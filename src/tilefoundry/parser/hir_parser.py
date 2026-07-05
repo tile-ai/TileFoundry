@@ -802,7 +802,7 @@ class _HirBodyVisitor(BaseExprVisitor):
         # kwargs like ``names=("x", "y")`` are plain static tuples.
         def _eval_mesh_arg(arg_node: ast.AST, *, is_layout_slot: bool = True):
             if is_layout_slot and _is_tuple_sugar(arg_node):
-                return parse_mesh_layout_sugar(arg_node)
+                return parse_mesh_layout_sugar(arg_node, closure=self.closure)
             return self._eval_static(arg_node)
 
         def _resolve_string_topology(name: str) -> object:

@@ -29,6 +29,18 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
 )
 
+
+class LayoutSugarError(ValueError):
+    """A layout-sugar node was recognized structurally but is malformed
+    (e.g. a dynamic ``DimVar`` / ``bool`` static extent).
+
+    It subclasses ``ValueError`` so existing ``except ValueError`` handlers
+    still catch it, but callers that speculatively try sugar parsing (and fall
+    back to generic static evaluation on a plain ``ValueError``) MUST let this
+    propagate so the real diagnostic is not masked by a downstream error.
+    """
+
+
 # ── AST helpers ─────────────────────────────────────────────────────────────
 
 
@@ -203,7 +215,9 @@ def _resolve_mesh_axis(mesh: Mesh, axis_name: str) -> MeshAxis:
 # ── layout literal parser (shared bottom layer) ────────────────────────────
 
 
-def _parse_layout_literal(node: ast.AST) -> tuple[tuple[int, ...], tuple[int, ...] | None]:
+def _parse_layout_literal(
+    node: ast.AST, *, closure: dict[str, Any] | None = None
+) -> tuple[tuple[int, ...], tuple[int, ...] | None]:
     """Parse a tuple AST node into (shape, strides_or_none).
 
     This is the shared bottom layer.  It does NOT choose a final type.
@@ -217,18 +231,21 @@ def _parse_layout_literal(node: ast.AST) -> tuple[tuple[int, ...], tuple[int, ..
     When dim elements contain ``@`` sugar operators, only the left-hand
     int constant is extracted for the shape; axis binding is handled by
     the target-specific lowering (e.g. ``parse_shard_layout_sugar``).
+
+    ``closure`` lets a dim that is a closure/global ``Name`` (e.g. ``WARPS``)
+    resolve to its static int value.
     """
     if isinstance(node, ast.Tuple):
         if len(node.elts) == 2 and isinstance(node.elts[0], ast.Tuple) and isinstance(node.elts[1], ast.Tuple):
             # Full form: ((dims), (strides))
             dim_nodes = list(node.elts[0].elts)
-            strides = _eval_ast(node.elts[1])
-            shape = tuple(_extract_dim_int(dn) for dn in dim_nodes)
+            strides = _eval_ast(node.elts[1], closure)
+            shape = tuple(_extract_dim_int(dn, closure=closure) for dn in dim_nodes)
         else:
             # Short form: (dims)
             dim_nodes = list(node.elts)
             strides = None
-            shape = tuple(_extract_dim_int(dn) for dn in dim_nodes)
+            shape = tuple(_extract_dim_int(dn, closure=closure) for dn in dim_nodes)
     elif _is_constant(node):
         shape = (node.value,)
         strides = None
@@ -249,17 +266,26 @@ def _parse_layout_literal(node: ast.AST) -> tuple[tuple[int, ...], tuple[int, ..
     return shape, strides
 
 
-def _extract_dim_int(node: ast.AST) -> int:
-    """Extract the integer from a layout dim node.
+def _extract_dim_int(node: ast.AST, *, closure: dict[str, Any] | None = None) -> int:
+    """Extract the static-int dimension from a layout dim node.
 
-    Handles: plain ``Constant(32)``, and ``BinOp(Constant(32), MatMult, ...)``
-    sugar forms where only the left operand is the dimension.
+    Handles: plain ``Constant(32)``, closure/global ``Name`` references bound to
+    an ``int`` (e.g. ``WARPS = 4``), and ``BinOp(<dim>, MatMult, ...)`` sugar
+    forms where only the left operand is the dimension. The resolved value MUST
+    be a static ``int``; ``bool`` and dynamic (``DimVar``) extents are rejected
+    with a clear diagnostic rather than a raw AST / attribute error.
     """
-    if _is_constant(node):
-        return node.value
-    if _is_matmul(node) and _is_constant(node.left):
-        return node.left.value
-    raise ValueError(f"expected int dim, got {ast.dump(node)}")
+    dim_node = node.left if _is_matmul(node) else node
+    if _is_constant(dim_node):
+        val = dim_node.value
+    else:
+        try:
+            val = _eval_ast(dim_node, closure)
+        except ValueError:
+            raise ValueError(f"expected int dim, got {ast.dump(node)}") from None
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise LayoutSugarError(f"layout dim must be a static int, got {val!r}")
+    return val
 
 
 # ── target-specific sugar parsers ──────────────────────────────────────────
@@ -277,13 +303,18 @@ def parse_layout_sugar(node: ast.AST) -> Layout:
     return Layout(shape=shape, strides=strides)
 
 
-def parse_mesh_layout_sugar(node: ast.AST) -> Layout:
+def parse_mesh_layout_sugar(
+    node: ast.AST, *, closure: dict[str, Any] | None = None
+) -> Layout:
     """Parse a mesh's layout tuple sugar as a ``Layout``.
+
+    ``closure`` lets mesh dims be closure/global ``int`` names (e.g. a
+    ``WARPS = 4`` constant used as ``(WARPS, LANES)``).
 
     >>> parse_mesh_layout_sugar(ast.parse("(128,)", mode="eval").body)
     Layout(shape=(128,), strides=(1,))
     """
-    shape, strides = _parse_layout_literal(node)
+    shape, strides = _parse_layout_literal(node, closure=closure)
     if strides is None:
         strides = _auto_strides(shape)
     return Layout(shape=shape, strides=strides)
@@ -530,7 +561,7 @@ def _parse_layout_item(
             # canonicalisation (factorisation against the mesh extent), so it
             # must resolve to a static int. A dynamic (DimVar) split axis is
             # not expressible in v1 sugar — only bare axes may be dynamic.
-            raise ValueError(
+            raise LayoutSugarError(
                 f"split layout dim `dim @ mesh.axis` must be a static int, got {dim!r}"
             )
 
