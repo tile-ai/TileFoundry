@@ -133,6 +133,7 @@ class SyncBarrier(Enum):
     SYNCTHREADS = "syncthreads"  # whole block, more than one warp
     SYNCWARP = "syncwarp"        # whole block of one warp, or a single-warp subset
     BAR_SYNC = "bar_sync"        # named barrier — a warp-aligned multi-warp subset
+    GRID = "grid"                # grid-wide software barrier (cta-scope mesh)
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,16 @@ def participation(mesh: Mesh) -> Participation:
 def classify(mesh: Mesh) -> SyncBarrier:
     """Pick the hardware barrier for ``mesh``. Raises ``VerifyError`` for a
     cross-warp subset that is not warp-aligned."""
+    topos = mesh.topologies or (mesh.topology,)
+    if topos and all(getattr(t, "name", None) == "cta" for t in topos):
+        # A cta-scope mesh synchronizes CTAs: the grid-wide software
+        # barrier. Only the FULL cta mesh is supported (no subsets) —
+        # and co-residency of the launch is the caller's contract.
+        if isinstance(mesh.layout, ComposedLayout):
+            raise VerifyError(
+                "T.sync: a partial grid sync (cta mesh slice) is unsupported"
+            )
+        return SyncBarrier.GRID
     p = participation(mesh)
     if p.full_cta:
         return SyncBarrier.SYNCWARP if p.count == _WARP_SIZE else SyncBarrier.SYNCTHREADS

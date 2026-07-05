@@ -203,11 +203,23 @@ A valid participant set maps to exactly one hardware barrier:
 | whole block that is one warp | `__syncwarp()` |
 | a contiguous lane subset within one warp | `__syncwarp(mask)` under a participant predicate |
 | a warp-aligned contiguous multi-warp subset | a named `bar.sync <id>, <count>` under a participant predicate |
+| the full mesh over the `cta` topology (all CTAs of the grid) | the grid-wide software barrier ([`runtime.md §3`](runtime.md)) |
 
 Codegen MUST guard the `__syncwarp(mask)` and `bar.sync` cases with the
 participant predicate `base <= tid < base+count` (`tid =
 program_id<thread>()`): a non-participant thread MUST NOT execute the barrier,
 and every participant MUST execute the same id and count.
+
+The first four rows synchronize threads **within one block**; their participant
+set is the contiguous thread interval above. A mesh whose topologies are all the
+`cta` topology instead synchronizes **CTAs across the grid** — `program_id<cta>`
+ranges over the launch's blocks — and maps to the grid-wide software barrier.
+Only the **full** cta mesh participates: a cta slice (a subset of CTAs) has no
+supported barrier and MUST be rejected at verify. The grid barrier's correctness
+requires every CTA of the launch to be co-resident; that co-residency is the
+launch's occupancy contract, not something the barrier can enforce. The
+grid-barrier device helper and its counter protocol are specified in
+[`runtime.md §3`](runtime.md).
 
 #### Named-barrier id allocation
 

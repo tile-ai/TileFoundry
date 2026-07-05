@@ -205,7 +205,19 @@ def test_classify_derives_barrier_from_participants() -> None:
     assert classify(m) is SyncBarrier.SYNCTHREADS          # whole block, 4 warps
     assert classify(m[0, :]) is SyncBarrier.SYNCWARP        # one warp
     assert classify(m[1:3, :]) is SyncBarrier.BAR_SYNC      # 2-warp subset
-    assert classify(_cta_mesh()) is SyncBarrier.SYNCTHREADS  # whole CTA
+
+
+def test_classify_full_cta_scope_mesh_is_grid_barrier() -> None:
+    """A mesh over the ``cta`` topology synchronizes CTAs across the grid — the
+    grid-wide software barrier, not a within-block ``__syncthreads``."""
+    assert classify(_cta_mesh()) is SyncBarrier.GRID
+
+
+def test_classify_rejects_partial_cta_slice() -> None:
+    """Only the full cta mesh maps to the grid barrier; a cta slice (a subset of
+    CTAs) has no supported barrier and is rejected."""
+    with pytest.raises(VerifyError, match="partial grid"):
+        classify(_cta_mesh()[0:64])
 
 
 # --- codegen text --------------------------------------------------------
@@ -222,6 +234,13 @@ def _emit(*meshes: Mesh) -> str:
 
 def test_codegen_full_cta_emits_syncthreads() -> None:
     assert _emit(_thread_mesh()).strip() == "__syncthreads();"
+
+
+def test_codegen_cta_scope_mesh_emits_grid_barrier() -> None:
+    assert (
+        _emit(_cta_mesh()).strip()
+        == "tilefoundry::ops::grid_barrier(tilefoundry::tf_grid_bar_state);"
+    )
 
 
 def test_codegen_single_warp_subset_emits_masked_syncwarp_under_predicate() -> None:

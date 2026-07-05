@@ -26,6 +26,15 @@ _TID = "tilefoundry::program_id<tilefoundry::TopologyScope::thread>()"
 def _emit(call, ctx: CodegenContext) -> None:
     mesh = call.target.mesh
     barrier = classify(mesh)
+
+    if barrier is SyncBarrier.GRID:
+        # Grid-wide software barrier over the module's counter pair. The
+        # counter has internal linkage and is defined once per generated
+        # module source (see the module template), so a header include never
+        # introduces a shared/duplicated global symbol across translation units.
+        ctx.emit("tilefoundry::ops::grid_barrier(tilefoundry::tf_grid_bar_state);")
+        return
+
     p = participation(mesh)
 
     if barrier is SyncBarrier.SYNCTHREADS:

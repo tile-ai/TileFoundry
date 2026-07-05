@@ -381,6 +381,38 @@ CUTE_HOST_DEVICE void copy(ShardTensor<TS, GLS, SLS> const &src,
 
 namespace ops {
 
+// ── Grid-wide barrier ───────────────────────────────────────────────
+
+// Software grid-wide barrier over a caller-provided gmem counter pair:
+// bar[0] = arrival counter, bar[1] = release phase. Every CTA arrives,
+// the last one resets the counter and bumps the phase; the rest spin on
+// the phase. Requires ALL CTAs of the launch to be co-resident (the
+// caller's occupancy contract). Reusable across launches and CUDA-graph
+// replays: the counter self-resets each phase, the phase is monotone
+// (u32 wrap is harmless). Prior gmem writes of every CTA are visible to
+// every CTA after return (__threadfence on arrival orders them before
+// the release; the atomic spin read acquires the release). The backing
+// counter pair is defined per generated module (internal linkage), so a
+// header include never introduces a shared/duplicated global symbol.
+__device__ __forceinline__ void grid_barrier(unsigned int *bar) {
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        unsigned int n_ctas = gridDim.x * gridDim.y * gridDim.z;
+        unsigned int phase = atomicAdd(&bar[1], 0u);
+        __threadfence();
+        unsigned int arrived = atomicAdd(&bar[0], 1u) + 1u;
+        if (arrived == n_ctas) {
+            bar[0] = 0u;
+            __threadfence();
+            atomicAdd(&bar[1], 1u);
+        } else {
+            while (atomicAdd(&bar[1], 0u) == phase) {
+            }
+        }
+    }
+    __syncthreads();
+}
+
 // ── Op tags (functors for dispatch) ─────────────────────────────────
 
 struct mul_op {

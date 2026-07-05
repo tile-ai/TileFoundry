@@ -82,6 +82,33 @@ def test_sync_barrier_forms_emit_expected_cuda() -> None:
     assert '"r"(64)' in src                      # 64-thread participant count
 
 
+@module(entry="grid_sync_host")
+class GridSync:
+    @prim_func(target="cuda")
+    def grid_sync_device(a: Tensor[(128,), "f32"]):
+        with Mesh(Topology("cta", 4), Layout(shape=(4,), strides=(1,))) as m:
+            T.sync(m)
+
+    @prim_func(target="cpu")
+    def grid_sync_host(a: Tensor[(128,), "f32"]):
+        launch(grid_sync_device, a, grid=(4, 1, 1), block=(128, 1, 1))  # noqa: F821
+
+
+def test_grid_scope_sync_emits_grid_barrier() -> None:
+    """A ``T.sync`` over a full ``cta``-topology mesh lowers to the grid-wide
+    software barrier helper (not a within-block ``__syncthreads``), and the
+    module defines its own internal-linkage counter for it."""
+    from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
+    from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
+
+    lowered = tilefoundry.lower(GridSync, target="cuda")
+    src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
+    assert "tilefoundry::ops::grid_barrier(tilefoundry::tf_grid_bar_state);" in src
+    # The backing counter is defined per module with internal linkage, not
+    # pulled from a shared header global.
+    assert "static __device__ unsigned int tf_grid_bar_state[2];" in src
+
+
 def test_sync_kernel_runs_and_squares() -> None:
     """All four barrier forms compile and run on GPU without deadlock/fault,
     and the elementwise square is correct."""

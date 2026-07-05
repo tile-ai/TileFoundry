@@ -450,3 +450,35 @@ Semantics:
 Preconditions:
 
 - `tensor.layout()` is a `ShardLayout`
+
+### 3.4 `tilefoundry::ops::grid_barrier`
+
+```cpp
+__device__ void grid_barrier(unsigned int* bar);
+```
+
+Semantics:
+
+- a grid-wide software barrier: every CTA of the launch arrives, and no CTA
+  returns until all have arrived
+- `bar` is a two-word gmem counter pair — `bar[0]` the arrival counter, `bar[1]`
+  the release phase — zero-initialized before first use. Each CTA's thread 0
+  arrives once (`atomicAdd(&bar[0], 1)`); the CTA that observes the final arrival
+  resets `bar[0]` and advances `bar[1]`; the others spin on `bar[1]`
+- the counter self-resets each phase and the phase is monotone, so the same
+  `bar` is reusable across successive barriers, relaunches, and CUDA-graph
+  replays
+- gmem writes issued by any CTA before the barrier are visible to every CTA after
+  it returns (arrival `__threadfence` orders them before the release; the spin
+  read acquires the release)
+- the runtime header carries only the helper; each generated module that emits a
+  grid barrier defines its own counter pair with **internal linkage** in the
+  module source, so including the header never introduces a shared or duplicated
+  global symbol across translation units
+
+Preconditions:
+
+- every CTA of the launch is co-resident (the launch's occupancy contract);
+  a launch whose CTAs are not all resident deadlocks
+- every CTA of the launch executes the barrier (it counts the full `gridDim`)
+- `bar` points at a zero-initialized two-word counter pair reserved for this use

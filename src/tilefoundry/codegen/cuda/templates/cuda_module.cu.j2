@@ -2,6 +2,12 @@
 #include <tilefoundry/runtime.h>
 
 namespace tilefoundry {
+{%- if uses_grid_barrier %}
+// Per-module grid-barrier counter (internal linkage): bar[0] = arrivals,
+// bar[1] = release phase. Zero-initialized at module load; the protocol
+// self-resets so relaunches and CUDA-graph replays are safe.
+static __device__ unsigned int tf_grid_bar_state[2];
+{%- endif %}
 {%- for spec in topology_shape_specializations %}
 template <> constexpr auto program_shape<{{ spec.scope }}>() noexcept {
   return cute::make_shape({{ spec.shape_args }});
