@@ -29,6 +29,7 @@ from .dispatch import (
 )
 from .range_slice import RangeSlice
 from .sugar import (
+    LayoutSugarError,
     _is_tuple_sugar,
     parse_layout_sugar,
     parse_shard_layout_sugar,
@@ -688,6 +689,10 @@ class BaseExprVisitor:
             if sugar is not None:
                 try:
                     return sugar(node)
+                except LayoutSugarError:
+                    # Node is recognized layout sugar but malformed — surface the
+                    # real diagnostic instead of masking it with _eval_static.
+                    raise
                 except ValueError:
                     pass
         elif annotation is None and attr_name == "layout" and _is_tuple_sugar(node):
@@ -698,6 +703,8 @@ class BaseExprVisitor:
                     default_mesh=self._current_default_mesh(),
                     closure=self.closure,
                 )
+            except LayoutSugarError:
+                raise
             except ValueError:
                 pass
         value = self._eval_static(node)

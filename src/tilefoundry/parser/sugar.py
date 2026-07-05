@@ -29,6 +29,18 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
 )
 
+
+class LayoutSugarError(ValueError):
+    """A layout-sugar node was recognized structurally but is malformed
+    (e.g. a dynamic ``DimVar`` / ``bool`` static extent).
+
+    It subclasses ``ValueError`` so existing ``except ValueError`` handlers
+    still catch it, but callers that speculatively try sugar parsing (and fall
+    back to generic static evaluation on a plain ``ValueError``) MUST let this
+    propagate so the real diagnostic is not masked by a downstream error.
+    """
+
+
 # ── AST helpers ─────────────────────────────────────────────────────────────
 
 
@@ -272,7 +284,7 @@ def _extract_dim_int(node: ast.AST, *, closure: dict[str, Any] | None = None) ->
         except ValueError:
             raise ValueError(f"expected int dim, got {ast.dump(node)}") from None
     if isinstance(val, bool) or not isinstance(val, int):
-        raise ValueError(f"layout dim must be a static int, got {val!r}")
+        raise LayoutSugarError(f"layout dim must be a static int, got {val!r}")
     return val
 
 
@@ -549,7 +561,7 @@ def _parse_layout_item(
             # canonicalisation (factorisation against the mesh extent), so it
             # must resolve to a static int. A dynamic (DimVar) split axis is
             # not expressible in v1 sugar — only bare axes may be dynamic.
-            raise ValueError(
+            raise LayoutSugarError(
                 f"split layout dim `dim @ mesh.axis` must be a static int, got {dim!r}"
             )
 

@@ -442,10 +442,10 @@ def test_reshard_sugar_rejects_dynamic_split_axis() -> None:
         )
 
 
-# ── closure / static-int dims in a mesh-shape sugar (task #5 P1/P2) ───────────
+# ── closure / static-int dims in a mesh-shape sugar ──────────────────────────
 # These exercise the ``with Mesh(Topology(...), (dims), names)`` body path
-# (`parse_mesh_layout_sugar`), which — unlike the shard/split path above — did
-# not thread the closure and rejected any ``ast.Name`` dim.
+# (`parse_mesh_layout_sugar`): a closure/global int dim resolves like a literal,
+# and a dynamic or bool dim is rejected with a static-int diagnostic.
 
 
 def _mesh_body_fn(threads, warps, lanes):
@@ -474,15 +474,14 @@ def _mesh_body_literal():
 
 
 def test_closure_int_mesh_dims_resolve_like_literals() -> None:
-    """E1: closure/global ints in a mesh-shape sugar (``(WARPS, LANES)`` and the
-    topology extent ``THREADS``) resolve identically to integer literals — the
+    """Closure/global ints in a mesh-shape sugar (``(WARPS, LANES)`` and the
+    topology extent ``THREADS``) resolve identically to integer literals; the
     parser must not reject the ``ast.Name``."""
     assert as_script(_mesh_body_fn(128, 4, 32)) == as_script(_mesh_body_literal())
 
 
 def test_closure_int_split_extent_still_parses() -> None:
-    """E2 (regression lock): a closure int as a split extent already works and
-    must keep working."""
+    """A closure int used as a split extent resolves and parses."""
     k_tile = 128
 
     @func(topologies=(Topology("thread", 128),))
@@ -495,8 +494,8 @@ def test_closure_int_split_extent_still_parses() -> None:
 
 
 def test_dimvar_mesh_dim_reports_static_int() -> None:
-    """E4: a ``DimVar`` in a mesh-shape position is rejected with a clear
-    static-int diagnostic (not a raw ``expected int dim`` / attribute error)."""
+    """A ``DimVar`` in a mesh-shape position is rejected with a clear static-int
+    diagnostic (not a raw AST / attribute error)."""
     w = DimVar("W", 1, 8)
 
     with pytest.raises(ValueError, match="static int"):
@@ -509,7 +508,7 @@ def test_dimvar_mesh_dim_reports_static_int() -> None:
 
 
 def test_bool_mesh_dim_rejected() -> None:
-    """E5: ``bool`` is rejected as a mesh dim even though it subclasses ``int``."""
+    """``bool`` is rejected as a mesh dim even though it subclasses ``int``."""
     warps = True
 
     with pytest.raises(ValueError, match="static int"):
@@ -518,4 +517,48 @@ def test_bool_mesh_dim_rejected() -> None:
         def _bad(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
             with Mesh(Topology("thread", 128), (warps, 32), ("w", "t")) as m:
                 xr = reshard(x, (1, 128 @ (m.w, m.t)), "rmem")  # noqa: F821
+                return reshard(xr, (1, 128), "gmem")  # noqa: F821
+
+
+# ── malformed layout sugar surfaces (not swallowed → AttributeError) ──────────
+# A sugar ValueError raised once the node is recognized as layout sugar must not
+# be swallowed into generic static eval (which turned the real "static int"
+# diagnostic into `'Mesh' object has no attribute 'w'`).
+
+
+def test_dimvar_split_extent_full_pipeline_reports_static_int() -> None:
+    """A ``DimVar`` split extent through the full ``@func`` op-arg path reports a
+    clear static-int error, not ``'Mesh' object has no attribute 'w'``."""
+    k = DimVar("K", 32, 256)
+
+    with pytest.raises(ValueError, match="static int"):
+
+        @func(topologies=(Topology("cta", 8), Topology("thread", 128)))
+        def _bad(x: Tensor[(8, k), "bf16"]) -> Tensor[(8, 1), "bf16"]:
+            with Mesh(Topology("thread", 128), (4, 32), ("w", "t")) as m:
+                xr = reshard(x, (8, k @ (m.w, m.t)), "rmem")  # noqa: F821
+                return reshard(xr, (8, 1), "gmem")  # noqa: F821
+
+
+def test_bool_split_extent_single_axis_rejected() -> None:
+    """A ``bool`` split extent (``True @ m.w``) is rejected with a static-int
+    error rather than being swallowed."""
+    with pytest.raises(ValueError, match="static int"):
+
+        @func(topologies=(Topology("thread", 128),))
+        def _bad(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
+            with Mesh(Topology("thread", 128), (4, 32), ("w", "t")) as m:
+                xr = reshard(x, (1, True @ m.w), "rmem")  # noqa: F821
+                return reshard(xr, (1, 128), "gmem")  # noqa: F821
+
+
+def test_bool_split_extent_multi_axis_rejected() -> None:
+    """A ``bool`` split extent in the multi-axis form (``True @ (m.w, m.t)``) is
+    rejected with a static-int error."""
+    with pytest.raises(ValueError, match="static int"):
+
+        @func(topologies=(Topology("thread", 128),))
+        def _bad(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
+            with Mesh(Topology("thread", 128), (4, 32), ("w", "t")) as m:
+                xr = reshard(x, (1, True @ (m.w, m.t)), "rmem")  # noqa: F821
                 return reshard(xr, (1, 128), "gmem")  # noqa: F821
