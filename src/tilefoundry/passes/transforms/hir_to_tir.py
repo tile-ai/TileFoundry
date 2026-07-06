@@ -506,19 +506,18 @@ class _Lowerer:
         self._cache[key] = acc_vars[0]
         return acc_vars[0]
 
-    @register_hir_lowering(Reshard)
-    def _lower_reshard(self, target, expr) -> Var:
-        key = id(expr)
-        # ── cross-CTA reshard: sync-then-reshard (reshard-owned fence) ──
-        # A reshard whose SOURCE chain is a param-rooted gmem cta-shard view and
-        # whose DEST is a *different* gmem cta-ShardLayout re-views the ROOT
-        # buffer under new ownership — a cross-CTA read. The sync is intrinsic to
-        # this lowering: the naive path fences the grid (so every CTA's shard
-        # writes are visible) and then reshards the root. The ``if`` is the
-        # scenario-dispatch point where a future async path could skip the fence;
-        # only the naive always-sync branch is implemented, and there is no
-        # heuristic standalone-sync auto-insertion elsewhere.
-        src_override = None
+    def _reshard_cross_cta_sync(self, expr) -> "Var | None":
+        """The reshard-owned grid fence. A reshard whose SOURCE chain is a
+        param-rooted gmem cta-shard view and whose DEST is a *different* gmem
+        cta-ShardLayout re-views the ROOT buffer under new ownership — a
+        cross-CTA read. The sync is intrinsic to the reshard lowering: the naive
+        path lowers the producing chain, fences the grid (so every CTA's shard
+        writes are visible), and returns the ROOT to reshard from; otherwise it
+        returns ``None``. This is the single scenario-dispatch point (a future
+        async path could skip the fence); it owns only the fence — cross-CTA data
+        redistribution is not implemented here. Both the intermediate reshard
+        path and the output-sink reshard path route through this helper so the
+        fence is never bypassed."""
         dst_sl = expr.type.layout
         src_expr = expr.args[0]
         if (
@@ -542,7 +541,13 @@ class _Lowerer:
                 # fence), fence the grid, then reshard the root param.
                 self.lower_expr(src_expr)
                 self._items.append(_eval_call(TirSync(mesh=dst_sl.mesh), ()))
-                src_override = root
+                return root
+        return None
+
+    @register_hir_lowering(Reshard)
+    def _lower_reshard(self, target, expr) -> Var:
+        key = id(expr)
+        src_override = self._reshard_cross_cta_sync(expr)
         src = (
             src_override
             if src_override is not None
@@ -1440,8 +1445,12 @@ def _lower_single_output(
         isinstance(body_expr, Call)
         and isinstance(body_expr.target, Reshard)
     ):
-        # Lower the inner computation (everything inside the Reshard).
-        inner = lo.lower_expr(body_expr.args[0])
+        # A cross-CTA ownership-change reshard fences the grid before the copy —
+        # the same reshard-owned sync as the intermediate path, so an output-sink
+        # reshard never bypasses the fence. The output still copies directly into
+        # ``out`` (no extra sharded temporary), reading the synced root.
+        override = lo._reshard_cross_cta_sync(body_expr)
+        inner = override if override is not None else lo.lower_expr(body_expr.args[0])
         inner_ty = inner.type
         # Use the post-typeinfer materialized layout from ``body_expr.type``
         # — ``body_expr.target.layout``

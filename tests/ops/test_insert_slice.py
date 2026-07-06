@@ -335,25 +335,27 @@ def test_decode_step_in_place_carry() -> None:
 
 
 @module(entry="xreshard")
-class _CrossCtaReshard:
-    """An intermediate cross-CTA reshard with a CTA ownership change (split
-    axis 0 → split axis 1), whose result is consumed further so it lowers
-    through the reshard path (a return-position reshard is emitted directly)."""
+class _CrossCtaReshardOutput:
+    """A cross-CTA ownership-change reshard (split axis 0 → split axis 1) at the
+    output position (the returned value). The reshard-owned grid fence must not
+    be bypassed by the output-sink lowering."""
 
     @func(topologies=(Topology("cta", 2),))
     def xreshard(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_D), "f32"]:
         with Mesh(topology="cta", layout=ShardCuteLayout(shape=(2,), strides=(1,))) as cta:
             g1 = reshard(a, layout=(2 @ cta, _DEC_D), storage=gmem)
-            g2 = reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
-            out = mul(g2, g2)
-            return reshard(out, layout=(2, _DEC_D @ cta), storage=gmem)
+            return reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
 
 
 def test_cross_cta_reshard_owned_sync() -> None:
-    """A cross-CTA reshard (ownership change) lowers to sync-then-reshard: the
-    grid sync is intrinsic to the reshard lowering and is emitted before the
-    reshard's copy. The removed ``_dirty_roots`` heuristic leaves no residue."""
-    pf = _lower(Module(name="m", functions=(_CrossCtaReshard.functions[0],), entry="xreshard"))
+    """An output-position cross-CTA reshard (ownership change) still lowers to
+    sync-then-reshard: the grid sync is emitted before the output copy, proving
+    the output-sink path routes through the same reshard-owned fence as an
+    intermediate reshard. The removed ``_dirty_roots`` heuristic leaves no
+    residue."""
+    pf = _lower(
+        Module(name="m", functions=(_CrossCtaReshardOutput.functions[0],), entry="xreshard")
+    )
     nodes = []
     _walk(pf.body, False, nodes)
 
@@ -363,7 +365,7 @@ def test_cross_cta_reshard_owned_sync() -> None:
         if _op_of(val) is not None
     ]
     assert "Sync" in kinds, f"no reshard-owned grid sync emitted: {kinds}"
-    # The sync fences before the cross-CTA reshard's copy.
+    # The sync fences before the output reshard's copy.
     assert kinds.index("Sync") < len(kinds) - 1 - kinds[::-1].index("Copy")
 
     import inspect  # noqa: PLC0415
@@ -373,3 +375,44 @@ def test_cross_cta_reshard_owned_sync() -> None:
     assert "_dirty_roots" not in inspect.getsource(hir_to_tir), (
         "the _dirty_roots heuristic must be fully removed"
     )
+
+
+_DYN_D = 5
+_DYN_K = 3
+
+
+@module(entry="dyn")
+class _DynOffset:
+    """A loop-carried in-place ``insert_slice`` whose offset is the loop
+    induction variable (a rank-0 scalar), writing a length-1 update to a
+    different position each iteration."""
+
+    @func(topologies=(Topology("thread", 1),))
+    def dyn(base: Tensor[(_DYN_D,), "f32"], v: Tensor[(1,), "f32"]):
+        with Mesh(Topology("thread", 1), (1,), ("t",)) as m:
+            br = reshard(base, (_DYN_D @ m.t,), "rmem")
+            vr = reshard(v, (1 @ m.t,), "rmem")
+            acc = full_like(br, 0.0)
+            for i in tile(_DYN_K):
+                acc = insert_slice(acc, vr, i)
+            return reshard(acc, (_DYN_D @ m.t,), "gmem")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_insert_slice_dynamic_offset() -> None:
+    """A per-iteration dynamic offset (the loop induction variable) writes the
+    update to each position ``0..K-1`` in turn; positions past the loop stay at
+    the ``full_like`` init. This exercises non-zero runtime offsets, not just
+    offset 0 or a static path."""
+    import tilefoundry  # noqa: PLC0415
+
+    rm = tilefoundry.compile(_DynOffset, target="cuda")
+    base = torch.randn(_DYN_D, device="cuda")
+    v = torch.randn(1, device="cuda")
+    out = torch.empty(_DYN_D, device="cuda")
+    rm(base, v, out)
+    torch.cuda.synchronize()
+
+    exp = torch.zeros(_DYN_D, device="cuda")
+    exp[:_DYN_K] = v[0]  # positions 0..K-1 each written with v at offset i
+    assert torch.allclose(out, exp, rtol=1e-4, atol=1e-4), (out - exp).abs().max()
