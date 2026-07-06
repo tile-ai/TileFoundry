@@ -90,6 +90,14 @@ TYPEINFER_CASES = [
         (sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32)),
         sharded((4, 8), (Split(0),), _M, cute=(6, 4, 8), strides=(32, 8, 1)),
     ),
+    # regression (AC-4-2): a multi-index gather whose total size is 1 (e.g.
+    # (1, 1)) is NOT a slice — the input layout carries through unchanged.
+    TypeInferCase(
+        "multi_index_total_size_one_passes_layout_through",
+        Gather(axis=1),
+        (sharded((6, 4, 8), (Split(0),), _M), ten((1, 1), DType.i32)),
+        sharded((6, 1, 1, 8), (Split(0),), _M, cute=(6, 4, 8), strides=(32, 8, 1)),
+    ),
 ]
 
 

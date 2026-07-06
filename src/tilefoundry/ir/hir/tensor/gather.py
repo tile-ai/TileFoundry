@@ -44,14 +44,11 @@ def _sliced_shard_layout(x_ty, axis: int, idx_shape: tuple):
     sl = x_ty.layout
     if not isinstance(sl, ShardLayout) or not isinstance(sl.layout, Layout):
         return sl
-    # Only single-index forms (scalar or one-element idx) are a slice.
+    # The slice contract covers only a scalar index or a rank-1 one-element
+    # ``(1,)`` index; every other form (including a multi-index whose total
+    # size is 1, e.g. ``(1, 1)``) carries the input layout through unchanged.
     scalar_idx = idx_shape == ()
-    numel = 1
-    for d in idx_shape:
-        if not isinstance(d, int):
-            return sl
-        numel *= d
-    if not scalar_idx and numel != 1:
+    if not scalar_idx and idx_shape != (1,):
         return sl
     cute_shape = sl.layout.shape
     cute_strides = sl.layout.strides
