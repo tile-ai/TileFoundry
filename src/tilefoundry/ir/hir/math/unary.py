@@ -21,7 +21,10 @@ from tilefoundry.ir.types import DType, TensorType
 
 @register_op(dialect="tf", category="math")
 class Unary(Op):
-    """Value-form pointwise unary operation."""
+    """Value-form pointwise unary operation.
+
+    Spec: hir.md §2.1
+    """
     x = ParamDef(kind="input", pattern=Tensor)
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
 

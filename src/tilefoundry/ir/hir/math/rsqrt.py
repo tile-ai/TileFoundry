@@ -14,6 +14,10 @@ from tilefoundry.ir.types import TensorType
 
 @register_op
 class Rsqrt(Op):
+    """Reciprocal square root (value form).
+
+    Spec: hir.md §2.1
+    """
     x = ParamDef(kind="input", pattern=Tensor)
 @register_typeinfer(Rsqrt)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:

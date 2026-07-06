@@ -12,7 +12,10 @@ from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 
 @register_op(name="shape_compose")
 class ShapeCompose(Op):
-    """Variadic: takes N rank-0 i64 Exprs, returns rank-1 shape of length N."""
+    """Assemble a shape from per-axis dims: N rank-0 i64 Exprs → rank-1 shape.
+
+    Spec: hir.md §2.4
+    """
     is_variadic: ClassVar[bool] = True
 
     dims = ParamDef(kind="input", pattern=Tensor)

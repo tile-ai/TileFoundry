@@ -20,11 +20,14 @@ An **Op** is spec'd as a catalog entry, not a field walk-through:
 2. a **single sentence** naming what the op does; a consensus Op
    (`add`, `relu`, ...) adds a stable external link instead of prose
 
-An Op's full contract — fields, typing / verifier rules, worked
-examples — lives in the **Op-class docstring** in code, which MUST
-carry the `Spec: <file> §X.Y` back-link (see below). Per-op contract or
-implementation detail MUST NOT live in the spec; the spec op catalog is
-the namespaced index. Design / architecture guidance (dispatch
+An Op that gets its **own** catalog heading (a custom Op) records its full
+contract — fields, typing / verifier rules, worked examples — in the **Op-class
+docstring** in code, which MUST carry the `Spec: <file> §X.Y` back-link (see
+below). Consensus Ops listed together under a **grouped** entry (one heading +
+an external link covering the whole group, e.g.
+`#### Reshape / Transpose / … — torch structural ops`) are exempt from the
+per-op back-link. Per-op contract or implementation detail MUST NOT live in the
+spec; the spec op catalog is the namespaced index. Design / architecture guidance (dispatch
 principles, cross-layer ownership) stays in the spec prose, outside the
 per-op entries.
 
@@ -127,10 +130,11 @@ docstring line:
 Spec: <file> §X.Y
 ```
 
-An **Op class** MUST carry this `Spec:` line (it is the target of the
-op-catalog entry, and holds the op's full contract). The reverse index
-is `grep`. There is no central registry. Internal helpers and private
-utilities MAY omit the anchor.
+An Op class that has its **own** catalog heading MUST carry this
+`Spec:` line (it is the target of that entry and holds the op's full
+contract); Ops under a grouped consensus entry are exempt (above). The
+reverse index is `grep`. There is no central registry. Internal helpers
+and private utilities MAY omit the anchor.
 
 Spec drives plan, not the other way round. When implementation
 reveals that a contract is wrong, the fix lands on the spec first.
