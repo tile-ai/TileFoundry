@@ -570,3 +570,25 @@ until all but the `n` most-recent committed groups have landed
 (`cp.async.wait_group n`; `n = 0` drains every outstanding group). A
 `copy_async` → `cp_async_commit` → `cp_async_wait(0)` sequence therefore yields
 the same destination contents as a synchronous `copy`.
+
+### 3.7 Wide-load fast path in `copy()`
+
+The shard-aware `copy()` selects a 128-bit vector-load fast path from the
+operands alone — there is no separate entry point and no selection state leaks
+to codegen. It is taken only when all of the following hold, and otherwise the
+copy falls back to the scalar element loop with identical results:
+
+- the source is gmem-resident (`cute::is_gmem` on the `ShardTensor` engine);
+- the destination local view is a static, rank-1, contiguous fragment whose
+  contiguous run is at least 128 bits wide —
+  `cute::max_common_vector(dst, dst) × cute::sizeof_bits<value_type> ≥ 128`,
+  where `value_type` is the cute view element type, not the `ShardTensor` engine
+  type;
+- at runtime the source base address is 16-byte aligned and the fragment is
+  contiguous (the gmem local view is dynamic-int, so contiguity is checked with
+  address arithmetic — pure ALU, no memory access).
+
+When taken, each 128-bit run is loaded as a vector into registers and scattered
+into the destination; the remaining sub-128-bit tail uses the element loop. A
+non-gmem source, a sub-128-bit run, an unaligned base, or a strided source all
+fall back to the scalar loop.

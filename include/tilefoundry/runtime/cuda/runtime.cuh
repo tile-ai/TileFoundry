@@ -398,6 +398,74 @@ CUTE_HOST_DEVICE int local_offset(ShardTensor<T, GL, SL> const &st) {
         return offset;
     }
 }
+
+namespace detail {
+
+// Wide-load fast path folded into ``copy()``: when the destination local view
+// is a static, rank-1, contiguous fragment whose contiguous run is at least
+// 128 bits wide (``cute::max_common_vector`` × ``cute::sizeof_bits``) and the
+// source is a contiguous, 16-byte-aligned gmem run of the same element type,
+// load it as 128-bit vectors into registers and scatter into ``dst``. Every
+// other case — a non-gmem source, a sub-128-bit run, an unaligned or strided
+// source, or the remainder tail — falls back to the element loop with the same
+// elements and values; only the load width changes. The element type is the
+// cute view ``value_type`` (``decltype(dv(0))``), not the ShardTensor engine
+// type; the vector width is derived from CuTe's own vectorization primitive,
+// not a hand-rolled trait.
+//
+// Spec: docs/spec/runtime.md §3.7
+template <bool SrcIsGmem, class SView, class DView>
+CUTE_HOST_DEVICE void copy_fragment(SView const &sv, DView &dv) {
+    using s_val_t = cute::remove_cvref_t<decltype(sv(0))>;
+    using d_val_t = cute::remove_cvref_t<decltype(dv(0))>;
+    using dvc_layout_t =
+        decltype(cute::coalesce(cute::remove_cvref_t<DView>{}.layout()));
+    constexpr bool dst_static_contig =
+        cute::is_static<dvc_layout_t>::value &&
+        decltype(cute::rank(dvc_layout_t{}))::value == 1 &&
+        (int(cute::size(dvc_layout_t{})) == 1 ||
+         int(cute::stride<0>(dvc_layout_t{})) == 1);
+    if constexpr (SrcIsGmem && std::is_same_v<s_val_t, d_val_t> &&
+                  dst_static_contig) {
+        constexpr int mcv = int(decltype(cute::max_common_vector(
+            dvc_layout_t{}, dvc_layout_t{}))::value);
+        constexpr int vec_bits = mcv * int(cute::sizeof_bits<d_val_t>::value);
+        if constexpr (vec_bits >= 128) {
+            constexpr int N = int(cute::size(dvc_layout_t{}));
+            constexpr int C = 16 / int(sizeof(d_val_t)); // elems per 128b vec
+            constexpr int NV = N / C;                    // full 128b vectors
+            s_val_t const *sp = &sv(0);
+            // Runtime guard: 16B-aligned base and a contiguous run (the gmem
+            // local view is dynamic-int, so contiguity is checked here, not at
+            // compile time). Pure address ALU, no memory access.
+            bool ok = (reinterpret_cast<uintptr_t>(sp) & 0xF) == 0;
+            CUTE_UNROLL
+            for (int i = 1; i < N; ++i)
+                ok = ok && (&sv(i) == sp + i);
+            if (ok) {
+                uint4 const *vp = reinterpret_cast<uint4 const *>(sp);
+                uint4 tmp[NV];
+                CUTE_UNROLL
+                for (int i = 0; i < NV; ++i)
+                    tmp[i] = vp[i];
+                d_val_t const *tp = reinterpret_cast<d_val_t const *>(tmp);
+                CUTE_UNROLL
+                for (int i = 0; i < NV * C; ++i)
+                    dv(i) = tp[i];
+                CUTE_UNROLL
+                for (int i = NV * C; i < N; ++i) // scalar tail
+                    dv(i) = sv(i);
+                return;
+            }
+        }
+    }
+    int N = int(cute::size(dv));
+    for (int i = 0; i < N; ++i)
+        dv(i) = static_cast<d_val_t>(sv(i));
+}
+
+} // namespace detail
+
 // shard-aware copy — dispatches on ShardTensor vs plain tensor.
 // MVP: full-tensor copy via local() (which currently returns full tensor).
 // TODO: implement per-program slicing in local(); add static_assert
@@ -449,10 +517,13 @@ CUTE_HOST_DEVICE void copy(ShardTensor<TS, GLS, SLS> const &src,
                            ShardTensor<TD, GLD, SLD> &dst) {
     auto &&sv = local(src);
     auto &&dv = local(dst);
-    int N = int(cute::size(dv));
-    for (int i = 0; i < N; ++i) {
-        dv(i) = sv(i);
-    }
+    // The wide-load fast path is selected inside ``copy_fragment`` purely from
+    // the operands (gmem residency + a static-contiguous ≥128-bit dst fragment
+    // + a runtime-aligned/contiguous source); everything else falls back to the
+    // element loop with identical results.
+    constexpr bool src_gmem =
+        cute::is_gmem<cute::remove_cvref_t<decltype(src.engine)>>::value;
+    detail::copy_fragment<src_gmem>(sv, dv);
 }
 
 namespace ops {
