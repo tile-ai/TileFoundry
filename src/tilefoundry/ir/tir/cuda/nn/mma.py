@@ -47,6 +47,8 @@ _ATOM_ROLE = {"acc": "C", "lhs": "A", "rhs": "B"}
 class Mma(Op):
     """Matrix-multiply-accumulate: ``acc += lhs @ rhs``.
 
+    Spec: tir.md §3.2
+
     Wrapped by ``Evaluate(Mma, ...)`` in Stmt position; the surface is
     ``T.mma(acc, a, b, atom=...)`` (operands in ``acc, lhs, rhs`` order).
     ``atom`` is an optional :class:`MmaAtom` descriptor. When present (the

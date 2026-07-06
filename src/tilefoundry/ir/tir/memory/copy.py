@@ -18,7 +18,10 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 
 @register_op
 class Copy(Op):
-    """Copies ``source`` into ``destination`` (in-place memory write)."""
+    """Copies ``source`` into ``destination`` (in-place memory write).
+
+    Spec: tir.md §3.1
+    """
     source = ParamDef(kind="input", pattern=Tensor)
     destination = ParamDef(kind="input", pattern=Tensor)
 

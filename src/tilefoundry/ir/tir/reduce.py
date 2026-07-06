@@ -35,6 +35,8 @@ __all__ = ["ReduceKind", "Reduce"]
 class Reduce(Op):
     """Generic reduction op dispatched by ``kind`` tag.
 
+    Spec: tir.md §3.3
+
     ``workspace`` is an optional scratch buffer used by the
     runtime template for cross-warp staging; ``None`` when not
     needed.

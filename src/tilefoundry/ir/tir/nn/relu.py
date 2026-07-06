@@ -16,7 +16,10 @@ from tilefoundry.ir.types import UnitType
 
 @register_op
 class ReLU(Op):
-    """Tensor-level pointwise ReLU writing into ``dst``."""
+    """Tensor-level pointwise ReLU writing into ``dst``.
+
+    Spec: tir.md §3.2
+    """
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
 

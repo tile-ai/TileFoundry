@@ -239,61 +239,61 @@ verify and codegen cannot disagree.
 
 ## 3. TIR Ops
 
+Value Ops MUST be anchored by `LetStmt.value` — their result `Var` is the only
+handle. Effect Ops appear in Stmt position as `Evaluate(op, args)`
+([§2.2](#22-evaluate)). Each Op's full contract lives in its Op-class docstring
+(`Spec: tir.md §3`), per [SPEC-RULES](../SPEC-RULES.md).
+
 ### 3.1 Memory Ops (`tir.memory.*`)
 
-| Op | Form | Purpose |
-|---|---|---|
-| `AllocTensor` | value | allocate a tensor; result type carried on the Op's `tensor_type` attribute. MUST be anchored by `LetStmt`. |
-| `MemorySpan` | value | re-interpret a memory region as a typed tensor. |
-| `PtrOf` | value | take the device address of a tensor for downstream view ops. |
-| `TensorView(memory, layout, shape?)` | value | derive a sub-view of a tensor. `layout` updates the ShardLayout / cute Layout; optional `shape` overrides the logical shape (reshape). `memory` may be a `PtrOf` result (ptr + offset). |
-| `Copy` | effect | byte-equivalent copy between two tensors. |
-| `Fill` | effect | broadcast a scalar value into a tensor. |
+#### AllocTensor
+Allocate a tensor (value form; result type on the `tensor_type` attribute).
 
-Value Ops MUST be anchored by `LetStmt.value` — their result `Var`
-is the only handle. Effect Ops appear in Stmt position as
-`Evaluate(op, args)` ([§2.2](#22-evaluate)).
+#### MemorySpan
+Re-interpret a memory region as a typed tensor (value form).
+
+#### PtrOf
+Take the device address of a tensor for downstream view ops (value form).
+
+#### TensorView
+Derive a sub-view of a tensor (value form).
+
+#### Copy
+Byte-equivalent copy between two tensors (effect form).
+
+#### Fill
+Broadcast a scalar value into a tensor (effect form).
 
 ### 3.2 NN Ops (`tir.nn.*`)
 
-| Op | Form | Purpose |
-|---|---|---|
-| `Mma` | effect | matrix-multiply-accumulate (`acc += lhs @ rhs`); args `(acc, lhs, rhs)`. An optional `atom` attribute selects an explicit instruction descriptor for the hand-written calling convention ([§3.7](#37-mma-atom-and-the-hand-written-calling-convention)). Lowering paths to per-target PTX live in [target](./target.md). |
-| `ReLU` | effect | pointwise `max(x, 0)`. |
-| `RMSNorm` | effect | fused RMS normalisation. |
+#### Mma
+Matrix-multiply-accumulate `acc += lhs @ rhs` (effect form); per-target PTX
+lowering lives in [target](./target.md), the atom calling convention in
+[§3.7](#37-mma-atom-and-the-hand-written-calling-convention).
+
+#### ReLU
+Pointwise `max(x, 0)` (effect form).
+
+#### RMSNorm
+Fused RMS normalisation (effect form).
 
 ### 3.3 Tensor Ops (`tir.tensor.*`)
 
-| Op | Form | Purpose |
-|---|---|---|
-| `Reduce` | effect | `dst = reduce(src, axes, kind)` with `kind ∈ {SUM, MEAN}` (`ReduceKind` enum). |
+#### Reduce
+Axis reduction `dst = reduce(src, axes, kind)` (effect form).
 
 ### 3.4 Generic kind-tagged effect Ops (`tir.arith`)
 
-`Binary` and `Unary` are effect-form Ops that dispatch on a kind
-enum rather than carrying per-op classes. They appear as
-`Evaluate(op, args)` like every other TIR effect op:
+`Binary` / `Unary` are effect-form Ops that dispatch on a kind enum rather than
+per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
+`UnaryKind` / `ReduceKind` are compiler-wide tag enums shared across HIR and
+TIR; lowering preserves the kind value without re-mapping.
 
-```python
-@register_op(category="arith")
-class Binary(Op):
-    lhs:  Expr = ParamDef(...)
-    rhs:  Expr = ParamDef(...)
-    dst:  Expr = ParamDef(...)
-    kind: BinaryKind = ParamDef(...)
+#### Binary
+Kind-tagged binary effect op (`dst = lhs <BinaryKind> rhs`).
 
-@register_op(category="arith")
-class Unary(Op):
-    src:  Expr = ParamDef(...)
-    dst:  Expr = ParamDef(...)
-    kind: UnaryKind = ParamDef(...)
-```
-
-`BinaryKind` (`ADD` / `MUL` / `SUB` / `DIV`), `UnaryKind`
-(`RSQRT` / `CAST` / `NEG` / `RELU`), and `ReduceKind` (`SUM` /
-`MEAN`, used by §3.3 `Reduce`) are compiler-wide tag enums shared
-across HIR and TIR. Lowering preserves the kind value without
-re-mapping.
+#### Unary
+Kind-tagged unary effect op (`dst = <UnaryKind> src`).
 
 ### 3.5 `@intrinsic` — user-defined effect Stmts
 
