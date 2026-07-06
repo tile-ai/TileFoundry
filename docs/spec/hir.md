@@ -204,6 +204,21 @@ input (a transposed / permuted view) MUST carry explicit strides
 from its producer; an input that is neither default-stride nor
 carries explicit strides is rejected by verify / typeinfer.
 
+**`insert_slice(dst, update, offsets)` — dynamic-update-slice.** Returns a
+tensor equal to `dst` with `update` written into the window that begins at
+`offsets` and spans `update`'s shape — the value-form (SSA) spelling of
+"slice then store", distinct from `scatter` (data-dependent multi-index write).
+The result has `dst`'s type; an in-place realization is a lowering concern
+(the result is anchored on the `dst` buffer). Contract:
+
+1. `update` MUST have the same rank as `dst`, and the same dtype.
+2. `offsets` is an `i32` vector with one start per `dst` axis; its entries MAY
+   be runtime scalars (e.g. a loop induction variable).
+3. `dst` and `update` are **rank-1** — one start in `offsets`, a
+   contiguous window `[offsets[0], offsets[0] + update.shape[0])`.
+4. A statically-known window that exceeds `dst`'s extent is rejected by
+   typeinfer; a window resolved only at runtime is the caller's responsibility.
+
 The TIR side (`tir.tensor.Reduce`) remains
 `Reduce(src, dst, axes, kind)` with no extra parameters — the
 hardware-level dispatch (intra-thread loop / intra-warp shuffle /
