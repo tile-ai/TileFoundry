@@ -223,20 +223,26 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
 
 def _coord_ref(index_var, ctx: CodegenContext) -> str:
     """Render a ``local_tile`` coordinate. A compile-time integer literal is
-    emitted directly (``make_coord(1)``). A rank-0 scalar offset is a native
-    integer (a kernel-param scalar lowers to an ``int`` argument, a loop
-    induction variable is already native), so it is used by name. The legacy
-    all-1 offset tensor (``(1,)``) arrives as a kernel-param cute tensor, so its
-    single element is read out (``off_tensor(0)``). This is the only
-    tensor→scalar case — it is not a general mechanism."""
+    emitted directly (``make_coord(1)``). A rank-0 scalar is a native integer (a
+    kernel-param scalar lowers to an ``int`` argument, a loop induction variable
+    is already native), so it is used by name. A one-element ``(1,)`` offset
+    tensor (a ``cache_update`` ``cur_pos`` / gather index) is a cute tensor whose
+    single element is read out (``off_tensor(0)`` for a kernel param, ``off(0)``
+    otherwise). Any other rank fails closed — there is no general
+    tensor→coordinate mechanism."""
     if isinstance(index_var, Constant):
         return str(int(index_var.value))
     name = ctx.name_for(index_var)
     shape = getattr(getattr(index_var, "type", None), "shape", ()) or ()
     dims = tuple(getattr(d, "value", d) for d in shape)
-    if dims == (1,) and ctx.is_kernel_param(index_var):
-        return f"{name}_tensor(0)"
-    return name
+    if dims == ():
+        return name
+    if dims == (1,):
+        return f"{name}_tensor(0)" if ctx.is_kernel_param(index_var) else f"{name}(0)"
+    raise NotImplementedError(
+        f"local_tile coordinate from a rank-{len(dims)} offset {dims} "
+        "is not supported"
+    )
 
 
 @register_codegen_cuda(TensorView)

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Constant, Op
+from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
@@ -28,10 +28,10 @@ class InsertSlice(Op):
 
     1. ``update`` MUST have the same rank as ``dst``, and the same dtype.
     2. ``offsets`` gives one start per sliced dim. The 1-D case (the only
-       implemented rank) takes a single scalar start: a rank-0 (or all-1)
-       integer tensor for a runtime value, or a compile-time integer literal.
-       An N-D slice takes a rank-1 vector of length equal to the number of
-       sliced dims; that rides the same surface and lands with the N-D case.
+       implemented rank) takes a single scalar start: a rank-0 ``()`` integer
+       tensor for a runtime value, or a compile-time integer literal. An N-D
+       slice takes a rank-1 vector of length equal to the number of sliced dims;
+       that rides the same surface and lands with the N-D case.
     3. ``dst`` / ``update`` are rank-1 — one scalar start, a contiguous window
        ``[start, start + update.shape[0])``. Higher-rank ``dst`` / ``update``
        share this surface and are rejected at typeinfer.
@@ -56,14 +56,6 @@ def _static_len(shape) -> "int | None":
     return v if isinstance(v, int) else None
 
 
-def _is_scalar(shape) -> bool:
-    """A scalar start: rank 0, or every dim is the literal 1."""
-    return all(
-        (isinstance(d, int) and d == 1) or (isinstance(d, Constant) and d.value == 1)
-        for d in shape
-    )
-
-
 @register_typeinfer(InsertSlice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     dst_ty = ctx.type_of(call.args[0])
@@ -83,12 +75,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError(
             f"insert_slice: dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}"
         )
-    # The 1-D case takes a single scalar start: a rank-0 (or all-1) integer
-    # tensor for a runtime value, or a compile-time integer literal.
-    if not _is_scalar(off_ty.shape):
+    # The 1-D case takes a single scalar start: a rank-0 integer tensor for a
+    # runtime value, or a compile-time integer literal. A rank>=1 offset (incl.
+    # ``(1,)`` / ``(1, 1)``) is not the surface.
+    if len(off_ty.shape) != 0:
         raise TypeError(
-            f"insert_slice: offsets must be a scalar start for the 1-D case, "
-            f"got shape {off_ty.shape}"
+            f"insert_slice: offsets must be a rank-0 scalar start for the 1-D "
+            f"case, got shape {off_ty.shape}"
         )
     if off_ty.dtype not in (DType.i32, DType.i64):
         raise TypeError(

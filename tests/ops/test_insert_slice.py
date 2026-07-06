@@ -70,12 +70,27 @@ CASES = [
         (ten((4, 8), _F), ten((1, 8), _F), ten((), _I)),
         ExpectedError("only the 1-D case", exc=NotImplementedError),
     ),
-    # A rank-1 vector offset is not a scalar start for the 1-D case.
+    # A rank-1 vector offset is not a rank-0 scalar start for the 1-D case.
     TypeInferCase(
         "offsets_vector_rejected",
         _OP,
         (ten((8,), _F), ten((3,), _F), ten((2,), _I)),
-        ExpectedError("offsets must be a scalar start", exc=TypeError),
+        ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
+    ),
+    # A one-element ``(1,)`` offset is the legacy spelling and is rejected —
+    # the canonical 1-D offset is a rank-0 scalar.
+    TypeInferCase(
+        "offsets_one_vector_rejected",
+        _OP,
+        (ten((8,), _F), ten((3,), _F), ten((1,), _I)),
+        ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
+    ),
+    # A total-size-one multi-dim ``(1, 1)`` offset is also rejected.
+    TypeInferCase(
+        "offsets_multi_one_rejected",
+        _OP,
+        (ten((8,), _F), ten((3,), _F), ten((1, 1), _I)),
+        ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
     ),
     # offsets must be an integer scalar.
     TypeInferCase(

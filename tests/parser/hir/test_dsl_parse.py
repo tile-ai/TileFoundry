@@ -80,7 +80,7 @@ def test_parse_tf_namespace_attribute_callee() -> None:
 
 @func
 def _insert_slice_call(
-    dst: Tensor[(8,), "f32"], upd: Tensor[(3,), "f32"], off: Tensor[(1,), "i32"],
+    dst: Tensor[(8,), "f32"], upd: Tensor[(3,), "f32"], off: Tensor[(), "i32"],
 ) -> Tensor[(8,), "f32"]:
     return tf.insert_slice(dst, upd, off)
 
