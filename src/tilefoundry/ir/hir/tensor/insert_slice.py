@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
+from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
@@ -27,12 +27,14 @@ class InsertSlice(Op):
     (data-dependent multi-index). Contract:
 
     1. ``update`` MUST have the same rank as ``dst``, and the same dtype.
-    2. ``offsets`` is a rank-1 ``i32`` vector whose length equals ``dst``'s
-       rank — one start per ``dst`` axis; entries MAY be runtime scalars (e.g.
-       a loop induction variable).
-    3. ``dst`` / ``update`` are rank-1 — one start in ``offsets``, a contiguous
-       window ``[offsets[0], offsets[0] + update.shape[0])``. Higher-rank
-       per-dim offsets share this surface and are rejected at typeinfer.
+    2. ``offsets`` gives one start per sliced dim. The 1-D case (the only
+       implemented rank) takes a single scalar start: a rank-0 (or all-1)
+       integer tensor for a runtime value, or a compile-time integer literal.
+       An N-D slice takes a rank-1 vector of length equal to the number of
+       sliced dims; that rides the same surface and lands with the N-D case.
+    3. ``dst`` / ``update`` are rank-1 — one scalar start, a contiguous window
+       ``[start, start + update.shape[0])``. Higher-rank ``dst`` / ``update``
+       share this surface and are rejected at typeinfer.
     4. A statically-known window exceeding ``dst``'s extent is rejected by
        typeinfer; a window resolved only at runtime is checked by the eval /
        runtime guard.
@@ -54,6 +56,14 @@ def _static_len(shape) -> "int | None":
     return v if isinstance(v, int) else None
 
 
+def _is_scalar(shape) -> bool:
+    """A scalar start: rank 0, or every dim is the literal 1."""
+    return all(
+        (isinstance(d, int) and d == 1) or (isinstance(d, Constant) and d.value == 1)
+        for d in shape
+    )
+
+
 @register_typeinfer(InsertSlice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     dst_ty = ctx.type_of(call.args[0])
@@ -73,22 +83,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError(
             f"insert_slice: dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}"
         )
-    # ``offsets`` is a rank-1 per-dim start vector: one i32 entry per dst axis.
-    # A scalar (rank-0) offset is not the surface — the length must be a static
-    # extent equal to dst rank (i.e. ``(1,)`` in the 1-D case).
-    if len(off_ty.shape) != 1:
+    # The 1-D case takes a single scalar start: a rank-0 (or all-1) integer
+    # tensor for a runtime value, or a compile-time integer literal.
+    if not _is_scalar(off_ty.shape):
         raise TypeError(
-            f"insert_slice: offsets must be a rank-1 vector, got rank "
-            f"{len(off_ty.shape)}"
+            f"insert_slice: offsets must be a scalar start for the 1-D case, "
+            f"got shape {off_ty.shape}"
         )
-    off_len = _static_len(off_ty.shape)
-    if off_len is None or off_len != len(dst_ty.shape):
+    if off_ty.dtype not in (DType.i32, DType.i64):
         raise TypeError(
-            f"insert_slice: offsets length {off_len} must equal dst rank "
-            f"{len(dst_ty.shape)}"
+            f"insert_slice: offsets must be an integer scalar, got {off_ty.dtype}"
         )
-    if off_ty.dtype != DType.i32:
-        raise TypeError(f"insert_slice: offsets must be i32, got {off_ty.dtype}")
     # Static in-bounds check when both the update extent and (constant) offset
     # are known; a dynamic offset is checked at runtime by the caller.
     dst_n, upd_n = _static_len(dst_ty.shape), _static_len(upd_ty.shape)

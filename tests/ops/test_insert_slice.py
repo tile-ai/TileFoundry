@@ -1,9 +1,12 @@
-"""HIR insert_slice (dynamic-update-slice) typeinfer + eval.
+"""HIR insert_slice (dynamic-update-slice) typeinfer + eval, plus the in-place
+loop-carry lowering exercised through a single decode step.
 
 ``insert_slice(dst, update, offsets)`` returns ``dst`` with ``update`` written
-into the window starting at ``offsets`` (one i32 start per dim). This milestone
-implements the 1-D case; higher rank shares the surface and is rejected at
-typeinfer.
+into the window starting at ``offsets``. The 1-D case takes a single scalar
+start (a rank-0 integer tensor or an integer literal); higher rank shares the
+surface and is rejected at typeinfer. The decode-step tests exercise the
+loop-carry lowering (grid-region carry, full_like, tuple_get_item, cache_update,
+in-place insert_slice) and the cross-CTA reshard-owned sync.
 """
 from __future__ import annotations
 
@@ -25,67 +28,74 @@ _I = DType.i32
 _OP = InsertSlice()
 
 CASES = [
-    # 1-D window: returns dst's type unchanged.
+    # 1-D window with a rank-0 scalar offset: returns dst's type unchanged.
     TypeInferCase(
         "returns_dst_type",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((1,), _I)),
+        (ten((8,), _F), ten((3,), _F), ten((), _I)),
         ten((8,), _F),
     ),
     # A full-width update (same extent as dst) is in bounds.
     TypeInferCase(
         "full_width_update_ok",
         _OP,
-        (ten((8,), _F), ten((8,), _F), ten((1,), _I)),
+        (ten((8,), _F), ten((8,), _F), ten((), _I)),
+        ten((8,), _F),
+    ),
+    # A rank-0 scalar offset is the canonical 1-D surface.
+    TypeInferCase(
+        "offsets_scalar_ok",
+        _OP,
+        (ten((8,), _F), ten((3,), _F), ten((), _I)),
+        ten((8,), _F),
+    ),
+    # An integer literal is carried as an i64 scalar and accepted.
+    TypeInferCase(
+        "offsets_i64_literal_ok",
+        _OP,
+        (ten((8,), _F), ten((3,), _F), ten((), DType.i64)),
         ten((8,), _F),
     ),
     # update rank must equal dst rank.
     TypeInferCase(
         "rank_mismatch_rejected",
         _OP,
-        (ten((8,), _F), ten((2, 4), _F), ten((2,), _I)),
+        (ten((8,), _F), ten((2, 4), _F), ten((), _I)),
         ExpectedError("update rank .* must equal dst rank", exc=TypeError),
     ),
     # N-D not implemented yet (same surface).
     TypeInferCase(
         "nd_not_implemented",
         _OP,
-        (ten((4, 8), _F), ten((1, 8), _F), ten((2,), _I)),
+        (ten((4, 8), _F), ten((1, 8), _F), ten((), _I)),
         ExpectedError("only the 1-D case", exc=NotImplementedError),
     ),
-    # A rank-0 (scalar) offset is not the A surface — offsets is a vector.
+    # A rank-1 vector offset is not a scalar start for the 1-D case.
     TypeInferCase(
-        "offsets_scalar_rejected",
-        _OP,
-        (ten((8,), _F), ten((3,), _F), ten((), _I)),
-        ExpectedError("offsets must be a rank-1 vector", exc=TypeError),
-    ),
-    # offsets length must equal dst rank.
-    TypeInferCase(
-        "offsets_length_rejected",
+        "offsets_vector_rejected",
         _OP,
         (ten((8,), _F), ten((3,), _F), ten((2,), _I)),
-        ExpectedError("offsets length .* must equal dst rank", exc=TypeError),
+        ExpectedError("offsets must be a scalar start", exc=TypeError),
     ),
-    # offsets must be i32.
+    # offsets must be an integer scalar.
     TypeInferCase(
         "offsets_dtype_rejected",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((1,), _F)),
-        ExpectedError("offsets must be i32", exc=TypeError),
+        (ten((8,), _F), ten((3,), _F), ten((), _F)),
+        ExpectedError("offsets must be an integer scalar", exc=TypeError),
     ),
     # dst / update dtype must match.
     TypeInferCase(
         "dtype_mismatch_rejected",
         _OP,
-        (ten((8,), _F), ten((3,), DType.bf16), ten((1,), _I)),
+        (ten((8,), _F), ten((3,), DType.bf16), ten((), _I)),
         ExpectedError("dst/update dtype mismatch", exc=TypeError),
     ),
     # A statically over-long update is rejected.
     TypeInferCase(
         "static_overlong_update_rejected",
         _OP,
-        (ten((8,), _F), ten((10,), _F), ten((1,), _I)),
+        (ten((8,), _F), ten((10,), _F), ten((), _I)),
         ExpectedError("exceeds dst extent", exc=TypeError),
     ),
 ]
@@ -113,7 +123,7 @@ def _ref(dst, upd, start):
     ids=["interior", "elem_start", "elem_end", "full"],
 )
 def test_insert_slice_eval(dst, upd, start):
-    offs = torch.tensor([start], dtype=torch.int32)
+    offs = torch.tensor(start, dtype=torch.int32)
     run_eval_case(EvalCase("", _OP, (dst, upd, offs), _ref(dst, upd, start), atol=0.0))
 
 
@@ -137,7 +147,7 @@ def test_insert_slice_eval_out_of_bounds(dst, upd, start):
     from tilefoundry.visitor_registry.contexts import TypeInferContext  # noqa: PLC0415
     from tilefoundry.visitor_registry.visitors import TypeInferVisitor  # noqa: PLC0415
 
-    offs = torch.tensor([start], dtype=torch.int32)
+    offs = torch.tensor(start, dtype=torch.int32)
     inputs = (dst, upd, offs)
     dtypes = (_F, _F, _I)
     params = tuple(
@@ -150,3 +160,201 @@ def test_insert_slice_eval_out_of_bounds(dst, upd, start):
     fn = Function.build(name="eval_oob", params=params, body=call, return_type=result_type)
     with pytest.raises(ValueError, match="out of bounds"):
         evaluate(fn, *inputs, device="cpu")
+
+
+# ── single decode step: in-place carry lowering + reshard-owned sync ──────
+
+from tilefoundry import func, module  # noqa: E402
+from tilefoundry.dsl import Mesh, Tensor, Topology  # noqa: E402
+from tilefoundry.dsl.storage import gmem  # noqa: E402
+from tilefoundry.dsl.tf import *  # noqa: E402,F401,F403
+from tilefoundry.ir.core.module import Module  # noqa: E402
+from tilefoundry.ir.tir.memory.alloc_tensor import AllocTensor  # noqa: E402
+from tilefoundry.ir.tir.memory.tensor_view import TensorView as TirTensorView  # noqa: E402
+from tilefoundry.ir.tir.memory.copy import Copy as TirCopy  # noqa: E402
+from tilefoundry.ir.tir.sync import Sync as TirSync  # noqa: E402
+from tilefoundry.ir.tir.stmts import (  # noqa: E402
+    Evaluate,
+    For,
+    LetStmt,
+    MeshScope,
+    Sequential,
+)
+from tilefoundry.ir.types.shard import Layout as ShardCuteLayout  # noqa: E402
+from tilefoundry.passes.transforms import HirToTirPass  # noqa: E402
+
+_DEC_D = 4
+_DEC_STEPS = 3
+_CACHE_CAP = 4
+_KV_HEADS = 1
+_HEAD_DIM = 4
+
+
+@module(entry="decode_step")
+class _DecodeStep:
+    """A single decode step exercising the in-place loop-carry lowerings: a
+    two-carry grid region (output accumulator + running total → a tuple, so
+    ``tuple_get_item``), ``full_like`` inits, an in-place ``insert_slice`` write
+    at a dynamic scalar offset, and a rank-4 ``cache_update`` KV write."""
+
+    @func(topologies=(Topology("thread", 1),))
+    def decode_step(
+        x: Tensor[(_DEC_D,), "f32"],
+        v: Tensor[(1,), "f32"],
+        kcache: Tensor[(1, _CACHE_CAP, _KV_HEADS, _HEAD_DIM), "f32"],
+        kin: Tensor[(1, 1, _KV_HEADS, _HEAD_DIM), "f32"],
+        cur: Tensor[(1,), "i32"],
+        spos: Tensor[(1,), "i32"],
+        off: Tensor[(), "i32"],
+    ):
+        with Mesh(Topology("thread", 1), (1,), ("t",)) as m:
+            xr = reshard(x, (_DEC_D @ m.t,), "rmem")
+            vr = reshard(v, (1 @ m.t,), "rmem")
+            acc = full_like(xr, 0.0)
+            cnt = full_like(xr, 0.0)
+            for i in tile(_DEC_STEPS):
+                acc = insert_slice(acc, vr, off)
+                cnt = add(cnt, xr)
+            result = add(acc, cnt)
+            kc = cache_update(kcache, cur, spos, kin)
+            return (reshard(result, (_DEC_D @ m.t,), "gmem"), kc)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_decode_step_matches_torch() -> None:
+    """The decode step compiles and runs on GPU; the accumulator write at a
+    dynamic offset and the KV cache update match a torch reference."""
+    import tilefoundry  # noqa: PLC0415
+
+    rm = tilefoundry.compile(_DecodeStep, target="cuda")
+    x = torch.randn(_DEC_D, device="cuda")
+    v = torch.randn(1, device="cuda")
+    kcache = torch.zeros(1, _CACHE_CAP, _KV_HEADS, _HEAD_DIM, device="cuda")
+    kin = torch.randn(1, 1, _KV_HEADS, _HEAD_DIM, device="cuda")
+    cur = torch.tensor([1], dtype=torch.int32, device="cuda")
+    spos = torch.tensor([1], dtype=torch.int32, device="cuda")
+    out = torch.empty(_DEC_D, device="cuda")
+    kc_out = torch.empty_like(kcache)
+    off = 2
+    rm(x, v, kcache, kin, cur, spos, off, out, kc_out)
+    torch.cuda.synchronize()
+
+    exp = _DEC_STEPS * x.clone()
+    exp[off] = exp[off] + v[0]
+    assert torch.allclose(out, exp, rtol=1e-4, atol=1e-4), (out - exp).abs().max()
+    exp_kc = kcache.clone()
+    exp_kc[:, 1:2] = kin
+    assert torch.allclose(kc_out, exp_kc, rtol=1e-4, atol=1e-4), (kc_out - exp_kc).abs().max()
+
+
+def _lower(mod):
+    return HirToTirPass().run(mod).functions[0]
+
+
+def _walk(node, in_loop, out):
+    if isinstance(node, Sequential):
+        for s in node.body:
+            _walk(s, in_loop, out)
+    elif isinstance(node, MeshScope):
+        _walk(node.body, in_loop, out)
+    elif isinstance(node, For):
+        _walk(node.body, True, out)
+    elif isinstance(node, LetStmt):
+        out.append((in_loop, "let", node.var, node.value))
+        _walk(node.body, in_loop, out)
+    elif isinstance(node, Evaluate):
+        out.append((in_loop, "eval", None, node))
+
+
+def _op_of(value):
+    return getattr(value, "target", None) or getattr(value, "callable", None)
+
+
+def test_decode_step_in_place_carry() -> None:
+    """The loop-carried ``acc = insert_slice(acc, …)`` reuses a single carry
+    buffer: the buffer is allocated once before the loop, written in place via a
+    slice-view Copy inside the loop, with no replacement allocation in the loop
+    body (the yielded result aliases the carry buffer)."""
+    pf = _lower(_DecodeStep)
+    nodes = []
+    _walk(pf.body, False, nodes)
+
+    alloc_before = {
+        id(var)
+        for in_loop, kind, var, val in nodes
+        if kind == "let" and not in_loop and isinstance(_op_of(val), AllocTensor)
+    }
+    alloc_in_loop = {
+        id(var)
+        for in_loop, kind, var, val in nodes
+        if kind == "let" and in_loop and isinstance(_op_of(val), AllocTensor)
+    }
+    # In-loop slice-view window over a carry buffer (an rmem AllocTensor result,
+    # not a kernel-param cache): this is the in-place insert_slice window.
+    windows = [
+        (var, val.args[0])
+        for in_loop, kind, var, val in nodes
+        if kind == "let"
+        and in_loop
+        and isinstance(_op_of(val), TirTensorView)
+        and len(val.args) > 1
+        and id(val.args[0]) in alloc_before
+    ]
+    assert windows, "no in-place insert_slice window over a carry buffer found"
+    win_var, carry_buf = windows[0]
+
+    # The carry buffer is allocated once before the loop and never re-allocated
+    # inside it (single reused buffer, no replacement alloc).
+    assert id(carry_buf) in alloc_before
+    assert id(carry_buf) not in alloc_in_loop
+
+    # The window is written in place (a Copy whose destination is the window).
+    copied_into_window = any(
+        kind == "eval"
+        and isinstance(_op_of(val), TirCopy)
+        and len(val.args) == 2
+        and val.args[1] is win_var
+        for in_loop, kind, var, val in nodes
+    )
+    assert copied_into_window, "insert_slice window is not written in place"
+
+
+@module(entry="xreshard")
+class _CrossCtaReshard:
+    """An intermediate cross-CTA reshard with a CTA ownership change (split
+    axis 0 → split axis 1), whose result is consumed further so it lowers
+    through the reshard path (a return-position reshard is emitted directly)."""
+
+    @func(topologies=(Topology("cta", 2),))
+    def xreshard(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_D), "f32"]:
+        with Mesh(topology="cta", layout=ShardCuteLayout(shape=(2,), strides=(1,))) as cta:
+            g1 = reshard(a, layout=(2 @ cta, _DEC_D), storage=gmem)
+            g2 = reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
+            out = mul(g2, g2)
+            return reshard(out, layout=(2, _DEC_D @ cta), storage=gmem)
+
+
+def test_cross_cta_reshard_owned_sync() -> None:
+    """A cross-CTA reshard (ownership change) lowers to sync-then-reshard: the
+    grid sync is intrinsic to the reshard lowering and is emitted before the
+    reshard's copy. The removed ``_dirty_roots`` heuristic leaves no residue."""
+    pf = _lower(Module(name="m", functions=(_CrossCtaReshard.functions[0],), entry="xreshard"))
+    nodes = []
+    _walk(pf.body, False, nodes)
+
+    kinds = [
+        type(_op_of(val)).__name__
+        for in_loop, kind, var, val in nodes
+        if _op_of(val) is not None
+    ]
+    assert "Sync" in kinds, f"no reshard-owned grid sync emitted: {kinds}"
+    # The sync fences before the cross-CTA reshard's copy.
+    assert kinds.index("Sync") < len(kinds) - 1 - kinds[::-1].index("Copy")
+
+    import inspect  # noqa: PLC0415
+
+    from tilefoundry.passes.transforms import hir_to_tir  # noqa: PLC0415
+
+    assert "_dirty_roots" not in inspect.getsource(hir_to_tir), (
+        "the _dirty_roots heuristic must be fully removed"
+    )

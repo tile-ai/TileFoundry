@@ -187,6 +187,16 @@ class Reshard(Op):
       over ``shard_layout_local_shape(layout)`` with size-1 → 0 (per-instance).
     - ``layout=Layout(strides=tuple)`` (verbose) → dest strides taken verbatim;
       typeinfer MUST NOT rewrite (e.g. SM80 MMA fragment layouts).
+
+    Cross-CTA fence. The grid fence for a cross-CTA reshard is owned by the
+    reshard lowering, not a separately authored sync. When a reshard reads a
+    gmem shard produced under a different CTA ownership (an ownership change
+    across a cta mesh), the naive lowering is sync-then-reshard: a grid barrier
+    is emitted before the reshard so every CTA's prior shard writes are visible.
+    This is a scenario-dispatch point — the naive path always fences; a future
+    path may skip the fence when it can prove visibility. The naive path owns
+    only the fence; cross-CTA data redistribution (all-to-all / gather across
+    CTAs) is not implemented here and belongs to a future scenario.
     """
     x = ParamDef(kind="input", pattern=Tensor)
     layout = ParamDef(kind="attribute", annotation=ShardLayout, default=None)

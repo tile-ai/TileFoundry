@@ -8,6 +8,7 @@ from functools import reduce
 from operator import mul
 
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.ir.core import Constant
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.types.dim import DimVar
@@ -220,6 +221,24 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
     return preamble, value_expr
 
 
+def _coord_ref(index_var, ctx: CodegenContext) -> str:
+    """Render a ``local_tile`` coordinate. A compile-time integer literal is
+    emitted directly (``make_coord(1)``). A rank-0 scalar offset is a native
+    integer (a kernel-param scalar lowers to an ``int`` argument, a loop
+    induction variable is already native), so it is used by name. The legacy
+    all-1 offset tensor (``(1,)``) arrives as a kernel-param cute tensor, so its
+    single element is read out (``off_tensor(0)``). This is the only
+    tensor→scalar case — it is not a general mechanism."""
+    if isinstance(index_var, Constant):
+        return str(int(index_var.value))
+    name = ctx.name_for(index_var)
+    shape = getattr(getattr(index_var, "type", None), "shape", ()) or ()
+    dims = tuple(getattr(d, "value", d) for d in shape)
+    if dims == (1,) and ctx.is_kernel_param(index_var):
+        return f"{name}_tensor(0)"
+    return name
+
+
 @register_codegen_cuda(TensorView)
 def _emit(let: LetStmt, ctx: CodegenContext) -> None:
     call = let.value
@@ -230,18 +249,37 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
     # Slice view (second arg is the index Var)
     if len(call.args) > 1:
         mem_name = ctx.name_for(memory_var)
-        if ctx.is_kernel_param(memory_var):
-            tensor_ref = f"{mem_name}_tensor"
-        else:
-            tensor_ref = mem_name
         index_var = call.args[1]
-        idx_name = ctx.name_for(index_var)
-        K = upper_bound(let.var.type.shape[0]) if let.var.type.shape else 1
+        if isinstance(getattr(memory_var.type, "layout", None), SL):
+            # A sharded intermediate buffer is a ShardTensor; project to the
+            # per-thread cute tensor before ``local_tile`` (an in-place
+            # ``insert_slice`` / ``cache_update`` window over a carried buffer).
+            # ``local()`` coalesces the per-shard layout to a flat 1-D view, so
+            # the tile size is the window's *total per-shard element count* and
+            # the coord indexes that flat view in whole-window blocks.
+            tensor_ref = f"tilefoundry::local({mem_name})"
+            win_layout = getattr(let.var.type, "layout", None)
+            if isinstance(win_layout, SL):
+                local_shape = shard_layout_local_shape(win_layout)
+            else:
+                local_shape = tuple(let.var.type.shape)
+            K = reduce(mul, (int(upper_bound(s)) for s in local_shape), 1)
+        else:
+            if ctx.is_kernel_param(memory_var):
+                tensor_ref = f"{mem_name}_tensor"
+            else:
+                tensor_ref = mem_name
+            # The tensor is a flat rank-1 cute view (a kernel param is wrapped as
+            # a 1-D ``Shape<total>`` tensor), so the tile is the window's total
+            # element count and the coord indexes it in whole-window blocks.
+            K = reduce(
+                mul, (int(upper_bound(s)) for s in let.var.type.shape), 1
+            )
         ctx.emit(
             f"auto {var_name} = cute::local_tile("
             f"{tensor_ref}, "
             f"cute::make_shape(cute::Int<{K}>{{}}), "
-            f"cute::make_coord({idx_name}));"
+            f"cute::make_coord({_coord_ref(index_var, ctx)}));"
         )
         return
 
