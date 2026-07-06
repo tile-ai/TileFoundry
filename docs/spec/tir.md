@@ -313,36 +313,9 @@ under the function's snake-case name. Parameters MUST be annotated
 
 ### 3.6 `Launch`
 
-`Launch` is the effect Op for a host-side launch of a device kernel.
-It appears only in a CPU (host) entry body and produces no value. Its
-Op attributes carry the non-grid/block launch configuration; the
-callee and the grid/block extents flow through the `Evaluate` args. A
-launch is `Evaluate(Launch(...), args)` with
-
-```
-args = (SymbolRef(callee),
-        grid_x, grid_y, grid_z, block_x, block_y, block_z,
-        *forwarded_args)
-```
-
-- **callee**. `args[0]` MUST be a `SymbolRef` ([§9](#9-symbolref))
-  resolving to a device `PrimFunction` whose target is a CUDA target.
-- **grid / block**. `args[1:7]` are the grid then block extents in the
-  fixed order `grid_x, grid_y, grid_z, block_x, block_y, block_z`.
-  Each is an `Expr`: a `Constant` for a static extent, the computed
-  dim `Expr` for a launch-provided (dynamic) one. They are launch
-  configuration, not kernel parameters — the device observes its
-  program geometry through `gridDim` / `blockIdx` and the codegen
-  `program_dim` / `program_shape` accessors
-  ([codegen §6](./codegen.md#6-program-shape-and-dynamic-cta)).
-- **forwarded args**. The remaining `args` bind the callee's
-  host-visible parameters in declaration order. They MUST NOT include
-  the hidden shape-scalar parameters ([§7](#7-shapeof)), which the
-  host fills from a tensor argument's runtime shape.
-- **attributes**. The Op attributes carry the non-grid/block launch
-  config — `cluster`, `dynamic_smem`, `stream`, `attrs`. A `cluster` /
-  `stream` / `attrs` value the current CUDA target does not support
-  MUST be rejected in target lowering.
+Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
+the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
+the non-grid/block launch config through the Op attributes.
 
 ### 3.7 MMA atom and the hand-written calling convention
 
