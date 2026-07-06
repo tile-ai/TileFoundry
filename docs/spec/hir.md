@@ -212,8 +212,9 @@ The result has `dst`'s type; an in-place realization is a lowering concern
 (the result is anchored on the `dst` buffer). Contract:
 
 1. `update` MUST have the same rank as `dst`, and the same dtype.
-2. `offsets` is an `i32` vector with one start per `dst` axis; its entries MAY
-   be runtime scalars (e.g. a loop induction variable).
+2. `offsets` is a rank-1 `i32` vector whose length equals `dst`'s rank — one
+   start per `dst` axis; its entries MAY be runtime scalars (e.g. a loop
+   induction variable).
 3. `dst` and `update` are **rank-1** — one start in `offsets`, a
    contiguous window `[offsets[0], offsets[0] + update.shape[0])`.
 4. A statically-known window that exceeds `dst`'s extent is rejected by

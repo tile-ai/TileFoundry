@@ -59,9 +59,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError(
             f"insert_slice: dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}"
         )
-    # ``offsets`` is the per-dim start vector: one i32 entry per dst axis.
+    # ``offsets`` is a rank-1 per-dim start vector: one i32 entry per dst axis.
+    # A scalar (rank-0) offset is not the surface — the length must be a static
+    # extent equal to dst rank (i.e. ``(1,)`` in the 1-D case).
+    if len(off_ty.shape) != 1:
+        raise TypeError(
+            f"insert_slice: offsets must be a rank-1 vector, got rank "
+            f"{len(off_ty.shape)}"
+        )
     off_len = _static_len(off_ty.shape)
-    if off_len is not None and off_len != len(dst_ty.shape):
+    if off_len is None or off_len != len(dst_ty.shape):
         raise TypeError(
             f"insert_slice: offsets length {off_len} must equal dst rank "
             f"{len(dst_ty.shape)}"
