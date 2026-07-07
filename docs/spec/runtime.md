@@ -413,7 +413,7 @@ time** from the operand `ShardLayout`s, together with any codegen-static geometr
 passed as template parameters, through a template trait, and is selected inside
 the entry (`if constexpr`). Codegen emits one uniform call per op and never
 selects a tier, computes a per-tier parameter, or carries the selection on the
-TIR op. `ops::reduce` ([§3.5](#35-tilefoundryopsreduce-sharded-reduction))
+TIR op. `ops::reduce` ([§3.5](#35-tilefoundryopsreduce-reduction-family))
 derives its reduction level from the operand shard layouts and `ops::sync`
 ([§3.4](#34-tilefoundryopssync-mesh-scoped-barrier)) derives its participant
 predicate from the barrier geometry; both are instances of this principle. The
@@ -504,32 +504,44 @@ Preconditions:
 - every CTA of the launch executes the barrier (it counts the full `gridDim`)
 - `bar` points at a zero-initialized two-word counter pair reserved for this use
 
-### 3.5 `tilefoundry::ops::reduce` (sharded reduction)
+### 3.5 `tilefoundry::ops::reduce` (reduction family)
 
 ```cpp
+// Sharded overloads — reduce over compile-time Axes, operands carry ShardLayout.
 template <class Op, class Axes, class SrcT, class DstT>
 __device__ void reduce(SrcT const& src, DstT& dst);
 template <class Op, class Axes, class SrcT, class DstT, class WorkspaceT>
 __device__ void reduce(SrcT const& src, DstT& dst, WorkspaceT& workspace);
+
+// Non-sharded rank-aware overloads — reduce over runtime extents.
+template <class Op, class TIn, class TOut>
+__device__ void reduce(TIn const& src, TOut& dst, int N, Op op = {});        // 1-D → scalar
+template <class Op, class TIn, class TOut>
+__device__ void reduce(TIn const& src, TOut& dst, int M, int K, Op op = {}); // (M, K) → (M,)
 ```
 
-The single public entry for a sharded reduction of `src` into `dst` under combine
-`Op` over the reduced `Axes` — one name, `tilefoundry::ops::reduce`, with the
-workspace-carrying overload distinguished only by arity, never a scenario-named
-variant. `Op` is one of the SUM / MEAN / MAX combines; MEAN is carried as a SUM
-plus one final divide by the total reduced extent. The reduced mesh axes are
-those a source `Split` collapses to a `Broadcast` in `dst`.
+`tilefoundry::ops::reduce` is the **single public name** for the whole reduction
+family; the overloads are distinguished only by parameter shape, never by a
+scenario-coded name. `Op` is one of the SUM / MEAN / MAX combines; MEAN is
+carried as a SUM plus one final divide by the reduced extent. Any per-level /
+per-tier helper (`reduce_impl::*`, the layered dispatch) is internal and MUST NOT
+appear on the public surface.
 
-`workspace` is optional shared-memory staging, supplied through the 3-arg
-overload: it is used only when the reduction crosses warps, and a reduction
-contained within a warp uses the 2-arg overload. Its capacity is sized by the
-lowering and MUST be known at allocation time.
+- **Sharded overloads** reduce over the compile-time `Axes` of `ShardLayout`
+  operands; the reduced mesh axes are those a source `Split` collapses to a
+  `Broadcast` in `dst`. `workspace` is optional shared-memory staging supplied
+  through the 3-arg overload: it is used only when the reduction crosses warps,
+  and a reduction contained within a warp uses the 2-arg overload; its capacity
+  is sized by the lowering and MUST be known at allocation time.
+- **Non-sharded overloads** reduce a plain (non-`ShardLayout`) tensor over
+  runtime extents: `(src, dst, N)` folds a 1-D `src` to the scalar `dst`, and
+  `(src, dst, M, K)` folds each of `M` rows over its `K` columns.
 
-Per the runtime-owned dispatch principle ([§3](#3-runtime-ops)), the active
-reduction level (intra-warp, cross-warp, cross-CTA) and its warp grouping are
-derived at compile time from the `(src, dst)` operand `ShardLayout`s and selected
-inside the entry; codegen does not choose the level. A reduction whose reduced
-axis crosses CTA boundaries is not supported.
+Per the runtime-owned dispatch principle ([§3](#3-runtime-ops)), for the sharded
+overloads the active reduction level (intra-warp, cross-warp, cross-CTA) and its
+warp grouping are derived at compile time from the `(src, dst)` operand
+`ShardLayout`s and selected inside the entry; codegen does not choose the level.
+A reduction whose reduced axis crosses CTA boundaries is not supported.
 
 ### 3.6 `tilefoundry::ops::copy_async` (async gmem→smem staging)
 
