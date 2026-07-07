@@ -1,8 +1,6 @@
 """HIR reference interpreter.
 
 Walks a HIR ``Function`` body and returns concrete torch values.
-
-Spec: evaluator.md §2 §4 §5
 """
 from __future__ import annotations
 

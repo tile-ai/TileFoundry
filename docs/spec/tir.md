@@ -495,11 +495,19 @@ A `T.mma` carrying an `atom` MUST satisfy:
   `rhs.layout == atom.B`.
 - **scope**: some mesh on the active `MeshScope` stack provides the
   atom's required thread scope —
-  `mesh_scope_matches_required_scope(mesh, atom.required_scope)`: same
-  topology kind, a self-consistent (`topology domain == layout extent`)
-  inverse-projectable mesh, and the **exact** required thread-value
-  layout shape and strides. A flat lane layout that cannot host the
-  atom's multi-axis fragment `Split` is rejected.
+  `mesh_scope_matches_required_scope(mesh, atom.required_scope)`. The
+  match is identity- and name-independent (mesh object identity, the
+  binding-var name, and axis names are not compared); it holds iff:
+  - the two meshes share the same program topology level — a `cta`
+    scope is never a `thread` / warp scope, even when its layout carries
+    the same shape;
+  - both topology domains (the product of the topology extents) are
+    statically known;
+  - each mesh is self-consistent (`topology domain == layout extent`),
+    and the enclosing mesh is inverse-projectable;
+  - the thread-value decomposition matches **exactly** — same layout
+    shape and strides. A flat lane layout cannot host the atom's
+    multi-axis fragment `Split` and is rejected.
 
 Per-target PTX emission dispatches on the atom ([target](./target.md)).
 

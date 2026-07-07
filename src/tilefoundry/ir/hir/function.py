@@ -21,19 +21,7 @@ def _callable_type_for(params: tuple[Var, ...], return_type: Type) -> CallableTy
 
 @dataclass(frozen=True)
 class Function(Expr):
-    """hir function container. body is a single Expr (SSA-as-DAG).
-
-    ``Function`` is an ``Expr`` subclass; its ``Expr.type`` is the
-    IR-level ``CallableType`` projected from ``params`` + ``return_type``.
-    Construction sites SHOULD use :meth:`Function.build` so the ``type``
-    projection stays consistent.
-
-    ``topologies`` is the single-function convenience path: declared
-    ``Topology`` values available for name resolution in
-    ``with Mesh(topology="cta", ...)``. When a standalone ``Function``
-    enters ``compile`` / ``jit``, its topologies lift to the enclosing
-    ``Module``.
-    """
+    """HIR function container: a pure-SSA ``Expr`` whose value type is its callable signature."""
     name: str
     params: tuple[Var, ...]
     body: Expr | None                       # None for a dispatch prototype (DSL ``pass``)
@@ -74,12 +62,9 @@ class Function(Expr):
     def add_variant(self, variant: "Function") -> None:
         """Append a specialization ``variant`` during authoring.
 
-        ``Function`` is a frozen, hashable dataclass and ``variants`` is in
-        eq/hash, so accumulation uses controlled authoring-phase mutation
-        (``object.__setattr__``). It is legal only before the base enters a
-        ``Module``: ``Module`` construction seals the base (sets ``_sealed``)
-        and any later ``add_variant`` raises. A base accumulating variants
-        MUST NOT be hashed until it is sealed.
+        ``variants`` participates in eq/hash, so accumulation uses controlled
+        authoring-phase mutation (``object.__setattr__``); a sealed base
+        rejects further variants.
         """
         if getattr(self, "_sealed", False):
             raise RuntimeError(
@@ -121,15 +106,7 @@ def canonical_specialization_signature(
 
 
 def _check_arg_against_param(call, ctx, callee, i, param, arg_ty: Type) -> None:
-    """Validate one call argument against a callee parameter.
-
-    A parameter declared *without* sharding (``TensorType`` with ``layout is
-    None``) is a logical tensor: its layout is unconstrained, so an argument of
-    any layout (plain / replicated / split / partial) is accepted as long as
-    its logical shape and dtype match. A parameter declared *with* a
-    ``ShardLayout`` is an explicit layout constraint: the argument's type must
-    match it exactly. Non-tensor parameters require exact type equality.
-    """
+    """Validate one call argument against a callee parameter."""
     p = param.type
     if isinstance(p, TensorType) and isinstance(arg_ty, TensorType) and p.layout is None:
         if arg_ty.shape != p.shape or arg_ty.dtype != p.dtype:
@@ -150,27 +127,7 @@ def _check_arg_against_param(call, ctx, callee, i, param, arg_ty: Type) -> None:
 
 @register_typeinfer(Function)
 def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
-    """Typeinfer handler for ``Call(target=hir.Function, args=...)``.
-
-    The callee body is re-derived under the *actual* argument types: each
-    parameter is bound to its caller argument's type and the body is
-    typeinferred in a fresh context, so a layout (sharding) supplied by the
-    caller flows into a layout-unconstrained (plain) parameter and propagates
-    through the body. A parameter that declares an explicit ``ShardLayout``
-    constrains its argument (mismatch fails at the boundary); a plain parameter
-    only constrains logical shape / dtype. The derived body type is this call's
-    result, so the callee specializes per call site.
-
-    When the body cannot express a propagated sharding (e.g. a reshape whose
-    cute factorization straddles a new axis), it fails at that op rather than
-    being rejected at the boundary.
-
-    A dispatch prototype callee (``variants != ()``, ``body is None``) has no
-    body to re-derive: dispatch selects a variant by the runtime argument
-    shapes, and every variant shares the prototype's declared signature, so the
-    call's result is the prototype's declared ``return_type``. The prototype
-    body (``None``) is never inspected.
-    """
+    """Typeinfer handler for ``Call(target=hir.Function, args=...)``."""
     callee: Function = call.target  # type: ignore[assignment]
     expected = len(callee.params)
     got = len(call.args)

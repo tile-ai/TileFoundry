@@ -53,6 +53,35 @@ namespace and creates a parser-lexical mesh binding;
 `ShardLayout.mesh` MUST point at an active binding on the lexical
 path.
 
+**Value type.** `Function.type` is the IR-level `CallableType`
+([types §7](./types.md#7-callabletype)) projected from `params` +
+`return_type`. The projection is fixed at construction and stays
+consistent across construction sites.
+
+**Call typing.** A `Call` whose target is a `Function` types by
+re-deriving the callee under the *actual* argument types: each
+parameter binds to its caller argument's type and the body is
+typeinferred afresh, so the callee **specializes per call site** and a
+caller-supplied layout (sharding) flows into a layout-unconstrained
+parameter and propagates through the body. Argument ↔ parameter
+matching is:
+
+- Arity MUST match — exactly one argument per parameter.
+- A parameter that is a `TensorType` with `layout is None` is a
+  **logical tensor**: its layout is unconstrained, so an argument of
+  any layout (plain / replicated / split / partial) is accepted when
+  its logical `shape` and `dtype` match.
+- A parameter that carries a `ShardLayout` is an explicit layout
+  constraint: the argument type MUST match it exactly.
+- Any other parameter requires exact type equality.
+
+When the body cannot express a propagated sharding (e.g. a reshape
+whose cute factorization straddles a new axis), typeinfer fails at that
+op, not at the boundary. A dispatch-prototype callee (`variants != ()`,
+`body is None`) is not re-derived: the call's result is the declared
+`return_type` and the `None` body is never inspected (variant selection
+is [§5](#5-dispatch-specializations)).
+
 **Signature annotation `Layout.strides` materialization.** A
 `Tensor[..., (sugar)]` annotation on a parameter or return appears
 at the kernel boundary, where the underlying engine is a shared
@@ -279,6 +308,13 @@ Every constraint below is enforced by the registered
 ([visitor-registry §4](./visitor-registry.md)).
 
 - `Function.body` is a single Expr; Stmts MUST NOT appear.
+- `Function.params` entries MUST be `Var`s.
+- Within a `Function` signature, every occurrence of a same-name
+  `DimVar` across `params` and `return_type` MUST agree on its
+  `(lo, hi)` bounds; a disagreement is a verify error. A
+  `DimVarRangePat` specialization MUST anchor to a `DimVar` reachable
+  from an input parameter and lie within that `DimVar`'s envelope
+  ([§5](#5-dispatch-specializations)).
 - `Local(x)`: `x.type.layout` MUST be `ShardLayout`. The result
   shape contracts per the `Split` axes; dtype is preserved; layout
   becomes the corresponding local layout.

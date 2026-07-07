@@ -1,23 +1,4 @@
-"""HIR → ``graphviz.Digraph`` visitor.
-
-Walks an ``HirFunction`` (or ``Module``) directly into a typed DOT
-graph. No intermediate ``ViewerModel`` layer.
-
-Key contracts:
-
-* **visual_id** = ``"__".join(call_path) + "__" + local`` — call-path
-  scoped so the same callee inline-expanded twice produces distinct
-  DOT node ids and distinct ``DetailIndex`` entries.
-* **Unified Function-node emitter** — ``Call(target=hir.Function)`` and
-  a top-level ``HirFunction`` go through the same path. The title row
-  carries a leading toggle-icon port plus a clickable title cell, so
-  both forms receive identical click affordances (so a Call-of-Function
-  node is clickable, not just a standalone Function).
-* **DetailIndex** — ``dict[visual_id, DetailRef]``. Builder fills it
-  during the walk; the ``/api/expr/<visual_id>`` endpoint reads ``DetailRef``
-  and formats panel JSON on demand. ``DetailRef`` holds the live HIR
-  expr plus minimal context (kind, call_path).
-"""
+"""HIR / Module → ``graphviz.Digraph`` visitor (no intermediate model)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

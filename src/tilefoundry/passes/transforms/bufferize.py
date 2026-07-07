@@ -1,20 +1,8 @@
-"""BufferizePass — TIR→TIR buffer-planning pass.
-
-
-Input is already explicit-buffer-param ``PrimFunction`` produced by
-``HirToTirPass`` (no MLIR-style value→buffer IR shape conversion). This
-pass collects logical buffer lifetimes and assigns physical placement.
-
-The MVP policy is:
-- every logical buffer (each ``LetStmt(var, value=Call(AllocTensor, ...))``)
-  gets its own independent physical allocation
-- no reuse / pooling / lifetime-aware overlap
+"""BufferizePass: TIR buffer-planning pass — logical-buffer lifetime + physical placement.
 
 Lifetime collection and scheduling are split into the ``LifetimeCollector``
-and ``BufferScheduler`` hooks so a real scheduler can replace the policy
-later without touching the pass boundary. With trivial impls the IR is
-returned structurally identical (passes 7's ``test_bufferize_pass_trivial``
-contract: stmt/out-param shape unchanged).
+and ``BufferScheduler`` hooks so a real scheduler can replace the placement
+policy without touching the pass boundary.
 """
 from __future__ import annotations
 

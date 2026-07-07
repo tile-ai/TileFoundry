@@ -1,7 +1,4 @@
-"""HIR reference interpreter — a codegen-independent value oracle.
-
-Spec: evaluator.md
-"""
+"""HIR reference interpreter — a codegen-independent value oracle."""
 from __future__ import annotations
 
 from typing import Any

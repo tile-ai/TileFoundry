@@ -1,16 +1,4 @@
-"""``T.cuda`` — the CUDA (NVIDIA-GPU) platform sub-namespace of ``dsl.T``.
-
-Spec: parser.md §2.6
-
-Platform sub-namespaces hold platform-specific instruction surfaces that are
-**compile-time descriptors**, not callable Ops: ``T.cuda.mma.<NAME>`` is an
-:class:`~tilefoundry.ir.tir.cuda.nn.mma_atom.MmaOpSpec`, and ``T.cuda.mma.atom(op=...)``
-produces an :class:`~tilefoundry.ir.tir.cuda.nn.mma_atom.MmaAtom`. The parser evaluates
-these statically (no ``LetStmt``); see ``tir_parser`` static-binding handling.
-
-``dsl.T.__getattr__`` returns :data:`cuda` for the name ``"cuda"``. Later
-platforms follow the same shape.
-"""
+"""``T.cuda`` — the CUDA (NVIDIA-GPU) platform sub-namespace of ``dsl.T``."""
 from __future__ import annotations
 
 from tilefoundry.ir.tir.cuda.nn import mma as _cuda_mma

@@ -107,15 +107,11 @@ def _param_wrapper_shard(
 
 
 def _collect_mesh_dims(body: Sequential) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """Delegate to ``_derive_launch_config``.
+    """Return the ``(grid, block)`` launch config for ``body``.
 
-    The duplicate walker that used to live here matched only
-    ``MeshScope`` and only single ``Topology(name='cta'/'thread')``
-    primaries — every multi-topology mesh (rmsnorm's
-    ``(warp, thread)``) silently collapsed to ``(1, 1, 1)``.
-    Forwarding to the canonical implementation in
-    ``tilefoundry.codegen.cuda.emit`` keeps a single source of
-    truth.
+    Forwards to ``_derive_launch_config`` in
+    ``tilefoundry.codegen.cuda.emit`` so the multi-topology walk is not
+    duplicated here.
     """
     # noqa cycle: emit.py auto-discovers this module via importlib, so
     # importing emit at top-level would be a real circular import.

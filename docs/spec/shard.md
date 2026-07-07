@@ -342,6 +342,9 @@ relevant mesh axis.
   `Reshard` typeinfer has run on a value, `S` reachable from that
   value MUST be a concrete tuple (the un-materialized form is an
   intermediate-only signal).
+- `S == ()` is a concrete rank-0 layout (`shape == ()`), not the
+  `None` sentinel; the empty tuple is never overloaded to mean
+  un-materialized.
 - When `S` is a concrete tuple, `S[k]` is the element step along
   cute dim `k` on the physical storage held by
   `ShardTensor.engine`; it MUST NOT be an abstract global stride.
@@ -465,6 +468,19 @@ op/relation:
 A `Partial` MUST NOT be silently eliminated by an ordinary op
 (no silent loss); only an explicit `Reshard` / allreduce from `Partial`
 to `Broadcast` completes it.
+
+A fully-`Broadcast` input `ShardLayout` (every attr `Broadcast`) is
+**replicated**: it carries no real sharding, so it contributes no
+`Split` / `Partial` and does not pin a mesh — it MAY combine with an
+input sharded on a different mesh. When no input carries real sharding
+the output carries none.
+
+An input `Split` that accesses a non-projection domain dim, or an
+output-surviving dim reachable only through a non-projection output
+access, MUST **fail closed** rather than guess a mapping. The rule
+reads only the access maps' affine structure (which domain dim each
+axis uses), never the domain bounds, so it is size-agnostic and
+identical for static and dynamic shapes.
 
 **Owner axis.** `Split(axis)` indexes an **output layout (cute) axis**,
 not the logical tensor axis. A reduction-induced `Partial` attaches to no

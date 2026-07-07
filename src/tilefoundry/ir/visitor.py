@@ -1,25 +1,4 @@
-"""IR traversal / rewrite skeleton.
-
-Five base classes:
-- ExprVisitor[T]         : read-only Expr traversal
-- ExprMutator            : Expr → Expr rewrite with identity preservation
-- StmtVisitor[T]         : read-only Stmt traversal (does NOT descend into embedded Expr)
-- StmtMutator            : Stmt → Stmt rewrite with identity preservation
-- StmtExprMutator        : combines both; rewrites Stmt tree AND embedded Expr fields
-
-Dispatch convention: visit_<ClassName> (e.g. visit_Call, visit_For) via getattr;
-fallback to generic_visit. See spec §2.
-
-Identity preservation (Mutator): generic_visit returns the original node when
-every child visit returns an `is`-identical object. Subclass overrides of
-visit_<ClassName> are expected to keep the same invariant (call generic_visit
-for unchanged branches).
-
-P2 TIR shape: all `body` fields on control-flow / scope / binding Stmts are
-``Sequential`` (a Stmt subclass packaging ``tuple[Stmt, ...]``). Child
-enumeration returns the Sequential as a single child; visitors descend into
-it via ``visit_Sequential``.
-"""
+"""IR traversal / rewrite base classes (visitor + identity-preserving mutator)."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -198,7 +177,7 @@ def _stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
     """Names of Expr-typed fields on `stmt`. StmtExprMutator uses this to
     rewrite the Expr subtrees embedded inside a Stmt. Var-binding fields
     (For.induction_var, LetStmt.var, MeshScope.binding) are intentionally
-    excluded — see spec visitor-mutator §6."""
+    excluded — a rewrite must not turn a binding site into a non-Var."""
     if isinstance(stmt, LetStmt):
         return ("value",)
     if isinstance(stmt, For):
