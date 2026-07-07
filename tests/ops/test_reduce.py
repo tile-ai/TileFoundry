@@ -181,7 +181,7 @@ def test_reduce_max_is_signed_not_abs_max():
 # butterfly + cross-warp combine) and ``reduce_cross_warp`` (cross-warp combine
 # only, each lane keeps its own output cells). Which one applies is a pure
 # function of the operand layouts — a reduced Split on a lane axis vs on a
-# warp-only axis. Codegen emits one uniform ``reduce_sharded`` entry; the runtime
+# warp-only axis. Codegen emits one uniform ``reduce`` entry; the runtime
 # derives the level and its ``warps_per_group`` from ``(src, dst)`` and the
 # ``Reduce`` op carries no selection attribute. The workspace *capacity* is still
 # sized by the lowering (``_analyze_cross_warp_workspace``).
@@ -252,7 +252,7 @@ def test_tir_reduce_has_no_dispatch_parameters():
 # ── Cross-warp reduce end-to-end (folded from the former e2e file) ───────────
 #
 # A warp-only reduction (each lane keeps its own output cell) drives the runtime
-# ``reduce_cross_warp`` path via the uniform ``reduce_sharded`` entry. Full GPU
+# ``reduce_cross_warp`` path via the uniform ``reduce`` entry. Full GPU
 # compile + run + numeric compare, plus the codegen-emit shape.
 import tilefoundry  # noqa: E402
 from tilefoundry import func as _func, module as _module  # noqa: E402
@@ -282,8 +282,8 @@ def test_cross_warp_sum_matches_torch() -> None:
     torch.testing.assert_close(out, x.sum(0, keepdim=True), rtol=1e-4, atol=1e-4)
 
 
-def test_cross_warp_sum_emits_reduce_sharded() -> None:
-    # Codegen emits the uniform reduce_sharded entry (no reduce_intra_cta /
+def test_cross_warp_sum_emits_reduce() -> None:
+    # Codegen emits the uniform reduce entry (no reduce_intra_cta /
     # reduce_cross_warp call, no warps_per_group argument) — the runtime derives
     # the level + wpg. The workspace capacity is still sized by the lowering:
     # per (warp, lane, cell) = 4 warps × 32 lanes × 1 cell = 128 slots.
@@ -296,5 +296,5 @@ def test_cross_warp_sum_emits_reduce_sharded() -> None:
 
     lowered = tilefoundry.lower(_CrossWarpSumModule, target="cuda")
     src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
-    assert re.search(r"reduce_sharded<[^(]*>\([^;]*\);", src), src
+    assert re.search(r"\breduce<[^(]*>\([^;]*\);", src), src
     assert re.search(r"__shared__ __align__\(16\) float ws\w*\[128\];", src), src

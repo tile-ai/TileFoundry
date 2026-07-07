@@ -413,7 +413,7 @@ time** from the operand `ShardLayout`s, together with any codegen-static geometr
 passed as template parameters, through a template trait, and is selected inside
 the entry (`if constexpr`). Codegen emits one uniform call per op and never
 selects a tier, computes a per-tier parameter, or carries the selection on the
-TIR op. `ops::reduce_sharded` ([§3.5](#35-tilefoundryopsreduce_sharded-sharded-reduction))
+TIR op. `ops::reduce` ([§3.5](#35-tilefoundryopsreduce-sharded-reduction))
 derives its reduction level from the operand shard layouts and `ops::sync`
 ([§3.4](#34-tilefoundryopssync-mesh-scoped-barrier)) derives its participant
 predicate from the barrier geometry; both are instances of this principle. The
@@ -504,22 +504,26 @@ Preconditions:
 - every CTA of the launch executes the barrier (it counts the full `gridDim`)
 - `bar` points at a zero-initialized two-word counter pair reserved for this use
 
-### 3.5 `tilefoundry::ops::reduce_sharded` (sharded reduction)
+### 3.5 `tilefoundry::ops::reduce` (sharded reduction)
 
 ```cpp
+template <class Op, class Axes, class SrcT, class DstT>
+__device__ void reduce(SrcT const& src, DstT& dst);
 template <class Op, class Axes, class SrcT, class DstT, class WorkspaceT>
-__device__ void reduce_sharded(SrcT const& src, DstT& dst, WorkspaceT& workspace);
+__device__ void reduce(SrcT const& src, DstT& dst, WorkspaceT& workspace);
 ```
 
-The single codegen-facing entry for a sharded reduction of `src` into `dst` under
-combine `Op` over the reduced `Axes`. `Op` is one of the SUM / MEAN / MAX
-combines; MEAN is carried as a SUM plus one final divide by the total reduced
-extent. The reduced mesh axes are those a source `Split` collapses to a
-`Broadcast` in `dst`.
+The single public entry for a sharded reduction of `src` into `dst` under combine
+`Op` over the reduced `Axes` — one name, `tilefoundry::ops::reduce`, with the
+workspace-carrying overload distinguished only by arity, never a scenario-named
+variant. `Op` is one of the SUM / MEAN / MAX combines; MEAN is carried as a SUM
+plus one final divide by the total reduced extent. The reduced mesh axes are
+those a source `Split` collapses to a `Broadcast` in `dst`.
 
-`workspace` is optional shared-memory staging: it is used only when the reduction
-crosses warps, and a reduction contained within a warp needs none. Its capacity
-is sized by the lowering and MUST be known at allocation time.
+`workspace` is optional shared-memory staging, supplied through the 3-arg
+overload: it is used only when the reduction crosses warps, and a reduction
+contained within a warp uses the 2-arg overload. Its capacity is sized by the
+lowering and MUST be known at allocation time.
 
 Per the runtime-owned dispatch principle ([§3](#3-runtime-ops)), the active
 reduction level (intra-warp, cross-warp, cross-CTA) and its warp grouping are

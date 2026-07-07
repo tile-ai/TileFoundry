@@ -794,7 +794,7 @@ CUTE_HOST_DEVICE void reduce(TIn const &src, TOut &dst, int M, int K,
 
 // Reduce 1D: scalar = reduce_kind(vec)
 template <class Op, class TIn, class TOut>
-CUTE_HOST_DEVICE void reduce_1d(TIn const &src, TOut &dst, int N, Op op = {}) {
+CUTE_HOST_DEVICE void reduce(TIn const &src, TOut &dst, int N, Op op = {}) {
     using value_type = cute::remove_cvref_t<decltype(dst(0))>;
     float acc = 0.0f;
     for (int i = 0; i < N; ++i) {
@@ -827,7 +827,7 @@ struct absmax_op {
 };
 
 // ── Sharded reduce ───────────────────────────────
-// Per-tier reduce building blocks; the public entry ``reduce_sharded`` below
+// Per-tier reduce building blocks; the public 3-arg ``reduce`` overload below
 // selects a tier from the operand shard layouts. MEAN folds as SUM plus a final
 // divide by the total reduced extent.
 
@@ -1031,7 +1031,7 @@ __device__ inline void reduce_cross_cta(SrcT const &, DstT &, WorkspaceT &,
 
 // ── Layered sharded-reduce dispatch ───────────────────────────────
 // Compile-time derivation of the reduction level and ``warps_per_group`` from
-// the operand shard layouts, consumed by ``reduce_sharded`` below.
+// the operand shard layouts, consumed by the 3-arg ``reduce`` overload below.
 template <class T> struct is_split_attr : std::false_type {};
 template <int A> struct is_split_attr<shard::S<A>> : std::true_type {};
 
@@ -1097,8 +1097,8 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
 }
 
 template <class Op, class Axes, class SrcT, class DstT, class WorkspaceT>
-__device__ inline void reduce_sharded(SrcT const &src, DstT &dst,
-                                      WorkspaceT &workspace) {
+__device__ inline void reduce(SrcT const &src, DstT &dst,
+                              WorkspaceT &workspace) {
     using SLs = typename cute::remove_cvref_t<SrcT>::shard_layout_type;
     using SLd = typename cute::remove_cvref_t<DstT>::shard_layout_type;
     constexpr reduce_dispatch_info info = reduce_dispatch<SLs, SLd>();

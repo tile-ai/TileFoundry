@@ -299,10 +299,11 @@ Axis reduction `dst = reduce(src, axes, kind)` (effect form), invoked as
 - `workspace` is **not** type- or scope-restricted at the IR level: the
   `HirToTirPass` ([passes](./passes.md)) chooses its storage level (RMSNorm
   uses `smem`; other cases MAY pick `gmem` or `rmem`) and sizes its capacity.
-- The `workspace`-present form lowers to the single runtime entry
-  `reduce_sharded` ([runtime.md](./runtime.md)); the runtime derives the
-  reduction level and its warps-per-group from the operand `ShardLayout`s, not
-  from an op attribute.
+- Both forms lower to the single public runtime entry `reduce`
+  ([runtime.md](./runtime.md)) — the `workspace`-present op to its 3-arg
+  overload, the `workspace`-absent op to its 2-arg overload; the runtime derives
+  the reduction level and its warps-per-group from the operand `ShardLayout`s,
+  not from an op attribute.
 
 ### 3.4 Generic kind-tagged effect Ops (`tir.arith`)
 

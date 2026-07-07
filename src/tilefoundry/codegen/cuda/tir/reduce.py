@@ -1,9 +1,4 @@
-"""Codegen for the Reduce TIR stmt — emits the uniform runtime reduce call.
-
-A sharded reduce emits ``reduce_sharded<Op, Axes>(src, dst, workspace)`` when the
-lowering provided a workspace, else the 2-arg ``reduce<Op, Axes>(src, dst)``; a
-non-sharded reduce emits the rank-aware ``reduce_1d`` / ``reduce`` fallback.
-"""
+"""Codegen for the Reduce TIR stmt — emits the uniform runtime reduce call."""
 
 from __future__ import annotations
 
@@ -37,13 +32,13 @@ def _emit(call, ctx: CodegenContext) -> None:
     is_sharded = isinstance(getattr(src_ty, "layout", None), ShardLayout)
 
     if is_sharded:
-        # 3-arg ``reduce_sharded`` when the lowering sized a workspace
-        # (``_analyze_cross_warp_workspace``), else the 2-arg ``reduce``.
+        # 3-arg overload when the lowering sized a workspace
+        # (``_analyze_cross_warp_workspace``), else the 2-arg overload.
         axes_t = _axes_pack_typename(call.target.axes)
         if len(call.args) >= 3:
             ws_n = ctx.name_for(call.args[2])
             ctx.emit(
-                f"tilefoundry::ops::reduce_sharded<{op_tag}, {axes_t}>"
+                f"tilefoundry::ops::reduce<{op_tag}, {axes_t}>"
                 f"({src_n}, {dst_n}, {ws_n});"
             )
         else:
@@ -53,11 +48,11 @@ def _emit(call, ctx: CodegenContext) -> None:
             )
         return
 
-    # Legacy non-sharded rank-aware fallback.
+    # Non-sharded rank-aware fallback.
     src_shape = src_ty.shape
     if len(src_shape) == 1:
         N = int(src_shape[0])
-        ctx.emit(f"tilefoundry::ops::reduce_1d({src_n}, {dst_n}, {N}, {op_tag}{{}});")
+        ctx.emit(f"tilefoundry::ops::reduce({src_n}, {dst_n}, {N}, {op_tag}{{}});")
     else:
         M = int(src_shape[0])
         K = int(src_shape[1])
