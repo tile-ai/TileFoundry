@@ -333,66 +333,14 @@ Every constraint below is enforced by the registered
 - Any HIR Op MUST be value-form ([core-ir §4](./core-ir.md));
   emitting an effect-form Call into HIR is a verify error.
 
-### 3.1 Relation-driven type validity
-
-An op's typeinfer MAY derive the output type from a forward access
-relation ([visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation))
-rather than from a hand-written rule. The relation describes one
-shared iteration domain and, per boundary, an access map from that
-domain to the tensor's index space. The relation carries **no tensor
-shape**: the output shape is typeinfer-side data, derived from the
-op's shape rule or (where implemented) from the relation by composing
-the output access map over the domain.
-
-Within the relation:
-
-- A domain dim that appears in an input access map but **not** in the
-  output access map is a **reduction** dim (it is eliminated in the
-  output).
-- A tensor axis whose access maps to a constant (rather than a domain
-  dim) is a **broadcast** axis.
-- A symbolic size is an isl parameter of the domain; the relation's
-  rank is fixed and is read from the input types.
-
-The shard consequences of these structural facts (how `Split` /
-`Broadcast` / `Partial` propagate, and the reduction effect) are
-defined in [shard §9](./shard.md#9-relation-driven-shard-propagation).
-
-### 3.2 Output storage of multi-input ops
-
-A symmetric multi-input op (`Binary`, `MatMul`, `Concat`, `Stack`,
-`Mma`) resolves its output `storage` by **anchoring** on the concrete
-residency among its operands ([types §2](./types.md)). The rule does not
-appeal to any ordering of storage kinds and is independent of operand order:
-
-- An **unmaterialized** operand (`storage=umat`) does not constrain the
-  output — it abstains.
-- One concrete operand storage (alongside any unmaterialized operands) is
-  the **anchor**; the output takes that storage.
-- Several concrete operands that agree on a storage → the output takes that
-  storage.
-- Several concrete operands that disagree on storage → typeinfer MUST
-  `ctx.error`, unless the op defines its own destination/mixed-storage
-  resolution. There is no operand-order tie-break.
-- All operands unmaterialized → the output is unmaterialized (`umat`).
-
-This resolution uses no memory-level lattice; output residency is a function
-of the concrete anchor(s) alone. (The `rmem < smem < gmem` hierarchy in §3 is
-a `Reshard`-*direction* notion and is unrelated to output-storage anchoring.)
-
-### 3.3 Operand layout / mesh ownership
-
-A tensor value's mesh / layout is carried by its `TensorType.layout`
-(`ShardLayout.mesh` names the mesh instance) — that type is the source of
-truth, and the IR places no scope-based restriction on values from
-different meshes coexisting. Each op's registered typeinfer **owns** the
-operand layout / mesh compatibility it requires and its result layout;
-there is no uniform cross-op rule imposed from outside typeinfer.
-`Reshard` is the explicit op that changes a value's layout / mesh.
-
-Per-op typeinfer owns layout compatibility and result layout. For example,
-`Gather` owns whether an indexed access is a pure slice or a layout-preserving
-data-dependent gather.
+Generic, analysis-wide typing behavior is owned by
+[analysis](./analysis.md): relation-driven type validity
+([analysis §1.1](./analysis.md#11-relation-derived-type-behavior)), output
+storage of multi-input ops, and operand layout / mesh ownership
+([analysis §3.3](./analysis.md#33-output-storage-and-meshlayout-compatibility)).
+HIR ops call these services; each op's registered typeinfer owns the layout /
+mesh compatibility and result layout it requires, and `Reshard` is the explicit
+op that changes a value's layout / mesh.
 
 ## 4. `GridRegionExpr`
 

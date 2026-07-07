@@ -302,7 +302,7 @@ One access `isl.map` per boundary value, in boundary order — inputs
 first, then outputs — each mapping the iteration domain to that tensor's
 index space. The carrier holds **no** tensor shape: the output shape is
 typeinfer-side data, not part of the relation (see
-[hir §3.1](./hir.md#31-relation-driven-type-validity)).
+[analysis §1.1](./analysis.md#11-relation-derived-type-behavior)).
 
 Registry + decorator:
 
