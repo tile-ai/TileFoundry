@@ -7,15 +7,21 @@ axis is preserved. An unsharded input passes through.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 import torch
 
+import tilefoundry
+from tilefoundry import func, module
+from tilefoundry.codegen.cuda.module import emit_cuda_module
+from tilefoundry.codegen.registry import group_functions_by_target
+from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Mesh, Topology
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
@@ -254,22 +260,17 @@ def test_tir_reduce_has_no_dispatch_parameters():
 # A warp-only reduction (each lane keeps its own output cell) drives the runtime
 # ``reduce_cross_warp`` path via the uniform ``reduce`` entry. Full GPU
 # compile + run + numeric compare, plus the codegen-emit shape.
-import tilefoundry  # noqa: E402
-from tilefoundry import func as _func, module as _module  # noqa: E402
-from tilefoundry.dsl import Mesh as _Mesh, Tensor as _Tensor  # noqa: E402
-from tilefoundry.dsl import Topology as _Topo, tf as _tf  # noqa: E402
 
-
-@_module(entry="cross_warp_sum")
+@module(entry="cross_warp_sum")
 class _CrossWarpSumModule:
-    @_func(topologies=(_Topo("thread", 4 * 32),))
-    def cross_warp_sum(a: _Tensor[(4, 32), 'f32']):
-        with _Mesh(_Topo("thread", 4 * 32), (4, 32), ('tk', 'hc')) as m:
+    @func(topologies=(Topology("thread", 4 * 32),))
+    def cross_warp_sum(a: Tensor[(4, 32), 'f32']):
+        with Mesh(Topology("thread", 4 * 32), (4, 32), ('tk', 'hc')) as m:
             # Axis 0 (tk) spans the four warps; axis 1 (hc) is the lane axis and
             # carries distinct output cells. Reducing axis 0 crosses warps only.
-            a_reg = _tf.reshard(a, (4 @ m.tk, 32 @ m.hc), 'rmem')
-            s = _tf.reduce(a_reg, (0,), True, ReduceKind.SUM)
-            return _tf.reshard(s, (1, 32 @ m.hc), 'gmem')
+            a_reg = tf.reshard(a, (4 @ m.tk, 32 @ m.hc), 'rmem')
+            s = tf.reduce(a_reg, (0,), True, ReduceKind.SUM)
+            return tf.reshard(s, (1, 32 @ m.hc), 'gmem')
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -287,13 +288,6 @@ def test_cross_warp_sum_emits_reduce() -> None:
     # reduce_cross_warp call, no warps_per_group argument) — the runtime derives
     # the level + wpg. The workspace capacity is still sized by the lowering:
     # per (warp, lane, cell) = 4 warps × 32 lanes × 1 cell = 128 slots.
-    import re  # noqa: PLC0415
-
-    from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
-    from tilefoundry.codegen.registry import (  # noqa: PLC0415
-        group_functions_by_target,
-    )
-
     lowered = tilefoundry.lower(_CrossWarpSumModule, target="cuda")
     src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
     assert re.search(r"\breduce<[^(]*>\([^;]*\);", src), src

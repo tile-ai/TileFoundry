@@ -25,12 +25,12 @@ import torch
 
 from tilefoundry.dsl import DimVar
 from tilefoundry.ir.core import Call, Constant, Var
-from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.math.rsqrt import Rsqrt
+from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.gather import Gather
@@ -140,6 +140,10 @@ def Mul() -> Binary:
     return Binary(kind=BinaryKind.MUL)
 
 
+def rsqrt_op() -> Unary:
+    return Unary(kind=UnaryKind.RSQRT)
+
+
 _DEFAULT_DTYPE = DType.bf16
 _COMPUTE_DTYPE = DType.f32
 
@@ -169,7 +173,7 @@ def _build_ssa_rmsnorm(M, K, dtype=_DEFAULT_DTYPE, compute_dtype=_COMPUTE_DTYPE)
     mean = Call(type=mean_type, target=Reduce(axes=(-1,), keepdim=True, kind=ReduceKind.MEAN), args=(x_sq,))
     eps_const = Constant(value=eps, type=TensorType(shape=(), dtype=compute_dtype, layout=None, storage="gmem"))
     ms_eps = Call(type=mean_type, target=Add(), args=(mean, eps_const))
-    rms = Call(type=mean_type, target=Rsqrt(), args=(ms_eps,))
+    rms = Call(type=mean_type, target=rsqrt_op(), args=(ms_eps,))
     x_norm = Call(type=f32_type, target=Mul(), args=(x_f32, rms))
     w_f32_type = TensorType(shape=(K,), dtype=compute_dtype, layout=None, storage="gmem")
     w_f32 = Call(type=w_f32_type, target=Cast(dtype=compute_dtype), args=(weight,))
@@ -200,7 +204,7 @@ def _build_gridregion_rmsnorm(M, K, dtype=_DEFAULT_DTYPE, compute_dtype=_COMPUTE
     mean = Call(type=scalar_type, target=Reduce(axes=(0,), keepdim=True, kind=ReduceKind.MEAN), args=(row_sq,))
     eps_const = Constant(value=eps, type=TensorType(shape=(), dtype=compute_dtype, layout=None, storage="rmem"))
     ms_eps = Call(type=scalar_type, target=Add(), args=(mean, eps_const))
-    rms = Call(type=scalar_type, target=Rsqrt(), args=(ms_eps,))
+    rms = Call(type=scalar_type, target=rsqrt_op(), args=(ms_eps,))
     row_norm = Call(type=row_f32_type, target=Mul(), args=(row_f32, rms))
     w_f32_type = TensorType(shape=(K,), dtype=compute_dtype, layout=None, storage="gmem")
     w_f32 = Call(type=w_f32_type, target=Cast(dtype=compute_dtype), args=(weight,))

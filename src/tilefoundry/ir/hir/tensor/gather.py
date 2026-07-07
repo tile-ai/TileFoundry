@@ -20,9 +20,13 @@ from tilefoundry.ir.types.shard.shard_layout import (
 
 @register_op
 class Gather(Op):
+    """Gather along one axis."""
+
     x = ParamDef(kind="input", pattern=Tensor)
     indices = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
+
+
 def _norm_axis(axis: int, rank: int) -> int:
     a = axis + rank if axis < 0 else axis
     if a < 0 or a >= rank:
@@ -31,7 +35,13 @@ def _norm_axis(axis: int, rank: int) -> int:
 
 
 def _sliced_shard_layout(x_ty, axis: int, idx_shape: tuple):
-    """Output ``ShardLayout`` for a single-index gather slice; passes the input layout through unchanged when the gather is not a pure slice."""
+    """Return the sliced ``ShardLayout`` for a pure single-index gather.
+
+    A scalar index or rank-1 ``(1,)`` index on a non-sharded axis is a slice:
+    scalar indices drop that axis's cute positions, while ``(1,)`` indices keep
+    them as size-1 positions. Gather along a Split axis, multi-index gather, or
+    composed layout passes the input layout through unchanged.
+    """
     sl = x_ty.layout
     if not isinstance(sl, ShardLayout) or not isinstance(sl.layout, Layout):
         return sl

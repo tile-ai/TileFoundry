@@ -23,7 +23,6 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.math.clamp import Clamp as HirClamp
-from tilefoundry.ir.hir.math.rsqrt import Rsqrt as HirRsqrt
 from tilefoundry.ir.hir.math.unary import Unary as HirUnary
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16 as HirMmaSM80_16x8x16
 from tilefoundry.ir.hir.cuda.nn.mma import Wgmma_SM90_64x128x16 as HirWgmma_SM90
@@ -784,18 +783,6 @@ class _Lowerer:
         alloc_r = Call(type=r.type, target=AllocTensorOp(tensor_type=r.type), args=())
         self._items.append(_Bind(var=r, value=alloc_r))
         self._items.append(_eval_call(TirUnary(kind=target.kind), (x, r)))
-        self._cache[key] = r
-        return r
-
-    # ── pointwise unary (generic tag dispatch) ──
-    @register_hir_lowering(HirRsqrt)
-    def _lower_rsqrt(self, target, expr) -> Var:
-        key = id(expr)
-        x = self.lower_expr(expr.args[0])
-        r = self._fresh(x.type, hint="r")
-        alloc_r = Call(type=r.type, target=AllocTensorOp(tensor_type=r.type), args=())
-        self._items.append(_Bind(var=r, value=alloc_r))
-        self._items.append(_eval_call(TirUnary(kind=UnaryKind.RSQRT), (x, r)))
         self._cache[key] = r
         return r
 

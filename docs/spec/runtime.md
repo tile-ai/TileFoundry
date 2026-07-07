@@ -385,26 +385,20 @@ cute::Tensor<Engine, Layout>
 
 ## 3. Runtime Ops
 
-Codegen targets namespace free functions:
+Codegen targets one public namespace function per runtime op/family:
 
-```cpp
-namespace tilefoundry::ops {
-template <class TIn, class TOut>
-__device__ void relu(TIn const& src, TOut& dst);
-}
+```text
+tilefoundry::ops::<op>(...)
 ```
 
-Rules:
-
-- public op surface is `tilefoundry::ops::xxx(...)`
-- codegen emits calls to that free-function surface only
-- implementation may dispatch internally through `detail::xxx_impl`
-- simple and complex ops both use the same public shape; complexity is hidden
-  in the implementation
-- op tags stay in the same header as the op family until real reuse pressure
-  justifies an `ops/tags/` split
-- class-style public surfaces such as `tilefoundry::ReLUOp` are not the
-  codegen-facing contract
+```mermaid
+flowchart LR
+    Codegen["generated target call"] --> Entry["ops::<op>(...) public entry"]
+    Entry --> Dispatch["internal trait / dispatch function"]
+    Dispatch --> ImplA["impl class / helper A"]
+    Dispatch --> ImplB["impl class / helper B"]
+    Entry --> SimpleImpl["single impl helper"]
+```
 
 **Runtime-owned dispatch.** Where an op has more than one implementation tier
 (selected by scope or by operand layout), the runtime exposes exactly **one**
@@ -467,110 +461,65 @@ Preconditions:
 
 ### 3.4 `tilefoundry::ops::sync` (mesh-scoped barrier)
 
-```cpp
+```text
 template <SyncKind Kind, int Base = 0, int Count = 0, unsigned Mask = 0u,
           int BarId = 0>
 __device__ void sync(unsigned int* grid_bar = nullptr);
 ```
 
-The single codegen-facing barrier entry. Codegen passes the barrier `Kind` and
-the codegen-static participant geometry (`Base` thread, `Count`, warp lane
-`Mask`, named-barrier `BarId`) as compile-time template parameters; per the
-runtime-owned dispatch principle ([§3](#3-runtime-ops)) the entry runs the
-participant predicate and selects the hardware barrier for `Kind`: whole CTA,
-a masked lane subset of one warp, a warp-aligned multi-warp named barrier, or a
-grid-wide software barrier over a full `cta`-scope mesh. The grid counter pair
-`grid_bar` is the sole runtime argument, used only by the grid kind.
-
-Grid-kind guarantees:
-
-- a grid-wide software barrier: every CTA of the launch arrives, and no CTA
-  returns until all have arrived
-- `grid_bar` is a two-word gmem counter pair — word 0 the arrival counter, word 1
-  the release phase — zero-initialized before first use
-- the counter self-resets each phase and the phase is monotone, so the same
-  counter pair is reusable across successive barriers, relaunches, and
-  CUDA-graph replays
-- gmem writes issued by any CTA before the barrier are visible to every CTA after
-  it returns
-- each generated module that emits a grid barrier defines its own counter pair
-  with **internal linkage** in the module source, so including the header never
-  introduces a shared or duplicated global symbol across translation units
-
-Preconditions:
-
-- every CTA of the launch is co-resident (the launch's occupancy contract);
-  a launch whose CTAs are not all resident deadlocks
-- every CTA of the launch executes the barrier (it counts the full `gridDim`)
-- `bar` points at a zero-initialized two-word counter pair reserved for this use
+- kind: runtime func
+- fields:
+  - Kind: compile-time barrier kind; selects CTA, warp, named-barrier, or grid
+    behavior inside the runtime entry
+  - Base / Count / Mask / BarId: compile-time participant geometry
+  - grid_bar: optional two-word global counter pair used only by grid barriers
+- constraints:
+  - Codegen emits only `sync`; it does not call lower-level barrier helpers.
+  - Grid barriers require every CTA of the launch to be co-resident and to
+    execute the barrier.
+  - A grid barrier's counter pair is zero-initialized before first use and is
+    owned by the generated module.
 
 ### 3.5 `tilefoundry::ops::reduce` (reduction family)
 
-```cpp
-// Sharded overloads — reduce over compile-time Axes, operands carry ShardLayout.
-template <class Op, class Axes, class SrcT, class DstT>
-__device__ void reduce(SrcT const& src, DstT& dst);
-template <class Op, class Axes, class SrcT, class DstT, class WorkspaceT>
-__device__ void reduce(SrcT const& src, DstT& dst, WorkspaceT& workspace);
-
-// Non-sharded rank-aware overloads — reduce over runtime extents.
-template <class Op, class TIn, class TOut>
-__device__ void reduce(TIn const& src, TOut& dst, int N, Op op = {});        // 1-D → scalar
-template <class Op, class TIn, class TOut>
-__device__ void reduce(TIn const& src, TOut& dst, int M, int K, Op op = {}); // (M, K) → (M,)
+```text
+template <class Op, class Axes, class Src, class Dst, class Ws = no_workspace>
+__device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
 ```
 
-`tilefoundry::ops::reduce` is the **single public name** for the whole reduction
-family; the overloads are distinguished only by parameter shape, never by a
-scenario-coded name. `Op` is one of the SUM / MEAN / MAX combines; MEAN is
-carried as a SUM plus one final divide by the reduced extent. Any per-level /
-per-tier helper (`reduce_impl::*`, the layered dispatch) is internal and MUST NOT
-appear on the public surface.
-
-- **Sharded overloads** reduce over the compile-time `Axes` of `ShardLayout`
-  operands; the reduced mesh axes are those a source `Split` collapses to a
-  `Broadcast` in `dst`. `workspace` is optional shared-memory staging supplied
-  through the 3-arg overload: it is used only when the reduction crosses warps,
-  and a reduction contained within a warp uses the 2-arg overload; its capacity
-  is sized by the lowering and MUST be known at allocation time.
-- **Non-sharded overloads** reduce a plain (non-`ShardLayout`) tensor over
-  runtime extents: `(src, dst, N)` folds a 1-D `src` to the scalar `dst`, and
-  `(src, dst, M, K)` folds each of `M` rows over its `K` columns.
-
-Per the runtime-owned dispatch principle ([§3](#3-runtime-ops)), for the sharded
-overloads the active reduction level (intra-warp, cross-warp, cross-CTA) and its
-warp grouping are derived at compile time from the `(src, dst)` operand
-`ShardLayout`s and selected inside the entry; codegen does not choose the level.
-A reduction whose reduced axis crosses CTA boundaries is not supported.
+- kind: runtime func
+- fields:
+  - Op: compile-time combine tag (`sum`, `mean`, `max`, `absmax`)
+  - Axes: compile-time reduced logical axes
+  - src / dst: source and destination operands; sharded operands carry
+    `ShardLayout`
+  - ws: optional shared-memory workspace value; `no_workspace` means the reduce
+    stays within one warp
+- constraints:
+  - `reduce` is the only public runtime reduce entry; tier names and helper
+    functions are internal.
+  - Sharded operands derive the active tier and warp grouping from `(src, dst)`
+    shard layouts inside the runtime.
+  - Plain operands derive extents from the operand rank and size inside the
+    runtime.
+  - A reduction whose reduced axis crosses CTA boundaries is not supported.
 
 ### 3.6 `tilefoundry::ops::copy_async` (async gmem→smem staging)
 
-```cpp
+```text
 template <class TSrc, class TDst>
-__device__ void copy_async(TSrc const& src, TDst& dst);   // cp.async.cg
+__device__ void copy_async(TSrc const& src, TDst& dst);
 ```
 
-`copy_async` is the async analogue of `copy_n`: it takes the same per-thread
-`local()` projection of `src` / `dst`, but issues each 16-byte (128-bit) run of
-the fragment as a non-blocking `cp.async` (`C = 16 / sizeof(element)` elements
-per instruction) and falls back to a synchronous element write for the sub-16B
-tail or a pre-sm80 target. `dst` must be shared and `src` global — the only
-direction `cp.async` supports — and both must share an element type (no cast on
-the fast path). When the destination local view is larger than the source
-fragment (a full CTA-shared tile fed by a `Split` global source), each thread
-stages its fragment at its `local_offset(src)` within the tile. The fragment is
-placed by a flat index, so a full staging tile must be a rank-1 /
-contiguously-coalescing view, and both the tile base and each 16-byte run must
-be 16-byte aligned for the vectorized path (`alloc_tensor` aligns shared tiles
-to 16 bytes).
-
-The copy is non-blocking, so a read of `dst` must be ordered after the transfer
-by the two group fences: `cp_async_commit` closes the current in-flight batch
-into one async group (`cp.async.commit_group`), and `cp_async_wait(n)` blocks
-until all but the `n` most-recent committed groups have landed
-(`cp.async.wait_group n`; `n = 0` drains every outstanding group). A
-`copy_async` → `cp_async_commit` → `cp_async_wait(0)` sequence therefore yields
-the same destination contents as a synchronous `copy`.
+- kind: runtime func
+- fields:
+  - src / dst: per-thread projected operands; the supported fast path stages
+    global source data into shared destination storage
+- constraints:
+  - The call is non-blocking; generated code orders later reads through
+    `cp_async_commit` and `cp_async_wait`.
+  - Runtime implementation details such as vector width, tail handling, and
+    architecture fallback live in code comments, not this spec entry.
 
 ### 3.7 Wide-load fast path in `copy()`
 

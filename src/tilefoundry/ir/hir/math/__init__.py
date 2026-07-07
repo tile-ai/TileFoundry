@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .binary import Binary
 from .unary import Unary
-from .rsqrt import Rsqrt
 from .exp import Exp
 from .softplus import Softplus
 
@@ -17,7 +16,6 @@ from . import aliases as _aliases  # noqa: F401
 __all__ = [
     "Binary",
     "Unary",
-    "Rsqrt",
     "Exp",
     "Softplus",
 ]

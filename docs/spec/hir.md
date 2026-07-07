@@ -128,13 +128,26 @@ per-name IR classes.
 [torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
 
 #### Binary
-Kinded pointwise arithmetic, comparison, and boolean.
+```text
+Binary(kind, lhs, rhs) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - kind: binary arithmetic, comparison, or boolean tag
+  - lhs / rhs: input tensors
+- constraints:
+  - Behavior follows torch pointwise semantics with TileFoundry type promotion.
 
 #### Unary
-Kinded pointwise unary (`neg` / `abs` / `logical_not`).
-
-#### Rsqrt
-Reciprocal square root.
+```text
+Unary(kind, x) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - kind: unary tag including `neg`, `abs`, `logical_not`, and `rsqrt`
+  - x: input tensor
+- constraints:
+  - Behavior follows torch pointwise semantics with TileFoundry type promotion.
 
 ### 2.2 `ir/hir/tensor/`
 
@@ -145,75 +158,56 @@ Tensor structural operations; consensus ops follow torch / numpy
 Consensus torch / numpy structural ops.
 
 #### Zeros
-Allocate a zero-initialised tensor.
+```text
+Zeros(shape, dtype, storage) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - shape: output logical shape
+  - dtype: output dtype
+  - storage: output storage kind
+- constraints:
+  - The result is zero-initialised.
 
 #### Reduce
-Axis reduction (`mean` / `sum` / `abs_max` / `max`).
-`Reduce(x, axes=(0,), keepdim=True, kind=ReduceKind.MEAN)` lowers to TIR
-`Reduce`, whose hardware dispatch is derived by codegen + runtime from the
-operand `ShardLayout` / `Mesh`.
-
-- The logical `TensorType.shape` follows numpy: a reduced axis becomes `1`
-  when `keepdim=True`, otherwise it is removed.
-- `storage` MUST be preserved.
-- When `x.type.layout` is plain (non-`ShardLayout`) or `None`, the output
-  layout passes through unchanged.
-
-**Output layout — sharded input.** When `x.type.layout` is a `ShardLayout`,
-reducing over an axis that is `Split` across mesh axes produces a result every
-participant sees identically. The output layout is "project to the local
-layout, then take default strides":
-
-- The input `ShardLayout` MUST be projected to its local layout under the
-  current device's shard view: every cute position bound to a mesh axis via a
-  `Split` attr shrinks to size 1.
-- Every cute position that falls within a reduced tensor axis MUST collapse to
-  size 1.
-- Strides MUST follow the row-major default for the resulting local shape:
-  size-1 positions carry stride `0`; other positions carry the default
-  contiguous stride for the surviving dimension(s).
-- Attrs: every `Split(axis=L)` whose cute position `L` falls within a reduced
-  tensor axis MUST become `Broadcast()`. Non-reduced mesh axes MUST preserve
-  their attr (`Split` / `Partial` / `Broadcast` / `Dynamic`).
-
-The default-contiguous-stride rule applies only when the input `ShardLayout` is
-itself in default-stride form; a non-default-stride (transposed / permuted)
-input MUST carry explicit strides from its producer, else verify / typeinfer
-MUST reject it.
-
-Cute position → tensor axis mapping uses the left-to-right product convention:
-each tensor axis `k` claims as many cute positions as needed to accumulate to
-`tensor_shape[k]`; trailing cute positions attach to the last tensor axis; a
-singleton tensor axis claims exactly one cute position.
-
-Worked examples: rmsnorm `(1, 1536) → (1, 1)` with every mesh axis covering the
-reduced last axis — every cute position ends up size-1-non-reduced (outer axis
-0) or reduced, so the output is `shape=(1,1,1,1) strides=(0,0,0,0)
-attrs=(Broadcast, Broadcast)`. A partial reduce `(M, N) → (M, 1)` with the mesh
-covering only the reduced axis keeps outer axis 0's stride (it still indexes
-distinct rows); only the reduced positions go to size 1 stride 0.
+```text
+Reduce(x, axes, keepdim, kind) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - x: input tensor
+  - axes: reduced logical axes
+  - keepdim: whether reduced axes remain as size-1 axes
+  - kind: `mean`, `sum`, `abs_max`, or `max`
+- constraints:
+  - The logical result shape follows numpy reduction rules.
+  - Storage is preserved.
+  - Plain input layout passes through unchanged.
+  - For `ShardLayout` input, every split cute position that belongs to a
+    reduced tensor axis collapses to broadcast with size-1 stride-0 output.
+  - Non-default-stride sharded input must carry explicit producer strides, or
+    typeinfer rejects it.
+  - Lowering emits TIR `Reduce`; runtime dispatch is derived from operands, not
+    from an HIR dispatch field.
 
 #### insert_slice
-Dynamic-update-slice: return `dst` with `update` written into the window that
-starts at `offsets` (one start per dim) and spans `update`'s shape — the SSA
-spelling of "slice + store", kept distinct from `scatter` (data-dependent
-multi-index).
-
-- `update` MUST have the same rank as `dst`, and the same dtype.
-- `offsets` gives one start per sliced dim. The 1-D case (the only implemented
-  rank) takes a single scalar start: a rank-0 `()` integer tensor for a runtime
-  value, or a compile-time integer literal. An N-D slice takes a rank-1 vector
-  of length equal to the number of sliced dims; that rides the same surface and
-  lands with the N-D case.
-- `dst` / `update` are rank-1 — one scalar start, a contiguous window
-  `[start, start + update.shape[0])`. Higher-rank `dst` / `update` share this
-  surface and MUST be rejected at typeinfer.
-- A statically-known window exceeding `dst`'s extent MUST be rejected by
-  typeinfer; a window resolved only at runtime MUST be checked by the eval /
-  runtime guard.
-
-The value form returns a new `dst`; an in-place realization is a lowering
-concern (the result is anchored on the `dst` buffer).
+```text
+insert_slice(dst, update, offsets) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - dst: target tensor; the value form returns a new tensor anchored on this
+    buffer at lowering time
+  - update: tensor written into the slice window
+  - offsets: scalar runtime value or integer literal for the implemented 1-D
+    case
+- constraints:
+  - `update` has the same rank and dtype as `dst`.
+  - The implemented 1-D case writes the contiguous window
+    `[start, start + update.shape[0])`.
+  - Higher-rank inputs share the surface but are rejected until implemented.
+  - Statically out-of-bounds windows fail typeinfer; runtime-only bounds are
+    checked by eval/runtime.
 
 ### 2.3 `ir/hir/nn/`
 
@@ -223,20 +217,31 @@ Neural-network value Ops following torch semantics
 #### MatMul / Conv2D / ReLU / Sigmoid / Tanh / SoftMax / LayerNorm
 Consensus torch.nn.functional ops.
 
-#### MMA ops
-Arch-specific matrix-multiply-accumulate (`Mma_SM80_16x8x16`,
-`Wgmma_SM90_64x128x16`, …) at the value-form-HIR ↔ effect-form-TIR boundary.
-
 ### 2.4 `ir/hir/shape/`
 
 Shape-level Ops on whole shape values (per-axis dim Ops are
 [types §3](./types.md)).
 
 #### ShapeExtract
-Extract one axis from a shape value.
+```text
+ShapeExtract(shape, axis) -> Dim
+```
+- kind: HIR op
+- fields:
+  - shape: input shape value
+  - axis: extracted axis
+- constraints:
+  - The result is the dimension at `axis`.
 
 #### ShapeCompose
-Assemble a shape from per-axis dims.
+```text
+ShapeCompose(dims) -> Shape
+```
+- kind: HIR op
+- fields:
+  - dims: per-axis dimensions
+- constraints:
+  - The result is a shape value assembled in input order.
 
 ### 2.5 `ir/hir/sharding/`
 
@@ -244,24 +249,22 @@ Assemble a shape from per-axis dims.
 ([shard §5](./shard.md)).
 
 #### Reshard
-Convert `x` to a target layout / storage in place, preserving the logical
-`TensorType.shape`. A single `reshard` covers layout / sharding / storage
-changes plus the logical-shape view shifts that arise from sharding (e.g.
-`(1, 64)` plain → `(1, 8192 @ cta)` sharded on a 128-cta mesh — physically
-each cta still holds 64, logically the `TensorType.shape` is 8192). Local
-memory rearrangement (transpose / flatten / true reshape) is **not** in scope
-— use `Reshape` for that.
-
-- Both attributes are optional: omitting `layout` preserves `x.layout`;
-  omitting `storage` preserves `x.storage`.
-- The output MUST preserve the logical `TensorType.shape` of the input.
-- `layout` MUST be a `ShardLayout` when supplied.
-- Destination `storage` MUST NOT be unmaterialized (`umat`); a reshard targets
-  a concrete residency.
-- The single op covers all four physical kinds (zero-copy view / cross-storage
-  copy / cross-CTA redistribute / mixed); typeinfer + costmodel classify each
-  call from its input ↔ output `TensorType` delta. The IR keeps one node per
-  user call.
+```text
+Reshard(x, layout=None, storage=None) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - x: input tensor
+  - layout: optional target `ShardLayout`
+  - storage: optional target storage kind
+- constraints:
+  - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
+    `x.storage`.
+  - The output preserves the input logical `TensorType.shape`.
+  - Supplied `layout` is a `ShardLayout`.
+  - Destination storage is concrete, not unmaterialized.
+  - The single op covers zero-copy view, cross-storage copy, cross-CTA
+    redistribute, and mixed cases; typeinfer/costmodel classify the call.
 
 **Stride resolution.** Storage direction follows the physical addressability
 hierarchy `rmem < smem < gmem` (per-thread / per-CTA / per-program). Typeinfer
@@ -291,15 +294,17 @@ cross-CTA data redistribution (all-to-all / gather across CTAs) is not part of
 this op.
 
 #### Local
-The current device's local view of a `ShardLayout` tensor.
-
-- `x.type.layout` MUST be a `ShardLayout`.
-- The result shape MUST contract along each `Split` axis by that mesh axis's
-  extent; `dtype` and `storage` MUST be preserved.
-- The shard wrapper MUST be stripped, leaving the base `Layout`.
-
-A statically-known `Split` axis size divides by the mesh-axis extent; a
-symbolic axis size is carried through unchanged (folded later).
+```text
+Local(x) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - x: input tensor with `ShardLayout`
+- constraints:
+  - The result shape contracts each `Split` axis by that mesh axis's extent.
+  - `dtype` and `storage` are preserved.
+  - The shard wrapper is stripped, leaving the base `Layout`.
+  - Static split sizes divide by mesh extent; symbolic sizes pass through.
 
 ## 3. Typing / structural rules
 
@@ -385,14 +390,9 @@ operand layout / mesh compatibility it requires and its result layout;
 there is no uniform cross-op rule imposed from outside typeinfer.
 `Reshard` is the explicit op that changes a value's layout / mesh.
 
-A single-index `Gather` — a scalar index or a rank-1 one-element (`(1,)`) index
-— on a **non-sharded** axis is a slice of the sharded input: its result layout
-drops that axis's cute positions (scalar index) or collapses them to size 1
-(`(1,)` index) and remaps the surviving `Split` cute-axis references onto their
-new positions, carrying the mesh through unchanged. A gather along a sharded
-(`Split`) axis, a multi-index gather (any index rank other than scalar or
-`(1,)`, including a multi-index whose total size is 1), or a composed layout is
-outside this slice contract and carries the input layout through unchanged.
+Per-op typeinfer owns layout compatibility and result layout. For example,
+`Gather` owns whether an indexed access is a pure slice or a layout-preserving
+data-dependent gather.
 
 ## 4. `GridRegionExpr`
 

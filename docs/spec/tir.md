@@ -282,31 +282,21 @@ Fused RMS normalisation (effect form).
 
 #### Reduce
 
-Axis reduction `dst = reduce(src, axes, kind)` (effect form), invoked as
-`Evaluate(Reduce, ...)`.
-
-- `Reduce` dispatches by a `ReduceKind` tag (`MEAN` / `SUM`,
-  [§3.4](#34-generic-kind-tagged-effect-ops-tirarith)) rather than per-kind
-  classes. `kind` MUST be a `ReduceKind`; `axes` is the reduced-axis tuple.
-- Operands are `src`, `dst`, and an **optional** `workspace` input. `Reduce`
-  carries no dispatch parameter — the runtime selects the reduction strategy.
-- `workspace` is a cross-warp staging buffer for partial sums: no hardware
-  register-direct exchange exists across warps on Ampere / Ada / Hopper, so
-  cross-warp partials stage through memory (the intra-warp exchange is
-  `__shfl_xor_sync` only). It MUST be omitted (`None`) when the reduction stays
-  within a single warp or the input is not mesh-sharded across an inter-warp
-  topology; otherwise it MUST be present.
-- `workspace` is **not** type- or scope-restricted at the IR level: the
-  `HirToTirPass` ([passes](./passes.md)) chooses its storage level (RMSNorm
-  uses `smem`; other cases MAY pick `gmem` or `rmem`) and sizes its capacity.
-- All forms lower to the single public runtime entry `reduce`
-  ([runtime.md §3.5](./runtime.md#35-tilefoundryopsreduce-reduction-family)),
-  selecting an overload by operand form: a sharded `src` emits
-  `reduce<Op, Axes>(src, dst[, workspace])` (3-arg when the lowering sized a
-  workspace, else 2-arg), and a plain (non-`ShardLayout`) `src` emits the
-  rank-aware `reduce(src, dst, N, op)` (1-D) or `reduce(src, dst, M, K, op)`.
-  For the sharded overloads the runtime derives the reduction level and its
-  warps-per-group from the operand `ShardLayout`s, not from an op attribute.
+```text
+Reduce(src, dst, workspace?, axes, kind)
+```
+- kind: TIR op
+- fields:
+  - src / dst: effect-form operands
+  - workspace: optional staging buffer sized by lowering
+  - axes: reduced-axis tuple
+  - kind: `ReduceKind` tag
+- constraints:
+  - `Reduce` carries no dispatch parameter; runtime selects the strategy.
+  - `workspace` is present only when lowering sizes cross-warp staging.
+  - All forms lower to the single public runtime entry
+    `tilefoundry::ops::reduce<Op, Axes>(src, dst[, workspace])`.
+  - Plain and sharded runtime extents/tiers are derived inside the runtime.
 
 ### 3.4 Generic kind-tagged effect Ops (`tir.arith`)
 
@@ -316,10 +306,28 @@ per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
 TIR; lowering preserves the kind value without re-mapping.
 
 #### Binary
-Kind-tagged binary effect op (`dst = lhs <BinaryKind> rhs`).
+```text
+Binary(lhs, rhs, dst, kind)
+```
+- kind: TIR op
+- fields:
+  - lhs / rhs: input operands
+  - dst: destination operand
+  - kind: `BinaryKind` tag
+- constraints:
+  - Lowers to the binary runtime family without per-kind TIR classes.
 
 #### Unary
-Kind-tagged unary effect op (`dst = <UnaryKind> src`).
+```text
+Unary(src, dst, kind)
+```
+- kind: TIR op
+- fields:
+  - src: input operand
+  - dst: destination operand
+  - kind: `UnaryKind` tag, including `rsqrt`
+- constraints:
+  - Lowers to the unary runtime family without per-kind TIR classes.
 
 ### 3.5 `@intrinsic` — user-defined effect Stmts
 
@@ -521,34 +529,39 @@ producer issues copies, groups them, and a consumer waits on the group queue.
 
 #### CopyAsync
 
-Async gmem→smem copy `cp.async` (effect form; non-blocking), invoked as
-`Evaluate(CopyAsync, ...)`.
-
-- `CopyAsync` has the same operand shape as `Copy`
-  ([§3.1](#31-memory-ops-tirmemory)) — `source` → `destination` — but the copy
-  is issued asynchronously: it returns before the data lands.
-- `destination` MUST be `smem` and `source` MUST be `gmem` — the only direction
-  `cp.async` supports — and both MUST share a dtype (the copy is a byte copy, no
-  cast).
-- A later read of `destination` MUST be ordered after the copy by a
-  `CpAsyncCommit` followed by a `CpAsyncWait`.
+```text
+CopyAsync(src, dst)
+```
+- kind: TIR op
+- fields:
+  - src / dst: async staging operands
+- constraints:
+  - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
+  - A later read of `dst` is ordered by `CpAsyncCommit` followed by
+    `CpAsyncWait`.
 
 #### CpAsyncCommit
 
-Close the current in-flight `cp.async` group (fence, no operands), invoked as
-`Evaluate(CpAsyncCommit, ...)`.
-
-- `CpAsyncCommit` snapshots every `CopyAsync` issued since the previous commit
-  into one async group, so a later `CpAsyncWait` can count groups.
+```text
+CpAsyncCommit()
+```
+- kind: TIR op
+- fields:
+  - effect: closes the current in-flight async-copy group
+- constraints:
+  - Later `CpAsyncWait` counts committed groups.
 
 #### CpAsyncWait
 
-Block until all but the `n` newest committed groups have arrived (fence, no
-operands), invoked as `Evaluate(CpAsyncWait, ...)`.
-
-- `n` MUST be a non-negative compile-time count of the most-recent groups
-  allowed to stay in flight; `n = 0` drains every outstanding group.
-- After the wait, the drained groups' `destination` tensors are safe to read.
+```text
+CpAsyncWait(n)
+```
+- kind: TIR op
+- fields:
+  - n: most-recent committed groups allowed to remain in flight
+- constraints:
+  - `n` is a non-negative compile-time count.
+  - `n = 0` drains every outstanding committed group.
 
 ## 4. Verify rules
 
@@ -725,4 +738,3 @@ unambiguously; the unmangled dispatcher name lives on
 `DispatchCall.callee_name` ([§6](#6-dispatchcall)), not on a
 `SymbolRef`. Local typeinfer does not resolve a `SymbolRef`; it
 carries its `type` directly.
-
