@@ -1,23 +1,4 @@
-"""Effect-ful TIR Op ``tir.tensor.Reduce``.
-
-Generic reduction Op that dispatches by ``ReduceKind`` tag (``MEAN``
-/ ``SUM``). Writes the reduced result into ``dst``. Wrapped by
-``Evaluate(Reduce, ...)`` in Stmt position.
-
-The Op carries an optional ``workspace`` input — a scratch buffer the
-runtime uses to stage cross-warp partial sums (no hardware
-register-direct exchange across warps exists on Hopper / Ada /
-Ampere; intra-warp uses ``__shfl_xor_sync`` only). The
-``workspace`` argument is **not type/scope-restricted** at the
-IR level — the HIR→TIR lowering picks the appropriate storage
-(rmsnorm uses ``'smem'``); other use cases may pick
-``'gmem'`` or ``'rmem'``. ``workspace`` is omitted (``None``)
-when the reduction stays inside a single warp or the input is
-not mesh-sharded across an inter-warp topology.
-
-CUDA codegen forwards the workspace tensor to
-``tilefoundry::ops::reduce<Op, Axes>(src, dst, workspace)``.
-"""
+"""Effect-form TIR Op ``tir.tensor.Reduce`` — axis reduction dispatched by ``ReduceKind`` tag."""
 
 from __future__ import annotations
 
@@ -33,12 +14,7 @@ __all__ = ["ReduceKind", "Reduce"]
 
 @register_op(dialect="T", category="tensor")
 class Reduce(Op):
-    """Generic reduction op dispatched by ``kind`` tag.
-
-    ``workspace`` is an optional scratch buffer used by the
-    runtime template for cross-warp staging; ``None`` when not
-    needed.
-    """
+    """Generic axis reduction; dispatched by the ``kind`` tag."""
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
     workspace = ParamDef(
@@ -46,7 +22,6 @@ class Reduce(Op):
     )
     axes = ParamDef(kind="attribute", annotation=tuple)
     kind = ParamDef(kind="attribute", annotation=ReduceKind)
-    warps_per_group = ParamDef(kind="attribute", annotation=int, default=1)
 
 @register_typeinfer(Reduce)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
@@ -60,8 +35,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     src_ty = ctx.type_of(call.args[0])  # noqa: F841
     dst_ty = ctx.type_of(call.args[1])  # noqa: F841
     # Per-shard reshard lowering may produce rank-N (e.g.
-    # ``(1, 1, 1, 8)``) src tensors. The
-    # runtime template (``tilefoundry::ops::reduce<Op, Axes>``) iterates
-    # via ``cute::size(src)`` so rank is no longer relevant at the
-    # verifier level — the old rank<=2 guard predates the sharded
-    # reduce path.
+    # ``(1, 1, 1, 8)``) src tensors. The runtime template
+    # (``tilefoundry::ops::reduce<Op, Axes>``) iterates via
+    # ``cute::size(src)`` so rank is no longer relevant at the verifier level —
+    # the old rank<=2 guard predates the sharded reduce path.

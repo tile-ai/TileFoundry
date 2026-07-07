@@ -1,28 +1,10 @@
-"""``@module`` decorator — collect a class of DSL functions into an IR Module.
-
-Spec: parser.md §2.7
-
-``@module(entry="<name>")`` turns a class whose body holds ``@func`` /
-``@prim_func`` methods into a ``tilefoundry.ir.core.module.Module``. The class body
-is a pure function container: every non-dunder member is a DSL function and
-nothing else. The decorated name binds directly to the Module, so
-``Cls.<func_name>`` resolves a kernel by attribute and ``Cls.lookup`` remains for
-programmatic unique-name resolution.
-"""
+"""``@module`` decorator — collect a class of DSL functions into an IR Module."""
 
 from __future__ import annotations
 
 
 def module(cls=None, *, entry: str):
-    """Collect a class body's ``@func`` / ``@prim_func`` members into a ``Module``.
-
-    Every non-dunder class member MUST be an ``@func`` / ``@prim_func`` result (an
-    ``hir.Function`` / ``tir.PrimFunction``); an undecorated method, a nested
-    class, or any stray attribute is rejected. Members are collected in
-    definition order. ``entry`` names the public entry function — a forward
-    reference resolved against the collected members — and MUST match exactly
-    one. The decorated name binds to the resulting ``Module``.
-    """
+    """Collect a class body's ``@func`` / ``@prim_func`` members into a ``Module``."""
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415

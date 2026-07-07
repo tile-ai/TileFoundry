@@ -16,6 +16,7 @@ from tilefoundry.ir.types import TensorType
 
 @register_op(name="ptr_of")
 class PtrOf(Op):
+    """Take the device address of a tensor for downstream view ops (value form)."""
     x = ParamDef(kind="input", pattern=Tensor)
 @register_typeinfer(PtrOf)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:

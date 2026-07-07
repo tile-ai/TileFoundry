@@ -12,20 +12,7 @@ from .function import Function, canonical_specialization_signature
 
 
 def verify_function(fn: Function) -> None:
-    """Per Spec §6 / §8.2 / §8.6 and the dispatch model in hir §5.
-
-    A ``Function`` is one of three shapes:
-    - **normal** — ``variants == ()``, ``body`` is an Expr; typeinfer the body.
-    - **dispatch prototype (base)** — ``variants != ()``, ``body is None``;
-      verify the variants + their partition, not a body.
-    - **variant** — ``specializations != ()``, ``variants == ()``, ``body`` an
-      Expr; verified like a normal function plus its pattern envelope.
-
-    A bodyless function with no variants is the unsealed authoring transient
-    (a `pass` prototype awaiting ``.specialize``) and is accepted here; the
-    sealed-Module invariant ``body is None`` ⟺ ``variants != ()`` is enforced
-    by ``verify_module``.
-    """
+    """Verify one hir ``Function``: params, signature ``DimVar``s, and its shape-specific rules (normal body / dispatch prototype / variant)."""
     for p in fn.params:
         if not isinstance(p, Var):
             raise VerifyError(f"hir Function {fn.name!r}: params must be Vars")
@@ -100,7 +87,7 @@ def _verify_variants(base: Function) -> None:
 
 
 def _verify_partition(base: Function) -> None:
-    """The variants' ranges MUST partition the base DimVar envelope —
+    """Check the variants' ranges partition the base DimVar envelope —
     pairwise disjoint and jointly complete over the half-open ``[lo, hi)``."""
     dim_vars: set[str] = set()
     ranges: list[tuple[int, int]] = []
@@ -234,7 +221,7 @@ def _verify_signature_dim_vars(fn: Function) -> None:
 
 def _reject_stmt_nodes(expr: Expr) -> None:
     if isinstance(expr, Stmt):
-        raise VerifyError(f"hir body contains a Stmt node {type(expr).__name__}; hir is expr-only (§8.6)")
+        raise VerifyError(f"hir body contains a Stmt node {type(expr).__name__}; hir is expr-only")
     if isinstance(expr, Call):
         for arg in expr.args:
             _reject_stmt_nodes(arg)

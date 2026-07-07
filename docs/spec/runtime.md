@@ -385,26 +385,34 @@ cute::Tensor<Engine, Layout>
 
 ## 3. Runtime Ops
 
-Codegen targets namespace free functions:
+Codegen targets one public namespace function per runtime op/family:
 
-```cpp
-namespace tilefoundry::ops {
-template <class TIn, class TOut>
-__device__ void relu(TIn const& src, TOut& dst);
-}
+```text
+tilefoundry::ops::<op>(...)
 ```
 
-Rules:
+```mermaid
+flowchart LR
+    Codegen["generated target call"] --> Entry["ops::<op>(...) public entry"]
+    Entry --> Dispatch["internal trait / dispatch function"]
+    Dispatch --> ImplA["impl class / helper A"]
+    Dispatch --> ImplB["impl class / helper B"]
+    Entry --> SimpleImpl["single impl helper"]
+```
 
-- public op surface is `tilefoundry::ops::xxx(...)`
-- codegen emits calls to that free-function surface only
-- implementation may dispatch internally through `detail::xxx_impl`
-- simple and complex ops both use the same public shape; complexity is hidden
-  in the implementation
-- op tags stay in the same header as the op family until real reuse pressure
-  justifies an `ops/tags/` split
-- class-style public surfaces such as `tilefoundry::ReLUOp` are not the
-  codegen-facing contract
+**Runtime-owned dispatch.** Where an op has more than one implementation tier
+(selected by scope or by operand layout), the runtime exposes exactly **one**
+public entry — never one op per tier. The active tier is derived at **compile
+time** from the operand `ShardLayout`s, together with any codegen-static geometry
+passed as template parameters, through a template trait, and is selected inside
+the entry (`if constexpr`). Codegen emits one uniform call per op and never
+selects a tier, computes a per-tier parameter, or carries the selection on the
+TIR op. `ops::reduce` ([§3.5](#35-tilefoundryopsreduce-reduction-family))
+derives its reduction level from the operand shard layouts and `ops::sync`
+([§3.4](#34-tilefoundryopssync-mesh-scoped-barrier)) derives its participant
+predicate from the barrier geometry; both are instances of this principle. The
+codegen side is
+[codegen §3.1](./codegen.md#31-runtime-owned-op-dispatch).
 
 ### 3.1 `cute::copy`
 
@@ -450,3 +458,88 @@ Semantics:
 Preconditions:
 
 - `tensor.layout()` is a `ShardLayout`
+
+### 3.4 `tilefoundry::ops::sync` (mesh-scoped barrier)
+
+```text
+template <SyncKind Kind, int Base = 0, int Count = 0, unsigned Mask = 0u,
+          int BarId = 0>
+__device__ void sync(unsigned int* grid_bar = nullptr);
+```
+
+- kind: runtime func
+- fields:
+  - Kind: compile-time barrier kind; selects CTA, warp, named-barrier, or grid
+    behavior inside the runtime entry
+  - Base / Count / Mask / BarId: compile-time participant geometry
+  - grid_bar: optional two-word global counter pair used only by grid barriers
+- constraints:
+  - Codegen emits only `sync`; it does not call lower-level barrier helpers.
+  - Grid barriers require every CTA of the launch to be co-resident and to
+    execute the barrier.
+  - A grid barrier's counter pair is zero-initialized before first use and is
+    owned by the generated module.
+
+### 3.5 `tilefoundry::ops::reduce` (reduction family)
+
+```text
+template <class Op, class Axes, class Src, class Dst, class Ws = no_workspace>
+__device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
+```
+
+- kind: runtime func
+- fields:
+  - Op: compile-time combine tag (`sum`, `mean`, `max`, `absmax`)
+  - Axes: compile-time reduced logical axes
+  - src / dst: source and destination operands; sharded operands carry
+    `ShardLayout`
+  - ws: optional shared-memory workspace value; `no_workspace` means the reduce
+    stays within one warp
+- constraints:
+  - `reduce` is the only public runtime reduce entry; tier names and helper
+    functions are internal.
+  - Sharded operands derive the active tier and warp grouping from `(src, dst)`
+    shard layouts inside the runtime.
+  - Plain operands derive extents from the operand rank and size inside the
+    runtime.
+  - A reduction whose reduced axis crosses CTA boundaries is not supported.
+
+### 3.6 `tilefoundry::ops::copy_async` (async gmem→smem staging)
+
+```text
+template <class TSrc, class TDst>
+__device__ void copy_async(TSrc const& src, TDst& dst);
+```
+
+- kind: runtime func
+- fields:
+  - src / dst: per-thread projected operands; the supported fast path stages
+    global source data into shared destination storage
+- constraints:
+  - The call is non-blocking; generated code orders later reads through
+    `cp_async_commit` and `cp_async_wait`.
+  - Runtime implementation details such as vector width, tail handling, and
+    architecture fallback live in code comments, not this spec entry.
+
+### 3.7 Wide-load fast path in `copy()`
+
+The shard-aware `copy()` selects a 128-bit vector-load fast path from the
+operands alone, per the runtime-owned dispatch principle
+([§3](#3-runtime-ops)): one `copy()` entry, no codegen-visible selection. It is
+taken only when all of the following hold, and otherwise the copy falls back to
+the scalar element loop with identical results:
+
+- the source is gmem-resident (`cute::is_gmem` on the `ShardTensor` engine);
+- the destination local view is a static, rank-1, contiguous fragment whose
+  contiguous run is at least 128 bits wide —
+  `cute::max_common_vector(dst, dst) × cute::sizeof_bits<value_type> ≥ 128`,
+  where `value_type` is the cute view element type, not the `ShardTensor` engine
+  type;
+- at runtime the source base address is 16-byte aligned and the fragment is
+  contiguous (the gmem local view is dynamic-int, so contiguity is checked with
+  address arithmetic — pure ALU, no memory access).
+
+When taken, each 128-bit run is loaded as a vector into registers and scattered
+into the destination; the remaining sub-128-bit tail uses the element loop. A
+non-gmem source, a sub-128-bit run, an unaligned base, or a strided source all
+fall back to the scalar loop.

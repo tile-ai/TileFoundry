@@ -205,7 +205,19 @@ def test_classify_derives_barrier_from_participants() -> None:
     assert classify(m) is SyncBarrier.SYNCTHREADS          # whole block, 4 warps
     assert classify(m[0, :]) is SyncBarrier.SYNCWARP        # one warp
     assert classify(m[1:3, :]) is SyncBarrier.BAR_SYNC      # 2-warp subset
-    assert classify(_cta_mesh()) is SyncBarrier.SYNCTHREADS  # whole CTA
+
+
+def test_classify_full_cta_scope_mesh_is_grid_barrier() -> None:
+    """A mesh over the ``cta`` topology synchronizes CTAs across the grid — the
+    grid-wide software barrier, not a within-block ``__syncthreads``."""
+    assert classify(_cta_mesh()) is SyncBarrier.GRID
+
+
+def test_classify_rejects_partial_cta_slice() -> None:
+    """Only the full cta mesh maps to the grid barrier; a cta slice (a subset of
+    CTAs) has no supported barrier and is rejected."""
+    with pytest.raises(VerifyError, match="partial grid"):
+        classify(_cta_mesh()[0:64])
 
 
 # --- codegen text --------------------------------------------------------
@@ -221,27 +233,41 @@ def _emit(*meshes: Mesh) -> str:
 
 
 def test_codegen_full_cta_emits_syncthreads() -> None:
-    assert _emit(_thread_mesh()).strip() == "__syncthreads();"
+    assert (
+        _emit(_thread_mesh()).strip()
+        == "tilefoundry::ops::sync<tilefoundry::ops::SyncKind::syncthreads>();"
+    )
+
+
+def test_codegen_cta_scope_mesh_emits_grid_barrier() -> None:
+    assert (
+        _emit(_cta_mesh()).strip()
+        == "tilefoundry::ops::sync<tilefoundry::ops::SyncKind::grid>"
+        "(tilefoundry::tf_grid_bar_state);"
+    )
 
 
 def test_codegen_single_warp_subset_emits_masked_syncwarp_under_predicate() -> None:
+    # The uniform entry carries the participant geometry (base 0, count 32, full
+    # lane mask) as template parameters; the predicate lives in the runtime.
     src = _emit(_thread_mesh()[0, :])
-    assert "__syncwarp(0xffffffffu)" in src
-    assert "< 32" in src  # participant predicate bounds
+    assert "SyncKind::syncwarp_masked, 0, 32, 0xffffffffu>();" in src
 
 
 def test_codegen_multi_warp_subset_emits_named_bar_sync_under_predicate() -> None:
+    # Warps 1-2 → base 32, count 64; the named-barrier id + predicate live in the
+    # runtime template.
     src = _emit(_thread_mesh()[1:3, :])
-    assert "bar.sync" in src
-    assert '"r"(64)' in src       # count = 64 participating threads
-    assert ">= 32" in src and "< 96" in src  # predicate [32, 96)
+    assert "SyncKind::bar_sync, 32, 64, 0u," in src
 
 
 def test_codegen_allocates_distinct_barrier_ids_per_kernel() -> None:
     """Two distinct multi-warp syncs in one kernel get distinct named ids."""
     m = Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t"))
     src = _emit(m[0:2, :], m[2:4, :])
-    assert '"r"(1)' in src and '"r"(2)' in src
+    # The named-barrier id is the last template argument of the uniform entry.
+    assert "SyncKind::bar_sync, 0, 64, 0u, 1>();" in src
+    assert "SyncKind::bar_sync, 64, 64, 0u, 2>();" in src
 
 
 def test_codegen_errors_when_named_barriers_exhausted() -> None:

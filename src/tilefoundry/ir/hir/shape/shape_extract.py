@@ -11,6 +11,7 @@ from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 
 @register_op(name="shape_extract")
 class ShapeExtract(Op):
+    """Extract one axis from a shape value."""
     shape = ParamDef(kind="input", pattern=Tensor)
     index = ParamDef(kind="attribute", annotation=int)
 @register_typeinfer(ShapeExtract)

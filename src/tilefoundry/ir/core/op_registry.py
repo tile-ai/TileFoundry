@@ -1,22 +1,4 @@
-"""OpSchema-based registry — single source of truth.
-
-
-Every callable Op opts in via ``@register_op`` (see
-``tilefoundry.ir.core.register``). The decorator builds an ``OpSchema``
-and appends it to the ``(dialect, name) -> list[OpSchema]`` index
-``_schemas_by_dialect_name`` (list-per-name to support F3 first-match
-overloads).
-
-The legacy class-based flat / category indices (``_op_by_name`` /
-``_stmt_by_name`` / ``_tf_by_category_name`` / ``_t_by_category_name``)
-have been removed. Their public lookup helpers
-(``get_op_by_name`` / ``get_stmt_by_name`` /
-``get_tf_by_category_name`` / ``get_t_by_category_name``) remain as
-thin views derived from ``_schemas_by_dialect_name`` — they return the
-**op_class** of the **first** registered ``OpSchema`` for the
-requested key, preserving the earlier single-value semantics that
-``resolve_op`` / ``resolve_stmt`` rely on.
-"""
+"""OpSchema registry: the ``(dialect, name) -> [OpSchema]`` index every callable Op registers into."""
 from __future__ import annotations
 
 from typing import Iterable, Literal

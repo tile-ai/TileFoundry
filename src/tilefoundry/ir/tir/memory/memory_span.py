@@ -15,6 +15,7 @@ from tilefoundry.ir.types import TensorType
 
 @register_op(name="memory_span")
 class MemorySpan(Op):
+    """Re-interpret a memory region as a typed tensor (value form)."""
     x = ParamDef(kind="input", pattern=Tensor)
 @register_typeinfer(MemorySpan)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:

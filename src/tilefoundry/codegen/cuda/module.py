@@ -98,11 +98,15 @@ def emit_cuda_module(cuda_fns: tuple[PrimFunction, ...]) -> LinkableModule:
                 f"but {f.kernel_name!r} has (grid={f.grid}, block={f.block})"
             )
     specs = _topology_shape_specializations(base.grid, base.block)
+    # A module that emits a grid barrier defines its own counter pair (internal
+    # linkage) in this source.
+    uses_grid_barrier = any("tf_grid_bar_state" in text for text in kernel_texts)
     source = render(
         "cuda_module.cu.j2",
         topology_shape_specializations=specs,
         kernels="\n".join(kernel_texts),
         dynamic_cta=base.grid[0] is None,
+        uses_grid_barrier=uses_grid_barrier,
     )
     functions = tuple(
         LinkableFunction(name=f.kernel_name, source=text)

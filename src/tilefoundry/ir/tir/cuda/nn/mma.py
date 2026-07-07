@@ -5,12 +5,6 @@ The CUDA MMA surface: the effect-form ``Mma`` op (``acc += lhs @ rhs``,
 C fragment ``ShardLayout``\\s, and the ``make_atom`` resolver that binds an
 :class:`MmaOpSpec` to its realized :class:`MmaAtom`. The op / atom descriptor
 classes live next door in ``mma_atom.py``.
-
-The SM80 16x8x16 BF16 fragment ``ShardLayout``\\s below are the single source of
-truth for both this module and ``tests/ir_types/test_mma_fragment_layouts.py``
-(which pins the derivation). See that test for the full derivation recipe.
-
-Spec: tir.md §3.7
 """
 from __future__ import annotations
 
@@ -45,16 +39,7 @@ _ATOM_ROLE = {"acc": "C", "lhs": "A", "rhs": "B"}
 
 @register_op(category="nn")
 class Mma(Op):
-    """Matrix-multiply-accumulate: ``acc += lhs @ rhs``.
-
-    Wrapped by ``Evaluate(Mma, ...)`` in Stmt position; the surface is
-    ``T.mma(acc, a, b, atom=...)`` (operands in ``acc, lhs, rhs`` order).
-    ``atom`` is an optional :class:`MmaAtom` descriptor. When present (the
-    hand-written TIR path) it fixes the instruction + fragment-layout contract,
-    and verify checks the operand fragment layouts against the atom's A/B/C.
-    When absent (the ``hir_to_tir`` lowered path) the atom stays implicit in
-    codegen.
-    """
+    """Matrix-multiply-accumulate: ``acc += lhs @ rhs``."""
     acc = ParamDef(kind="input", pattern=Tensor)
     lhs = ParamDef(kind="input", pattern=Tensor)
     rhs = ParamDef(kind="input", pattern=Tensor)
@@ -86,10 +71,9 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
         ctx.error(call, f"Mma lhs/rhs dtype mismatch: {lhs_ty.dtype} vs {rhs_ty.dtype}")
     if (lhs_ty.dtype, acc_ty.dtype) not in _FP_ACC_WIDEN:
         ctx.error(call, f"Mma unsupported dtype combo: input {lhs_ty.dtype} acc {acc_ty.dtype}")
-    # Atom path: each operand's fragment layout must equal the atom's contract
-    # (acc→C, lhs→A, rhs→B), and an enclosing mesh scope must host the atom's
-    # required thread scope. The enclosing ``MeshScope`` stack arrives on
-    # ``ctx.mesh_scope`` (set by the verify stmt walk).
+    # Atom path: check each operand's fragment layout against the atom
+    # (acc→C, lhs→A, rhs→B), and that an enclosing mesh scope (``ctx.mesh_scope``,
+    # set by the verify walk) hosts the atom's required thread scope.
     atom = call.target.atom
     if atom is not None:
         for role, ty, want in (

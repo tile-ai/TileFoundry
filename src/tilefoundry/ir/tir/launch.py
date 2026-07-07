@@ -1,18 +1,4 @@
-"""``tir.Launch`` — host-side device-kernel launch effect Op.
-
-A host launch is the effect Op ``Launch`` invoked through ``Evaluate``:
-
-    Evaluate(Launch(cluster, dynamic_smem, stream, attrs),
-             (SymbolRef(callee), grid_x, grid_y, grid_z,
-              block_x, block_y, block_z, *forwarded_args))
-
-The callee and the grid / block extents flow through the ``Evaluate`` args;
-the Op attributes carry the non-grid/block launch configuration. Grid / block
-extents are normal Exprs — a ``Constant`` for a static extent, a ``ShapeOf``
-for a launch-provided (dynamic) one, or a dim-arithmetic ``Call`` over those.
-
-Spec: tir.md §3.6
-"""
+"""``tir.Launch`` — host-side device-kernel launch effect Op."""
 from __future__ import annotations
 
 from tilefoundry.ir.core.op import Op
@@ -21,7 +7,7 @@ from tilefoundry.ir.target.launch import LaunchAttrs
 
 
 class Launch(Op):
-    """Host launch of a device kernel — an effect Op (Spec: tir.md §3.6)."""
+    """Host launch of a device kernel — an effect Op producing no value."""
 
     cluster = ParamDef(kind="attribute", default=None)
     dynamic_smem = ParamDef(kind="attribute", default=0)

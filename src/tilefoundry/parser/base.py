@@ -173,7 +173,7 @@ class BaseExprVisitor:
     # Attribute access (cta.x etc.) --------------------------------------------------
 
     def visit_Attribute(self, node: ast.Attribute) -> Expr:
-        # Spec §3.4: `cta.x` / `cta.y` resolves through the lexical env to a
+        # `cta.x` / `cta.y` resolves through the lexical env to a
         # compile-time MeshAxis (Python object). It is NOT an Expr — callers
         # embedding it (e.g. ShardLayout construction) handle that. If it
         # really reaches this Expr dispatcher, raise.
@@ -476,21 +476,13 @@ class BaseExprVisitor:
         return isinstance(cls, type) and issubclass(cls, Op) and cls is not Op
 
     def call_to_op_call(self, node: ast.Call) -> Expr:
-        """Resolve `foo(...)` to a Call on an hir Op; raises if callee is a
-        tir Stmt (caller handles Stmt position).
+        """Resolve ``foo(...)`` to a ``Call`` on an hir Op.
 
-        Both callee forms are resolved through closure-only lookup
-        — see :meth:`_resolve_call_target` for the
-        contract. There is no registry shortcut; bare names require
-        an explicit ``from tilefoundry.dsl.tf import *`` (or specific
-        ``import``) for the binding to be in scope.
-
-        Nested HIR Function calls (``@func`` calling another ``@func``)
-        take a dedicated branch before schema dispatch: a callee that *is*
-        an ``hir.Function`` produces ``Call(target=<that Function>, args)``
-        directly, and the call's type comes from the callee's
-        ``return_type`` via the ``@register_typeinfer(Function)``
-        handler.
+        Dispatches a callee that is an ``hir.Function`` (nested ``@func`` call)
+        to :meth:`_build_function_call`; otherwise resolves an ``OpSchema`` via
+        :meth:`_resolve_call_target` and binds positional / keyword args to the
+        schema's input / attribute ParamDefs. Raises when the callee is a tir
+        Stmt op (the caller handles Stmt position) or is unresolved.
         """
         # Surface display name for error messages and effect-stmt detection.
         if isinstance(node.func, ast.Name):
@@ -714,7 +706,7 @@ class BaseExprVisitor:
         # literal (``"bf16"`` / ``"sum"`` / ...), promote it to the enum
         # member by VALUE so DSL source can stay free of ``DType.bf16`` /
         # ``ReduceKind.SUM`` etc. (the enum stays the IR-canonical attribute
-        # type; this is the parser/Call-build boundary — see parser.md §2.4).
+        # type; this is the parser/Call-build boundary).
         if (
             isinstance(value, str)
             and isinstance(annotation, type)

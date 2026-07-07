@@ -13,7 +13,7 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
 
 @register_op
 class Local(Op):
-    """Extract the current-device local view of a ShardLayout tensor. §8.11."""
+    """The current device's local view of a ``ShardLayout`` tensor."""
     x = ParamDef(kind="input", pattern=Tensor)
 @register_typeinfer(Local)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:

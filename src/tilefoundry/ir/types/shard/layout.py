@@ -9,28 +9,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Layout:
-    """Cute-style layout: shape + per-axis cute strides.
-
-    A shape / stride entry is a ``ShapeDim`` — a static ``int`` or a symbolic
-    / dynamic dim (a ``DimVar`` or dim ``Expr``) — and may also be ``None`` for
-    a launch-provided (dynamic) extent (the dynamic-CTA mesh layout
-    ``Layout(shape=(None,), strides=(1,))``). Consumers that need a concrete
-    integer (``Mesh.__getitem__``, ``T.sync`` participation) require static
-    ``int`` entries and fail closed on a symbolic / dynamic one.
-
-    ``strides`` MAY be ``None`` (the whole tuple) to signal an *un-materialized*
-    layout coming from parser sugar (``docs/spec/shard.md §7.1.2`` +
-    ``docs/spec/hir.md §3``). ``Reshard`` typeinfer fills the concrete tuple in
-    based on the storage-level direction rule.
-
-    Invariant: after ``Reshard`` typeinfer has run on a value, the
-    ``strides`` reachable from that value's type is a concrete
-    tuple; the un-materialized form is an intermediate-only signal
-    that lowering / codegen / runtime never see.
-
-    ``strides=()`` keeps its rank-0 scalar meaning (``shape=()``); it
-    is NOT overloaded as a sentinel.
-    """
+    """Cute-style layout: shape + per-axis cute strides."""
 
     shape: tuple["ShapeDim | None", ...]
     strides: Optional[tuple["ShapeDim", ...]] = None

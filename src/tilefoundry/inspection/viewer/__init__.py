@@ -27,18 +27,7 @@ class Viewer:
         host: str = "127.0.0.1",
         block: bool | None = None,
     ) -> int:
-        """Serve the viewer and return the bound port.
-
-        The HTTP server runs in a background daemon thread, so this
-        returns immediately by default (the contract the tests rely on).
-        When ``block`` is left unset it follows ``open_browser``: an
-        interactive caller (``open_browser=True``) blocks until Ctrl-C so
-        the process stays alive for the browser; a programmatic caller
-        returns the port.
-
-        A cold cache downloads the pinned JS assets first; if that fails
-        offline it raises a clear ``RuntimeError`` (no silent fallback).
-        """
+        """Serve the viewer and return the bound port."""
         assets = ensure_assets()
         cache_root = next(iter(assets.values())).parent
         server = start_server(self.root, port=port, cache_root=cache_root, host=host)

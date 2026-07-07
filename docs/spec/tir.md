@@ -203,11 +203,23 @@ A valid participant set maps to exactly one hardware barrier:
 | whole block that is one warp | `__syncwarp()` |
 | a contiguous lane subset within one warp | `__syncwarp(mask)` under a participant predicate |
 | a warp-aligned contiguous multi-warp subset | a named `bar.sync <id>, <count>` under a participant predicate |
+| the full mesh over the `cta` topology (all CTAs of the grid) | the grid-wide software barrier ([`runtime.md §3`](runtime.md)) |
 
 Codegen MUST guard the `__syncwarp(mask)` and `bar.sync` cases with the
 participant predicate `base <= tid < base+count` (`tid =
 program_id<thread>()`): a non-participant thread MUST NOT execute the barrier,
 and every participant MUST execute the same id and count.
+
+The first four rows synchronize threads **within one block**; their participant
+set is the contiguous thread interval above. A mesh whose topologies are all the
+`cta` topology instead synchronizes **CTAs across the grid** — `program_id<cta>`
+ranges over the launch's blocks — and maps to the grid-wide software barrier.
+Only the **full** cta mesh participates: a cta slice (a subset of CTAs) has no
+supported barrier and MUST be rejected at verify. The grid barrier's correctness
+requires every CTA of the launch to be co-resident; that co-residency is the
+launch's occupancy contract, not something the barrier can enforce. The
+grid-barrier device helper and its counter protocol are specified in
+[`runtime.md §3`](runtime.md).
 
 #### Named-barrier id allocation
 
@@ -227,61 +239,95 @@ verify and codegen cannot disagree.
 
 ## 3. TIR Ops
 
+Value Ops MUST be anchored by `LetStmt.value` — their result `Var` is the only
+handle. Effect Ops appear in Stmt position as `Evaluate(op, args)`
+([§2.2](#22-evaluate)). Each Op's full contract lives here, in its catalog entry
+below; code carries only a one-line purpose docstring
+([SPEC-RULES](../SPEC-RULES.md)).
+
 ### 3.1 Memory Ops (`tir.memory.*`)
 
-| Op | Form | Purpose |
-|---|---|---|
-| `AllocTensor` | value | allocate a tensor; result type carried on the Op's `tensor_type` attribute. MUST be anchored by `LetStmt`. |
-| `MemorySpan` | value | re-interpret a memory region as a typed tensor. |
-| `PtrOf` | value | take the device address of a tensor for downstream view ops. |
-| `TensorView(memory, layout, shape?)` | value | derive a sub-view of a tensor. `layout` updates the ShardLayout / cute Layout; optional `shape` overrides the logical shape (reshape). `memory` may be a `PtrOf` result (ptr + offset). |
-| `Copy` | effect | byte-equivalent copy between two tensors. |
-| `Fill` | effect | broadcast a scalar value into a tensor. |
+#### AllocTensor
+Allocate a tensor (value form; result type on the `tensor_type` attribute).
 
-Value Ops MUST be anchored by `LetStmt.value` — their result `Var`
-is the only handle. Effect Ops appear in Stmt position as
-`Evaluate(op, args)` ([§2.2](#22-evaluate)).
+#### MemorySpan
+Re-interpret a memory region as a typed tensor (value form).
+
+#### PtrOf
+Take the device address of a tensor for downstream view ops (value form).
+
+#### TensorView
+Derive a sub-view of a tensor (value form).
+
+#### Copy
+Byte-equivalent copy between two tensors (effect form).
+
+#### Fill
+Broadcast a scalar value into a tensor (effect form).
 
 ### 3.2 NN Ops (`tir.nn.*`)
 
-| Op | Form | Purpose |
-|---|---|---|
-| `Mma` | effect | matrix-multiply-accumulate (`acc += lhs @ rhs`); args `(acc, lhs, rhs)`. An optional `atom` attribute selects an explicit instruction descriptor for the hand-written calling convention ([§3.7](#37-mma-atom-and-the-hand-written-calling-convention)). Lowering paths to per-target PTX live in [target](./target.md). |
-| `ReLU` | effect | pointwise `max(x, 0)`. |
-| `RMSNorm` | effect | fused RMS normalisation. |
+#### Mma
+Matrix-multiply-accumulate `acc += lhs @ rhs` (effect form); per-target PTX
+lowering lives in [target](./target.md), the atom calling convention in
+[§3.7](#37-mma-atom-and-the-hand-written-calling-convention).
+
+#### ReLU
+Pointwise `max(x, 0)` (effect form).
+
+#### RMSNorm
+Fused RMS normalisation (effect form).
 
 ### 3.3 Tensor Ops (`tir.tensor.*`)
 
-| Op | Form | Purpose |
-|---|---|---|
-| `Reduce` | effect | `dst = reduce(src, axes, kind)` with `kind ∈ {SUM, MEAN}` (`ReduceKind` enum). |
+#### Reduce
+
+```text
+Reduce(src, dst, workspace?, axes, kind)
+```
+- kind: TIR op
+- fields:
+  - src / dst: effect-form operands
+  - workspace: optional staging buffer sized by lowering
+  - axes: reduced-axis tuple
+  - kind: `ReduceKind` tag
+- constraints:
+  - `Reduce` carries no dispatch parameter; runtime selects the strategy.
+  - `workspace` is present only when lowering sizes cross-warp staging.
+  - All forms lower to the single public runtime entry
+    `tilefoundry::ops::reduce<Op, Axes>(src, dst[, workspace])`.
+  - Plain and sharded runtime extents/tiers are derived inside the runtime.
 
 ### 3.4 Generic kind-tagged effect Ops (`tir.arith`)
 
-`Binary` and `Unary` are effect-form Ops that dispatch on a kind
-enum rather than carrying per-op classes. They appear as
-`Evaluate(op, args)` like every other TIR effect op:
+`Binary` / `Unary` are effect-form Ops that dispatch on a kind enum rather than
+per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
+`UnaryKind` / `ReduceKind` are compiler-wide tag enums shared across HIR and
+TIR; lowering preserves the kind value without re-mapping.
 
-```python
-@register_op(category="arith")
-class Binary(Op):
-    lhs:  Expr = ParamDef(...)
-    rhs:  Expr = ParamDef(...)
-    dst:  Expr = ParamDef(...)
-    kind: BinaryKind = ParamDef(...)
-
-@register_op(category="arith")
-class Unary(Op):
-    src:  Expr = ParamDef(...)
-    dst:  Expr = ParamDef(...)
-    kind: UnaryKind = ParamDef(...)
+#### Binary
+```text
+Binary(lhs, rhs, dst, kind)
 ```
+- kind: TIR op
+- fields:
+  - lhs / rhs: input operands
+  - dst: destination operand
+  - kind: `BinaryKind` tag
+- constraints:
+  - Lowers to the binary runtime family without per-kind TIR classes.
 
-`BinaryKind` (`ADD` / `MUL` / `SUB` / `DIV`), `UnaryKind`
-(`RSQRT` / `CAST` / `NEG` / `RELU`), and `ReduceKind` (`SUM` /
-`MEAN`, used by §3.3 `Reduce`) are compiler-wide tag enums shared
-across HIR and TIR. Lowering preserves the kind value without
-re-mapping.
+#### Unary
+```text
+Unary(src, dst, kind)
+```
+- kind: TIR op
+- fields:
+  - src: input operand
+  - dst: destination operand
+  - kind: `UnaryKind` tag, including `rsqrt`
+- constraints:
+  - Lowers to the unary runtime family without per-kind TIR classes.
 
 ### 3.5 `@intrinsic` — user-defined effect Stmts
 
@@ -301,36 +347,30 @@ under the function's snake-case name. Parameters MUST be annotated
 
 ### 3.6 `Launch`
 
-`Launch` is the effect Op for a host-side launch of a device kernel.
-It appears only in a CPU (host) entry body and produces no value. Its
-Op attributes carry the non-grid/block launch configuration; the
-callee and the grid/block extents flow through the `Evaluate` args. A
-launch is `Evaluate(Launch(...), args)` with
+Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
+the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
+the non-grid/block launch config through the Op attributes.
 
-```
-args = (SymbolRef(callee),
-        grid_x, grid_y, grid_z, block_x, block_y, block_z,
-        *forwarded_args)
-```
+`Launch` appears only in a CPU (host) entry body, as `Evaluate(Launch(...),
+args)` with `args = (SymbolRef(callee), grid_x, grid_y, grid_z, block_x,
+block_y, block_z, *forwarded_args)`:
 
-- **callee**. `args[0]` MUST be a `SymbolRef` ([§9](#9-symbolref))
-  resolving to a device `PrimFunction` whose target is a CUDA target.
-- **grid / block**. `args[1:7]` are the grid then block extents in the
-  fixed order `grid_x, grid_y, grid_z, block_x, block_y, block_z`.
-  Each is an `Expr`: a `Constant` for a static extent, the computed
-  dim `Expr` for a launch-provided (dynamic) one. They are launch
-  configuration, not kernel parameters — the device observes its
-  program geometry through `gridDim` / `blockIdx` and the codegen
-  `program_dim` / `program_shape` accessors
-  ([codegen §6](./codegen.md#6-program-shape-and-dynamic-cta)).
-- **forwarded args**. The remaining `args` bind the callee's
-  host-visible parameters in declaration order. They MUST NOT include
-  the hidden shape-scalar parameters ([§7](#7-shapeof)), which the
-  host fills from a tensor argument's runtime shape.
-- **attributes**. The Op attributes carry the non-grid/block launch
-  config — `cluster`, `dynamic_smem`, `stream`, `attrs`. A `cluster` /
-  `stream` / `attrs` value the current CUDA target does not support
-  MUST be rejected in target lowering.
+- **callee**: `args[0]` MUST be a `SymbolRef` ([§9](#9-symbolref)) resolving to
+  a device `PrimFunction` with a CUDA target.
+- **grid / block**: `args[1:7]` are the grid then block extents in the fixed
+  order `grid_x, grid_y, grid_z, block_x, block_y, block_z`. Each is an `Expr`
+  — a `Constant` for a static extent, a `ShapeOf` ([§7](#7-shapeof)) for a
+  launch-provided (dynamic) one, or a dim-arithmetic `Call` over those. They are
+  launch configuration, not kernel parameters: the device observes geometry
+  through `gridDim` / `blockIdx` (the codegen `program_dim` / `program_shape`
+  accessors), never as arguments.
+- **forwarded args**: the remaining `args` bind the callee's host-visible
+  parameters in declaration order. They MUST NOT include the hidden
+  `<param>_shape_<axis>` scalar parameters ([§7](#7-shapeof)) — the host fills
+  those from a tensor argument's runtime shape.
+- **attributes**: `cluster`, `dynamic_smem`, `stream`, and `attrs` carry the
+  non-grid/block launch configuration. A `cluster` / `stream` / `attrs` value
+  the active CUDA target does not support MUST be rejected in target lowering.
 
 ### 3.7 MMA atom and the hand-written calling convention
 
@@ -466,13 +506,62 @@ A `T.mma` carrying an `atom` MUST satisfy:
   `rhs.layout == atom.B`.
 - **scope**: some mesh on the active `MeshScope` stack provides the
   atom's required thread scope —
-  `mesh_scope_matches_required_scope(mesh, atom.required_scope)`: same
-  topology kind, a self-consistent (`topology domain == layout extent`)
-  inverse-projectable mesh, and the **exact** required thread-value
-  layout shape and strides. A flat lane layout that cannot host the
-  atom's multi-axis fragment `Split` is rejected.
+  `mesh_scope_matches_required_scope(mesh, atom.required_scope)`. The
+  match is identity- and name-independent (mesh object identity, the
+  binding-var name, and axis names are not compared); it holds iff:
+  - the two meshes share the same program topology level — a `cta`
+    scope is never a `thread` / warp scope, even when its layout carries
+    the same shape;
+  - both topology domains (the product of the topology extents) are
+    statically known;
+  - each mesh is self-consistent (`topology domain == layout extent`),
+    and the enclosing mesh is inverse-projectable;
+  - the thread-value decomposition matches **exactly** — same layout
+    shape and strides. A flat lane layout cannot host the atom's
+    multi-axis fragment `Split` and is rejected.
 
 Per-target PTX emission dispatches on the atom ([target](./target.md)).
+
+### 3.8 Async copy Ops (`tir.async.*`)
+
+Non-blocking `cp.async` gmem→smem staging for warp-specialized pipelines: a
+producer issues copies, groups them, and a consumer waits on the group queue.
+
+#### CopyAsync
+
+```text
+CopyAsync(src, dst)
+```
+- kind: TIR op
+- fields:
+  - src / dst: async staging operands
+- constraints:
+  - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
+  - A later read of `dst` is ordered by `CpAsyncCommit` followed by
+    `CpAsyncWait`.
+
+#### CpAsyncCommit
+
+```text
+CpAsyncCommit()
+```
+- kind: TIR op
+- fields:
+  - effect: closes the current in-flight async-copy group
+- constraints:
+  - Later `CpAsyncWait` counts committed groups.
+
+#### CpAsyncWait
+
+```text
+CpAsyncWait(n)
+```
+- kind: TIR op
+- fields:
+  - n: most-recent committed groups allowed to remain in flight
+- constraints:
+  - `n` is a non-negative compile-time count.
+  - `n = 0` drains every outstanding committed group.
 
 ## 4. Verify rules
 
@@ -649,4 +738,3 @@ unambiguously; the unmangled dispatcher name lives on
 `DispatchCall.callee_name` ([§6](#6-dispatchcall)), not on a
 `SymbolRef`. Local typeinfer does not resolve a `SymbolRef`; it
 carries its `type` directly.
-

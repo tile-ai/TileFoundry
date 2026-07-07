@@ -1,7 +1,4 @@
-"""Evaluator value model.
-
-Spec: evaluator.md §1
-"""
+"""Evaluator value model."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,18 +14,12 @@ class EvalError(Exception):
 
 
 class Value:
-    """Base of every evaluated value. A single-output node produces a
-    ``TensorValue``; a multi-output node (``Tuple``, a ``TupleType`` ``Call``,
-    a multi-carry ``GridRegionExpr``) produces a ``TupleValue``."""
+    """Base of every evaluated value."""
 
 
 @dataclass(frozen=True)
 class TensorValue(Value):
-    """A logical tensor value paired with its HIR type.
-
-    ``data`` holds the value in its logical shape; ``type`` carries the
-    ``TensorType`` (including any ``layout``).
-    """
+    """A logical tensor value paired with its HIR type."""
 
     data: torch.Tensor
     type: TensorType
@@ -71,7 +62,7 @@ def _flatten_ints(shape) -> tuple[int, ...]:
 
 def _layout_shape(type) -> tuple[int, ...] | None:
     """The element organisation of ``type.layout`` as a flat int tuple, or
-    ``None`` when there is no layout to project onto (Spec: evaluator.md §6)."""
+    ``None`` when there is no layout to project onto."""
     layout = getattr(type, "layout", None)
     if layout is None:
         return None
@@ -87,8 +78,8 @@ def _layout_shape(type) -> tuple[int, ...] | None:
 
 def as_layout_view(value: TensorValue) -> torch.Tensor:
     """Project ``value.data`` from its logical shape to the layout-domain
-    element organisation (Spec: evaluator.md §6). Returns ``data`` unchanged
-    when there is no layout or the element count does not match."""
+    element organisation. Returns ``data`` unchanged when there is no layout
+    or the element count does not match."""
     shape = _layout_shape(value.type)
     if shape is None:
         return value.data

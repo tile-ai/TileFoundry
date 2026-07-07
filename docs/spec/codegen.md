@@ -103,6 +103,16 @@ target group.
   `tilefoundry::` shard tensor for a `ShardLayout` (§7) — it does not change the
   function into a `__device__`-parameter function.
 
+### 3.1 Runtime-owned op dispatch
+
+Where more than one runtime template implements an op, codegen emits **one
+uniform runtime op call**, passing the operand `ShardLayout`s (and any
+codegen-static participant geometry) as compile-time template parameters. The
+runtime template dispatches on those layouts at compile time; codegen does not
+select a tier, compute a per-tier parameter, or carry the selection on the TIR
+op. This is the codegen side of the runtime-owned dispatch principle, whose
+contract lives in [runtime.md §3](runtime.md#3-runtime-ops).
+
 ## 4. Codegen products
 
 ### 4.1 `LinkableFunction`

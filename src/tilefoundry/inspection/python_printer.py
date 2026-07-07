@@ -315,7 +315,6 @@ _OP_NAME_MAP: dict[str, str] = {
     "ReLU": "relu",
     "Add": "add",
     "Mul": "mul",
-    "Rsqrt": "rsqrt",
     "Cast": "cast",
     "Reduce": "reduce",
     "Reshard": "reshard",

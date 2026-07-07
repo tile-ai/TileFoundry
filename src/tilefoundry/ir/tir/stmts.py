@@ -99,16 +99,8 @@ class Abort(Stmt):
 
 @dataclass(frozen=True)
 class Evaluate(Stmt):
-    """Stmt-position wrapper for a callable invocation with no result value.
-
-    ``callable`` is an effect-form ``Op`` (``Copy`` / ``Fill`` / ``Mma`` /
-    ``Reduce`` / ``ReLU`` / ``RMSNorm`` / ``Launch``) or a ``SymbolRef``
-    naming a callee ``PrimFunction``; ``args`` are the operands. Visitors and
-    verify dispatch on ``type(callable)``.
-
-    Spec: tir.md §2.2
-    """
-    callable: "Op | SymbolRef"  # noqa: A003 -- spec field name (tir.md §2.2)
+    """Stmt-position wrapper for a callable invocation (effect ``Op`` or ``SymbolRef``) that yields no value."""
+    callable: "Op | SymbolRef"  # noqa: A003 -- spec field name
     args: tuple[Expr, ...]
 
 

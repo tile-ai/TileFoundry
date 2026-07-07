@@ -1,10 +1,10 @@
 """Generic shard propagation over a forward access relation.
 
-``derive_output_shard_layout`` derives an op's output ``ShardLayout`` from the input
-shards and the relation access maps, with one rule for every op (see
-``docs/spec/shard.md`` §9). It reads only the maps' affine structure (which
-domain dim each tensor axis uses), never the domain bounds, so it is
-size-agnostic and identical for static and dynamic shapes.
+``derive_output_shard_layout`` derives an op's output ``ShardLayout`` from the
+input shards and the relation access maps by one rule for every op. It reads
+only the maps' affine structure (which domain dim each tensor axis uses), never
+the domain bounds, so it is size-agnostic and identical for static and dynamic
+shapes.
 """
 from __future__ import annotations
 
@@ -202,26 +202,7 @@ def derive_output_shard_layout(
     complete_reduction_dims: "frozenset[int]" = frozenset(),
     fresh_strides: bool = False,
 ):
-    """Derive the output ``ShardLayout`` from the input shards + the relation.
-
-    Per mesh axis: an input ``Split`` (which binds a cute axis) whose domain dim
-    survives in the output map (as a pure projection) becomes an output
-    ``Split`` on the mapped cute axis; a ``Split`` of a reduction dim becomes a
-    mesh-axis ``Partial`` (when in *partial_reduction_dims*) or ``Broadcast``.
-    A ``Partial`` is a mesh-axis value state with no cute axis: it is created on
-    the mesh axis whose ``Split`` reduced a contraction dim, an input
-    ``Partial`` carries through on the same mesh axis (never silently dropped),
-    and it is discharged only by an explicit reduction/allreduce. A constant
-    (broadcast) input axis contributes nothing. Fails closed when an input
-    ``Split`` accesses a non-projection axis or when a surviving dim appears
-    only via a non-projection output access. Returns ``None`` when no input
-    carries real sharding. A
-    ``ShardLayout`` whose attrs are all ``Broadcast`` is replicated: it
-    contributes no sharding and does not pin a mesh, so it may be combined with
-    an input sharded on a different mesh. Reuses the
-    cute-layout-axis → logical-tensor-axis mapping and the relation access
-    maps; never inspects domain bounds (size-agnostic).
-    """
+    """Derive the output ``ShardLayout`` from the input shards and the forward relation."""
     sharded = [
         (i, t.layout)
         for i, t in enumerate(input_types)

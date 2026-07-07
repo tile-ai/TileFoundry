@@ -164,7 +164,12 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
   (a fresh `ViewerBuilder(root, collapsed).build().source`),
   `/api/expr/<visual_id>` (detail JSON formatted on demand from the
   `DetailIndex`), and `/api/palette` (the colour palette). No `dot`
-  subprocess exists anywhere in the package.
+  subprocess exists anywhere in the package. The server runs on a
+  background daemon thread; `serve` returns the bound port immediately
+  unless `block` holds the process open. When `block` is unset it
+  follows `open_browser` — an interactive call (`open_browser=True`)
+  blocks until interrupted so the page stays reachable; a programmatic
+  call returns.
 - **Builder.** `ViewerBuilder` walks the HIR `Function` / `Module`
   directly into a `graphviz.Digraph`; there is no intermediate model. A
   `Call(target=hir.Function)` and a top-level `Function` share one

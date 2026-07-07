@@ -11,3 +11,8 @@ repos:
         entry: python scripts/spec_rules_lint.py
         language: system
         files: ^docs/spec/.*\.md$
+      - id: spec-entropy-lint
+        name: spec-entropy-lint
+        entry: python scripts/spec_entropy_lint.py
+        language: system
+        files: ^src/.*\.py$

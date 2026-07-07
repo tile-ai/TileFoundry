@@ -1,23 +1,4 @@
-"""HIR generic Reduce op with kind enum.
-
-``Reduce(x, axes=(0,), kind=ReduceKind.MEAN)`` lowers to TIR Reduce.
-
-Output layout contract: every ``Split(axis=L)`` ``ShardAttr`` whose
-cute layout position ``L`` falls within a reduced tensor axis is
-replaced by ``Broadcast()`` in the output ``ShardLayout``. The cute
-``Layout`` collapses those positions to ``size = 1`` and
-``stride = 0`` (broadcast view — value is replicated, no
-addressing offset). Non-reduced cute positions preserve their
-original shape and stride unchanged. This matches the principle
-"output cute positions that still index distinct elements
-preserve stride; broadcast positions zero out their stride."
-
-For the rmsnorm demo (``(1, 1536) → (1, 1)``), every cute
-position ends up either size-1-non-reduced (outer tensor axis 0)
-or reduced (the 6/32/8 sub-axes); under the rule above the
-output strides are all zero, matching the expected
-``shape=(1,1,1,1) strides=(0,0,0,0) attrs=(B,B)``.
-"""
+"""HIR generic Reduce op with kind enum."""
 
 from __future__ import annotations
 
@@ -45,6 +26,7 @@ __all__ = ["ReduceKind", "Reduce"]
 
 @register_op
 class Reduce(Op):
+    """Axis reduction over ``x`` (``mean`` / ``sum`` / ``abs_max`` / ``max``)."""
     x = ParamDef(kind="input", pattern=Tensor)
     axes = ParamDef(kind="attribute", annotation=tuple)
     keepdim = ParamDef(kind="attribute", annotation=bool, default=True)

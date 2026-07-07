@@ -5,13 +5,9 @@ Materialises a CuTe tensor bound to the storage class indicated by the
 LetStmt's var TensorType.
 
 When the var's layout is a ``ShardLayout``, the emitted CUDA wraps the per-thread
-backing cute Tensor in ``tilefoundry::make_shard_tensor(...)`` so the
-generated source carries the shard semantics end-to-end. Downstream
-op impls (``tilefoundry::ops::cast`` / ``unary`` / ``binary`` / ``reduce``
-/ ``copy``) take ``ShardTensor`` and convert to per-thread cute via
-``local()`` internally. Non-shard memory storages
-(``gmem`` / ``smem`` / ``rmem``, or ``storage=None``) with no ShardLayout keep
-the prior ``TensorType.shape`` materialisation path.
+backing cute Tensor in ``tilefoundry::make_shard_tensor(...)``. A non-shard
+storage (``gmem`` / ``smem`` / ``rmem``, or ``storage=None``) keeps the plain
+``TensorType.shape`` materialisation path.
 """
 from __future__ import annotations
 
@@ -61,7 +57,9 @@ def _emit_plain_alloc(
         layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
     cpp_type = ctx.dtype_to_cpp(var.type.dtype.name)
     if storage == StorageKind.SMEM:
-        ctx.emit(f"__shared__ {cpp_type} {name}_buf[{total}];")
+        # 16B-align the shared tile so a 128-bit vectorized / ``cp.async``
+        # access into it has an aligned base (alignment only ever increases).
+        ctx.emit(f"__shared__ __align__(16) {cpp_type} {name}_buf[{total}];")
         ctx.emit(
             f"auto {name} = cute::make_tensor("
             f"cute::make_smem_ptr({name}_buf), {layout});"

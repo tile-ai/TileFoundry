@@ -1,24 +1,4 @@
-"""Effect-ful TIR Op ``tir.Sync`` — a mesh-scoped barrier.
-
-Spec: tir.md §2.4
-
-``T.sync(m)`` synchronizes the threads of mesh ``m`` — a compile-time
-descriptor, possibly a constant slice ``m[1:3, :]``. ``Sync`` is an effect-form
-op wrapped by ``Evaluate`` in Stmt position; it carries ``mesh`` as a
-compile-time attribute (no SSA operand), mirroring how ``Mma`` carries its
-``atom``.
-
-The barrier kind is *derived* from the participating thread set, not stored:
-
-- the whole CTA → ``__syncthreads()`` (or ``__syncwarp()`` when the block is a
-  single warp);
-- a contiguous lane subset inside one warp → ``__syncwarp(mask)`` under a
-  participant predicate;
-- a warp-aligned contiguous multi-warp subset → a named ``bar.sync`` under a
-  participant predicate;
-- anything non-contiguous or cross-warp-unaligned is rejected at verify, never
-  silently broadened or split.
-"""
+"""Effect-form TIR Op ``tir.Sync`` — a mesh-scoped barrier emitted by ``T.sync(m)``."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -133,6 +113,7 @@ class SyncBarrier(Enum):
     SYNCTHREADS = "syncthreads"  # whole block, more than one warp
     SYNCWARP = "syncwarp"        # whole block of one warp, or a single-warp subset
     BAR_SYNC = "bar_sync"        # named barrier — a warp-aligned multi-warp subset
+    GRID = "grid"                # grid-wide software barrier (cta-scope mesh)
 
 
 @dataclass(frozen=True)
@@ -230,6 +211,15 @@ def participation(mesh: Mesh) -> Participation:
 def classify(mesh: Mesh) -> SyncBarrier:
     """Pick the hardware barrier for ``mesh``. Raises ``VerifyError`` for a
     cross-warp subset that is not warp-aligned."""
+    topos = mesh.topologies or (mesh.topology,)
+    if topos and all(getattr(t, "name", None) == "cta" for t in topos):
+        # A cta-scope mesh maps to the grid-wide barrier; only the full mesh
+        # (no cta slice) has a supported barrier.
+        if isinstance(mesh.layout, ComposedLayout):
+            raise VerifyError(
+                "T.sync: a partial grid sync (cta mesh slice) is unsupported"
+            )
+        return SyncBarrier.GRID
     p = participation(mesh)
     if p.full_cta:
         return SyncBarrier.SYNCWARP if p.count == _WARP_SIZE else SyncBarrier.SYNCTHREADS
