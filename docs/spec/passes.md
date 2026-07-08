@@ -34,6 +34,7 @@ pass framework is:
 
 ## 2. `Pass` base class
 
+
 ```python
 from abc import ABC, abstractmethod
 from tilefoundry.ir.core import Module
@@ -321,7 +322,7 @@ Worked example: `SM80_16x8x16_F32BF16BF16F32_TN` with
 #### Dispatch lowering
 
 The pass lowers each `Module.functions` entry by its shape
-([hir.md §5](./hir.md#5-dispatch-specializations)):
+([hir.md §1.1](./hir.md#11-function)):
 
 - A normal function (`variants == ()`) lowers on the default
   single-body path.
@@ -357,7 +358,7 @@ derived from `call.args[param_index].type.shape[axis]`:
 
 An empty reachable set is a compile-time error. Coverage and
 disjointness of the variants over the dispatch envelope are verified
-statically (the partition rule, [hir.md §5](./hir.md#5-dispatch-specializations)),
+statically (the partition rule, [hir.md §1.1](./hir.md#11-function)),
 so an in-envelope shape always selects exactly one variant. The
 `tir.DispatchCall.fallback` (`Abort`) is reached only by an
 out-of-envelope shape — a call-contract violation.

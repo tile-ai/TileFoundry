@@ -89,7 +89,7 @@ definitions are emitted in the module prelude / standalone header.
 
 ### 2.6 Specialization printing
 
-A dispatch prototype ([hir.md §5](./hir.md#5-dispatch-specializations))
+A dispatch prototype ([hir.md §1.1](./hir.md#11-function))
 prints as its base `@tilefoundry.func` with a `pass` body, followed by each
 variant as an `@<name>.specialize(pattern)` block in declared order:
 
@@ -106,7 +106,7 @@ def _(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
 The pattern prints in its constructor form (`DimVarRangePat("S", 1, 4)`;
 other `Pattern` subclasses fall back to `repr(pattern)`). The emitted form
 mirrors the authoring surface
-([parser.md §8](./parser.md#8-dispatch-specializations)). Because a
+([parser.md §1.1](./parser.md#11-decorators)). Because a
 dispatch prototype has a `DimVar` parameter, its rendering is a
 **display-only** surface (§2.7): human-readable, not a round-trip
 validation artifact.

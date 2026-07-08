@@ -119,7 +119,7 @@ rules; a handler MUST NOT depend on type inference having run.
 
 Evaluation is an `ExprVisitor[Value]`
 ([visitor-mutator §1](./visitor-mutator.md)) memoized on `id(expr)`, so
-a shared sub-DAG ([hir §1](./hir.md)) is evaluated once:
+a shared sub-DAG ([hir §1.1](./hir.md)) is evaluated once:
 
 ```python
 def visit(expr):                      # memoized: id(expr) -> Value
@@ -142,19 +142,19 @@ def visit(expr):                      # memoized: id(expr) -> Value
 ```
 
 - A `Var` resolves to its binding in the current environment; a
-  `Constant` ([core-ir §3](./core-ir.md)) materialises to a backend
+  `Constant` ([core-ir §2](./core-ir.md)) materialises to a backend
   tensor of its `TensorType` (a scalar becomes a rank-0 tensor).
 - A `Call` whose `target` is an `Op` evaluates its operands, then
   dispatches through `eval_registry`
   ([§3](#3-register_eval-and-the-eval-context)).
-- A `Call` whose `target` is a `Function` ([hir §1](./hir.md)) binds the
+- A `Call` whose `target` is a `Function` ([hir §1.1](./hir.md)) binds the
   evaluated arguments to the callee's parameters in a fresh environment
   and evaluates the callee `body` — the same value semantics a call site
   has under type inference.
 
 ## 5. `GridRegionExpr`
 
-A `GridRegionExpr` ([hir §4](./hir.md)) is a loop over its iteration
+A `GridRegionExpr` ([hir §1.2](./hir.md)) is a loop over its iteration
 domain whose carry chain starts from `init_args`:
 
 ```python
@@ -191,7 +191,7 @@ values:
   `axes` in the operand's **logical** `TensorType.shape`, regardless of
   `type.layout`. A computation that must group a logical axis differently
   (e.g. per-head normalisation) is expressed by a logical `Reshape`
-  ([hir §2.2](./hir.md)) to the target logical shape *before* the op; the
+  ([hir §1.3](./hir.md)) to the target logical shape *before* the op; the
   op's axis then indexes that reshaped logical shape. `Reshard` only
   changes distribution / layout and never changes which values an op
   reduces or indexes.
@@ -202,8 +202,8 @@ values:
   inverse. These are provided for an op explicitly defined to compute in
   the layout domain; no op in the current set is layout-domain, so none
   of them call these helpers.
-- `Reshard` ([hir §2.5](./hir.md)) preserves the logical value and MAY
+- `Reshard` ([hir §1.3](./hir.md)) preserves the logical value and MAY
   reshape it into the target layout's shape; it performs no
   cross-participant data movement.
-- `Local` ([hir §2.5](./hir.md)) returns its operand's value for the
+- `Local` ([hir §1.3](./hir.md)) returns its operand's value for the
   single modelled participant.

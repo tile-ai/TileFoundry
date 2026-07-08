@@ -36,6 +36,7 @@ flowchart LR
 
 ## 2. Emitter
 
+
 An emitter walks a verified `tir.PrimFunction` and produces source plus the
 metadata the link step needs.
 
@@ -116,6 +117,7 @@ contract lives in [runtime.md §3](runtime.md#3-runtime-ops).
 ## 4. Codegen products
 
 ### 4.1 `LinkableFunction`
+
 
 One lowered function's pre-link source.
 
@@ -204,8 +206,9 @@ commands are an implementation detail and not part of the contract.
 
 ## 5. Dispatch and shape-scalar ABI
 
+
 A `tir.PrimFunction` produced by HIR→TIR lowering for a dispatch prototype
-([hir §5](./hir.md#5-dispatch-specializations)) emits as a host dispatch entry
+([hir §1.1](./hir.md#11-function)) emits as a host dispatch entry
 plus its variant kernels:
 
 - **Dispatch entry** (PrimFunction whose body is a single `tir.DispatchCall`):

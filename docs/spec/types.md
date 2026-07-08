@@ -88,7 +88,7 @@ class TensorType(IRType):
   shape-element form; a rank-0 tensor with a memory `StorageKind` is an
   ordinary scalar holding one element.
 
-Enforcement is owned by [tir §4](./tir.md) / [hir §3](./hir.md);
+Enforcement is owned by [tir §4](./tir.md) / [hir §1.3](./hir.md);
 dispatch is described in
 [visitor-registry](./visitor-registry.md).
 
@@ -182,7 +182,7 @@ class TupleType(IRType):
   tuple is consumed only via the `tuple_get_item` Op
   ([core-ir](./core-ir.md)). The exception for tuple-of-`Expr` formal
   parameters (e.g. `Concat`, `Stack`) is owned by
-  [hir §2.2](./hir.md).
+  [hir §1.3](./hir.md).
 
 ---
 
@@ -199,7 +199,7 @@ class UnitType(IRType):
 consumers can read; in Stmt position such an Op appears as
 `Evaluate(op, args)` ([tir §2.2](./tir.md#22-evaluate)). The
 effect-form vs value-form classification is owned by
-[core-ir §4](./core-ir.md).
+[core-ir §2.3](./core-ir.md).
 
 ---
 
@@ -214,7 +214,7 @@ class CallableType(IRType):
 ```
 
 - `CallableType` is the type of any Expr that represents a callable
-  value. Today the only producer is [hir §1](./hir.md) `Function`.
+  value. Today the only producer is [hir §1.1](./hir.md) `Function`.
 - `parameters` is a tuple of parameter **types**; parameter names
   are not part of the type. Names live on `Function.params`
   (`Var.name`) at the IR level.

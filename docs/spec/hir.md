@@ -1,8 +1,12 @@
 # TileFoundry Spec — hir (`@func` pure SSA dataflow IR)
 
-Defines `hir.Function`, the HIR Op subdirectories
-(math / tensor / nn / shape / sharding), the structured-SSA
-exception `GridRegionExpr`, and the parser-level Mesh-scope rule.
+Defines HIR, the pure SSA-as-DAG dataflow IR: its `Expr` constructs — the
+`Function` container, the structured-SSA exception `GridRegionExpr`, and the
+HIR Op subdirectories (math / tensor / nn / shape / sharding) — together with
+their HIR-specific typing rules. Mesh scope is authored in the parser
+([parser](./parser.md)) and its `Mesh` / `Topology` are defined by shard
+([shard §5](./shard.md)); HIR links to those owners where a construct carries
+the result.
 
 ```mermaid
 flowchart TB
@@ -17,7 +21,15 @@ flowchart TB
     Op --> HirOpBase
 ```
 
-## 1. `Function`
+## 1. HIR Expr constructs
+
+HIR values are `Expr` nodes ([core-ir §2](./core-ir.md)): a `Function`
+container, the loop-phi-shaped `GridRegionExpr`, and value `Op` calls. HIR is
+pure **SSA-as-DAG** — there are no `Region` / `Block` abstractions and no Stmt
+sequence; the single structured exception that carries loop-phi-shaped SSA is
+`GridRegionExpr`.
+
+### 1.1 `Function`
 
 ```python
 @dataclass(frozen=True)
@@ -38,7 +50,7 @@ reuse lives in the parser's lexical environment, not the IR. The one
 exception is a **dispatch prototype** — a specialized function's base,
 whose body is `None` (written `pass` in the DSL); it declares the
 signature and dispatch envelope only, and its variants carry the
-implementations ([§5](#5-dispatch-specializations)).
+implementations (see **Shape dispatch and specializations** below).
 
 `Function` always returns by value; explicit output parameters are
 TIR-only (see [tir](./tir.md)). `HirToTirPass` materialises the HIR
@@ -47,7 +59,7 @@ HIR → TIR boundary.
 
 `topologies` is the convenience declaration for a single-function
 program. Before `compile` / `jit`, it lifts to `Module.topologies`
-([core-ir §2](./core-ir.md)). A `with Mesh(topology="cta", ...) as cta:`
+([core-ir §1](./core-ir.md)). A `with Mesh(topology="cta", ...) as cta:`
 inside the body resolves the topology name through the active
 namespace and creates a parser-lexical mesh binding;
 `ShardLayout.mesh` MUST point at an active binding on the lexical
@@ -80,7 +92,7 @@ whose cute factorization straddles a new axis), typeinfer fails at that
 op, not at the boundary. A dispatch-prototype callee (`variants != ()`,
 `body is None`) is not re-derived: the call's result is the declared
 `return_type` and the `None` body is never inspected (variant selection
-is [§5](#5-dispatch-specializations)).
+is **Shape dispatch and specializations** below).
 
 **Signature annotation `Layout.strides` materialization.** A
 `Tensor[..., (sugar)]` annotation on a parameter or return appears
@@ -106,211 +118,12 @@ results is expressed by Python object identity:
 
 There are no `Region` / `Block` abstractions in HIR. The single
 structured exception that carries loop-phi-shaped SSA is
-`GridRegionExpr` ([§4](#4-gridregionexpr)). Everything else is a
+`GridRegionExpr` ([§1.2](#12-gridregionexpr)). Everything else is a
 pure Call DAG.
 
-## 2. Op catalog
-
-HIR Ops are organised under `tilefoundry.ir.hir.<namespace>/`; the
-subdirectory is file organisation, not a separate IR layer. A **custom Op**
-records its full contract (fields, typing / verifier rules, worked examples)
-in its catalog entry below; a **consensus Op** needs only one sentence or a
-grouped external reference, per [SPEC-RULES](../SPEC-RULES.md). The op name is
-the pointer — code carries no back-link to this catalog. Field signatures and
-`ParamDef` listings stay in code ([core-ir §4](./core-ir.md)).
-
-### 2.1 `ir/hir/math/`
-
-Pointwise arithmetic and comparison, torch semantics with TileFoundry
-type-promotion. User-callable names (`add` / `cmp_eq` / `logical_and` / …) are
-surface aliases ([core-ir §4](./core-ir.md)) over the kinded Ops; there are no
-per-name IR classes.
-[torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
-
-#### Binary
-```text
-Binary(kind, lhs, rhs) -> Tensor
-```
-- kind: HIR op
-- fields:
-  - kind: binary arithmetic, comparison, or boolean tag
-  - lhs / rhs: input tensors
-- constraints:
-  - Behavior follows torch pointwise semantics with TileFoundry type promotion.
-
-#### Unary
-```text
-Unary(kind, x) -> Tensor
-```
-- kind: HIR op
-- fields:
-  - kind: unary tag including `neg`, `abs`, `logical_not`, and `rsqrt`
-  - x: input tensor
-- constraints:
-  - Behavior follows torch pointwise semantics with TileFoundry type promotion.
-
-### 2.2 `ir/hir/tensor/`
-
-Tensor structural operations; consensus ops follow torch / numpy
-([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
-
-#### Reshape / Transpose / Slice / Concat / Stack / Split / Gather / ShapeOf / Rank / Cast
-Consensus torch / numpy structural ops.
-
-#### Zeros
-```text
-Zeros(shape, dtype, storage) -> Tensor
-```
-- kind: HIR op
-- fields:
-  - shape: output logical shape
-  - dtype: output dtype
-  - storage: output storage kind
-- constraints:
-  - The result is zero-initialised.
-
-#### Reduce
-```text
-Reduce(x, axes, keepdim, kind) -> Tensor
-```
-- kind: HIR op
-- fields:
-  - x: input tensor
-  - axes: reduced logical axes
-  - keepdim: whether reduced axes remain as size-1 axes
-  - kind: `mean`, `sum`, `abs_max`, or `max`
-- constraints:
-  - The logical result shape follows numpy reduction rules.
-  - Storage is preserved.
-  - Plain input layout passes through unchanged.
-  - For `ShardLayout` input, every split cute position that belongs to a
-    reduced tensor axis collapses to broadcast with size-1 stride-0 output.
-  - Non-default-stride sharded input must carry explicit producer strides, or
-    typeinfer rejects it.
-  - Lowering emits TIR `Reduce`; runtime dispatch is derived from operands, not
-    from an HIR dispatch field.
-
-#### insert_slice
-```text
-insert_slice(dst, update, offsets) -> Tensor
-```
-- kind: HIR op
-- fields:
-  - dst: target tensor; the value form returns a new tensor anchored on this
-    buffer at lowering time
-  - update: tensor written into the slice window
-  - offsets: scalar runtime value or integer literal for the implemented 1-D
-    case
-- constraints:
-  - `update` has the same rank and dtype as `dst`.
-  - The implemented 1-D case writes the contiguous window
-    `[start, start + update.shape[0])`.
-  - Higher-rank inputs share the surface but are rejected until implemented.
-  - Statically out-of-bounds windows fail typeinfer; runtime-only bounds are
-    checked by eval/runtime.
-
-### 2.3 `ir/hir/nn/`
-
-Neural-network value Ops following torch semantics
-([torch.nn.functional](https://pytorch.org/docs/stable/nn.functional.html)).
-
-#### MatMul / Conv2D / ReLU / Sigmoid / Tanh / SoftMax / LayerNorm
-Consensus torch.nn.functional ops.
-
-### 2.4 `ir/hir/shape/`
-
-Shape-level Ops on whole shape values (per-axis dim Ops are
-[types §3](./types.md)).
-
-#### ShapeExtract
-```text
-ShapeExtract(shape, axis) -> Dim
-```
-- kind: HIR op
-- fields:
-  - shape: input shape value
-  - axis: extracted axis
-- constraints:
-  - The result is the dimension at `axis`.
-
-#### ShapeCompose
-```text
-ShapeCompose(dims) -> Shape
-```
-- kind: HIR op
-- fields:
-  - dims: per-axis dimensions
-- constraints:
-  - The result is a shape value assembled in input order.
-
-### 2.5 `ir/hir/sharding/`
-
-`ShardLayout` and `Mesh` are type-system constructs, not Expr inputs
-([shard §5](./shard.md)).
-
-#### Reshard
-```text
-Reshard(x, layout=None, storage=None) -> Tensor
-```
-- kind: HIR op
-- fields:
-  - x: input tensor
-  - layout: optional target `ShardLayout`
-  - storage: optional target storage kind
-- constraints:
-  - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
-    `x.storage`.
-  - The output preserves the input logical `TensorType.shape`.
-  - Supplied `layout` is a `ShardLayout`.
-  - Destination storage is concrete, not unmaterialized.
-  - The single op covers zero-copy view, cross-storage copy, cross-CTA
-    redistribute, and mixed cases; typeinfer/costmodel classify the call.
-
-**Stride resolution.** Storage direction follows the physical addressability
-hierarchy `rmem < smem < gmem` (per-thread / per-CTA / per-program). Typeinfer
-dispatches on `(layout, storage)`:
-
-- `layout=None`, storage unchanged → `x.type` (no-op).
-- `layout=None`, storage changed → error; a storage change MUST carry an
-  explicit `layout=`.
-- `layout=Layout(strides=None)` (sugar), storage unchanged → dest strides match
-  the form already on `x.layout`: a Split-axes-zero source ⇒ per-instance form;
-  otherwise ⇒ shared-engine C-order over the canonical global shape. When
-  `x.layout` is `None` (plain kernel-param), fall back to shared-engine C-order.
-- `layout=Layout(strides=None)` (sugar), low → high level → dest strides =
-  C-order over `layout.shape` (shared-engine form).
-- `layout=Layout(strides=None)` (sugar), high → low level → dest `strides[k]=0`
-  for every `Split` axis `k`; non-`Split` axes follow C-order over
-  `shard_layout_local_shape(layout)` with size-1 → 0 (per-instance form).
-- `layout=Layout(strides=tuple)` (verbose) → dest strides are taken verbatim;
-  typeinfer MUST NOT rewrite them (e.g. SM80 MMA fragment layouts).
-
-**Cross-CTA fence.** The grid fence for a cross-CTA reshard is owned by the
-reshard lowering, not by a separately authored sync. When a reshard reads a
-gmem shard produced under a different CTA ownership (an ownership change across
-a cta mesh), the lowering MUST emit a grid barrier before the reshard so every
-CTA's prior shard writes are visible. The reshard lowering owns only the fence;
-cross-CTA data redistribution (all-to-all / gather across CTAs) is not part of
-this op.
-
-#### Local
-```text
-Local(x) -> Tensor
-```
-- kind: HIR op
-- fields:
-  - x: input tensor with `ShardLayout`
-- constraints:
-  - The result shape contracts each `Split` axis by that mesh axis's extent.
-  - `dtype` and `storage` are preserved.
-  - The shard wrapper is stripped, leaving the base `Layout`.
-  - Static split sizes divide by mesh extent; symbolic sizes pass through.
-
-## 3. Typing / structural rules
-
-Every constraint below is enforced by the registered
-`@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
-([visitor-registry §4](./visitor-registry.md)).
+**Function typing rules.** Enforced by the registered
+`@register_typeinfer(Function)` body via `ctx.error(...)`
+([visitor-registry §4](./visitor-registry.md)):
 
 - `Function.body` is a single Expr; Stmts MUST NOT appear.
 - `Function.params` entries MUST be `Var`s.
@@ -319,30 +132,80 @@ Every constraint below is enforced by the registered
   `(lo, hi)` bounds; a disagreement is a verify error. A
   `DimVarRangePat` specialization MUST anchor to a `DimVar` reachable
   from an input parameter and lie within that `DimVar`'s envelope
-  ([§5](#5-dispatch-specializations)).
-- `Local(x)`: `x.type.layout` MUST be `ShardLayout`. The result
-  shape contracts per the `Split` axes; dtype is preserved; layout
-  becomes the corresponding local layout.
-- `Reshard(x, layout, storage)`: `layout` and `storage` are attributes
-  (compile-time constants); the output preserves `x.type.shape` (logical).
-  Architecture invariant: after HIR typeinfer runs, every `ShardLayout`
-  reachable from a value's type has concrete `layout.strides` (never `None`) —
-  the un-materialized (`strides=None`) parser sugar MUST be materialized by the
-  owning typeinfer. The per-op `(layout, storage)` resolution table is in the
-  `Reshard` catalog entry (§2.5).
-- Any HIR Op MUST be value-form ([core-ir §4](./core-ir.md));
-  emitting an effect-form Call into HIR is a verify error.
+  (see **Shape dispatch and specializations** below).
 
-Generic, analysis-wide typing behavior is owned by
-[analysis](./analysis.md): relation-driven type validity
-([analysis §1.1](./analysis.md#11-relation-derived-type-behavior)), output
-storage of multi-input ops, and operand layout / mesh ownership
-([analysis §3.3](./analysis.md#33-output-storage-and-meshlayout-compatibility)).
-HIR ops call these services; each op's registered typeinfer owns the layout /
-mesh compatibility and result layout it requires, and `Reshard` is the explicit
-op that changes a value's layout / mesh.
+**Shape dispatch and specializations.**
+`Function` is the sole HIR function `Expr`. Shape-dispatch is carried on a
+single **base** `Function` through its `variants` field; there is no
+separate specialized-function type. The field is the IR-side carrier for
+the parser surface ([parser.md](./parser.md)).
 
-## 4. `GridRegionExpr`
+```python
+@dataclass(frozen=True)
+class Function(Expr):
+    ...
+    specializations: tuple[Pattern, ...] = ()
+    variants: tuple["Function", ...] = ()
+```
+
+*Structure.* A `Function` is exactly one of three shapes:
+
+- **normal** — `specializations == ()`, `variants == ()`, `body` is an
+  `Expr`. An ordinary function.
+- **dispatch prototype (base)** — `specializations == ()`,
+  `variants != ()`, `body is None`. Declares the signature and dispatch
+  envelope only; the implementations live in its variants.
+- **variant** — `specializations != ()`, `variants == ()`, `body` is an
+  `Expr`. A shape-specialized implementation registered on a base.
+
+Nesting is exactly one level: a variant MUST NOT itself carry variants.
+In a sealed (verified) `Module` the invariant is `body is None` ⟺
+`variants != ()` — a function with no body and no variants is uncallable
+and invalid, and a real body combined with variants is invalid. During
+authoring the base is transiently `body is None, variants == ()` between
+`@func def f: pass` and the first `@f.specialize(...)`; this unsealed
+state is allowed only until the base enters a `Module` (see **Authoring
+freeze** below).
+
+- `variants` is a canonical IR field — it participates in structural
+  equality, hashing, and canonical printing.
+- Every variant of a base MUST share the base's `name`, `params`,
+  `return_type`, `target`, and `topologies`: a variant specializes the
+  body, not the signature.
+- A variant carries exactly one `DimVarRangePat` in `specializations`.
+  The canonical signature is
+  `";".join(f"{p.dim_var}${p.lo}_{p.hi}" for p in specializations)`
+  (v0 allows only `DimVarRangePat`). Two variants of one base MUST have
+  distinct canonical signatures.
+
+*Envelope coverage.* A dispatched function's parameter
+`TensorType.shape` carries a `DimVar(name, lo, hi)` whose `(lo, hi)` is
+the dispatch envelope; `DimVarRangePat` references that `DimVar` by name.
+The variants' ranges MUST **partition** the envelope — pairwise
+**disjoint** and jointly **complete** (their union is exactly the
+half-open `[lo, hi)`). Adjacent half-open ranges meet at the shared
+boundary value as `[.., c)` then `[c, ..)`. Every in-envelope shape
+therefore selects exactly one variant.
+
+*Prototype body.* A base's `body is None`: the prototype is never
+typeinferred, lowered, or evaluated as a body. Only its variants carry
+executable bodies. There is no base body to fall back to.
+
+*Dispatch resolution.* A `Call` whose target is a dispatch prototype
+(`variants != ()`) is a dispatch call: the variant whose `DimVarRangePat`
+matches the call's concrete argument shapes is selected and is the call's
+result. A shape outside the envelope matches no variant and is an error;
+there is no base body to fall back to (the prototype body is `None`). A
+`Call` whose target has `variants == ()` is a direct call to that body.
+
+*Authoring freeze.* Variants accumulate during authoring, before the
+base `Function` enters a `Module` ([core-ir §1](./core-ir.md#1-module)). A
+sealed base rejects further variants. Because `variants` participates in
+hashing, a base MUST NOT be hashed while still accumulating variants. A
+top-level `Module.functions` entry MUST NOT be a variant: a top-level
+`Function` with `specializations != ()` is a verifier error.
+
+### 1.2 `GridRegionExpr`
 
 ```python
 @dataclass(frozen=True)
@@ -431,84 +294,225 @@ GridRegionExpr(
 )
 ```
 
-## 5. Dispatch specializations
+### 1.3 Op
 
-`Function` is the sole HIR function `Expr`. Shape-dispatch is carried on a
-single **base** `Function` through its `variants` field; there is no
-separate specialized-function type. The field is the IR-side carrier for
-the parser surface in [parser.md §8](./parser.md#8-dispatch-specializations).
+HIR Ops are organised under `tilefoundry.ir.hir.<namespace>/`; the
+subdirectory is file organisation, not a separate IR layer. A **custom Op**
+records its full contract (fields, typing / verifier rules, worked examples)
+in its catalog entry below; a **consensus Op** needs only one sentence or a
+grouped external reference, per [SPEC-RULES](../SPEC-RULES.md). The op name is
+the pointer — code carries no back-link to this catalog. Field signatures and
+`ParamDef` listings stay in code ([core-ir §2.3](./core-ir.md)).
 
-```python
-@dataclass(frozen=True)
-class Function(Expr):
-    ...
-    specializations: tuple[Pattern, ...] = ()
-    variants: tuple["Function", ...] = ()
+**HIR-specific typing hooks.** Each op's constraints are enforced by its
+registered `@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
+([visitor-registry §4](./visitor-registry.md)):
+
+- `Local(x)`: `x.type.layout` MUST be `ShardLayout`. The result
+  shape contracts per the `Split` axes; dtype is preserved; layout
+  becomes the corresponding local layout.
+- `Reshard(x, layout, storage)`: `layout` and `storage` are attributes
+  (compile-time constants); the output preserves `x.type.shape` (logical).
+  Architecture invariant: after HIR typeinfer runs, every `ShardLayout`
+  reachable from a value's type has concrete `layout.strides` (never `None`) —
+  the un-materialized (`strides=None`) parser sugar MUST be materialized by the
+  owning typeinfer. The per-op `(layout, storage)` resolution table is in the
+  `Reshard` op entry below.
+- Any HIR Op MUST be value-form ([core-ir §2.3](./core-ir.md));
+  emitting an effect-form Call into HIR is a verify error.
+
+Generic, analysis-wide typing behavior is owned by
+[analysis](./analysis.md): relation-driven type validity
+([analysis §1.1](./analysis.md#11-relation-derived-type-behavior)), output
+storage of multi-input ops, and operand layout / mesh ownership
+([analysis §3.3](./analysis.md#33-output-storage-and-meshlayout-compatibility)).
+HIR ops call these services; each op's registered typeinfer owns the layout /
+mesh compatibility and result layout it requires, and `Reshard` is the explicit
+op that changes a value's layout / mesh.
+
+#### `ir/hir/math/`
+
+Pointwise arithmetic and comparison, torch semantics with TileFoundry
+type-promotion. User-callable names (`add` / `cmp_eq` / `logical_and` / …) are
+surface aliases ([core-ir §2.3](./core-ir.md)) over the kinded Ops; there are no
+per-name IR classes.
+[torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
+
+##### Binary
+```text
+Binary(kind, lhs, rhs) -> Tensor
 ```
+- kind: HIR op
+- fields:
+  - kind: binary arithmetic, comparison, or boolean tag
+  - lhs / rhs: input tensors
+- constraints:
+  - Behavior follows torch pointwise semantics with TileFoundry type promotion.
 
-**Structure.** A `Function` is exactly one of three shapes:
+##### Unary
+```text
+Unary(kind, x) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - kind: unary tag including `neg`, `abs`, `logical_not`, and `rsqrt`
+  - x: input tensor
+- constraints:
+  - Behavior follows torch pointwise semantics with TileFoundry type promotion.
 
-- **normal** — `specializations == ()`, `variants == ()`, `body` is an
-  `Expr`. An ordinary function.
-- **dispatch prototype (base)** — `specializations == ()`,
-  `variants != ()`, `body is None`. Declares the signature and dispatch
-  envelope only; the implementations live in its variants.
-- **variant** — `specializations != ()`, `variants == ()`, `body` is an
-  `Expr`. A shape-specialized implementation registered on a base.
+#### `ir/hir/tensor/`
 
-Nesting is exactly one level: a variant MUST NOT itself carry variants.
-In a sealed (verified) `Module` the invariant is `body is None` ⟺
-`variants != ()` — a function with no body and no variants is uncallable
-and invalid, and a real body combined with variants is invalid. During
-authoring the base is transiently `body is None, variants == ()` between
-`@func def f: pass` and the first `@f.specialize(...)`; this unsealed
-state is allowed only until the base enters a `Module` (see **Authoring
-freeze** below).
+Tensor structural operations; consensus ops follow torch / numpy
+([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
-- `variants` is a canonical IR field — it participates in structural
-  equality, hashing, and canonical printing.
-- Every variant of a base MUST share the base's `name`, `params`,
-  `return_type`, `target`, and `topologies`: a variant specializes the
-  body, not the signature.
-- A variant carries exactly one `DimVarRangePat` in `specializations`.
-  The canonical signature is
-  `";".join(f"{p.dim_var}${p.lo}_{p.hi}" for p in specializations)`
-  (v0 allows only `DimVarRangePat`). Two variants of one base MUST have
-  distinct canonical signatures.
+##### Reshape / Transpose / Slice / Concat / Stack / Split / Gather / ShapeOf / Rank / Cast
+Consensus torch / numpy structural ops.
 
-**Envelope coverage.** A dispatched function's parameter
-`TensorType.shape` carries a `DimVar(name, lo, hi)` whose `(lo, hi)` is
-the dispatch envelope; `DimVarRangePat` references that `DimVar` by name.
-The variants' ranges MUST **partition** the envelope — pairwise
-**disjoint** and jointly **complete** (their union is exactly the
-half-open `[lo, hi)`). Adjacent half-open ranges meet at the shared
-boundary value as `[.., c)` then `[c, ..)`. Every in-envelope shape
-therefore selects exactly one variant.
+##### Zeros
+```text
+Zeros(shape, dtype, storage) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - shape: output logical shape
+  - dtype: output dtype
+  - storage: output storage kind
+- constraints:
+  - The result is zero-initialised.
 
-**Prototype body.** A base's `body is None`: the prototype is never
-typeinferred, lowered, or evaluated as a body. Only its variants carry
-executable bodies. There is no base body to fall back to.
+##### Reduce
+```text
+Reduce(x, axes, keepdim, kind) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - x: input tensor
+  - axes: reduced logical axes
+  - keepdim: whether reduced axes remain as size-1 axes
+  - kind: `mean`, `sum`, `abs_max`, or `max`
+- constraints:
+  - The logical result shape follows numpy reduction rules.
+  - Storage is preserved.
+  - Plain input layout passes through unchanged.
+  - For `ShardLayout` input, every split cute position that belongs to a
+    reduced tensor axis collapses to broadcast with size-1 stride-0 output.
+  - Non-default-stride sharded input must carry explicit producer strides, or
+    typeinfer rejects it.
+  - Lowering emits TIR `Reduce`; runtime dispatch is derived from operands, not
+    from an HIR dispatch field.
 
-**Dispatch resolution.** A `Call` whose target is a dispatch prototype
-(`variants != ()`) is a dispatch call: the variant whose `DimVarRangePat`
-matches the call's concrete argument shapes is selected and is the call's
-result. A shape outside the envelope matches no variant and is an error;
-there is no base body to fall back to (the prototype body is `None`). A
-`Call` whose target has `variants == ()` is a direct call to that body.
+##### insert_slice
+```text
+insert_slice(dst, update, offsets) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - dst: target tensor; the value form returns a new tensor anchored on this
+    buffer at lowering time
+  - update: tensor written into the slice window
+  - offsets: scalar runtime value or integer literal for the implemented 1-D
+    case
+- constraints:
+  - `update` has the same rank and dtype as `dst`.
+  - The implemented 1-D case writes the contiguous window
+    `[start, start + update.shape[0])`.
+  - Higher-rank inputs share the surface but are rejected until implemented.
+  - Statically out-of-bounds windows fail typeinfer; runtime-only bounds are
+    checked by eval/runtime.
 
-**Authoring freeze.** Variants accumulate during authoring, before the
-base `Function` enters a `Module` ([core-ir §2](./core-ir.md#2-module)). A
-sealed base rejects further variants. Because `variants` participates in
-hashing, a base MUST NOT be hashed while still accumulating variants. A
-top-level `Module.functions` entry MUST NOT be a variant: a top-level
-`Function` with `specializations != ()` is a verifier error.
+#### `ir/hir/nn/`
 
-**Canonical `DimVar` subject rule.** When a `DimVar D` appears at
-multiple `(param_index, axis)` positions in the function signature,
-the lowering picks the **first** occurrence under
-`(param_index ascending, axis ascending)` as the canonical subject
-for `ShapeOf` lookups. Other occurrences are assumed equal at call
-time (caller responsibility — runtime UB on mismatch).
+Neural-network value Ops following torch semantics
+([torch.nn.functional](https://pytorch.org/docs/stable/nn.functional.html)).
 
-HIR→TIR lowering details: see
-[passes.md §7.1](./passes.md#71-hirtotirpass) `HirToTirPass`.
+##### MatMul / Conv2D / ReLU / Sigmoid / Tanh / SoftMax / LayerNorm
+Consensus torch.nn.functional ops.
+
+#### `ir/hir/shape/`
+
+Shape-level Ops on whole shape values (per-axis dim Ops are
+[types §3](./types.md)).
+
+##### ShapeExtract
+```text
+ShapeExtract(shape, axis) -> Dim
+```
+- kind: HIR op
+- fields:
+  - shape: input shape value
+  - axis: extracted axis
+- constraints:
+  - The result is the dimension at `axis`.
+
+##### ShapeCompose
+```text
+ShapeCompose(dims) -> Shape
+```
+- kind: HIR op
+- fields:
+  - dims: per-axis dimensions
+- constraints:
+  - The result is a shape value assembled in input order.
+
+#### `ir/hir/sharding/`
+
+`ShardLayout` and `Mesh` are type-system constructs, not Expr inputs
+([shard §5](./shard.md)).
+
+##### Reshard
+```text
+Reshard(x, layout=None, storage=None) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - x: input tensor
+  - layout: optional target `ShardLayout`
+  - storage: optional target storage kind
+- constraints:
+  - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
+    `x.storage`.
+  - The output preserves the input logical `TensorType.shape`.
+  - Supplied `layout` is a `ShardLayout`.
+  - Destination storage is concrete, not unmaterialized.
+  - The single op covers zero-copy view, cross-storage copy, cross-CTA
+    redistribute, and mixed cases; typeinfer/costmodel classify the call.
+
+**Stride resolution.** Storage direction follows the physical addressability
+hierarchy `rmem < smem < gmem` (per-thread / per-CTA / per-program). Typeinfer
+dispatches on `(layout, storage)`:
+
+- `layout=None`, storage unchanged → `x.type` (no-op).
+- `layout=None`, storage changed → error; a storage change MUST carry an
+  explicit `layout=`.
+- `layout=Layout(strides=None)` (sugar), storage unchanged → dest strides match
+  the form already on `x.layout`: a Split-axes-zero source ⇒ per-instance form;
+  otherwise ⇒ shared-engine C-order over the canonical global shape. When
+  `x.layout` is `None` (plain kernel-param), fall back to shared-engine C-order.
+- `layout=Layout(strides=None)` (sugar), low → high level → dest strides =
+  C-order over `layout.shape` (shared-engine form).
+- `layout=Layout(strides=None)` (sugar), high → low level → dest `strides[k]=0`
+  for every `Split` axis `k`; non-`Split` axes follow C-order over
+  `shard_layout_local_shape(layout)` with size-1 → 0 (per-instance form).
+- `layout=Layout(strides=tuple)` (verbose) → dest strides are taken verbatim;
+  typeinfer MUST NOT rewrite them (e.g. SM80 MMA fragment layouts).
+
+**Cross-CTA fence.** The grid fence for a cross-CTA reshard is owned by the
+reshard lowering, not by a separately authored sync. When a reshard reads a
+gmem shard produced under a different CTA ownership (an ownership change across
+a cta mesh), the lowering MUST emit a grid barrier before the reshard so every
+CTA's prior shard writes are visible. The reshard lowering owns only the fence;
+cross-CTA data redistribution (all-to-all / gather across CTAs) is not part of
+this op.
+
+##### Local
+```text
+Local(x) -> Tensor
+```
+- kind: HIR op
+- fields:
+  - x: input tensor with `ShardLayout`
+- constraints:
+  - The result shape contracts each `Split` axis by that mesh axis's extent.
+  - `dtype` and `storage` are preserved.
+  - The shard wrapper is stripped, leaving the base `Layout`.
+  - Static split sizes divide by mesh extent; symbolic sizes pass through.

@@ -1,20 +1,12 @@
 # TileFoundry Spec — core_ir
 
 Defines the shared node algebra — `Module` / `Expr` / `Op` / `Call` /
-`Var` / `Constant` / `Tuple` — that both HIR and TIR consume. Types
-carried by `Expr.type` are defined in [types](./types.md). `Stmt` is
-not here; it lives only in [tir §1](./tir.md) as a TIR-only base
-class.
-
----
-
-## 1. Role
-
-`core_ir` is the shared node algebra layer, not a standalone IR. HIR
-and TIR both extend it with their own `Function` container and their
-own `Op` / `Stmt` subclasses; the type system lives in
-[types](./types.md), the distributed layout layer in
-[shard](./shard.md), and the `Stmt` base class in [tir](./tir.md).
+`Var` / `Constant` / `Tuple` — that both HIR and TIR consume. `core_ir` is the
+shared node algebra layer, not a standalone IR: HIR and TIR each extend it with
+their own `Function` container and their own `Op` / `Stmt` subclasses. Types
+carried by `Expr.type` are defined in [types](./types.md); the distributed
+layout layer is [shard](./shard.md); `Stmt` is not here — it lives only in
+[tir §1](./tir.md) as a TIR-only base class.
 
 ```mermaid
 flowchart TB
@@ -33,15 +25,13 @@ flowchart TB
 ```
 
 `Module.functions` is `hir.Function | tir.PrimFunction`; the
-heterogeneous container is described in [§2](#2-module). HIR
+heterogeneous container is described in [§1](#1-module). HIR
 `Function` is an `Expr` subclass, TIR `PrimFunction` is a `Stmt`
 subclass — the diagram above intentionally does not draw an edge
 from `Module` to `Expr` to avoid implying that all functions are
 Exprs.
 
----
-
-## 2. `Module`
+## 1. `Module`
 
 ```python
 @dataclass(frozen=True)
@@ -75,15 +65,15 @@ class Module:
   its specialization variants are finalized. Variants may be added to a
   base only during authoring, before the base enters a `Module`; once
   sealed, adding a variant is an error
-  ([hir.md §5](./hir.md#5-dispatch-specializations)).
+  ([hir.md §1.1](./hir.md#11-function)).
 
-### 2.1 Function access
+### 1.1 Function access
 
 A `Module` mirrors the model it describes: a caller reaches a kernel by name.
 
 Each `name` maps to at most one `Module.functions` entry. Shape-specialization
 variants of a function live inside that entry's `Function.variants`
-([hir.md §5](./hir.md#5-dispatch-specializations)), never as separate same-name
+([hir.md §1.1](./hir.md#11-function)), never as separate same-name
 entries — so name resolution is always single-valued.
 
 - `mod.lookup(name)` returns the function named `name`; it raises when no
@@ -98,9 +88,7 @@ entries — so name resolution is always single-valued.
   attribute rules. This lets a module read like the model it mirrors —
   `decoder.self_attention`.
 
----
-
-## 3. `Expr`
+## 2. `Expr`
 
 ```python
 class Expr:
@@ -119,13 +107,66 @@ single `Call` whose `type` is `TupleType`; consumers project a single
 field through the `tuple_get_item` Op (a regular registered Op; no
 dedicated `Expr` subclass).
 
----
+Dialect-specific `Expr` subclasses are owned by their dialect specs, not
+here: HIR owns `Function` and `GridRegionExpr` ([hir §1](./hir.md#1-hir-expr-constructs)),
+and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
+([tir](./tir.md)).
 
-## 4. `Op`
+### 2.1 `Call`
+
+```python
+@dataclass(frozen=True)
+class Call(Expr):
+    """A call to an Op. The HIR body is a tree of value-form Calls; in
+    TIR a value-form Call is anchored by LetStmt, while a Stmt-position
+    effect invocation is Evaluate(op, args) (tir §2.2). A Call MUST NOT
+    appear as a top-level Stmt directly."""
+    target: Op
+    args: tuple[Expr, ...]
+    # type is computed by typeinfer(target, args); it is one of
+    # TensorType / TupleType / UnitType depending on the Op's form.
+```
+
+Constraints:
+
+- `len(args)` MUST equal the number of `kind="input"` ParamDefs on
+  `target`.
+- Each `args[i].type` MUST satisfy the i-th input ParamDef's pattern
+  / typeinfer rule.
+
+### 2.2 `Var` / `Constant` / `Tuple`
+
+```python
+@dataclass(frozen=True)
+class Var(Expr):
+    """A named value. HIR uses Var for function parameters; TIR uses Var
+    for LetStmt / For / MeshScope bindings."""
+    name: str
+    type: IRType                  # declaration-side type; the binding stmt does not override it
+
+@dataclass(frozen=True)
+class Constant(Expr):
+    """Literal constant. A scalar is a rank-0 TensorType."""
+    value: object       # int / float / tuple / ...
+
+@dataclass(frozen=True)
+class Tuple(Expr):
+    """Value-level multi-output aggregate. type is TupleType
+    ([types §4](./types.md))."""
+    fields: tuple[Expr, ...]
+```
+
+`Tuple` is the value-level aggregate node; it pairs with `TupleType`
+([types §4](./types.md)) but is not the same — `Tuple` is an `Expr`
+in the IR graph, `TupleType` is the type carried by `Expr.type`.
+
+### 2.3 `Op`
 
 `Op` is a value class (it describes an op's signature and attributes)
 — not an `Expr` subclass. A `Call` carries an `Op` instance in its
-`target` field.
+`target` field. The custom-op mechanism is declared here: parameters are
+`ParamDef` class attributes discovered through reflection, and a class is
+registered with `@register_op`.
 
 ```python
 class Op:
@@ -178,7 +219,7 @@ class ReduceSum(Op):
   attribute values on the instance: `Binary(kind=BinaryKind.ADD)` /
   `ReduceSum(axis=1, keepdims=True)`.
 
-### 4.1 Surface aliases (`@register_alias`)
+#### Surface aliases (`@register_alias`)
 
 A **surface alias** is a registry entry that has no IR class of its
 own; instead, its `OpSchema.builder` callback constructs a *target*
@@ -209,9 +250,9 @@ Properties:
 
 HIR `math` uses aliases for kinded sugar names (`add` / `sub` /
 ... / `cmp_eq` / ... / `neg` / ...); the IR core has just `Binary`
-/ `Unary` (see [hir §2.1](./hir.md#21-irhirmath)).
+/ `Unary` (see [hir math ops](./hir.md#irhirmath)).
 
-### 4.2 Input position and form
+#### Input position and form
 
 The order of `kind="input"` ParamDefs determines `Call.args`
 position: `call.args[i]` corresponds to the `i`-th input ParamDef
@@ -225,61 +266,7 @@ readable value (`UnitType`, [types §6](./types.md)); in Stmt position
 it appears as `Evaluate(op, args)`
 ([tir §2.2](./tir.md#22-evaluate)).
 
----
-
-## 5. `Call`
-
-```python
-@dataclass(frozen=True)
-class Call(Expr):
-    """A call to an Op. The HIR body is a tree of value-form Calls; in
-    TIR a value-form Call is anchored by LetStmt, while a Stmt-position
-    effect invocation is Evaluate(op, args) (tir §2.2). A Call MUST NOT
-    appear as a top-level Stmt directly."""
-    target: Op
-    args: tuple[Expr, ...]
-    # type is computed by typeinfer(target, args); it is one of
-    # TensorType / TupleType / UnitType depending on the Op's form.
-```
-
-Constraints:
-
-- `len(args)` MUST equal the number of `kind="input"` ParamDefs on
-  `target`.
-- Each `args[i].type` MUST satisfy the i-th input ParamDef's pattern
-  / typeinfer rule.
-
----
-
-## 6. `Var` / `Constant` / `Tuple`
-
-```python
-@dataclass(frozen=True)
-class Var(Expr):
-    """A named value. HIR uses Var for function parameters; TIR uses Var
-    for LetStmt / For / MeshScope bindings."""
-    name: str
-    type: IRType                  # declaration-side type; the binding stmt does not override it
-
-@dataclass(frozen=True)
-class Constant(Expr):
-    """Literal constant. A scalar is a rank-0 TensorType."""
-    value: object       # int / float / tuple / ...
-
-@dataclass(frozen=True)
-class Tuple(Expr):
-    """Value-level multi-output aggregate. type is TupleType
-    ([types §4](./types.md))."""
-    fields: tuple[Expr, ...]
-```
-
-`Tuple` is the value-level aggregate node; it pairs with `TupleType`
-([types §4](./types.md)) but is not the same — `Tuple` is an `Expr`
-in the IR graph, `TupleType` is the type carried by `Expr.type`.
-
----
-
-## 7. `Pattern`
+## 3. `Pattern`
 
 `Pattern` is the reusable predicate carrier shared by parser dispatch
 and specialization dispatch.
@@ -294,19 +281,19 @@ class Pattern:
 
 Two consumer surfaces:
 
-- **Parser dispatch** — `ParamDef.pattern` (§4) is matched against an
+- **Parser dispatch** — `ParamDef.pattern` (§2.3) is matched against an
   argument's `Expr.type` during overload resolution. Subclasses used:
   `ScalarPat` (rank-0), `TensorPat(rank?, dtype?)` (non-scalar), and
   `AndPat(parts)` (conjunction). Two singletons are exported as
   convenience: `Scalar = ScalarPat()` and `Tensor = TensorPat()`.
 - **Specialization dispatch** — patterns appearing in
-  `hir.Function.specializations` ([hir.md §5](./hir.md#5-dispatch-specializations))
+  `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and the parallel `tir.DispatchCall.case_patterns`
   ([tir.md §6](./tir.md#6-dispatchcall)) describe which runtime
   shape range a variant covers. The HIR→TIR lowering inspects each
   pattern's fields directly; it does not call `match`.
 
-### 7.1 `DimVarRangePat`
+### 3.1 `DimVarRangePat`
 
 ```python
 @dataclass(frozen=True)
@@ -333,4 +320,3 @@ class DimVarRangePat(Pattern):
   containment (`pattern ⊆ DimVar envelope`) is checked in
   signature context — by the `@tilefoundry.func` validator and the
   HIR→TIR lowering — not by `DimVarRangePat.__post_init__`.
-

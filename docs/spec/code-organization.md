@@ -69,7 +69,7 @@ snake_case of the Op class CamelCase (`MatMul` → `matmul.py`,
 follow the same rule.
 
 **Rule 1a — surface-alias schemas have no per-name file.** A surface
-alias ([core-ir §4.1](./core-ir.md#41-surface-aliases-register_alias))
+alias ([core-ir §2.3](./core-ir.md#surface-aliases-register_alias))
 has no IR class — its builder routes to a kinded target Op. All
 aliases for a category live together in `aliases.py` (e.g. the 19
 HIR math sugar names `add` / `sub` / `cmp_eq` / `neg` / … all

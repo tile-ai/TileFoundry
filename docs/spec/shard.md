@@ -46,7 +46,7 @@ any `LayoutBase`. Pure-layout invariants and shard-binding
 invariants live with the construct they constrain. Enforcement is
 dispatched by [visitor-registry](./visitor-registry.md); concrete
 checks live in [tir §4](./tir.md#4-verify-rules) (TIR side) and
-[hir §3](./hir.md#3-typing--structural-rules) (HIR side).
+[hir §1.3](./hir.md#13-op) (HIR side).
 
 ---
 
@@ -336,7 +336,7 @@ relevant mesh axis.
   strides have not yet been fixed; the layout's `shape` /
   partition is determined but the per-axis stride form is deferred
   to `Reshard` typeinfer
-  ([hir.md §3](./hir.md#3-typing--structural-rules)). Surface
+  ([hir.md §1.3](./hir.md#13-op)). Surface
   sugar `(N @ m.a, ...)` always emits `S is None`; verbose
   `((shape), (strides))` always emits a concrete `S`. After
   `Reshard` typeinfer has run on a value, `S` reachable from that
@@ -417,7 +417,7 @@ buffer.
 A reshard whose user-provided cute strides are non-default (e.g. an
 SM80 mma fragment) bypasses this materialization step: the layout
 already has a concrete `strides` tuple, so the `Reshard` typeinfer
-rule ([hir.md §3](./hir.md#3-typing--structural-rules)) preserves
+rule ([hir.md §1.3](./hir.md#13-op)) preserves
 it verbatim.
 
 ---

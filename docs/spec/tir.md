@@ -23,6 +23,7 @@ the work, structural Stmts carry control flow.
 
 ## 2. `Stmt`
 
+
 ```python
 @dataclass(frozen=True)
 class Stmt:
@@ -118,7 +119,7 @@ together with `args`; an `Op` callable carries no result, so its
 `Call` form is unit-typed.
 
 The value-producing counterpart is the `Call(Op, args)` Expr
-([core-ir.md §5](./core-ir.md#5-call)): it has a non-`Unit` result
+([core-ir.md §2.1](./core-ir.md#21-call)): it has a non-`Unit` result
 type and is anchored by `LetStmt`. `Evaluate` is the unit-typed,
 Stmt-position form and the only Stmt-position invocation wrapper.
 
@@ -377,7 +378,7 @@ block_y, block_z, *forwarded_args)`:
 A hand-written kernel issues an MMA through an explicit **atom** — a
 realized instruction descriptor — instead of the bare `Mma` op whose
 fragment layouts the per-target lowering chooses
-([hir §2.3](./hir.md#23-irhirnn), [passes](./passes.md)). An MMA atom fixes a
+([hir §1.3](./hir.md#irhirnn), [passes](./passes.md)). An MMA atom fixes a
 concrete hardware instruction, so the whole MMA surface is **target-owned**:
 the `Mma` op and the `MmaOpSpec` / `MmaAtom` descriptors
 (`tilefoundry.ir.tir.cuda.nn`, mirroring the CuTe `MMA_Op` → `MMA_Atom`
@@ -607,7 +608,7 @@ CpAsyncWait(n)
 `tir.DispatchCall` is a first-class TIR Stmt that implements
 pattern-based first-match dispatch over a tuple of `Expr` subjects.
 It is the lowered form of an HIR dispatch prototype
-([hir.md §5](./hir.md#5-dispatch-specializations)) and of any sub-call
+([hir.md §1.1](./hir.md#11-function)) and of any sub-call
 to a dispatch-prototype callee.
 
 ```python
@@ -639,7 +640,7 @@ The verifier requires:
 - `len(case_patterns) == len(case_calls)`.
 - Each `case_patterns[i]` has length `== len(subjects) == 1`.
 - Each `case_patterns[i][0]` is a `DimVarRangePat`
-  ([core-ir.md §7.1](./core-ir.md#71-dimvarrangepat)).
+  ([core-ir.md §3.1](./core-ir.md#31-dimvarrangepat)).
 - `fallback` is exactly `Sequential((Abort(),))` — a length-1 body
   containing one `Abort`.
 
@@ -709,7 +710,7 @@ target: the `callable` of an `Evaluate(SymbolRef, args)`
 
 #### `name`
 - MUST be the canonical name of a `PrimFunction` in the enclosing
-  `Module` ([core-ir.md §2](./core-ir.md#2-module)), exactly as stored
+  `Module` ([core-ir.md §1](./core-ir.md#1-module)), exactly as stored
   in `PrimFunction.name`. It MAY be a generated / mangled
   specialization name.
 
@@ -730,7 +731,7 @@ target: the `callable` of an `Evaluate(SymbolRef, args)`
   it never back-fills.
 
 Resolution is module level: a unique lookup over the `Module`
-([core-ir.md §2](./core-ir.md#2-module)) MUST map `name` to exactly
+([core-ir.md §1](./core-ir.md#1-module)) MUST map `name` to exactly
 one `PrimFunction`; zero or more than one match is an error.
 Specialization variants each carry a distinct canonical
 `PrimFunction.name`, so a `SymbolRef` to a variant resolves
