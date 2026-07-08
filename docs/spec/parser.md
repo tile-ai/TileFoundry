@@ -400,23 +400,14 @@ for any name not found on the module's own namespace. Both
 namespaces implement it identically:
 
 ```python
-def __getattr__(name: str) -> type[Op] | Callable:
-    schemas = op_registry.get_schemas(_DIALECT, name)
-    if not schemas:
-        raise AttributeError(name)
-    first = schemas[0]
-    # Surface-alias schema (op_class is None): return the alias
-    # builder fn — it carries `_op_schema` so parser dispatch
-    # recovers the schema uniformly via getattr.
-    if first.op_class is None:
-        return first.builder
-    if len(schemas) == 1:
-        return first.op_class             # bind Op class itself
-    return _make_overload_resolver(schemas)
-
-def __dir__() -> list[str]:
-    return list(op_registry.iter_schema_names(_DIALECT))
+def __getattr__(name: str) -> type[Op] | Callable: ...   # resolve a dialect name to its Op class / alias builder
+def __dir__() -> list[str]: ...                          # list the dialect's registered schema names
 ```
+
+`__getattr__` looks up `op_registry.get_schemas(_DIALECT, name)` and raises
+`AttributeError` on a miss; for a single real-Op schema it returns the `Op`
+class, for a surface-alias schema (`op_class is None`) the alias builder fn, and
+for more than one schema an overload resolver.
 
 Both forms (Op class for real-Op schemas, alias builder fn for
 alias schemas) carry an `_op_schema` attribute, so the parser's

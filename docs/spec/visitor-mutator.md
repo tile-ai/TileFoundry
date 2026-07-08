@@ -44,13 +44,8 @@ is injected by overriding `visit_<ClassName>` in subclasses.
 - `visit_Evaluate(self, stmt: Evaluate) -> Stmt` for `Evaluate`,
 - and so on.
 
-```python
-def visit(self, node):
-    method = getattr(self, f"visit_{type(node).__name__}", None)
-    if method is not None:
-        return method(node)
-    return self.generic_visit(node)
-```
+`visit(node)` looks up `visit_<type(node).__name__>` on the subclass and calls
+it, falling back to `generic_visit(node)` when no such override exists.
 
 - **Most-specific wins.** `Call` is a subclass of `Expr`, but with
   both `visit_Call` and `visit_Expr` defined, `visit_Call` wins —
@@ -128,17 +123,6 @@ Identity preservation matters for three reasons:
    downstream work via `new_expr is old_expr`.
 3. **Cache validity.** `typeinfer` / cost caches keyed on Expr
    identity remain valid for unchanged nodes.
-
-Example — rewrite every `Add` to `Sub`:
-
-```python
-class AddToSub(ExprMutator):
-    def visit_Call(self, call: Call) -> Expr:
-        if isinstance(call.target, hir.math.Add):
-            new_args = tuple(self.visit(a) for a in call.args)
-            return Call(target=hir.math.Sub(), args=new_args, type=call.type)
-        return self.generic_visit(call)
-```
 
 A `visit_Call` override MUST itself respect identity preservation:
 the unchanged branch routes through `generic_visit(call)` rather
@@ -225,14 +209,8 @@ Stmt position they appear as `Evaluate(callable=op, args)` so the
 invocation can sit in `Sequential` body position. Passes and visitors
 MUST match on `Evaluate` and dispatch on `type(callable)`:
 
-```python
-from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.tir.memory.copy import Copy
-
-def visit_Evaluate(self, stmt):
-    if isinstance(stmt.callable, Copy):
-        ...
-```
+a `visit_Evaluate(self, stmt)` override branches on `type(stmt.callable)`
+(e.g. `Copy`).
 
 `StmtVisitor` / `StmtMutator` recognise `Evaluate` as a
 leaf-in-stmt-tree — `_stmt_children(Evaluate)` is empty.

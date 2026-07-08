@@ -120,22 +120,11 @@ Transform passes use the visitor / mutator base classes from
 [visitor-mutator](./visitor-mutator.md) rather than hand-written
 `isinstance` dispatch.
 
-```python
-from tilefoundry.ir.visitor import StmtExprMutator
-from tilefoundry.passes.pass_base import PrimFuncPass
-
-class MyRewritePass(PrimFuncPass):
-    name = "my_rewrite"
-
-    class _Impl(StmtExprMutator):
-        def visit_Evaluate(self, stmt): ...   # match on Evaluate; dispatch on type(stmt.callable)
-
-    def run_prim_func(self, fn, module):
-        new_body = self._Impl().visit_stmt(fn.body)
-        if new_body is fn.body:
-            return fn                          # identity preservation
-        return replace(fn, body=new_body)
-```
+A transform `PrimFuncPass` wraps a `StmtExprMutator` subclass: `run_prim_func`
+runs the mutator over `fn.body`, returns `fn` unchanged when the mutator
+preserves identity (the returned body is the same object), and otherwise
+returns `replace(fn, body=new_body)`. The inner mutator matches on `Evaluate`
+and dispatches on `type(stmt.callable)`.
 
 The visit-and-rewrite contract — including the `visit_Evaluate`
 entry form for TIR effect Ops — is owned by

@@ -128,26 +128,11 @@ class Call(Expr):
 - constraints:
   - a value-form `Call` is anchored by `LetStmt` in TIR; a Stmt-position effect
     invocation is `Evaluate(op, args)`.
-
-```python
-@dataclass(frozen=True)
-class Call(Expr):
-    """A call to an Op. The HIR body is a tree of value-form Calls; in
-    TIR a value-form Call is anchored by LetStmt, while a Stmt-position
-    effect invocation is Evaluate(op, args) (tir §1.4). A Call MUST NOT
-    appear as a top-level Stmt directly."""
-    target: Op
-    args: tuple[Expr, ...]
-    # type is computed by typeinfer(target, args); it is one of
-    # TensorType / TupleType / UnitType depending on the Op's form.
-```
-
-Constraints:
-
-- `len(args)` MUST equal the number of `kind="input"` ParamDefs on
-  `target`.
-- Each `args[i].type` MUST satisfy the i-th input ParamDef's pattern
-  / typeinfer rule.
+  - A `Call` MUST NOT appear as a top-level Stmt directly.
+  - `len(args)` MUST equal the number of `kind="input"` ParamDefs on
+    `target`.
+  - Each `args[i].type` MUST satisfy the i-th input ParamDef's pattern
+    / typeinfer rule.
 
 ### 2.2 `Var` / `Constant` / `Tuple`
 
@@ -187,23 +172,10 @@ class Op:                                     # @register_op registers a class
 
 - constraints:
   - a value class describing an op's signature/attributes, not an `Expr` subclass;
-    a `Call` carries an `Op` instance in `target`.
-
-```python
-class Op:
-    """Base of every Op. Ops are value-producing through Call. Most are
-    pure; TIR has resource-introducing Ops (e.g. tir.memory.AllocTensor)
-    with positional-identity requirements that MUST be anchored by a
-    LetStmt — see [tir §2.3](./tir.md#23-tir-ops). Parameters are declared as
-    ParamDef class attributes and discovered through reflection."""
-
-    @classmethod
-    def params(cls) -> list[ParamDef]:
-        """Reflectively scan class-level ParamDef attributes and return
-        the ordered ParamDef list."""
-
-    def __init__(self, **attrs): ...
-```
+    a `Call` carries an `Op` instance in `target`; most Ops are pure.
+  - resource-introducing Ops (e.g. `tir.memory.AllocTensor`) with
+    positional-identity requirements MUST be anchored by a `LetStmt`
+    (see [tir §2.3](./tir.md#23-tir-ops)).
 
 ```python
 class ParamDef:

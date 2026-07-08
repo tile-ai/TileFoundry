@@ -364,17 +364,6 @@ def register_codegen_<target>(cls: type[Op] | type[Stmt]): ...   # decorator: re
   - each target has its own registry; keys may be `type[Op]` (TIR-owned Expr Op
     handlers) or `type[Stmt]`.
 
-```python
-codegen_cuda_registry: AnalysisRegistry[type] = AnalysisRegistry("codegen_cuda")
-codegen_cpu_registry:  AnalysisRegistry[type] = AnalysisRegistry("codegen_cpu")
-
-def register_codegen_cuda(cls: type[Op] | type[Stmt]):
-    def decorator(fn):
-        codegen_cuda_registry.register(cls, fn)
-        return fn
-    return decorator
-```
-
 Each target has its own registry. Keys may be `type[Op]` (TIR-owned
 Expr Op handlers — `tir.memory.AllocTensor` /
 `tir.memory.{PtrOf,MemorySpan,TensorView}` / `tir.scalar.*`) or
