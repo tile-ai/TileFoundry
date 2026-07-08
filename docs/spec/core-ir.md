@@ -119,7 +119,7 @@ and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
 class Call(Expr):
     """A call to an Op. The HIR body is a tree of value-form Calls; in
     TIR a value-form Call is anchored by LetStmt, while a Stmt-position
-    effect invocation is Evaluate(op, args) (tir §2.2). A Call MUST NOT
+    effect invocation is Evaluate(op, args) (tir §1.4). A Call MUST NOT
     appear as a top-level Stmt directly."""
     target: Op
     args: tuple[Expr, ...]
@@ -173,7 +173,7 @@ class Op:
     """Base of every Op. Ops are value-producing through Call. Most are
     pure; TIR has resource-introducing Ops (e.g. tir.memory.AllocTensor)
     with positional-identity requirements that MUST be anchored by a
-    LetStmt — see [tir §5.1](./tir.md). Parameters are declared as
+    LetStmt — see [tir §2.3](./tir.md#23-tir-ops). Parameters are declared as
     ParamDef class attributes and discovered through reflection."""
 
     @classmethod
@@ -264,7 +264,7 @@ result the IR consumes — `Call.type` is then `TensorType` or
 effect (e.g. `tir.memory.Copy` / `tir.cuda.nn.Mma`) and produces no
 readable value (`UnitType`, [types §6](./types.md)); in Stmt position
 it appears as `Evaluate(op, args)`
-([tir §2.2](./tir.md#22-evaluate)).
+([tir §1.4](./tir.md#14-evaluate)).
 
 ## 3. `Pattern`
 
@@ -289,7 +289,7 @@ Two consumer surfaces:
 - **Specialization dispatch** — patterns appearing in
   `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and the parallel `tir.DispatchCall.case_patterns`
-  ([tir.md §6](./tir.md#6-dispatchcall)) describe which runtime
+  ([tir.md §1.6](./tir.md#16-dispatchcall)) describe which runtime
   shape range a variant covers. The HIR→TIR lowering inspects each
   pattern's fields directly; it does not call `match`.
 

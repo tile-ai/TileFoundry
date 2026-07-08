@@ -265,7 +265,7 @@ leaf-in-stmt-tree — `_stmt_children(Evaluate)` is empty.
 that is a `SymbolRef`) as Expr fields, so Expr-level rewrites still
 reach them. A value-form `Call` to a TIR effect-form Op in Stmt
 position, instead of `Evaluate(op, args)`, is malformed IR
-([tir §2.2](./tir.md#22-evaluate)).
+([tir §1.4](./tir.md#14-evaluate)).
 
 ## 8. Implementation location
 

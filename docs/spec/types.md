@@ -88,7 +88,7 @@ class TensorType(IRType):
   shape-element form; a rank-0 tensor with a memory `StorageKind` is an
   ordinary scalar holding one element.
 
-Enforcement is owned by [tir §4](./tir.md) / [hir §1.3](./hir.md);
+Enforcement is owned by [tir §1.3](./tir.md#13-primfunction) / [hir §1.3](./hir.md);
 dispatch is described in
 [visitor-registry](./visitor-registry.md).
 
@@ -197,7 +197,7 @@ class UnitType(IRType):
 `UnitType` is the result type of an effect-form Op (such as
 `tir.cuda.nn.Mma`, `tir.memory.Copy`), which produces no value its
 consumers can read; in Stmt position such an Op appears as
-`Evaluate(op, args)` ([tir §2.2](./tir.md#22-evaluate)). The
+`Evaluate(op, args)` ([tir §1.4](./tir.md#14-evaluate)). The
 effect-form vs value-form classification is owned by
 [core-ir §2.3](./core-ir.md).
 

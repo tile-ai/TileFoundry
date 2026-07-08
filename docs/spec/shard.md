@@ -45,7 +45,7 @@ flowchart TB
 any `LayoutBase`. Pure-layout invariants and shard-binding
 invariants live with the construct they constrain. Enforcement is
 dispatched by [visitor-registry](./visitor-registry.md); concrete
-checks live in [tir §4](./tir.md#4-verify-rules) (TIR side) and
+checks live in [tir §1.3](./tir.md#13-primfunction) (TIR side) and
 [hir §1.3](./hir.md#13-op) (HIR side).
 
 ---
@@ -67,7 +67,7 @@ A `shape` / `stride` entry is not restricted to a static `int`: it may be a
 symbolic / dynamic dim (a `DimVar` or dim `Expr` — a `ShapeDim`), or `None`
 for a launch-provided (dynamic-CTA) extent (`Layout(shape=(None,),
 strides=(1,))`). Consumers that need a concrete integer — `Mesh.__getitem__`
-and `T.sync` participation (tir.md §2.4) — require static `int` entries and
+and `T.sync` participation (tir.md §1.5) — require static `int` entries and
 **fail closed** on a symbolic / dynamic one rather than guessing.
 
 ---
@@ -182,7 +182,7 @@ class Mesh:
     # compile-time constant; Python value, does not enter the IR graph.
     # ``layout`` is a plain ``Layout`` for an un-sliced mesh. ``Mesh[key]``
     # (``__getitem__``) slices a constant sub-mesh used by ``T.sync``
-    # (tir.md §2.4): it replaces ``layout`` with a ``ComposedLayout`` recording
+    # (tir.md §1.5): it replaces ``layout`` with a ``ComposedLayout`` recording
     # the participating sub-box — the selected per-axis extents over the parent
     # strides in ``outer`` and the slice origin ``Σ start_i · stride_i`` in
     # ``offset`` (identity ``inner``). The slice never becomes an IR/SSA value;
@@ -200,7 +200,7 @@ Field meanings:
 - `topology` — device-domain description (`name` + `num_devices`)
 - `layout` — the mesh's own shape / strides (a `Layout`); a constant slice
   (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
-  (tir.md §2.4)
+  (tir.md §1.5)
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 - `MeshAxis` — single-axis object retrieved via `mesh.x` / `mesh.y` /
   `mesh.axes[i]`, used by parser static evaluation

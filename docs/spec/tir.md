@@ -5,8 +5,6 @@ into TIR; the lowering pass `HirToTirPass` ([passes](./passes.md))
 also produces TIR. TIR has no value return; effect-form Ops carry
 the work, structural Stmts carry control flow.
 
-## 1. Role and scope
-
 - **Container**: `tir.PrimFunction(name, params, body, output_count)`.
   `body` is a `Sequential`; the function returns no value.
 - **Stmt tree**: function bodies are nested Stmts only. Exprs appear
@@ -14,15 +12,16 @@ the work, structural Stmts carry control flow.
 - **Effect Ops** (`Copy`, `Fill`, `Mma`, `ReLU`, `RMSNorm`, `Reduce`)
   are value-class Ops registered with `@register_op`; in Stmt
   position they are invoked as `Evaluate(op, args)`
-  ([§2.2](#22-evaluate)).
+  ([§1.4](#14-evaluate)).
 - **Value Ops** (`AllocTensor`, `MemorySpan`, `PtrOf`, `TensorView`)
   are anchored by `LetStmt` so their result `Var` has stable
   identity.
 - **No HIR Ops** reach TIR; HIR-to-TIR rewriting is owned by the
   pass layer.
 
-## 2. `Stmt`
+## 1. TIR Stmt hierarchy
 
+### 1.1 `Stmt`
 
 ```python
 @dataclass(frozen=True)
@@ -48,7 +47,7 @@ flowchart TB
     Stmt --> EvaluateStmt
 ```
 
-### 2.1 Structural Stmts (`tir.stmts`)
+### 1.2 Structural Stmts (`tir.stmts`)
 
 ```python
 @dataclass(frozen=True)
@@ -91,7 +90,47 @@ class Return(Stmt):
     pass                              # @prim_func has no value return
 ```
 
-### 2.2 `Evaluate`
+- `MeshScope.mesh` carries the `Mesh` object; the `binding` `Var`
+  scopes the mesh inside `body`.
+
+### 1.3 `PrimFunction`
+
+```python
+@dataclass(frozen=True)
+class PrimFunction(Stmt):
+    name: str
+    params: tuple[Var, ...]
+    body: Sequential
+    output_count: int = 1             # number of trailing output params
+```
+
+`PrimFunction` is itself a `Stmt`, not a separate top-level node;
+it sits inside the TIR Stmt tree along with everything else.
+
+`tir.verify.verify_prim_function(fn, *, module_fns=())` enforces:
+
+- **Param homogeneity**. All parameters' layouts MUST be uniformly
+  `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.
+- **Fresh `Var` identity**. The same `Var` object MUST NOT be bound
+  by more than one `LetStmt` / `For` / `MeshScope` across the
+  function. Parameters seed the bound set.
+- **`LetStmt` typing**. `LetStmt.var.type` MUST equal the typeinfer
+  of `LetStmt.value`.
+- **`AllocTensor` placement**. `Call(AllocTensor, ...)` MAY only
+  appear directly as `LetStmt.value`. Nesting it inside any other
+  Expr is rejected.
+- **`MeshScope` mesh in scope**. Any embedded `ShardLayout` MUST
+  reference a mesh on the active `MeshScope` stack or a parameter's
+  `ShardLayout.mesh`.
+- **`Evaluate.callable`**. When `callable` is a `SymbolRef`
+  ([§2.1](#21-symbolref)), module-level resolution MUST find exactly one
+  `PrimFunction` of that name in the enclosing `Module`, `args` length
+  MUST match the resolved callee's `params`, and the `SymbolRef.type`
+  MUST equal the resolved callee's `CallableType`. When `callable` is
+  an `Op`, the per-Op verifier registered via
+  `@register_verify_stmt(Op)` runs.
+
+### 1.4 `Evaluate`
 
 ```python
 @dataclass(frozen=True)
@@ -104,14 +143,14 @@ class Evaluate(Stmt):
 invocation that has no result value. The `callable` is one of:
 
 - an effect-form `Op` (e.g. `tir.memory.Copy`, `tir.cuda.nn.Mma`,
-  `tir.tensor.Reduce`, `tir.Launch` [§3.6](#36-launch)). `args` are
+  `tir.tensor.Reduce`, `tir.Launch` [§2.3](#launch)). `args` are
   the Op's operands in `ParamDef` order; the per-Op verifier
   registered via `@register_verify_stmt(Op)` runs.
-- a `SymbolRef` ([§9](#9-symbolref)) — a reference to a callee
+- a `SymbolRef` ([§2.1](#21-symbolref)) — a reference to a callee
   `PrimFunction` in the enclosing `Module`. `args` follow the callee's
   parameter order, the final `output_count` positions binding output
   buffers; the callee is resolved uniquely at module level
-  ([§4](#4-verify-rules)).
+  ([§1.3](#13-primfunction)).
 
 Verify and lowering MUST dispatch on `type(callable)`. The per-Op
 verify / codegen handlers are keyed by `Op` type and receive the Op
@@ -127,30 +166,16 @@ Stmt-position form and the only Stmt-position invocation wrapper.
 unconditional invocation — an effect `Op` or a function `SymbolRef` —
 is expressed as `Evaluate(callable, args)`. A construct that carries
 its own control flow stays a first-class `Stmt`, not an `Evaluate`
-callable: `DispatchCall` ([§6](#6-dispatchcall)) is a first-match
+callable: `DispatchCall` ([§1.6](#16-dispatchcall)) is a first-match
 `if`/`else` over patterns with a fallback, and `Abort`
-([§8](#8-abort)) is a terminator. Their nested function invocations
+([§1.7](#17-abort)) is a terminator. Their nested function invocations
 are themselves `Evaluate(SymbolRef, args)`.
 
-### 2.3 `PrimFunction`
-
-```python
-@dataclass(frozen=True)
-class PrimFunction(Stmt):
-    name: str
-    params: tuple[Var, ...]
-    body: Sequential
-    output_count: int = 1             # number of trailing output params
-```
-
-`PrimFunction` is itself a `Stmt`, not a separate top-level node;
-it sits inside the TIR Stmt tree along with everything else.
-
-### 2.4 `Sync`
+### 1.5 `Sync`
 
 `Sync` is a mesh-scoped barrier. It is an **effect-form op** (`tir.sync.Sync`),
 authored `T.sync(m)`, and appears in Stmt position wrapped by `Evaluate`
-([§2.2](#22-evaluate)) like any other effect op. The surface is **only**
+([§1.4](#14-evaluate)) like any other effect op. The surface is **only**
 `T.sync(m)` / `T.sync(m[slice])` — there is no `m.sync()` receiver form.
 
 ```python
@@ -238,372 +263,7 @@ the mesh, and any slice of it, is a compile-time descriptor rather than an SSA
 value, and the barrier kind is derived from that set by one shared routine so
 verify and codegen cannot disagree.
 
-## 3. TIR Ops
-
-Value Ops MUST be anchored by `LetStmt.value` — their result `Var` is the only
-handle. Effect Ops appear in Stmt position as `Evaluate(op, args)`
-([§2.2](#22-evaluate)). Each Op's full contract lives here, in its catalog entry
-below; code carries only a one-line purpose docstring
-([SPEC-RULES](../SPEC-RULES.md)).
-
-### 3.1 Memory Ops (`tir.memory.*`)
-
-#### AllocTensor
-Allocate a tensor (value form; result type on the `tensor_type` attribute).
-
-#### MemorySpan
-Re-interpret a memory region as a typed tensor (value form).
-
-#### PtrOf
-Take the device address of a tensor for downstream view ops (value form).
-
-#### TensorView
-Derive a sub-view of a tensor (value form).
-
-#### Copy
-Byte-equivalent copy between two tensors (effect form).
-
-#### Fill
-Broadcast a scalar value into a tensor (effect form).
-
-### 3.2 NN Ops (`tir.nn.*`)
-
-#### Mma
-Matrix-multiply-accumulate `acc += lhs @ rhs` (effect form); per-target PTX
-lowering lives in [target](./target.md), the atom calling convention in
-[§3.7](#37-mma-atom-and-the-hand-written-calling-convention).
-
-#### ReLU
-Pointwise `max(x, 0)` (effect form).
-
-#### RMSNorm
-Fused RMS normalisation (effect form).
-
-### 3.3 Tensor Ops (`tir.tensor.*`)
-
-#### Reduce
-
-```text
-Reduce(src, dst, workspace?, axes, kind)
-```
-- kind: TIR op
-- fields:
-  - src / dst: effect-form operands
-  - workspace: optional staging buffer sized by lowering
-  - axes: reduced-axis tuple
-  - kind: `ReduceKind` tag
-- constraints:
-  - `Reduce` carries no dispatch parameter; runtime selects the strategy.
-  - `workspace` is present only when lowering sizes cross-warp staging.
-  - All forms lower to the single public runtime entry
-    `tilefoundry::ops::reduce<Op, Axes>(src, dst[, workspace])`.
-  - Plain and sharded runtime extents/tiers are derived inside the runtime.
-
-### 3.4 Generic kind-tagged effect Ops (`tir.arith`)
-
-`Binary` / `Unary` are effect-form Ops that dispatch on a kind enum rather than
-per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
-`UnaryKind` / `ReduceKind` are compiler-wide tag enums shared across HIR and
-TIR; lowering preserves the kind value without re-mapping.
-
-#### Binary
-```text
-Binary(lhs, rhs, dst, kind)
-```
-- kind: TIR op
-- fields:
-  - lhs / rhs: input operands
-  - dst: destination operand
-  - kind: `BinaryKind` tag
-- constraints:
-  - Lowers to the binary runtime family without per-kind TIR classes.
-
-#### Unary
-```text
-Unary(src, dst, kind)
-```
-- kind: TIR op
-- fields:
-  - src: input operand
-  - dst: destination operand
-  - kind: `UnaryKind` tag, including `rsqrt`
-- constraints:
-  - Lowers to the unary runtime family without per-kind TIR classes.
-
-### 3.5 `@intrinsic` — user-defined effect Stmts
-
-```python
-@intrinsic
-def some_intrinsic(a: Expr, b: Expr) -> None:
-    """verify body — runs as register_verify_stmt."""
-    if a.type.shape != b.type.shape:
-        raise VerifyError(...)
-```
-
-`tilefoundry.ir.tir.intrinsic.intrinsic` synthesises a Stmt subclass
-from the decorated function's signature, registers the function
-body as the Stmt's verifier, and wires the parser dispatch entry
-under the function's snake-case name. Parameters MUST be annotated
-`Expr`; the return annotation MUST be `None`.
-
-### 3.6 `Launch`
-
-Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
-the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
-the non-grid/block launch config through the Op attributes.
-
-`Launch` appears only in a CPU (host) entry body, as `Evaluate(Launch(...),
-args)` with `args = (SymbolRef(callee), grid_x, grid_y, grid_z, block_x,
-block_y, block_z, *forwarded_args)`:
-
-- **callee**: `args[0]` MUST be a `SymbolRef` ([§9](#9-symbolref)) resolving to
-  a device `PrimFunction` with a CUDA target.
-- **grid / block**: `args[1:7]` are the grid then block extents in the fixed
-  order `grid_x, grid_y, grid_z, block_x, block_y, block_z`. Each is an `Expr`
-  — a `Constant` for a static extent, a `ShapeOf` ([§7](#7-shapeof)) for a
-  launch-provided (dynamic) one, or a dim-arithmetic `Call` over those. They are
-  launch configuration, not kernel parameters: the device observes geometry
-  through `gridDim` / `blockIdx` (the codegen `program_dim` / `program_shape`
-  accessors), never as arguments.
-- **forwarded args**: the remaining `args` bind the callee's host-visible
-  parameters in declaration order. They MUST NOT include the hidden
-  `<param>_shape_<axis>` scalar parameters ([§7](#7-shapeof)) — the host fills
-  those from a tensor argument's runtime shape.
-- **attributes**: `cluster`, `dynamic_smem`, `stream`, and `attrs` carry the
-  non-grid/block launch configuration. A `cluster` / `stream` / `attrs` value
-  the active CUDA target does not support MUST be rejected in target lowering.
-
-### 3.7 MMA atom and the hand-written calling convention
-
-A hand-written kernel issues an MMA through an explicit **atom** — a
-realized instruction descriptor — instead of the bare `Mma` op whose
-fragment layouts the per-target lowering chooses
-([hir §1.3](./hir.md#irhirnn), [passes](./passes.md)). An MMA atom fixes a
-concrete hardware instruction, so the whole MMA surface is **target-owned**:
-the `Mma` op and the `MmaOpSpec` / `MmaAtom` descriptors
-(`tilefoundry.ir.tir.cuda.nn`, mirroring the CuTe `MMA_Op` → `MMA_Atom`
-layering), the concrete instructions, and their fragment layouts all live
-under `tilefoundry.ir.tir.cuda.nn.mma` / `mma_atom`, following IR's dialect-first
-layout `ir/{dialect}/{target}/{category}`.
-
-#### `MmaOpSpec`
-
-A named, fully-specified MMA instruction (the CuTe `MMA_Op` analog).
-
-```python
-@dataclass(frozen=True)
-class MmaOpSpec:
-    name: str
-    shape_mnk: tuple[int, int, int]
-    dtype_a: DType
-    dtype_b: DType
-    dtype_c: DType
-    operand_layout: str
-```
-
-##### `name`
-
-- MUST uniquely identify the instruction. dtype / shape / source layout
-  are fixed by it; the remaining fields mirror the name so verify and
-  codegen do not re-parse the string.
-
-##### `shape_mnk`
-
-- MUST be the instruction's `(M, N, K)` tuple; every entry MUST be a
-  static int.
-
-##### `dtype_a`
-
-- MUST be the `lhs` operand element type (`DType`).
-
-##### `dtype_b`
-
-- MUST be the `rhs` operand element type (`DType`); it MAY differ from
-  `dtype_a`.
-
-##### `dtype_c`
-
-- MUST be the accumulator element type (`DType`); it MAY differ from the
-  operand types (e.g. `f32` accumulation over `bf16` operands).
-
-##### `operand_layout`
-
-- MUST encode the source operand order as a string, e.g. `"TN"` (A
-  row-major, B col-major). An `MmaOpSpec` MUST NOT carry fragment-layout
-  knowledge.
-
-#### `MmaAtom`
-
-The realized atom for an `op` (the CuTe `MMA_Atom` analog), built by
-`T.cuda.mma.atom(op=...)`
-([parser §2.6](./parser.md#26-platform-sub-namespaces)).
-
-```python
-@dataclass(frozen=True)
-class MmaAtom:
-    op: MmaOpSpec
-    A: ShardLayout
-    B: ShardLayout
-    C: ShardLayout
-    required_scope: Mesh
-```
-
-##### `op`
-
-- MUST be the `MmaOpSpec` this atom realizes.
-
-##### `A`
-
-- MUST be the `lhs` operand fragment `ShardLayout` contract — the
-  lane→value layout the instruction reads. It MUST be returned **as-is**
-  at a use site and MUST NOT be rebound onto the caller's mesh.
-
-##### `B`
-
-- MUST be the `rhs` operand fragment `ShardLayout` contract; the same
-  as-is / no-rebind rule as `A` applies.
-
-##### `C`
-
-- MUST be the accumulator fragment `ShardLayout` contract; the same
-  as-is / no-rebind rule as `A` applies.
-
-##### `required_scope`
-
-- MUST be the thread-participation contract the atom needs, carried as
-  its own `Mesh` (for the SM80 `16x8x16` instruction, 32 lanes arranged
-  as a `(4, 8)` thread mesh). It MUST NOT be the caller's mesh; the
-  caller's enclosing scope MUST be checked against it at verify (below).
-
-#### Calling convention
-
-Load, compute, and store are **three separate** effect statements under
-an enclosing `MeshScope` ([§5](#5-topology-and-storage)); `T.mma` is
-verify-only and MUST NOT fuse the loads or the store.
-
-```python
-atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
-with Mesh(Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))) as warp:
-    a_frag = T.alloc_tensor(TensorType(..., layout=atom.A, storage=rmem))
-    acc    = T.alloc_tensor(TensorType(..., layout=atom.C, storage=rmem))
-    T.copy(T.tensor_view(a, layout=atom.A), a_frag)   # load
-    T.fill(acc, 0.0)
-    T.mma(acc, a_frag, b_frag, atom=atom)             # compute
-    T.copy(acc, T.tensor_view(c, layout=atom.C))      # store
-```
-
-- The author allocates each register fragment with the matching
-  `atom.A/B/C` layout and fills it with its own `T.copy`. The
-  accumulator is initialised with `Fill` and then read-modify-written.
-- `atom` is a compile-time attribute on the `Mma` Op
-  ([parser §2.6](./parser.md#26-platform-sub-namespaces)), not a runtime
-  operand. When absent, lowering takes the bare-`Mma` per-target path.
-
-#### Verify
-
-A `T.mma` carrying an `atom` MUST satisfy:
-
-- **operand contracts**: `acc.layout == atom.C`, `lhs.layout == atom.A`,
-  `rhs.layout == atom.B`.
-- **scope**: some mesh on the active `MeshScope` stack provides the
-  atom's required thread scope —
-  `mesh_scope_matches_required_scope(mesh, atom.required_scope)`. The
-  match is identity- and name-independent (mesh object identity, the
-  binding-var name, and axis names are not compared); it holds iff:
-  - the two meshes share the same program topology level — a `cta`
-    scope is never a `thread` / warp scope, even when its layout carries
-    the same shape;
-  - both topology domains (the product of the topology extents) are
-    statically known;
-  - each mesh is self-consistent (`topology domain == layout extent`),
-    and the enclosing mesh is inverse-projectable;
-  - the thread-value decomposition matches **exactly** — same layout
-    shape and strides. A flat lane layout cannot host the atom's
-    multi-axis fragment `Split` and is rejected.
-
-Per-target PTX emission dispatches on the atom ([target](./target.md)).
-
-### 3.8 Async copy Ops (`tir.async.*`)
-
-Non-blocking `cp.async` gmem→smem staging for warp-specialized pipelines: a
-producer issues copies, groups them, and a consumer waits on the group queue.
-
-#### CopyAsync
-
-```text
-CopyAsync(src, dst)
-```
-- kind: TIR op
-- fields:
-  - src / dst: async staging operands
-- constraints:
-  - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
-  - A later read of `dst` is ordered by `CpAsyncCommit` followed by
-    `CpAsyncWait`.
-
-#### CpAsyncCommit
-
-```text
-CpAsyncCommit()
-```
-- kind: TIR op
-- fields:
-  - effect: closes the current in-flight async-copy group
-- constraints:
-  - Later `CpAsyncWait` counts committed groups.
-
-#### CpAsyncWait
-
-```text
-CpAsyncWait(n)
-```
-- kind: TIR op
-- fields:
-  - n: most-recent committed groups allowed to remain in flight
-- constraints:
-  - `n` is a non-negative compile-time count.
-  - `n = 0` drains every outstanding committed group.
-
-## 4. Verify rules
-
-`tir.verify.verify_prim_function(fn, *, module_fns=())` enforces:
-
-- **Param homogeneity**. All parameters' layouts MUST be uniformly
-  `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.
-- **Fresh `Var` identity**. The same `Var` object MUST NOT be bound
-  by more than one `LetStmt` / `For` / `MeshScope` across the
-  function. Parameters seed the bound set.
-- **`LetStmt` typing**. `LetStmt.var.type` MUST equal the typeinfer
-  of `LetStmt.value`.
-- **`AllocTensor` placement**. `Call(AllocTensor, ...)` MAY only
-  appear directly as `LetStmt.value`. Nesting it inside any other
-  Expr is rejected.
-- **`MeshScope` mesh in scope**. Any embedded `ShardLayout` MUST
-  reference a mesh on the active `MeshScope` stack or a parameter's
-  `ShardLayout.mesh`.
-- **`Evaluate.callable`**. When `callable` is a `SymbolRef`
-  ([§9](#9-symbolref)), module-level resolution MUST find exactly one
-  `PrimFunction` of that name in the enclosing `Module`, `args` length
-  MUST match the resolved callee's `params`, and the `SymbolRef.type`
-  MUST equal the resolved callee's `CallableType`. When `callable` is
-  an `Op`, the per-Op verifier registered via
-  `@register_verify_stmt(Op)` runs.
-
-## 5. Topology and storage
-
-- `MeshScope.mesh` carries the `Mesh` object; the `binding` `Var`
-  scopes the mesh inside `body`.
-- `TensorType.storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` /
-  `tmem`) or `None` ([types §2](./types.md)). `storage=None` is rank-0-only,
-  reserved for shape-element tensors. A memory-resident TIR tensor MUST carry a
-  concrete level; the unmaterialized `umat` ([types §2](./types.md)) is an
-  HIR-only value and MUST already be materialized to a concrete level by the
-  time `HirToTirPass` produces TIR — it never appears in TIR.
-- `Reshard` does not appear in TIR; HIR-side `Reshard` is lowered
-  into `LetStmt(AllocTensor)` + `Evaluate(Copy, ...)` chains
-  during `HirToTirPass` ([passes](./passes.md)).
-
-## 6. `DispatchCall`
+### 1.6 `DispatchCall`
 
 `tir.DispatchCall` is a first-class TIR Stmt that implements
 pattern-based first-match dispatch over a tuple of `Expr` subjects.
@@ -622,7 +282,7 @@ class DispatchCall(Stmt):
 ```
 
 `DispatchCall` is a control Stmt, not an `Evaluate` callable
-([§2.2](#22-evaluate)); each `case_calls[i]` is an
+([§1.4](#14-evaluate)); each `case_calls[i]` is an
 `Evaluate(SymbolRef, args)` invoking that case's specialized callee.
 
 Semantics: the i-th `case_patterns` matches against `subjects` by
@@ -631,7 +291,7 @@ position; the first `i` whose every pattern matches runs
 runs. Source order is part of the IR contract — printers and viewers
 MUST preserve it.
 
-### 6.1 Verifier rules
+#### Verifier rules
 
 The verifier requires:
 
@@ -648,7 +308,87 @@ The verifier requires:
 across compiles: ordered by axis kind, then by canonical name of the
 matched key. A single dispatch axis makes this ordering trivial.
 
-## 7. `ShapeOf`
+### 1.7 `Abort`
+
+```python
+@dataclass(frozen=True)
+class Abort(Stmt):
+    message: str = ""
+```
+
+- `Abort` is terminating. It exists in code paths the compiler
+  believes are unreachable (notably `DispatchCall.fallback`).
+- The CUDA emitter renders `Abort` as `__trap();` in device contexts
+  and `assert(false);` in host contexts so a runtime hit is loud
+  rather than silent.
+- `message` is a debug surface; it does not carry semantics.
+
+### 1.8 `@intrinsic` — user-defined effect Stmts
+
+```python
+@intrinsic
+def some_intrinsic(a: Expr, b: Expr) -> None:
+    """verify body — runs as register_verify_stmt."""
+    if a.type.shape != b.type.shape:
+        raise VerifyError(...)
+```
+
+`tilefoundry.ir.tir.intrinsic.intrinsic` synthesises a Stmt subclass
+from the decorated function's signature, registers the function
+body as the Stmt's verifier, and wires the parser dispatch entry
+under the function's snake-case name. Parameters MUST be annotated
+`Expr`; the return annotation MUST be `None`.
+
+## 2. TIR Expr and callable constructs
+
+### 2.1 `SymbolRef`
+
+```python
+@dataclass(frozen=True)
+class SymbolRef(Expr):
+    name: str
+    nested: tuple[str, ...] = ()
+    # type: CallableType — the resolved callee's IR-level CallableType
+```
+
+`SymbolRef` is a leaf `Expr` naming a callee `PrimFunction` as a call
+target: the `callable` of an `Evaluate(SymbolRef, args)`
+([§1.4](#14-evaluate)) function invocation and `args[0]` of a `Launch`
+([§2.3](#launch)).
+
+#### `name`
+- MUST be the canonical name of a `PrimFunction` in the enclosing
+  `Module` ([core-ir.md §1](./core-ir.md#1-module)), exactly as stored
+  in `PrimFunction.name`. It MAY be a generated / mangled
+  specialization name.
+
+#### `nested`
+- MUST be empty: the `Module` holds only top-level functions, so a
+  non-empty `nested` is rejected.
+
+#### `type`
+- MUST be the resolved callee's IR-level `CallableType`
+  ([types §7](./types.md#7-callabletype)): `parameters` are the callee
+  `params` types in order; `return_type` is `UnitType`
+  ([types §6](./types.md#6-unittype)) — a TIR `PrimFunction` returns
+  no value, its outputs are trailing params ([§1.4](#14-evaluate)).
+- MUST be set at construction from the callee in hand; a `SymbolRef`
+  with a deferred or unresolved type MUST NOT enter constructed IR.
+  `Expr` is frozen and verify MUST NOT mutate IR, so verify only
+  checks `type` against the resolved callee ([§1.3](#13-primfunction)) —
+  it never back-fills.
+
+Resolution is module level: a unique lookup over the `Module`
+([core-ir.md §1](./core-ir.md#1-module)) MUST map `name` to exactly
+one `PrimFunction`; zero or more than one match is an error.
+Specialization variants each carry a distinct canonical
+`PrimFunction.name`, so a `SymbolRef` to a variant resolves
+unambiguously; the unmangled dispatcher name lives on
+`DispatchCall.callee_name` ([§1.6](#16-dispatchcall)), not on a
+`SymbolRef`. Local typeinfer does not resolve a `SymbolRef`; it
+carries its `type` directly.
+
+### 2.2 `ShapeOf`
 
 ```python
 @dataclass(frozen=True)
@@ -676,66 +416,324 @@ produced:
   tensor parameter / axis in which it occurs.
 - A CPU host entry MUST NOT expose such a scalar at its user-facing
   surface — it reads the extent from its tensor argument's runtime shape
-  and forwards it ([§3.6](#36-launch)).
+  and forwards it ([§2.3](#launch)).
 
-## 8. `Abort`
+### 2.3 TIR Ops
 
-```python
-@dataclass(frozen=True)
-class Abort(Stmt):
-    message: str = ""
+Value Ops MUST be anchored by `LetStmt.value` — their result `Var` is the only
+handle. Effect Ops appear in Stmt position as `Evaluate(op, args)`
+([§1.4](#14-evaluate)). Each Op's full contract lives here, in its catalog entry
+below; code carries only a one-line purpose docstring
+([SPEC-RULES](../SPEC-RULES.md)).
+
+- `TensorType.storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` /
+  `tmem`) or `None` ([types §2](./types.md)). `storage=None` is rank-0-only,
+  reserved for shape-element tensors. A memory-resident TIR tensor MUST carry a
+  concrete level; the unmaterialized `umat` ([types §2](./types.md)) is an
+  HIR-only value and MUST already be materialized to a concrete level by the
+  time `HirToTirPass` produces TIR — it never appears in TIR.
+- `Reshard` does not appear in TIR; HIR-side `Reshard` is lowered
+  into `LetStmt(AllocTensor)` + `Evaluate(Copy, ...)` chains
+  during `HirToTirPass` ([passes](./passes.md)).
+
+#### Memory Ops (`tir.memory.*`)
+
+##### AllocTensor
+Allocate a tensor (value form; result type on the `tensor_type` attribute).
+
+##### MemorySpan
+Re-interpret a memory region as a typed tensor (value form).
+
+##### PtrOf
+Take the device address of a tensor for downstream view ops (value form).
+
+##### TensorView
+Derive a sub-view of a tensor (value form).
+
+##### Copy
+Byte-equivalent copy between two tensors (effect form).
+
+##### Fill
+Broadcast a scalar value into a tensor (effect form).
+
+#### NN Ops (`tir.nn.*`)
+
+##### Mma
+Matrix-multiply-accumulate `acc += lhs @ rhs` (effect form); per-target PTX
+lowering lives in [target](./target.md), the atom calling convention in
+[§2.3](#mma-atom-and-the-hand-written-calling-convention).
+
+##### ReLU
+Pointwise `max(x, 0)` (effect form).
+
+##### RMSNorm
+Fused RMS normalisation (effect form).
+
+#### Tensor Ops (`tir.tensor.*`)
+
+##### Reduce
+
+```text
+Reduce(src, dst, workspace?, axes, kind)
 ```
+- kind: TIR op
+- fields:
+  - src / dst: effect-form operands
+  - workspace: optional staging buffer sized by lowering
+  - axes: reduced-axis tuple
+  - kind: `ReduceKind` tag
+- constraints:
+  - `Reduce` carries no dispatch parameter; runtime selects the strategy.
+  - `workspace` is present only when lowering sizes cross-warp staging.
+  - All forms lower to the single public runtime entry
+    `tilefoundry::ops::reduce<Op, Axes>(src, dst[, workspace])`.
+  - Plain and sharded runtime extents/tiers are derived inside the runtime.
 
-- `Abort` is terminating. It exists in code paths the compiler
-  believes are unreachable (notably `DispatchCall.fallback`).
-- The CUDA emitter renders `Abort` as `__trap();` in device contexts
-  and `assert(false);` in host contexts so a runtime hit is loud
-  rather than silent.
-- `message` is a debug surface; it does not carry semantics.
+#### Generic kind-tagged effect Ops (`tir.arith`)
 
-## 9. `SymbolRef`
+`Binary` / `Unary` are effect-form Ops that dispatch on a kind enum rather than
+per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
+`UnaryKind` / `ReduceKind` are compiler-wide tag enums shared across HIR and
+TIR; lowering preserves the kind value without re-mapping.
+
+##### Binary
+```text
+Binary(lhs, rhs, dst, kind)
+```
+- kind: TIR op
+- fields:
+  - lhs / rhs: input operands
+  - dst: destination operand
+  - kind: `BinaryKind` tag
+- constraints:
+  - Lowers to the binary runtime family without per-kind TIR classes.
+
+##### Unary
+```text
+Unary(src, dst, kind)
+```
+- kind: TIR op
+- fields:
+  - src: input operand
+  - dst: destination operand
+  - kind: `UnaryKind` tag, including `rsqrt`
+- constraints:
+  - Lowers to the unary runtime family without per-kind TIR classes.
+
+#### `Launch`
+
+Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
+the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
+the non-grid/block launch config through the Op attributes.
+
+`Launch` appears only in a CPU (host) entry body, as `Evaluate(Launch(...),
+args)` with `args = (SymbolRef(callee), grid_x, grid_y, grid_z, block_x,
+block_y, block_z, *forwarded_args)`:
+
+- **callee**: `args[0]` MUST be a `SymbolRef` ([§2.1](#21-symbolref)) resolving to
+  a device `PrimFunction` with a CUDA target.
+- **grid / block**: `args[1:7]` are the grid then block extents in the fixed
+  order `grid_x, grid_y, grid_z, block_x, block_y, block_z`. Each is an `Expr`
+  — a `Constant` for a static extent, a `ShapeOf` ([§2.2](#22-shapeof)) for a
+  launch-provided (dynamic) one, or a dim-arithmetic `Call` over those. They are
+  launch configuration, not kernel parameters: the device observes geometry
+  through `gridDim` / `blockIdx` (the codegen `program_dim` / `program_shape`
+  accessors), never as arguments.
+- **forwarded args**: the remaining `args` bind the callee's host-visible
+  parameters in declaration order. They MUST NOT include the hidden
+  `<param>_shape_<axis>` scalar parameters ([§2.2](#22-shapeof)) — the host fills
+  those from a tensor argument's runtime shape.
+- **attributes**: `cluster`, `dynamic_smem`, `stream`, and `attrs` carry the
+  non-grid/block launch configuration. A `cluster` / `stream` / `attrs` value
+  the active CUDA target does not support MUST be rejected in target lowering.
+
+#### MMA atom and the hand-written calling convention
+
+A hand-written kernel issues an MMA through an explicit **atom** — a
+realized instruction descriptor — instead of the bare `Mma` op whose
+fragment layouts the per-target lowering chooses
+([hir §1.3](./hir.md#irhirnn), [passes](./passes.md)). An MMA atom fixes a
+concrete hardware instruction, so the whole MMA surface is **target-owned**:
+the `Mma` op and the `MmaOpSpec` / `MmaAtom` descriptors
+(`tilefoundry.ir.tir.cuda.nn`, mirroring the CuTe `MMA_Op` → `MMA_Atom`
+layering), the concrete instructions, and their fragment layouts all live
+under `tilefoundry.ir.tir.cuda.nn.mma` / `mma_atom`, following IR's dialect-first
+layout `ir/{dialect}/{target}/{category}`.
+
+##### `MmaOpSpec`
+
+A named, fully-specified MMA instruction (the CuTe `MMA_Op` analog).
 
 ```python
 @dataclass(frozen=True)
-class SymbolRef(Expr):
+class MmaOpSpec:
     name: str
-    nested: tuple[str, ...] = ()
-    # type: CallableType — the resolved callee's IR-level CallableType
+    shape_mnk: tuple[int, int, int]
+    dtype_a: DType
+    dtype_b: DType
+    dtype_c: DType
+    operand_layout: str
 ```
 
-`SymbolRef` is a leaf `Expr` naming a callee `PrimFunction` as a call
-target: the `callable` of an `Evaluate(SymbolRef, args)`
-([§2.2](#22-evaluate)) function invocation and `args[0]` of a `Launch`
-([§3.6](#36-launch)).
+###### `name`
 
-#### `name`
-- MUST be the canonical name of a `PrimFunction` in the enclosing
-  `Module` ([core-ir.md §1](./core-ir.md#1-module)), exactly as stored
-  in `PrimFunction.name`. It MAY be a generated / mangled
-  specialization name.
+- MUST uniquely identify the instruction. dtype / shape / source layout
+  are fixed by it; the remaining fields mirror the name so verify and
+  codegen do not re-parse the string.
 
-#### `nested`
-- MUST be empty: the `Module` holds only top-level functions, so a
-  non-empty `nested` is rejected.
+###### `shape_mnk`
 
-#### `type`
-- MUST be the resolved callee's IR-level `CallableType`
-  ([types §7](./types.md#7-callabletype)): `parameters` are the callee
-  `params` types in order; `return_type` is `UnitType`
-  ([types §6](./types.md#6-unittype)) — a TIR `PrimFunction` returns
-  no value, its outputs are trailing params ([§2.2](#22-evaluate)).
-- MUST be set at construction from the callee in hand; a `SymbolRef`
-  with a deferred or unresolved type MUST NOT enter constructed IR.
-  `Expr` is frozen and verify MUST NOT mutate IR, so verify only
-  checks `type` against the resolved callee ([§4](#4-verify-rules)) —
-  it never back-fills.
+- MUST be the instruction's `(M, N, K)` tuple; every entry MUST be a
+  static int.
 
-Resolution is module level: a unique lookup over the `Module`
-([core-ir.md §1](./core-ir.md#1-module)) MUST map `name` to exactly
-one `PrimFunction`; zero or more than one match is an error.
-Specialization variants each carry a distinct canonical
-`PrimFunction.name`, so a `SymbolRef` to a variant resolves
-unambiguously; the unmangled dispatcher name lives on
-`DispatchCall.callee_name` ([§6](#6-dispatchcall)), not on a
-`SymbolRef`. Local typeinfer does not resolve a `SymbolRef`; it
-carries its `type` directly.
+###### `dtype_a`
+
+- MUST be the `lhs` operand element type (`DType`).
+
+###### `dtype_b`
+
+- MUST be the `rhs` operand element type (`DType`); it MAY differ from
+  `dtype_a`.
+
+###### `dtype_c`
+
+- MUST be the accumulator element type (`DType`); it MAY differ from the
+  operand types (e.g. `f32` accumulation over `bf16` operands).
+
+###### `operand_layout`
+
+- MUST encode the source operand order as a string, e.g. `"TN"` (A
+  row-major, B col-major). An `MmaOpSpec` MUST NOT carry fragment-layout
+  knowledge.
+
+##### `MmaAtom`
+
+The realized atom for an `op` (the CuTe `MMA_Atom` analog), built by
+`T.cuda.mma.atom(op=...)`
+([parser §2.6](./parser.md#26-platform-sub-namespaces)).
+
+```python
+@dataclass(frozen=True)
+class MmaAtom:
+    op: MmaOpSpec
+    A: ShardLayout
+    B: ShardLayout
+    C: ShardLayout
+    required_scope: Mesh
+```
+
+###### `op`
+
+- MUST be the `MmaOpSpec` this atom realizes.
+
+###### `A`
+
+- MUST be the `lhs` operand fragment `ShardLayout` contract — the
+  lane→value layout the instruction reads. It MUST be returned **as-is**
+  at a use site and MUST NOT be rebound onto the caller's mesh.
+
+###### `B`
+
+- MUST be the `rhs` operand fragment `ShardLayout` contract; the same
+  as-is / no-rebind rule as `A` applies.
+
+###### `C`
+
+- MUST be the accumulator fragment `ShardLayout` contract; the same
+  as-is / no-rebind rule as `A` applies.
+
+###### `required_scope`
+
+- MUST be the thread-participation contract the atom needs, carried as
+  its own `Mesh` (for the SM80 `16x8x16` instruction, 32 lanes arranged
+  as a `(4, 8)` thread mesh). It MUST NOT be the caller's mesh; the
+  caller's enclosing scope MUST be checked against it at verify (below).
+
+##### Calling convention
+
+Load, compute, and store are **three separate** effect statements under
+an enclosing `MeshScope` ([§1.2](#12-structural-stmts-tirstmts)); `T.mma` is
+verify-only and MUST NOT fuse the loads or the store.
+
+```python
+atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
+with Mesh(Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))) as warp:
+    a_frag = T.alloc_tensor(TensorType(..., layout=atom.A, storage=rmem))
+    acc    = T.alloc_tensor(TensorType(..., layout=atom.C, storage=rmem))
+    T.copy(T.tensor_view(a, layout=atom.A), a_frag)   # load
+    T.fill(acc, 0.0)
+    T.mma(acc, a_frag, b_frag, atom=atom)             # compute
+    T.copy(acc, T.tensor_view(c, layout=atom.C))      # store
+```
+
+- The author allocates each register fragment with the matching
+  `atom.A/B/C` layout and fills it with its own `T.copy`. The
+  accumulator is initialised with `Fill` and then read-modify-written.
+- `atom` is a compile-time attribute on the `Mma` Op
+  ([parser §2.6](./parser.md#26-platform-sub-namespaces)), not a runtime
+  operand. When absent, lowering takes the bare-`Mma` per-target path.
+
+##### Verify
+
+A `T.mma` carrying an `atom` MUST satisfy:
+
+- **operand contracts**: `acc.layout == atom.C`, `lhs.layout == atom.A`,
+  `rhs.layout == atom.B`.
+- **scope**: some mesh on the active `MeshScope` stack provides the
+  atom's required thread scope —
+  `mesh_scope_matches_required_scope(mesh, atom.required_scope)`. The
+  match is identity- and name-independent (mesh object identity, the
+  binding-var name, and axis names are not compared); it holds iff:
+  - the two meshes share the same program topology level — a `cta`
+    scope is never a `thread` / warp scope, even when its layout carries
+    the same shape;
+  - both topology domains (the product of the topology extents) are
+    statically known;
+  - each mesh is self-consistent (`topology domain == layout extent`),
+    and the enclosing mesh is inverse-projectable;
+  - the thread-value decomposition matches **exactly** — same layout
+    shape and strides. A flat lane layout cannot host the atom's
+    multi-axis fragment `Split` and is rejected.
+
+Per-target PTX emission dispatches on the atom ([target](./target.md)).
+
+#### Async copy Ops (`tir.async.*`)
+
+Non-blocking `cp.async` gmem→smem staging for warp-specialized pipelines: a
+producer issues copies, groups them, and a consumer waits on the group queue.
+
+##### CopyAsync
+
+```text
+CopyAsync(src, dst)
+```
+- kind: TIR op
+- fields:
+  - src / dst: async staging operands
+- constraints:
+  - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
+  - A later read of `dst` is ordered by `CpAsyncCommit` followed by
+    `CpAsyncWait`.
+
+##### CpAsyncCommit
+
+```text
+CpAsyncCommit()
+```
+- kind: TIR op
+- fields:
+  - effect: closes the current in-flight async-copy group
+- constraints:
+  - Later `CpAsyncWait` counts committed groups.
+
+##### CpAsyncWait
+
+```text
+CpAsyncWait(n)
+```
+- kind: TIR op
+- fields:
+  - n: most-recent committed groups allowed to remain in flight
+- constraints:
+  - `n` is a non-negative compile-time count.
+  - `n = 0` drains every outstanding committed group.

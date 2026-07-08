@@ -335,7 +335,7 @@ The pass lowers each `Module.functions` entry by its shape
      symbol, not by narrowed param types.
   2. The prototype emits one entry `tir.PrimFunction` under the
      unmangled `name` whose body is a single `tir.DispatchCall`
-     (see [tir.md §6](./tir.md#6-dispatchcall)):
+     (see [tir.md §1.6](./tir.md#16-dispatchcall)):
      - `subjects = (ShapeOf(param, axis),)` for the canonical
        `(param, axis)` of the dispatch `DimVar`;
      - `case_patterns` carries each variant's pattern in source

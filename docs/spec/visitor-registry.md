@@ -363,7 +363,7 @@ registry implementation. The stable IR shape is `Evaluate(op, args)`;
 the stable IR does not wrap a value-form `Call` inside `Evaluate`. See
 [visitor-mutator §7](./visitor-mutator.md)
 for the matching visitor entry-form contract and
-[tir §2.2](./tir.md#22-evaluate) for the wrapper definition.
+[tir §1.4](./tir.md#14-evaluate) for the wrapper definition.
 
 ```python
 # src/tilefoundry/ir/tir/memory/copy.py

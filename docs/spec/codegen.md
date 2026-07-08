@@ -232,7 +232,7 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(<name>, __tilefoundry_<sanitized>_host);
 ```
 
 **Shape-scalar parameter ABI.** Each `tir.ShapeOf(param, axis)`
-([tir §7](./tir.md#7-shapeof)) reachable from a PrimFunction body adds a hidden
+([tir §2.2](./tir.md#22-shapeof)) reachable from a PrimFunction body adds a hidden
 kernel-scalar parameter named `f"{param.name}_shape_<axis>"` — a rank-0 `i32`
 shape-scalar `TensorType` with `storage=None`. The host wrapper extracts the
 value from the

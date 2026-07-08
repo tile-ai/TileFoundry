@@ -506,7 +506,7 @@ registry.
   visibility (§2.5).
 - `T.cuda.mma` is the CUDA MMA surface: `T.cuda.mma.<NAME>` is an
   `MmaOpSpec` and `T.cuda.mma.atom(op=...)` an `MmaAtom`
-  ([tir §3.7](./tir.md#37-mma-atom-and-the-hand-written-calling-convention)).
+  ([tir §2.3](./tir.md#mma-atom-and-the-hand-written-calling-convention)).
   The folder name (`cuda`) matches `codegen/cuda/` and the runtime tree.
 
 In a `@prim_func` body a chain rooted at a platform sub-namespace is a
@@ -785,7 +785,7 @@ imperative statements that fold into a `Sequential` of Stmts.
 | Python | TIR action |
 |---|---|
 | `x = expr` | `LetStmt(var=x, value=expr, body=<sequential rest>)`. The remaining body of the function is nested as `body`. |
-| `a = Tensor(...)` | `LetStmt(var=a, value=Call(tir.memory.AllocTensor, (), attrs=<TensorType fields>), body=<rest>)`. See [tir §5.1](./tir.md). |
+| `a = Tensor(...)` | `LetStmt(var=a, value=Call(tir.memory.AllocTensor, (), attrs=<TensorType fields>), body=<rest>)`. See [tir §2.3](./tir.md#23-tir-ops). |
 | `foo(a, b)` (effect Op) | `Evaluate(target_op, args)` Stmt. |
 | `foo(a, b)` (value Op) | `Call` Expr embedded in the right-hand side of a `LetStmt` or another Stmt's Expr field. |
 | `for i in range(...)` | `For(induction_var=i, start, stop, step, body)`. |
