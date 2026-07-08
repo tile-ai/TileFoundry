@@ -45,32 +45,43 @@ single-output node produces a `TensorValue`; a multi-output node (a
 `Tuple`, a `TupleType` `Call`, or a multi-carry `GridRegionExpr`)
 produces a `TupleValue`.
 
-```python
-class Value:
-    """Base of every evaluated value."""
-
-@dataclass(frozen=True)
-class TensorValue(Value):
-    data: "torch.Tensor"     # logical tensor value
-    type: TensorType         # HIR type of this value (carries layout)
-
-@dataclass(frozen=True)
-class TupleValue(Value):
-    elements: tuple[Value, ...]
+```text
+Value()
 ```
+
+- kind: Python class
+- fields: none — base of every evaluated value
+- constraints: none — abstract base; concrete values are `TensorValue` / `TupleValue`
 
 ### `TensorValue`
 
-- `data` holds the value in its **logical shape** — the shape of
-  `type` ([types §2](./types.md)), not a layout-domain shape.
-- `type.layout`, when a `ShardLayout` or `Layout`, drives the
-  layout-domain projection of [§6](#6-layout-domain).
-- A scalar value is a rank-0 `data` with a rank-0 `TensorType`.
+```text
+TensorValue(data: torch.Tensor, type: TensorType)
+```
+
+- kind: Python class
+- fields:
+  - data: the logical tensor value
+  - type: the HIR type of this value (carries layout)
+- constraints:
+  - `data` holds the value in its **logical shape** — the shape of
+    `type` ([types §2](./types.md)), not a layout-domain shape.
+  - `type.layout`, when a `ShardLayout` or `Layout`, drives the
+    layout-domain projection of [§6](#6-layout-domain).
+  - A scalar value is a rank-0 `data` with a rank-0 `TensorType`.
 
 ### `TupleValue`
 
-- `elements` are the per-field `Value`s; `tuple_get_item` projects one
-  by static index.
+```text
+TupleValue(elements: tuple[Value, ...])
+```
+
+- kind: Python class
+- fields:
+  - elements: the per-field `Value`s
+- constraints:
+  - `elements` are the per-field `Value`s; `tuple_get_item` projects one
+    by static index.
 
 ## 2. Parameters and inputs
 

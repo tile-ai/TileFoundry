@@ -53,71 +53,85 @@ shared `SSAValue` whose `type` MUST be a `TensorType`.
 
 ### 3.2 `Domain`
 
-`Domain` is carried directly by `isl.set`:
-
-```
+```text
 Domain = isl.set
 ```
 
-It represents the legal iteration domain of the current `TileGraph`.
+- kind: Python class
+- fields: the legal iteration domain of the current `TileGraph`, carried by `isl.set`
+- constraints: none — carried directly by `isl.set`
+
+`Domain` is carried directly by `isl.set`. It represents the legal iteration
+domain of the current `TileGraph`.
 
 ### 3.3 `DomainRelation`
 
-`DomainRelation` is carried directly by `isl.multi_aff`:
-
-```
+```text
 DomainRelation = isl.multi_aff
 ```
 
-It maps the parent `TileGraph.domain` onto the current
-`TileGraph.domain`. `isl.multi_aff` is sufficient at this layer.
+- kind: Python class
+- fields: the map from the parent `TileGraph.domain` onto the current `TileGraph.domain`, carried by `isl.multi_aff`
+- constraints: none — `isl.multi_aff` is sufficient at this layer
+
+`DomainRelation` is carried directly by `isl.multi_aff`. It maps the parent
+`TileGraph.domain` onto the current `TileGraph.domain`. `isl.multi_aff` is
+sufficient at this layer.
 
 ### 3.4 `AccessRelation`
 
-`AccessRelation` is also carried by `isl.multi_aff`:
-
-```
+```text
 AccessRelation = isl.multi_aff
 ```
 
-It expresses the affine map from the current `TileGraph.domain` to a
-boundary value's index space. `AccessRelation` itself does not carry
-a tensor or value reference, a read / write mode, or any further
-semantics; those bindings live on the surrounding `TileGraph`'s
-boundary fields.
+- kind: Python class
+- fields: the affine map from the current `TileGraph.domain` to a boundary value's index space, carried by `isl.multi_aff`
+- constraints:
+  - `AccessRelation` itself does not carry a tensor or value reference, a read /
+    write mode, or any further semantics; those bindings live on the surrounding
+    `TileGraph`'s boundary fields.
+
+`AccessRelation` is also carried by `isl.multi_aff`. It expresses the affine map
+from the current `TileGraph.domain` to a boundary value's index space.
 
 ### 3.5 `ITileNode`
 
-`ITileNode` is the abstract base of every node that participates in
-a `TileGraph` body:
-
-```
+```text
 ITileNode
   inputs:  Value[]
   outputs: Value[]
 ```
 
-`ITileNode` unifies graph-node boundaries only; it does not unify
-`domain`.
+- kind: Python class
+- fields:
+  - inputs: boundary input `Value`s
+  - outputs: boundary output `Value`s
+- constraints:
+  - `ITileNode` unifies graph-node boundaries only; it does not unify `domain`.
+
+`ITileNode` is the abstract base of every node that participates in
+a `TileGraph` body.
 
 ### 3.6 `DiGraph<TNode>`
 
-`TileGraph.body` is carried by a directed-graph object:
-
-```
+```text
 DiGraph<TNode>
   nodes
   edges
 ```
 
-Reading-style reference: networkx. The in-memory API is not pinned
-by this spec.
+- kind: Python class
+- fields:
+  - nodes: the graph nodes
+  - edges: the graph edges
+- constraints: none — the in-memory API is not pinned by this spec (reading-style reference: networkx)
+
+`TileGraph.body` is carried by a directed-graph object. Reading-style
+reference: networkx. The in-memory API is not pinned by this spec.
 
 ### 3.7 `TileGraph`
 
-`TileGraph` is the composite node:
-
-```
+```text
 TileGraph : ITileNode
   domain: Domain
   domain_relation: DomainRelation        # optional; child graphs only
@@ -128,32 +142,41 @@ TileGraph : ITileNode
   body: DiGraph<ITileNode>
 ```
 
-Where:
+- kind: Python class
+- fields:
+  - `domain` is the iteration domain of the current graph.
+  - `domain_relation` belongs to `TileGraph` only; ordinary `ITileNode`
+    members do not carry one.
+  - `input_access_relations` aligns positionally with `inputs`.
+  - `output_access_relations` aligns positionally with `outputs`.
+  - `body` is the directed graph at the current level.
+- constraints:
+  - the composite node; a per-level SSA DAG. `domain_relation` is present on
+    child graphs only.
 
-- `domain` is the iteration domain of the current graph.
-- `domain_relation` belongs to `TileGraph` only; ordinary `ITileNode`
-  members do not carry one.
-- `input_access_relations` aligns positionally with `inputs`.
-- `output_access_relations` aligns positionally with `outputs`.
-- `body` is the directed graph at the current level.
+`TileGraph` is the composite node.
 
 ### 3.8 `TileUnit`
 
-`TileUnit` is the minimum-unit node:
-
-```
+```text
 TileUnit : ITileNode
   op_kind: str
   inputs:  Value[]
   outputs: Value[]
 ```
 
-Where:
+- kind: Python class
+- fields:
+  - op_kind: the unit's op kind
+  - inputs: boundary input `Value`s
+  - outputs: boundary output `Value`s
+- constraints:
+  - a `TileUnit` does not own its own `domain`,
+  - it does not own its own `domain_relation`,
+  - as the minimum unit it is interpreted under the `domain` of the
+    enclosing `TileGraph`.
 
-- a `TileUnit` does not own its own `domain`,
-- it does not own its own `domain_relation`,
-- as the minimum unit it is interpreted under the `domain` of the
-  enclosing `TileGraph`.
+`TileUnit` is the minimum-unit node.
 
 ## 4. Semantic skeleton
 

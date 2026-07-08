@@ -150,6 +150,24 @@ through any registry — their semantic rules are owned by
 All four instances share one registry implementation. It is a
 class-keyed dict with a duplicate-registration guard.
 
+```text
+AnalysisRegistry[Key](name: str):  register(cls, fn) -> None;  lookup(cls) -> Callable | None;  has(cls) -> bool
+```
+
+- kind: Python class
+- fields:
+  - name: the registry name (used in duplicate-registration errors)
+- constraints:
+  - A registry MUST raise on double registration of the same class;
+    subclasses do not inherit a parent's handler. Each concrete
+    `Op` / `Stmt` subclass either registers itself explicitly or is
+    caught by the visitor's `generic_visit` fallback.
+  - `lookup` returns `None` on a miss. The caller decides whether a
+    miss is an error or a fallback. `VerifyVisitor` falls back to
+    `generic_visit` on a miss (an unregistered Stmt simply has no
+    custom verify rule); `TypeInferContext` raises (every Op call
+    MUST have a typeinfer rule).
+
 ```python
 from typing import Callable, Generic, TypeVar
 from tilefoundry.ir.core import Op
@@ -176,18 +194,6 @@ class AnalysisRegistry(Generic[Key]):
     def has(self, cls: Key) -> bool:
         return cls in self._map
 ```
-
-Invariants:
-
-- A registry MUST raise on double registration of the same class;
-  subclasses do not inherit a parent's handler. Each concrete
-  `Op` / `Stmt` subclass either registers itself explicitly or is
-  caught by the visitor's `generic_visit` fallback.
-- `lookup` returns `None` on a miss. The caller decides whether a
-  miss is an error or a fallback. `VerifyVisitor` falls back to
-  `generic_visit` on a miss (an unregistered Stmt simply has no
-  custom verify rule); `TypeInferContext` raises (every Op call
-  MUST have a typeinfer rule).
 
 ## 4. Instance 1 — `typeinfer`
 
@@ -282,12 +288,17 @@ expression structure and needs to recompute types, it calls
 A second registry exposes each op's access relation as a **forward**
 service that typeinfer consumes. Its result carrier is:
 
-```python
-@dataclass(frozen=True)
-class AccessRelationResult:
-    domain: isl.set
-    maps: tuple[isl.map, ...]
+```text
+AccessRelationResult(domain: isl.set, maps: tuple[isl.map, ...])
 ```
+
+- kind: Python class
+- fields:
+  - domain: the op's bounded iteration domain as an `isl.set`
+  - maps: one access `isl.map` per boundary value, in boundary order (inputs then outputs)
+- constraints:
+  - the carrier holds **no** tensor shape; the output shape is typeinfer-side
+    data (see [analysis §1.1](./analysis.md#11-relation-derived-type-behavior)).
 
 #### `domain`
 

@@ -70,6 +70,16 @@ does not depend on Python-version-specific dispatch behaviour.
 Read-only Expr-tree traversal. `T` is user-chosen (`None` for
 side-effect collection, `set[Var]` for free-var analysis, etc.).
 
+```text
+ExprVisitor[T]:  visit(expr: Expr) -> T;  generic_visit(expr: Expr) -> T
+```
+
+- kind: Python class
+- fields: none — read-only Expr traversal; `T` is the user-chosen visit result type
+- constraints:
+  - `generic_visit` recurses into all child Exprs and returns `None` by default;
+    subclasses MAY override to aggregate.
+
 ```python
 from typing import Generic, TypeVar
 from tilefoundry.ir.core import Expr, Call, Var, Constant, Tuple
@@ -120,6 +130,16 @@ Recursive Expr rewrite returning the same node kind. Core invariant:
 **when no child changed, return the original node** (identity
 preservation).
 
+```text
+ExprMutator:  visit(expr: Expr) -> Expr;  generic_visit(expr: Expr) -> Expr
+```
+
+- kind: Python class
+- fields: none — identity-preserving Expr rewrite
+- constraints:
+  - When no child changed, `generic_visit` returns the original node (identity
+    preservation).
+
 ```python
 class ExprMutator:
     """Identity-preserving Expr rewrite."""
@@ -168,6 +188,18 @@ than `return call`, so child Exprs are still recursed.
 
 Same shape as the Expr family, but for the Stmt tree.
 
+```text
+StmtVisitor[T]:  visit(stmt: Stmt) -> T
+StmtMutator:     visit(stmt: Stmt) -> Stmt
+```
+
+- kind: Python class
+- fields: none — Stmt-tree traversal (`StmtVisitor`) / identity-preserving Stmt rewrite (`StmtMutator`)
+- constraints:
+  - `StmtMutator`'s identity-preservation invariant is identical to `ExprMutator`.
+  - `StmtVisitor` / `StmtMutator` do not descend into Expr fields embedded in
+    Stmts; those are visited only through `StmtExprMutator` (§6).
+
 ```python
 from tilefoundry.ir.tir import Stmt, Sequential, PrimFunction
 from tilefoundry.ir.tir.stmts import LetStmt, For, While, If, MeshScope, Return, Evaluate
@@ -208,6 +240,15 @@ embedded in Stmts — `For.start` / `For.stop` / `For.step` /
 Composite: rewrite the Stmt tree **and** descend into the Expr
 fields embedded in Stmts. This is the most common combination
 (every lowering / simplification / structural rewrite needs it).
+
+```text
+StmtExprMutator(StmtMutator, ExprMutator):  visit_stmt(stmt: Stmt) -> Stmt;  visit_expr(expr: Expr) -> Expr
+```
+
+- kind: Python class
+- fields: none — rewrites Stmts and the Exprs embedded in their Expr-typed fields
+- constraints:
+  - The rewrite scope is **embedded value Exprs**, not binding `Var`s.
 
 ```python
 class StmtExprMutator(StmtMutator, ExprMutator):
