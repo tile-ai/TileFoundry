@@ -248,7 +248,9 @@ exactly; otherwise the sugar is rejected. The factorisation is
 opaque to the user: input `N @ m.a` and input
 `(mesh_extent(a) @ m.a, N // mesh_extent(a))` produce the same IR.
 
-**Stride materialization (parser surface)**. The first sugar form
+#### Stride materialization (parser surface)
+
+The first sugar form
 (`'(' axis-spec ... ')'`) emits `Layout(shape=canonical,
 strides=None)` — the cute strides are deferred to `Reshard`
 typeinfer, which fills them in based on the storage-level direction

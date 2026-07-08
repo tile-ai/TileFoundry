@@ -136,7 +136,7 @@ else.
 - User imports go through the `tilefoundry.dsl.tf` /
   `tilefoundry.dsl.T` namespaces' `__getattr__`, not through the
   per-category `__init__.py`
-  ([parser §2](./parser.md#2-dsl-namespace-package)).
+  ([parser §2](./parser.md#2-dsl-namespace-surface)).
 
 **Rule 6 — one pass = one file.** A pass class lives in
 `passes/transforms/<pass_name>.py` (snake_case file name = pass

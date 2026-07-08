@@ -135,7 +135,7 @@ instances split as follows:
 | Instance | Op-branch handler | Stmt-branch handler | Notes |
 |---|---|---|---|
 | **typeinfer** | `(Call, TypeInferContext) -> TensorType \| TupleType` | — | Value-producing only |
-| **verify** | — | `(Stmt, VerifyContext) -> None` | Effect-side constraints; for `Evaluate(op, args)`, dispatch keys on the Op class — see [§4](#4-instance-2--verify) |
+| **verify** | — | `(Stmt, VerifyContext) -> None` | Effect-side constraints; for `Evaluate(op, args)`, dispatch keys on the Op class — see [§5](#5-instance-2--verify) |
 | **codegen_\<target\>** | `(Call, CodegenContext) -> str` | `(Stmt, CodegenContext) -> None` | Both sides are emitted |
 | **cost** (placeholder) | `(Call, CostContext) -> Cost` | `(Stmt, CostContext) -> Cost` (optional) | Not implemented in MVP |
 
