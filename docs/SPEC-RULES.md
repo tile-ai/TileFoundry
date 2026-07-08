@@ -16,28 +16,50 @@ solely because a specific spec rule requires it.
 
 ## Unified Entry Format
 
-Spec entries for ops, runtime functions, public classes, and pass/helper classes
-use one outer shell:
+Spec entries for ops, runtime functions, public classes, enums, and
+pass/helper classes render the construct as a **source-code interface** in its
+own language, followed by its constraints:
 
 ````md
 #### Name
-```text
-signature / ClassName<...>
+```python
+class Name:
+    field_a: TypeA                        # role of field_a
+    field_b: TypeB                        # role of field_b
+    def method(self, arg: T) -> R: ...    # role of method
 ```
-- kind: HIR op | TIR op | runtime func | C++ class | Python class/pass
-- fields:
-  - name: role or argument/member/effect description
 - constraints:
+  - contract rule
   - contract rule
 ````
 
-The `fields` content adapts to `kind`: class entries describe members/type
-fields; function entries describe arguments, returns, effects, or runtime state.
-Do not paste a full dataclass or re-list code-identical fields when a compact
-signature and a few stable keys carry the contract.
+Rules:
+
+- Show the **interface only** — the class / enum / struct surface, field
+  annotations, and method / function signatures. Never include a method body,
+  traversal loop, registry / decorator implementation, or any other executable
+  detail; a signature ends in `...`.
+- Write the construct in its real language: `python` for Python classes /
+  functions / decorators / enums, `cpp` for C++ / CUDA enums / classes /
+  structs / types / functions.
+- Describe each field's and method's role with a **short inline comment** on the
+  same line (`# ...` in Python, `// ...` in C++). A longer note goes in a
+  docstring / block comment that explains role only, never mechanics.
+- An op-catalog entry renders as a callable signature
+  (e.g. `Binary(kind, lhs, rhs) -> Tensor`) with inline comments; its owning
+  dialect is conveyed by the file / namespace, not a separate label.
+- A `- constraints:` bullet list follows the code block and carries the contract
+  rules — including every normative MUST / SHALL / SHOULD sentence.
+- One code block MAY list several signatures of the same family when that reads
+  clearly.
+- Do not re-list code-identical fields twice or paste a full implementation; the
+  interface surface plus constraints carries the contract.
+- Example code appears only to pin an otherwise-ambiguous contract corner (an
+  edge case). It never replaces an entry's interface surface and never repeats a
+  full implementation.
 
 Consensus ops may be grouped when one external reference defines their behavior.
-Custom TileFoundry ops and public runtime entries need their own compact entry.
+Custom TileFoundry ops and public runtime entries need their own entry.
 
 ## Constraints
 

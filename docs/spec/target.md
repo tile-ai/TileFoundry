@@ -22,13 +22,11 @@ and codegen. Emitting source and linking the artifact are owned by
 
 ## 2. `Target`
 
-```text
-Target(name: str)
+```python
+class Target:
+    name: str    # the stable back-end identifier
 ```
 
-- kind: Python class
-- fields:
-  - name: the stable back-end identifier
 - constraints:
   - MUST be the stable back-end identifier used for target resolution and for the
     function-target grouping in codegen.
@@ -40,15 +38,13 @@ codegen products ([codegen §4](./codegen.md#4-codegen-products)).
 
 CUDA is the current reference target.
 
-```text
-CudaTarget(name: str = "cuda", arch: str = "sm_90", topology_levels: tuple[str, ...] = ("cta", "thread"))
+```python
+class CudaTarget:
+    name: str = "cuda"                                     # the back-end identifier, fixed to "cuda"
+    arch: str = "sm_90"                                    # the SM architecture the device source is compiled for
+    topology_levels: tuple[str, ...] = ("cta", "thread")  # the program topology level set the target admits
 ```
 
-- kind: Python class
-- fields:
-  - name: the back-end identifier, fixed to `"cuda"`
-  - arch: the SM architecture the device source is compiled for
-  - topology_levels: the program topology level set the target admits
 - constraints:
   - MUST be `"cuda"`.
   - MUST name the SM architecture the device source is compiled for.
@@ -61,13 +57,11 @@ CudaTarget(name: str = "cuda", arch: str = "sm_90", topology_levels: tuple[str, 
 
 ## 4. `CpuTarget`
 
-```text
-CpuTarget(name: str = "cpu")
+```python
+class CpuTarget:
+    name: str = "cpu"    # the back-end identifier, fixed to "cpu"
 ```
 
-- kind: Python class
-- fields:
-  - name: the back-end identifier, fixed to `"cpu"`
 - constraints:
   - MUST be `"cpu"`.
 

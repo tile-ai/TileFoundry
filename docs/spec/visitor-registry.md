@@ -85,15 +85,8 @@ class StmtVisitor(Generic[T]):
 
 # VerifyVisitor is the derived class that holds a registry reference:
 class VerifyVisitor(StmtVisitor[None]):
-    def __init__(self, ctx: VerifyContext, registry=verify_stmt_registry):
-        self.ctx = ctx
-        self.registry = registry          # explicit binding point
-
-    def generic_visit(self, stmt: Stmt) -> None:
-        fn = self.registry.lookup(type(stmt))
-        if fn is not None:
-            fn(stmt, self.ctx)
-        super().generic_visit(stmt)
+    def __init__(self, ctx: VerifyContext, registry=verify_stmt_registry): ...   # explicit binding point
+    def generic_visit(self, stmt: Stmt) -> None: ...   # look up type(stmt) in the registry, then recurse
 ```
 
 `@register_verify_stmt(Copy)` writes a handler into
@@ -150,13 +143,14 @@ through any registry — their semantic rules are owned by
 All four instances share one registry implementation. It is a
 class-keyed dict with a duplicate-registration guard.
 
-```text
-AnalysisRegistry[Key](name: str):  register(cls, fn) -> None;  lookup(cls) -> Callable | None;  has(cls) -> bool
+```python
+class AnalysisRegistry(Generic[Key]):          # Key = type[Op] or type[Stmt]
+    def __init__(self, name: str): ...
+    def register(self, cls: Key, fn: Callable) -> None: ...   # raises on duplicate
+    def lookup(self, cls: Key) -> Callable | None: ...        # None on miss
+    def has(self, cls: Key) -> bool: ...
 ```
 
-- kind: Python class
-- fields:
-  - name: the registry name (used in duplicate-registration errors)
 - constraints:
   - A registry MUST raise on double registration of the same class;
     subclasses do not inherit a parent's handler. Each concrete
@@ -168,112 +162,53 @@ AnalysisRegistry[Key](name: str):  register(cls, fn) -> None;  lookup(cls) -> Ca
     custom verify rule); `TypeInferContext` raises (every Op call
     MUST have a typeinfer rule).
 
-```python
-from typing import Callable, Generic, TypeVar
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.tir import Stmt
-
-Key = TypeVar("Key")            # type[Op] or type[Stmt]
-
-class AnalysisRegistry(Generic[Key]):
-    """Class → handler dict. Double registration raises;
-    lookup miss returns None."""
-
-    def __init__(self, name: str):
-        self.name = name
-        self._map: dict[Key, Callable] = {}
-
-    def register(self, cls: Key, fn: Callable) -> None:
-        if cls in self._map:
-            raise RuntimeError(f"{self.name}: {cls.__name__} already registered")
-        self._map[cls] = fn
-
-    def lookup(self, cls: Key) -> Callable | None:
-        return self._map.get(cls)
-
-    def has(self, cls: Key) -> bool:
-        return cls in self._map
-```
-
 ## 4. Instance 1 — `typeinfer`
 
 Context:
 
 ```python
-from dataclasses import dataclass, field
-from tilefoundry.ir.core import Module, Expr, Call, Var, Constant, Tuple
-from tilefoundry.ir.types import TensorType, TupleType
-
 @dataclass
 class TypeInferContext:
-    module: Module
-    cache: dict[Expr, TensorType | TupleType] = field(default_factory=dict)
-
-    def type_of(self, expr: Expr) -> TensorType | TupleType:
-        """Lazy compute + cache; supports recursive child queries."""
-        if expr not in self.cache:
-            self.cache[expr] = self._compute(expr)
-        return self.cache[expr]
-
-    def _compute(self, expr: Expr) -> TensorType | TupleType:
-        if isinstance(expr, Constant):
-            return _constant_type(expr.value)
-        if isinstance(expr, Var):
-            return expr.type
-        if isinstance(expr, Call):
-            fn = typeinfer_registry.lookup(type(expr.target))
-            if fn is None:
-                self.error(expr, f"no typeinfer registered for {type(expr.target).__name__}")
-            return fn(expr, self)
-        if isinstance(expr, Tuple):
-            return TupleType(fields=tuple(self.type_of(f) for f in expr.fields))
-        raise AssertionError(f"unreachable Expr subclass {type(expr).__name__}")
-
-    def error(self, node, msg: str): ...   # see §7
+    module: Module                              # the Module being type-checked
+    cache: dict[Expr, TensorType | TupleType]   # memoized Expr → TensorType | TupleType
+    def type_of(self, expr: Expr) -> TensorType | TupleType: ...   # lazy-compute + cache a node's type; supports recursive child queries
+    def error(self, node, msg: str): ...        # raise a constraint failure — see §7
 ```
+
+- constraints:
+  - a `Call`'s type comes from `typeinfer_registry.lookup(type(target))`; an
+    unregistered Op call routes through `ctx.error`.
 
 Registry + decorator:
 
 ```python
-typeinfer_registry: AnalysisRegistry[type[Op]] = AnalysisRegistry("typeinfer")
-
-def register_typeinfer(op_cls: type[Op]):
-    def decorator(fn):
-        typeinfer_registry.register(op_cls, fn)
-        return fn
-    return decorator
+typeinfer_registry: AnalysisRegistry[type[Op]]   # module-level registry keyed by type[Op]
+def register_typeinfer(op_cls: type[Op]): ...     # decorator: register a typeinfer handler for one Op class
 ```
+
+- constraints:
+  - handler signature is `(call: Call, ctx: TypeInferContext) -> TensorType | TupleType`.
 
 Handler signature: `(call: Call, ctx: TypeInferContext) -> TensorType | TupleType`.
 
 ```python
-# src/tilefoundry/ir/hir/math/binary.py
+# a typeinfer handler pins the (call, ctx) -> type shape:
 @register_typeinfer(Binary)
-def _(call: Call, ctx: TypeInferContext) -> TensorType:
-    lhs = ctx.type_of(call.args[0])
-    rhs = ctx.type_of(call.args[1])
-    if lhs.dtype != rhs.dtype:
-        ctx.error(call, "dtype mismatch")
-    return TensorType(
-        shape=_broadcast(lhs.shape, rhs.shape),
-        dtype=lhs.dtype,
-        layout=_merge_layout(lhs.layout, rhs.layout),
-        storage=_merge_storage(lhs.storage, rhs.storage),
-    )
+def _(call: Call, ctx: TypeInferContext) -> TensorType: ...
 ```
 
 Visitor:
 
 ```python
-from tilefoundry.ir.visitor import ExprVisitor
-
 class TypeInferVisitor(ExprVisitor[TensorType | TupleType]):
-    """Walks an HIR Function body, delegates to ctx.type_of for each Expr,
-    fills Expr.type along the way."""
-    def __init__(self, ctx: TypeInferContext): self.ctx = ctx
-    def visit_Call(self, call: Call): return self.ctx.type_of(call)
-    def visit_Var(self, var: Var):    return var.type
+    def __init__(self, ctx: TypeInferContext): ...   # ctx carries the cache and helpers
+    def visit_Call(self, call: Call): ...            # delegate to ctx.type_of
+    def visit_Var(self, var: Var): ...               # return the Var's type
 ```
+
+- constraints:
+  - walks an HIR `Function` body, delegates each `Expr` to `ctx.type_of`, and
+    fills `Expr.type` along the way.
 
 Lifecycle: parser builds a `TypeInferContext` and runs eager
 typeinfer at parse time (see [parser](./parser.md)). A `Module`
@@ -288,14 +223,13 @@ expression structure and needs to recompute types, it calls
 A second registry exposes each op's access relation as a **forward**
 service that typeinfer consumes. Its result carrier is:
 
-```text
-AccessRelationResult(domain: isl.set, maps: tuple[isl.map, ...])
+```python
+@dataclass
+class AccessRelationResult:
+    domain: isl.set             # the op's bounded iteration domain as an isl.set
+    maps: tuple[isl.map, ...]   # one access isl.map per boundary value, in boundary order (inputs then outputs)
 ```
 
-- kind: Python class
-- fields:
-  - domain: the op's bounded iteration domain as an `isl.set`
-  - maps: one access `isl.map` per boundary value, in boundary order (inputs then outputs)
 - constraints:
   - the carrier holds **no** tensor shape; the output shape is typeinfer-side
     data (see [analysis §1.1](./analysis.md#11-relation-derived-type-behavior)).
@@ -318,13 +252,8 @@ typeinfer-side data, not part of the relation (see
 Registry + decorator:
 
 ```python
-type_relation_registry: AnalysisRegistry[type[Op]] = AnalysisRegistry("type_relation")
-
-def register_type_relation(op_cls: type[Op]):
-    def decorator(fn):
-        type_relation_registry.register(op_cls, fn)
-        return fn
-    return decorator
+type_relation_registry: AnalysisRegistry[type[Op]]     # forward relation registry keyed by type[Op]
+def register_type_relation(op_cls: type[Op]): ...       # decorator: register a type_relation handler for one Op class
 ```
 
 Handler signature:
@@ -342,22 +271,23 @@ Context (extends `TypeInferContext` to share the type-of cache):
 
 ```python
 @dataclass
-class VerifyContext(TypeInferContext):
-    """Verify shares typeinfer's cache and adds a mesh-scope stack."""
-    mesh_stack: list = field(default_factory=list)
+class VerifyContext(TypeInferContext):   # inherits module / cache / type_of
+    mesh_stack: list                     # active mesh-scope stack maintained during the walk
 ```
+
+- constraints:
+  - shares typeinfer's type-of cache; adds a mesh-scope stack.
 
 Registry + decorator:
 
 ```python
-verify_stmt_registry: AnalysisRegistry[type] = AnalysisRegistry("verify_stmt")
-
-def register_verify_stmt(cls: type):
-    def decorator(fn):
-        verify_stmt_registry.register(cls, fn)
-        return fn
-    return decorator
+verify_stmt_registry: AnalysisRegistry[type]   # module-level registry keyed by Stmt/Op class
+def register_verify_stmt(cls: type): ...        # decorator: register a verify handler keyed on the Stmt/Op class
 ```
+
+- constraints:
+  - handler signature is `(node, ctx: VerifyContext) -> None`; failure routes
+    through `ctx.error(node, msg)`, which raises `VerifyError`.
 
 Handler signature: `(node, ctx: VerifyContext) -> None`. Failure
 routes through `ctx.error(node, msg)` which raises `VerifyError`.
@@ -377,15 +307,9 @@ for the matching visitor entry-form contract and
 [tir §1.4](./tir.md#14-evaluate) for the wrapper definition.
 
 ```python
-# src/tilefoundry/ir/tir/memory/copy.py
+# a verify handler keys on the Op class and returns None:
 @register_verify_stmt(Copy)
-def _(call: Call, ctx: VerifyContext) -> None:
-    src = ctx.type_of(call.args[0])
-    dst = ctx.type_of(call.args[1])
-    if src.shape != dst.shape:
-        ctx.error(call, "shape mismatch in Copy")
-    if src.dtype != dst.dtype:
-        ctx.error(call, "dtype mismatch in Copy")
+def _(call: Call, ctx: VerifyContext) -> None: ...
 ```
 
 Per-stmt rules (shape / dtype / layout constraints) belong in
@@ -394,32 +318,16 @@ Per-stmt rules (shape / dtype / layout constraints) belong in
 Visitor:
 
 ```python
-from tilefoundry.ir.visitor import StmtVisitor
-
 class VerifyVisitor(StmtVisitor[None]):
-    """Recursively walks PrimFunction.body; per Stmt subclass tries the registry.
-    The registry is injected via __init__, not baked into StmtVisitor (§1.1)."""
-
-    def __init__(self, ctx: VerifyContext, registry: AnalysisRegistry = verify_stmt_registry):
-        self.ctx = ctx
-        self.registry = registry
-
-    def generic_visit(self, stmt: Stmt) -> None:
-        fn = self.registry.lookup(type(stmt))
-        if fn is not None:
-            fn(stmt, self.ctx)
-        # Unregistered Stmts (control flow / LetStmt / Sequential / …) just
-        # recurse via the base class. Adding a custom verify rule for one of
-        # them is a register_verify_stmt call away.
-        super().generic_visit(stmt)
-
-    def visit_MeshScope(self, stmt):
-        self.ctx.mesh_stack.append(stmt.mesh)
-        try:
-            super().generic_visit(stmt)
-        finally:
-            self.ctx.mesh_stack.pop()
+    def __init__(self, ctx: VerifyContext, registry: AnalysisRegistry = verify_stmt_registry): ...   # ctx + injected verify registry
+    def generic_visit(self, stmt: Stmt) -> None: ...   # try the registry, fall back to base recursion on a miss
+    def visit_MeshScope(self, stmt): ...               # push/pop the mesh-scope stack around recursion
 ```
+
+- constraints:
+  - recurses `PrimFunction.body`; per Stmt subclass tries the registry, falling
+    back to `generic_visit` on a miss. The registry is injected via `__init__`,
+    not baked into `StmtVisitor` (see [§1.1](#11-registry-is-not-a-property-of-stmtvisitor--exprvisitor)).
 
 **Unregistered semantics.** A Stmt subclass without
 `register_verify_stmt` does not error — `VerifyVisitor` simply
@@ -435,14 +343,26 @@ Context (skeleton; per-target fields live in [target](./target.md)):
 ```python
 @dataclass
 class CodegenContext:
-    module: Module
+    module: Module              # the Module being emitted
     output: list[str]           # accumulated code fragments
     symbol_table: dict          # Var → emitted identifier
-    indent: int = 0
+    indent: int = 0             # current indent level
     # target-specific fields owned by target.md
 ```
 
+- constraints:
+  - skeleton only; per-target fields and helpers are owned by [target](./target.md).
+
 Registry per target:
+
+```python
+codegen_<target>_registry: AnalysisRegistry[type]        # one registry per target
+def register_codegen_<target>(cls: type[Op] | type[Stmt]): ...   # decorator: register a per-target handler
+```
+
+- constraints:
+  - each target has its own registry; keys may be `type[Op]` (TIR-owned Expr Op
+    handlers) or `type[Stmt]`.
 
 ```python
 codegen_cuda_registry: AnalysisRegistry[type] = AnalysisRegistry("codegen_cuda")
@@ -469,45 +389,26 @@ Handler signatures:
   one or more lines into `ctx.output`.
 
 ```python
-# src/tilefoundry/codegen/cuda/tir/scalar/relu.py
+# Op-branch handler returns a code fragment; Stmt-branch handler emits lines:
 @register_codegen_cuda(TirScalarReLU)
-def _(call: Call, ctx: CodegenContext) -> str:
-    x = ctx.emit_expr(call.args[0])
-    return f"tilefoundry::ReLUOp{{}}({x})"
-
-# src/tilefoundry/codegen/cuda/tir/memory/copy.py
+def _(call: Call, ctx: CodegenContext) -> str: ...
 @register_codegen_cuda(Copy)
-def _(stmt: Copy, ctx: CodegenContext) -> None:
-    src = ctx.emit_expr(stmt.source)
-    dst = ctx.emit_expr(stmt.destination)
-    ctx.emit_line(f"cute::copy({src}, {dst});")
+def _(stmt: Copy, ctx: CodegenContext) -> None: ...
 ```
 
 Visitor:
 
 ```python
 class CodegenVisitor:
-    """Combines the StmtVisitor + ExprVisitor sides; routes per node class
-    through the per-target registry."""
-
-    def __init__(self, ctx: CodegenContext, target: str):
-        self.ctx = ctx
-        self.registry = _codegen_registry_for(target)
-
-    def emit_stmt(self, stmt: Stmt) -> None:
-        fn = self.registry.lookup(type(stmt))
-        if fn is not None:
-            fn(stmt, self.ctx); return
-        self._emit_default_stmt(stmt)   # control flow, default emit owned by target.md
-
-    def emit_expr(self, expr: Expr) -> str:
-        if isinstance(expr, Call):
-            fn = self.registry.lookup(type(expr.target))
-            if fn is None:
-                raise RuntimeError(f"no codegen for Op {type(expr.target).__name__} on target")
-            return fn(expr, self.ctx)
-        return self._emit_default_expr(expr)
+    def __init__(self, ctx: CodegenContext, target: str): ...   # target selects the per-target registry
+    def emit_stmt(self, stmt: Stmt) -> None: ...   # Stmt-side entry; unregistered Stmt falls back to target default emit
+    def emit_expr(self, expr: Expr) -> str: ...    # Op-side entry; unregistered Op raises
 ```
+
+- constraints:
+  - combines the `StmtVisitor` + `ExprVisitor` sides; routes per node class through
+    the per-target registry; an unregistered Op raises, an unregistered Stmt falls
+    back to the target-owned default emit.
 
 User extension path — adding a new Stmt `MyIntrinsic`:
 
@@ -529,23 +430,21 @@ handlers**.
 ```python
 @dataclass
 class Cost:
-    flops: int
-    bytes: int
+    flops: int     # the cost carrier's flop count
+    bytes: int     # the cost carrier's byte count
 
 @dataclass
-class CostContext(TypeInferContext): ...
+class CostContext(TypeInferContext): ...           # TypeInferContext subclass reserved for cost state
 
-costmodel_registry: AnalysisRegistry[type[Op]] = AnalysisRegistry("costmodel")
+costmodel_registry: AnalysisRegistry[type[Op]]     # the cost registry (MVP registers no handlers)
+def register_costmodel(op_cls: type[Op]): ...       # decorator: register a cost handler for one Op class
 
-def register_costmodel(op_cls: type[Op]):
-    def decorator(fn):
-        costmodel_registry.register(op_cls, fn)
-        return fn
-    return decorator
-
-class CostVisitor(ExprVisitor[Cost]):
-    ...
+class CostVisitor(ExprVisitor[Cost]): ...          # the cost walker
 ```
+
+- constraints:
+  - placeholder: the interface signature is reserved for future extension; MVP
+    registers no handlers and cost-based decision rules are out of scope here.
 
 Only the interface signature is reserved for future extension.
 Cost-based decision rules are not in scope here.
@@ -554,17 +453,13 @@ Cost-based decision rules are not in scope here.
 
 ### 8.1 `ctx.error`
 
-`TypeInferContext` and every Context that inherits it provides a
-single error helper:
-
 ```python
-def error(self, node: Expr | Stmt, msg: str):
-    if isinstance(node, Call):
-        name = node.target.__class__.__name__
-    else:
-        name = node.__class__.__name__
-    raise VerifyError(f"{name}: {msg}\n  at {getattr(node, 'source', '<unknown>')}")
+def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...   # node: the offending Expr/Stmt (class name used in the message); msg: the constraint-failure message; raises VerifyError with a stable format
 ```
+
+- constraints:
+  - provided by `TypeInferContext` and every Context that inherits it; raises
+    `VerifyError` with a stable format.
 
 Handlers MUST surface constraint failures via `ctx.error(node, msg)`;
 hand-rolled `raise` is not the convention. This keeps the error
@@ -582,20 +477,7 @@ constrained by this spec.
 `@register_*` decorators are import-time side effects.
 `ir/hir/__init__.py`, `ir/tir/__init__.py`, and
 `codegen/<target>/__init__.py` perform a recursive walk so every
-submodule is imported and every `@register_*` runs:
-
-```python
-# src/tilefoundry/ir/hir/__init__.py
-import pkgutil, importlib
-
-def _auto_import(pkg_name: str):
-    pkg = importlib.import_module(pkg_name)
-    for _, modname, _ in pkgutil.walk_packages(pkg.__path__, pkg_name + "."):
-        importlib.import_module(modname)
-
-_auto_import("tilefoundry.ir.hir")              # fires HIR @register_typeinfer / @register_op
-_auto_import("tilefoundry.codegen.cuda.tir")    # fires CUDA @register_codegen_cuda
-```
+submodule is imported and every `@register_*` runs.
 
 `import tilefoundry` triggers the walk once; every registry is fully
 populated. Re-imports are idempotent (Python caches the module;
@@ -618,15 +500,8 @@ class AliasContext(TypeInferContext):
 ### Step 2 — declare a registry + decorator
 
 ```python
-from tilefoundry.visitor_registry import AnalysisRegistry
-
-alias_registry: AnalysisRegistry[type[Op]] = AnalysisRegistry("alias")
-
-def register_alias(op_cls: type[Op]):
-    def deco(fn):
-        alias_registry.register(op_cls, fn)
-        return fn
-    return deco
+alias_registry: AnalysisRegistry[type[Op]]   # the new analysis's registry
+def register_alias(op_cls: type[Op]): ...     # decorator: register a handler for one Op class
 ```
 
 Pick `type[Op]` for an analysis that walks `Call`s, `type[Stmt]` for
@@ -636,28 +511,17 @@ needed.
 ### Step 3 — derive a Visitor that holds the registry explicitly
 
 ```python
-from tilefoundry.ir.visitor import ExprVisitor
-
 class AliasVisitor(ExprVisitor[None]):
-    def __init__(self, ctx: AliasContext, registry: AnalysisRegistry = alias_registry):
-        self.ctx = ctx
-        self.registry = registry        # explicit binding
-
-    def visit_Call(self, call: Call) -> None:
-        fn = self.registry.lookup(type(call.target))
-        if fn is not None:
-            fn(call, self.ctx)
-        super().generic_visit(call)
+    def __init__(self, ctx: AliasContext, registry: AnalysisRegistry = alias_registry): ...   # explicit binding
+    def visit_Call(self, call: Call) -> None: ...   # look up type(call.target), invoke, then recurse
 ```
 
 ### Step 4 — register handlers in the Op files
 
 ```python
-# src/tilefoundry/ir/hir/tensor/reshape.py
+# an alias handler keys on the Op class and returns None:
 @register_alias(Reshape)
-def _(call: Call, ctx: AliasContext) -> None:
-    src = call.args[0]
-    ctx.alias_sets.setdefault(src, {src}).add(call)
+def _(call: Call, ctx: AliasContext) -> None: ...
 ```
 
 These four steps are what every existing instance

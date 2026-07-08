@@ -24,10 +24,12 @@ the work, structural Stmts carry control flow.
 ### 1.1 `Stmt`
 
 ```python
-@dataclass(frozen=True)
 class Stmt:
-    loc: str | None = None
+    loc: str | None = None    # optional debug location; not load-bearing for semantics
 ```
+
+- constraints:
+  - the abstract base of every TIR Stmt subclass; HIR has no `Stmt`.
 
 `Stmt` is the abstract base of every TIR Stmt subclass. HIR has no
 `Stmt`. `loc` is a debug surface; it is not load-bearing for
@@ -50,45 +52,41 @@ flowchart TB
 ### 1.2 Structural Stmts (`tir.stmts`)
 
 ```python
-@dataclass(frozen=True)
 class Sequential(Stmt):
-    body: tuple[Stmt, ...]            # __iter__ / __len__ / __getitem__ provided
+    body: tuple[Stmt, ...]            # a Stmt sequence (__iter__ / __len__ / __getitem__ provided)
 
-@dataclass(frozen=True)
 class LetStmt(Stmt):
-    var: Var
+    var: Var                          # binds var to value; let chains nest body
     value: Expr
-    body: Sequential                  # let chains nest body
+    body: Sequential
 
-@dataclass(frozen=True)
 class For(Stmt):
-    induction_var: Var
+    induction_var: Var                # counted loop
     start: Expr
     stop: Expr
     step: Expr
     body: Sequential
 
-@dataclass(frozen=True)
-class While(Stmt):
+class While(Stmt):                    # control flow
     cond: Expr
     body: Sequential
 
-@dataclass(frozen=True)
-class If(Stmt):
+class If(Stmt):                       # control flow
     cond: Expr
     then_body: Sequential
     else_body: Sequential
 
-@dataclass(frozen=True)
 class MeshScope(Stmt):
-    mesh: Mesh
+    mesh: Mesh                        # scopes a mesh binding over body
     binding: Var
     body: Sequential
 
-@dataclass(frozen=True)
 class Return(Stmt):
-    pass                              # @prim_func has no value return
+    ...                               # @prim_func has no value return
 ```
+
+- constraints:
+  - the structural (control-flow / binding) Stmt family; bodies are `Sequential`.
 
 - `MeshScope.mesh` carries the `Mesh` object; the `binding` `Var`
   scopes the mesh inside `body`.
@@ -96,13 +94,16 @@ class Return(Stmt):
 ### 1.3 `PrimFunction`
 
 ```python
-@dataclass(frozen=True)
 class PrimFunction(Stmt):
-    name: str
-    params: tuple[Var, ...]
-    body: Sequential
+    name: str                         # the function name
+    params: tuple[Var, ...]           # parameter Vars (the trailing output_count are outputs)
+    body: Sequential                  # the function body
     output_count: int = 1             # number of trailing output params
 ```
+
+- constraints:
+  - itself a `Stmt`, not a separate top-level node; returns no value.
+    `verify_prim_function` enforces the rules below.
 
 `PrimFunction` is itself a `Stmt`, not a separate top-level node;
 it sits inside the TIR Stmt tree along with everything else.
@@ -133,11 +134,14 @@ it sits inside the TIR Stmt tree along with everything else.
 ### 1.4 `Evaluate`
 
 ```python
-@dataclass(frozen=True)
 class Evaluate(Stmt):
-    callable: Op | SymbolRef
-    args: tuple[Expr, ...]
+    callable: Op | SymbolRef    # an effect-form Op or a SymbolRef callee
+    args: tuple[Expr, ...]      # the callable's operands in ParamDef / parameter order
 ```
+
+- constraints:
+  - TIR's single Stmt-position wrapper for a no-result invocation; verify and
+    lowering dispatch on `type(callable)`.
 
 `Evaluate` is TIR's single Stmt-position wrapper for a callable
 invocation that has no result value. The `callable` is one of:
@@ -179,10 +183,13 @@ authored `T.sync(m)`, and appears in Stmt position wrapped by `Evaluate`
 `T.sync(m)` / `T.sync(m[slice])` — there is no `m.sync()` receiver form.
 
 ```python
-@register_op(dialect="T", category="sync")
 class Sync(Op):
-    mesh = ParamDef(kind="attribute", annotation=Mesh)
+    mesh = attribute(Mesh)    # effect-form op `tir.sync.Sync`, authored `T.sync(m)`; the (possibly sliced) mesh the barrier synchronizes
 ```
+
+- constraints:
+  - a mesh-scoped barrier; in Stmt position it is wrapped by `Evaluate`. The
+    participant set, barrier mapping, and named-barrier id rules are below.
 
 #### `mesh` — the participating threads
 
@@ -272,14 +279,17 @@ It is the lowered form of an HIR dispatch prototype
 to a dispatch-prototype callee.
 
 ```python
-@dataclass(frozen=True)
 class DispatchCall(Stmt):
     callee_name: str                                  # unmangled dispatcher name (debug / printer)
-    subjects: tuple[Expr, ...]                        # one per dispatch axis
-    case_patterns: tuple[tuple[Pattern, ...], ...]    # parallel to case_calls; inner length == len(subjects)
-    case_calls: tuple[Evaluate, ...]                  # parallel to case_patterns
-    fallback: Sequential                              # taken when no case matches
+    subjects: tuple[Expr, ...]                        # one Expr per dispatch axis
+    case_patterns: tuple[tuple[Pattern, ...], ...]    # parallel case table: patterns
+    case_calls: tuple[Evaluate, ...]                  # parallel case table: Evaluate(SymbolRef, args)
+    fallback: Sequential                              # the Sequential taken when no case matches
 ```
+
+- constraints:
+  - a control Stmt (not an `Evaluate` callable) implementing first-match dispatch;
+    source order is part of the IR contract. Verifier rules below.
 
 `DispatchCall` is a control Stmt, not an `Evaluate` callable
 ([§1.4](#14-evaluate)); each `case_calls[i]` is an
@@ -311,10 +321,12 @@ matched key. A single dispatch axis makes this ordering trivial.
 ### 1.7 `Abort`
 
 ```python
-@dataclass(frozen=True)
 class Abort(Stmt):
-    message: str = ""
+    message: str = ""    # a debug surface; carries no semantics
 ```
+
+- constraints:
+  - a terminating Stmt on believed-unreachable paths (notably `DispatchCall.fallback`).
 
 - `Abort` is terminating. It exists in code paths the compiler
   believes are unreachable (notably `DispatchCall.fallback`).
@@ -327,11 +339,13 @@ class Abort(Stmt):
 
 ```python
 @intrinsic
-def some_intrinsic(a: Expr, b: Expr) -> None:
-    """verify body — runs as register_verify_stmt."""
-    if a.type.shape != b.type.shape:
-        raise VerifyError(...)
+def <name>(<param>: Expr, ...) -> None: ...    # decorated function's signature defines the synthesized Stmt subclass; its body becomes the verifier
 ```
+
+- constraints:
+  - synthesises a Stmt subclass, registers the body as its verifier, and wires
+    parser dispatch under the snake-case name; parameters are annotated `Expr` and
+    the return annotation is `None`.
 
 `tilefoundry.ir.tir.intrinsic.intrinsic` synthesises a Stmt subclass
 from the decorated function's signature, registers the function
@@ -344,12 +358,15 @@ under the function's snake-case name. Parameters MUST be annotated
 ### 2.1 `SymbolRef`
 
 ```python
-@dataclass(frozen=True)
 class SymbolRef(Expr):
-    name: str
-    nested: tuple[str, ...] = ()
-    # type: CallableType — the resolved callee's IR-level CallableType
+    name: str                       # canonical name of the callee PrimFunction (may be a mangled specialization name)
+    nested: tuple[str, ...] = ()    # empty — the Module holds only top-level functions
+    # type: CallableType — the resolved callee's CallableType, set at construction
 ```
+
+- constraints:
+  - a leaf `Expr` naming a callee as an `Evaluate` / `Launch` target; resolution
+    is module-level and unique. Per-field rules below.
 
 `SymbolRef` is a leaf `Expr` naming a callee `PrimFunction` as a call
 target: the `callable` of an `Evaluate(SymbolRef, args)`
@@ -391,11 +408,14 @@ carries its `type` directly.
 ### 2.2 `ShapeOf`
 
 ```python
-@dataclass(frozen=True)
 class ShapeOf(Expr):
-    param: Var
-    axis: int
+    param: Var    # a parameter Var of the enclosing PrimFunction
+    axis: int     # a valid axis index of param.type
 ```
+
+- constraints:
+  - `type` is a rank-0 `i32` `TensorType` (scalar); it is the runtime-extent ABI
+    for a dynamic tensor dimension. Per-field and ABI rules below.
 
 - `ShapeOf.type` is rank-0 `TensorType` of dtype `i32` (a scalar).
 - `param` MUST resolve to a parameter `Var` of the enclosing
@@ -439,49 +459,79 @@ below; code carries only a one-line purpose docstring
 #### Memory Ops (`tir.memory.*`)
 
 ##### AllocTensor
-Allocate a tensor (value form; result type on the `tensor_type` attribute).
+```python
+AllocTensor(tensor_type) -> Tensor          # value form; tensor_type: attribute carrying the allocated tensor's result type
+```
+- constraints:
+  - allocate a tensor; a value Op anchored by `LetStmt.value`.
 
 ##### MemorySpan
-Re-interpret a memory region as a typed tensor (value form).
+```python
+MemorySpan(region, tensor_type) -> Tensor    # value form; region: the memory region being re-interpreted; tensor_type: the typed-tensor view placed over it
+```
+- constraints:
+  - re-interpret a memory region as a typed tensor; a value Op.
 
 ##### PtrOf
-Take the device address of a tensor for downstream view ops (value form).
+```python
+PtrOf(tensor) -> ptr                          # value form; tensor: the tensor whose device address is taken
+```
+- constraints:
+  - take the device address of a tensor for downstream view ops; a value Op.
 
 ##### TensorView
-Derive a sub-view of a tensor (value form).
+```python
+TensorView(tensor, ...) -> Tensor             # value form; tensor: the base tensor; view spec: the sub-view descriptor (offsets / layout)
+```
+- constraints:
+  - derive a sub-view of a tensor; a value Op.
 
 ##### Copy
-Byte-equivalent copy between two tensors (effect form).
+```python
+Copy(src, dst)                                # effect form; src / dst: source and destination tensors
+```
+- constraints:
+  - byte-equivalent copy between two tensors.
 
 ##### Fill
-Broadcast a scalar value into a tensor (effect form).
+```python
+Fill(dst, value)                              # effect form; dst: destination tensor; value: scalar broadcast into dst
+```
+- constraints:
+  - broadcast a scalar value into a tensor.
 
 #### NN Ops (`tir.nn.*`)
 
 ##### Mma
-Matrix-multiply-accumulate `acc += lhs @ rhs` (effect form); per-target PTX
-lowering lives in [target](./target.md), the atom calling convention in
-[§2.3](#mma-atom-and-the-hand-written-calling-convention).
+```python
+Mma(acc, lhs, rhs, atom?)                     # effect form: acc += lhs @ rhs; acc / lhs / rhs: accumulator and operand fragments; atom: optional compile-time MmaAtom attribute, absent ⇒ bare-Mma per-target path
+```
+- constraints:
+  - matrix-multiply-accumulate `acc += lhs @ rhs`; per-target PTX lowering lives in
+    [target](./target.md), the atom calling convention in
+    [§2.3](#mma-atom-and-the-hand-written-calling-convention).
 
 ##### ReLU
-Pointwise `max(x, 0)` (effect form).
+```python
+ReLU(x, dst)                                  # effect form; x / dst: input and destination tensors
+```
+- constraints:
+  - pointwise `max(x, 0)`.
 
 ##### RMSNorm
-Fused RMS normalisation (effect form).
+```python
+RMSNorm(x, dst, ...)                          # effect form; x / dst: input and normalised-output tensors
+```
+- constraints:
+  - fused RMS normalisation.
 
 #### Tensor Ops (`tir.tensor.*`)
 
 ##### Reduce
 
-```text
-Reduce(src, dst, workspace?, axes, kind)
+```python
+Reduce(src, dst, workspace?, axes, kind)    # src / dst: effect-form operands; workspace: optional staging buffer sized by lowering; axes: reduced-axis tuple; kind: ReduceKind tag
 ```
-- kind: TIR op
-- fields:
-  - src / dst: effect-form operands
-  - workspace: optional staging buffer sized by lowering
-  - axes: reduced-axis tuple
-  - kind: `ReduceKind` tag
 - constraints:
   - `Reduce` carries no dispatch parameter; runtime selects the strategy.
   - `workspace` is present only when lowering sizes cross-warp staging.
@@ -497,26 +547,16 @@ per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
 TIR; lowering preserves the kind value without re-mapping.
 
 ##### Binary
-```text
-Binary(lhs, rhs, dst, kind)
+```python
+Binary(lhs, rhs, dst, kind)    # lhs / rhs: input operands; dst: destination operand; kind: BinaryKind tag
 ```
-- kind: TIR op
-- fields:
-  - lhs / rhs: input operands
-  - dst: destination operand
-  - kind: `BinaryKind` tag
 - constraints:
   - Lowers to the binary runtime family without per-kind TIR classes.
 
 ##### Unary
-```text
-Unary(src, dst, kind)
+```python
+Unary(src, dst, kind)    # src: input operand; dst: destination operand; kind: UnaryKind tag, including rsqrt
 ```
-- kind: TIR op
-- fields:
-  - src: input operand
-  - dst: destination operand
-  - kind: `UnaryKind` tag, including `rsqrt`
 - constraints:
   - Lowers to the unary runtime family without per-kind TIR classes.
 
@@ -525,6 +565,15 @@ Unary(src, dst, kind)
 Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
 the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
 the non-grid/block launch config through the Op attributes.
+
+```python
+Launch(cluster?, dynamic_smem?, stream?, attrs?)    # effect form; cluster / dynamic_smem / stream / attrs: attribute-carried launch configuration
+# Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y, grid_z, block_x, block_y, block_z, *forwarded_args))
+```
+
+- constraints:
+  - appears only in a CPU (host) entry body; grid/block extents are launch config,
+    not kernel parameters. Per-arg / per-attribute rules below.
 
 `Launch` appears only in a CPU (host) entry body, as `Evaluate(Launch(...),
 args)` with `args = (SymbolRef(callee), grid_x, grid_y, grid_z, block_x,
@@ -565,15 +614,18 @@ layout `ir/{dialect}/{target}/{category}`.
 A named, fully-specified MMA instruction (the CuTe `MMA_Op` analog).
 
 ```python
-@dataclass(frozen=True)
 class MmaOpSpec:
-    name: str
-    shape_mnk: tuple[int, int, int]
-    dtype_a: DType
-    dtype_b: DType
-    dtype_c: DType
-    operand_layout: str
+    name: str                         # uniquely identifies the instruction; the other fields mirror it
+    shape_mnk: tuple[int, int, int]   # the instruction's static (M, N, K)
+    dtype_a: DType                    # lhs operand element type
+    dtype_b: DType                    # rhs operand element type
+    dtype_c: DType                    # accumulator element type
+    operand_layout: str               # source operand order string (e.g. "TN")
 ```
+
+- constraints:
+  - a fully-specified MMA instruction descriptor carrying no fragment-layout
+    knowledge. Per-field rules below.
 
 ###### `name`
 
@@ -613,14 +665,17 @@ The realized atom for an `op` (the CuTe `MMA_Atom` analog), built by
 ([parser §2.6](./parser.md#26-platform-sub-namespaces)).
 
 ```python
-@dataclass(frozen=True)
 class MmaAtom:
-    op: MmaOpSpec
-    A: ShardLayout
-    B: ShardLayout
-    C: ShardLayout
-    required_scope: Mesh
+    op: MmaOpSpec         # the MmaOpSpec this atom realizes
+    A: ShardLayout        # lhs fragment ShardLayout contract
+    B: ShardLayout        # rhs fragment ShardLayout contract
+    C: ShardLayout        # accumulator fragment ShardLayout contract
+    required_scope: Mesh  # the thread-participation contract, carried as its own Mesh
 ```
+
+- constraints:
+  - the realized atom for an `op`; fragment layouts are returned as-is and not
+    rebound onto the caller's mesh. Per-field rules below.
 
 ###### `op`
 
@@ -704,12 +759,9 @@ producer issues copies, groups them, and a consumer waits on the group queue.
 
 ##### CopyAsync
 
-```text
-CopyAsync(src, dst)
+```python
+CopyAsync(src, dst)    # src / dst: async staging operands
 ```
-- kind: TIR op
-- fields:
-  - src / dst: async staging operands
 - constraints:
   - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
   - A later read of `dst` is ordered by `CpAsyncCommit` followed by
@@ -717,23 +769,17 @@ CopyAsync(src, dst)
 
 ##### CpAsyncCommit
 
-```text
-CpAsyncCommit()
+```python
+CpAsyncCommit()    # effect: closes the current in-flight async-copy group
 ```
-- kind: TIR op
-- fields:
-  - effect: closes the current in-flight async-copy group
 - constraints:
   - Later `CpAsyncWait` counts committed groups.
 
 ##### CpAsyncWait
 
-```text
-CpAsyncWait(n)
+```python
+CpAsyncWait(n)    # n: most-recent committed groups allowed to remain in flight
 ```
-- kind: TIR op
-- fields:
-  - n: most-recent committed groups allowed to remain in flight
 - constraints:
   - `n` is a non-negative compile-time count.
   - `n = 0` drains every outstanding committed group.

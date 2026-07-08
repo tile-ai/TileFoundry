@@ -56,8 +56,12 @@ The primitive building block, taken from pycute's `shape` / `stride`
 convention. It is not just a flat tuple — nested tuples are allowed:
 
 ```python
-IntTuple = int | tuple["IntTuple", ...]
+IntTuple = int | tuple[IntTuple, ...]    # entry: an `int`, a symbolic/dynamic dim (`ShapeDim`), `None` (launch-provided extent), or a nested `IntTuple`
 ```
+
+- constraints:
+  - admits both a unique flat `int`-tuple view and a unique nested-structure view;
+    the `shape` / `strides` of `Layout` and `ShardLayout` are `IntTuple`.
 
 Flatten-equivalence: every `IntTuple` admits both a unique flat
 `int`-tuple view and a unique nested-structure view. The `shape` and
@@ -78,11 +82,15 @@ and `T.sync` participation (tir.md §1.5) — require static `int` entries and
 the `Layout` hierarchy:
 
 ```python
-class LayoutBase: pass
-class Layout(LayoutBase): ...
-class ComposedLayout(LayoutBase): ...
-class ShardLayout(LayoutBase): ...
+class LayoutBase: ...                    # abstract base
+class Layout(LayoutBase): ...            # concrete `LayoutBase` member
+class ComposedLayout(LayoutBase): ...    # concrete `LayoutBase` member
+class ShardLayout(LayoutBase): ...       # concrete `LayoutBase` member
 ```
+
+- constraints:
+  - `TensorType.layout` accepts only objects in this hierarchy; the common contract
+    below applies to every legal layout object.
 
 Common contract — every legal layout object MUST satisfy:
 
@@ -104,11 +112,14 @@ An object that does not satisfy these conditions cannot enter
 Mirrors `pycute.layout.Layout`:
 
 ```python
-@dataclass(frozen=True)
 class Layout(LayoutBase):
-    shape: IntTuple        # entries: ShapeDim | None (§1)
-    stride: IntTuple | None = None  # entries: ShapeDim; whole tuple None = un-materialized
+    shape: IntTuple                 # layout-domain shape (entries `ShapeDim | None`)
+    stride: IntTuple | None = None  # step rule from domain to physical index; whole tuple `None` = un-materialized
 ```
+
+- constraints:
+  - the pure primitive layout; it has no `offset` field. Field meanings and
+    semantics below.
 
 Field meanings:
 
@@ -139,12 +150,15 @@ The primitive `Layout` has **no** `offset` field. `offset` belongs to
 Mirrors CuTeDSL `make_composed_layout(inner, offset, outer)`:
 
 ```python
-@dataclass(frozen=True)
 class ComposedLayout(LayoutBase):
-    inner: LayoutBase
-    offset: int
-    outer: LayoutBase
+    inner: LayoutBase   # applied last (output-side layout)
+    offset: int         # intermediate scalar offset (a property of the composition)
+    outer: LayoutBase   # applied first (input / domain-side layout)
 ```
+
+- constraints:
+  - `idx = inner(offset + outer(coord))`; inherits domain shape and axis numbering
+    from `outer`.
 
 Field meanings:
 
@@ -169,31 +183,24 @@ axis exposed by `outer`.
 ## 5. `Mesh`
 
 ```python
-@dataclass(frozen=True)
-class Topology:
+class Topology:                            # device-domain description
     name: str
     num_devices: int
 
-@dataclass(frozen=True)
-class Mesh:
+class Mesh:                                # the parallel device domain
     topology: Topology
-    layout: Layout | ComposedLayout
+    layout: Layout | ComposedLayout        # a plain `Layout` (un-sliced) or a `ComposedLayout` (a constant `m[...]` slice)
     names: tuple[str, ...] | None = None
-    # compile-time constant; Python value, does not enter the IR graph.
-    # ``layout`` is a plain ``Layout`` for an un-sliced mesh. ``Mesh[key]``
-    # (``__getitem__``) slices a constant sub-mesh used by ``T.sync``
-    # (tir.md §1.5): it replaces ``layout`` with a ``ComposedLayout`` recording
-    # the participating sub-box — the selected per-axis extents over the parent
-    # strides in ``outer`` and the slice origin ``Σ start_i · stride_i`` in
-    # ``offset`` (identity ``inner``). The slice never becomes an IR/SSA value;
-    # the enclosing full mesh supplies the parent shape when a slice is verified.
 
-@dataclass(frozen=True)
-class MeshAxis:
+class MeshAxis:                            # single-axis object via `mesh.x` / `mesh.axes[i]`
     mesh: Mesh
     index: int
     size: int
 ```
+
+- constraints:
+  - a compile-time constant that does not enter the IR graph; describes the device
+    domain, not a tensor layout object. A slice never becomes an IR/SSA value.
 
 Field meanings:
 
@@ -214,22 +221,20 @@ object.
 ## 6. `ShardAttr`
 
 ```python
-@dataclass(frozen=True)
-class Split:
+class Split:                          # binds the current mesh axis to the layout's `axis`-th cute domain axis
     axis: int
 
-@dataclass(frozen=True)
-class Broadcast:
-    pass
+class Broadcast: ...                  # the value is replicated across this mesh axis
 
-@dataclass(frozen=True)
-class Dynamic:
-    pass
+class Dynamic: ...                    # the distribution policy is not yet resolved
 
-@dataclass(frozen=True)
-class Partial:
-    reduction: str = "sum"    # "sum" / "max" / "min"
+class Partial:                        # an un-reduced partial value (`sum` / `max` / `min`)
+    reduction: str = "sum"
 ```
+
+- constraints:
+  - each entry of `ShardLayout.attrs` describes one mesh axis by its tuple
+    position; per-attr semantics and surface sugar below.
 
 Each entry of `ShardLayout.attrs` describes one **mesh axis** (by its
 position in the tuple); the attr says what that mesh axis does. `Split`
@@ -279,12 +284,15 @@ a new layout-algebra primitive, it binds an underlying layout's domain
 axes to mesh axes.
 
 ```python
-@dataclass(frozen=True)
 class ShardLayout(LayoutBase):
-    layout: LayoutBase            # Layout or ComposedLayout being bound
-    attrs: tuple[Split | Broadcast | Dynamic | Partial, ...]
-    mesh: Mesh
+    layout: LayoutBase                                        # the underlying `Layout` / `ComposedLayout` being bound
+    attrs: tuple[Split | Broadcast | Dynamic | Partial, ...]  # per-mesh-axis attributes, ordered by mesh axis
+    mesh: Mesh                                                # the device-domain `Mesh`
 ```
+
+- constraints:
+  - the distributed binding layer; binds an underlying layout's domain axes to mesh
+    axes without a new layout-algebra primitive. Sub-field contracts in §7.1–§7.5.
 
 The distribution-changing transformation (redistribute / sharding) is
 itself an IR op (`hir.sharding.Reshard`, see [hir](./hir.md) §2.5).

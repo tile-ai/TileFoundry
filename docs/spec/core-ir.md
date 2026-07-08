@@ -34,15 +34,17 @@ Exprs.
 ## 1. `Module`
 
 ```python
-@dataclass(frozen=True)
 class Module:
-    """The top-level compilation unit. Parser output; pass input/output."""
-    name: str
-    functions: tuple["hir.Function | tir.PrimFunction", ...]
-    entry: str                         # required: a name in `functions`
-    topologies: tuple[Topology, ...]   # module-level program topology namespace
-    metadata: dict[str, object]        # target / option metadata, never semantic mesh bindings
+    name: str                                               # the module name
+    functions: tuple[hir.Function | tir.PrimFunction, ...]  # the heterogeneous hir.Function | tir.PrimFunction container
+    entry: str                                              # name of the public entry function (a name present in functions)
+    topologies: tuple[Topology, ...]                        # module-level program topology namespace
+    metadata: dict[str, object]                             # target / option metadata, never semantic mesh bindings
 ```
+
+- constraints:
+  - the top-level compilation unit (parser output; pass input/output);
+    constructing a `Module` seals its functions.
 
 - `parse_module` (see [parser §1](./parser.md)) returns a `Module`.
 - `entry` is the public entry point — `tilefoundry.lower(...)` and the
@@ -92,11 +94,13 @@ entries — so name resolution is always single-valued.
 
 ```python
 class Expr:
-    """Every expression node. In HIR, an Expr is the SSA value; in TIR,
-    Stmts embed Exprs in their Expr-typed sub-fields."""
-    type: IRType                  # see [types §1](./types.md)
-    source: str | None            # optional: original source slice for debug / error location
+    type: IRType        # the node's IRType; always present
+    source: str | None  # optional original source slice for debug / error location
 ```
+
+- constraints:
+  - base of every expression node; concrete subclasses are dialect-owned, not
+    introduced per Op (value-producing Ops appear as `Call` nodes).
 
 `Expr` always carries a `type`. The runtime class of `Expr.type` is
 one of `TensorType` / `TupleType` / `UnitType`
@@ -113,6 +117,17 @@ and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
 ([tir](./tir.md)).
 
 ### 2.1 `Call`
+
+```python
+class Call(Expr):
+    target: Op              # the Op being called
+    args: tuple[Expr, ...]  # the input Exprs
+    # type: computed by typeinfer(target, args); one of TensorType / TupleType / UnitType
+```
+
+- constraints:
+  - a value-form `Call` is anchored by `LetStmt` in TIR; a Stmt-position effect
+    invocation is `Evaluate(op, args)`.
 
 ```python
 @dataclass(frozen=True)
@@ -137,24 +152,19 @@ Constraints:
 ### 2.2 `Var` / `Constant` / `Tuple`
 
 ```python
-@dataclass(frozen=True)
 class Var(Expr):
-    """A named value. HIR uses Var for function parameters; TIR uses Var
-    for LetStmt / For / MeshScope bindings."""
-    name: str
-    type: IRType                  # declaration-side type; the binding stmt does not override it
+    name: str     # a named value (HIR params, TIR bindings)
+    type: IRType  # declaration-side type
 
-@dataclass(frozen=True)
 class Constant(Expr):
-    """Literal constant. A scalar is a rank-0 TensorType."""
-    value: object       # int / float / tuple / ...
+    value: object  # a literal; a scalar is a rank-0 TensorType
 
-@dataclass(frozen=True)
 class Tuple(Expr):
-    """Value-level multi-output aggregate. type is TupleType
-    ([types §4](./types.md))."""
-    fields: tuple[Expr, ...]
+    fields: tuple[Expr, ...]  # value-level multi-output aggregate; type is TupleType
 ```
+
+- constraints:
+  - `Tuple` is an `Expr` in the IR graph, distinct from the `TupleType` it carries.
 
 `Tuple` is the value-level aggregate node; it pairs with `TupleType`
 ([types §4](./types.md)) but is not the same — `Tuple` is an `Expr`
@@ -167,6 +177,17 @@ in the IR graph, `TupleType` is the type carried by `Expr.type`.
 `target` field. The custom-op mechanism is declared here: parameters are
 `ParamDef` class attributes discovered through reflection, and a class is
 registered with `@register_op`.
+
+```python
+class Op:                                     # @register_op registers a class
+    @classmethod
+    def params(cls) -> list[ParamDef]: ...    # reflectively scans class-level ParamDef attributes and returns them ordered
+    def __init__(self, **attrs): ...          # instantiates with attribute values (a no-attribute Op is a singleton)
+```
+
+- constraints:
+  - a value class describing an op's signature/attributes, not an `Expr` subclass;
+    a `Call` carries an `Op` instance in `target`.
 
 ```python
 class Op:
@@ -185,15 +206,16 @@ class Op:
 ```
 
 ```python
-@dataclass(frozen=True)
 class ParamDef:
-    """Single Op parameter descriptor."""
-    kind: Literal["input", "attribute"]
-    annotation: type | None = None     # Python type (Expr / int / bool / tuple / ...)
-    pattern: Pattern | None = None     # input-kind only: pattern matched against arg.type
-    default: object = MISSING          # attribute-kind only: omitted-call default
-    optional: bool = False             # attribute-kind only: nullable
+    kind: Literal["input", "attribute"]  # "input" (flows into Call.args) or "attribute" (carried on the Op instance)
+    annotation: type | None              # the Python type of the parameter
+    pattern: Pattern | None              # input-kind only — the Pattern matched against arg.type
+    default: object                      # attribute-kind only — omitted-call default
+    optional: bool                       # attribute-kind only — nullability
 ```
+
+- constraints:
+  - a single Op parameter descriptor; the order of input-kind ParamDefs fixes `Call.args` position.
 
 Example:
 
@@ -226,6 +248,15 @@ own; instead, its `OpSchema.builder` callback constructs a *target*
 Op with some attributes pre-fixed. Aliases let several user-callable
 surface names share a single kinded IR class without exposing the
 `kind=...` attribute at the call site.
+
+```python
+@register_alias(dialect: str, category: str, name: str, params: list[ParamDef])  # surface-registry coordinates; params reuses the target Op's static ParamDef references
+def builder() -> Op: ...    # returns a target Op with attributes pre-fixed; takes attribute kwargs only
+```
+
+- constraints:
+  - alias schemas have no IR class (`OpSchema.op_class is None`) and prepend to the
+    schema bucket so they win first-match resolution.
 
 ```python
 @register_alias(dialect="tf", category="math", name="add",
@@ -272,12 +303,13 @@ it appears as `Evaluate(op, args)`
 and specialization dispatch.
 
 ```python
-@dataclass(frozen=True)
 class Pattern:
-    """Base predicate. Subclasses override match(subject) -> bool."""
-
-    def match(self, subject) -> bool: ...
+    def match(self, subject) -> bool: ...    # base predicate returning bool; subclasses override it
 ```
+
+- constraints:
+  - shared by parser dispatch (`ParamDef.pattern`) and specialization dispatch
+    (`Function.specializations` / `DispatchCall.case_patterns`).
 
 Two consumer surfaces:
 
@@ -296,12 +328,15 @@ Two consumer surfaces:
 ### 3.1 `DimVarRangePat`
 
 ```python
-@dataclass(frozen=True)
 class DimVarRangePat(Pattern):
-    dim_var: str
-    lo: int
-    hi: int
+    dim_var: str  # name of the DimVar the range applies to
+    lo: int       # the half-open interval [lo, hi) lower bound
+    hi: int       # the half-open interval [lo, hi) upper bound
 ```
+
+- constraints:
+  - the per-variant sub-range for a named `DimVar`; `match(v)` is `lo <= v < hi`
+    and ignores `dim_var`.
 
 - `dim_var` MUST be a non-empty `str` — the name of the `DimVar` the
   range applies to. The lowering resolves it to a runtime

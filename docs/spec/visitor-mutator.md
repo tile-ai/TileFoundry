@@ -70,38 +70,15 @@ does not depend on Python-version-specific dispatch behaviour.
 Read-only Expr-tree traversal. `T` is user-chosen (`None` for
 side-effect collection, `set[Var]` for free-var analysis, etc.).
 
-```text
-ExprVisitor[T]:  visit(expr: Expr) -> T;  generic_visit(expr: Expr) -> T
+```python
+class ExprVisitor(Generic[T]):                     # read-only Expr traversal; T is the user-chosen visit result type
+    def visit(self, expr: Expr) -> T: ...          # dispatch to visit_<Type> else generic_visit
+    def generic_visit(self, expr: Expr) -> T: ...  # recurse child Exprs; returns None by default
 ```
 
-- kind: Python class
-- fields: none — read-only Expr traversal; `T` is the user-chosen visit result type
 - constraints:
   - `generic_visit` recurses into all child Exprs and returns `None` by default;
     subclasses MAY override to aggregate.
-
-```python
-from typing import Generic, TypeVar
-from tilefoundry.ir.core import Expr, Call, Var, Constant, Tuple
-
-T = TypeVar("T")
-
-class ExprVisitor(Generic[T]):
-    """Read-only Expr traversal. Subclasses override visit_<ClassName>."""
-
-    def visit(self, expr: Expr) -> T:
-        method = getattr(self, f"visit_{type(expr).__name__}", None)
-        if method is not None:
-            return method(expr)
-        return self.generic_visit(expr)
-
-    def generic_visit(self, expr: Expr) -> T:
-        """Default: recurse into all child Exprs; return None.
-        Subclasses MAY override to aggregate."""
-        for child in _expr_children(expr):
-            self.visit(child)
-        return None  # type: ignore[return-value]
-```
 
 `_expr_children(expr)` enumerates child Exprs of any Expr node by
 fixed field order. The mapping is module-local and is the single
@@ -130,32 +107,15 @@ Recursive Expr rewrite returning the same node kind. Core invariant:
 **when no child changed, return the original node** (identity
 preservation).
 
-```text
-ExprMutator:  visit(expr: Expr) -> Expr;  generic_visit(expr: Expr) -> Expr
+```python
+class ExprMutator:                                    # identity-preserving Expr rewrite
+    def visit(self, expr: Expr) -> Expr: ...          # dispatch to visit_<Type> else generic_visit
+    def generic_visit(self, expr: Expr) -> Expr: ...  # recurse children; return original node when no child changed (identity preservation)
 ```
 
-- kind: Python class
-- fields: none — identity-preserving Expr rewrite
 - constraints:
   - When no child changed, `generic_visit` returns the original node (identity
     preservation).
-
-```python
-class ExprMutator:
-    """Identity-preserving Expr rewrite."""
-
-    def visit(self, expr: Expr) -> Expr:
-        method = getattr(self, f"visit_{type(expr).__name__}", None)
-        if method is not None:
-            return method(expr)
-        return self.generic_visit(expr)
-
-    def generic_visit(self, expr: Expr) -> Expr:
-        new_children = tuple(self.visit(c) for c in _expr_children(expr))
-        if all(nc is oc for nc, oc in zip(new_children, _expr_children(expr))):
-            return expr                     # identity preservation
-        return _rebuild_expr(expr, new_children)
-```
 
 `_rebuild_expr(expr, new_children)` constructs a new Expr of the
 same subclass while preserving non-child fields (`type`, `source`).
@@ -188,32 +148,20 @@ than `return call`, so child Exprs are still recursed.
 
 Same shape as the Expr family, but for the Stmt tree.
 
-```text
-StmtVisitor[T]:  visit(stmt: Stmt) -> T
-StmtMutator:     visit(stmt: Stmt) -> Stmt
+```python
+class StmtVisitor(Generic[T]):                     # read-only Stmt-tree traversal
+    def visit(self, stmt: Stmt) -> T: ...          # dispatch to visit_<Type> else generic_visit
+    def generic_visit(self, stmt: Stmt) -> T: ...  # recurse child Stmts
+
+class StmtMutator:                                    # identity-preserving Stmt rewrite
+    def visit(self, stmt: Stmt) -> Stmt: ...          # dispatch to visit_<Type> else generic_visit
+    def generic_visit(self, stmt: Stmt) -> Stmt: ...  # recurse child Stmts; invariant identical to ExprMutator
 ```
 
-- kind: Python class
-- fields: none — Stmt-tree traversal (`StmtVisitor`) / identity-preserving Stmt rewrite (`StmtMutator`)
 - constraints:
   - `StmtMutator`'s identity-preservation invariant is identical to `ExprMutator`.
   - `StmtVisitor` / `StmtMutator` do not descend into Expr fields embedded in
     Stmts; those are visited only through `StmtExprMutator` (§6).
-
-```python
-from tilefoundry.ir.tir import Stmt, Sequential, PrimFunction
-from tilefoundry.ir.tir.stmts import LetStmt, For, While, If, MeshScope, Return, Evaluate
-
-class StmtVisitor(Generic[T]):
-    def visit(self, stmt: Stmt) -> T: ...
-    def generic_visit(self, stmt: Stmt) -> T: ...
-    # visit_Sequential / visit_For / visit_If / visit_Evaluate / ...
-
-class StmtMutator:
-    def visit(self, stmt: Stmt) -> Stmt: ...
-    def generic_visit(self, stmt: Stmt) -> Stmt: ...
-    # identity-preservation invariant identical to ExprMutator
-```
 
 `_stmt_children(stmt)` enumerates child Stmts only (Expr fields
 come back via `StmtExprMutator`):
@@ -241,29 +189,15 @@ Composite: rewrite the Stmt tree **and** descend into the Expr
 fields embedded in Stmts. This is the most common combination
 (every lowering / simplification / structural rewrite needs it).
 
-```text
-StmtExprMutator(StmtMutator, ExprMutator):  visit_stmt(stmt: Stmt) -> Stmt;  visit_expr(expr: Expr) -> Expr
+```python
+class StmtExprMutator(StmtMutator, ExprMutator):      # rewrite Stmts and the Exprs embedded in their Expr-typed fields
+    def visit_stmt(self, stmt: Stmt) -> Stmt: ...     # rewrite the Stmt tree via StmtMutator
+    def visit_expr(self, expr: Expr) -> Expr: ...     # rewrite embedded value Exprs via ExprMutator
+    def generic_visit(self, stmt: Stmt) -> Stmt: ...  # StmtMutator recurse, then rewrite each Stmt's Expr fields
 ```
 
-- kind: Python class
-- fields: none — rewrites Stmts and the Exprs embedded in their Expr-typed fields
 - constraints:
   - The rewrite scope is **embedded value Exprs**, not binding `Var`s.
-
-```python
-class StmtExprMutator(StmtMutator, ExprMutator):
-    """Rewrite Stmts and the Exprs embedded in their Expr-typed fields."""
-
-    def visit_stmt(self, stmt: Stmt) -> Stmt:
-        return StmtMutator.visit(self, stmt)
-
-    def visit_expr(self, expr: Expr) -> Expr:
-        return ExprMutator.visit(self, expr)
-
-    def generic_visit(self, stmt: Stmt) -> Stmt:
-        new_stmt = StmtMutator.generic_visit(self, stmt)
-        return _rewrite_stmt_exprs(new_stmt, self.visit_expr)
-```
 
 `_rewrite_stmt_exprs(stmt, fn)` enumerates the Expr fields of each
 Stmt subclass, applies `fn` with identity preservation, and rebuilds

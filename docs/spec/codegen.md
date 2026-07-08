@@ -46,11 +46,13 @@ metadata the link step needs.
 
 ### 2.1 Emitter registry
 
-Each target registers an emitter, resolved by target name:
-
 ```python
-emit = get_emitter("cuda")    # tuple[PrimFunction, ...] -> LinkableModule
+def get_emitter(target: str) -> Emitter: ...    # resolve the emitter registered for a target
+# Emitter: Callable[[tuple[PrimFunction, ...]], LinkableModule]
 ```
+
+- constraints:
+  - each target registers one emitter, resolved by target name.
 
 An emitter MUST consume only TIR and MUST return a `LinkableModule` for its
 target. The emitter file layout mirrors the IR file layout
@@ -59,13 +61,13 @@ by [code-organization](./code-organization.md).
 
 ### 2.2 Per-Op handler registry
 
-Within a target, per-Op handlers are registered for the emitter:
-
 ```python
-@register_codegen_cuda(Copy)
-def _(call: Call, ctx: CodegenContext) -> None:
-    ctx.emit(f"tilefoundry::copy({ctx.expr(call.args[0])}, {ctx.expr(call.args[1])});")
+@register_codegen_<target>(Op)                              # decorator: register a per-Op handler on a target's emitter
+def handler(call: Call, ctx: CodegenContext) -> None: ...   # Call (wrapped Op inside Evaluate) + CodegenContext
 ```
+
+- constraints:
+  - dispatch (matching `Evaluate` and selecting the handler) is owned by visitor-registry.
 
 Dispatch is owned by [visitor-registry §6](./visitor-registry.md). A handler
 receives the `Call` (the wrapped Op inside `Evaluate`) plus a `CodegenContext`,
@@ -74,13 +76,17 @@ prohibited.
 
 ### 2.3 `CodegenContext`
 
-`CodegenContext` is the per-walk state object passed to handlers. It exposes the
-helpers a handler is allowed to use:
+```python
+class CodegenContext:
+    def emit(self, line: str) -> None: ...               # append a target source line
+    def expr(self, node: Expr) -> str: ...               # render an Expr as a target expression string
+    def dtype_to_cpp(self, dtype_name: str) -> str: ...  # backend dtype mapping
+    def make_var_name(self, ...) -> str: ...             # allocate fresh target-side identifiers
+```
 
-- `emit(line: str)` — append a target source line.
-- `expr(node: Expr) -> str` — render an `Expr` as a target expression string.
-- `dtype_to_cpp(dtype_name: str) -> str` — backend dtype mapping.
-- `make_var_name(...)` — allocate fresh target-side identifiers.
+- constraints:
+  - the per-walk state object passed to handlers; the single source of truth for
+    target-side type strings, so handlers do not read the IR for them directly.
 
 A handler MUST NOT reach into the IR for type strings on its own; the context is
 the single source of truth. Other helpers MAY be added per target.
@@ -112,14 +118,12 @@ emission that produces these calls is owned by
 
 One lowered function's pre-link source.
 
-```text
-LinkableFunction(name: str, source: str)
+```python
+class LinkableFunction:
+    name: str      # the function / kernel symbol
+    source: str    # that function's emitted text
 ```
 
-- kind: Python class
-- fields:
-  - name: the function / kernel symbol
-  - source: that function's emitted text
 - constraints:
   - MUST be the function / kernel symbol.
   - MUST be that function's emitted text.
@@ -128,16 +132,14 @@ LinkableFunction(name: str, source: str)
 
 One target's pre-link translation unit.
 
-```text
-LinkableModule(target: str, language: str, source: str, functions: tuple[LinkableFunction, ...])
+```python
+class LinkableModule:
+    target: str                              # the function target name (cuda / cpu)
+    language: str                            # the source language (cu / cpp)
+    source: str                              # the assembled translation-unit text
+    functions: tuple[LinkableFunction, ...]  # the module's constituent LinkableFunctions
 ```
 
-- kind: Python class
-- fields:
-  - target: the function target name (`cuda` / `cpu`)
-  - language: the source language (`cu` / `cpp`)
-  - source: the assembled translation-unit text
-  - functions: the module's constituent `LinkableFunction`s
 - constraints:
   - MUST be the function target name (`cuda` / `cpu`).
   - MUST be the source language: `cu` for a CUDA translation unit, `cpp` for a
@@ -153,17 +155,15 @@ user-callable.
 The link output: a loadable artifact plus the host-visible metadata the loader
 needs.
 
-```text
-LinkedModule(library_path: Path, source: str, entry: CallableType, launch_config: LaunchConfig, kernels: tuple[KernelInfo, ...])
+```python
+class LinkedModule:
+    library_path: Path                  # the produced shared library
+    source: str                         # the assembled host + device source
+    entry: CallableType                 # the host-visible callable type of the module entry
+    launch_config: LaunchConfig         # the entry's launch geometry (grid / block extents)
+    kernels: tuple[KernelInfo, ...]     # the ABI of the module's __global__ kernels
 ```
 
-- kind: Python class
-- fields:
-  - library_path: the produced shared library
-  - source: the assembled host + device source
-  - entry: the host-visible callable type of the module entry
-  - launch_config: the entry's launch geometry (grid / block extents)
-  - kernels: the ABI of the module's `__global__` kernels
 - constraints:
   - MUST point at the produced shared library.
   - MUST carry the assembled host + device source — the diagnostic source the

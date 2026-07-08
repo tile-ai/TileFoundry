@@ -35,21 +35,6 @@ pass framework is:
 ## 2. `Pass` base class
 
 
-```text
-Pass(ABC):  name: str;  requires: tuple[str, ...] = ();  run(module: Module) -> Module  [abstract]
-```
-
-- kind: Python class
-- fields:
-  - name: pass name for dump / log
-  - requires: ordered dependency assertion (no scheduling)
-- constraints:
-  - `run(module)` returns a new `Module`; it does not mutate input.
-  - Passes MUST NOT depend on global state. All configuration enters
-    through constructor parameters or pass-local attributes.
-  - Pass failures raise named exceptions (e.g. `VerifyError`); they
-    do not swallow errors.
-
 ```python
 from abc import ABC, abstractmethod
 from tilefoundry.ir.core import Module
@@ -66,6 +51,13 @@ class Pass(ABC):
     def run(self, module: Module) -> Module: ...
 ```
 
+- constraints:
+  - `run(module)` returns a new `Module`; it does not mutate input.
+  - Passes MUST NOT depend on global state. All configuration enters
+    through constructor parameters or pass-local attributes.
+  - Pass failures raise named exceptions (e.g. `VerifyError`); they
+    do not swallow errors.
+
 ## 3. Three pass granularities
 
 ### 3.1 `ModulePass`
@@ -75,21 +67,15 @@ functions. Examples: module-level inline, dead-function elimination,
 HIR → TIR replacement (substitute `tir.PrimFunction` for
 `hir.Function`).
 
-```text
-ModulePass(Pass):  run(module: Module) -> Module  [abstract]
-```
-
-- kind: Python class
-- fields: none — runs over the whole `Module`; may add / remove / reorder functions
-- constraints:
-  - `run` returns a new `Module`; inherits the `Pass` no-mutation / no-global-state
-    contract (§2).
-
 ```python
-class ModulePass(Pass):
+class ModulePass(Pass):                             # runs over the whole Module; may add / remove / reorder functions
     @abstractmethod
     def run(self, module: Module) -> Module: ...
 ```
+
+- constraints:
+  - `run` returns a new `Module`; inherits the `Pass` no-mutation / no-global-state
+    contract (§2).
 
 ### 3.2 `FunctionPass`
 
@@ -97,57 +83,36 @@ Visits each `hir.Function`. The framework supplies a default `run`
 that walks `module.functions`, calls `run_function` for HIR
 entries, and reassembles the `Module`.
 
-```text
-FunctionPass(Pass):  run_function(fn: HirFunction, module: Module) -> HirFunction  [abstract];  run(module) [default]
-```
-
-- kind: Python class
-- fields: none — visits each `hir.Function`; framework supplies the default `run`
-- constraints:
-  - inherits the `Pass` contract (§2); the default `run` reassembles the `Module`
-    from `run_function` results.
-
 ```python
 from tilefoundry.ir.hir import Function as HirFunction
 
-class FunctionPass(Pass):
+class FunctionPass(Pass):                                                       # visits each hir.Function; framework supplies the default run
     @abstractmethod
-    def run_function(self, fn: HirFunction, module: Module) -> HirFunction: ...
-
-    def run(self, module: Module) -> Module:
-        new_fns = []
-        for fn in module.functions:
-            if isinstance(fn, HirFunction):
-                new_fns.append(self.run_function(fn, module))
-            else:
-                new_fns.append(fn)
-        return Module(name=module.name, functions=tuple(new_fns))
+    def run_function(self, fn: HirFunction, module: Module) -> HirFunction: ...  # visit one HIR function
+    def run(self, module: Module) -> Module: ...                                # default reassembles the Module from run_function results
 ```
+
+- constraints:
+  - inherits the `Pass` contract (§2); the default `run` reassembles the `Module`
+    from `run_function` results.
 
 ### 3.3 `PrimFuncPass`
 
 Same shape as `FunctionPass`, but visits `tir.PrimFunction`. Mirrors
 nncase's `PrimFuncPass.cs`.
 
-```text
-PrimFuncPass(Pass):  run_prim_func(fn: PrimFunction, module: Module) -> PrimFunction  [abstract];  run(module) [default]
-```
-
-- kind: Python class
-- fields: none — visits each `tir.PrimFunction` (mirrors `FunctionPass`)
-- constraints:
-  - inherits the `Pass` contract (§2); same shape as `FunctionPass` over
-    `tir.PrimFunction`.
-
 ```python
 from tilefoundry.ir.tir import PrimFunction
 
-class PrimFuncPass(Pass):
+class PrimFuncPass(Pass):                                                       # visits each tir.PrimFunction (mirrors FunctionPass)
     @abstractmethod
     def run_prim_func(self, fn: PrimFunction, module: Module) -> PrimFunction: ...
-
     def run(self, module: Module) -> Module: ...   # default mirrors FunctionPass
 ```
+
+- constraints:
+  - inherits the `Pass` contract (§2); same shape as `FunctionPass` over
+    `tir.PrimFunction`.
 
 ## 4. Transform pass idiom
 
@@ -182,46 +147,19 @@ A linear scheduler that runs passes in registration order and
 optionally drops per-pass IR dumps when wrapped in a
 `tilefoundry.dump.DumpScope`.
 
-```text
-PassManager:  passes: list[Pass] = [];  add(p: Pass) -> PassManager;  run(module: Module) -> Module
-```
-
-- kind: Python class
-- fields:
-  - passes: the registered passes, run in registration order
-- constraints:
-  - `requires` is an ordering assertion checked before the run, not a topological sort.
-
 ```python
 from dataclasses import dataclass, field
-from tilefoundry.dump import DumpFlags, DumpScope, dump
 
 @dataclass
 class PassManager:
-    passes: list[Pass] = field(default_factory=list)
+    passes: list[Pass] = field(default_factory=list)  # the registered passes, run in registration order
 
-    def add(self, p: Pass) -> "PassManager":
-        self.passes.append(p)
-        return self
-
-    def run(self, module: Module) -> Module:
-        self._check_requires()
-        for seq, p in enumerate(self.passes):
-            with DumpScope(f"{seq:02d}_{p.name}"):
-                dump("before.txt", repr(module), DumpFlags.PASS_IR)
-                module = p.run(module)
-                dump("after.txt", repr(module), DumpFlags.PASS_IR)
-        return module
-
-    def _check_requires(self) -> None:
-        """`requires` is an ordering assertion, not a topological sort."""
-        seen: set[str] = set()
-        for p in self.passes:
-            for r in p.requires:
-                if r not in seen:
-                    raise ValueError(f"pass {p.name!r} requires {r!r} not registered before it")
-            seen.add(p.name)
+    def add(self, p: Pass) -> "PassManager": ...      # register a pass; returns self for chaining
+    def run(self, module: Module) -> Module: ...      # run passes in registration order
 ```
+
+- constraints:
+  - `requires` is an ordering assertion checked before the run, not a topological sort.
 
 `PassManager` does not own a dump destination. When the caller
 wraps the run in a `DumpScope` and `DumpFlags.PASS_IR` is enabled,
@@ -281,12 +219,11 @@ unified retype / verify is scheduled by `PassManager`.
 
 ### 7.1 `HirToTirPass`
 
-```text
-HirToTirPass(ModulePass):  run(module: Module) -> Module
+```python
+class HirToTirPass(ModulePass):                     # replaces every hir.Function with a tir.PrimFunction
+    name = "hir_to_tir"
 ```
 
-- kind: Python pass
-- fields: none — replaces every `hir.Function` with a `tir.PrimFunction`
 - constraints:
   - TIR has no return-tensor form; HIR outputs become trailing params. The
     per-op / mesh / `Reshard` / dispatch lowering rules are in the subsections
@@ -298,11 +235,6 @@ tensor` calling convention into the TIR explicit-output-param form
 `PrimFunction(params=(inputs..., outputs...), body=...)`. TIR has
 no return-tensor form. After this pass, `PassManager` reruns HIR
 `typeinfer` / TIR `verify` on the dirty scope.
-
-```python
-class HirToTirPass(ModulePass):
-    name = "hir_to_tir"
-```
 
 #### Per-op lowering dispatch
 
@@ -441,21 +373,15 @@ into the `tir.memory.*` descriptors. Policy: every logical buffer
 gets an independent physical allocation; no reuse, pool, or lifetime
 overlap. Buffer planning is not a codegen responsibility.
 
-```text
-BufferizePass(PrimFuncPass):  name = "bufferize";  requires = ("hir_to_tir",)
-```
-
-- kind: Python pass
-- fields: none — assigns each logical buffer a physical offset / size after `HirToTirPass`
-- constraints:
-  - every logical buffer gets an independent physical allocation; no reuse, pool,
-    or lifetime overlap. Buffer planning is not a codegen responsibility.
-
 ```python
-class BufferizePass(PrimFuncPass):
+class BufferizePass(PrimFuncPass):                  # assigns each logical buffer a physical offset / size after HirToTirPass
     name = "bufferize"
     requires = ("hir_to_tir",)
 ```
+
+- constraints:
+  - every logical buffer gets an independent physical allocation; no reuse, pool,
+    or lifetime overlap. Buffer planning is not a codegen responsibility.
 
 ## 8. Directory layout
 

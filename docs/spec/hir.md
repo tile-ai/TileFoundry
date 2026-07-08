@@ -37,12 +37,16 @@ class Function(Expr):
     """HIR's function container. An Expr subclass — its value type is
     the function signature, and call sites resolve through Module's
     symbol table."""
-    name: str
+    name: str                               # the function name; call sites resolve through Module's symbol table
     params: tuple[Var, ...]                 # each Var carries a type annotation
     body: Expr | None                       # a single Expr — typically a Call DAG; None for a dispatch prototype
     return_type: IRType                     # TensorType for single output, TupleType for multi
     topologies: tuple[Topology, ...]        # convenience for single-function modules
 ```
+- constraints:
+  - an `Expr` subclass whose value type is the function signature; always returns
+    by value (explicit output params are TIR-only). Typing and shape-dispatch
+    rules are stated below.
 
 `Function.body` is a **single Expr** (usually a Call DAG, possibly
 nested inside a `GridRegionExpr`). HIR has no Stmt sequence; name
@@ -212,15 +216,19 @@ top-level `Module.functions` entry MUST NOT be a variant: a top-level
 class GridRegionExpr(Expr):
     """Loop-phi-shaped structured SSA — the only HIR exception to
     pure Call DAG. Folds a tile-style loop into a single Expr value."""
-    induction_var: Var
-    carried_args: tuple[Var, ...]
-    init_args: tuple[Expr, ...]
-    body: Expr
-    yield_values: tuple[Expr, ...]
+    induction_var: Var                       # loop induction Var, ranging over range(start, extent, step)
+    carried_args: tuple[Var, ...]            # loop-phi carry chain (equal lengths)
+    init_args: tuple[Expr, ...]              # loop-phi carry chain (equal lengths)
+    body: Expr                               # the loop body Expr
+    yield_values: tuple[Expr, ...]           # loop-phi carry chain (equal lengths)
     extent: ShapeDim                         # iteration-domain stop (half-open)
     step: ShapeDim                           # induction-var stride
     start: ShapeDim = 0                       # iteration-domain start (default 0)
 ```
+- constraints:
+  - the only HIR exception to pure Call DAG: loop-phi-shaped structured SSA that
+    folds a tile-style loop into one `Expr` value; `type` is `TensorType` (single
+    carry) or `TupleType` (multi-carry).
 
 **Iteration domain.** Both DSL loop surfaces — `for i in tile(...)` and
 `for i in range(...)` — lower to this one node; they share the domain
@@ -339,24 +347,16 @@ per-name IR classes.
 [torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
 
 ##### Binary
-```text
-Binary(kind, lhs, rhs) -> Tensor
+```python
+Binary(kind, lhs, rhs) -> Tensor    # kind: binary arithmetic, comparison, or boolean tag; lhs / rhs: input tensors
 ```
-- kind: HIR op
-- fields:
-  - kind: binary arithmetic, comparison, or boolean tag
-  - lhs / rhs: input tensors
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
 
 ##### Unary
-```text
-Unary(kind, x) -> Tensor
+```python
+Unary(kind, x) -> Tensor    # kind: unary tag including neg, abs, logical_not, and rsqrt; x: input tensor
 ```
-- kind: HIR op
-- fields:
-  - kind: unary tag including `neg`, `abs`, `logical_not`, and `rsqrt`
-  - x: input tensor
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
 
@@ -369,27 +369,16 @@ Tensor structural operations; consensus ops follow torch / numpy
 Consensus torch / numpy structural ops.
 
 ##### Zeros
-```text
-Zeros(shape, dtype, storage) -> Tensor
+```python
+Zeros(shape, dtype, storage) -> Tensor    # shape: output logical shape; dtype: output dtype; storage: output storage kind
 ```
-- kind: HIR op
-- fields:
-  - shape: output logical shape
-  - dtype: output dtype
-  - storage: output storage kind
 - constraints:
   - The result is zero-initialised.
 
 ##### Reduce
-```text
-Reduce(x, axes, keepdim, kind) -> Tensor
+```python
+Reduce(x, axes, keepdim, kind) -> Tensor    # x: input tensor; axes: reduced logical axes; keepdim: whether reduced axes remain as size-1 axes; kind: mean, sum, abs_max, or max
 ```
-- kind: HIR op
-- fields:
-  - x: input tensor
-  - axes: reduced logical axes
-  - keepdim: whether reduced axes remain as size-1 axes
-  - kind: `mean`, `sum`, `abs_max`, or `max`
 - constraints:
   - The logical result shape follows numpy reduction rules.
   - Storage is preserved.
@@ -402,16 +391,9 @@ Reduce(x, axes, keepdim, kind) -> Tensor
     from an HIR dispatch field.
 
 ##### insert_slice
-```text
-insert_slice(dst, update, offsets) -> Tensor
+```python
+insert_slice(dst, update, offsets) -> Tensor    # dst: target tensor (value form returns a new tensor anchored on this buffer at lowering time); update: tensor written into the slice window; offsets: scalar runtime value or integer literal for the implemented 1-D case
 ```
-- kind: HIR op
-- fields:
-  - dst: target tensor; the value form returns a new tensor anchored on this
-    buffer at lowering time
-  - update: tensor written into the slice window
-  - offsets: scalar runtime value or integer literal for the implemented 1-D
-    case
 - constraints:
   - `update` has the same rank and dtype as `dst`.
   - The implemented 1-D case writes the contiguous window
@@ -434,23 +416,16 @@ Shape-level Ops on whole shape values (per-axis dim Ops are
 [types §3](./types.md)).
 
 ##### ShapeExtract
-```text
-ShapeExtract(shape, axis) -> Dim
+```python
+ShapeExtract(shape, axis) -> Dim    # shape: input shape value; axis: extracted axis
 ```
-- kind: HIR op
-- fields:
-  - shape: input shape value
-  - axis: extracted axis
 - constraints:
   - The result is the dimension at `axis`.
 
 ##### ShapeCompose
-```text
-ShapeCompose(dims) -> Shape
+```python
+ShapeCompose(dims) -> Shape    # dims: per-axis dimensions
 ```
-- kind: HIR op
-- fields:
-  - dims: per-axis dimensions
 - constraints:
   - The result is a shape value assembled in input order.
 
@@ -460,14 +435,9 @@ ShapeCompose(dims) -> Shape
 ([shard §5](./shard.md)).
 
 ##### Reshard
-```text
-Reshard(x, layout=None, storage=None) -> Tensor
+```python
+Reshard(x, layout=None, storage=None) -> Tensor    # x: input tensor; layout: optional target ShardLayout; storage: optional target storage kind
 ```
-- kind: HIR op
-- fields:
-  - x: input tensor
-  - layout: optional target `ShardLayout`
-  - storage: optional target storage kind
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
     `x.storage`.
@@ -505,12 +475,9 @@ cross-CTA data redistribution (all-to-all / gather across CTAs) is not part of
 this op.
 
 ##### Local
-```text
-Local(x) -> Tensor
+```python
+Local(x) -> Tensor    # x: input tensor with ShardLayout
 ```
-- kind: HIR op
-- fields:
-  - x: input tensor with `ShardLayout`
 - constraints:
   - The result shape contracts each `Split` axis by that mesh axis's extent.
   - `dtype` and `storage` are preserved.

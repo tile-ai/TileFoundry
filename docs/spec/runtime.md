@@ -14,56 +14,35 @@ snapshot.
 
 ### 1.1 `RuntimeModule`
 
-```text
-RuntimeModule:  source;  kernels;  entry;  launch_config;  functions;  entry_function;  __call__(*args)
+```python
+class RuntimeModule:
+    source: str                            # generated target source string, e.g. CUDA `.cu` text
+    kernels: dict[str, KernelInfo]         # kernel metadata keyed by generated kernel name
+    entry: str                             # name of the default entry function
+    launch_config: LaunchConfig            # launch metadata (grid / block dims)
+    functions: dict[str, RuntimeFunction]  # mapping of function name → RuntimeFunction callable
+    entry_function: RuntimeFunction        # functions[entry] — the default RuntimeFunction
+    def __call__(self, *args): ...         # delegates to entry_function(*args)
 ```
 
-- kind: Python class
-- fields:
-  - source: generated target source string, e.g. CUDA `.cu` text
-  - kernels: kernel metadata keyed by generated kernel name
-  - entry: name of the default entry function (`str`)
-  - launch_config: launch metadata (grid/block dims)
-  - functions: mapping of function name → `RuntimeFunction` callable
-  - entry_function: `functions[entry]` — the default `RuntimeFunction`
-  - __call__(*args): delegates to `entry_function(*args)`
 - constraints:
   - `RuntimeModule` is the result object of `tilefoundry.build(mod)`,
     `tilefoundry.compile(mod)`, and `tilefoundry.jit(fn_or_mod)`; it is directly
     callable.
 
-```python
-# AOT (full compile pipeline)
-rm = tilefoundry.compile(mod, target="cuda", options=...)
-out = rm(a)
-
-# JIT (thin convenience wrapper with cache)
-rt = tilefoundry.jit(mod_or_fn, target="cuda", options=...)
-out = rt(a)
-```
-
 ### 1.1.1 `RuntimeFunction`
 
 Each compiled function is wrapped as a `RuntimeFunction`:
 
-```text
-RuntimeFunction:  type: CallableType;  __call__(*args)
+```python
+class RuntimeFunction:
+    type: CallableType                # the calling convention — CallableType (params + input / output counts)
+    def __call__(self, *args): ...    # auto-alloc outputs when len(args) == type.input_count, else pre-alloc; see §1.2
 ```
 
-- kind: Python class
-- fields:
-  - type: the calling convention — `CallableType` (params + input / output counts)
 - constraints:
   - `__call__(*args)` auto-allocates outputs when `len(args) == type.input_count`,
     otherwise uses the provided output tensors (pre-alloc); see §1.2.
-
-```python
-class RuntimeFunction:
-    type: CallableType   # calling convention: params + input/output counts
-    # __call__(*args):
-    #   auto-alloc: len(args) == type.input_count → alloc outputs, return result(s)
-    #   pre-alloc:  len(args) == len(type.params)  → use provided outs, return outs
-```
 
 `CallableType` carries `params`, `input_count`, `output_count` — set by
 codegen from the lowered IR metadata.
@@ -101,15 +80,15 @@ codegen from lowered IR, NOT guessed at runtime).
 
 ### 1.2 `jit()` API
 
-```text
-jit(fn_or_mod: Function | Module, *, target: str = "cuda", options: CompilerOptions | None = None) -> RuntimeModule
+```python
+def jit(
+    fn_or_mod: Function | Module,             # a hir.Function or Module (normalized to a Module)
+    *,
+    target: str = "cuda",                     # the back-end target (default "cuda")
+    options: CompilerOptions | None = None,   # optional CompilerOptions
+) -> RuntimeModule: ...
 ```
 
-- kind: runtime func
-- fields:
-  - fn_or_mod: a `hir.Function` or `Module` (normalized to a `Module`)
-  - target: the back-end target (default `"cuda"`)
-  - options: optional `CompilerOptions`
 - constraints:
   - accepts only TileFoundry IR (`Function` / `Module`); raw Python functions
     raise `TypeError`; the full input contract is stated below.
@@ -117,21 +96,6 @@ jit(fn_or_mod: Function | Module, *, target: str = "cuda", options: CompilerOpti
 `tilefoundry.jit(fn_or_mod, *, target="cuda", options=None)` is the JIT
 entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
 `Module`, compiles with cache, and returns a callable `RuntimeModule`.
-
-```python
-from tilefoundry import jit
-
-cta = Topology("cta", 128)
-thread = Topology("thread", 8 * 32)
-
-@func(topologies=(cta, thread))
-def fn(x: Tensor[(32,128), "f32"]):
-    with Mesh(topology="cta", layout=Layout(shape=(128,), strides=(1,))) as cta_mesh:
-        ...
-
-rt = jit(fn, target="cuda")
-out = rt(a)  # callable
-```
 
 **Input contract**:
 - Only TileFoundry IR objects (`Function` / `Module`) accepted.
@@ -179,14 +143,12 @@ boundary the TIR/codegen surface is explicit input/output parameters.
 
 ### 1.3 `launch_config`
 
-```text
-launch_config  # launch geometry metadata (grid / block dims)
+```python
+class LaunchConfig:      # launch geometry metadata (grid / block dims)
+    grid: tuple[int, ...]    # grid dims, derived from CTA-level topology
+    block: tuple[int, ...]   # block dims, derived from thread-level topology
 ```
 
-- kind: Python class
-- fields:
-  - grid dims: derived from CTA-level topology
-  - block dims: derived from thread-level topology
 - constraints:
   - metadata only, not a runtime scheduler; records the launch shape the
     generated kernel was compiled for.
@@ -220,33 +182,24 @@ include only the umbrella header and MUST NOT include target subheaders directly
 
 ### 2.1 `TopologyScope`
 
-```text
-enum class TopologyScope { cta, thread, scope_count };
+```cpp
+enum class TopologyScope {
+  cta,          // maps to blockIdx
+  thread,       // maps to threadIdx
+  scope_count,  // a sentinel
+};
 ```
 
-- kind: C++ class
-- fields:
-  - cta: maps to `blockIdx`
-  - thread: maps to `threadIdx`
-  - scope_count: a sentinel
 - constraints: none — a fixed enumeration of program topology levels
 
 ### 2.2 Topology Metadata
 
-```text
-template <TopologyScope T> auto program_shape() noexcept;  // shape of topology level T
+```cpp
+template <TopologyScope T> auto program_shape() noexcept;  // shape of topology level T (e.g. program_shape<cta>() → grid dims)
 template <TopologyScope T> auto program_dim() noexcept;    // size of topology level T
-template <TopologyScope T> auto program_id() noexcept;     // linearized runtime id of T
+template <TopologyScope T> auto program_id() noexcept;     // linearized scalar runtime id of T (current execution instance)
 ```
 
-- kind: runtime func
-- fields:
-  - program_shape<T>(): the shape of topology level `T` (e.g.
-    `program_shape<cta>()` → grid dims)
-  - program_dim<T>(): the size of `T`
-  - program_id<T>(): a **linearized** scalar runtime id for `T`
-    (`program_id<cta>()` → linearized block index; `program_id<thread>()` →
-    linearized thread index)
 - constraints:
   - static vs dynamic (launch-provided CTA) behavior and the emission rule are
     stated below ([target §7](./target.md#7-program-shape-and-dynamic-cta)).
@@ -260,18 +213,15 @@ always a runtime query returning the current execution instance id.
 
 ### 2.3 `tilefoundry::Mesh`
 
-```text
+```cpp
 template <class MeshLayout, TopologyScope... Topos>
-struct Mesh { MeshLayout mesh_layout;  static constexpr auto topologies = cute::make_tuple(Topos...); };
-auto local_index() const noexcept;
+struct Mesh {
+  MeshLayout mesh_layout;                                        // a CuTe-compatible layout type
+  static constexpr auto topologies = cute::make_tuple(Topos...); // sparse TopologyScope list this mesh uses (type-level, not runtime state)
+  auto local_index() const noexcept;                             // full mesh coordinate for this execution instance
+};
 ```
 
-- kind: C++ class
-- fields:
-  - mesh_layout: a CuTe-compatible layout type
-  - topologies: a `static constexpr` tuple of the sparse `TopologyScope` list
-    (`Topos...`) this mesh uses — type-level information, not runtime state; only
-    the topology levels the mesh actually uses are included
 - constraints:
   - Axes-to-topology mapping: axes are partitioned into contiguous groups, matched
     from the **end** of `mesh_layout.shape` backwards, in **reverse** `topologies`
@@ -286,21 +236,20 @@ auto local_index() const noexcept;
 
 ### 2.4 `tilefoundry::ShardLayout`
 
-```text
+```cpp
 template <class Layout, class Attrs, class Mesh>
-struct ShardLayout { Layout layout;  Attrs attrs;  Mesh mesh; };
+struct ShardLayout {
+  Layout layout;   // the underlying CuTe layout
+  Attrs attrs;     // shard attributes, ordered by mesh axis
+  Mesh mesh;       // the bound device domain
+};
 ```
 
-- kind: C++ class
-- fields:
-  - layout: the underlying CuTe layout
-  - attrs: shard attributes, ordered by mesh axis
-  - mesh: the bound device domain
 - constraints: none — a plain layout / attrs / mesh aggregate
 
 ### 2.5 `tilefoundry::shard` — Shard Attributes
 
-```text
+```cpp
 namespace tilefoundry::shard {
   template <int Axis> struct S {};         // Split along axis
   struct B {};                             // Broadcast (replicate)
@@ -309,19 +258,13 @@ namespace tilefoundry::shard {
 }
 ```
 
-- kind: C++ class
-- fields:
-  - S<Axis>: Split along axis
-  - B: Broadcast (replicate)
-  - P<Reduction>: Partial reduction
-  - Dynamic: Dynamic / data-dependent
 - constraints: none — compile-time shard-attribute tags
 
 Shorthand: `S<Axis>` = Split, `B` = Broadcast, `P<Reduction>` = Partial.
 
 ### 2.6 `tilefoundry::ShardTensor`
 
-```text
+```cpp
 template <class Engine_, class GlobalLayout_, class ShardLayout_>
 struct ShardTensor {
   using engine_type = Engine_;
@@ -334,11 +277,6 @@ struct ShardTensor {
 };
 ```
 
-- kind: C++ class
-- fields:
-  - engine: CuTe tensor / view (gmem / smem / rmem); a raw pointer is rejected
-  - shard_layout: runtime shard-layout value (dynamic dims carry real extents)
-  - data(): underlying pointer of the wrapped cute tensor
 - constraints:
   - `engine` must be a full cute tensor/view, never a raw pointer (residency
     lives on the engine type); `data()` drops the residency tag. The full
@@ -359,22 +297,20 @@ use `local()` instead.
 
 ### 2.7 `tilefoundry::make_shard_tensor`
 
-```text
+```cpp
 template <class T, class GL, class SL>
-auto make_shard_tensor(T const& tensor, GL global_layout, SL shard_layout)
+auto make_shard_tensor(T const& tensor,   // a CuTe tensor / view (raw pointers rejected at compile time)
+                       GL global_layout,  // the global layout to bind
+                       SL shard_layout)   // the shard layout to bind
   -> ShardTensor<T, GL, SL>;
 ```
 
-- kind: runtime func
-- fields:
-  - tensor: a CuTe tensor / view (raw pointers rejected at compile time)
-  - global_layout / shard_layout: the global and shard layouts to bind
 - constraints:
   - Factory. `T` must be a CuTe tensor/view; raw pointers rejected at compile time.
 
 ### 2.8 `tilefoundry::copy` — Shard-aware Overloads
 
-```text
+```cpp
 // shard → plain
 template <class T, class GL, class SL, class DT>
 void copy(ShardTensor<T, GL, SL> const& src, DT& dst);
@@ -384,22 +320,16 @@ template <class ST, class T, class GL, class SL>
 void copy(ST const& src, ShardTensor<T, GL, SL>& dst);
 ```
 
-- kind: runtime func
-- fields:
-  - src / dst: a shard tensor and a plain tensor (either direction)
 - constraints:
   - Copies the full tensor between a shard tensor and a plain tensor.
 
 ### 2.10 `local()`
 
-```text
+```cpp
 template <class E, class GL, class SL>
-auto local(ShardTensor<E, GL, SL> const& t) noexcept;
+auto local(ShardTensor<E, GL, SL> const& t) noexcept;   // project t to this execution instance's local view
 ```
 
-- kind: runtime func
-- fields:
-  - t: the `ShardTensor` to project to this execution instance's local view
 - constraints:
   - Returns the cute `Tensor` view this execution instance owns on `t`.
 
@@ -439,14 +369,12 @@ storage-specific branching is required.
 
 ### 2.9 Tensor And Storage
 
-```text
-cute::Tensor<Engine, Layout>
+```cpp
+template <class Engine,   // the CuTe engine / iterator / pointer category
+          class Layout>   // a CuTe layout or tilefoundry::ShardLayout
+class cute::Tensor;
 ```
 
-- kind: C++ class
-- fields:
-  - `Engine` is the CuTe engine / iterator / pointer category
-  - `Layout` is a CuTe layout or `tilefoundry::ShardLayout`
 - constraints:
   - when `Layout` is `ShardLayout`, the tensor has distributed semantics
 
@@ -460,8 +388,8 @@ cute::Tensor<Engine, Layout>
 
 Codegen targets one public namespace function per runtime op/family:
 
-```text
-tilefoundry::ops::<op>(...)
+```cpp
+tilefoundry::ops::<op>(...)   // one public namespace function per runtime op / family
 ```
 
 ```mermaid
@@ -492,14 +420,11 @@ codegen side is
 
 ### 3.1 `cute::copy`
 
-```text
+```cpp
 template <class SrcTensor, class DstTensor>
-void copy(SrcTensor const& src, DstTensor& dst);
+void copy(SrcTensor const& src, DstTensor& dst);   // source and destination tensors
 ```
 
-- kind: runtime func
-- fields:
-  - src / dst: source and destination tensors
 - constraints:
   - copies data from `src` to `dst`
   - `size(src) == size(dst)`
@@ -507,27 +432,21 @@ void copy(SrcTensor const& src, DstTensor& dst);
 
 ### 3.2 `cute::fill`
 
-```text
+```cpp
 template <class Tensor, class Value>
-void fill(Tensor& tensor, Value val);
+void fill(Tensor& tensor, Value val);   // the destination tensor and the scalar fill value
 ```
 
-- kind: runtime func
-- fields:
-  - tensor / val: the destination tensor and the scalar fill value
 - constraints:
   - fills `tensor` with scalar `val`
 
 ### 3.3 `tilefoundry::shard_partition`
 
-```text
+```cpp
 template <class Tensor>
-auto shard_partition(Tensor const& tensor);
+auto shard_partition(Tensor const& tensor);   // a tensor whose layout() is a ShardLayout
 ```
 
-- kind: runtime func
-- fields:
-  - tensor: a tensor whose `layout()` is a `ShardLayout`
 - constraints:
   - extracts `mesh` from `tensor.layout()`
   - calls `mesh.local_index()` to get the current device coordinate
@@ -537,18 +456,13 @@ auto shard_partition(Tensor const& tensor);
 
 ### 3.4 `tilefoundry::ops::sync` (mesh-scoped barrier)
 
-```text
-template <SyncKind Kind, int Base = 0, int Count = 0, unsigned Mask = 0u,
+```cpp
+template <SyncKind Kind,                                              // compile-time barrier kind; selects CTA, warp, named-barrier, or grid behavior
+          int Base = 0, int Count = 0, unsigned Mask = 0u,            // compile-time participant geometry
           int BarId = 0>
-__device__ void sync(unsigned int* grid_bar = nullptr);
+__device__ void sync(unsigned int* grid_bar = nullptr);   // optional two-word global counter pair used only by grid barriers
 ```
 
-- kind: runtime func
-- fields:
-  - Kind: compile-time barrier kind; selects CTA, warp, named-barrier, or grid
-    behavior inside the runtime entry
-  - Base / Count / Mask / BarId: compile-time participant geometry
-  - grid_bar: optional two-word global counter pair used only by grid barriers
 - constraints:
   - Codegen emits only `sync`; it does not call lower-level barrier helpers.
   - Grid barriers require every CTA of the launch to be co-resident and to
@@ -558,19 +472,14 @@ __device__ void sync(unsigned int* grid_bar = nullptr);
 
 ### 3.5 `tilefoundry::ops::reduce` (reduction family)
 
-```text
-template <class Op, class Axes, class Src, class Dst, class Ws = no_workspace>
+```cpp
+template <class Op,                 // compile-time combine tag (sum, mean, max, absmax)
+          class Axes,               // compile-time reduced logical axes
+          class Src, class Dst,     // source and destination operands; sharded operands carry ShardLayout
+          class Ws = no_workspace>  // optional shared-memory workspace; no_workspace keeps the reduce within one warp
 __device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
 ```
 
-- kind: runtime func
-- fields:
-  - Op: compile-time combine tag (`sum`, `mean`, `max`, `absmax`)
-  - Axes: compile-time reduced logical axes
-  - src / dst: source and destination operands; sharded operands carry
-    `ShardLayout`
-  - ws: optional shared-memory workspace value; `no_workspace` means the reduce
-    stays within one warp
 - constraints:
   - `reduce` is the only public runtime reduce entry; tier names and helper
     functions are internal.
@@ -582,15 +491,11 @@ __device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
 
 ### 3.6 `tilefoundry::ops::copy_async` (async gmem→smem staging)
 
-```text
+```cpp
 template <class TSrc, class TDst>
-__device__ void copy_async(TSrc const& src, TDst& dst);
+__device__ void copy_async(TSrc const& src, TDst& dst);   // per-thread projected operands; fast path stages gmem source into smem destination
 ```
 
-- kind: runtime func
-- fields:
-  - src / dst: per-thread projected operands; the supported fast path stages
-    global source data into shared destination storage
 - constraints:
   - The call is non-blocking; generated code orders later reads through
     `cp_async_commit` and `cp_async_wait`.

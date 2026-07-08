@@ -27,12 +27,11 @@ flowchart TB
 
 ## 1. `IRType`
 
-```text
-IRType()
+```python
+class IRType:      # abstract base; concrete IR types derive from it
+    ...
 ```
 
-- kind: Python class
-- fields: none — abstract base
 - constraints:
   - every `core_ir.Expr.type` is one of its derivations (`TensorType` /
     `TupleType` / `UnitType` / `CallableType`).
@@ -45,23 +44,18 @@ its derivations: `TensorType` / `TupleType` / `UnitType` /
 
 ## 2. `TensorType`
 
-```text
-TensorType(shape: tuple[ShapeDim, ...], dtype: DType, layout: Layout | ShardLayout | ComposedLayout, storage: StorageKind | None)
+```python
+# ShapeDim = int | DimVar | Expr — a static int, a bounded `DimVar` Op, or a dim-arithmetic `Expr` (see §4)
+class TensorType(IRType):
+    shape: tuple[ShapeDim, ...]                      # logical shape; invariant under sharding / storage / layout
+    dtype: DType                                     # element dtype
+    layout: Layout | ShardLayout | ComposedLayout    # member of the Layout family (see shard)
+    storage: StorageKind | None                      # abstract result residency, or umat / None
 ```
 
-- kind: Python class
-- fields:
-  - Each `shape` element is a `ShapeDim` — one of: a raw Python
-    `int` (static dim), a `DimVar` `Op` instance (bounded named
-    symbolic dim placed directly into `shape`), or a dim-arithmetic
-    `Expr` (a `Call` over `DimAdd` / `DimMul` / ... whose leaves are
-    `Constant(int)` / `DimVar` / `DimConst`).
-  - `shape` is the tensor's **logical shape**; it is invariant under
-    sharding, storage, and per-shard physical layout.
+- constraints:
   - A *scalar* is `TensorType(shape=(), ...)` — a rank-0 tensor. There
     is no separate `Scalar` type.
-  - `layout` is a member of the `Layout` family
-    (`Layout` / `ComposedLayout` / `ShardLayout`); see [shard](./shard.md).
   - `storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` / `tmem` /
     `umat`) or `None`. A concrete level (`gmem` / `smem` / `rmem` / `host` /
     `tmem`) is the value's **abstract result residency** — where the result tensor
@@ -72,7 +66,6 @@ TensorType(shape: tuple[ShapeDim, ...], dtype: DType, layout: Layout | ShardLayo
     unmaterialized value MUST be resolved to a concrete residency (or otherwise
     materialized) before codegen consumes it. `None` is unchanged — a tensor with
     no memory space (a shape-element scalar), distinct from `umat`.
-- constraints:
   - For plain `Layout` / `ComposedLayout`, `len(shape)` MUST equal the
     layout's logical axis count; for `ComposedLayout` this is the
     outer-layout's axis count after expansion.
@@ -96,12 +89,16 @@ dispatch is described in
 
 ## 3. `DType`
 
-```text
-DType(enum.Enum): f32 | f16 | bf16 | i32 | i64 | bool | ...   # extended on demand
+```python
+class DType(enum.Enum):    # enumerated dtype values, extended on demand
+    f32 = auto()
+    f16 = auto()
+    bf16 = auto()
+    i32 = auto()
+    i64 = auto()
+    bool = auto()
 ```
 
-- kind: Python class
-- fields: enumerated dtype values (`f32` / `f16` / `bf16` / `i32` / `i64` / `bool`, extended on demand)
 - constraints: none — a value enumeration, independent of `layout` / `storage`
 
 `DType` is a value enumeration, independent of `layout` / `storage`.
@@ -164,14 +161,11 @@ optimisation.
 
 ## 5. `TupleType`
 
-```text
-TupleType(fields: tuple[IRType, ...])
+```python
+class TupleType(IRType):
+    fields: tuple[IRType, ...]    # the tuple's field types; result type of a multi-output Op (nested TupleType is uncommon)
 ```
 
-- kind: Python class
-- fields:
-  - fields: the tuple's field types; the result type of a multi-output Op
-    (nested `TupleType` is uncommon)
 - constraints:
   - A multi-output Op (e.g. [hir](./hir.md) `tensor.Split`) has
     `Call.type: TupleType` whose fields correspond to the outputs. A
@@ -187,12 +181,11 @@ TupleType(fields: tuple[IRType, ...])
 
 ## 6. `UnitType`
 
-```text
-UnitType()
+```python
+class UnitType(IRType):    # no payload; result type of an effect-form Op
+    ...
 ```
 
-- kind: Python class
-- fields: none — no payload
 - constraints:
   - the result type of an effect-form Op; produces no readable value and
     appears in Stmt position as `Evaluate(op, args)`.
@@ -208,14 +201,12 @@ effect-form vs value-form classification is owned by
 
 ## 7. `CallableType`
 
-```text
-CallableType(return_type: IRType, parameters: tuple[IRType, ...])
+```python
+class CallableType(IRType):
+    return_type: IRType                # the callable's result type
+    parameters: tuple[IRType, ...]     # parameter types (names are not part of the type)
 ```
 
-- kind: Python class
-- fields:
-  - return_type: the callable's result type
-  - parameters: a tuple of parameter types (parameter names are not part of the type)
 - constraints:
   - `CallableType` is the type of any Expr that represents a callable
     value. Today the only producer is [hir §1.1](./hir.md) `Function`.
