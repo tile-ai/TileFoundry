@@ -402,6 +402,23 @@ insert_slice(dst, update, offsets) -> Tensor    # dst: target tensor (value form
   - Statically out-of-bounds windows fail typeinfer; runtime-only bounds are
     checked by eval/runtime.
 
+##### TopK
+```python
+TopK(x, k, axis=-1, largest=True, sorted=True) -> (Tensor, Tensor)    # x: input; k: elements kept on axis; largest: greatest vs smallest; sorted: ordered selection -> (values keep x dtype, i64 indices)
+```
+- constraints:
+  - The result is a `(values, indices)` tuple; both shrink the selected axis to
+    length `k`; `values` keep `x`'s dtype and `indices` are `i64`.
+  - `k` MUST be non-negative, and a static `k` greater than the selected-axis
+    length fails typeinfer.
+  - The selected axis MUST NOT be `Split`-sharded by a `ShardLayout`; a split
+    selected axis fails typeinfer.
+  - A `ShardLayout` output preserves the non-selected sharding and any
+    replication; only the selected axis's layout extent becomes `k`, so the
+    layout keeps size parity with the result shape.
+  - `sorted` returns the selected elements ordered by `largest`; otherwise the
+    same selected set is returned in an unspecified order.
+
 #### `ir/hir/nn/`
 
 Neural-network value Ops following torch semantics
