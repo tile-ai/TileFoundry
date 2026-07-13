@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .binary import Binary
 from .unary import Unary
-from .exp import Exp
 from .softplus import Softplus
 
 # Surface aliases register all kinded sugar names
@@ -16,6 +15,5 @@ from . import aliases as _aliases  # noqa: F401
 __all__ = [
     "Binary",
     "Unary",
-    "Exp",
     "Softplus",
 ]

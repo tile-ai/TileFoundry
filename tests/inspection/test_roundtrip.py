@@ -7,11 +7,10 @@ from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import add, mul
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, Constant, Op, Var
+from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.parser.hir_parser import parse_script

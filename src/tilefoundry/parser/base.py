@@ -8,13 +8,12 @@ import logging
 import textwrap
 from typing import Any, Literal
 
-from tilefoundry.ir.core import Call, Constant, Expr, Op, TypeInferContext, VerifyError
+from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, TypeInferContext, VerifyError
 from tilefoundry.ir.core.op_registry import _first_schema
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.target.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types import DType, TensorType, TupleType
@@ -553,7 +552,7 @@ class BaseExprVisitor:
                         and input_params[i].name == "offsets"
                     ):
                         # Narrow route: only ``insert_slice``'s per-axis offset
-                        # tuple is lifted to an explicit hir.tensor.Tuple of
+                        # tuple is lifted to an explicit core Tuple of
                         # scalar Exprs. Any other input keeps the default path,
                         # so a tuple literal there is rejected.
                         input_args.append(self._tuple_expr_expr(arg))

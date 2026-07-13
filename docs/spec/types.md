@@ -108,11 +108,9 @@ class DType(enum.Enum):    # enumerated dtype values, extended on demand
   - Each member's value equals its name.
   - `fp8e4m3` is the canonical fp8 spelling; no alternate fp8 spelling (e.g.
     `f8e4m3`) exists.
-  - `fp8e4m3`, `f8e8m0`, and `f4e2m1` are low-precision dtypes: Cast-boundary
-    element types that declare a tensor's element type at a Cast boundary rather
-    than being computed on directly.
-  - Generic arithmetic (`Binary` / `Unary` / `MatMul` / `Reduce`) MUST reject an
-    operand of a low-precision dtype at type inference.
+  - `fp8e4m3`, `f8e8m0`, and `f4e2m1` are low-precision dtypes: logical element
+    types whose values enter and leave a computation through `Cast`. Type
+    inference treats them like any other element type.
   - The evaluator supports `Cast` to and from `fp8e4m3` and `f8e8m0`; `f4e2m1`
     has no evaluator `Cast`, so evaluating a `Cast` targeting `f4e2m1` raises an
     unsupported-dtype error.

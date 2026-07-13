@@ -37,6 +37,28 @@ implementation. Write the construct in its own language (`python` / `cpp`). One
 block may group a family of related signatures. Example code appears only to pin
 an ambiguous contract corner, never to repeat an implementation.
 
+An **Op entry** (HIR / TIR) describes the Op class the IR defines: the
+CamelCase class construction applied to its inputs and attributes, never a
+lowercase function-style spelling. Parameter roles go in a docstring block
+above the signature — one parameter per line, `;`-terminated except the last —
+and the signature line carries no trailing parameter comment:
+
+````md
+##### Cast
+```python
+"""
+x: input tensor;
+dtype: target element dtype
+"""
+Cast(x, dtype) -> Tensor
+```
+- constraints:
+  - contract rule
+````
+
+The same leading-docstring parameter block applies to every spec entry that
+shows a Python callable (runtime API functions and helpers included).
+
 Consensus ops may be grouped when one external reference defines their behavior.
 Custom TileFoundry ops and public runtime entries need their own entry.
 

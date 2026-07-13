@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Union
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16 as HirMmaSM80_16x8x16
@@ -35,7 +35,6 @@ from tilefoundry.ir.hir.tensor.gather import Gather as HirGather
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice as HirInsertSlice
 from tilefoundry.ir.hir.tensor.reduce import Reduce as HirReduce
 from tilefoundry.ir.hir.tensor.reshape import Reshape as HirReshape
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem as HirTupleGetItem
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.arith import (

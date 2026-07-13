@@ -72,6 +72,7 @@ _UNARY_ALIASES: tuple[tuple[str, UnaryKind], ...] = (
     ("abs", UnaryKind.ABS),
     ("logical_not", UnaryKind.NOT),
     ("rsqrt", UnaryKind.RSQRT),
+    ("exp", UnaryKind.EXP),
     ("log", UnaryKind.LOG),
     # SQUARE is a first-class UnaryKind, not a parser-level expansion
     # to mul(x, x), so codegen / lowering can see the "this is a

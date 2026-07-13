@@ -81,11 +81,16 @@ codegen from lowered IR, NOT guessed at runtime).
 ### 1.2 `jit()` API
 
 ```python
+"""
+fn_or_mod: a hir.Function or Module (normalized to a Module);
+target: the back-end target (default "cuda");
+options: optional CompilerOptions
+"""
 def jit(
-    fn_or_mod: Function | Module,             # a hir.Function or Module (normalized to a Module)
+    fn_or_mod: Function | Module,
     *,
-    target: str = "cuda",                     # the back-end target (default "cuda")
-    options: CompilerOptions | None = None,   # optional CompilerOptions
+    target: str = "cuda",
+    options: CompilerOptions | None = None,
 ) -> RuntimeModule: ...
 ```
 

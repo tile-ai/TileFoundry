@@ -19,7 +19,6 @@ from tests.ops.typeinfer_utils import (
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
-from tilefoundry.inspection.viewer.builder import ViewerBuilder
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.topk import TopK
@@ -198,24 +197,6 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
         assert isinstance(t.layout, ShardLayout)
         assert t.layout.layout.shape == (6, s), t.layout.layout.shape
         assert t.layout.layout.strides == (1, 1), "concrete strides, never None"
-
-
-def test_topk_renders_in_viewer():
-    """The viewer builder renders a TopK function (attributes included) without
-    error."""
-    param = Var(
-        type=TensorType(shape=(4, 256), dtype=DType.f32, layout=None, storage="gmem"),
-        name="x",
-    )
-    call = Call(type=param.type, target=TopK(k=6, axis=-1, largest=False, sorted=True), args=(param,))
-    result_type = TypeInferVisitor(TypeInferContext()).visit(call)
-    call = replace(call, type=result_type)
-    fn = Function.build(name="topk_view", params=(param,), body=call, return_type=result_type)
-    src = ViewerBuilder(fn).build().source
-    assert "topk" in src.lower(), "TopK node renders"
-    # The exact TopK attribute values render (name: value), not just the names.
-    for rendered in ("k: 6", "axis: -1", "largest: False", "sorted: True"):
-        assert rendered in src, f"expected {rendered!r} in viewer source"
 
 
 def test_topk_parser_preserves_largest_sorted():

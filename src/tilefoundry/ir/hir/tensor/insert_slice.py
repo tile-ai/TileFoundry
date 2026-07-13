@@ -3,12 +3,11 @@ from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
-from tilefoundry.ir.core import Constant, Op
+from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar, Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 
@@ -19,7 +18,7 @@ class InsertSlice(Op):
     dst = ParamDef(kind="input", pattern=Tensor)
     update = ParamDef(kind="input", pattern=Tensor)
     # A rank-0 scalar start (rank-1 dst) or a tuple of per-axis rank-0 scalars
-    # (rank-N); the parser lifts the tuple literal to an ``hir.tensor.Tuple``.
+    # (rank-N); the parser lifts the tuple literal to a core ``Tuple``.
     offsets = ParamDef(kind="input", pattern=Scalar)
 
 

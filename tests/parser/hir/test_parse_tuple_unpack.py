@@ -5,13 +5,14 @@ from __future__ import annotations
 import textwrap
 
 import pytest
+import torch
 
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.core import Call
+from tilefoundry.evaluator import evaluate
+from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TupleType
 from tilefoundry.parser.hir_parser import parse_script
@@ -108,10 +109,32 @@ def _ret_bare(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]):
 
 @pytest.mark.parametrize("fn", [_ret_paren, _ret_bare], ids=["paren", "bare"])
 def test_literal_tuple_return_parses_to_tuple_type(fn) -> None:
-    """Both spellings of a literal tuple return fold to an ``hir.tensor.Tuple``
+    """Both spellings of a literal tuple return fold to a core ``Tuple``
     body with a ``TupleType`` return of the element field types."""
     assert isinstance(fn.body, Tuple), f"body is {type(fn.body).__name__}"
     assert len(fn.body.elements) == 2
     assert isinstance(fn.return_type, TupleType)
     assert len(fn.return_type.fields) == 2
     assert all(f.dtype == DType.f32 for f in fn.return_type.fields)
+
+
+def test_tuple_return_evaluates_two_values() -> None:
+    torch.manual_seed(0)
+    a, b = torch.randn(4), torch.randn(4)
+    out = evaluate(_ret_paren, a, b, device="cpu")
+    assert isinstance(out, tuple) and len(out) == 2
+    torch.testing.assert_close(out[0], a + b)
+    torch.testing.assert_close(out[1], a * b)
+
+
+@func
+def _caller(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+    s, p = _ret_paren(a, b)
+    return add(s, p)  # noqa: F405
+
+
+def test_caller_destructures_two_output_helper() -> None:
+    torch.manual_seed(1)
+    a, b = torch.randn(4), torch.randn(4)
+    out = evaluate(_caller, a, b, device="cpu")
+    torch.testing.assert_close(out, (a + b) + (a * b))

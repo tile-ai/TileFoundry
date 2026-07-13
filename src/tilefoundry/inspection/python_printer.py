@@ -10,14 +10,13 @@ from __future__ import annotations
 import enum
 import re
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -390,6 +389,7 @@ def _build_kinded_alias_maps():
         },
         {
             UnaryKind.NEG: "neg", UnaryKind.ABS: "abs", UnaryKind.NOT: "logical_not",
+            UnaryKind.EXP: "exp", UnaryKind.LOG: "log",
         },
     )
 
@@ -528,7 +528,7 @@ def _emit_def(
     def _arg_ref(a) -> str:
         # A tuple-valued input (e.g. insert_slice's per-axis offsets) renders
         # inline as a literal so the parser's narrow route lifts it back to a
-        # hir Tuple on re-parse.
+        # core Tuple on re-parse.
         return _tuple_literal(a.elements) if isinstance(a, Tuple) else _names[id(a)]
 
     # Function signature. A ``TupleType`` return has no surface annotation; it
@@ -569,7 +569,7 @@ def _emit_def(
         if isinstance(expr, Tuple):
             # A tuple is rendered inline at its use site: as a literal argument
             # (op input) or by the ``return`` statement (function body). The
-            # parser lifts an inline offset tuple back to a hir Tuple, whereas a
+            # parser lifts an inline offset tuple back to a core Tuple, whereas a
             # hoisted ``name = (...)`` binding would not re-parse.
             continue
         if isinstance(expr, Call):

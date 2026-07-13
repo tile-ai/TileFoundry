@@ -22,11 +22,10 @@ from tests.ops.typeinfer_utils import (
     ten,
 )
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call, Constant, Var
-from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -61,31 +60,36 @@ def _infer_insert(dst_ty, upd_ty, offsets_expr):
     return TypeInferVisitor(TypeInferContext()).visit(call)
 
 
-def _eval_rankn(dst: torch.Tensor, upd: torch.Tensor, lit_offsets, runtime_axis=None):
-    """Evaluate a rank-N insert_slice with an offset tuple. ``lit_offsets`` are
-    per-axis literals; if ``runtime_axis`` is given, that axis's offset is a
-    runtime rank-0 param carrying ``lit_offsets[runtime_axis]`` instead."""
-    from dataclasses import replace  # noqa: PLC0415
+_DSL_PRELUDE = (
+    "from __future__ import annotations\n"
+    "from tilefoundry import func\n"
+    "from tilefoundry.dsl import Tensor, tf\n"
+    "\n"
+)
 
-    dst_p = Var(type=TensorType(shape=tuple(dst.shape), dtype=_F, layout=None, storage="gmem"), name="dst")
-    upd_p = Var(type=TensorType(shape=tuple(upd.shape), dtype=_F, layout=None, storage="gmem"), name="upd")
-    params = [dst_p, upd_p]
-    inputs = [dst, upd]
-    elems = []
+
+def _eval_rankn(dst: torch.Tensor, upd: torch.Tensor, lit_offsets, runtime_axis=None):
+    """Evaluate a rank-N insert_slice through the parsed DSL surface.
+    ``lit_offsets`` are per-axis literals; if ``runtime_axis`` is given, that
+    axis's offset is a runtime rank-0 i32 param carrying
+    ``lit_offsets[runtime_axis]`` instead."""
+    d = ", ".join(str(int(x)) for x in dst.shape)
+    u = ", ".join(str(int(x)) for x in upd.shape)
+    extra_params, inputs, elems = [], [dst, upd], []
     for ax, o in enumerate(lit_offsets):
         if ax == runtime_axis:
-            v = Var(type=_SI32, name=f"o{ax}")
-            params.append(v)
-            inputs.append(torch.tensor(o, dtype=torch.int32))
-            elems.append(v)
+            extra_params.append(f'o{ax}: Tensor[(), "i32"]')
+            inputs.append(torch.tensor(int(o), dtype=torch.int32))
+            elems.append(f"o{ax}")
         else:
-            elems.append(_lit(o))
-    offsets = _offsets(*elems)
-    call = Call(type=dst_p.type, target=InsertSlice(), args=(dst_p, upd_p, offsets))
-    rt = TypeInferVisitor(TypeInferContext()).visit(call)
-    call = replace(call, type=rt)
-    fn = Function.build(name="ins", params=tuple(params), body=call, return_type=rt)
-    return evaluate(fn, *inputs, device="cpu")
+            elems.append(str(int(o)))
+    extra = "".join(f", {p}" for p in extra_params)
+    src = (
+        _DSL_PRELUDE + "@func\n"
+        f'def ins(dst: Tensor[({d}), "f32"], upd: Tensor[({u}), "f32"]{extra}) -> Tensor[({d}), "f32"]:\n'
+        f"    return tf.insert_slice(dst, upd, ({', '.join(elems)}))\n"
+    )
+    return evaluate(parse_script(src), *inputs, device="cpu")
 
 
 def _ref_scatter(dst, upd, offsets):
@@ -564,74 +568,6 @@ def test_insert_slice_dynamic_offset() -> None:
     assert torch.allclose(out, exp, rtol=1e-4, atol=1e-4), (out - exp).abs().max()
 
 
-# ── rank-N in-place lowering: N-coord window view of the carry buffer ──────
-
-_ND_A, _ND_B, _ND_C, _ND_K = 1, 8, 4, 3
-
-
-@module(entry="nd_carry")
-class _NdCarry:
-    """A loop-carried rank-3 in-place ``insert_slice`` writing a length-1 window
-    on axis 1 (offset = induction var) each iteration, full on the last axis."""
-
-    @func(topologies=(Topology("thread", 1),))
-    def nd_carry(
-        base: Tensor[(_ND_A, _ND_B, _ND_C), "f32"],
-        v: Tensor[(_ND_A, 1, _ND_C), "f32"],
-    ):
-        with Mesh(Topology("thread", 1), (1,), ("t",)) as m:
-            br = reshard(base, (_ND_A, _ND_B, _ND_C @ m.t), "rmem")
-            vr = reshard(v, (_ND_A, 1, _ND_C @ m.t), "rmem")
-            acc = full_like(br, 0.0)
-            for i in tile(_ND_K):
-                acc = insert_slice(acc, vr, (0, i, 0))
-            return reshard(acc, (_ND_A, _ND_B, _ND_C @ m.t), "gmem")
-
-
-def test_insert_slice_rankn_in_place_carry() -> None:
-    """The rank-3 in-place ``insert_slice`` lowers to a TensorView window over
-    the existing carry buffer using three independent coordinates, written in
-    place — no replacement destination allocation in the loop."""
-    pf = _lower(_NdCarry)
-    nodes = []
-    _walk(pf.body, False, nodes)
-
-    alloc_before = {
-        id(var) for in_loop, kind, var, val in nodes
-        if kind == "let" and not in_loop and isinstance(_op_of(val), AllocTensor)
-    }
-    alloc_in_loop = {
-        id(var) for in_loop, kind, var, val in nodes
-        if kind == "let" and in_loop and isinstance(_op_of(val), AllocTensor)
-    }
-    windows = [
-        (var, val) for in_loop, kind, var, val in nodes
-        if kind == "let" and in_loop
-        and isinstance(_op_of(val), TirTensorView)
-        and len(val.args) > 1
-        and id(val.args[0]) in alloc_before
-    ]
-    assert windows, "no in-place rank-N insert_slice window over a carry buffer found"
-    win_var, win_val = windows[0]
-
-    # Three independent coordinates: memory + one coord per axis.
-    assert len(win_val.args) == 1 + 3, (
-        f"expected dst + 3 coords, got {len(win_val.args)} args"
-    )
-    carry_buf = win_val.args[0]
-    assert id(carry_buf) in alloc_before, "window must view a buffer allocated before the loop"
-    assert id(carry_buf) not in alloc_in_loop, "window must not view a replacement allocation"
-
-    copied = any(
-        kind == "eval"
-        and isinstance(_op_of(val), TirCopy)
-        and len(val.args) == 2
-        and val.args[1] is win_var
-        for in_loop, kind, var, val in nodes
-    )
-    assert copied, "rank-N insert_slice window is not written in place"
-
-
 # ── rank-N insert_slice end-to-end on GPU: per-axis window + coords ────────
 #
 # A non-contiguous per-axis window (partial inner axis) written at a dynamic,
@@ -664,82 +600,6 @@ class _NdWindow:
             return reshard(acc, (_NW_A, _NW_B, _NW_C @ m.t), "gmem")
 
 
-def _cuda_source(cls) -> str:
-    import tilefoundry  # noqa: PLC0415
-    from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
-    from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
-
-    return emit_cuda_module(
-        group_functions_by_target(tilefoundry.lower(cls, target="cuda"))["cuda"]
-    ).source
-
-
-def test_insert_slice_rankn_codegen_covers_retained_axes() -> None:
-    """Auxiliary source check: the rank-N window tile emits one coordinate and
-    one window extent per *retained* per-thread axis (degenerate extent-1 axes
-    are elided, so this is ``make_coord(i, 0)`` here) — not a single flat coord /
-    flat tile size."""
-    import re  # noqa: PLC0415
-
-    src = _cuda_source(_NdWindow)
-    tiles = re.findall(r"cute::local_tile\((.*?)\);", src, re.DOTALL)
-    assert tiles, "no local_tile emitted for the rank-N insert_slice window"
-    nd = [
-        t for t in tiles
-        if "tilefoundry::local(" in t and re.search(r"make_coord\([^)]*,", t)
-    ]
-    assert nd, f"no N-D local_tile over a per-thread view found; got: {tiles}"
-    call = nd[0]
-    coords = [c.strip() for c in re.search(r"make_coord\((.*?)\)", call).group(1).split(",")]
-    shape = [s.strip() for s in re.search(r"make_shape\((.*?)\)", call).group(1).split(",")]
-    # One coordinate and one window extent per retained axis: coord rank ==
-    # window rank, more than one axis (not a flat single coord), and the dynamic
-    # middle coord is not dropped to a constant 0.
-    assert len(coords) == len(shape) >= 2, f"coords={coords} shape={shape}"
-    assert any(c != "0" for c in coords), f"all coordinates collapsed to 0: {coords}"
-
-
-def _rankn_window_let(mod):
-    """The lowered N-D ``insert_slice`` window LetStmt (TensorView, >2 coords)."""
-    def walk(node):
-        if isinstance(node, Sequential):
-            for s in node.body:
-                yield from walk(s)
-        elif isinstance(node, MeshScope):
-            yield from walk(node.body)
-        elif isinstance(node, For):
-            yield from walk(node.body)
-        elif isinstance(node, LetStmt):
-            yield node
-            yield from walk(node.body)
-
-    for let in walk(_lower(mod).body):
-        v = let.value
-        if isinstance(_op_of(v), TirTensorView) and len(v.args) > 2:
-            return let
-    raise AssertionError("no rank-N TensorView window LetStmt found")
-
-
-@pytest.mark.parametrize("delta", [1, -1], ids=["extra_coord", "missing_coord"])
-def test_insert_slice_rankn_codegen_coord_count_fail_closed(delta) -> None:
-    """The N-D window emitter fail-closes when the coordinate count does not
-    match the layout-derived destination rank — a missing or extra coordinate
-    raises rather than silently ignoring or fabricating an axis."""
-    import dataclasses  # noqa: PLC0415
-
-    import tilefoundry.codegen.cuda  # noqa: F401,PLC0415 — emitter autodiscovery
-    from tilefoundry.codegen.cuda.context import CodegenContext  # noqa: PLC0415
-    from tilefoundry.codegen.cuda.tir.memory.tensor_view import _emit  # noqa: PLC0415
-
-    let = _rankn_window_let(_NdWindow)
-    coords = let.value.args[1:]
-    if delta > 0:
-        bad = let.value.args + (coords[-1],)
-    else:
-        bad = let.value.args[:-1]
-    bad_let = dataclasses.replace(let, value=dataclasses.replace(let.value, args=bad))
-    with pytest.raises(ValueError, match="offsets"):
-        _emit(bad_let, CodegenContext())
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

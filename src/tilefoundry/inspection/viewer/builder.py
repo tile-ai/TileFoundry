@@ -13,10 +13,10 @@ from tilefoundry.inspection.python_printer import (
     _tensor_annotation,
     shard_compact_inline,
 )
+from tilefoundry.ir.core import Tuple as HirTuple
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.tensor.tuple import Tuple as HirTuple
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.shard.mesh import Mesh

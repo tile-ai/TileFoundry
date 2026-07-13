@@ -460,42 +460,69 @@ below; code carries only a one-line purpose docstring
 
 ##### AllocTensor
 ```python
-AllocTensor(tensor_type) -> Tensor          # value form; tensor_type: attribute carrying the allocated tensor's result type
+"""
+value form;
+tensor_type: attribute carrying the allocated tensor's result type
+"""
+AllocTensor(tensor_type) -> Tensor
 ```
 - constraints:
   - allocate a tensor; a value Op anchored by `LetStmt.value`.
 
 ##### MemorySpan
 ```python
-MemorySpan(region, tensor_type) -> Tensor    # value form; region: the memory region being re-interpreted; tensor_type: the typed-tensor view placed over it
+"""
+value form;
+region: the memory region being re-interpreted;
+tensor_type: the typed-tensor view placed over it
+"""
+MemorySpan(region, tensor_type) -> Tensor
 ```
 - constraints:
   - re-interpret a memory region as a typed tensor; a value Op.
 
 ##### PtrOf
 ```python
-PtrOf(tensor) -> ptr                          # value form; tensor: the tensor whose device address is taken
+"""
+value form;
+tensor: the tensor whose device address is taken
+"""
+PtrOf(tensor) -> ptr
 ```
 - constraints:
   - take the device address of a tensor for downstream view ops; a value Op.
 
 ##### TensorView
 ```python
-TensorView(tensor, ...) -> Tensor             # value form; tensor: the base tensor; view spec: the sub-view descriptor (offsets / layout)
+"""
+value form;
+tensor: the base tensor;
+view spec: the sub-view descriptor (offsets / layout)
+"""
+TensorView(tensor, ...) -> Tensor
 ```
 - constraints:
   - derive a sub-view of a tensor; a value Op.
 
 ##### Copy
 ```python
-Copy(src, dst)                                # effect form; src / dst: source and destination tensors
+"""
+effect form;
+src / dst: source and destination tensors
+"""
+Copy(src, dst)
 ```
 - constraints:
   - byte-equivalent copy between two tensors.
 
 ##### Fill
 ```python
-Fill(dst, value)                              # effect form; dst: destination tensor; value: scalar broadcast into dst
+"""
+effect form;
+dst: destination tensor;
+value: scalar broadcast into dst
+"""
+Fill(dst, value)
 ```
 - constraints:
   - broadcast a scalar value into a tensor.
@@ -504,7 +531,12 @@ Fill(dst, value)                              # effect form; dst: destination te
 
 ##### Mma
 ```python
-Mma(acc, lhs, rhs, atom?)                     # effect form: acc += lhs @ rhs; acc / lhs / rhs: accumulator and operand fragments; atom: optional compile-time MmaAtom attribute, absent ⇒ bare-Mma per-target path
+"""
+effect form: acc += lhs @ rhs;
+acc / lhs / rhs: accumulator and operand fragments;
+atom: optional compile-time MmaAtom attribute, absent ⇒ bare-Mma per-target path
+"""
+Mma(acc, lhs, rhs, atom?)
 ```
 - constraints:
   - matrix-multiply-accumulate `acc += lhs @ rhs`; per-target PTX lowering lives in
@@ -513,14 +545,22 @@ Mma(acc, lhs, rhs, atom?)                     # effect form: acc += lhs @ rhs; a
 
 ##### ReLU
 ```python
-ReLU(x, dst)                                  # effect form; x / dst: input and destination tensors
+"""
+effect form;
+x / dst: input and destination tensors
+"""
+ReLU(x, dst)
 ```
 - constraints:
   - pointwise `max(x, 0)`.
 
 ##### RMSNorm
 ```python
-RMSNorm(x, dst, ...)                          # effect form; x / dst: input and normalised-output tensors
+"""
+effect form;
+x / dst: input and normalised-output tensors
+"""
+RMSNorm(x, dst, ...)
 ```
 - constraints:
   - fused RMS normalisation.
@@ -530,7 +570,13 @@ RMSNorm(x, dst, ...)                          # effect form; x / dst: input and 
 ##### Reduce
 
 ```python
-Reduce(src, dst, workspace?, axes, kind)    # src / dst: effect-form operands; workspace: optional staging buffer sized by lowering; axes: reduced-axis tuple; kind: ReduceKind tag
+"""
+src / dst: effect-form operands;
+workspace: optional staging buffer sized by lowering;
+axes: reduced-axis tuple;
+kind: ReduceKind tag
+"""
+Reduce(src, dst, workspace?, axes, kind)
 ```
 - constraints:
   - `Reduce` carries no dispatch parameter; runtime selects the strategy.
@@ -548,14 +594,24 @@ TIR; lowering preserves the kind value without re-mapping.
 
 ##### Binary
 ```python
-Binary(lhs, rhs, dst, kind)    # lhs / rhs: input operands; dst: destination operand; kind: BinaryKind tag
+"""
+lhs / rhs: input operands;
+dst: destination operand;
+kind: BinaryKind tag
+"""
+Binary(lhs, rhs, dst, kind)
 ```
 - constraints:
   - Lowers to the binary runtime family without per-kind TIR classes.
 
 ##### Unary
 ```python
-Unary(src, dst, kind)    # src: input operand; dst: destination operand; kind: UnaryKind tag, including rsqrt
+"""
+src: input operand;
+dst: destination operand;
+kind: UnaryKind tag, including rsqrt
+"""
+Unary(src, dst, kind)
 ```
 - constraints:
   - Lowers to the unary runtime family without per-kind TIR classes.
@@ -567,7 +623,11 @@ the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
 the non-grid/block launch config through the Op attributes.
 
 ```python
-Launch(cluster?, dynamic_smem?, stream?, attrs?)    # effect form; cluster / dynamic_smem / stream / attrs: attribute-carried launch configuration
+"""
+effect form;
+cluster / dynamic_smem / stream / attrs: attribute-carried launch configuration
+"""
+Launch(cluster?, dynamic_smem?, stream?, attrs?)
 # Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y, grid_z, block_x, block_y, block_z, *forwarded_args))
 ```
 
@@ -760,7 +820,10 @@ producer issues copies, groups them, and a consumer waits on the group queue.
 ##### CopyAsync
 
 ```python
-CopyAsync(src, dst)    # src / dst: async staging operands
+"""
+src / dst: async staging operands
+"""
+CopyAsync(src, dst)
 ```
 - constraints:
   - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
@@ -770,7 +833,10 @@ CopyAsync(src, dst)    # src / dst: async staging operands
 ##### CpAsyncCommit
 
 ```python
-CpAsyncCommit()    # effect: closes the current in-flight async-copy group
+"""
+effect: closes the current in-flight async-copy group
+"""
+CpAsyncCommit()
 ```
 - constraints:
   - Later `CpAsyncWait` counts committed groups.
@@ -778,7 +844,10 @@ CpAsyncCommit()    # effect: closes the current in-flight async-copy group
 ##### CpAsyncWait
 
 ```python
-CpAsyncWait(n)    # n: most-recent committed groups allowed to remain in flight
+"""
+n: most-recent committed groups allowed to remain in flight
+"""
+CpAsyncWait(n)
 ```
 - constraints:
   - `n` is a non-negative compile-time count.

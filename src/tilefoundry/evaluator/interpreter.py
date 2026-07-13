@@ -18,10 +18,9 @@ from tilefoundry.evaluator.value import (
     Value,
     to_torch_dtype,
 )
-from tilefoundry.ir.core import Call, Constant, Var
+from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.visitor import ExprVisitor
 

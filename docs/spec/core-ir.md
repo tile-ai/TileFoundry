@@ -145,7 +145,7 @@ class Constant(Expr):
     value: object  # a literal; a scalar is a rank-0 TensorType
 
 class Tuple(Expr):
-    fields: tuple[Expr, ...]  # value-level multi-output aggregate; type is TupleType
+    elements: tuple[Expr, ...]  # value-level multi-output aggregate; type is TupleType
 ```
 
 - constraints:

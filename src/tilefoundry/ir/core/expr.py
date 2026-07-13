@@ -36,3 +36,15 @@ class Call(Expr):
     args: tuple[Expr, ...]
 
 
+@dataclass(frozen=True)
+class Tuple(Expr):
+    """Value-form explicit tuple construction.
+
+    ``Tuple((a, b))``: the type is ``TupleType(fields=(a.type, b.type))``. Not
+    a registered Op — an IR-level construct emitted by the parser for
+    ``return (a, b)`` bodies and per-axis scalar tuples (e.g. ``insert_slice``
+    offsets).
+    """
+    elements: tuple[Expr, ...]
+
+

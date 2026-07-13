@@ -4,10 +4,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Generic, TypeVar
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmt import Stmt

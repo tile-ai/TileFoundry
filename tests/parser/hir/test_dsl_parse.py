@@ -9,11 +9,10 @@ from __future__ import annotations
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.core import Call
+from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.relu import ReLU
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.types import DType
 
 # ── Typical op shapes via real @func authoring ───────────────────────────
@@ -133,7 +132,7 @@ def _insert_slice_offset_tuple(
 
 def test_parse_insert_slice_offset_tuple() -> None:
     """The rank-N ``insert_slice`` per-axis offset argument parses to an
-    ``hir.tensor.Tuple`` with ordered rank-0 integer scalar fields (a literal,
+    core ``Tuple`` with ordered rank-0 integer scalar fields (a literal,
     a runtime scalar, a literal) — not a rank-1 offset tensor."""
     body = _insert_slice_offset_tuple.body
     assert isinstance(body, Call) and isinstance(body.target, InsertSlice)

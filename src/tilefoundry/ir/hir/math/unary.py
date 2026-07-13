@@ -16,7 +16,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import DType, TensorType, reject_low_precision
+from tilefoundry.ir.types import DType, TensorType
 
 
 @register_op(dialect="tf", category="math")
@@ -31,7 +31,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not isinstance(op.kind, UnaryKind):
         ctx.error(call, f"Unary: kind must be UnaryKind, got {type(op.kind)}")
     x_ty = ctx.type_of(call.args[0])
-    reject_low_precision(ctx, call, x_ty)
     if op.kind is UnaryKind.NOT and x_ty.dtype != DType.bool:
         ctx.error(call, "Unary NOT: operand must be bool")
     return TensorType(
@@ -51,6 +50,7 @@ def _eval_unary(ctx):
         UnaryKind.RELU: torch.relu,
         UnaryKind.SQUARE: torch.square,
         UnaryKind.RSQRT: torch.rsqrt,
+        UnaryKind.EXP: torch.exp,
         UnaryKind.LOG: torch.log,
     }
     return TensorValue(data=fns[ctx.op.kind](ctx.args[0].data), type=ctx.result_type)

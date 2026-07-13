@@ -341,15 +341,19 @@ op that changes a value's layout / mesh.
 #### `ir/hir/math/`
 
 Pointwise arithmetic and comparison, torch semantics with TileFoundry
-type-promotion. Most user-callable names (`add` / `cmp_eq` / `logical_and` / …)
-are surface aliases ([core-ir §2.3](./core-ir.md)) over the kinded `Binary` /
-`Unary` Ops. A few pointwise ops are first-class per-name IR classes instead
-(e.g. `Exp`); their surface name maps to the dedicated Op, not to a kind.
+type-promotion. User-callable names (`add` / `cmp_eq` / `logical_and` / …) are
+surface aliases ([core-ir §2.3](./core-ir.md)) over the kinded Ops; there are no
+per-name IR classes.
 [torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
 
 ##### Binary
 ```python
-Binary(kind, lhs, rhs) -> Tensor    # kind: binary arithmetic, comparison, or boolean tag; lhs / rhs: input tensors
+"""
+kind: binary arithmetic, comparison, or boolean tag;
+lhs: input tensor;
+rhs: input tensor
+"""
+Binary(kind, lhs, rhs) -> Tensor
 ```
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
@@ -357,20 +361,15 @@ Binary(kind, lhs, rhs) -> Tensor    # kind: binary arithmetic, comparison, or bo
 
 ##### Unary
 ```python
-Unary(kind, x) -> Tensor    # kind: unary tag including neg, abs, logical_not, rsqrt, and log; x: input tensor
+"""
+kind: unary tag including neg, abs, logical_not, rsqrt, exp, and log;
+x: input tensor
+"""
+Unary(kind, x) -> Tensor
 ```
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
-  - `log` is the natural logarithm; `exp` is NOT a Unary kind — it is the
-    first-class `Exp` Op below.
-
-##### Exp
-```python
-Exp(x) -> Tensor    # x: input tensor
-```
-- constraints:
-  - Pointwise natural exponential `e ** x`; a first-class Op with surface name
-    `exp`, not a `Unary` kind.
+  - `exp` is the natural exponential `e ** x`; `log` is the natural logarithm.
 
 #### `ir/hir/tensor/`
 
@@ -382,21 +381,31 @@ Consensus torch / numpy structural ops.
 
 ##### Cast
 ```python
-Cast(x, dtype) -> Tensor    # x: input tensor; dtype: target element dtype
+"""
+x: input tensor;
+dtype: target element dtype
+"""
+Cast(x, dtype) -> Tensor
 ```
 - constraints:
   - Identity in shape / storage / layout; only the element dtype changes to
     `dtype`. A `ShardLayout` input keeps its layout (the relation is the identity).
-  - Cast type inference permits a low-precision `dtype` (`fp8e4m3` / `f8e8m0` /
-    `f4e2m1`) as either the input or the target — `Cast` is the boundary for those
-    dtypes (see types.md §3), whereas generic arithmetic rejects them.
+  - `Cast` is the conversion boundary for the low-precision dtypes (`fp8e4m3` /
+    `f8e8m0` / `f4e2m1`, see types.md §3), accepted as either the input or the
+    target dtype.
   - The evaluator supports a `dtype` in `{f32, f16, bf16, fp8e4m3, f8e8m0, i32,
     i64, bool}`; evaluating a `Cast` to a dtype outside this set (e.g. `f4e2m1`)
     raises an unsupported-dtype error.
 
 ##### Gather
 ```python
-Gather(x, index, axis, batch_dims=0) -> Tensor    # x: source; index: integer index tensor; axis: gathered axis; batch_dims: number of leading batched dims
+"""
+x: source;
+index: integer index tensor;
+axis: gathered axis;
+batch_dims: number of leading batched dims
+"""
+Gather(x, index, axis, batch_dims=0) -> Tensor
 ```
 - constraints:
   - Result shape is `x.shape[:axis] + index.shape[batch_dims:] + x.shape[axis+1:]`; the gathered `axis` is replaced by `index`'s non-batch dims, and `x`'s other dims pass through.
@@ -407,14 +416,25 @@ Gather(x, index, axis, batch_dims=0) -> Tensor    # x: source; index: integer in
 
 ##### Zeros
 ```python
-Zeros(shape, dtype, storage) -> Tensor    # shape: output logical shape; dtype: output dtype; storage: output storage kind
+"""
+shape: output logical shape;
+dtype: output dtype;
+storage: output storage kind
+"""
+Zeros(shape, dtype, storage) -> Tensor
 ```
 - constraints:
   - The result is zero-initialised.
 
 ##### Reduce
 ```python
-Reduce(x, axes, keepdim, kind) -> Tensor    # x: input tensor; axes: reduced logical axes; keepdim: whether reduced axes remain as size-1 axes; kind: mean, sum, abs_max, or max
+"""
+x: input tensor;
+axes: reduced logical axes;
+keepdim: whether reduced axes remain as size-1 axes;
+kind: mean, sum, abs_max, or max
+"""
+Reduce(x, axes, keepdim, kind) -> Tensor
 ```
 - constraints:
   - The logical result shape follows numpy reduction rules.
@@ -427,9 +447,14 @@ Reduce(x, axes, keepdim, kind) -> Tensor    # x: input tensor; axes: reduced log
   - Lowering emits TIR `Reduce`; runtime dispatch is derived from operands, not
     from an HIR dispatch field.
 
-##### insert_slice
+##### InsertSlice
 ```python
-insert_slice(dst, update, offsets) -> Tensor    # dst: target tensor (value form returns a tensor anchored on this buffer at lowering time); update: tensor written into the window; offsets: per-axis window starts — a rank-0 integer scalar for a rank-1 dst, or a tuple of rank-0 integer scalars (literal or runtime), one per axis, for rank N
+"""
+dst: target tensor (value form returns a tensor anchored on this buffer at lowering time);
+update: tensor written into the window;
+offsets: per-axis window starts — a rank-0 integer scalar for a rank-1 dst, or a tuple of rank-0 integer scalars (literal or runtime), one per axis, for rank N
+"""
+InsertSlice(dst, update, offsets) -> Tensor
 ```
 - constraints:
   - `update` has the same rank and dtype as `dst`; the window on each axis is
@@ -444,7 +469,14 @@ insert_slice(dst, update, offsets) -> Tensor    # dst: target tensor (value form
 
 ##### TopK
 ```python
-TopK(x, k, axis=-1, largest=True, sorted=True) -> (Tensor, Tensor)    # x: input; k: elements kept on axis; largest: greatest vs smallest; sorted: ordered selection -> (values keep x dtype, i64 indices)
+"""
+x: input tensor;
+k: elements kept on the selected axis;
+axis: selected axis;
+largest: greatest vs smallest selection;
+sorted: ordered selection
+"""
+TopK(x, k, axis=-1, largest=True, sorted=True) -> (Tensor, Tensor)
 ```
 - constraints:
   - The result is a `(values, indices)` tuple; both shrink the selected axis to
@@ -474,14 +506,21 @@ Shape-level Ops on whole shape values (per-axis dim Ops are
 
 ##### ShapeExtract
 ```python
-ShapeExtract(shape, axis) -> Dim    # shape: input shape value; axis: extracted axis
+"""
+shape: input shape value;
+axis: extracted axis
+"""
+ShapeExtract(shape, axis) -> Dim
 ```
 - constraints:
   - The result is the dimension at `axis`.
 
 ##### ShapeCompose
 ```python
-ShapeCompose(dims) -> Shape    # dims: per-axis dimensions
+"""
+dims: per-axis dimensions
+"""
+ShapeCompose(dims) -> Shape
 ```
 - constraints:
   - The result is a shape value assembled in input order.
@@ -493,7 +532,12 @@ ShapeCompose(dims) -> Shape    # dims: per-axis dimensions
 
 ##### Reshard
 ```python
-Reshard(x, layout=None, storage=None) -> Tensor    # x: input tensor; layout: optional target ShardLayout; storage: optional target storage kind
+"""
+x: input tensor;
+layout: optional target ShardLayout;
+storage: optional target storage kind
+"""
+Reshard(x, layout=None, storage=None) -> Tensor
 ```
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
@@ -533,7 +577,10 @@ this op.
 
 ##### Local
 ```python
-Local(x) -> Tensor    # x: input tensor with ShardLayout
+"""
+x: input tensor with ShardLayout
+"""
+Local(x) -> Tensor
 ```
 - constraints:
   - The result shape contracts each `Split` axis by that mesh axis's extent.

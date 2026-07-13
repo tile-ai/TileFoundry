@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
 
-from .dtype import LOW_PRECISION_DTYPES, DType, reject_low_precision
+from .dtype import DType
 from .tensor_type import TensorType, TupleType, Type, UnitType
 from .callable_type import (
     CallableType,
@@ -14,14 +14,12 @@ from .callable_type import (
 __all__ = [
     "CallableType",
     "DType",
-    "LOW_PRECISION_DTYPES",
     "TensorType",
     "TupleType",
     "Type",
     "UnitType",
     "callable_type_for",
     "callable_type_for_prim_function",
-    "reject_low_precision",
 ]
 
 # Lazy-register dim ops' typeinfer after core is fully loaded. We defer the

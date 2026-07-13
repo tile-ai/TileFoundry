@@ -10,12 +10,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
@@ -25,6 +19,16 @@ from tests.ops.typeinfer_utils import (
     sharded,
     ten,
 )
+from tilefoundry import func
+from tilefoundry.dsl import Tensor, tf
+from tilefoundry.evaluator import evaluate
+from tilefoundry.ir.core import Call
+from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
 
 _ADD = Binary(kind=BinaryKind.ADD)
 _F = DType.f32
@@ -172,3 +176,74 @@ def test_binary_evaluate(kind):
     _a, _b = torch.randn(2, 3), torch.randn(2, 3)
     expected = {BinaryKind.ADD: _a + _b, BinaryKind.SUB: _a - _b, BinaryKind.MUL: _a * _b}[kind]
     run_eval_case(EvalCase("", Binary(kind=kind), (_a, _b), expected))
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float16, torch.bfloat16], ids=["f32", "f16", "bf16"]
+)
+def test_binary_evaluate_dtypes(dtype):
+    torch.manual_seed(0)
+    a, b = torch.randn(2, 3, dtype=dtype), torch.randn(2, 3, dtype=dtype)
+    run_eval_case(EvalCase("", Binary(kind=BinaryKind.ADD), (a, b), a + b))
+
+
+# Low-precision dtypes are legal typeinfer operands: inference is purely
+# logical, so they pass through like any other element type.
+@pytest.mark.parametrize(
+    "dt", [DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1], ids=lambda d: d.value
+)
+def test_binary_low_precision_typeinfer_passthrough(dt):
+    run_typeinfer_case(
+        TypeInferCase(
+            f"low_precision_{dt.value}",
+            _ADD,
+            (ten((4, 8), dt), ten((4, 8), dt)),
+            ten((4, 8), dt),
+        )
+    )
+
+
+# ── minimum / maximum surface aliases (asymmetric clamp oracles) ─────────────
+
+
+@func
+def _min_clamp(g: Tensor[(4, 256), "f32"]) -> Tensor[(4, 256), "f32"]:
+    return tf.minimum(g, 10.0)
+
+
+@func
+def _asym_clamp(u: Tensor[(4, 256), "f32"]) -> Tensor[(4, 256), "f32"]:
+    return tf.maximum(tf.minimum(u, 10.0), -10.0)
+
+
+def test_min_clamp_matches_torch():
+    """``minimum(g, 10)`` == ``torch.clamp(g, max=10)``."""
+    torch.manual_seed(0)
+    g = torch.randn(4, 256) * 20.0
+    out = evaluate(_min_clamp, g, device="cpu")
+    torch.testing.assert_close(out.float(), torch.clamp(g, max=10.0), atol=1e-6, rtol=1e-6)
+
+
+def test_asym_clamp_matches_torch():
+    """``maximum(minimum(u, 10), -10)`` == ``torch.clamp(u, -10, 10)``."""
+    torch.manual_seed(1)
+    u = torch.randn(4, 256) * 20.0
+    out = evaluate(_asym_clamp, u, device="cpu")
+    torch.testing.assert_close(
+        out.float(), torch.clamp(u, min=-10.0, max=10.0), atol=1e-6, rtol=1e-6
+    )
+
+
+def test_minimum_maximum_resolve_to_binary_min_max():
+    """``minimum`` / ``maximum`` are surface aliases of the ``Binary`` MIN / MAX
+    kinds."""
+    lo = _min_clamp.body
+    assert isinstance(lo, Call) and isinstance(lo.target, Binary)
+    assert lo.target.kind is BinaryKind.MIN
+
+    hi = _asym_clamp.body
+    assert isinstance(hi, Call) and isinstance(hi.target, Binary)
+    assert hi.target.kind is BinaryKind.MAX
+    inner = hi.args[0]
+    assert isinstance(inner, Call) and isinstance(inner.target, Binary)
+    assert inner.target.kind is BinaryKind.MIN

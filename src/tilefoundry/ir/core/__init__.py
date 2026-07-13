@@ -3,7 +3,7 @@ from __future__ import annotations
 # ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
 
 from .errors import VerifyError
-from .expr import Call, Constant, Expr, Var
+from .expr import Call, Constant, Expr, Tuple, Var
 from .op import Op, ParameterInfo
 from .registry import (
     AnalysisRegistry,
@@ -22,7 +22,7 @@ from .context import TypeInferContext
 
 __all__ = [
     # exprs
-    "Expr", "Var", "Constant", "Call",
+    "Expr", "Var", "Constant", "Call", "Tuple",
     # op
     "Op", "ParameterInfo",
     # registry
