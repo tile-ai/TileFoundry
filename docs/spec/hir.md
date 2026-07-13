@@ -377,8 +377,19 @@ Exp(x) -> Tensor    # x: input tensor
 Tensor structural operations; consensus ops follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
-##### Reshape / Transpose / Slice / Concat / Stack / Split / Gather / ShapeOf / Rank / Cast
+##### Reshape / Transpose / Slice / Concat / Stack / ShapeOf / Rank / Cast
 Consensus torch / numpy structural ops.
+
+##### Gather
+```python
+Gather(x, index, axis, batch_dims=0) -> Tensor    # x: source; index: integer index tensor; axis: gathered axis; batch_dims: number of leading batched dims
+```
+- constraints:
+  - Result shape is `x.shape[:axis] + index.shape[batch_dims:] + x.shape[axis+1:]`; the gathered `axis` is replaced by `index`'s non-batch dims, and `x`'s other dims pass through.
+  - `batch_dims` MUST satisfy `0 <= batch_dims <= min(axis, rank(index))`, and the leading `batch_dims` dims of `x` and `index` MUST be equal.
+  - Element rule: `out[c.., i.., t..] = x[c.., index[b.., i..], t..]`, where the first `batch_dims` of the `axis` leading dims also index `index`.
+  - `batch_dims=0` (default) inserts the full `index` shape at `axis`; a leading-dimension shape coincidence MUST NOT implicitly enable batching — batching is selected only by an explicit positive `batch_dims`.
+  - `batch_dims > 0` is defined for type inference and evaluation over unsharded operands; a `ShardLayout` operand and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed. `batch_dims=0` retains the existing sharded slice and lowering behavior.
 
 ##### Zeros
 ```python

@@ -1044,6 +1044,12 @@ class _Lowerer:
     @register_hir_lowering(HirGather)
     def _lower_gather(self, target, expr) -> Var:
         key = id(expr)
+        if getattr(target, "batch_dims", 0) != 0:
+            # The batched contract is evaluator/typeinfer-only for now; refuse to
+            # fall through to the single-coordinate slice-view lowering below.
+            raise NotImplementedError(
+                "Gather: batched gather lowering (batch_dims>0) is not yet supported"
+            )
         x = self.lower_expr(expr.args[0])
         idx = self.lower_expr(expr.args[1])
         # Compute view layout from sliced shape
