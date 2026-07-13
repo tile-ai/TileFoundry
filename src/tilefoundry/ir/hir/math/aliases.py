@@ -33,6 +33,8 @@ _BINARY_ALIASES: tuple[tuple[str, BinaryKind], ...] = (
     ("mod", BinaryKind.MOD),
     ("min", BinaryKind.MIN),
     ("max", BinaryKind.MAX),
+    ("minimum", BinaryKind.MIN),
+    ("maximum", BinaryKind.MAX),
     ("cmp_eq", BinaryKind.EQ),
     ("cmp_ne", BinaryKind.NE),
     ("cmp_lt", BinaryKind.LT),
@@ -70,6 +72,7 @@ _UNARY_ALIASES: tuple[tuple[str, UnaryKind], ...] = (
     ("abs", UnaryKind.ABS),
     ("logical_not", UnaryKind.NOT),
     ("rsqrt", UnaryKind.RSQRT),
+    ("log", UnaryKind.LOG),
     # SQUARE is a first-class UnaryKind, not a parser-level expansion
     # to mul(x, x), so codegen / lowering can see the "this is a
     # square" intent explicitly.

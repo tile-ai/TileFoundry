@@ -341,9 +341,10 @@ op that changes a value's layout / mesh.
 #### `ir/hir/math/`
 
 Pointwise arithmetic and comparison, torch semantics with TileFoundry
-type-promotion. User-callable names (`add` / `cmp_eq` / `logical_and` / …) are
-surface aliases ([core-ir §2.3](./core-ir.md)) over the kinded Ops; there are no
-per-name IR classes.
+type-promotion. Most user-callable names (`add` / `cmp_eq` / `logical_and` / …)
+are surface aliases ([core-ir §2.3](./core-ir.md)) over the kinded `Binary` /
+`Unary` Ops. A few pointwise ops are first-class per-name IR classes instead
+(e.g. `Exp`); their surface name maps to the dedicated Op, not to a kind.
 [torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
 
 ##### Binary
@@ -352,13 +353,24 @@ Binary(kind, lhs, rhs) -> Tensor    # kind: binary arithmetic, comparison, or bo
 ```
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
+  - The elementwise `min` / `max` kinds are also surfaced as `minimum` / `maximum`.
 
 ##### Unary
 ```python
-Unary(kind, x) -> Tensor    # kind: unary tag including neg, abs, logical_not, and rsqrt; x: input tensor
+Unary(kind, x) -> Tensor    # kind: unary tag including neg, abs, logical_not, rsqrt, and log; x: input tensor
 ```
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
+  - `log` is the natural logarithm; `exp` is NOT a Unary kind — it is the
+    first-class `Exp` Op below.
+
+##### Exp
+```python
+Exp(x) -> Tensor    # x: input tensor
+```
+- constraints:
+  - Pointwise natural exponential `e ** x`; a first-class Op with surface name
+    `exp`, not a `Unary` kind.
 
 #### `ir/hir/tensor/`
 
