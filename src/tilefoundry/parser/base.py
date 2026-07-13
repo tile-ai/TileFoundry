@@ -14,6 +14,7 @@ from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.target.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types import DType, TensorType, TupleType
@@ -540,7 +541,24 @@ class BaseExprVisitor:
         else:
             for i, arg in enumerate(pos_args):
                 if i < len(input_params):
-                    input_args.append(self.expr(arg))
+                    if (
+                        isinstance(arg, ast.Tuple)
+                        and schema.name == "insert_slice"
+                        and input_params[i].name == "offsets"
+                    ):
+                        # Narrow route: only ``insert_slice``'s per-axis offset
+                        # tuple is lifted to an explicit hir.tensor.Tuple of
+                        # scalar Exprs. Any other input keeps the default path,
+                        # so a tuple literal there is rejected.
+                        elems = tuple(self.expr(e) for e in arg.elts)
+                        input_args.append(
+                            Tuple(
+                                type=TupleType(fields=tuple(e.type for e in elems)),
+                                elements=elems,
+                            )
+                        )
+                    else:
+                        input_args.append(self.expr(arg))
                 else:
                     attr_idx = i - len(input_params)
                     if attr_idx >= len(attr_params):

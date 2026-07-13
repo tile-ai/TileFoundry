@@ -19,13 +19,13 @@ from typing import Union
 from tilefoundry.ir.core import Call, Constant, Expr, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16 as HirMmaSM80_16x8x16
+from tilefoundry.ir.hir.cuda.nn.mma import Wgmma_SM90_64x128x16 as HirWgmma_SM90
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.math.clamp import Clamp as HirClamp
 from tilefoundry.ir.hir.math.unary import Unary as HirUnary
-from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16 as HirMmaSM80_16x8x16
-from tilefoundry.ir.hir.cuda.nn.mma import Wgmma_SM90_64x128x16 as HirWgmma_SM90
 from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
 from tilefoundry.ir.hir.sharding.reshard import Reshard, _shared_engine_strides
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate as HirCacheUpdate
@@ -48,6 +48,7 @@ from tilefoundry.ir.tir.arith import (
     UnaryKind,
 )
 from tilefoundry.ir.tir.clamp import Clamp as TirClamp
+from tilefoundry.ir.tir.cuda.nn.mma import Mma as TirMma
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
@@ -55,12 +56,10 @@ from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.tir.memory.fill import Fill
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
-from tilefoundry.ir.tir.cuda.nn.mma import Mma as TirMma
 from tilefoundry.ir.tir.nn.relu import ReLU as TirReLU
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.shape import ShapeOf, shape_var_name
-from tilefoundry.ir.tir.sync import Sync as TirSync
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import (
     Abort,
@@ -72,6 +71,7 @@ from tilefoundry.ir.tir.stmts import (
     Sequential,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef, symbol_call
+from tilefoundry.ir.tir.sync import Sync as TirSync
 from tilefoundry.ir.types import (
     DType,
     TensorType,
@@ -81,10 +81,6 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.shard.layout import Layout as _Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.visitor_registry.registries import (
-    hir_lowering_registry,
-    register_hir_lowering,
-)
 from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
@@ -94,6 +90,10 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis as _layout_axis_to_tensor_axis,
 )
 from tilefoundry.passes.pass_base import ModulePass
+from tilefoundry.visitor_registry.registries import (
+    hir_lowering_registry,
+    register_hir_lowering,
+)
 
 
 def _eval_call(op, args: tuple) -> Evaluate:
@@ -960,24 +960,31 @@ class _Lowerer:
         key = id(expr)
         dst = self.lower_expr(expr.args[0])
         upd = self.lower_expr(expr.args[1])
-        # 1-D window (insert_slice is rank-1). The window starts at the scalar
-        # offset; it is a tile of the update's own extent, so the offset is the
-        # coord. Write ``update`` into that window IN PLACE and return ``dst`` —
-        # a loop-carried ``ov = insert_slice(ov, …)`` therefore reuses the single
-        # carried buffer with no replacement allocation, and the yield aliases
-        # the carry buffer.
-        coord = self._insert_slice_coord(expr.args[2])
+        # Per-axis window: an offset tuple (rank N) or a single scalar (1-D).
+        # Each window is a tile of the update's own extent starting at the
+        # offset, so each offset is that axis's tile coord. Write ``update`` into
+        # the window IN PLACE and return ``dst`` — a loop-carried
+        # ``ov = insert_slice(ov, …)`` therefore reuses the single carried buffer
+        # with no replacement allocation, and the yield aliases the carry buffer.
+        off_expr = expr.args[2]
         upd_shape = tuple(upd.type.shape)
+        if isinstance(off_expr, Tuple):
+            coords = tuple(self._insert_slice_coord(el) for el in off_expr.elements)
+            plain_layout = TensorView.layout_for_slice_nd(
+                src_shape=tuple(dst.type.shape), sliced_shape=upd_shape
+            )
+        else:
+            coords = (self._insert_slice_coord(off_expr),)
+            plain_layout = TensorView.layout_for_slice(
+                src_shape=tuple(dst.type.shape), axis=0, sliced_shape=upd_shape
+            )
         # The window carries the update's layout: for a sharded update this is a
         # ShardLayout, so the Copy verifier sees matching ShardLayouts and the
-        # emitter derives the per-shard tile size (``local()`` coalesces the dst
-        # to a flat 1-D view, so K must be the whole window, not just axis 0).
+        # emitter derives the per-shard tile size.
         if isinstance(upd.type.layout, ShardLayout):
             win_layout = upd.type.layout
         else:
-            win_layout = TensorView.layout_for_slice(
-                src_shape=tuple(dst.type.shape), axis=0, sliced_shape=upd_shape
-            )
+            win_layout = plain_layout
         win_type = TensorType(
             shape=upd_shape,
             dtype=dst.type.dtype,
@@ -985,7 +992,7 @@ class _Lowerer:
             storage=dst.type.storage,
         )
         win_call = Call(
-            type=win_type, target=TensorView(layout=win_layout), args=(dst, coord)
+            type=win_type, target=TensorView(layout=win_layout), args=(dst, *coords)
         )
         win = self._fresh(win_type, hint="isv")
         self._items.append(_Bind(var=win, value=win_call))

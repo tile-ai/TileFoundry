@@ -392,15 +392,18 @@ Reduce(x, axes, keepdim, kind) -> Tensor    # x: input tensor; axes: reduced log
 
 ##### insert_slice
 ```python
-insert_slice(dst, update, offsets) -> Tensor    # dst: target tensor (value form returns a new tensor anchored on this buffer at lowering time); update: tensor written into the slice window; offsets: scalar runtime value or integer literal for the implemented 1-D case
+insert_slice(dst, update, offsets) -> Tensor    # dst: target tensor (value form returns a tensor anchored on this buffer at lowering time); update: tensor written into the window; offsets: per-axis window starts — a rank-0 integer scalar for a rank-1 dst, or a tuple of rank-0 integer scalars (literal or runtime), one per axis, for rank N
 ```
 - constraints:
-  - `update` has the same rank and dtype as `dst`.
-  - The implemented 1-D case writes the contiguous window
-    `[start, start + update.shape[0])`.
-  - Higher-rank inputs share the surface but are rejected until implemented.
-  - Statically out-of-bounds windows fail typeinfer; runtime-only bounds are
-    checked by eval/runtime.
+  - `update` has the same rank and dtype as `dst`; the window on each axis is
+    `[offset_axis, offset_axis + update.shape[axis])`.
+  - A rank-1 `dst` accepts a bare rank-0 scalar offset; a rank-N `dst` requires
+    an offset tuple whose length equals the rank.
+  - A *literal* (compile-time) offset that places a negative or out-of-bounds
+    window on an axis fails typeinfer, naming the axis; a runtime offset is
+    checked at eval/runtime.
+  - The value form writes `update` into a slice view of `dst`'s existing buffer
+    (a loop-carried `dst` reuses one buffer with no replacement allocation).
 
 ##### TopK
 ```python

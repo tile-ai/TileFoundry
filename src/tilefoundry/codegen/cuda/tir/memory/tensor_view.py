@@ -252,9 +252,63 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
     var_name = ctx.name_for(let.var)
     layout = call.target.layout
 
-    # Slice view (second arg is the index Var)
+    # Slice view: one coordinate per axis after the memory source. A single
+    # coordinate selects a flat window over the coalesced per-thread view
+    # (cache_update / 1-D insert_slice); multiple coordinates select a per-axis
+    # N-D window (rank-N insert_slice). The coordinate count is validated below
+    # against the layout-derived rank — a sharded axis adds a per-thread cute
+    # axis, so it is not the logical rank.
     if len(call.args) > 1:
         mem_name = ctx.name_for(memory_var)
+        # rank-N window (an offset per axis): a true N-D ``local_tile`` over the
+        # per-axis view, so every coordinate and the per-axis window shape reach
+        # codegen (no flat collapse). A single coordinate keeps the flat path.
+        if len(call.args) > 2:
+            logical_coords = call.args[1:]
+            dst_layout = getattr(memory_var.type, "layout", None)
+            win_layout = getattr(let.var.type, "layout", None)
+            if (
+                not isinstance(dst_layout, SL)
+                or not isinstance(win_layout, SL)
+                or ctx.is_kernel_param(memory_var)
+            ):
+                raise NotImplementedError(
+                    "rank-N insert_slice window is only supported over a "
+                    "locally allocated sharded (ShardTensor) destination"
+                )
+            # A reshard adds a per-thread cute axis for each sharded (``Split``)
+            # axis, and the local buffer alloc drops every extent-1 axis. Tile
+            # over ``local(...)`` (the per-thread buffer) in that same reduced
+            # space: the logical offsets bind to the non-split axes in order,
+            # and only the retained (extent > 1) axes reach the tile — a dropped
+            # axis is degenerate (single position), so its offset is 0.
+            dst_local = shard_layout_local_shape(dst_layout)
+            win_local = shard_layout_local_shape(win_layout)
+            split_axes = {a.axis for a in dst_layout.attrs if isinstance(a, Split)}
+            non_split = [a for a in range(len(dst_local)) if a not in split_axes]
+            if len(logical_coords) != len(non_split):
+                raise ValueError(
+                    f"insert_slice: {len(logical_coords)} offsets for a rank-"
+                    f"{len(non_split)} destination"
+                )
+            coord_of = dict(zip(non_split, logical_coords))
+            kept = [a for a in range(len(dst_local)) if int(upper_bound(dst_local[a])) != 1]
+            if any(a in split_axes for a in kept):
+                raise NotImplementedError(
+                    "rank-N insert_slice with a per-thread extent > 1 on a "
+                    "sharded axis is not supported"
+                )
+            shape_args = ", ".join(
+                f"cute::Int<{int(upper_bound(win_local[a]))}>{{}}" for a in kept
+            )
+            coord_args = ", ".join(_coord_ref(coord_of[a], ctx) for a in kept)
+            ctx.emit(
+                f"auto {var_name} = cute::local_tile("
+                f"tilefoundry::local({mem_name}), "
+                f"cute::make_shape({shape_args}), "
+                f"cute::make_coord({coord_args}));"
+            )
+            return
         index_var = call.args[1]
         if isinstance(getattr(memory_var.type, "layout", None), SL):
             # A sharded intermediate buffer is a ShardTensor; project to the
