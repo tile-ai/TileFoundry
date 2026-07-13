@@ -13,7 +13,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import TensorType, TupleType
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.parser.hir_parser import parse_script
 
 
@@ -305,6 +305,34 @@ def test_literal_tuple_return_roundtrips() -> None:
     assert "return (" in src, f"tuple return not rendered:\n{src}"
     fn2 = parse_script(src)
     assert _structural_equal(_tuple_ret, fn2), f"round-trip mismatch:\n{src}"
+
+
+def test_low_precision_dtype_names_roundtrip() -> None:
+    """A ``@func`` whose parameters are typed with the three low-precision dtype
+    names (fp8e4m3, f8e8m0, f4e2m1) prints those names and re-parses to the same
+    dtypes (print → parse → structural equal)."""
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "\n"
+        "@func\n"
+        'def lp(a: Tensor[(4,), "fp8e4m3"], b: Tensor[(4,), "f8e8m0"], '
+        'c: Tensor[(4,), "f4e2m1"]):\n'
+        "    return (a, b, c)\n"
+    )
+    fn = parse_script(src)
+    assert [p.type.dtype for p in fn.params] == [
+        DType.fp8e4m3,
+        DType.f8e8m0,
+        DType.f4e2m1,
+    ]
+    printed = as_script(fn)
+    for name in ("fp8e4m3", "f8e8m0", "f4e2m1"):
+        assert name in printed, printed
+    fn2 = parse_script(printed)
+    assert _structural_equal(fn, fn2), f"round-trip mismatch:\n{printed}"
 
 
 def test_tuple_return_with_mesh_element_roundtrips() -> None:

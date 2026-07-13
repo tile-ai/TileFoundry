@@ -10,7 +10,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import LOW_PRECISION_DTYPES, TensorType
 from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
@@ -120,6 +120,9 @@ def _matmul_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     lhs = ctx.type_of(call.args[0])
     rhs = ctx.type_of(call.args[1])
+    for ty in (lhs, rhs):
+        if ty.dtype in LOW_PRECISION_DTYPES:
+            ctx.error(call, f"low-precision dtype {ty.dtype.value} is not supported for arithmetic")
     if lhs.dtype != rhs.dtype:
         ctx.error(call, f"MatMul dtype mismatch: {lhs.dtype} vs {rhs.dtype}")
     if len(lhs.shape) < 2 or len(rhs.shape) < 2:

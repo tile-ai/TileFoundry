@@ -16,7 +16,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import LOW_PRECISION_DTYPES, DType, TensorType
 
 
 @register_op(dialect="tf", category="math")
@@ -31,6 +31,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not isinstance(op.kind, UnaryKind):
         ctx.error(call, f"Unary: kind must be UnaryKind, got {type(op.kind)}")
     x_ty = ctx.type_of(call.args[0])
+    if x_ty.dtype in LOW_PRECISION_DTYPES:
+        ctx.error(call, f"low-precision dtype {x_ty.dtype.value} is not supported for arithmetic")
     if op.kind is UnaryKind.NOT and x_ty.dtype != DType.bool:
         ctx.error(call, "Unary NOT: operand must be bool")
     return TensorType(

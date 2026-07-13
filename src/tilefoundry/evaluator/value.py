@@ -36,6 +36,8 @@ _TORCH_DTYPE = {
     DType.f32: torch.float32,
     DType.f16: torch.float16,
     DType.bf16: torch.bfloat16,
+    DType.fp8e4m3: torch.float8_e4m3fn,
+    DType.f8e8m0: torch.float8_e8m0fnu,
     DType.i32: torch.int32,
     DType.i64: torch.int64,
     DType.bool: torch.bool,

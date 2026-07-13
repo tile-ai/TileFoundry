@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
 
-from .dtype import DType
+from .dtype import LOW_PRECISION_DTYPES, DType
 from .tensor_type import TensorType, TupleType, Type, UnitType
 from .callable_type import (
     CallableType,
@@ -14,6 +14,7 @@ from .callable_type import (
 __all__ = [
     "CallableType",
     "DType",
+    "LOW_PRECISION_DTYPES",
     "TensorType",
     "TupleType",
     "Type",

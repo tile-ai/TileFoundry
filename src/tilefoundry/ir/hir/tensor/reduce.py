@@ -12,7 +12,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import LOW_PRECISION_DTYPES, TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -59,6 +59,8 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 @register_typeinfer(Reduce)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
+    if x_ty.dtype in LOW_PRECISION_DTYPES:
+        ctx.error(call, f"low-precision dtype {x_ty.dtype.value} is not supported for arithmetic")
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)
     reduced = _reduced_axes(call, rank)

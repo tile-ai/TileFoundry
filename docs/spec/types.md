@@ -91,17 +91,31 @@ dispatch is described in
 
 ```python
 class DType(enum.Enum):    # enumerated dtype values, extended on demand
-    f32 = auto()
-    f16 = auto()
-    bf16 = auto()
-    i32 = auto()
-    i64 = auto()
-    bool = auto()
+    f32 = "f32"
+    f16 = "f16"
+    bf16 = "bf16"
+    fp8e4m3 = "fp8e4m3"
+    f8e8m0 = "f8e8m0"
+    f4e2m1 = "f4e2m1"
+    i32 = "i32"
+    i64 = "i64"
+    bool = "bool"
 ```
 
-- constraints: none — a value enumeration, independent of `layout` / `storage`
-
 `DType` is a value enumeration, independent of `layout` / `storage`.
+
+- constraints:
+  - Each member's value equals its name.
+  - `fp8e4m3` is the canonical fp8 spelling; no alternate fp8 spelling (e.g.
+    `f8e4m3`) exists.
+  - `fp8e4m3`, `f8e8m0`, and `f4e2m1` are low-precision dtypes: Cast-boundary
+    element types that declare a tensor's element type at a Cast boundary rather
+    than being computed on directly.
+  - Generic arithmetic (`Binary` / `Unary` / `MatMul` / `Reduce`) MUST reject an
+    operand of a low-precision dtype at type inference.
+  - The evaluator supports `Cast` to and from `fp8e4m3` and `f8e8m0`; `f4e2m1`
+    has no evaluator `Cast`, so evaluating a `Cast` targeting `f4e2m1` raises an
+    unsupported-dtype error.
 
 ---
 

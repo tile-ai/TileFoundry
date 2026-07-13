@@ -377,8 +377,22 @@ Exp(x) -> Tensor    # x: input tensor
 Tensor structural operations; consensus ops follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
-##### Reshape / Transpose / Slice / Concat / Stack / ShapeOf / Rank / Cast
+##### Reshape / Transpose / Slice / Concat / Stack / ShapeOf / Rank
 Consensus torch / numpy structural ops.
+
+##### Cast
+```python
+Cast(x, dtype) -> Tensor    # x: input tensor; dtype: target element dtype
+```
+- constraints:
+  - Identity in shape / storage / layout; only the element dtype changes to
+    `dtype`. A `ShardLayout` input keeps its layout (the relation is the identity).
+  - Cast type inference permits a low-precision `dtype` (`fp8e4m3` / `f8e8m0` /
+    `f4e2m1`) as either the input or the target — `Cast` is the boundary for those
+    dtypes (see types.md §3), whereas generic arithmetic rejects them.
+  - The evaluator supports a `dtype` in `{f32, f16, bf16, fp8e4m3, f8e8m0, i32,
+    i64, bool}`; evaluating a `Cast` to a dtype outside this set (e.g. `f4e2m1`)
+    raises an unsupported-dtype error.
 
 ##### Gather
 ```python
