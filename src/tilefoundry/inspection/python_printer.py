@@ -7,10 +7,11 @@ are emitted; otherwise the verbose ``ShardLayout(...)`` form is used.
 
 from __future__ import annotations
 
+import enum
 import re
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var
-from tilefoundry.ir.core.kinds import BinaryKind, ReduceKind, UnaryKind
+from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.math.binary import Binary
@@ -518,6 +519,18 @@ def _emit_def(
     for expr in _order:
         _assign_name(expr)
 
+    def _tuple_literal(elements) -> str:
+        inner = ", ".join(_names[id(el)] for el in elements)
+        if len(elements) == 1:
+            inner += ","
+        return f"({inner})"
+
+    def _arg_ref(a) -> str:
+        # A tuple-valued input (e.g. insert_slice's per-axis offsets) renders
+        # inline as a literal so the parser's narrow route lifts it back to a
+        # hir Tuple on re-parse.
+        return _tuple_literal(a.elements) if isinstance(a, Tuple) else _names[id(a)]
+
     # Function signature. A ``TupleType`` return has no surface annotation; it
     # is re-inferred from the literal tuple ``return`` body on re-parse.
     return_ty = fn.return_type
@@ -584,18 +597,6 @@ def _emit_def(
             else:
                 # Generic op: op_name(arg1, arg2, ..., attr=val)
                 op_name_str = _op_name(target)
-
-                def _arg_ref(a):
-                    # A tuple-valued input (e.g. insert_slice's per-axis offsets)
-                    # renders inline as a literal so the parser's narrow route
-                    # lifts it back to a hir Tuple on re-parse.
-                    if isinstance(a, Tuple):
-                        inner = ", ".join(_names[id(el)] for el in a.elements)
-                        if len(a.elements) == 1:
-                            inner += ","
-                        return f"({inner})"
-                    return _names[id(a)]
-
                 arg_names = [_arg_ref(a) for a in expr.args]
                 args_str = ", ".join(arg_names)
 
@@ -626,9 +627,11 @@ def _emit_def(
                 for k, v in attrs.items():
                     if isinstance(v, str):
                         attr_strs.append(f'{k}="{v}"')
-                    elif isinstance(v, ReduceKind):
-                        # A ReduceKind attribute prints as its DSL string value
-                        # so the source re-parses without a bare enum reference.
+                    elif isinstance(v, enum.Enum) and isinstance(v.value, str):
+                        # A string-valued enum attribute (ReduceKind / DType /
+                        # ...) prints as its DSL string value so the source
+                        # re-parses without a bare enum reference — the parser
+                        # promotes the string back via the ParamDef annotation.
                         attr_strs.append(f'{k}="{v.value}"')
                     elif isinstance(v, float):
                         attr_strs.append(f"{k}={v!r}")
@@ -653,11 +656,7 @@ def _emit_def(
     # Return statement. A literal tuple body renders its elements inline
     # (``return (e0, e1)``) rather than a name for the un-emitted Tuple node.
     if isinstance(fn.body, Tuple):
-        elem_names = [_names[id(el)] for el in fn.body.elements]
-        inner = ", ".join(elem_names)
-        if len(elem_names) == 1:
-            inner += ","
-        lines.append(f"{indent}return ({inner})")
+        lines.append(f"{indent}return {_tuple_literal(fn.body.elements)}")
     else:
         body_name = _names[id(fn.body)]
         lines.append(f"{indent}return {body_name}")

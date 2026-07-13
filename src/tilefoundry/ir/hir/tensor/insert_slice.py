@@ -10,6 +10,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 
 
 @register_op(name="insert_slice")
@@ -20,12 +21,6 @@ class InsertSlice(Op):
     # A rank-0 scalar start (rank-1 dst) or a tuple of per-axis rank-0 scalars
     # (rank-N); the parser lifts the tuple literal to an ``hir.tensor.Tuple``.
     offsets = ParamDef(kind="input", pattern=Scalar)
-
-
-def _static(dim) -> "int | None":
-    """A shape dim as a plain ``int`` if statically known, else ``None``."""
-    v = getattr(dim, "value", dim)
-    return v if isinstance(v, int) else None
 
 
 def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx) -> None:
@@ -43,7 +38,7 @@ def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx) -> None:
             f"insert_slice: offset for axis {ax} must be an integer scalar, got "
             f"{off_ty.dtype}"
         )
-    d, u = _static(dst_ext), _static(upd_ext)
+    d, u = static_dim_value(dst_ext), static_dim_value(upd_ext)
     if d is not None and u is not None and u > d:
         raise TypeError(
             f"insert_slice: update extent {u} exceeds dst extent {d} on axis {ax}"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -141,8 +143,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Gather)
 def _eval_gather(ctx):
-    import math  # noqa: PLC0415
-
     x = ctx.args[0].data
     indices = ctx.args[1].data
     axis = _norm_axis(ctx.op.axis, x.dim())

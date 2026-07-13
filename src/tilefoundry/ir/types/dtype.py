@@ -22,4 +22,11 @@ LOW_PRECISION_DTYPES: frozenset[DType] = frozenset(
 )
 
 
-__all__ = ["DType", "LOW_PRECISION_DTYPES"]
+def reject_low_precision(ctx, call, *types) -> None:
+    """Typeinfer guard: error on any operand typed with a Cast-boundary dtype."""
+    for ty in types:
+        if ty.dtype in LOW_PRECISION_DTYPES:
+            ctx.error(call, f"low-precision dtype {ty.dtype.value} is not supported for arithmetic")
+
+
+__all__ = ["DType", "LOW_PRECISION_DTYPES", "reject_low_precision"]

@@ -119,6 +119,12 @@ class BaseExprVisitor:
         # to fall back on.
         self._call_dsl_names: dict[int, str] = {}
 
+    def _tuple_expr_expr(self, node: ast.Tuple):
+        """Build a ``Tuple`` from an AST tuple literal."""
+        elements = tuple(self.expr(e) for e in node.elts)
+        field_types = tuple(e.type for e in elements)
+        return Tuple(type=TupleType(fields=field_types), elements=elements)
+
     def _resolve_body_mesh(self, name: str):
         """Resolve a mesh by variable name from the lexical env only.
 
@@ -550,13 +556,7 @@ class BaseExprVisitor:
                         # tuple is lifted to an explicit hir.tensor.Tuple of
                         # scalar Exprs. Any other input keeps the default path,
                         # so a tuple literal there is rejected.
-                        elems = tuple(self.expr(e) for e in arg.elts)
-                        input_args.append(
-                            Tuple(
-                                type=TupleType(fields=tuple(e.type for e in elems)),
-                                elements=elems,
-                            )
-                        )
+                        input_args.append(self._tuple_expr_expr(arg))
                     else:
                         input_args.append(self.expr(arg))
                 else:

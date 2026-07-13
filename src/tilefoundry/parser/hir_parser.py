@@ -6,7 +6,6 @@ from typing import Any
 from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -336,12 +335,6 @@ class _HirBodyVisitor(BaseExprVisitor):
     def __init__(self, env, closure, *, topo_ns=None):
         super().__init__(env, closure)
         self.topo_ns: dict[str, "Topology"] = topo_ns or {}
-
-    def _tuple_expr_expr(self, node: ast.Tuple):
-        """Build a ``Tuple`` from an AST tuple literal."""
-        elements = tuple(self.expr(e) for e in node.elts)
-        field_types = tuple(e.type for e in elements)
-        return Tuple(type=TupleType(fields=field_types), elements=elements)
 
     # Function body: assignment statements only update the symtab; hir is
     # SSA-as-DAG (§8.6), so variable sharing is expressed by the tail Expr

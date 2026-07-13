@@ -2,6 +2,7 @@
 and rejection of an oversized k or a Split on the selected axis."""
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 import pytest
@@ -28,13 +29,6 @@ from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, Spli
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
-
-
-def _cute_size(shape) -> int:
-    n = 1
-    for d in shape:
-        n *= int(d)
-    return n
 
 _BF = DType.bf16
 _F32 = DType.f32
@@ -171,7 +165,7 @@ def test_topk_output_layout_shrinks_selected_axis_preserving_split():
         assert any(isinstance(a, Split) and a.axis == 0 for a in t.layout.attrs), (
             "non-selected Split(0) must survive TopK"
         )
-        assert _cute_size(t.layout.layout.shape) == _cute_size(t.shape), (
+        assert math.prod(t.layout.layout.shape) == math.prod(t.shape), (
             f"size(layout)={t.layout.layout.shape} != size(shape)={t.shape}"
         )
 
@@ -186,7 +180,7 @@ def test_topk_all_broadcast_layout_shrinks_selected_axis():
     for t in (values_ty, indices_ty):
         assert isinstance(t.layout, ShardLayout)
         assert all(isinstance(a, Broadcast) for a in t.layout.attrs), "replication preserved"
-        assert _cute_size(t.layout.layout.shape) == _cute_size(t.shape), (
+        assert math.prod(t.layout.layout.shape) == math.prod(t.shape), (
             f"size(layout)={t.layout.layout.shape} != size(shape)={t.shape}"
         )
 

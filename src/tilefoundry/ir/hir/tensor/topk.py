@@ -32,7 +32,10 @@ from tilefoundry.visitor_registry.access_relation import (
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    _c_order,
+    derive_output_shard_layout,
+)
 
 
 @register_op
@@ -47,19 +50,15 @@ class TopK(Op):
     axis = ParamDef(kind="attribute", annotation=int, default=-1)
     largest = ParamDef(kind="attribute", annotation=bool, default=True)
     sorted = ParamDef(kind="attribute", annotation=bool, default=True)
+
+
 def _canonical_shard(sl: "ShardLayout", out_shape) -> "ShardLayout":
     """Canonical output ``ShardLayout`` for a replicated input (nothing for the
     generic propagator to carry): C-order strides over ``out_shape``, all-ones
     when the shape is non-static; ``attrs`` and ``mesh`` pass through.
     """
     out_shape = tuple(out_shape)
-    if all(isinstance(d, int) and not isinstance(d, bool) for d in out_shape):
-        acc = [1] * len(out_shape)
-        for i in range(len(out_shape) - 2, -1, -1):
-            acc[i] = acc[i + 1] * out_shape[i + 1]
-        strides = tuple(acc)
-    else:
-        strides = tuple(1 for _ in out_shape)
+    strides = _c_order(out_shape) or tuple(1 for _ in out_shape)
     return ShardLayout(
         layout=Layout(shape=out_shape, strides=strides),
         attrs=sl.attrs,

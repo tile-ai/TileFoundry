@@ -970,21 +970,21 @@ class _Lowerer:
         upd_shape = tuple(upd.type.shape)
         if isinstance(off_expr, Tuple):
             coords = tuple(self._insert_slice_coord(el) for el in off_expr.elements)
-            plain_layout = TensorView.layout_for_slice_nd(
-                src_shape=tuple(dst.type.shape), sliced_shape=upd_shape
-            )
         else:
             coords = (self._insert_slice_coord(off_expr),)
-            plain_layout = TensorView.layout_for_slice(
-                src_shape=tuple(dst.type.shape), axis=0, sliced_shape=upd_shape
-            )
         # The window carries the update's layout: for a sharded update this is a
         # ShardLayout, so the Copy verifier sees matching ShardLayouts and the
         # emitter derives the per-shard tile size.
         if isinstance(upd.type.layout, ShardLayout):
             win_layout = upd.type.layout
+        elif isinstance(off_expr, Tuple):
+            win_layout = TensorView.layout_for_slice_nd(
+                src_shape=tuple(dst.type.shape), sliced_shape=upd_shape
+            )
         else:
-            win_layout = plain_layout
+            win_layout = TensorView.layout_for_slice(
+                src_shape=tuple(dst.type.shape), axis=0, sliced_shape=upd_shape
+            )
         win_type = TensorType(
             shape=upd_shape,
             dtype=dst.type.dtype,
@@ -1044,7 +1044,7 @@ class _Lowerer:
     @register_hir_lowering(HirGather)
     def _lower_gather(self, target, expr) -> Var:
         key = id(expr)
-        if getattr(target, "batch_dims", 0) != 0:
+        if target.batch_dims != 0:
             # The batched contract is evaluator/typeinfer-only for now; refuse to
             # fall through to the single-coordinate slice-view lowering below.
             raise NotImplementedError(

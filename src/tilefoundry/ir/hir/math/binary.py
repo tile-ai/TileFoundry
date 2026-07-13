@@ -20,7 +20,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import LOW_PRECISION_DTYPES, DType, TensorType
+from tilefoundry.ir.types import DType, TensorType, reject_low_precision
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -88,9 +88,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"Binary: kind must be BinaryKind, got {type(op.kind)}")
     lhs_ty = ctx.type_of(call.args[0])
     rhs_ty = ctx.type_of(call.args[1])
-    for ty in (lhs_ty, rhs_ty):
-        if ty.dtype in LOW_PRECISION_DTYPES:
-            ctx.error(call, f"low-precision dtype {ty.dtype.value} is not supported for arithmetic")
+    reject_low_precision(ctx, call, lhs_ty, rhs_ty)
     if lhs_ty.dtype != rhs_ty.dtype:
         ctx.error(call, f"Binary {op.kind.name}: dtype mismatch "
                         f"({lhs_ty.dtype} vs {rhs_ty.dtype})")
