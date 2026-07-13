@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var
-from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
+from tilefoundry.ir.core.kinds import BinaryKind, ReduceKind, UnaryKind
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.math.binary import Binary
@@ -553,6 +553,12 @@ def _emit_def(
             name = _names[id(expr)]
             lines.append(f"{indent}{name} = {repr(expr.value)}")
             continue
+        if isinstance(expr, Tuple):
+            # A tuple is rendered inline at its use site: as a literal argument
+            # (op input) or by the ``return`` statement (function body). The
+            # parser lifts an inline offset tuple back to a hir Tuple, whereas a
+            # hoisted ``name = (...)`` binding would not re-parse.
+            continue
         if isinstance(expr, Call):
             name = _names[id(expr)]
             target = expr.target
@@ -571,14 +577,26 @@ def _emit_def(
                     f", storage={target.storage.name.lower()}"
                     if target.storage is not None else ""
                 )
-                loc = f'  # loc="{expr.loc}"' if expr.loc else ""
+                loc = f'  # loc="{name}"' if expr.loc else ""
                 lines.append(
                     f"{indent}{name} = reshard({src_name}{layout_kw}{storage}){loc}"
                 )
             else:
                 # Generic op: op_name(arg1, arg2, ..., attr=val)
                 op_name_str = _op_name(target)
-                arg_names = [_names[id(a)] for a in expr.args]
+
+                def _arg_ref(a):
+                    # A tuple-valued input (e.g. insert_slice's per-axis offsets)
+                    # renders inline as a literal so the parser's narrow route
+                    # lifts it back to a hir Tuple on re-parse.
+                    if isinstance(a, Tuple):
+                        inner = ", ".join(_names[id(el)] for el in a.elements)
+                        if len(a.elements) == 1:
+                            inner += ","
+                        return f"({inner})"
+                    return _names[id(a)]
+
+                arg_names = [_arg_ref(a) for a in expr.args]
                 args_str = ", ".join(arg_names)
 
                 # Extract keyword attributes from the op.
@@ -608,6 +626,10 @@ def _emit_def(
                 for k, v in attrs.items():
                     if isinstance(v, str):
                         attr_strs.append(f'{k}="{v}"')
+                    elif isinstance(v, ReduceKind):
+                        # A ReduceKind attribute prints as its DSL string value
+                        # so the source re-parses without a bare enum reference.
+                        attr_strs.append(f'{k}="{v.value}"')
                     elif isinstance(v, float):
                         attr_strs.append(f"{k}={v!r}")
                     elif isinstance(v, ShardLayout):
@@ -625,7 +647,7 @@ def _emit_def(
                     call_str += ", " + ", ".join(attr_strs)
                 call_str += ")"
 
-                loc = f'  # loc="{expr.loc}"' if expr.loc else ""
+                loc = f'  # loc="{name}"' if expr.loc else ""
                 lines.append(f"{indent}{name} = {call_str}{loc}")
 
     # Return statement. A literal tuple body renders its elements inline

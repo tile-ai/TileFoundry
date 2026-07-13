@@ -307,6 +307,75 @@ def test_literal_tuple_return_roundtrips() -> None:
     assert _structural_equal(_tuple_ret, fn2), f"round-trip mismatch:\n{src}"
 
 
+def test_reduce_kind_roundtrips_as_dsl_string() -> None:
+    """A ``reduce`` op's ``ReduceKind`` attribute prints as its DSL string value
+    (``kind="sum"``), not ``ReduceKind.SUM`` (which the script does not import),
+    so the printed source re-parses and re-prints identically."""
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "\n"
+        "@func\n"
+        'def rd(x: Tensor[(2, 4), "f32"]):\n'
+        '    res = reduce(x, axes=(1,), keepdim=False, kind="sum")\n'
+        "    return res\n"
+    )
+    fn = parse_script(src)
+    script = as_script(fn)
+    assert 'kind="sum"' in script, script
+    assert "ReduceKind" not in script, script
+    reparsed = parse_script(script)
+    assert as_script(reparsed) == script
+
+
+def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
+    """A rank-3 ``insert_slice`` whose offset is a literal tuple argument prints
+    the tuple inline as a literal ``(e0, e1, e2)`` at the call site (the parser
+    lifts an inline offset tuple back to a hir Tuple), so the source re-parses
+    without a dangling reference and re-prints identically."""
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "\n"
+        "@func\n"
+        'def ins(dst: Tensor[(2, 5, 3), "f32"], upd: Tensor[(2, 1, 3), "f32"]):\n'
+        "    res = insert_slice(dst, upd, (0, 1, 0))\n"
+        "    return res\n"
+    )
+    fn = parse_script(src)
+    script = as_script(fn)
+    reparsed = parse_script(script)
+    assert as_script(reparsed) == script
+
+
+def test_shadowed_call_loc_roundtrips() -> None:
+    """When a call's source loc collides with an op name (``vals, idx = topk``
+    gives the ``topk`` call loc ``"topk"``), the printer renames the binding to
+    ``topk_out`` to avoid shadowing the op; the emitted ``# loc`` comment must
+    reflect the emitted binding, so the source re-parses and re-prints identically."""
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "\n"
+        "@func\n"
+        'def sh(x: Tensor[(4, 8), "f32"]):\n'
+        "    vals, idx = topk(x, k=3, axis=-1, largest=True, sorted=True)\n"
+        "    return vals\n"
+    )
+    fn = parse_script(src)
+    script = as_script(fn)
+    assert 'topk_out = topk(' in script, script
+    assert 'loc="topk_out"' in script and 'loc="topk"' not in script, script
+    reparsed = parse_script(script)
+    assert as_script(reparsed) == script
+
+
 def test_low_precision_dtype_names_roundtrip() -> None:
     """A ``@func`` whose parameters are typed with the three low-precision dtype
     names (fp8e4m3, f8e8m0, f4e2m1) prints those names and re-parses to the same
