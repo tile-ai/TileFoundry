@@ -11,8 +11,9 @@ from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, TupleType
 from tilefoundry.parser.hir_parser import parse_script
 
 
@@ -90,3 +91,27 @@ def test_tuple_unpack_errors() -> None:
 
     with pytest.raises(VerifyError, match="targets must all be plain names"):
         parse_script(_dedent(BAD_NESTED_SRC))
+
+
+# ── Literal tuple return: `return (a, b)` / `return a, b` → TupleType body ──
+
+
+@func
+def _ret_paren(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]):
+    return (add(a, b), mul(a, b))
+
+
+@func
+def _ret_bare(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]):
+    return add(a, b), mul(a, b)
+
+
+@pytest.mark.parametrize("fn", [_ret_paren, _ret_bare], ids=["paren", "bare"])
+def test_literal_tuple_return_parses_to_tuple_type(fn) -> None:
+    """Both spellings of a literal tuple return fold to an ``hir.tensor.Tuple``
+    body with a ``TupleType`` return of the element field types."""
+    assert isinstance(fn.body, Tuple), f"body is {type(fn.body).__name__}"
+    assert len(fn.body.elements) == 2
+    assert isinstance(fn.return_type, TupleType)
+    assert len(fn.return_type.fields) == 2
+    assert all(f.dtype == DType.f32 for f in fn.return_type.fields)

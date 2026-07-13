@@ -2,15 +2,19 @@
 
 import pytest
 
+from tests.fixtures.demo_ir import build_demo
+from tilefoundry import func
+from tilefoundry.dsl import Tensor
+from tilefoundry.dsl.tf import add, mul
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.parser.hir_parser import parse_script
-from tests.fixtures.demo_ir import build_demo
 
 
 def _is_op(obj) -> bool:
@@ -100,6 +104,24 @@ def _structural_equal(a, b, path="") -> bool:
                 if not _attr_equal(av, bv, f"{path}.attr.{pi.name}"):
                     return False
         return _structural_equal(a.type, b.type, f"{path}.type")
+
+    if isinstance(a, Tuple):
+        if len(a.elements) != len(b.elements):
+            print(f"MISMATCH tuple element count at {path}: {len(a.elements)} vs {len(b.elements)}")
+            return False
+        for i, (ea, eb) in enumerate(zip(a.elements, b.elements)):
+            if not _structural_equal(ea, eb, f"{path}.elements[{i}]"):
+                return False
+        return _structural_equal(a.type, b.type, f"{path}.type")
+
+    if isinstance(a, TupleType):
+        if len(a.fields) != len(b.fields):
+            print(f"MISMATCH tuple field count at {path}: {len(a.fields)} vs {len(b.fields)}")
+            return False
+        return all(
+            _structural_equal(fa, fb, f"{path}.fields[{i}]")
+            for i, (fa, fb) in enumerate(zip(a.fields, b.fields))
+        )
 
     if isinstance(a, TensorType):
         if a.shape != b.shape:
@@ -269,3 +291,47 @@ class TestRoundTrip:
         )
         with pytest.raises((TypeError,)):
             parse_script(src)
+
+
+@func
+def _tuple_ret(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]):
+    return add(a, b), mul(a, b)
+
+
+def test_literal_tuple_return_roundtrips() -> None:
+    """A tuple-returning @func prints a literal ``return (e0, e1)`` and
+    re-parses to a structurally equal function (print → parse → equal)."""
+    src = as_script(_tuple_ret)
+    assert "return (" in src, f"tuple return not rendered:\n{src}"
+    fn2 = parse_script(src)
+    assert _structural_equal(_tuple_ret, fn2), f"round-trip mismatch:\n{src}"
+
+
+def test_tuple_return_with_mesh_element_roundtrips() -> None:
+    """A tuple-return element that introduces a mesh (a ``reshard``) must be
+    discovered by the printer's mesh collection via ``Tuple.elements``; the
+    rendered call references the declared mesh and round-trips."""
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.ir.types.shard import (\n"
+        "    B, S, P, Layout, Mesh, ShardLayout, Topology,\n"
+        ")\n"
+        "sl = ShardLayout(\n"
+        "    layout=Layout((1, 1536), (1536, 1)),\n"
+        "    attrs=(),\n"
+        '    mesh=Mesh(Topology("cta", 128), Layout((128,), (1,))),\n'
+        ")\n"
+        "\n"
+        "@func\n"
+        'def f(a: Tensor[(1, 1536), "f32"], c: Tensor[(1, 1536), "f32"]):\n'
+        '    b = reshard(a, sl, "smem")\n'
+        "    return (b, c)\n"
+    )
+    fn = parse_script(src)
+    printed = as_script(fn)
+    assert "return (" in printed, printed
+    fn2 = parse_script(printed)
+    assert _structural_equal(fn, fn2), f"round-trip mismatch:\n{printed}"

@@ -16,8 +16,9 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.tuple import Tuple
 from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimConst,
@@ -423,6 +424,9 @@ def _collect_meshes(fn: HirFunction) -> dict[int, Mesh]:
                 _add_layout(expr.target.layout)
             for arg in expr.args:
                 _walk(arg)
+        elif isinstance(expr, Tuple):
+            for el in expr.elements:
+                _walk(el)
 
     _walk(fn.body)
     return meshes
@@ -473,6 +477,9 @@ def _emit_def(
         if isinstance(expr, Call):
             for arg in expr.args:
                 _topo(arg)
+        elif isinstance(expr, Tuple):
+            for el in expr.elements:
+                _topo(el)
         _order.append(expr)
 
     _topo(fn.body)
@@ -511,13 +518,16 @@ def _emit_def(
     for expr in _order:
         _assign_name(expr)
 
-    # Function signature
+    # Function signature. A ``TupleType`` return has no surface annotation; it
+    # is re-inferred from the literal tuple ``return`` body on re-parse.
     return_ty = fn.return_type
-    ret_str = (
-        _tensor_annotation(return_ty, mesh_name_map=mesh_map, indent=indent)
-        if isinstance(return_ty, TensorType)
-        else "None"
-    )
+    arrow = ""
+    if isinstance(return_ty, TensorType):
+        arrow = " -> " + _tensor_annotation(
+            return_ty, mesh_name_map=mesh_map, indent=indent
+        )
+    elif not isinstance(return_ty, TupleType):
+        arrow = " -> None"
 
     lines.append(f"def {def_name}(")
     param_strs = []
@@ -529,7 +539,7 @@ def _emit_def(
         else:
             param_strs.append(f"{indent}{name}")
     lines.append(",\n".join(param_strs))
-    lines.append(f") -> {ret_str}:")
+    lines.append(f"){arrow}:")
 
     # A dispatch prototype has no body — declare signature only.
     if fn.body is None:
@@ -618,9 +628,17 @@ def _emit_def(
                 loc = f'  # loc="{expr.loc}"' if expr.loc else ""
                 lines.append(f"{indent}{name} = {call_str}{loc}")
 
-    # Return statement
-    body_name = _names[id(fn.body)]
-    lines.append(f"{indent}return {body_name}")
+    # Return statement. A literal tuple body renders its elements inline
+    # (``return (e0, e1)``) rather than a name for the un-emitted Tuple node.
+    if isinstance(fn.body, Tuple):
+        elem_names = [_names[id(el)] for el in fn.body.elements]
+        inner = ", ".join(elem_names)
+        if len(elem_names) == 1:
+            inner += ","
+        lines.append(f"{indent}return ({inner})")
+    else:
+        body_name = _names[id(fn.body)]
+        lines.append(f"{indent}return {body_name}")
     return lines
 
 

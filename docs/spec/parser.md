@@ -735,6 +735,7 @@ Python statements that the parser folds into a single `Expr` tree.
 | `for i in tile(...)` | `GridRegionExpr` (see §1.7 and below). |
 | `with Mesh(...) as m` | Push `m` onto the parser-lexical stack; pop on exit. No IR node. |
 | `return expr` | Sets `Function.body`. A `return` without a value is rejected. |
+| `return (a, b)` / `return a, b` | A literal tuple return (both spellings are the same AST) folds to an `hir.tensor.Tuple` body; `Function.return_type` is the `TupleType` of the element types. Callers destructure via the existing tuple-unpack rule (`o, s = f(...)`). |
 | `pass` | Accepted only as the **entire** body: sets `Function.body = None`, declaring a dispatch prototype whose implementations are registered via `.specialize` (§8). A `pass` mixed with any other statement is rejected. |
 
 `for` / `if` / `while` over arbitrary ranges, conditionals, and other
