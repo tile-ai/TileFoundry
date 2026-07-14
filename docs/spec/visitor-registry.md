@@ -356,8 +356,8 @@ class CodegenContext:
 Registry per target:
 
 ```python
-codegen_<target>_registry: AnalysisRegistry[type]        # one registry per target
-def register_codegen_<target>(cls: type[Op] | type[Stmt]): ...   # decorator: register a per-target handler
+codegen_cuda_registry: AnalysisRegistry[type]        # one registry per target (cuda / cpu / ...)
+def register_codegen_cuda(cls: type[Op] | type[Stmt]): ...   # decorator: register a per-target handler
 ```
 
 - constraints:

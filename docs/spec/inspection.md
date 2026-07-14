@@ -94,6 +94,7 @@ prints as its base `@tilefoundry.func` with a `pass` body, followed by each
 variant as an `@<name>.specialize(pattern)` block in declared order:
 
 ```python
+# example
 @tilefoundry.func
 def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     pass

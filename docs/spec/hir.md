@@ -32,21 +32,28 @@ sequence; the single structured exception that carries loop-phi-shaped SSA is
 ### 1.1 `Function`
 
 ```python
-@dataclass(frozen=True)
 class Function(Expr):
-    """HIR's function container. An Expr subclass — its value type is
-    the function signature, and call sites resolve through Module's
-    symbol table."""
-    name: str                               # the function name; call sites resolve through Module's symbol table
-    params: tuple[Var, ...]                 # each Var carries a type annotation
-    body: Expr | None                       # a single Expr — typically a Call DAG; None for a dispatch prototype
-    return_type: IRType                     # TensorType for single output, TupleType for multi
-    topologies: tuple[Topology, ...]        # convenience for single-function modules
+    """HIR's function container; its value type is the function signature.
+
+    Attributes:
+        name: the function name; call sites resolve through Module's symbol table.
+        params: each Var carries a type annotation.
+        body: a single Expr — typically a Call DAG; None for a dispatch prototype.
+        return_type: TensorType for single output, TupleType for multi.
+        topologies: convenience for single-function modules.
+    """
+
+    name: str
+    params: tuple[Var, ...]
+    body: Expr | None
+    return_type: IRType
+    topologies: tuple[Topology, ...]
 ```
 - constraints:
   - an `Expr` subclass whose value type is the function signature; always returns
     by value (explicit output params are TIR-only). Typing and shape-dispatch
     rules are stated below.
+  - defined as a frozen dataclass — instances are immutable after construction.
 
 `Function.body` is a **single Expr** (usually a Call DAG, possibly
 nested inside a `GridRegionExpr`). HIR has no Stmt sequence; name
@@ -145,7 +152,6 @@ separate specialized-function type. The field is the IR-side carrier for
 the parser surface ([parser.md](./parser.md)).
 
 ```python
-@dataclass(frozen=True)
 class Function(Expr):
     ...
     specializations: tuple[Pattern, ...] = ()
@@ -212,23 +218,34 @@ top-level `Module.functions` entry MUST NOT be a variant: a top-level
 ### 1.2 `GridRegionExpr`
 
 ```python
-@dataclass(frozen=True)
 class GridRegionExpr(Expr):
-    """Loop-phi-shaped structured SSA — the only HIR exception to
-    pure Call DAG. Folds a tile-style loop into a single Expr value."""
-    induction_var: Var                       # loop induction Var, ranging over range(start, extent, step)
-    carried_args: tuple[Var, ...]            # loop-phi carry chain (equal lengths)
-    init_args: tuple[Expr, ...]              # loop-phi carry chain (equal lengths)
-    body: Expr                               # the loop body Expr
-    yield_values: tuple[Expr, ...]           # loop-phi carry chain (equal lengths)
-    extent: ShapeDim                         # iteration-domain stop (half-open)
-    step: ShapeDim                           # induction-var stride
-    start: ShapeDim = 0                       # iteration-domain start (default 0)
+    """Loop-phi-shaped structured SSA folding a tile-style loop into one Expr value.
+
+    Attributes:
+        induction_var: loop induction Var, ranging over range(start, extent, step).
+        carried_args: loop-phi carry chain (equal lengths).
+        init_args: loop-phi carry chain (equal lengths).
+        body: the loop body Expr.
+        yield_values: loop-phi carry chain (equal lengths).
+        extent: iteration-domain stop (half-open).
+        step: induction-var stride.
+        start: iteration-domain start (default 0).
+    """
+
+    induction_var: Var
+    carried_args: tuple[Var, ...]
+    init_args: tuple[Expr, ...]
+    body: Expr
+    yield_values: tuple[Expr, ...]
+    extent: ShapeDim
+    step: ShapeDim
+    start: ShapeDim = 0
 ```
 - constraints:
   - the only HIR exception to pure Call DAG: loop-phi-shaped structured SSA that
     folds a tile-style loop into one `Expr` value; `type` is `TensorType` (single
     carry) or `TupleType` (multi-carry).
+  - defined as a frozen dataclass — instances are immutable after construction.
 
 **Iteration domain.** Both DSL loop surfaces — `for i in tile(...)` and
 `for i in range(...)` — lower to this one node; they share the domain
@@ -282,6 +299,7 @@ Parser-side rules: see [parser §5.6](./parser.md).
 **Minimal example** — loop-carried accumulator:
 
 ```python
+# example
 acc = zeros((M,), f32, storage="rmem")
 for i in tile(K, step=BLOCK):
     acc = acc + load_tile(x, i)
@@ -291,6 +309,7 @@ for i in tile(K, step=BLOCK):
 becomes (sketched):
 
 ```python
+# example
 GridRegionExpr(
     induction_var = i,
     carried_args  = (acc_phi,),
@@ -309,8 +328,8 @@ subdirectory is file organisation, not a separate IR layer. A **custom Op**
 records its full contract (fields, typing / verifier rules, worked examples)
 in its catalog entry below; a **consensus Op** needs only one sentence or a
 grouped external reference, per [SPEC-RULES](../SPEC-RULES.md). The op name is
-the pointer — code carries no back-link to this catalog. Field signatures and
-`ParamDef` listings stay in code ([core-ir §2.3](./core-ir.md)).
+the pointer — code carries no back-link to this catalog. `ParamDef` plumbing
+stays in code; the mechanism is owned by [core-ir §2.3](./core-ir.md).
 
 **HIR-specific typing hooks.** Each op's constraints are enforced by its
 registered `@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
@@ -348,12 +367,18 @@ per-name IR classes.
 
 ##### Binary
 ```python
-"""
-kind: binary arithmetic, comparison, or boolean tag;
-lhs: input tensor;
-rhs: input tensor
-"""
-Binary(kind, lhs, rhs) -> Tensor
+class Binary(Op):
+    """Kind-tagged pointwise binary operation; produces a Tensor.
+
+    Attributes:
+        lhs: input; input tensor.
+        rhs: input; input tensor.
+        kind: attribute; binary arithmetic, comparison, or boolean tag.
+    """
+
+    lhs: Tensor
+    rhs: Tensor
+    kind: BinaryKind
 ```
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
@@ -361,11 +386,16 @@ Binary(kind, lhs, rhs) -> Tensor
 
 ##### Unary
 ```python
-"""
-kind: unary tag including neg, abs, logical_not, rsqrt, exp, and log;
-x: input tensor
-"""
-Unary(kind, x) -> Tensor
+class Unary(Op):
+    """Kind-tagged pointwise unary operation; produces a Tensor.
+
+    Attributes:
+        x: input; input tensor.
+        kind: attribute; unary tag including neg, abs, logical_not, rsqrt, exp, and log.
+    """
+
+    x: Tensor
+    kind: UnaryKind
 ```
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
@@ -381,11 +411,16 @@ Consensus torch / numpy structural ops.
 
 ##### Cast
 ```python
-"""
-x: input tensor;
-dtype: target element dtype
-"""
-Cast(x, dtype) -> Tensor
+class Cast(Op):
+    """Convert the element dtype; produces a Tensor.
+
+    Attributes:
+        x: input; source tensor.
+        dtype: attribute; target element dtype.
+    """
+
+    x: Tensor
+    dtype: DType
 ```
 - constraints:
   - Identity in shape / storage / layout; only the element dtype changes to
@@ -399,13 +434,20 @@ Cast(x, dtype) -> Tensor
 
 ##### Gather
 ```python
-"""
-x: source;
-index: integer index tensor;
-axis: gathered axis;
-batch_dims: number of leading batched dims
-"""
-Gather(x, index, axis, batch_dims=0) -> Tensor
+class Gather(Op):
+    """Gather along one axis, optionally batched; produces a Tensor.
+
+    Attributes:
+        x: input; source.
+        indices: input; integer index tensor.
+        axis: attribute; gathered axis.
+        batch_dims: attribute; number of leading batched dims.
+    """
+
+    x: Tensor
+    indices: Tensor
+    axis: int
+    batch_dims: int = 0
 ```
 - constraints:
   - Result shape is `x.shape[:axis] + index.shape[batch_dims:] + x.shape[axis+1:]`; the gathered `axis` is replaced by `index`'s non-batch dims, and `x`'s other dims pass through.
@@ -416,25 +458,38 @@ Gather(x, index, axis, batch_dims=0) -> Tensor
 
 ##### Zeros
 ```python
-"""
-shape: output logical shape;
-dtype: output dtype;
-storage: output storage kind
-"""
-Zeros(shape, dtype, storage) -> Tensor
+class Zeros(Op):
+    """Allocate a zero-initialised tensor; produces a Tensor.
+
+    Attributes:
+        shape: attribute; output logical shape.
+        dtype: attribute; output dtype.
+        storage: attribute; output storage kind.
+    """
+
+    shape: tuple
+    dtype: DType
+    storage: StorageKind = StorageKind.GMEM
 ```
 - constraints:
   - The result is zero-initialised.
 
 ##### Reduce
 ```python
-"""
-x: input tensor;
-axes: reduced logical axes;
-keepdim: whether reduced axes remain as size-1 axes;
-kind: mean, sum, abs_max, or max
-"""
-Reduce(x, axes, keepdim, kind) -> Tensor
+class Reduce(Op):
+    """Reduce ``x`` over the selected axes; produces a Tensor.
+
+    Attributes:
+        x: input; input tensor.
+        axes: attribute; reduced logical axes.
+        keepdim: attribute; whether reduced axes remain as size-1 axes.
+        kind: attribute; mean, sum, abs_max, or max.
+    """
+
+    x: Tensor
+    axes: tuple
+    keepdim: bool = True
+    kind: ReduceKind = ReduceKind.MEAN
 ```
 - constraints:
   - The logical result shape follows numpy reduction rules.
@@ -449,12 +504,21 @@ Reduce(x, axes, keepdim, kind) -> Tensor
 
 ##### InsertSlice
 ```python
-"""
-dst: target tensor (value form returns a tensor anchored on this buffer at lowering time);
-update: tensor written into the window;
-offsets: per-axis window starts — a rank-0 integer scalar for a rank-1 dst, or a tuple of rank-0 integer scalars (literal or runtime), one per axis, for rank N
-"""
-InsertSlice(dst, update, offsets) -> Tensor
+class InsertSlice(Op):
+    """Write ``update`` into a window of ``dst``; produces a Tensor.
+
+    Attributes:
+        dst: input; target tensor (value form returns a tensor anchored on this
+            buffer at lowering time).
+        update: input; tensor written into the window.
+        offsets: input; per-axis window starts — a rank-0 integer scalar for a
+            rank-1 dst, or a tuple of rank-0 integer scalars (literal or
+            runtime), one per axis, for rank N.
+    """
+
+    dst: Tensor
+    update: Tensor
+    offsets: Scalar
 ```
 - constraints:
   - `update` has the same rank and dtype as `dst`; the window on each axis is
@@ -469,14 +533,22 @@ InsertSlice(dst, update, offsets) -> Tensor
 
 ##### TopK
 ```python
-"""
-x: input tensor;
-k: elements kept on the selected axis;
-axis: selected axis;
-largest: greatest vs smallest selection;
-sorted: ordered selection
-"""
-TopK(x, k, axis=-1, largest=True, sorted=True) -> (Tensor, Tensor)
+class TopK(Op):
+    """Select the top ``k`` elements on ``axis``; produces ``(values, indices)``.
+
+    Attributes:
+        x: input; source tensor.
+        k: attribute; elements kept on the selected axis.
+        axis: attribute; selected axis.
+        largest: attribute; greatest vs smallest selection.
+        sorted: attribute; ordered selection.
+    """
+
+    x: Tensor
+    k: int
+    axis: int = -1
+    largest: bool = True
+    sorted: bool = True
 ```
 - constraints:
   - The result is a `(values, indices)` tuple; both shrink the selected axis to
@@ -506,21 +578,30 @@ Shape-level Ops on whole shape values (per-axis dim Ops are
 
 ##### ShapeExtract
 ```python
-"""
-shape: input shape value;
-axis: extracted axis
-"""
-ShapeExtract(shape, axis) -> Dim
+class ShapeExtract(Op):
+    """Extract one axis from a shape value; produces a Dim.
+
+    Attributes:
+        shape: input; input shape value.
+        index: attribute; extracted axis.
+    """
+
+    shape: Tensor
+    index: int
 ```
 - constraints:
-  - The result is the dimension at `axis`.
+  - The result is the dimension at `index`.
 
 ##### ShapeCompose
 ```python
-"""
-dims: per-axis dimensions
-"""
-ShapeCompose(dims) -> Shape
+class ShapeCompose(Op):
+    """Assemble per-axis dims into a shape value; produces a Shape.
+
+    Attributes:
+        dims: input; per-axis dimensions.
+    """
+
+    dims: Tensor
 ```
 - constraints:
   - The result is a shape value assembled in input order.
@@ -532,12 +613,18 @@ ShapeCompose(dims) -> Shape
 
 ##### Reshard
 ```python
-"""
-x: input tensor;
-layout: optional target ShardLayout;
-storage: optional target storage kind
-"""
-Reshard(x, layout=None, storage=None) -> Tensor
+class Reshard(Op):
+    """Convert ``x`` to a target layout / storage; produces a Tensor.
+
+    Attributes:
+        x: input; input tensor.
+        layout: attribute; optional target ShardLayout.
+        storage: attribute; optional target storage kind.
+    """
+
+    x: Tensor
+    layout: ShardLayout = None
+    storage: StorageKind = None
 ```
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
@@ -577,10 +664,14 @@ this op.
 
 ##### Local
 ```python
-"""
-x: input tensor with ShardLayout
-"""
-Local(x) -> Tensor
+class Local(Op):
+    """Take the current device's local view of a sharded tensor; produces a Tensor.
+
+    Attributes:
+        x: input; input tensor with ShardLayout.
+    """
+
+    x: Tensor
 ```
 - constraints:
   - The result shape contracts each `Split` axis by that mesh axis's extent.

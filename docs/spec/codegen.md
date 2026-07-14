@@ -62,12 +62,14 @@ by [code-organization](./code-organization.md).
 ### 2.2 Per-Op handler registry
 
 ```python
-@register_codegen_<target>(Op)                              # decorator: register a per-Op handler on a target's emitter
 def handler(call: Call, ctx: CodegenContext) -> None: ...   # Call (wrapped Op inside Evaluate) + CodegenContext
 ```
 
 - constraints:
-  - dispatch (matching `Evaluate` and selecting the handler) is owned by visitor-registry.
+  - a handler is registered on a target's emitter with the per-target
+    `register_codegen_*` decorator ([visitor-registry §6](./visitor-registry.md));
+    dispatch (matching `Evaluate` and selecting the handler) is owned by
+    visitor-registry.
 
 Dispatch is owned by [visitor-registry §6](./visitor-registry.md). A handler
 receives the `Call` (the wrapped Op inside `Evaluate`) plus a `CodegenContext`,
@@ -81,7 +83,7 @@ class CodegenContext:
     def emit(self, line: str) -> None: ...               # append a target source line
     def expr(self, node: Expr) -> str: ...               # render an Expr as a target expression string
     def dtype_to_cpp(self, dtype_name: str) -> str: ...  # backend dtype mapping
-    def make_var_name(self, ...) -> str: ...             # allocate fresh target-side identifiers
+    def name_for(self, var) -> str: ...                  # allocate / return the target-side identifier for an SSA var
 ```
 
 - constraints:

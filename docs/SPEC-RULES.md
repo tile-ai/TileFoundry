@@ -16,51 +16,44 @@ solely because a specific spec rule requires it.
 
 ## Unified Entry Format
 
-A spec entry shows the construct's **source-code interface** — the
-class / enum / struct / function / op-callable surface with field annotations
-and method signatures (ending in `...`, no bodies), each field or method given a
-short inline comment for its role — followed by a `- constraints:` list:
+A spec entry shows the construct in its **source defining form**, with every
+identifier spelled and cased exactly as in the source: a Python class
+(including every HIR / TIR Op) appears as its `class Name(Base):` definition, a
+Python function as its `def name(...) -> R:` signature, and a C++ construct as
+its struct / class / enum / template declaration. A class MUST NOT be shown as
+a call-form signature. Each entry is followed by a `- constraints:` list, where
+every normative MUST / SHALL / SHOULD sentence lives.
 
-````md
-#### Name
-```python
-class Name:
-    field_a: TypeA                        # role of field_a
-    def method(self, arg: T) -> R: ...    # role of method
-```
-- constraints:
-  - contract rule (every normative MUST / SHALL / SHOULD sentence lives here)
-````
+The interface is concise, never a copy of the implementation: no decorators,
+no registration machinery, no `ParamDef` plumbing, no method or function
+bodies (a method appears as its `...`-terminated signature). An Op's inputs
+and attributes appear as annotated fields, one per line, using the source
+field names; attribute defaults are kept (they are interface).
 
-Interface only: no method body, traversal, or registry / decorator
-implementation. Write the construct in its own language (`python` / `cpp`). One
-block may group a family of related signatures. Example code appears only to pin
-an ambiguous contract corner, never to repeat an implementation.
+Documentation inside a block follows the industry style of its language, so it
+is mechanically checkable:
 
-An **Op entry** (HIR / TIR) describes the Op class the IR defines: the
-CamelCase class construction applied to its inputs and attributes, never a
-lowercase function-style spelling. Parameter roles go in a docstring block
-above the signature — one parameter per line, `;`-terminated except the last —
-and the signature line carries no trailing parameter comment:
+- **Python — Google docstring style** (validated by ruff's pydocstyle rules,
+  `convention = "google"`). The class or function docstring opens with a
+  one-line summary (for a value-producing Op, state what it produces; for an
+  effect-form Op, say `effect form`). Field roles go in an `Attributes:`
+  section (`name: input|attribute; role.`), function parameters in `Args:`,
+  results in `Returns:`. Declaration lines carry no trailing role comments.
+- **C++ — Doxygen** (`/** @brief ... @tparam ... @param ... @return ... */`
+  above each declaration; aggregate members MAY use trailing `///<`).
 
-````md
-##### Cast
-```python
-"""
-x: input tensor;
-dtype: target element dtype
-"""
-Cast(x, dtype) -> Tensor
-```
-- constraints:
-  - contract rule
-````
+A fenced block that exists to pin an ambiguous contract corner (usage, not an
+interface) starts with a `# example` / `// example` marker line and is exempt
+from the format checks. Example code never repeats an implementation. One
+block may group a family of related signatures.
 
-The same leading-docstring parameter block applies to every spec entry that
-shows a Python callable (runtime API functions and helpers included).
-
-Consensus ops may be grouped when one external reference defines their behavior.
-Custom TileFoundry ops and public runtime entries need their own entry.
+Consensus ops may be grouped when one external reference defines their
+behavior. Custom TileFoundry ops and public runtime entries need their own
+entry. A decorator-based mechanism appears only in the section that owns it —
+the custom-op machinery (`@register_op` / `ParamDef`) in
+[core-ir §2.3](./spec/core-ir.md), the visitor registries (`@register_*`) in
+[visitor-registry](./spec/visitor-registry.md); anywhere else a decorator may
+only appear inside an `# example`-marked block.
 
 ## Constraints
 

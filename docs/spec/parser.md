@@ -45,6 +45,7 @@ function. `@func` parses with dispatch token `"hir"`, `@prim_func`
 with `"tir"`.
 
 ```python
+# example
 @tilefoundry.module(entry="f")
 class M:
     @tilefoundry.func
@@ -61,6 +62,7 @@ shape through `Function.specialize`. The base function is defined with
 with `@base.specialize(pattern)`:
 
 ```python
+# example
 S = DimVar("S", 1, 9)                                          # envelope [1, 9) = 1..8
 
 @tilefoundry.func
@@ -360,8 +362,7 @@ def _register_schema(schema: OpSchema) -> None: ...
 def get_schemas(dialect: str, name: str) -> list[OpSchema]: ...
 def iter_schema_names(dialect: str) -> Iterable[str]: ...
 
-# tilefoundry/ir/core/op_schema.py
-@dataclass(frozen=True)
+# tilefoundry/ir/core/op_schema.py — a frozen dataclass
 class OpSchema:
     dialect: str            # "tf" or "T"
     name: str

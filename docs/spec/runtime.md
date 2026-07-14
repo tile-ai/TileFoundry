@@ -81,17 +81,17 @@ codegen from lowered IR, NOT guessed at runtime).
 ### 1.2 `jit()` API
 
 ```python
-"""
-fn_or_mod: a hir.Function or Module (normalized to a Module);
-target: the back-end target (default "cuda");
-options: optional CompilerOptions
-"""
-def jit(
-    fn_or_mod: Function | Module,
-    *,
-    target: str = "cuda",
-    options: CompilerOptions | None = None,
-) -> RuntimeModule: ...
+def jit(fn_or_mod: Function | Module, *, target: str = "cuda", options: CompilerOptions | None = None) -> RuntimeModule:
+    """Compile *fn_or_mod* and return the callable runtime module.
+
+    Args:
+        fn_or_mod: a hir.Function or Module (normalized to a Module).
+        target: the back-end target.
+        options: optional CompilerOptions.
+
+    Returns:
+        The callable RuntimeModule.
+    """
 ```
 
 - constraints:
@@ -188,10 +188,13 @@ include only the umbrella header and MUST NOT include target subheaders directly
 ### 2.1 `TopologyScope`
 
 ```cpp
+/**
+ * @brief A fixed enumeration of program topology levels.
+ */
 enum class TopologyScope {
-  cta,          // maps to blockIdx
-  thread,       // maps to threadIdx
-  scope_count,  // a sentinel
+  cta,          ///< maps to blockIdx
+  thread,       ///< maps to threadIdx
+  scope_count,  ///< a sentinel
 };
 ```
 
@@ -200,9 +203,23 @@ enum class TopologyScope {
 ### 2.2 Topology Metadata
 
 ```cpp
-template <TopologyScope T> auto program_shape() noexcept;  // shape of topology level T (e.g. program_shape<cta>() → grid dims)
-template <TopologyScope T> auto program_dim() noexcept;    // size of topology level T
-template <TopologyScope T> auto program_id() noexcept;     // linearized scalar runtime id of T (current execution instance)
+/**
+ * @brief Shape of topology level T (e.g. program_shape<cta>() → grid dims).
+ * @tparam T the topology level
+ */
+template <TopologyScope T> auto program_shape() noexcept;
+
+/**
+ * @brief Size of topology level T.
+ * @tparam T the topology level
+ */
+template <TopologyScope T> auto program_dim() noexcept;
+
+/**
+ * @brief Linearized scalar runtime id of T (current execution instance).
+ * @tparam T the topology level
+ */
+template <TopologyScope T> auto program_id() noexcept;
 ```
 
 - constraints:
@@ -219,11 +236,14 @@ always a runtime query returning the current execution instance id.
 ### 2.3 `tilefoundry::Mesh`
 
 ```cpp
+/**
+ * @brief A device mesh: a CuTe layout whose axes map to program topology levels.
+ */
 template <class MeshLayout, TopologyScope... Topos>
 struct Mesh {
-  MeshLayout mesh_layout;                                        // a CuTe-compatible layout type
-  static constexpr auto topologies = cute::make_tuple(Topos...); // sparse TopologyScope list this mesh uses (type-level, not runtime state)
-  auto local_index() const noexcept;                             // full mesh coordinate for this execution instance
+  MeshLayout mesh_layout;                                        ///< a CuTe-compatible layout type
+  static constexpr auto topologies = cute::make_tuple(Topos...); ///< sparse TopologyScope list this mesh uses (type-level, not runtime state)
+  auto local_index() const noexcept;                             ///< full mesh coordinate for this execution instance
 };
 ```
 
@@ -242,11 +262,14 @@ struct Mesh {
 ### 2.4 `tilefoundry::ShardLayout`
 
 ```cpp
+/**
+ * @brief A plain layout / attrs / mesh aggregate.
+ */
 template <class Layout, class Attrs, class Mesh>
 struct ShardLayout {
-  Layout layout;   // the underlying CuTe layout
-  Attrs attrs;     // shard attributes, ordered by mesh axis
-  Mesh mesh;       // the bound device domain
+  Layout layout;   ///< the underlying CuTe layout
+  Attrs attrs;     ///< shard attributes, ordered by mesh axis
+  Mesh mesh;       ///< the bound device domain
 };
 ```
 
@@ -270,14 +293,17 @@ Shorthand: `S<Axis>` = Split, `B` = Broadcast, `P<Reduction>` = Partial.
 ### 2.6 `tilefoundry::ShardTensor`
 
 ```cpp
+/**
+ * @brief A CuTe tensor/view paired with its runtime shard layout.
+ */
 template <class Engine_, class GlobalLayout_, class ShardLayout_>
 struct ShardTensor {
   using engine_type = Engine_;
   using global_layout_type = GlobalLayout_;
   using shard_layout_type = ShardLayout_;
-  Engine_ engine;             // CuTe tensor/view (gmem/smem/rmem); raw pointer rejected
-  ShardLayout_ shard_layout;  // runtime shard-layout value (dynamic dims carry real extents)
-  auto data();                // underlying pointer of the wrapped cute tensor
+  Engine_ engine;             ///< CuTe tensor/view (gmem/smem/rmem); raw pointer rejected
+  ShardLayout_ shard_layout;  ///< runtime shard-layout value (dynamic dims carry real extents)
+  auto data();                ///< underlying pointer of the wrapped cute tensor
   auto data() const;
 };
 ```
@@ -303,10 +329,14 @@ use `local()` instead.
 ### 2.7 `tilefoundry::make_shard_tensor`
 
 ```cpp
+/**
+ * @brief Factory: bind a global layout and a shard layout onto a CuTe tensor.
+ * @param tensor a CuTe tensor / view (raw pointers rejected at compile time)
+ * @param global_layout the global layout to bind
+ * @param shard_layout the shard layout to bind
+ */
 template <class T, class GL, class SL>
-auto make_shard_tensor(T const& tensor,   // a CuTe tensor / view (raw pointers rejected at compile time)
-                       GL global_layout,  // the global layout to bind
-                       SL shard_layout)   // the shard layout to bind
+auto make_shard_tensor(T const& tensor, GL global_layout, SL shard_layout)
   -> ShardTensor<T, GL, SL>;
 ```
 
@@ -316,11 +346,19 @@ auto make_shard_tensor(T const& tensor,   // a CuTe tensor / view (raw pointers 
 ### 2.8 `tilefoundry::copy` — Shard-aware Overloads
 
 ```cpp
-// shard → plain
+/**
+ * @brief Copy the full tensor, shard → plain.
+ * @param src the shard-tensor source
+ * @param dst the plain destination tensor
+ */
 template <class T, class GL, class SL, class DT>
 void copy(ShardTensor<T, GL, SL> const& src, DT& dst);
 
-// plain → shard
+/**
+ * @brief Copy the full tensor, plain → shard.
+ * @param src the plain source tensor
+ * @param dst the shard-tensor destination
+ */
 template <class ST, class T, class GL, class SL>
 void copy(ST const& src, ShardTensor<T, GL, SL>& dst);
 ```
@@ -331,8 +369,12 @@ void copy(ST const& src, ShardTensor<T, GL, SL>& dst);
 ### 2.10 `local()`
 
 ```cpp
+/**
+ * @brief Project t to this execution instance's local view.
+ * @param t the shard tensor to project
+ */
 template <class E, class GL, class SL>
-auto local(ShardTensor<E, GL, SL> const& t) noexcept;   // project t to this execution instance's local view
+auto local(ShardTensor<E, GL, SL> const& t) noexcept;
 ```
 
 - constraints:
@@ -375,8 +417,12 @@ storage-specific branching is required.
 ### 2.9 Tensor And Storage
 
 ```cpp
-template <class Engine,   // the CuTe engine / iterator / pointer category
-          class Layout>   // a CuTe layout or tilefoundry::ShardLayout
+/**
+ * @brief A CuTe tensor: an engine plus a layout.
+ * @tparam Engine the CuTe engine / iterator / pointer category
+ * @tparam Layout a CuTe layout or tilefoundry::ShardLayout
+ */
+template <class Engine, class Layout>
 class cute::Tensor;
 ```
 
@@ -426,8 +472,13 @@ codegen side is
 ### 3.1 `cute::copy`
 
 ```cpp
+/**
+ * @brief Copy data from src to dst.
+ * @param src the source tensor
+ * @param dst the destination tensor
+ */
 template <class SrcTensor, class DstTensor>
-void copy(SrcTensor const& src, DstTensor& dst);   // source and destination tensors
+void copy(SrcTensor const& src, DstTensor& dst);
 ```
 
 - constraints:
@@ -438,8 +489,13 @@ void copy(SrcTensor const& src, DstTensor& dst);   // source and destination ten
 ### 3.2 `cute::fill`
 
 ```cpp
+/**
+ * @brief Fill tensor with scalar val.
+ * @param tensor the destination tensor
+ * @param val the scalar fill value
+ */
 template <class Tensor, class Value>
-void fill(Tensor& tensor, Value val);   // the destination tensor and the scalar fill value
+void fill(Tensor& tensor, Value val);
 ```
 
 - constraints:
@@ -448,8 +504,12 @@ void fill(Tensor& tensor, Value val);   // the destination tensor and the scalar
 ### 3.3 `tilefoundry::shard_partition`
 
 ```cpp
+/**
+ * @brief Project tensor to the current device coordinate's local view.
+ * @param tensor a tensor whose layout() is a ShardLayout
+ */
 template <class Tensor>
-auto shard_partition(Tensor const& tensor);   // a tensor whose layout() is a ShardLayout
+auto shard_partition(Tensor const& tensor);
 ```
 
 - constraints:
@@ -462,10 +522,17 @@ auto shard_partition(Tensor const& tensor);   // a tensor whose layout() is a Sh
 ### 3.4 `tilefoundry::ops::sync` (mesh-scoped barrier)
 
 ```cpp
-template <SyncKind Kind,                                              // compile-time barrier kind; selects CTA, warp, named-barrier, or grid behavior
-          int Base = 0, int Count = 0, unsigned Mask = 0u,            // compile-time participant geometry
-          int BarId = 0>
-__device__ void sync(unsigned int* grid_bar = nullptr);   // optional two-word global counter pair used only by grid barriers
+/**
+ * @brief Mesh-scoped barrier.
+ * @tparam Kind compile-time barrier kind; selects CTA, warp, named-barrier, or grid behavior
+ * @tparam Base compile-time participant geometry
+ * @tparam Count compile-time participant geometry
+ * @tparam Mask compile-time participant geometry
+ * @tparam BarId compile-time named-barrier id
+ * @param grid_bar optional two-word global counter pair used only by grid barriers
+ */
+template <SyncKind Kind, int Base = 0, int Count = 0, unsigned Mask = 0u, int BarId = 0>
+__device__ void sync(unsigned int* grid_bar = nullptr);
 ```
 
 - constraints:
@@ -478,10 +545,15 @@ __device__ void sync(unsigned int* grid_bar = nullptr);   // optional two-word g
 ### 3.5 `tilefoundry::ops::reduce` (reduction family)
 
 ```cpp
-template <class Op,                 // compile-time combine tag (sum, mean, max, absmax)
-          class Axes,               // compile-time reduced logical axes
-          class Src, class Dst,     // source and destination operands; sharded operands carry ShardLayout
-          class Ws = no_workspace>  // optional shared-memory workspace; no_workspace keeps the reduce within one warp
+/**
+ * @brief Reduce src into dst along Axes.
+ * @tparam Op compile-time combine tag (sum, mean, max, absmax)
+ * @tparam Axes compile-time reduced logical axes
+ * @param src source operand; sharded operands carry ShardLayout
+ * @param dst destination operand; sharded operands carry ShardLayout
+ * @param ws optional shared-memory workspace; no_workspace keeps the reduce within one warp
+ */
+template <class Op, class Axes, class Src, class Dst, class Ws = no_workspace>
 __device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
 ```
 
@@ -497,8 +569,13 @@ __device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
 ### 3.6 `tilefoundry::ops::copy_async` (async gmem→smem staging)
 
 ```cpp
+/**
+ * @brief Async staging copy; fast path stages a gmem source into an smem destination.
+ * @param src per-thread projected source operand
+ * @param dst per-thread projected destination operand
+ */
 template <class TSrc, class TDst>
-__device__ void copy_async(TSrc const& src, TDst& dst);   // per-thread projected operands; fast path stages gmem source into smem destination
+__device__ void copy_async(TSrc const& src, TDst& dst);
 ```
 
 - constraints:

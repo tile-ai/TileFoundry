@@ -40,9 +40,12 @@ from abc import ABC, abstractmethod
 from tilefoundry.ir.core import Module
 
 class Pass(ABC):
-    """A Module → Module pure function (side-effect logging is
-    allowed, but the input Module MUST NOT be mutated — Module is
-    a frozen dataclass, so a mutator returns a new instance)."""
+    """A Module → Module pure function.
+
+    Side-effect logging is allowed, but the input Module MUST NOT be
+    mutated — Module is a frozen dataclass, so a mutator returns a new
+    instance.
+    """
 
     name: str                               # for dump / log
     requires: tuple[str, ...] = ()          # ordered dependency assertion (no scheduling)
@@ -137,11 +140,14 @@ optionally drops per-pass IR dumps when wrapped in a
 `tilefoundry.dump.DumpScope`.
 
 ```python
-from dataclasses import dataclass, field
-
-@dataclass
 class PassManager:
-    passes: list[Pass] = field(default_factory=list)  # the registered passes, run in registration order
+    """Ordered pass pipeline.
+
+    Attributes:
+        passes: the registered passes, run in registration order.
+    """
+
+    passes: list[Pass]
 
     def add(self, p: Pass) -> "PassManager": ...      # register a pass; returns self for chaining
     def run(self, module: Module) -> Module: ...      # run passes in registration order

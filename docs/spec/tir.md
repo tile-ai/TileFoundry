@@ -184,7 +184,13 @@ authored `T.sync(m)`, and appears in Stmt position wrapped by `Evaluate`
 
 ```python
 class Sync(Op):
-    mesh = attribute(Mesh)    # effect-form op `tir.sync.Sync`, authored `T.sync(m)`; the (possibly sliced) mesh the barrier synchronizes
+    """Effect form; mesh-scoped barrier op ``tir.sync.Sync``, authored ``T.sync(m)``.
+
+    Attributes:
+        mesh: attribute; the (possibly sliced) mesh the barrier synchronizes.
+    """
+
+    mesh: Mesh
 ```
 
 - constraints:
@@ -338,6 +344,7 @@ class Abort(Stmt):
 ### 1.8 `@intrinsic` — user-defined effect Stmts
 
 ```python
+# example
 @intrinsic
 def <name>(<param>: Expr, ...) -> None: ...    # decorated function's signature defines the synthesized Stmt subclass; its body becomes the verifier
 ```
@@ -460,69 +467,93 @@ below; code carries only a one-line purpose docstring
 
 ##### AllocTensor
 ```python
-"""
-value form;
-tensor_type: attribute carrying the allocated tensor's result type
-"""
-AllocTensor(tensor_type) -> Tensor
+class AllocTensor(Op):
+    """Value form; allocate a tensor, anchored by ``LetStmt.value``.
+
+    Attributes:
+        tensor_type: attribute; the allocated tensor's result type.
+    """
+
+    tensor_type: TensorType
 ```
 - constraints:
   - allocate a tensor; a value Op anchored by `LetStmt.value`.
 
 ##### MemorySpan
 ```python
-"""
-value form;
-region: the memory region being re-interpreted;
-tensor_type: the typed-tensor view placed over it
-"""
-MemorySpan(region, tensor_type) -> Tensor
+class MemorySpan(Op):
+    """Value form; re-interpret a memory region as a typed tensor.
+
+    Attributes:
+        x: input; the memory region being re-interpreted.
+    """
+
+    x: Tensor
 ```
 - constraints:
   - re-interpret a memory region as a typed tensor; a value Op.
 
 ##### PtrOf
 ```python
-"""
-value form;
-tensor: the tensor whose device address is taken
-"""
-PtrOf(tensor) -> ptr
+class PtrOf(Op):
+    """Value form; take the device address of a tensor.
+
+    Attributes:
+        x: input; the tensor whose device address is taken.
+    """
+
+    x: Tensor
 ```
 - constraints:
   - take the device address of a tensor for downstream view ops; a value Op.
 
 ##### TensorView
 ```python
-"""
-value form;
-tensor: the base tensor;
-view spec: the sub-view descriptor (offsets / layout)
-"""
-TensorView(tensor, ...) -> Tensor
+class TensorView(Op):
+    """Value form; derive a sub-view of a tensor.
+
+    Attributes:
+        memory: input; the base tensor (may be a ``PtrOf`` result).
+        layout: attribute; the sub-view descriptor — a plain ``Layout`` or a
+            ``ShardLayout`` placed over ``memory``.
+        shape: attribute; optional logical-shape override (reshape).
+    """
+
+    memory: Tensor
+    layout: object
+    shape: tuple | None = None
 ```
 - constraints:
   - derive a sub-view of a tensor; a value Op.
 
 ##### Copy
 ```python
-"""
-effect form;
-src / dst: source and destination tensors
-"""
-Copy(src, dst)
+class Copy(Op):
+    """Effect form; byte-equivalent copy between two tensors.
+
+    Attributes:
+        source: input; copy source.
+        destination: input; copy destination.
+    """
+
+    source: Tensor
+    destination: Tensor
 ```
 - constraints:
   - byte-equivalent copy between two tensors.
 
 ##### Fill
 ```python
-"""
-effect form;
-dst: destination tensor;
-value: scalar broadcast into dst
-"""
-Fill(dst, value)
+class Fill(Op):
+    """Effect form; broadcast a scalar value into a tensor.
+
+    Attributes:
+        tensor: input; destination tensor.
+        value: input; rank-0 scalar broadcast into ``tensor``.
+    """
+
+    tensor: Tensor
+    value: Tensor
 ```
 - constraints:
   - broadcast a scalar value into a tensor.
@@ -531,12 +562,21 @@ Fill(dst, value)
 
 ##### Mma
 ```python
-"""
-effect form: acc += lhs @ rhs;
-acc / lhs / rhs: accumulator and operand fragments;
-atom: optional compile-time MmaAtom attribute, absent ⇒ bare-Mma per-target path
-"""
-Mma(acc, lhs, rhs, atom?)
+class Mma(Op):
+    """Effect form; matrix-multiply-accumulate ``acc += lhs @ rhs``.
+
+    Attributes:
+        acc: input; accumulator fragment.
+        lhs: input; left-hand operand fragment.
+        rhs: input; right-hand operand fragment.
+        atom: attribute; optional compile-time ``MmaAtom``, absent ⇒ bare-Mma
+            per-target path.
+    """
+
+    acc: Tensor
+    lhs: Tensor
+    rhs: Tensor
+    atom: MmaAtom | None = None
 ```
 - constraints:
   - matrix-multiply-accumulate `acc += lhs @ rhs`; per-target PTX lowering lives in
@@ -545,22 +585,36 @@ Mma(acc, lhs, rhs, atom?)
 
 ##### ReLU
 ```python
-"""
-effect form;
-x / dst: input and destination tensors
-"""
-ReLU(x, dst)
+class ReLU(Op):
+    """Effect form; pointwise ``max(src, 0)`` written into ``dst``.
+
+    Attributes:
+        src: input; input tensor.
+        dst: input; destination tensor.
+    """
+
+    src: Tensor
+    dst: Tensor
 ```
 - constraints:
   - pointwise `max(x, 0)`.
 
 ##### RMSNorm
 ```python
-"""
-effect form;
-x / dst: input and normalised-output tensors
-"""
-RMSNorm(x, dst, ...)
+class RMSNorm(Op):
+    """Effect form; fused RMS normalisation written into ``dst``.
+
+    Attributes:
+        src: input; input tensor, reduced over its last axis.
+        dst: input; normalised-output tensor.
+        weight: input; 1-D scale multiplied onto the normalised output.
+        eps: attribute; epsilon applied with rsqrt.
+    """
+
+    src: Tensor
+    dst: Tensor
+    weight: Tensor
+    eps: float
 ```
 - constraints:
   - fused RMS normalisation.
@@ -570,13 +624,22 @@ RMSNorm(x, dst, ...)
 ##### Reduce
 
 ```python
-"""
-src / dst: effect-form operands;
-workspace: optional staging buffer sized by lowering;
-axes: reduced-axis tuple;
-kind: ReduceKind tag
-"""
-Reduce(src, dst, workspace?, axes, kind)
+class Reduce(Op):
+    """Effect form; generic axis reduction dispatched by the ``kind`` tag.
+
+    Attributes:
+        src: input; reduction source.
+        dst: input; reduction destination.
+        workspace: input; optional staging buffer sized by lowering.
+        axes: attribute; reduced-axis tuple.
+        kind: attribute; ``ReduceKind`` tag.
+    """
+
+    src: Tensor
+    dst: Tensor
+    workspace: Tensor | None = None
+    axes: tuple
+    kind: ReduceKind
 ```
 - constraints:
   - `Reduce` carries no dispatch parameter; runtime selects the strategy.
@@ -594,24 +657,38 @@ TIR; lowering preserves the kind value without re-mapping.
 
 ##### Binary
 ```python
-"""
-lhs / rhs: input operands;
-dst: destination operand;
-kind: BinaryKind tag
-"""
-Binary(lhs, rhs, dst, kind)
+class Binary(Op):
+    """Effect form; pointwise binary operation ``dst = lhs <kind> rhs``.
+
+    Attributes:
+        lhs: input; left-hand operand.
+        rhs: input; right-hand operand.
+        dst: input; destination operand.
+        kind: attribute; ``BinaryKind`` tag.
+    """
+
+    lhs: Tensor
+    rhs: Tensor
+    dst: Tensor
+    kind: BinaryKind
 ```
 - constraints:
   - Lowers to the binary runtime family without per-kind TIR classes.
 
 ##### Unary
 ```python
-"""
-src: input operand;
-dst: destination operand;
-kind: UnaryKind tag, including rsqrt
-"""
-Unary(src, dst, kind)
+class Unary(Op):
+    """Effect form; pointwise unary operation ``dst = <kind>(src)``.
+
+    Attributes:
+        src: input; input operand.
+        dst: input; destination operand.
+        kind: attribute; ``UnaryKind`` tag, including rsqrt.
+    """
+
+    src: Tensor
+    dst: Tensor
+    kind: UnaryKind
 ```
 - constraints:
   - Lowers to the unary runtime family without per-kind TIR classes.
@@ -623,11 +700,21 @@ the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
 the non-grid/block launch config through the Op attributes.
 
 ```python
-"""
-effect form;
-cluster / dynamic_smem / stream / attrs: attribute-carried launch configuration
-"""
-Launch(cluster?, dynamic_smem?, stream?, attrs?)
+class Launch(Op):
+    """Effect form; host launch of a device kernel, producing no value.
+
+    Attributes:
+        cluster: attribute; optional cluster extents.
+        dynamic_smem: attribute; dynamic shared-memory byte count.
+        stream: attribute; optional stream handle.
+        attrs: attribute; remaining ``LaunchAttrs`` launch configuration.
+    """
+
+    cluster: tuple | None = None
+    dynamic_smem: int = 0
+    stream: object | None = None
+    attrs: LaunchAttrs = LaunchAttrs()
+
 # Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y, grid_z, block_x, block_y, block_z, *forwarded_args))
 ```
 
@@ -820,10 +907,16 @@ producer issues copies, groups them, and a consumer waits on the group queue.
 ##### CopyAsync
 
 ```python
-"""
-src / dst: async staging operands
-"""
-CopyAsync(src, dst)
+class CopyAsync(Op):
+    """Effect form; async gmem→smem copy, non-blocking.
+
+    Attributes:
+        source: input; gmem staging source.
+        destination: input; smem staging destination.
+    """
+
+    source: Tensor
+    destination: Tensor
 ```
 - constraints:
   - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
@@ -833,10 +926,8 @@ CopyAsync(src, dst)
 ##### CpAsyncCommit
 
 ```python
-"""
-effect: closes the current in-flight async-copy group
-"""
-CpAsyncCommit()
+class CpAsyncCommit(Op):
+    """Effect form; close the current in-flight async-copy group."""
 ```
 - constraints:
   - Later `CpAsyncWait` counts committed groups.
@@ -844,10 +935,14 @@ CpAsyncCommit()
 ##### CpAsyncWait
 
 ```python
-"""
-n: most-recent committed groups allowed to remain in flight
-"""
-CpAsyncWait(n)
+class CpAsyncWait(Op):
+    """Effect form; wait until at most ``n`` committed groups remain in flight.
+
+    Attributes:
+        n: attribute; most-recent committed groups allowed to remain in flight.
+    """
+
+    n: int = 0
 ```
 - constraints:
   - `n` is a non-negative compile-time count.
