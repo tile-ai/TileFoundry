@@ -454,7 +454,11 @@ class Gather(Op):
   - `batch_dims` MUST satisfy `0 <= batch_dims <= min(axis, rank(index))`, and the leading `batch_dims` dims of `x` and `index` MUST be equal.
   - Element rule: `out[c.., i.., t..] = x[c.., index[b.., i..], t..]`, where the first `batch_dims` of the `axis` leading dims also index `index`.
   - `batch_dims=0` (default) inserts the full `index` shape at `axis`; a leading-dimension shape coincidence MUST NOT implicitly enable batching — batching is selected only by an explicit positive `batch_dims`.
-  - `batch_dims > 0` is defined for type inference and evaluation over unsharded operands; a `ShardLayout` operand and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed. `batch_dims=0` retains the existing sharded slice and lowering behavior.
+  - `batch_dims > 0` is defined for type inference and evaluation over unsharded operands; a `ShardLayout` operand and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed.
+  - For `batch_dims=0`, a `ShardLayout` operand's output layout is always derived, never passed through unchanged. An un-materialized (`strides=None`) cute layout MUST first derive concrete strides as the prefix product of the cute shape (shard.md §3 default).
+  - A gathered axis carrying exactly one `Split` (and no other `Split` anywhere in `attrs`) produces `Partial(sum)` on that mesh axis, for any index shape: each device already holds the true value at the rows it owns and a zero row elsewhere, so summing the per-device partials across the mesh axis reconstructs the true gather.
+  - Otherwise, a scalar or rank-1 `(1,)` index on a non-`Split` gathered axis derives the sliced output layout (dropping the axis's cute positions for a scalar index, or keeping them at size 1 for a `(1,)` index; any other `Split` in `attrs` is remapped onto the surviving positions).
+  - Any remaining case — more than one `Split` anywhere in `attrs`, a composed layout, or a non-slice index combined with a `Split` elsewhere in `attrs` — has no derivable output layout and MUST fail closed.
 
 ##### Zeros
 ```python

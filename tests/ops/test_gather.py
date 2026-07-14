@@ -21,7 +21,7 @@ from tilefoundry.dsl.tf import gather
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.gather import Gather
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.ir.types.shard.shard_layout import Partial, Split
 from tilefoundry.passes.transforms import HirToTirPass
 
 _F = DType.f32
@@ -89,21 +89,22 @@ TYPEINFER_CASES = [
         (sharded((6, 4, 8), (Split(1),), _M), ten((), DType.i32)),
         sharded((4, 8), (Split(0),), _M, cute=(4, 8), strides=(8, 1)),
     ),
-    # regression (AC-4-2): a gather ALONG the Split (sharded) axis is out of the
-    # slice's scope, so the input layout carries through unchanged.
+    # A gather ALONG the Split (sharded) axis is a masked-gather: every device
+    # already holds a zero-filled partial of the gathered rows, so the output
+    # sums to the true gather across that mesh axis.
     TypeInferCase(
-        "sharded_axis_gather_passes_layout_through",
+        "sharded_axis_gather_derives_partial",
         Gather(axis=0),
         (sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32)),
-        sharded((4, 8), (Split(0),), _M, cute=(6, 4, 8), strides=(32, 8, 1)),
+        sharded((4, 8), (Partial(reduction="sum"),), _M, cute=(4, 8), strides=(1, 4)),
     ),
-    # regression (AC-4-2): a multi-index gather whose total size is 1 (e.g.
-    # (1, 1)) is NOT a slice — the input layout carries through unchanged.
+    # A multi-index gather (e.g. (1, 1)) on a non-Split axis, combined with a
+    # Split elsewhere in the layout, has no derivable output layout.
     TypeInferCase(
-        "multi_index_total_size_one_passes_layout_through",
+        "multi_index_with_split_elsewhere_fails_closed",
         Gather(axis=1),
         (sharded((6, 4, 8), (Split(0),), _M), ten((1, 1), DType.i32)),
-        sharded((6, 1, 1, 8), (Split(0),), _M, cute=(6, 4, 8), strides=(32, 8, 1)),
+        ExpectedError(match="cannot derive an output layout"),
     ),
 ]
 
