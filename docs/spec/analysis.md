@@ -14,7 +14,11 @@ Type inference is registered per Op through
 `@register_typeinfer(<OpClass>)` and enforces its constraints via `ctx.error(...)`
 ([visitor-registry §4](./visitor-registry.md)). A handler receives the op and a
 typeinfer context, derives the output `IRType`, and reports violations through
-`ctx.error`.
+`ctx.error`. A `hir.Function` call composes these per-op rules under
+elaboration ([hir §1.1](./hir.md#11-function)): the callee body is
+reconstructed and each of its nodes re-derives through the same per-op
+rules under the call's actual argument types, so a relation-derived rule
+never needs its own function-boundary case.
 
 ### 1.1 Relation-derived type behavior
 

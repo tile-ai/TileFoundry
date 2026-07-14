@@ -81,29 +81,43 @@ path.
 `return_type`. The projection is fixed at construction and stays
 consistent across construction sites.
 
-**Call typing.** A `Call` whose target is a `Function` types by
-re-deriving the callee under the *actual* argument types: each
-parameter binds to its caller argument's type and the body is
-typeinferred afresh, so the callee **specializes per call site** and a
-caller-supplied layout (sharding) flows into a layout-unconstrained
-parameter and propagates through the body. Argument ↔ parameter
-matching is:
+**Call typing — elaboration.** The template a `@func` declares lives at the
+Python-source level; IR never carries a template object or a shared
+polymorphic body. A `Call` whose target is a `Function` types by
+*elaboration*: `elaborate(callee, arg_types)` binds each parameter to the
+caller's actual argument type, then reconstructs the body under that
+binding — every node the reconstruction touches is typeinferred afresh and
+stamped exactly once, so **the callee specializes per call site** and a
+caller-supplied layout (sharding) flowing into a layout-unconstrained
+parameter propagates through the whole body, including through a `Tuple` or
+`GridRegionExpr` return. The result of elaboration is the concrete
+`Function` instance that becomes the `Call`'s `target`; the `Call`'s type is
+that instance's (re-derived) body type, never a stale `return_type` field
+carried over from a different call site.
+
+Argument ↔ parameter binding is:
 
 - Arity MUST match — exactly one argument per parameter.
-- A parameter that is a `TensorType` with `layout is None` is a
-  **logical tensor**: its layout is unconstrained, so an argument of
-  any layout (plain / replicated / split / partial) is accepted when
-  its logical `shape` and `dtype` match.
-- A parameter that carries a `ShardLayout` is an explicit layout
-  constraint: the argument type MUST match it exactly.
+- A parameter that is a `TensorType` with `layout is None` is a **template
+  wildcard**: it binds to the argument's full type, including any
+  `ShardLayout`, once the argument's logical `shape` and `dtype` match.
+- A parameter that carries a `ShardLayout` is an explicit **contract**: the
+  argument type MUST match it exactly.
 - Any other parameter requires exact type equality.
+- `DimVar` shapes keep envelope matching — elaboration does not
+  monomorphize a dynamic shape into a concrete one (that is **Shape
+  dispatch and specializations** below, unaffected by elaboration).
 
 When the body cannot express a propagated sharding (e.g. a reshape
 whose cute factorization straddles a new axis), typeinfer fails at that
-op, not at the boundary. A dispatch-prototype callee (`variants != ()`,
-`body is None`) is not re-derived: the call's result is the declared
-`return_type` and the `None` body is never inspected (variant selection
-is **Shape dispatch and specializations** below).
+op, not at the boundary. Reconstructing IR for every call is unnecessary
+when nothing would change: elaborating with argument types that already
+equal the callee's current parameter types returns the same `Function`
+instance (dedup) rather than a clone — an optimization, not a semantic;
+callers MUST NOT rely on getting a distinct instance. A dispatch-prototype
+callee (`variants != ()`, `body is None`) is not elaborated: the call's
+result is the declared `return_type` and the `None` body is never inspected
+(variant selection is **Shape dispatch and specializations** below).
 
 **Signature annotation `Layout.strides` materialization.** A
 `Tensor[..., (sugar)]` annotation on a parameter or return appears
