@@ -183,20 +183,20 @@ failing closed when it does not.
 - `docs/spec/hir.md`
 
 #### Plan
-- [ ] step 2.1 Split `Reshape` out of the grouped "Reshape / Transpose /
+- [x] step 2.1 Split `Reshape` out of the grouped "Reshape / Transpose /
       Slice / Concat / Stack / ShapeOf / Rank" consensus one-liner
       (`hir.md` §1.3 `ir/hir/tensor/`) into its own entry, following the
       Unified Entry Format (source-form `class Reshape(Op): ...`,
       `- constraints:` list) — matching how `Cast`/`Gather`/`Reduce` already
       have their own entries in the same subsection for the same reason
       (non-consensus, custom constraints).
-- [ ] step 2.2 State the implemented subset as a constraint: a genuine
+- [x] step 2.2 State the implemented subset as a constraint: a genuine
       `ShardLayout` carries through `Reshape` when every cute position lies
       entirely within one new axis, OR (this WI) a `Split`-bound position
       subdivides at a boundary where the bound mesh extent divides the outer
       sub-factor — `Split` relocates there, the inner residual becomes a
       plain cute position.
-- [ ] step 2.3 State the unimplemented target contract as a constraint,
+- [x] step 2.3 State the unimplemented target contract as a constraint,
       following the `Gather` `batch_dims` precedent (`hir.md` §1.3, "not yet
       supported and MUST fail closed"): arbitrary rank-N regroup — any
       further nesting of splits, or a device-owned block that does not align
@@ -206,17 +206,17 @@ failing closed when it does not.
       the spec sentence recording it as the boundary, not an oversight).
 
 #### Acceptance Criteria
-- [ ] AC-2-1: `docs/spec/hir.md`'s new `Reshape` entry has no plan /
+- [x] AC-2-1: `docs/spec/hir.md`'s new `Reshape` entry has no plan /
       milestone / task-ID / commit-hash reference (SPEC-RULES.md
       Constraints); no `Non-Goals` / `Future` / `Tests` section.
-- [ ] AC-2-2: `python scripts/spec_rules_lint.py docs/spec/hir.md` (or
+- [x] AC-2-2: `python scripts/spec_rules_lint.py docs/spec/hir.md` (or
       the repo's equivalent entry point) passes.
 <!-- policy_ac:start -->
-- [ ] Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs. <!-- policy_ac: spec_discipline-0 -->
-- [ ] Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section. <!-- policy_ac: spec_discipline-1 -->
-- [ ] Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names. <!-- policy_ac: spec_discipline-2 -->
-- [ ] Spec section MUST be in English. <!-- policy_ac: spec_discipline-3 -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs. <!-- policy_ac: spec_discipline-0 -->
+- [x] Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section. <!-- policy_ac: spec_discipline-1 -->
+- [x] Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names. <!-- policy_ac: spec_discipline-2 -->
+- [x] Spec section MUST be in English. <!-- policy_ac: spec_discipline-3 -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ### Milestone M3: Full-suite validation
