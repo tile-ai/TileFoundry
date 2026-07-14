@@ -229,18 +229,20 @@ failing closed when it does not.
 - `tests/`
 
 #### Plan
-- [ ] step 3.1 Run the full suite (`pytest tests/`); triage every failure
+- [x] step 3.1 Run the full suite (`pytest tests/`); triage every failure
       against Milestone M0/M1's scope — any unrelated failure is a STOP
       item, not a silent fix.
-- [ ] step 3.2 Re-run `repro_g08.py` after the full suite to confirm no
+- [x] step 3.2 Re-run `repro_g08.py` after the full suite to confirm no
       cross-test interference.
 
 #### Acceptance Criteria
-- [ ] AC-3-1: `pytest tests/` fully green in the worktree venv.
-- [ ] AC-3-2: `<worktree>/.venv/bin/python -m pytest repro_g08.py -v`
+- [x] AC-3-1: `pytest tests/` fully green in the worktree venv — 828
+      passed (baseline before this WI: 827; net +1 from Milestone M1's
+      added straddle-negative case).
+- [x] AC-3-2: `<worktree>/.venv/bin/python -m pytest repro_g08.py -v`
       (run from `gap-repros/`) — 3 passed.
 <!-- policy_ac:start -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ## Execution Preflight
