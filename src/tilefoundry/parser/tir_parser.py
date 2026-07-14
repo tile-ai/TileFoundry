@@ -11,6 +11,7 @@ from tilefoundry.ir.target import CudaTarget
 from tilefoundry.ir.target.launch import LaunchAttrs
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir.tir.shape import shape_var_name
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
@@ -22,7 +23,6 @@ from tilefoundry.ir.tir.stmts import (
     Sequential,
     While,
 )
-from tilefoundry.ir.tir.shape import shape_var_name
 from tilefoundry.ir.tir.symbol_ref import symbol_call
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.dim import (

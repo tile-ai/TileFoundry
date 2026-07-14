@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import torch
 
-from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
 from tests.ops.eval_utils import EvalCase, run_eval_case
+from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
 
 
 def test_sigmoid_evaluate():

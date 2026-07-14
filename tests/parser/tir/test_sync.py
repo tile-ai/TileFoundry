@@ -19,8 +19,8 @@ import pytest
 import tilefoundry.codegen.cuda  # noqa: F401 — trigger emitter autodiscovery
 from tilefoundry import prim_func
 from tilefoundry.codegen.cuda.context import CodegenContext
-from tilefoundry.dsl import Tensor, T
-from tilefoundry.ir.core import VerifyError, Var
+from tilefoundry.dsl import T, Tensor
+from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
 from tilefoundry.ir.tir.sync import Sync, SyncBarrier, classify

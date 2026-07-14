@@ -21,8 +21,8 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.op_registry import (
     _schemas_by_dialect_name,
     get_op_by_name,
-    get_tf_by_category_name,
     get_schemas,
+    get_tf_by_category_name,
 )
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor

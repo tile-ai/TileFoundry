@@ -13,17 +13,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import (
-    Partial,
-    ShardLayout,
-    Split,
-)
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
@@ -31,6 +20,16 @@ from tests.ops.typeinfer_utils import (
     infer_call,
     run_typeinfer_case,
     ten,
+)
+from tilefoundry.ir.hir.nn.matmul import MatMul
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard.layout import Layout
+from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.shard.shard_layout import (
+    Partial,
+    ShardLayout,
+    Split,
 )
 
 _MM = MatMul()

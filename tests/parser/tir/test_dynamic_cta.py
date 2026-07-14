@@ -9,7 +9,7 @@ kernels get no hidden scalars.
 from __future__ import annotations
 
 from tilefoundry import prim_func
-from tilefoundry.dsl import DimVar, Tensor, T
+from tilefoundry.dsl import DimVar, T, Tensor
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
