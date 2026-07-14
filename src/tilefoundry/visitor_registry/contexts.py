@@ -13,12 +13,10 @@ from dataclasses import dataclass, field
 from typing import Any, NoReturn, Union
 
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.expr import Call, Constant, Expr, Var
+from tilefoundry.ir.core.expr import Call, Expr
 from tilefoundry.ir.core.stmt import Stmt
 from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.tensor_type import DType, TensorType, Type
-
-from .registries import typeinfer_registry
 
 
 def _constant_type(value: object) -> TensorType:
@@ -35,7 +33,12 @@ def _constant_type(value: object) -> TensorType:
 
 @dataclass
 class TypeInferContext:
-    """Lazy type-of cache. Spec §4.
+    """Walk-local type-of cache + error helper. Spec §4.
+
+    The actual per-``Expr``-kind derivation rules live on
+    ``TypeInferVisitor`` (visitor_registry.visitors); this context is only
+    the memo dict and the shared ``error()`` formatter — it does not
+    dispatch on ``type(expr)`` itself.
 
     ``mesh_scope`` carries the enclosing ``MeshScope`` stack into a registered
     ``verify_stmt`` handler (the stmt walk sets it before dispatch), so a
@@ -51,28 +54,13 @@ class TypeInferContext:
         cached = self.cache.get(expr)
         if cached is not None:
             return cached
-        computed = self._compute(expr)
+        # Local import: visitors.py imports TypeInferContext from this module,
+        # so the reverse import is deferred to call time to avoid a cycle.
+        from .visitors import TypeInferVisitor  # noqa: PLC0415
+
+        computed = TypeInferVisitor(self).visit(expr)
         self.cache[expr] = computed
         return computed
-
-    def _compute(self, expr: Expr) -> Type:
-        if isinstance(expr, Constant):
-            declared = getattr(expr, "type", None)
-            if declared is not None:
-                return declared
-            return _constant_type(expr.value)
-        if isinstance(expr, Var):
-            return expr.type
-        if isinstance(expr, Call):
-            op_cls = type(expr.target)
-            fn = typeinfer_registry.lookup(op_cls)
-            if fn is None:
-                self.error(expr, f"no typeinfer registered for {op_cls.__name__}")
-            return fn(expr, self)
-        declared = getattr(expr, "type", None)
-        if declared is not None:
-            return declared
-        self.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
     def error(self, node: Union[Expr, Stmt], msg: str) -> NoReturn:
         if isinstance(node, Call):
