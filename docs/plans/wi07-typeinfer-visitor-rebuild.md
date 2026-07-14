@@ -109,11 +109,11 @@ argument layout propagates through the whole callee body, including a
 - `src/tilefoundry/visitor_registry/visitors.py`
 
 #### Plan
-- [ ] step 0.1 Delete `TypeInferContext._compute`'s `isinstance` chain
+- [x] step 0.1 Delete `TypeInferContext._compute`'s `isinstance` chain
       (`contexts.py:58-75`); `TypeInferContext.type_of` delegates to
       `TypeInferVisitor(self).visit(expr)` and becomes a walk-local
       cache + `error()` helper only.
-- [ ] step 0.2 `TypeInferVisitor` (`visitors.py`) grows exhaustive
+- [x] step 0.2 `TypeInferVisitor` (`visitors.py`) grows exhaustive
       `visit_Var` / `visit_Constant` / `visit_Call` (registry dispatch,
       moved from `_compute`) / `visit_Tuple` (structural: `TupleType` over
       `ctx.type_of(e)` for each element) / `visit_GridRegionExpr`
@@ -122,18 +122,18 @@ argument layout propagates through the whole callee body, including a
       already stamps) / `visit_ShapeOf` (tir: returns the node's own
       declared `.type` — a `ShapeOf` is always constructed with an explicit
       type, never derived from children).
-- [ ] step 0.3 Override `generic_visit` to raise via `ctx.error` for any
+- [x] step 0.3 Override `generic_visit` to raise via `ctx.error` for any
       `Expr` subclass with no explicit rule (no silent fallback).
 
 #### Acceptance Criteria
-- [ ] AC-0-1: `TypeInferContext` has no `_compute` method; every dispatch
+- [x] AC-0-1: `TypeInferContext` has no `_compute` method; every dispatch
       rule lives on `TypeInferVisitor` as a `visit_<Kind>` method.
-- [ ] AC-0-2: `pytest tests/ops tests/ir_types tests/analysis -q` stays
+- [x] AC-0-2: `pytest tests/ops tests/ir_types tests/analysis -q` stays
       green (Call-kind typeinfer regression guard).
-- [ ] AC-0-3: `pytest tests/passes tests/e2e tests/codegen tests/runtime -q`
+- [x] AC-0-3: `pytest tests/passes tests/e2e tests/codegen tests/runtime -q`
       stays green (tir `ShapeOf` / verify regression guard).
 <!-- policy_ac:start -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ### Milestone M1: Elaboration construction entry + call-site wiring
@@ -146,7 +146,7 @@ argument layout propagates through the whole callee body, including a
 - `src/tilefoundry/parser/base.py`
 
 #### Plan
-- [ ] step 1.1 Add `elaborate(callee, arg_types, ctx=None) -> Function` in
+- [x] step 1.1 Add `elaborate(callee, arg_types, ctx=None) -> Function` in
       `function.py`: arity check; per-param bind via the existing
       `_check_arg_against_param` semantics generalized to return the *bound*
       type (wildcard → argument's full type incl. `ShardLayout`; explicit
@@ -159,7 +159,7 @@ argument layout propagates through the whole callee body, including a
       by `id()` so SSA-as-DAG sharing survives the rebuild) that re-stamps
       every changed node's `.type` through `TypeInferContext.type_of`, and
       return a new `Function.build(...)` instance.
-- [ ] step 1.2 Rewrite `_typeinfer_hir_function_call`
+- [x] step 1.2 Rewrite `_typeinfer_hir_function_call`
       (`function.py:128-151`) to: compute `arg_types` from `ctx.type_of` on
       each `call.args` entry, call `elaborate(callee, arg_types, ctx)`, and
       return the FRESHLY re-derived type of the resulting instance's body
@@ -167,23 +167,23 @@ argument layout propagates through the whole callee body, including a
       directly, per the Constraints section) — or `instance.return_type`
       when `instance.body is None` (dispatch prototype). Delete the
       `sub = TypeInferContext(...)` overlay-seeding code.
-- [ ] step 1.3 `parser/base.py::_build_function_call` calls `elaborate`
+- [x] step 1.3 `parser/base.py::_build_function_call` calls `elaborate`
       before constructing the `Call` so `Call.target` is the actual
       elaborated instance (not just `Call.type`) — required so the viewer's
       inline-expansion (`inspection/viewer/builder.py`, unchanged) and any
       body/printer read of `call.target` see correctly-propagated types.
 
 #### Acceptance Criteria
-- [ ] AC-1-1: `<worktree>/.venv/bin/python -m pytest
+- [x] AC-1-1: `<worktree>/.venv/bin/python -m pytest
       /home/qihang.zheng/zqh/TileOpsGov/research/deepseek-v4-flash-dataflow/gap-repros/repro_g10.py
       -v` — 4 passed, repro file unmodified.
-- [ ] AC-1-2: `pytest tests/ir/test_function_call_typeinfer.py
+- [x] AC-1-2: `pytest tests/ir/test_function_call_typeinfer.py
       tests/parser/hir/test_nested_func_call.py -v` green with no test-body
       changes (only doc/comment updates allowed if wording goes stale).
-- [ ] AC-1-3: `pytest tests/ir tests/parser tests/dsl tests/inspection -q`
+- [x] AC-1-3: `pytest tests/ir tests/parser tests/dsl tests/inspection -q`
       green.
 <!-- policy_ac:start -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ### Milestone M2: Spec edits
@@ -198,31 +198,31 @@ argument layout propagates through the whole callee body, including a
 - `docs/spec/visitor-registry.md`
 
 #### Plan
-- [ ] step 2.1 Rewrite `hir.md` §1.1 "Call typing" to the elaboration model:
+- [x] step 2.1 Rewrite `hir.md` §1.1 "Call typing" to the elaboration model:
       per-call-site construction, wildcard-vs-contract annotation semantics,
       dedup as an optimization not a semantic, dispatch prototypes
       unaffected.
-- [ ] step 2.2 `analysis.md` §1 gains a short note that relation-derived
+- [x] step 2.2 `analysis.md` §1 gains a short note that relation-derived
       type behavior composes under elaboration (a callee's body is
       re-derived per call site; per-op relation rules are unaffected).
-- [ ] step 2.3 `visitor-registry.md` §4 updates the `TypeInferVisitor` /
+- [x] step 2.3 `visitor-registry.md` §4 updates the `TypeInferVisitor` /
       `TypeInferContext` contract text to match the exhaustive-visitor
       shape (no more "registry consulted by `_compute`" framing).
-- [ ] step 2.4 `visitor-mutator.md` touch-up only if the elaboration
+- [x] step 2.4 `visitor-mutator.md` touch-up only if the elaboration
       mutator's memoized-rebuild pattern needs a documented note under
       `ExprMutator`; otherwise no change (call out N/A in the commit if so).
 
 #### Acceptance Criteria
-- [ ] AC-2-1: `python scripts/spec_rules_lint.py` (or equivalent existing
+- [x] AC-2-1: `python scripts/spec_rules_lint.py` (or equivalent existing
       spec lint entry point) passes on the touched spec files.
-- [ ] AC-2-2: No spec file mentions this plan, milestones, or task IDs
+- [x] AC-2-2: No spec file mentions this plan, milestones, or task IDs
       (SPEC-RULES.md Constraints).
 <!-- policy_ac:start -->
-- [ ] Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs. <!-- policy_ac: spec_discipline-0 -->
-- [ ] Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section. <!-- policy_ac: spec_discipline-1 -->
-- [ ] Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names. <!-- policy_ac: spec_discipline-2 -->
-- [ ] Spec section MUST be in English. <!-- policy_ac: spec_discipline-3 -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs. <!-- policy_ac: spec_discipline-0 -->
+- [x] Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section. <!-- policy_ac: spec_discipline-1 -->
+- [x] Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names. <!-- policy_ac: spec_discipline-2 -->
+- [x] Spec section MUST be in English. <!-- policy_ac: spec_discipline-3 -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ### Milestone M3: Full-suite validation and regression migration
@@ -235,21 +235,25 @@ argument layout propagates through the whole callee body, including a
 - `tests/`
 
 #### Plan
-- [ ] step 3.1 Run the full suite (`pytest tests/`); triage every failure.
-- [ ] step 3.2 Migrate any pre-existing test that asserted the old
+- [x] step 3.1 Run the full suite (`pytest tests/`); triage every failure.
+- [x] step 3.2 Migrate any pre-existing test that asserted the old
       overlay/layout-mismatch-permissive behavior to the elaboration /
       instantiation pattern; record which tests and why in the milestone
-      commit body (develop.md Scope discipline).
-- [ ] step 3.3 Re-run the full suite to green.
+      commit body (develop.md Scope discipline). Result: zero — the full
+      suite passed unmodified (no pre-existing test exercised the
+      overlay-permissive scenario the fix corrects).
+- [x] step 3.3 Re-run the full suite to green.
 
 #### Acceptance Criteria
-- [ ] AC-3-1: `pytest tests/` fully green in the worktree venv.
-- [ ] AC-3-2: `<worktree>/.venv/bin/python -m pytest repro_g10.py -v` (run
+- [x] AC-3-1: `pytest tests/` fully green in the worktree venv.
+- [x] AC-3-2: `<worktree>/.venv/bin/python -m pytest repro_g10.py -v` (run
       from `gap-repros/`) — 4 passed.
-- [ ] AC-3-3: The commit body enumerates every migrated test file and the
-      one-line reason (old assumption vs. new elaboration contract).
+- [x] AC-3-3: The commit body enumerates every migrated test file and the
+      one-line reason (old assumption vs. new elaboration contract). Result:
+      none migrated — `pytest tests/` was 827 passed / 0 failed on the first
+      run after M1, with no test-file edits.
 <!-- policy_ac:start -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ## Execution Preflight
