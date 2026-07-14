@@ -148,29 +148,30 @@ failing closed when it does not.
 - `tests/ops/test_reshape.py`
 
 #### Plan
-- [ ] step 1.1 Rewrite `straddle_fails_closed` to `straddle_derives` (or
-      equivalent rename): `(16, 8) Split(0) mesh(4,) → (4, 32)` now expects
-      the derived `ShardLayout` (`Split(0)` on the size-4 leading axis,
-      local extent 1; residual 4 merges with the whole size-8 position into
-      the trailing axis). Update the docstring to state the mesh-divides
-      condition instead of "straddles".
-- [ ] step 1.2 Rewrite `split_dim_straddles_fails_closed` to a derive case:
-      `(4096,) Split(0) mesh(4,) → (32, 128)` expects `Split(0)` on the
-      size-32 leading axis (local extent 8), residual 128 plain. Update the
-      docstring accordingly.
-- [ ] step 1.3 Add one genuinely-straddling negative case in the same file
-      (mesh extent does NOT divide the outer factor) so the file keeps a
-      fail-closed regression guard of its own, not just via the external
-      repro — e.g. mirror the repro's `[6,4] Split(0) mesh(2,) → [3,8]`.
+- [x] step 1.1 Rewrite `straddle_fails_closed` to `split_divides_carries`:
+      `(16, 8) Split(0) mesh(4,) → (4, 32)` now expects the derived
+      `ShardLayout` (`Split(0)` on the size-4 leading axis, local extent 1;
+      residual 4 merges with the whole size-8 position into the trailing
+      axis). Docstring restated around the mesh-divides condition instead
+      of "straddles".
+- [x] step 1.2 Rewrite `split_dim_straddles_fails_closed` to
+      `flat_split_divides_carries`: `(4096,) Split(0) mesh(4,) → (32, 128)`
+      expects `Split(0)` on the size-32 leading axis (local extent 8),
+      residual 128 plain. Docstring updated accordingly.
+- [x] step 1.3 Add a genuinely-straddling negative case under the
+      (now-vacated) name `straddle_fails_closed`, mirroring the repro's
+      `[6,4] Split(0) mesh(2,) → [3,8]` (mesh extent 2 does not divide the
+      outer sub-factor 3) — the file keeps a fail-closed regression guard
+      of its own, not just via the external repro.
 
 #### Acceptance Criteria
-- [ ] AC-1-1: `pytest tests/ops/test_reshape.py -v` fully green with the two
+- [x] AC-1-1: `pytest tests/ops/test_reshape.py -v` fully green with the two
       cases now asserting derived output, plus a new straddle-negative case.
-- [ ] AC-1-2: Commit body names both migrated tests and the one-line reason
+- [x] AC-1-2: Commit body names both migrated tests and the one-line reason
       (pre-fix blanket restriction vs. the mesh-divides-the-outer-factor
       contract), per `docs/develop.md` Scope discipline.
 <!-- policy_ac:start -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ### Milestone M2: Spec edit — `Reshape` gets its own `hir.md` entry

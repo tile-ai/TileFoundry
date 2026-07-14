@@ -3,9 +3,11 @@
 Reshape is a view: an unsharded input reshapes to an unsharded output; a
 genuine sharding carries when every cute position lies entirely within one new
 axis (size-1 axes are inserted/dropped freely and the cute factorization of the
-surviving positions is preserved, with ``Split`` cute-axis references remapped);
-a reshape whose cute factorization straddles a new-axis boundary fails closed
-(no fake layout).
+surviving positions is preserved, with ``Split`` cute-axis references remapped),
+or when a ``Split``-bound position divides across a new-axis boundary at a
+point its bound mesh extent evenly divides (``Split`` relocates to the outer
+sub-factor); a reshape that cannot be expressed either way fails closed (no
+fake layout). See ``docs/spec/hir.md`` §1.3 ``Reshape``.
 """
 from __future__ import annotations
 
@@ -89,19 +91,33 @@ CASES = [
             strides=(0, 128, 1),
         ),
     ),
-    # ── misaligned sharded fails closed ───────────────────────────────────────
-    # cute position 0 (size 16) straddles the new size-4 axis -> error.
+    # ── dividing sharded splits carry ──────────────────────────────────────────
+    # cute position 0 (size 16) divides across the new size-4 boundary: the
+    # outer sub-factor (4) is exactly the mesh extent, so Split relocates
+    # there (local extent 1); the inner residual (4) merges with position 1
+    # into the trailing axis.
     TypeInferCase(
-        "straddle_fails_closed",
+        "split_divides_carries",
         _reshape((4, 32)),
         (sharded((16, 8), (Split(0),), _M),),
-        ExpectedError(match="align"),
+        sharded((4, 32), (Split(0),), _M, cute=(4, 4, 8), strides=(32, 8, 1)),
     ),
-    # a flat split dim (4096) split into (32, 128) straddles both new axes.
+    # a flat split dim (4096) splits into (32, 128): the outer sub-factor (32)
+    # is divisible by the mesh extent (4) -> Split relocates to axis 0.
     TypeInferCase(
-        "split_dim_straddles_fails_closed",
+        "flat_split_divides_carries",
         _reshape((32, 128)),
         (sharded((4096,), (Split(0),), _M),),
+        sharded((32, 128), (Split(0),), _M),
+    ),
+    # ── misaligned sharded fails closed ───────────────────────────────────────
+    # cute position 0 (size 6) would divide across the new size-3 boundary,
+    # but the mesh extent (2) does not divide the outer sub-factor (3) -> the
+    # split genuinely straddles a device boundary and stays rejected.
+    TypeInferCase(
+        "straddle_fails_closed",
+        _reshape((3, 8)),
+        (sharded((6, 4), (Split(0),), mesh((2,))),),
         ExpectedError(match="align"),
     ),
 ]
