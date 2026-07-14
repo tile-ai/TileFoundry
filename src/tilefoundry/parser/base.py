@@ -422,8 +422,11 @@ class BaseExprVisitor:
     ) -> Expr:
         """Build a ``Call(target=<hir.Function>, args=...)`` for a nested
         ``@func`` → ``@func`` call site. Arg-count enforcement lives in
-        the parser; argument *types* are checked by the
-        ``@register_typeinfer(Function)`` handler that runs on demand.
+        the parser; argument *types* are bound by elaboration
+        (``tilefoundry.ir.hir.function.elaborate``, hir.md §1.1) before the
+        ``Call`` is built, so ``Call.target`` is the actual per-call-site
+        instance (needed for the viewer/printer to read correctly-propagated
+        types off ``call.target.body``), not just ``Call.type``.
         ``loc=`` keyword is accepted and threaded onto ``Call.loc``;
         every other keyword is rejected because hir Function calls are
         positional-only at the IR level.
@@ -450,7 +453,12 @@ class BaseExprVisitor:
                 f"declares {expected} parameter(s), call passed {got}"
             )
         input_args = tuple(self.expr(a) for a in node.args)
-        call = self._build_call(callee, input_args)
+        # Local import: avoids a parser <-> ir.hir.function import-order
+        # dependency at module load time.
+        from tilefoundry.ir.hir.function import elaborate  # noqa: PLC0415
+
+        instance = elaborate(callee, tuple(a.type for a in input_args), self._ctx)
+        call = self._build_call(instance, input_args)
         if explicit_loc_given:
             call = dataclasses.replace(call, loc=explicit_loc)
             self._explicit_loc_call_ids.add(id(call))

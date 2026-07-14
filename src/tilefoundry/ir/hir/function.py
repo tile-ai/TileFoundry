@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Expr, Var
-from tilefoundry.ir.core.expr import Call
+from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.target import CudaTarget, Target
@@ -105,54 +106,135 @@ def canonical_specialization_signature(
     return ";".join(parts)
 
 
-def _check_arg_against_param(call, ctx, callee, i, param, arg_ty: Type) -> None:
-    """Validate one call argument against a callee parameter."""
+def _bind_param_type(ctx, callee: "Function", i: int, param: Var, arg_ty: Type) -> Type:
+    """Bind one parameter's elaborated type from the caller's argument type.
+
+    A ``layout is None`` ``TensorType`` parameter is a template wildcard —
+    the bound type is the argument's own full type (including any
+    ``ShardLayout``), once its logical shape/dtype match. Any other
+    parameter type is an explicit contract: the argument MUST match it
+    exactly (hir.md §1.1).
+    """
     p = param.type
     if isinstance(p, TensorType) and isinstance(arg_ty, TensorType) and p.layout is None:
         if arg_ty.shape != p.shape or arg_ty.dtype != p.dtype:
             ctx.error(
-                call,
+                callee,
                 f"hir Function call {callee.name!r}: arg {i} shape/dtype "
                 f"mismatch — callee param {param.name!r} expects logical "
                 f"{p.shape} {p.dtype}, got {arg_ty.shape} {arg_ty.dtype}",
             )
-        return
+        return arg_ty
     if arg_ty != p:
         ctx.error(
-            call,
+            callee,
             f"hir Function call {callee.name!r}: arg {i} type mismatch — "
             f"callee param {param.name!r} expects {p!r}, got {arg_ty!r}",
         )
+    return p
+
+
+def elaborate(
+    callee: "Function", arg_types: tuple[Type, ...], ctx: TypeInferContext | None = None,
+) -> "Function":
+    """Construct the concrete callee instance for one call site's argument
+    types (hir.md §1.1). The template lives at the Python-source level;
+    every differently-typed call gets its own IR construction here.
+
+    Returns ``callee`` unchanged for a dispatch prototype (``variants !=
+    ()``/``body is None`` — no body to elaborate; shape dispatch stays
+    envelope-matched, untouched by this function) and whenever every bound
+    parameter type already equals the callee's current parameter type
+    (dedup — an allowed optimization, not a semantic).
+    """
+    if ctx is None:
+        ctx = TypeInferContext()
+    expected = len(callee.params)
+    got = len(arg_types)
+    if got != expected:
+        ctx.error(
+            callee,
+            f"hir Function call {callee.name!r}: arity mismatch — "
+            f"callee declares {expected} parameter(s), call passed {got}",
+        )
+    bound_types = [
+        _bind_param_type(ctx, callee, i, param, arg_ty)
+        for i, (param, arg_ty) in enumerate(zip(callee.params, arg_types))
+    ]
+    if callee.variants or callee.body is None:
+        return callee
+    if all(bt == p.type for bt, p in zip(bound_types, callee.params)):
+        return callee
+
+    new_params = tuple(
+        Var(type=bt, name=p.name) for bt, p in zip(bound_types, callee.params)
+    )
+    subst = {id(old): new for old, new in zip(callee.params, new_params)}
+
+    # Local import: tilefoundry.ir.visitor imports Function from this
+    # module, so a module-level import here would cycle.
+    from tilefoundry.ir.visitor import ExprMutator  # noqa: PLC0415
+
+    class _Elaborator(ExprMutator):
+        """Rebuild ``callee.body`` under ``subst`` (memoized by node
+        identity so SSA-as-DAG sharing survives), re-stamping every
+        changed node's type through the shared typeinfer visitor."""
+
+        def __init__(self, body_ctx: TypeInferContext) -> None:
+            self.body_ctx = body_ctx
+            self._memo: dict[int, Expr] = {}
+
+        def visit(self, expr: Expr) -> Expr:
+            cached = self._memo.get(id(expr))
+            if cached is not None:
+                return cached
+            new = super().visit(expr)
+            self._memo[id(expr)] = new
+            return new
+
+        def visit_Var(self, var: Var) -> Expr:
+            return subst.get(id(var), var)
+
+        def visit_Constant(self, c: Constant) -> Expr:
+            return c
+
+        def generic_visit(self, expr: Expr) -> Expr:
+            rebuilt = super().generic_visit(expr)
+            if rebuilt is expr:
+                return expr
+            return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
+
+    body_ctx = TypeInferContext(module=ctx.module)
+    new_body = _Elaborator(body_ctx).visit(callee.body)
+    return Function.build(
+        name=callee.name,
+        params=new_params,
+        body=new_body,
+        return_type=new_body.type,
+        topologies=callee.topologies,
+        specializations=callee.specializations,
+        target=callee.target,
+    )
 
 
 @register_typeinfer(Function)
 def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
-    """Typeinfer handler for ``Call(target=hir.Function, args=...)``."""
+    """Typeinfer handler for ``Call(target=hir.Function, args=...)``:
+    derive the type by elaboration (hir.md §1.1). The Call's type is always
+    the freshly re-derived type of the (possibly deduped) instance's body —
+    never a possibly-stale ``Function.return_type`` field — except for a
+    dispatch prototype, whose ``None`` body is never inspected."""
     callee: Function = call.target  # type: ignore[assignment]
-    expected = len(callee.params)
-    got = len(call.args)
-    if got != expected:
-        ctx.error(
-            call,
-            f"hir Function call {callee.name!r}: arity mismatch — "
-            f"callee declares {expected} parameter(s), call passed {got}",
-        )
-    if callee.variants:
-        # Dispatch prototype: validate args against the shared signature and
-        # return the declared return type — never typeinfer the None body.
-        for i, (param, arg) in enumerate(zip(callee.params, call.args)):
-            _check_arg_against_param(call, ctx, callee, i, param, ctx.type_of(arg))
-        return callee.return_type
-    sub = TypeInferContext(module=ctx.module)
-    for i, (param, arg) in enumerate(zip(callee.params, call.args)):
-        arg_ty = ctx.type_of(arg)
-        _check_arg_against_param(call, ctx, callee, i, param, arg_ty)
-        sub.cache[param] = arg_ty
-    return sub.type_of(callee.body)
+    arg_types = tuple(ctx.type_of(a) for a in call.args)
+    instance = elaborate(callee, arg_types, ctx)
+    if instance.body is None:
+        return instance.return_type
+    return TypeInferContext(module=ctx.module).type_of(instance.body)
 
 
 __all__ = [
     "Function",
     "_callable_type_for",
     "canonical_specialization_signature",
+    "elaborate",
 ]
