@@ -108,35 +108,35 @@ failing closed when it does not.
 - `src/tilefoundry/ir/hir/tensor/reshape.py`
 
 #### Plan
-- [ ] step 0.1 In the new-axis walk (`reshape.py:66-86`), when the next cute
+- [x] step 0.1 In the new-axis walk (`reshape.py:66-86`), when the next cute
       position `cs` would overshoot the current new axis (`prod * cs > d`),
       compute `needed = d // prod`; if `d % prod != 0` or `cs % needed != 0`,
       keep the existing fail-closed `return None` (genuine straddle,
       unchanged behavior for non-dividing cases).
-- [ ] step 0.2 Otherwise split `cs` into `(needed, residual = cs // needed)`:
+- [x] step 0.2 Otherwise split `cs` into `(needed, residual = cs // needed)`:
       append `needed` as the new position completing the current axis
       (stride `cute_strides[ci] * residual` when strides are concrete);
       push `residual` back as a synthetic pending position (stride
       `cute_strides[ci]`, no `old_pos` link) for the next axis in the walk,
       instead of advancing `ci`.
-- [ ] step 0.3 When the split position carries a `Split` attr (`ci in
+- [x] step 0.3 When the split position carries a `Split` attr (`ci in
       old_to_new`-eligible), require the bound mesh extent divides `needed`;
       fail closed (`return None`) if it does not. On success, remap the
       `Split` to the new position holding `needed` (the residual position
       is plain, no `Split`).
-- [ ] step 0.4 Preserve existing behavior for: whole-position merges (no
+- [x] step 0.4 Preserve existing behavior for: whole-position merges (no
       split needed), unit-axis insertion/removal, `Partial`/`Broadcast`
       carry-through — no regression in the non-splitting paths.
 
 #### Acceptance Criteria
-- [ ] AC-0-1: `<worktree>/.venv/bin/python -m pytest
+- [x] AC-0-1: `<worktree>/.venv/bin/python -m pytest
       /home/qihang.zheng/zqh/TileOpsGov/research/deepseek-v4-flash-dataflow/gap-repros/repro_g08.py
       -v` — 3 passed, repro file unmodified.
-- [ ] AC-0-2: `pytest tests/ops/test_reshape.py -v` — every case from
+- [x] AC-0-2: `pytest tests/ops/test_reshape.py -v` — every case from
       `CASES` that predates this change and is NOT one of the two flagged
       in Constraints stays green with unchanged expectations.
 <!-- policy_ac:start -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ### Milestone M1: Regression migration for the two now-derivable existing cases

@@ -29,14 +29,19 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     factorization aligns with *new_shape*.
 
     A reshape is a view: it inserts/removes size-1 axes and groups along
-    boundaries. It can carry the sharding iff every cute position lies entirely
-    within one new axis -- no position straddles a new-axis boundary -- so each
-    non-size-1 new axis is the product of a contiguous run of cute positions.
-    Size-1 axes hold no sharding and are inserted/dropped freely; the cute
-    factorization (and any tiling) of the surviving positions is preserved, and
-    each ``Split`` cute-axis reference is remapped to its new cute position
-    (``Partial`` / ``Broadcast`` are mesh-axis states with no cute axis and
-    carry through unchanged).
+    boundaries. It can carry the sharding when every cute position lies
+    entirely within one new axis (whole positions merge into a coarser new
+    axis, in either order). It can ALSO carry the sharding when a cute
+    position must itself divide across a new-axis boundary, provided that
+    position is `Split`-bound and its outer (earlier) sub-factor is evenly
+    divisible by the bound mesh extent: `Split` relocates to that outer
+    sub-factor (same mesh axis, reduced local extent), and the inner
+    residual carries forward as a plain (non-`Split`) cute position into the
+    next new axis. A plain (non-`Split`) position may divide at any boundary
+    that evenly factors it; only a `Split`-bound position whose boundary the
+    mesh extent does not divide fails closed. Size-1 axes are
+    inserted/dropped freely and hold no sharding. `Partial` / `Broadcast`
+    carry through unchanged (mesh-axis states, no cute axis).
 
     Returns the carried ``ShardLayout``, or ``None`` when the reshape cannot
     express the sharding (the caller fails closed). All extents must be static
@@ -52,6 +57,15 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     cute_strides = cute.strides
     n_cute = len(cute_shape)
 
+    # The mesh extent bound to each Split-carrying cute axis (at most one
+    # Split per axis -- ShardLayout construction forbids two Splits sharing
+    # an axis).
+    mesh_shape = layout.mesh.layout.shape
+    split_mesh_extent: dict[int, int] = {}
+    for mesh_axis_idx, attr in enumerate(layout.attrs):
+        if isinstance(attr, Split) and mesh_axis_idx < len(mesh_shape):
+            split_mesh_extent[attr.axis] = int(mesh_shape[mesh_axis_idx])
+
     def _next_nonunit(start: int) -> int:
         i = start
         while i < n_cute and int(cute_shape[i]) == 1:
@@ -59,11 +73,17 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
         return i
 
     # Walk new axes; compose each non-size-1 new axis from a contiguous run of
-    # non-size-1 cute positions, recording the old cute position -> new cute
-    # position remap. Inserted size-1 new axes get a fresh unit position.
+    # cute positions, recording the old cute position -> new cute position
+    # remap. A position that overshoots the current new axis divides into an
+    # outer sub-factor (completing the axis) and an inner residual carried
+    # forward via `pending` to the next axis; only the outer sub-factor keeps
+    # the position's `old_pos` (so only it is eligible for a `Split` remap) --
+    # the residual is a fresh, unsharded position regardless of what it
+    # descends from. Inserted size-1 new axes get a fresh unit position.
     new_positions: list[tuple[int, int, int | None]] = []  # (size, stride, old_pos)
     old_to_new: dict[int, int] = {}
     ci = 0
+    pending: tuple[int, int, int | None] | None = None  # (size, stride, old_pos)
     for dim in new_shape:
         d = int(dim)
         if d == 1:
@@ -71,19 +91,43 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
             continue
         prod = 1
         while prod < d:
-            ci = _next_nonunit(ci)
-            if ci >= n_cute:
-                return None  # ran out of cute positions to compose this axis
-            cs = int(cute_shape[ci])
-            prod *= cs
-            if prod > d:
-                return None  # this cute position straddles a new-axis boundary
-            stride = cute_strides[ci] if cute_strides is not None else 0
-            old_to_new[ci] = len(new_positions)
-            new_positions.append((cs, stride, ci))
-            ci += 1
-    if _next_nonunit(ci) < n_cute:
-        return None  # leftover non-size-1 cute positions cannot be placed
+            if pending is not None:
+                cs, stride, old_pos = pending
+                pending = None
+            else:
+                ci = _next_nonunit(ci)
+                if ci >= n_cute:
+                    return None  # ran out of cute positions to compose this axis
+                cs = int(cute_shape[ci])
+                stride = cute_strides[ci] if cute_strides is not None else 0
+                old_pos = ci
+                ci += 1
+            new_prod = prod * cs
+            if new_prod <= d:
+                if old_pos is not None:
+                    old_to_new[old_pos] = len(new_positions)
+                new_positions.append((cs, stride, old_pos))
+                prod = new_prod
+                continue
+            # This position overshoots the axis: split into an outer
+            # sub-factor (`needed`, completes the axis) and an inner
+            # residual (carried to the next axis via `pending`).
+            if d % prod != 0:
+                return None  # axis boundary does not land on a position boundary
+            needed = d // prod
+            if cs % needed != 0:
+                return None  # position does not divide at the axis boundary
+            residual = cs // needed
+            mesh_ext = split_mesh_extent.get(old_pos) if old_pos is not None else None
+            if mesh_ext is not None and needed % mesh_ext != 0:
+                return None  # Split-bound: mesh extent must divide the outer sub-factor
+            if old_pos is not None:
+                old_to_new[old_pos] = len(new_positions)
+            new_positions.append((needed, stride * residual, old_pos))
+            pending = (residual, stride, None)
+            prod = d
+    if pending is not None or _next_nonunit(ci) < n_cute:
+        return None  # leftover cute content cannot be placed
 
     new_attrs = []
     for attr in layout.attrs:
