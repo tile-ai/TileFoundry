@@ -87,8 +87,8 @@ template <class Op> struct BinaryBcastScalar {
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         auto val = static_cast<value_type>(sc(0));
         for (int i = 0; i < N; ++i) {
-            d(i) = static_cast<value_type>(
-                op(static_cast<value_type>(s(i)), val));
+            d(i) =
+                static_cast<value_type>(op(static_cast<value_type>(s(i)), val));
         }
     }
 };

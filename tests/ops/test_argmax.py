@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.hir.tensor.argmax import ArgMax
-from tilefoundry.ir.types import DType
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     run_typeinfer_case,
     ten,
 )
+from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.types import DType
 
 _I64 = DType.i64
 

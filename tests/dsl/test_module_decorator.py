@@ -23,7 +23,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.types.shard import Mesh, Layout, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 
 
 @module(entry="composed")

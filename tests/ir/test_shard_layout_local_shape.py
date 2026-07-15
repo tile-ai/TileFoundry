@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh, Topology
-from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Partial,

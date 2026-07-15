@@ -12,10 +12,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.shard_layout import Partial, Split
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
@@ -25,6 +21,10 @@ from tests.ops.typeinfer_utils import (
     sharded,
     ten,
 )
+from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard.shard_layout import Partial, Split
 
 _F = DType.f32
 _M = mesh((4,))

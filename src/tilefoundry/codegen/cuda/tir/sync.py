@@ -7,7 +7,7 @@ parameters to ``tilefoundry::ops::sync``.
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
-from tilefoundry.ir.tir.sync import SyncBarrier, Sync, classify, participation
+from tilefoundry.ir.tir.sync import Sync, SyncBarrier, classify, participation
 
 _SYNC = "tilefoundry::ops::sync"
 _KIND = "tilefoundry::ops::SyncKind"

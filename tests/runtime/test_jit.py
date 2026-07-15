@@ -4,13 +4,13 @@ import hashlib
 
 import pytest
 
+from tests.fixtures.demo_canonical import build_demo_canonical
+from tests.fixtures.demo_ir import build_demo
 from tilefoundry import jit
 from tilefoundry.compile import _canonical_module_text, _jit_cache_key_payload
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.runtime.module import RuntimeModule
-from tests.fixtures.demo_canonical import build_demo_canonical
-from tests.fixtures.demo_ir import build_demo
 
 
 def test_jit_rejects_non_ir_inputs_and_unknown_targets() -> None:

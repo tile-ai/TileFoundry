@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.ir.hir.nn.softmax import SoftMax
 from tests.ops.eval_utils import EvalCase, run_eval_case
+from tilefoundry.ir.hir.nn.softmax import SoftMax
 
 
 @pytest.mark.parametrize(
