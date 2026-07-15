@@ -16,12 +16,12 @@ import pytest
 from tilefoundry import prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import VerifyError
+from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.cuda.nn.mma import make_atom
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom, MmaOpSpec
 from tilefoundry.ir.tir.stmts import LetStmt, MeshScope
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Mesh, Layout, ShardLayout, Topology
-from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
 
 # Module-level pre-instantiated alias (equivalent to building it inline).
 _OP = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
@@ -87,7 +87,7 @@ def test_infunc_op_and_atom_emit_no_letstmt() -> None:
     @prim_func(target="cuda")
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
         op = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
-        atom = T.cuda.mma.atom(op=op)
+        atom = T.cuda.mma.atom(op=op)  # noqa: F841
 
     assert all(not isinstance(s, LetStmt) for s in kernel.body.body)
     assert kernel.body.body == ()
@@ -120,8 +120,8 @@ def _alloc_frag_kernel(topology, mesh_layout):
     """A kernel that allocs a fragment via `atom.A` inside the given scope."""
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
         atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
-        with Mesh(topology, mesh_layout) as warp:
-            frag = T.alloc_tensor(
+        with Mesh(topology, mesh_layout) as warp:  # noqa: F841
+            frag = T.alloc_tensor(  # noqa: F841
                 TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A,
                            storage=StorageKind.RMEM)
             )
@@ -195,7 +195,7 @@ def test_atom_A_outside_mesh_scope_is_rejected() -> None:
 
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
         atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
-        frag = T.alloc_tensor(
+        frag = T.alloc_tensor(  # noqa: F841
             TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A,
                        storage=StorageKind.RMEM)
         )

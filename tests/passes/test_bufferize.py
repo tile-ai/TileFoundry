@@ -5,6 +5,7 @@ pass leaves the ``PrimFunction`` body structurally unchanged.
 """
 from __future__ import annotations
 
+from tests.fixtures.demo_ir import build_demo
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
@@ -17,7 +18,6 @@ from tilefoundry.passes.transforms.bufferize import (
     LifetimeCollector,
     Placement,
 )
-from tests.fixtures.demo_ir import build_demo
 
 
 def _lower() -> tuple[PrimFunction, Module]:

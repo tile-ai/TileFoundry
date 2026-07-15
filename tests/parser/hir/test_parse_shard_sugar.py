@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 import pytest
 
+from tests.fixtures.demo_ir import build_demo
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- binds bare op names (reshard, ...)
@@ -34,8 +35,6 @@ from tilefoundry.ir.types.shard import (
 )
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.parser.sugar import parse_shard_layout_sugar
-from tests.fixtures.demo_ir import build_demo
-
 
 # ── shared assertion helpers ─────────────────────────────────────────────────
 

@@ -20,8 +20,8 @@ import torch
 import tilefoundry
 from tilefoundry import func, prim_func
 from tilefoundry.dsl import DimVar, ReduceKind, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401,F403  -- bind bare op names (reshard, relu, ...)
 from tilefoundry.dsl.storage import gmem, rmem
+from tilefoundry.dsl.tf import *  # noqa: F401,F403  -- bind bare op names (reshard, relu, ...)
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
 

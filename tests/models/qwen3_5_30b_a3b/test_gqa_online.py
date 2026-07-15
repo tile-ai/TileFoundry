@@ -16,7 +16,6 @@ import math
 import pytest
 import torch
 
-from tilefoundry.evaluator import evaluate
 from tests.models.qwen3_5_30b_a3b.gqa_online import (
     GQA_GROUP,
     HEAD_DIM,
@@ -25,6 +24,7 @@ from tests.models.qwen3_5_30b_a3b.gqa_online import (
     NUM_SPLITS,
     gqa_online_attend,
 )
+from tilefoundry.evaluator import evaluate
 
 Hq, Hkv, D, G = NUM_Q_HEADS, NUM_KV_HEADS, HEAD_DIM, GQA_GROUP
 _SCALE = 1.0 / math.sqrt(D)

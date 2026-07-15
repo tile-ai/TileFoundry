@@ -16,6 +16,16 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.ops.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    infer_call,
+    mesh,
+    run_typeinfer_case,
+    sharded,
+    ten,
+)
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.target.storage import StorageKind
@@ -26,16 +36,6 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Partial,
     Split,
     shard_layout_local_shape,
-)
-from tests.ops.eval_utils import EvalCase, run_eval_case
-from tests.ops.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    infer_call,
-    mesh,
-    run_typeinfer_case,
-    sharded,
-    ten,
 )
 
 _F = DType.f32

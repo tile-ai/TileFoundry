@@ -3,6 +3,8 @@
 import os
 from math import prod
 
+from tests.fixtures.demo_ir import build_demo
+from tests.fixtures.qwen3_attention_graph import build_qwen3_attention_main_2cta_headnorm
 from tilefoundry.dump import DumpFlags, FileDumper, current_scope, dump
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Var
@@ -10,8 +12,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.parser.hir_parser import parse_script
-from tests.fixtures.demo_ir import build_demo
-from tests.fixtures.qwen3_attention_graph import build_qwen3_attention_main_2cta_headnorm
 
 
 def _structural_equal(a, b, path="") -> bool:

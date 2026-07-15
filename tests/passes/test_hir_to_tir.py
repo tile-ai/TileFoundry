@@ -6,6 +6,8 @@ import textwrap
 
 import pytest
 
+from tests.fixtures.demo_ir import build_demo
+
 # DSL surface imported at module scope so ``@func`` closure
 # resolution sees ``Tensor`` / ``Mesh`` / ... when the tests below
 # build inline @func definitions.
@@ -29,7 +31,6 @@ from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.passes.transforms import HirToTirPass
-from tests.fixtures.demo_ir import build_demo
 
 
 def _run() -> PrimFunction:

@@ -12,9 +12,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     TypeInferCase,
@@ -23,6 +20,9 @@ from tests.ops.typeinfer_utils import (
     sharded,
     ten,
 )
+from tilefoundry.ir.hir.tensor.transpose import Transpose
+from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
 
 # A 4-axis mesh whose split axis factorizes a tensor dim into mesh-extent ×
 # per-shard sub-positions (cluster, cta, warp, lane).

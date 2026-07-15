@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.cuda.nn.mma import Mma
+from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
@@ -19,8 +19,8 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology
 from tilefoundry.ir.types.shard.layout import Layout
+from tilefoundry.ir.types.shard.mesh import Mesh, Topology
 from tilefoundry.ir.visitor import (
     ExprMutator,
     ExprVisitor,

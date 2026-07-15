@@ -5,12 +5,12 @@ from __future__ import annotations
 import pytest
 
 import tilefoundry
+from tests.fixtures.demo_ir import build_demo
 from tilefoundry.dump import DumpFlags, DumpScope, MemoryDumper
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.passes import ModulePass, PassManager
 from tilefoundry.passes.transforms import HirToTirPass
-from tests.fixtures.demo_ir import build_demo
 
 
 def _demo_module() -> Module:
