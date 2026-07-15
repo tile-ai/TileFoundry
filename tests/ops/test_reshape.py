@@ -46,84 +46,35 @@ def _reshape(new_shape):
     return Reshape(new_shape=new_shape)
 
 
+def _split_mesh_axes(ty) -> set:
+    """Mesh axes carrying a genuine `Split` in *ty*'s output layout — the
+    public "did the sharding survive" signal, independent of which cute
+    position a `Split` happens to reference internally."""
+    return {i for i, a in enumerate(ty.layout.attrs) if isinstance(a, Split)}
+
+
+def _partial_reductions(ty) -> dict:
+    """Mesh axes carrying a `Partial` in *ty*'s output layout, keyed by mesh
+    axis and valued by reduction op."""
+    return {i: a.reduction for i, a in enumerate(ty.layout.attrs) if isinstance(a, Partial)}
+
+
+def _split_local_extents(ty) -> list:
+    """`shard_layout_local_shape` at every `Split`-bound cute dim of *ty*'s
+    output layout — every entry MUST be 1 (`docs/spec/shard.md` §7.1.1)."""
+    local = shard_layout_local_shape(ty.layout)
+    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
+
+
 CASES = [
     # ── unsharded ────────────────────────────────────────────────────────────
     TypeInferCase("unsharded", _reshape((32,)), (ten((4, 8), _F),), ten((32,), _F)),
-    # ── aligned sharded carries ───────────────────────────────────────────────
-    # merge: cute (16, 8) -> (128,); the positions' product equals the new axis.
-    TypeInferCase(
-        "merge_carries",
-        _reshape((128,)),
-        (sharded((16, 8), (Split(0),), _M),),
-        sharded((128,), (Split(0),), _M, cute=(16, 8), strides=(8, 1)),
-    ),
-    # insert a unit axis after the split axis: the Split stays on axis 0.
-    TypeInferCase(
-        "insert_unit_axis",
-        _reshape((32, 1, 128)),
-        (sharded((32, 128), (Split(0),), _M),),
-        sharded((32, 1, 128), (Split(0),), _M, cute=(32, 1, 128), strides=(128, 0, 1)),
-    ),
-    # insert a leading unit axis: the split moves from axis 0 to axis 1.
-    TypeInferCase(
-        "reshuffle_leading_unit",
-        _reshape((1, 32, 128)),
-        (sharded((32, 128), (Split(0),), _M),),
-        sharded((1, 32, 128), (Split(1),), _M, cute=(1, 32, 128), strides=(0, 128, 1)),
-    ),
-    # drop a leading unit axis: the split moves from axis 1 back to axis 0.
+    # drop a leading unit axis: mesh axis 0 stays genuinely split.
     TypeInferCase(
         "remove_leading_unit",
         _reshape((32, 128)),
         (sharded((1, 32, 128), (Split(1),), _M),),
         sharded((32, 128), (Split(0),), _M),
-    ),
-    # ── mesh-axis value states carry without a cute axis ──────────────────────
-    # a Partial is a mesh-axis value state with no cute axis; it carries through
-    # the reshape unchanged (no cute-position remap).
-    TypeInferCase(
-        "partial_carries",
-        _reshape((32, 1, 128)),
-        (sharded((32, 128), (Partial("sum"),), _M),),
-        sharded((32, 1, 128), (Partial("sum"),), _M, cute=(32, 1, 128), strides=(128, 0, 1)),
-    ),
-    # mix on a two-axis mesh: the Split remaps to its new cute position while the
-    # Partial carries through unchanged.
-    TypeInferCase(
-        "split_remaps_partial_carries",
-        _reshape((1, 32, 128)),
-        (sharded((32, 128), (Split(0), Partial("sum")), mesh((2, 2))),),
-        sharded(
-            (1, 32, 128),
-            (Split(1), Partial("sum")),
-            mesh((2, 2)),
-            cute=(1, 32, 128),
-            strides=(0, 128, 1),
-        ),
-    ),
-    # ── dividing sharded splits carry ──────────────────────────────────────────
-    # cute position 0 (size 16) divides across the new size-4 boundary: the
-    # outer sub-factor (4) is exactly the mesh extent, so Split relocates
-    # there (local extent 1); the inner residual (4) merges with position 1
-    # into the trailing axis.
-    TypeInferCase(
-        "split_divides_carries",
-        _reshape((4, 32)),
-        (sharded((16, 8), (Split(0),), _M),),
-        sharded((4, 32), (Split(0),), _M, cute=(4, 4, 8), strides=(32, 8, 1)),
-    ),
-    # a flat split dim (4096) splits into (32, 128): the outer sub-factor (32)
-    # is divisible by the mesh extent (4) but exceeds it, so it factors
-    # further into (4, Split-bound, local extent 1) and (8, plain); the
-    # inner residual (128) merges in as its own plain position.
-    TypeInferCase(
-        "flat_split_divides_carries",
-        _reshape((32, 128)),
-        (sharded((4096,), (Split(0),), _M),),
-        sharded(
-            (32, 128), (Split(0),), _M,
-            cute=(4, 8, 128), strides=(1024, 128, 1),
-        ),
     ),
     # ── misaligned sharded fails closed ───────────────────────────────────────
     # cute position 0 (size 6) would divide across the new size-3 boundary,
@@ -141,6 +92,74 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_reshape_typeinfer(case):
     run_typeinfer_case(case)
+
+
+# ── sharded carries ───────────────────────────────────────────────────────
+# Each case checks output shape and which mesh axes stay `Split` / `Partial`,
+# not the internal cute factorization a valid `Reshape` might produce.
+
+
+def test_merge_carries():
+    """Merge: cute (16, 8) -> (128,); the Split-bound mesh axis survives."""
+    ty = infer_call(_reshape((128,)), sharded((16, 8), (Split(0),), _M))
+    assert tuple(ty.shape) == (128,)
+    assert _split_mesh_axes(ty) == {0}
+
+
+def test_insert_unit_axis():
+    """Inserting a unit axis after the split axis leaves the sharding intact."""
+    ty = infer_call(_reshape((32, 1, 128)), sharded((32, 128), (Split(0),), _M))
+    assert tuple(ty.shape) == (32, 1, 128)
+    assert _split_mesh_axes(ty) == {0}
+
+
+def test_reshuffle_leading_unit():
+    """Inserting a leading unit axis still leaves the mesh axis genuinely
+    split, even though its bound cute position shifts internally."""
+    ty = infer_call(_reshape((1, 32, 128)), sharded((32, 128), (Split(0),), _M))
+    assert tuple(ty.shape) == (1, 32, 128)
+    assert _split_mesh_axes(ty) == {0}
+
+
+def test_partial_carries():
+    """A `Partial` is a mesh-axis value state with no cute axis; it carries
+    through the reshape unchanged."""
+    ty = infer_call(_reshape((32, 1, 128)), sharded((32, 128), (Partial("sum"),), _M))
+    assert tuple(ty.shape) == (32, 1, 128)
+    assert _partial_reductions(ty) == {0: "sum"}
+
+
+def test_split_remaps_partial_carries():
+    """On a two-axis mesh, the `Split` mesh axis survives the reshape while
+    the `Partial` mesh axis carries through unchanged."""
+    ty = infer_call(
+        _reshape((1, 32, 128)),
+        sharded((32, 128), (Split(0), Partial("sum")), mesh((2, 2))),
+    )
+    assert tuple(ty.shape) == (1, 32, 128)
+    assert _split_mesh_axes(ty) == {0}
+    assert _partial_reductions(ty) == {1: "sum"}
+
+
+def test_split_divides_carries():
+    """cute position 0 (size 16) divides across the new size-4 boundary: the
+    outer sub-factor (4) is exactly the mesh extent, so the Split-bound mesh
+    axis survives with local extent 1 (`docs/spec/shard.md` §7.1.1)."""
+    ty = infer_call(_reshape((4, 32)), sharded((16, 8), (Split(0),), _M))
+    assert tuple(ty.shape) == (4, 32)
+    assert _split_mesh_axes(ty) == {0}
+    assert _split_local_extents(ty) == [1]
+
+
+def test_flat_split_divides_carries():
+    """A flat split dim (4096) splits into (32, 128): the outer sub-factor
+    (32) is divisible by the mesh extent (4) but exceeds it, so the
+    Split-bound mesh axis still keeps local extent 1 (`docs/spec/shard.md`
+    §7.1.1) after the further factorization."""
+    ty = infer_call(_reshape((32, 128)), sharded((4096,), (Split(0),), _M))
+    assert tuple(ty.shape) == (32, 128)
+    assert _split_mesh_axes(ty) == {0}
+    assert _split_local_extents(ty) == [1]
 
 
 def test_reshape_then_reshard_rmem_no_split_aliasing():
