@@ -100,16 +100,12 @@ class AccessRelationResult:
     """Forward access relation for one Call, built from input types alone.
 
     ``domain`` is the bounded iteration domain as an ``isl.set``: static dims
-    are constant constraints, dynamic dims are isl parameters (one per
-    ``DimVar``, or an opaque parameter for a composite ``DimExpr`` extent).
-    ``maps`` holds one access ``isl.map`` per boundary value in boundary
-    order (inputs first, then outputs). The carrier holds no tensor shape —
-    output shape is typeinfer-side data, not part of the relation.
-
-    ``param_map`` resolves each of ``domain``'s isl parameter names back to
-    the ``ShapeDim`` it stands for (see
-    ``tilefoundry.utilities.isl_utility.to_domain``); it is this Call's own
-    data, never shared with any other Call's relation.
+    are constant constraints, dynamic dims are isl parameters. ``maps`` holds
+    one access ``isl.map`` per boundary value, in boundary order (inputs
+    first, then outputs). ``param_map`` resolves each of ``domain``'s isl
+    parameter names back to the ``ShapeDim`` it stands for; it is this
+    Call's own data, never shared with any other Call's relation. The
+    carrier holds no tensor shape — output shape is typeinfer-side data.
     """
 
     domain: "isl.set"

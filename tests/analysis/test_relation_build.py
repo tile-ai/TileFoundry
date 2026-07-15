@@ -5,7 +5,7 @@ import isl
 import pytest
 
 from tilefoundry.ir.types.dim import DimFloorDiv, DimVar, simplify_dim
-from tilefoundry.utilities.isl_utility import to_domain
+from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult
 from tilefoundry.visitor_registry.relation_build import (
     build_domain,

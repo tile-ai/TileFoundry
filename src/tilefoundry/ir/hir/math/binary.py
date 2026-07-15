@@ -22,12 +22,12 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.utilities.isl_utility import to_domain
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
     register_type_relation,
 )
+from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import shape_from_relation
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 

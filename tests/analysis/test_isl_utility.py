@@ -1,4 +1,4 @@
-"""isl_utility — dim_range interval arithmetic, to_domain encode, to_dim decode."""
+"""isl_utility — dim_range, to_domain encode, to_dim decode."""
 from __future__ import annotations
 
 import isl
@@ -15,7 +15,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
-from tilefoundry.utilities.isl_utility import dim_range, to_dim, to_domain
+from tilefoundry.visitor_registry.isl_utility import dim_range, to_dim, to_domain
 
 P = DimVar("P", 2048, 1_048_577)
 Q = DimVar("Q", 2, 33)
@@ -40,26 +40,24 @@ def test_dim_range_mul_const_and_symbolic():
     assert (lo, hi) == (P.lo * Q.lo, (P.hi - 1) * (Q.hi - 1) + 1)
 
 
-def test_dim_range_floordiv_const_and_symbolic():
+def test_dim_range_floordiv_const():
     assert dim_range(simplify_dim(DimFloorDiv, (P, 4))) == (P.lo // 4, (P.hi - 1) // 4 + 1)
+
+
+def test_dim_range_floordiv_symbolic_divisor_raises():
     n = DimVar("N", 1, 8)
-    lo, hi = dim_range(simplify_dim(DimFloorDiv, (P, n)))
-    assert (lo, hi) == (P.lo // (n.hi - 1), (P.hi - 1) // n.lo + 1)
-
-
-def test_dim_range_floordiv_divisor_range_includes_zero_raises():
-    n = DimVar("N", 0, 8)
-    with pytest.raises(ValueError, match="divisor range must be positive"):
+    with pytest.raises(NotImplementedError, match="symbolic divisor"):
         dim_range(simplify_dim(DimFloorDiv, (P, n)))
 
 
-def test_dim_range_mod():
+def test_dim_range_mod_const():
     assert dim_range(simplify_dim(DimMod, (P, 128))) == (0, 128)
 
 
-def test_dim_range_mod_divisor_not_positive_raises():
-    with pytest.raises(ValueError, match="divisor range must be positive"):
-        dim_range(simplify_dim(DimMod, (P, 0)))
+def test_dim_range_mod_symbolic_divisor_raises():
+    n = DimVar("N", 1, 8)
+    with pytest.raises(NotImplementedError, match="symbolic divisor"):
+        dim_range(simplify_dim(DimMod, (P, n)))
 
 
 def test_dim_range_max_min():
@@ -155,21 +153,17 @@ def test_to_dim_binary_ops(expr_str, expected_op, operand):
 
 def test_to_dim_minus():
     pa = isl.pw_aff("[P] -> { [(-P)] }")
-    result = to_dim(pa, {"P": P})
-    assert result == simplify_dim(DimSub, (0, P))
+    assert to_dim(pa, {"P": P}) == simplify_dim(DimSub, (0, P))
 
 
 def test_to_dim_floordiv():
-    # isl's ast_build only emits a bare fdiv_q/pdiv_q node for a clean floor
-    # division; `mod` decomposes into sub/mul/fdiv_q (each already covered
-    # individually above), so it is not separately re-testable this way.
-    div_pa = isl.pw_aff("[P] -> { [floor(P/4)] }")
-    assert to_dim(div_pa, {"P": P}) == simplify_dim(DimFloorDiv, (P, 4))
+    # `mod` decomposes into sub/mul/fdiv_q (each already covered above), so
+    # it has no separate bare ast node to test this way.
+    pa = isl.pw_aff("[P] -> { [floor(P/4)] }")
+    assert to_dim(pa, {"P": P}) == simplify_dim(DimFloorDiv, (P, 4))
 
 
 def test_to_dim_unsupported_op_raises():
-    # An explicit select/cond node (piecewise-max detection disabled) has no
-    # ShapeDim decoding — this is the documented extension point.
     isl.options_set_ast_build_detect_min_max(0)
     try:
         pa = isl.pw_aff("[P, Q] -> { [P] : P > Q; [Q] : P <= Q }")
@@ -179,7 +173,7 @@ def test_to_dim_unsupported_op_raises():
         isl.options_set_ast_build_detect_min_max(1)
 
 
-# ─── round trip (nncase RoundTrip precedent) ────────────────────────────────
+# ─── round trip ─────────────────────────────────────────────────────────────
 
 
 def test_round_trip_lossless_for_every_dim_kind():
