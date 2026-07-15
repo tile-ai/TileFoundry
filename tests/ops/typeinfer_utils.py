@@ -13,9 +13,10 @@ import pytest
 
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.types import TensorType, TupleType
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -44,6 +45,31 @@ def mesh(layout_shape, names=None, topology="gpu") -> Mesh:
         names=tuple(names),
         topologies=(topology,),
     )
+
+
+def raw_shard_tensor_type(
+    shape, layout_shape, strides, attrs, mesh, *, dtype=DType.f32, storage="gmem"
+) -> TensorType:
+    """A sharded ``TensorType`` built directly from an explicit (possibly
+    non-canonical) ``layout_shape``/``strides``, bypassing
+    ``make_shard_tensor_type``'s canonicalization. Only for the handful of
+    tests exercising a layout shape ``make_shard_tensor_type`` cannot itself
+    produce (an implicit ``strides=None`` layout, or a stride pattern that
+    isn't plain C-order)."""
+    return TensorType(
+        shape=shape,
+        dtype=dtype,
+        storage=storage,
+        layout=ShardLayout(layout=Layout(shape=layout_shape, strides=strides), attrs=attrs, mesh=mesh),
+    )
+
+
+def split_local_extents(ty) -> list:
+    """`shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s
+    layout — every entry MUST be 1 on a canonical layout (`docs/spec/shard.md`
+    §7.1.1)."""
+    local = shard_layout_local_shape(ty.layout)
+    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
 
 
 def make_call(op, input_types) -> Call:

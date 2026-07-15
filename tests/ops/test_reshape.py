@@ -23,6 +23,7 @@ from tests.ops.typeinfer_utils import (
     infer_call,
     mesh,
     run_typeinfer_case,
+    split_local_extents,
     ten,
 )
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -56,13 +57,6 @@ def _partial_reductions(ty) -> dict:
     """Mesh axes carrying a `Partial` in *ty*'s output layout, keyed by mesh
     axis and valued by reduction op."""
     return {i: a.reduction for i, a in enumerate(ty.layout.attrs) if isinstance(a, Partial)}
-
-
-def _split_local_extents(ty) -> list:
-    """`shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s
-    output layout — every entry MUST be 1 (`docs/spec/shard.md` §7.1.1)."""
-    local = shard_layout_local_shape(ty.layout)
-    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
 
 
 CASES = [
@@ -147,7 +141,7 @@ def test_split_divides_carries():
     ty = infer_call(_reshape((4, 32)), make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)))
     assert tuple(ty.shape) == (4, 32)
     assert _split_mesh_axes(ty) == {0}
-    assert _split_local_extents(ty) == [1]
+    assert split_local_extents(ty) == [1]
 
 
 def test_flat_split_divides_carries():
@@ -158,7 +152,7 @@ def test_flat_split_divides_carries():
     ty = infer_call(_reshape((32, 128)), make_shard_tensor_type((4096,), mesh=_M, attrs=(Split(0),)))
     assert tuple(ty.shape) == (32, 128)
     assert _split_mesh_axes(ty) == {0}
-    assert _split_local_extents(ty) == [1]
+    assert split_local_extents(ty) == [1]
 
 
 def test_reshape_then_reshard_rmem_no_split_aliasing():

@@ -17,12 +17,12 @@ from tests.ops.typeinfer_utils import (
     TypeInferCase,
     infer_call,
     mesh,
+    raw_shard_tensor_type,
     run_typeinfer_case,
     ten,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType, TensorType, make_shard_tensor_type
-from tilefoundry.ir.types.shard.layout import Layout
+from tilefoundry.ir.types import DType, make_shard_tensor_type
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -77,13 +77,8 @@ def test_factorized_split_reorders_subaxes():
 def test_implicit_strides_no_crash():
     """implicit (None) strides: shape + attrs permute, output keeps implicit
     strides (regression: no None-stride indexing crash)."""
-    x_ty = TensorType(
-        shape=(16, 8), dtype=DType.bf16, storage="gmem",
-        layout=ShardLayout(
-            layout=Layout(shape=(16, 8), strides=None),
-            attrs=(Split(0), *_B4[1:]),
-            mesh=_M,
-        ),
+    x_ty = raw_shard_tensor_type(
+        (16, 8), (16, 8), None, (Split(0), *_B4[1:]), _M, dtype=DType.bf16,
     )
     ty = infer_call(_T10, x_ty)
     assert tuple(ty.shape) == (8, 16)

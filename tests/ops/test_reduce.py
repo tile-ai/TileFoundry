@@ -19,7 +19,9 @@ from tests.ops.typeinfer_utils import (
     TypeInferCase,
     infer_call,
     mesh,
+    raw_shard_tensor_type,
     run_typeinfer_case,
+    split_local_extents,
     ten,
 )
 from tilefoundry import func, module
@@ -30,14 +32,11 @@ from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
-from tilefoundry.ir.types import DType, TensorType, make_shard_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
-    Broadcast,
-    ShardLayout,
     Split,
     layout_axis_to_tensor_axis,
-    shard_layout_local_shape,
 )
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
 
@@ -77,20 +76,12 @@ def _attr_kinds(ty) -> tuple:
     return tuple(type(a).__name__ for a in ty.layout.attrs)
 
 
-def _split_local_extents(ty) -> list:
-    local = shard_layout_local_shape(ty.layout)
-    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
-
-
 def test_reduced_axis_splits_become_broadcast():
     """Reduced-axis Splits become Broadcast; layout positions on the reduced
     axis shrink to size 1 / stride 0 (broadcast-view input)."""
-    x_ty = TensorType(
-        shape=(1, 1536), dtype=_BF, storage=_RMEM,
-        layout=ShardLayout(
-            layout=Layout(shape=(1, 6, 32, 8), strides=(0, 0, 0, 1)),
-            attrs=(Split(1), Split(2)), mesh=_M,
-        ),
+    x_ty = raw_shard_tensor_type(
+        (1, 1536), (1, 6, 32, 8), (0, 0, 0, 1), (Split(1), Split(2)), _M,
+        dtype=_BF, storage=_RMEM,
     )
     ty = infer_call(_MEAN_LAST, x_ty)
     assert tuple(ty.shape) == (1, 1)
@@ -117,7 +108,7 @@ def test_preserves_non_reduced_axis_split():
     ty = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), x_ty)
     assert tuple(ty.shape) == (12, 1)
     assert _attr_kinds(ty) == ("Split", "Broadcast")
-    assert _split_local_extents(ty) == [1]
+    assert split_local_extents(ty) == [1]
 
 
 def test_keepdim_false_pops_shape():
@@ -135,12 +126,8 @@ def test_implicit_strides_fresh_output():
     """Implicit (None) strides reduce to a fresh, concretely-strided output
     (no None indexing); the non-reduced axis's Split survives, the reduced
     axis becomes Broadcast."""
-    x_ty = TensorType(
-        shape=(12, 32), dtype=_BF, storage=_RMEM,
-        layout=ShardLayout(
-            layout=Layout(shape=(12, 32), strides=None),
-            attrs=(Split(0), Split(1)), mesh=_M,
-        ),
+    x_ty = raw_shard_tensor_type(
+        (12, 32), (12, 32), None, (Split(0), Split(1)), _M, dtype=_BF, storage=_RMEM,
     )
     ty = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), x_ty)
     assert tuple(ty.shape) == (12, 1)
@@ -221,24 +208,16 @@ _THREAD_B = Topology("thread", 4 * 32)
 _MESH_B = mesh((4, 32), ("tk", "hc"), topology=_THREAD_B)
 
 
-def _case_a_src_dst():
-    src = make_shard_tensor_type(
+def _case_a_src():
+    return make_shard_tensor_type(
         (1, 1536), mesh=_MESH_A, attrs=(Split(1), Split(1)), dtype=_BF, storage=_RMEM,
     )
-    dst = make_shard_tensor_type(
-        (1, 1), mesh=_MESH_A, attrs=(Broadcast(), Broadcast()), dtype=_BF, storage=_RMEM,
-    )
-    return src, dst
 
 
-def _case_b_src_dst():
-    src = make_shard_tensor_type(
+def _case_b_src():
+    return make_shard_tensor_type(
         (4, 32), mesh=_MESH_B, attrs=(Split(0), Split(1)), dtype=_BF, storage=_RMEM,
     )
-    dst = make_shard_tensor_type(
-        (1, 32), mesh=_MESH_B, attrs=(Broadcast(), Split(1)), dtype=_BF, storage=_RMEM,
-    )
-    return src, dst
 
 
 def test_analyze_workspace_reports_lane_reduced_and_sizes():
@@ -247,11 +226,11 @@ def test_analyze_workspace_reports_lane_reduced_and_sizes():
     # Case A: the reduced axis covers the warp mesh axis w(6) and the lane axis
     # t; the lane butterfly folds t, the 6 warps combine → total_warps=6,
     # lane_reduced.
-    ws_a, _dt_a, lane_a = _analyze_cross_warp_workspace(_case_a_src_dst()[0], (-1,))
+    ws_a, _dt_a, lane_a = _analyze_cross_warp_workspace(_case_a_src(), (-1,))
     assert (ws_a, lane_a) == (6, True)
     # Case B: the reduce crosses the 4 warps only; each lane keeps its own cell →
     # total_warps=4, not lane_reduced.
-    ws_b, _dt_b, lane_b = _analyze_cross_warp_workspace(_case_b_src_dst()[0], (0,))
+    ws_b, _dt_b, lane_b = _analyze_cross_warp_workspace(_case_b_src(), (0,))
     assert (ws_b, lane_b) == (4, False)
 
 

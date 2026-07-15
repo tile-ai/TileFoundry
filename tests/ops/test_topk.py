@@ -13,6 +13,7 @@ from tests.ops.typeinfer_utils import (
     TypeInferCase,
     infer_call,
     mesh,
+    raw_shard_tensor_type,
     run_typeinfer_case,
     ten,
 )
@@ -23,7 +24,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.types import DType, TensorType, TupleType, make_shard_tensor_type
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, Split
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
@@ -190,12 +190,8 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
     every post-typeinfer ShardLayout has concrete strides — it materializes
     explicit all-ones strides rather than leaving them None."""
     s = DimVar("S", 1, 64)
-    x_ty = TensorType(
-        shape=(256, s), dtype=_F32, storage="gmem",
-        layout=ShardLayout(
-            layout=Layout(shape=(256, s), strides=None),
-            attrs=(Broadcast(),), mesh=mesh((4,)),
-        ),
+    x_ty = raw_shard_tensor_type(
+        (256, s), (256, s), None, (Broadcast(),), mesh((4,)), dtype=_F32,
     )
     values_ty, indices_ty = infer_call(TopK(k=6, axis=0), x_ty).fields  # select the static axis
     assert values_ty.shape == (6, s) and indices_ty.shape == (6, s)
