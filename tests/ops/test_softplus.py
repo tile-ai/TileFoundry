@@ -4,10 +4,16 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.ops.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    mesh,
+    run_typeinfer_case,
+    sharded,
+)
 from tilefoundry.ir.hir.math.softplus import Softplus
 from tilefoundry.ir.types.shard.shard_layout import Partial
-from tests.ops.eval_utils import EvalCase, run_eval_case
-from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, mesh, run_typeinfer_case, sharded
 
 _OP = Softplus()
 _M = mesh((4,))

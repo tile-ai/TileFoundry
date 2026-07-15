@@ -42,7 +42,7 @@ from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by the @func bo
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names for the @func body
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Mesh, Layout, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 
 # Model dims (match tests/models/qwen3_5_30b_a3b/common.py).
 HEAD_DIM = 128
@@ -149,7 +149,7 @@ def _ctx_partials(
     # block gets its OWN local softmax (m_p, l_p, o_p) over its block axis only —
     # no cross-block reduction here. `with Mesh(cta)` is the CTA-parallel
     # authoring context (NUM_SPLITS is the CTA axis); it emits no IR node.
-    with Mesh(topology="cta", layout=Layout((NUM_CTA,), (1,))) as cta:
+    with Mesh(topology="cta", layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
         k_f = tf.transpose(
             tf.cast(tf.repeat_interleave(
                 tf.reshape(k_cache, new_shape=(1, NUM_SPLITS, CBLK, _HKV, _D)),
@@ -191,7 +191,7 @@ def _ctx_combine(
     # `with Mesh(cta)` keeps this on the same CTA mesh as `_ctx_partials`: the
     # NUM_SPLITS axis IS the CTA axis, so this reduction is the cross-CTA combine,
     # mapped at lowering to a barrier / gather over the producers (not an IR node).
-    with Mesh(topology="cta", layout=Layout((NUM_CTA,), (1,))) as cta:
+    with Mesh(topology="cta", layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
         m = tf.reduce(m_p, axes=(-2,), keepdim=True, kind="max")          # global max
         alpha = tf.exp(m_p - m)                                           # rescale per block
         l = tf.reduce(alpha * l_p, axes=(-2,), keepdim=True, kind="sum")  # [1,S,Hq,1,1]

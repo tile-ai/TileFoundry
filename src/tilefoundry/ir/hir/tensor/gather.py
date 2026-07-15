@@ -13,10 +13,12 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
+from tilefoundry.ir.types.shard.layout_algebra import prefix_product
 from tilefoundry.ir.types.shard.shard_layout import (
+    Partial,
     ShardLayout,
     Split,
-    layout_axis_to_tensor_axis,
+    split_target_axes,
 )
 
 
@@ -60,57 +62,55 @@ def _check_batch_dims(batch_dims: int, axis: int, x_shape: tuple, idx_shape: tup
     return b
 
 
-def _sliced_shard_layout(x_ty, axis: int, idx_shape: tuple):
-    """Return the sliced ``ShardLayout`` for a pure single-index gather.
+def _gather_shard_layout(call, ctx, x_ty, axis: int, idx_shape: tuple, out_shape: tuple):
+    """Derive the output ``ShardLayout`` for a non-batched gather.
 
-    A scalar index or rank-1 ``(1,)`` index on a non-sharded axis is a slice:
-    scalar indices drop that axis's cute positions, while ``(1,)`` indices keep
-    them as size-1 positions. Gather along a Split axis, multi-index gather, or
-    composed layout passes the input layout through unchanged.
+    Gather produces a new tensor: the internal cute ``Layout`` is always
+    natural contiguous over ``out_shape``, never the input's. Only the shard
+    ``attrs`` migrate, per mesh axis: ``Broadcast``/``Partial`` carry through
+    unchanged (gather is a linear row selection); a ``Split`` targeting the
+    gathered axis becomes ``Partial(sum)`` (each device holds a zero-filled
+    partial of the gathered rows, so summing the partials reconstructs the
+    true gather); a ``Split`` targeting another axis carries through with its
+    logical axis renumbered for the removed/inserted axes. A composed layout,
+    or multiple ``Split``s where one targets the gathered axis, has no
+    derivable output and fails closed via ``ctx.error``.
     """
     sl = x_ty.layout
-    if not isinstance(sl, ShardLayout) or not isinstance(sl.layout, Layout):
+    if not isinstance(sl, ShardLayout):
         return sl
-    # Only a scalar index or a rank-1 ``(1,)`` index is a pure slice; any other
-    # form (incl. a total-size-1 multi-index like ``(1, 1)``) passes through.
-    scalar_idx = idx_shape == ()
-    if not scalar_idx and idx_shape != (1,):
-        return sl
-    cute_shape = sl.layout.shape
-    cute_strides = sl.layout.strides
-    if cute_strides is None or len(cute_strides) != len(cute_shape):
-        return sl
-    pos_to_axis = layout_axis_to_tensor_axis(cute_shape, tuple(x_ty.shape))
-    if len(pos_to_axis) != len(cute_shape):
-        return sl
-    sliced = {p for p, a in enumerate(pos_to_axis) if a == axis}
-    if not sliced:
-        return sl
-    # A gather along a ``Split`` (sharded) axis is not a pure slice; pass through.
-    if any(isinstance(a, Split) and a.axis in sliced for a in sl.attrs):
-        return sl
-    if scalar_idx:
-        # Drop the sliced positions; remap Split axes onto the survivors.
-        keep = [p for p in range(len(cute_shape)) if p not in sliced]
-        if not keep:
-            return sl
-        new_shape = tuple(cute_shape[p] for p in keep)
-        new_strides = tuple(cute_strides[p] for p in keep)
-        pos_map = {p: i for i, p in enumerate(keep)}
-        new_attrs = tuple(
-            Split(axis=pos_map[a.axis]) if isinstance(a, Split) else a
-            for a in sl.attrs
+    if not isinstance(sl.layout, Layout):
+        ctx.error(
+            call,
+            f"axis {axis} has a composed shard layout; cannot derive an "
+            f"output layout",
         )
-    else:
-        # (1,)-style index: the axis survives at size 1.
-        new_shape = tuple(1 if p in sliced else d for p, d in enumerate(cute_shape))
-        new_strides = tuple(cute_strides)
-        new_attrs = sl.attrs
-    return ShardLayout(
-        layout=Layout(shape=new_shape, strides=new_strides),
-        attrs=new_attrs,
-        mesh=sl.mesh,
+    targets = split_target_axes(sl, tuple(x_ty.shape))
+    splits = [(i, t) for i, t in enumerate(targets) if t is not None]
+    on_axis = [i for i, t in splits if t == axis]
+    if on_axis and len(splits) > 1:
+        ctx.error(
+            call,
+            f"axis {axis} gather over a shard layout with multiple Split "
+            f"axes including the gathered axis; cannot derive an output layout",
+        )
+    natural = Layout(shape=out_shape, strides=prefix_product(out_shape))
+    if on_axis:
+        mesh_idx = on_axis[0]
+        new_attrs = tuple(
+            Partial(reduction="sum") if i == mesh_idx else a
+            for i, a in enumerate(sl.attrs)
+        )
+        return ShardLayout(layout=natural, attrs=new_attrs, mesh=sl.mesh)
+    # No Split targets the gathered axis: every attr carries through, a Split
+    # elsewhere renumbered for the axis removed at `axis` and the `idx_shape`
+    # axes inserted in its place.
+    shift = len(idx_shape) - 1
+    new_attrs = tuple(
+        Split(axis=t + shift if t > axis else t) if isinstance(a, Split) else a
+        for a, t in zip(sl.attrs, targets)
     )
+    return ShardLayout(layout=natural, attrs=new_attrs, mesh=sl.mesh)
 
 
 @register_typeinfer(Gather)
@@ -135,7 +135,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     # The gathered axis is replaced by the index's non-batch dims; leading axes
     # and trailing axes of x pass through (batch_dims=0 => full index inserted).
     new_shape = list(x_ty.shape[:axis]) + list(idx_ty.shape[b:]) + list(x_ty.shape[axis + 1:])
-    new_layout = _sliced_shard_layout(x_ty, axis, tuple(idx_ty.shape))
+    new_layout = _gather_shard_layout(call, ctx, x_ty, axis, tuple(idx_ty.shape), tuple(new_shape))
     return TensorType(
         shape=tuple(new_shape), dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
     )

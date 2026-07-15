@@ -3,7 +3,14 @@ from __future__ import annotations
 
 import pytest
 
-from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, mesh, run_typeinfer_case, sharded, ten
+from tests.ops.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    mesh,
+    run_typeinfer_case,
+    sharded,
+    ten,
+)
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard.shard_layout import Partial

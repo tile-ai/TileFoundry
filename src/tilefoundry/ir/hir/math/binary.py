@@ -27,7 +27,8 @@ from tilefoundry.visitor_registry.access_relation import (
     build_relation,
     register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, shape_from_relation
+from tilefoundry.visitor_registry.isl_utility import to_domain
+from tilefoundry.visitor_registry.relation_build import shape_from_relation
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 from ._helpers import _broadcast, _is_one, _merge_layout, resolve_anchor_storage
@@ -61,7 +62,7 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     lhs, rhs = input_types
     out_shape = _broadcast(lhs.shape, rhs.shape)
     r = len(out_shape)
-    domain = build_domain(out_shape)
+    domain, param_map = to_domain(out_shape)
     in_dims = [f"d{i}" for i in range(r)]
 
     def access(in_shape):
@@ -78,7 +79,7 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     maps = tuple(
         isl.map(f"{{ {src} -> [{', '.join(dst)}] }}") for dst in dsts
     )
-    return AccessRelationResult(domain=domain, maps=maps)
+    return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
 def _check_partial_commutes(call: "Call", ctx: "TypeInferContext", op, la, lb) -> None:
@@ -172,7 +173,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         # relation builds the broadcast domain, the output shape is read back
         # from it, and the shard engine consumes the same maps.
         relation = build_relation(call, (lhs_ty, rhs_ty), ctx)
-        out_shape = shape_from_relation((lhs_ty, rhs_ty), relation)
+        out_shape = shape_from_relation(relation)
         shard = None
         if isinstance(la, ShardLayout) or isinstance(lb, ShardLayout):
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)

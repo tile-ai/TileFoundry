@@ -13,6 +13,16 @@ import pytest
 import torch
 
 import tilefoundry
+from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.ops.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    infer_call,
+    mesh,
+    run_typeinfer_case,
+    sharded,
+    ten,
+)
 from tilefoundry import func, module
 from tilefoundry.codegen.cuda.module import emit_cuda_module
 from tilefoundry.codegen.registry import group_functions_by_target
@@ -30,16 +40,6 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
 )
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
-from tests.ops.eval_utils import EvalCase, run_eval_case
-from tests.ops.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    infer_call,
-    mesh,
-    run_typeinfer_case,
-    sharded,
-    ten,
-)
 
 _RMEM = StorageKind.RMEM
 _BF = DType.bf16

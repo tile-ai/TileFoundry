@@ -27,8 +27,8 @@ from tilefoundry.inspection.viewer import (
     Viewer,
 )
 from tilefoundry.ir.core.expr import Call
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.shard import (
     Mesh,
     Topology,

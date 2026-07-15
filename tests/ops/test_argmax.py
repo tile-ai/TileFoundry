@@ -3,9 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.hir.tensor.argmax import ArgMax
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import Partial
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -14,6 +11,9 @@ from tests.ops.typeinfer_utils import (
     sharded,
     ten,
 )
+from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.shard.shard_layout import Partial
 
 _I64 = DType.i64
 

@@ -23,6 +23,14 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.ops.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    mesh,
+    run_typeinfer_case,
+    sharded,
+)
 from tilefoundry.dsl import DimVar
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
@@ -47,17 +55,9 @@ from tilefoundry.ir.tir.stmts import (
     While,
 )
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Mesh, Layout, Topology
-from tilefoundry.passes.transforms.hir_to_tir import HirToTirPass
-from tests.ops.eval_utils import EvalCase, run_eval_case
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.ir.types.shard.shard_layout import Partial
-from tests.ops.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    mesh,
-    run_typeinfer_case,
-    sharded,
-)
+from tilefoundry.passes.transforms.hir_to_tir import HirToTirPass
 
 
 def _ten(shape, dtype):

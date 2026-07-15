@@ -6,14 +6,6 @@ from dataclasses import replace
 import pytest
 import torch
 
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.nn.rope import RoPE
-from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.shard.shard_layout import Partial
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -22,6 +14,14 @@ from tests.ops.typeinfer_utils import (
     sharded,
     ten,
 )
+from tilefoundry.evaluator import evaluate
+from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.nn.rope import RoPE
+from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 _BF = DType.bf16
 _M = mesh((4,))

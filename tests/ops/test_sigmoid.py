@@ -5,7 +5,13 @@ import pytest
 import torch
 
 from tests.ops.eval_utils import EvalCase, run_eval_case
-from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, mesh, run_typeinfer_case, sharded
+from tests.ops.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    mesh,
+    run_typeinfer_case,
+    sharded,
+)
 from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
 from tilefoundry.ir.types.shard.shard_layout import Partial
 

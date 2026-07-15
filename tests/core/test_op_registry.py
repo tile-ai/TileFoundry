@@ -7,8 +7,8 @@ from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.op_registry import (
     _first_schema,
     get_op_by_name,
-    get_tf_by_category_name,
     get_stmt_by_name,
+    get_tf_by_category_name,
     iter_schemas,
 )
 from tilefoundry.ir.tir.prim_function import PrimFunction
