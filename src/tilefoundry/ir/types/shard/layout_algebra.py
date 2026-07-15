@@ -36,10 +36,10 @@ def _shape(layout: Layout) -> tuple[int, ...]:
 def _stride(layout: Layout) -> tuple[int, ...]:
     if layout.strides is not None:
         return layout.strides
-    return _prefix_product(_shape(layout))
+    return prefix_product(_shape(layout))
 
 
-def _prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
+def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
     """Exclusive prefix product (column-major natural strides)."""
     out: list[int] = []
     acc = 1
@@ -144,7 +144,7 @@ def _right_inverse_layout(layout: Layout) -> Layout:
     current_idx = 1
     shape = _shape(layout)
     stride = _stride(layout)
-    triples = sorted(zip(stride, shape, _prefix_product(shape)))
+    triples = sorted(zip(stride, shape, prefix_product(shape)))
     for st, sh, rstride in triples:
         if sh == 1:
             continue
@@ -170,7 +170,7 @@ def _is_identity_inner(inner: object) -> bool:
     if inner is None:
         return True
     if isinstance(inner, Layout):
-        return _stride(inner) == _prefix_product(_shape(inner))
+        return _stride(inner) == prefix_product(_shape(inner))
     return False
 
 
@@ -256,7 +256,7 @@ def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
     # coord_1d is the 1-D domain linearization; split it over the domain's
     # natural (prefix-product) strides, NOT outer's image strides.
     shape = _shape(outer)
-    return idx2crd(coord_1d, shape, _prefix_product(shape))
+    return idx2crd(coord_1d, shape, prefix_product(shape))
 
 
 def contains(scope: ComposedLayout, t: int) -> bool:
@@ -266,6 +266,7 @@ def contains(scope: ComposedLayout, t: int) -> bool:
 
 __all__ = [
     "NotProjectable",
+    "prefix_product",
     "size",
     "cosize",
     "apply",

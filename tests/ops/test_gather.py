@@ -67,27 +67,30 @@ TYPEINFER_CASES = [
         ExpectedError(match="out of range", exc=TypeError),
     ),
     # ── sharded input, single-index gather on a NON-sharded middle axis ────────
-    # scalar index removes the middle axis's cute position; the Split on axis 0
-    # is remapped onto the surviving positions (the wsum / embed gap).
+    # gather output is a new tensor: the internal layout is natural contiguous
+    # over the output shape; the Split on axis 0 (untouched by the gather)
+    # carries through unchanged.
     TypeInferCase(
         "sharded_mid_axis_scalar_drops_position",
         Gather(axis=1),
         (sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32)),
-        sharded((6, 8), (Split(0),), _M, cute=(6, 8), strides=(32, 1)),
+        sharded((6, 8), (Split(0),), _M, cute=(6, 8), strides=(1, 6)),
     ),
-    # (1,)-shaped index keeps the middle axis at size 1; strides/attrs unchanged.
+    # (1,)-shaped index keeps the middle axis at size 1; the Split on axis 0
+    # still carries through unchanged (natural contiguous output layout).
     TypeInferCase(
         "sharded_mid_axis_single_index_keeps_unit",
         Gather(axis=1),
         (sharded((6, 4, 8), (Split(0),), _M), ten((1,), DType.i32)),
-        sharded((6, 1, 8), (Split(0),), _M, cute=(6, 1, 8), strides=(32, 8, 1)),
+        sharded((6, 1, 8), (Split(0),), _M, cute=(6, 1, 8), strides=(1, 6, 6)),
     ),
-    # a non-sharded LEADING axis scalar-gather remaps the Split from axis 1 -> 0.
+    # a non-sharded LEADING axis scalar-gather renumbers the Split from axis
+    # 1 -> 0 (axis 0 removed); natural contiguous output layout.
     TypeInferCase(
         "sharded_leading_axis_scalar_remaps_split",
         Gather(axis=0),
         (sharded((6, 4, 8), (Split(1),), _M), ten((), DType.i32)),
-        sharded((4, 8), (Split(0),), _M, cute=(4, 8), strides=(8, 1)),
+        sharded((4, 8), (Split(0),), _M, cute=(4, 8), strides=(1, 4)),
     ),
     # A gather ALONG the Split (sharded) axis is a masked-gather: every device
     # already holds a zero-filled partial of the gathered rows, so the output
@@ -98,13 +101,15 @@ TYPEINFER_CASES = [
         (sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32)),
         sharded((4, 8), (Partial(reduction="sum"),), _M, cute=(4, 8), strides=(1, 4)),
     ),
-    # A multi-index gather (e.g. (1, 1)) on a non-Split axis, combined with a
-    # Split elsewhere in the layout, has no derivable output layout.
+    # A multi-index gather (e.g. (1, 1)) on a non-Split axis, with a Split
+    # elsewhere in the layout: every device holds the full gathered axis
+    # locally, so the Split on the OTHER axis carries through, renumbered for
+    # the idx axes inserted at the gathered position.
     TypeInferCase(
-        "multi_index_with_split_elsewhere_fails_closed",
+        "multi_index_with_split_elsewhere_derives",
         Gather(axis=1),
         (sharded((6, 4, 8), (Split(0),), _M), ten((1, 1), DType.i32)),
-        ExpectedError(match="cannot derive an output layout"),
+        sharded((6, 1, 1, 8), (Split(0),), _M, cute=(6, 1, 1, 8), strides=(1, 6, 6, 6)),
     ),
 ]
 

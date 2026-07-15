@@ -147,6 +147,13 @@ def layout_axis_to_tensor_axis(
     return result
 
 
+def split_target_axes(sl: "ShardLayout", tensor_shape: tuple) -> tuple:
+    """Per mesh axis in ``sl.attrs``, the logical ``tensor_shape`` axis its
+    ``Split`` targets (``None`` for a non-``Split`` attr)."""
+    la2ta = layout_axis_to_tensor_axis(sl.layout.shape, tensor_shape)
+    return tuple(la2ta[a.axis] if isinstance(a, Split) else None for a in sl.attrs)
+
+
 __all__ = [
     "ShardAttr",
     "Split",
@@ -159,4 +166,5 @@ __all__ = [
     "ShardLayout",
     "shard_layout_local_shape",
     "layout_axis_to_tensor_axis",
+    "split_target_axes",
 ]
