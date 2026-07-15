@@ -33,13 +33,13 @@ struct Sync {
         } else if constexpr (Kind == SyncKind::syncwarp_full) {
             __syncwarp();
         } else if constexpr (Kind == SyncKind::syncwarp_masked) {
-            const int tid = int(tilefoundry::program_id<
-                                tilefoundry::TopologyScope::thread>());
+            const int tid = int(
+                tilefoundry::program_id<tilefoundry::TopologyScope::thread>());
             if (tid >= Base && tid < Base + Count)
                 __syncwarp(Mask);
         } else if constexpr (Kind == SyncKind::bar_sync) {
-            const int tid = int(tilefoundry::program_id<
-                                tilefoundry::TopologyScope::thread>());
+            const int tid = int(
+                tilefoundry::program_id<tilefoundry::TopologyScope::thread>());
             if (tid >= Base && tid < Base + Count)
                 asm volatile("bar.sync %0, %1;" ::"r"(BarId), "r"(Count));
         }

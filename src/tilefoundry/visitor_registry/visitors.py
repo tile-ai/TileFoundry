@@ -10,49 +10,81 @@ extension point for sandbox tests or grouped dispatch.
 """
 from __future__ import annotations
 
-from tilefoundry.ir.core.expr import Call, Expr, Var
+from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
-from tilefoundry.ir.types.tensor_type import Type, UnitType
+from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
 from tilefoundry.ir.visitor import ExprVisitor, StmtVisitor
 
-from .contexts import Cost, CostContext, TypeInferContext, VerifyContext
+from .contexts import Cost, CostContext, TypeInferContext, VerifyContext, _constant_type
 from .registries import (
     AnalysisRegistry,
     codegen_cpu_registry,
     codegen_cuda_registry,
     costmodel_registry,
+    typeinfer_registry,
     verify_stmt_registry,
 )
 
 
 class TypeInferVisitor(ExprVisitor[Type]):
-    """Walks hir Function.body / tir Stmt Expr fields filling type cache.
+    """The one typeinfer derivation rule per ``Expr`` kind. hir.md §1.1,
+    visitor-registry.md §4.
 
-    Practical usage: call ``ctx.type_of(expr)`` directly — that already
-    drives dispatch through ``typeinfer_registry``. This class exists so
-    code that wants to walk a whole Expr tree in visitor-style (e.g.
-    collecting types for every sub-expression) has an explicit entry.
-
-    **Registry ownership**: unlike VerifyVisitor / CodegenVisitor, the
-    typeinfer registry is consulted by ``TypeInferContext._compute``, not
-    by this visitor. Callers that need a custom registry subclass
-    ``TypeInferContext`` and override ``_compute`` (or inject the registry
-    there). No ``registry=`` constructor param exists here so the API
-    doesn't mislead into thinking it would take effect.
+    ``TypeInferContext.type_of`` is the caller-facing cache + dispatch
+    entry; it constructs one of these per lookup and delegates to
+    ``visit(expr)``. There is no ``isinstance`` fallback — an ``Expr``
+    subclass with no ``visit_<Kind>`` here raises via ``generic_visit``
+    rather than trusting a possibly-stale ``expr.type`` field.
     """
 
     def __init__(self, ctx: TypeInferContext) -> None:
         self.ctx = ctx
 
-    def visit_Call(self, call: Call) -> Type:
-        return self.ctx.type_of(call)
-
     def visit_Var(self, var: Var) -> Type:
         return var.type
 
-    def visit_Constant(self, c) -> Type:
-        return self.ctx.type_of(c)
+    def visit_Constant(self, c: Constant) -> Type:
+        declared = c.type
+        if declared is not None:
+            return declared
+        return _constant_type(c.value)
+
+    def visit_Call(self, call: Call) -> Type:
+        op_cls = type(call.target)
+        fn = typeinfer_registry.lookup(op_cls)
+        if fn is None:
+            self.ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
+        return fn(call, self.ctx)
+
+    def visit_Tuple(self, tup: Tuple) -> Type:
+        """Structural: the field types of the (possibly just-elaborated)
+        elements, never the node's own stamped ``.type`` (hir.md §1.1)."""
+        return TupleType(fields=tuple(self.ctx.type_of(e) for e in tup.elements))
+
+    def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Type:
+        """Carry/body: a no-carry loop's value is its body; a carrying loop's
+        value is its ``carried_args`` phi Vars' own declared type(s) — the
+        same rule the parser applies when constructing the node (hir.md
+        §1.2)."""
+        self.ctx.type_of(grid.body)
+        for y in grid.yield_values:
+            self.ctx.type_of(y)
+        if not grid.carried_args:
+            return self.ctx.type_of(grid.body)
+        if len(grid.carried_args) == 1:
+            return grid.carried_args[0].type
+        return TupleType(fields=tuple(p.type for p in grid.carried_args))
+
+    def visit_ShapeOf(self, shape_of: ShapeOf) -> Type:
+        """A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32)
+        type at construction; it has no children to derive from."""
+        return shape_of.type
+
+    def generic_visit(self, expr: Expr) -> Type:
+        self.ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
 
 class VerifyVisitor(StmtVisitor[None]):

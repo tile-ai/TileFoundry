@@ -17,7 +17,7 @@ add_library({{ name }} SHARED device.cu host.cpp)
 set_target_properties({{ name }} PROPERTIES
   PREFIX "lib"
   OUTPUT_NAME "{{ name }}"
-  CUDA_ARCHITECTURES "80")
+  CUDA_ARCHITECTURES "{{ cuda_arch }}")
 
 # Per-source target macro: device gets CUDA, host gets CPU. Never both in one TU.
 set_source_files_properties(device.cu PROPERTIES COMPILE_DEFINITIONS TILEFOUNDRY_TARGET_CUDA)

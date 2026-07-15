@@ -3,10 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.types import DType
 from tests.ops.typeinfer_utils import (
     STORAGES,
     ExpectedError,
@@ -15,6 +11,10 @@ from tests.ops.typeinfer_utils import (
     ten,
     tensor_grid,
 )
+from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.types import DType
 
 _ADD = Binary(kind=BinaryKind.ADD)
 

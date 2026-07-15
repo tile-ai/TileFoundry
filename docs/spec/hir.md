@@ -81,29 +81,52 @@ path.
 `return_type`. The projection is fixed at construction and stays
 consistent across construction sites.
 
-**Call typing.** A `Call` whose target is a `Function` types by
-re-deriving the callee under the *actual* argument types: each
-parameter binds to its caller argument's type and the body is
-typeinferred afresh, so the callee **specializes per call site** and a
-caller-supplied layout (sharding) flows into a layout-unconstrained
-parameter and propagates through the body. Argument ↔ parameter
-matching is:
+**Call typing — elaboration.** The template a `@func` declares lives at the
+Python-source level; IR never carries a template object or a shared
+polymorphic body. A `Call` whose target is a `Function` types by
+*elaboration*: `elaborate(callee, arg_types)` binds each parameter to the
+caller's actual argument type, then reconstructs the body under that
+binding — every node the reconstruction touches is typeinferred afresh and
+stamped exactly once, so **the callee specializes per call site** and a
+caller-supplied layout (sharding) flowing into a layout-unconstrained
+parameter propagates through the whole body, including through a `Tuple` or
+`GridRegionExpr` return. The result of elaboration is the concrete
+`Function` instance that becomes the `Call`'s `target`; the `Call`'s type is
+that instance's (re-derived) body type, never a stale `return_type` field
+carried over from a different call site.
+
+Argument ↔ parameter binding is:
 
 - Arity MUST match — exactly one argument per parameter.
-- A parameter that is a `TensorType` with `layout is None` is a
-  **logical tensor**: its layout is unconstrained, so an argument of
-  any layout (plain / replicated / split / partial) is accepted when
-  its logical `shape` and `dtype` match.
-- A parameter that carries a `ShardLayout` is an explicit layout
-  constraint: the argument type MUST match it exactly.
+- A parameter that is a `TensorType` with `layout is None` is a **template
+  wildcard**: it binds to the argument's full type, including any
+  `ShardLayout`, once the argument's logical `shape` and `dtype` match.
+- A parameter that carries a `ShardLayout` is an explicit **contract**: the
+  argument type MUST match it exactly.
 - Any other parameter requires exact type equality.
+- `DimVar` shapes keep envelope matching — elaboration does not
+  monomorphize a dynamic shape into a concrete one (that is **Shape
+  dispatch and specializations** below, unaffected by elaboration).
 
 When the body cannot express a propagated sharding (e.g. a reshape
 whose cute factorization straddles a new axis), typeinfer fails at that
-op, not at the boundary. A dispatch-prototype callee (`variants != ()`,
-`body is None`) is not re-derived: the call's result is the declared
-`return_type` and the `None` body is never inspected (variant selection
-is **Shape dispatch and specializations** below).
+op, not at the boundary. Reconstructing IR for every call is unnecessary
+when nothing would change: elaborating with argument types that already
+equal the callee's current parameter types returns the same `Function`
+instance (dedup) rather than a clone — an optimization, not a semantic;
+callers MUST NOT rely on getting a distinct instance. A dispatch-prototype
+callee (`variants != ()`, `body is None`) is not elaborated: the call's
+result is the declared `return_type` and the `None` body is never inspected
+(variant selection is **Shape dispatch and specializations** below).
+
+Elaboration memoizes per construction session — one parser run, or one
+top-level `elaborate` call and every nested call it re-elaborates — keyed
+on (callee, argument types): two call sites of the same callee with
+identical argument types MUST resolve to the identical `Function`
+instance, not merely an equal one, so a viewer/printer keyed on instance
+identity renders one node per distinct specialization. The memo is
+session-local state, not module or process state; it carries nothing
+across sessions.
 
 **Signature annotation `Layout.strides` materialization.** A
 `Tensor[..., (sugar)]` annotation on a parameter or return appears
@@ -403,11 +426,49 @@ class Unary(Op):
 
 #### `ir/hir/tensor/`
 
-Tensor structural operations; consensus ops follow torch / numpy
+Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
+/ `Stack` / `ShapeOf` / `Rank`) follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
-##### Reshape / Transpose / Slice / Concat / Stack / ShapeOf / Rank
-Consensus torch / numpy structural ops.
+##### Reshape
+```python
+class Reshape(Op):
+    """Reshape ``x`` to ``new_shape``; produces a Tensor.
+
+    Attributes:
+        x: input; source tensor.
+        new_shape: attribute; target logical shape.
+    """
+
+    x: Tensor
+    new_shape: tuple
+```
+- constraints:
+  - The result shape is `new_shape`; `size(new_shape)` MUST equal `size(x.shape)`.
+  - A plain (non-`ShardLayout`) input reshapes to a plain output.
+  - A fully-`Broadcast` `ShardLayout` input (every attr `Broadcast`, no genuine
+    sharding) reshapes to a plain (unsharded) output.
+  - A genuine `ShardLayout` input (at least one non-`Broadcast` attr) carries
+    through `Reshape` when the reshape is expressible as a view over the
+    input's cute positions (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)):
+    - every cute position lies entirely within one new axis — non-size-1 new
+      axes are the product of a contiguous run of whole cute positions, in
+      either merge direction; size-1 axes insert/drop freely and hold no
+      sharding; a `Split` cute-axis reference remaps to its new cute
+      position; `Partial` / `Broadcast` carry through unchanged (mesh-axis
+      states, no cute axis); OR
+    - a `Split`-bound cute position divides across a new-axis boundary at a
+      point its bound mesh extent evenly divides: the outer (earlier)
+      sub-factor itself further factors into `(mesh_ext, Split-bound, local
+      extent 1)` and `(sub-factor / mesh_ext, plain)`, and the inner residual
+      becomes a plain (non-`Split`) cute position — every `Split`-bound cute
+      dim keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
+  - Arbitrary rank-N regroup — a `Split`-bound position whose device-owned
+    block spans a boundary deeper than one divide, or two or more
+    `Split`-bound positions interacting across the same regroup — is not yet
+    supported and MUST fail closed.
+  - A reshape not expressible by the above MUST fail closed rather than
+    fabricate a layout.
 
 ##### Cast
 ```python
@@ -454,7 +515,12 @@ class Gather(Op):
   - `batch_dims` MUST satisfy `0 <= batch_dims <= min(axis, rank(index))`, and the leading `batch_dims` dims of `x` and `index` MUST be equal.
   - Element rule: `out[c.., i.., t..] = x[c.., index[b.., i..], t..]`, where the first `batch_dims` of the `axis` leading dims also index `index`.
   - `batch_dims=0` (default) inserts the full `index` shape at `axis`; a leading-dimension shape coincidence MUST NOT implicitly enable batching — batching is selected only by an explicit positive `batch_dims`.
-  - `batch_dims > 0` is defined for type inference and evaluation over unsharded operands; a `ShardLayout` operand and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed. `batch_dims=0` retains the existing sharded slice and lowering behavior.
+  - `batch_dims > 0` is defined for type inference and evaluation over unsharded operands; a `ShardLayout` operand and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed.
+  - `Gather` produces a new tensor: for a `ShardLayout` operand, the internal cute `Layout` is always natural contiguous over the output shape; it MUST NOT be inherited from the input.
+  - Only the shard `attrs` migrate, per mesh axis. `Broadcast` and `Partial` carry through unchanged — gather is a linear row selection (`gather(Σᵢ xᵢ) == Σᵢ gather(xᵢ)`).
+  - A `Split` targeting the gathered axis produces `Partial(sum)` on that mesh axis (each device already holds the true value at the rows it owns and a zero row elsewhere, so summing the per-device partials across the mesh axis reconstructs the true gather).
+  - A `Split` targeting another axis carries through, with its logical axis renumbered for the axis removed at the gathered `axis` and `index`'s non-batch dims inserted in its place.
+  - Multiple `Split`s where one targets the gathered axis, and a composed layout, have no derivable output and MUST fail closed.
 
 ##### Zeros
 ```python

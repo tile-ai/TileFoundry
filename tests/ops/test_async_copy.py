@@ -17,19 +17,18 @@ import torch
 
 import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 — trigger emitter autodiscovery
+from tests.ops.typeinfer_utils import infer_call, ten
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.core import VerifyError, Var
+from tilefoundry.ir.core import Var, VerifyError
+from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncCommit, CpAsyncWait
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.shard.shard_layout import Broadcast
-from tests.ops.typeinfer_utils import infer_call, ten
-
 
 # ── typeinfer ────────────────────────────────────────────────────────────────
 

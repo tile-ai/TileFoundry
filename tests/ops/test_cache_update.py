@@ -6,6 +6,13 @@ from dataclasses import replace
 import pytest
 import torch
 
+from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.ops.typeinfer_utils import (
+    ExpectedError,
+    TypeInferCase,
+    run_typeinfer_case,
+    ten,
+)
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Var
@@ -14,13 +21,6 @@ from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
-from tests.ops.eval_utils import EvalCase, run_eval_case
-from tests.ops.typeinfer_utils import (
-    ExpectedError,
-    TypeInferCase,
-    run_typeinfer_case,
-    ten,
-)
 
 
 def _ref(cache, cur_pos, s, new):

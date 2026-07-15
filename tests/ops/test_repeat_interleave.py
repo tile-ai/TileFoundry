@@ -9,9 +9,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
@@ -21,6 +18,9 @@ from tests.ops.typeinfer_utils import (
     sharded,
     ten,
 )
+from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
+from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
 
 _F = DType.f32
 _M = mesh((4,))

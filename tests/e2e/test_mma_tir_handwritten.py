@@ -16,9 +16,9 @@ import torch
 import tilefoundry
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types.shard import Mesh, Layout, Topology
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 
 _OP = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
 
@@ -32,7 +32,7 @@ class MmHandwritten:
         c: Tensor[(16, 8), "f32"],
     ):
         atom = T.cuda.mma.atom(op=_OP)
-        with Mesh(Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))) as warp:
+        with Mesh(Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))) as warp:  # noqa: F841
             # gmem → register fragments (distributed load, like HIR reshard).
             a_view = T.tensor_view(a, layout=atom.A)
             b_view = T.tensor_view(b, layout=atom.B)

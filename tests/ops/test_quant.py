@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.hir.tensor.quant import Quant
-from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType, TupleType
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     run_typeinfer_case,
     ten,
 )
+from tilefoundry.ir.hir.tensor.quant import Quant
+from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types import DType, TupleType
 
 _BF = DType.bf16
 _FP8 = DType.fp8e4m3

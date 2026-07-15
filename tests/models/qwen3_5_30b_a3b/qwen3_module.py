@@ -20,9 +20,6 @@ land in the same module as they are ported.
 """
 from __future__ import annotations
 
-from tilefoundry import func, module
-from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tests.models.qwen3_5_30b_a3b.common import (
     CACHE_CAP,
     GQA_GROUP,
@@ -34,6 +31,9 @@ from tests.models.qwen3_5_30b_a3b.common import (
     Q_PROJ,
     S_CAP,
 )
+from tilefoundry import func, module
+from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
+from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 
 # Packed q/k/v projection fan-out: one GEMM produces ``[Q_PROJ | KV_PROJ |
 # KV_PROJ]`` (4096 + 512 + 512 = 5120), sliced into q/k/v below.

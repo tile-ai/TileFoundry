@@ -16,7 +16,6 @@ from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor

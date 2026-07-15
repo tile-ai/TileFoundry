@@ -176,8 +176,11 @@ class TypeInferContext:
 ```
 
 - constraints:
-  - a `Call`'s type comes from `typeinfer_registry.lookup(type(target))`; an
-    unregistered Op call routes through `ctx.error`.
+  - `type_of` is a walk-local cache only — it holds no dispatch rule of its
+    own. A cache miss delegates to `TypeInferVisitor(self).visit(expr)`
+    (below), whose `visit_Call` is what consults
+    `typeinfer_registry.lookup(type(target))`; an unregistered Op call
+    routes through `ctx.error`.
 
 Registry + decorator:
 
@@ -202,13 +205,27 @@ Visitor:
 ```python
 class TypeInferVisitor(ExprVisitor[TensorType | TupleType]):
     def __init__(self, ctx: TypeInferContext): ...   # ctx carries the cache and helpers
-    def visit_Call(self, call: Call): ...            # delegate to ctx.type_of
     def visit_Var(self, var: Var): ...               # return the Var's type
+    def visit_Constant(self, c: Constant): ...       # the node's own declared type
+    def visit_Call(self, call: Call): ...            # typeinfer_registry.lookup(type(call.target))
+    def visit_Tuple(self, tup: Tuple): ...            # structural: TupleType over each element's type
+    def visit_GridRegionExpr(self, grid): ...         # carry/body — hir §1.2
 ```
 
 - constraints:
-  - walks an HIR `Function` body, delegates each `Expr` to `ctx.type_of`, and
-    fills `Expr.type` along the way.
+  - one `visit_<Kind>` rule per `Expr` subclass reachable from a `hir.Function`
+    body or a tir `Expr` field — there is no `isinstance` fallback. An `Expr`
+    subclass with no rule raises via `ctx.error` in `generic_visit` rather than
+    trusting a possibly-stale `Expr.type` field.
+  - `visit_Call` is the sole registry-dispatch point: it looks up
+    `typeinfer_registry.lookup(type(call.target))` and invokes the handler: an
+    unregistered `Op` call routes through `ctx.error`.
+  - `visit_Tuple` derives a structural `TupleType` from `ctx.type_of` of each
+    element — never the `Tuple` node's own stamped `.type`.
+  - `hir.Function` is itself a valid `Call.target` (§4 above): its registered
+    typeinfer handler elaborates the callee under the call's actual argument
+    types ([hir §1.1](./hir.md#11-function)) rather than reading the target's
+    own `.type`.
 
 Lifecycle: parser builds a `TypeInferContext` and runs eager
 typeinfer at parse time (see [parser](./parser.md)). A `Module`
