@@ -426,11 +426,49 @@ class Unary(Op):
 
 #### `ir/hir/tensor/`
 
-Tensor structural operations; consensus ops follow torch / numpy
+Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
+/ `Stack` / `ShapeOf` / `Rank`) follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
-##### Reshape / Transpose / Slice / Concat / Stack / ShapeOf / Rank
-Consensus torch / numpy structural ops.
+##### Reshape
+```python
+class Reshape(Op):
+    """Reshape ``x`` to ``new_shape``; produces a Tensor.
+
+    Attributes:
+        x: input; source tensor.
+        new_shape: attribute; target logical shape.
+    """
+
+    x: Tensor
+    new_shape: tuple
+```
+- constraints:
+  - The result shape is `new_shape`; `size(new_shape)` MUST equal `size(x.shape)`.
+  - A plain (non-`ShardLayout`) input reshapes to a plain output.
+  - A fully-`Broadcast` `ShardLayout` input (every attr `Broadcast`, no genuine
+    sharding) reshapes to a plain (unsharded) output.
+  - A genuine `ShardLayout` input (at least one non-`Broadcast` attr) carries
+    through `Reshape` when the reshape is expressible as a view over the
+    input's cute positions (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)):
+    - every cute position lies entirely within one new axis — non-size-1 new
+      axes are the product of a contiguous run of whole cute positions, in
+      either merge direction; size-1 axes insert/drop freely and hold no
+      sharding; a `Split` cute-axis reference remaps to its new cute
+      position; `Partial` / `Broadcast` carry through unchanged (mesh-axis
+      states, no cute axis); OR
+    - a `Split`-bound cute position divides across a new-axis boundary at a
+      point its bound mesh extent evenly divides: the outer (earlier)
+      sub-factor itself further factors into `(mesh_ext, Split-bound, local
+      extent 1)` and `(sub-factor / mesh_ext, plain)`, and the inner residual
+      becomes a plain (non-`Split`) cute position — every `Split`-bound cute
+      dim keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
+  - Arbitrary rank-N regroup — a `Split`-bound position whose device-owned
+    block spans a boundary deeper than one divide, or two or more
+    `Split`-bound positions interacting across the same regroup — is not yet
+    supported and MUST fail closed.
+  - A reshape not expressible by the above MUST fail closed rather than
+    fabricate a layout.
 
 ##### Cast
 ```python
