@@ -51,6 +51,7 @@ straddling case (`[6,4] Split(0)@dev2 → [3,8]`) as a green regression guard.
 - `tests/ops/test_reshape.py`
 - `docs/spec/hir.md`
 - `research/deepseek-v4-flash-dataflow/gap-repros/repro_g08.py` (TileOpsGov, read-only acceptance input)
+- `research/deepseek-v4-flash-dataflow/gap-repros/repro_g08b.py` (TileOpsGov, read-only acceptance input)
 
 ## Goal
 
@@ -96,6 +97,23 @@ failing closed when it does not.
   single-old-axis-splits-into-two-new-axes pattern.
 - Never modify the main worktree (`/home/qihang.zheng/zqh/TileFoundry`) or
   TileOpsGov; no pushes, no PRs.
+- **Discovered defect (flagged, not silently resolved):** Milestone M0's fix
+  checked `needed % mesh_ext == 0` but kept the ENTIRE `needed` sub-factor
+  under the `Split` tag whenever that check passed, even when `needed !=
+  mesh_ext` — producing a `Split`-bound cute axis with local extent
+  `needed / mesh_ext > 1`, which violates `docs/spec/shard.md` §7.1.1
+  (`local_shape(sl)[k] == 1` on every `Split`-bound cute dim).
+  `ir/hir/sharding/reshard.py::_per_instance_strides` relies on that
+  invariant to assign stride 0 to `Split`-bound axes, so an ordinary
+  `Reshape -> Reshard(rmem)` on the plan's own driving shapes (the dequant
+  acceptance shape, and `flat_split_divides_carries`) type-checked and then
+  silently aliased distinct per-device coordinates onto one physical slot,
+  where the pre-M0 baseline safely rejected. Milestone M4 corrects this by
+  factoring `needed` into `(mesh_ext, Split-bound, local 1)` +
+  `(needed // mesh_ext, plain)` when `needed != mesh_ext` — the same
+  two-position factorization `parser/sugar.py::_canonicalize_single_axis`
+  already uses for parse-time sugar (§7.1.1), generalized here to reshape's
+  runtime divisibility check instead of a fixed `N == mesh_extent` literal.
 
 ## Milestones
 
@@ -243,6 +261,60 @@ failing closed when it does not.
       (run from `gap-repros/`) — 3 passed.
 <!-- policy_ac:start -->
 - [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+<!-- policy_ac:end -->
+
+### Milestone M4: Rework — Split-bound residual keeps local_shape == 1
+
+#### Depends
+- M3
+
+#### Related Files
+- `src/tilefoundry/ir/hir/tensor/reshape.py`
+- `tests/ops/test_reshape.py`
+- `docs/spec/hir.md`
+
+#### Plan
+- [ ] step 4.1 In `_carry_sharded_reshape`'s residual-carry branch
+      (`reshape.py`, the `needed % mesh_ext == 0` success path), when
+      `needed != mesh_ext`, factor `needed` into `(mesh_ext, needed //
+      mesh_ext)` instead of keeping the whole `needed` sub-factor under the
+      `Split` tag: emit the `mesh_ext`-sized position as `Split`-bound
+      (local extent 1, remapped from `old_pos`), immediately followed by a
+      fresh plain (non-`Split`) position of extent `needed // mesh_ext`,
+      stride bookkeeping consistent with the existing outer/residual split
+      above it (mirrors `parser/sugar.py::_canonicalize_single_axis`). When
+      `needed == mesh_ext` the position already has local extent 1;
+      behavior is unchanged.
+- [ ] step 4.2 Update `tests/ops/test_reshape.py::flat_split_divides_carries`
+      to the finer `cute=`/`strides=` factorization this produces
+      (`TensorType.shape` assertion unchanged); update the module and
+      `_carry_sharded_reshape` docstrings to describe the two-position
+      factorization instead of "reduced local extent".
+- [ ] step 4.3 Add a `Reshape -> Reshard(rmem)` regression test to
+      `tests/ops/test_reshape.py` reproducing
+      `repro_g08b.py::test_ogroup_reshape_then_rmem_reshard_no_aliasing`'s
+      shape, asserting no stride-0/local-extent>1 aliasing survives the
+      composition.
+- [ ] step 4.4 Update `docs/spec/hir.md`'s `Reshape` entry: replace "Split
+      relocates to the outer (earlier) sub-factor at reduced local extent"
+      with the two-position factorization, so the entry no longer
+      contradicts `docs/spec/shard.md` §7.1.1.
+
+#### Acceptance Criteria
+- [ ] AC-4-1: `.venv/bin/python -m pytest
+      /home/qihang.zheng/zqh/TileOpsGov/research/deepseek-v4-flash-dataflow/gap-repros/repro_g08b.py
+      -v` — 2 passed, repro file unmodified.
+- [ ] AC-4-2: same command against
+      `.../gap-repros/repro_g08.py` — stays 3 passed.
+- [ ] AC-4-3: `.venv/bin/python -m pytest tests/ -q` — fully green.
+- [ ] AC-4-4: `python scripts/spec_rules_lint.py docs/spec/hir.md` and
+      `python scripts/spec_entropy_lint.py` on touched files — clean.
+<!-- policy_ac:start -->
+- [ ] Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs. <!-- policy_ac: spec_discipline-0 -->
+- [ ] Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section. <!-- policy_ac: spec_discipline-1 -->
+- [ ] Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names. <!-- policy_ac: spec_discipline-2 -->
+- [ ] Spec section MUST be in English. <!-- policy_ac: spec_discipline-3 -->
+- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ## Execution Preflight
