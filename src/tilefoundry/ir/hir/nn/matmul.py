@@ -11,11 +11,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import (
-    ShardLayout,
-    Split,
-    layout_axis_to_tensor_axis,
-)
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -42,13 +38,8 @@ def _k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
     """The mesh axes on which *t* splits its contraction (K) tensor axis."""
     if not isinstance(t.layout, ShardLayout):
         return frozenset()
-    sl = t.layout
-    la2ta = layout_axis_to_tensor_axis(sl.layout.shape, t.shape)
-    return frozenset(
-        p
-        for p, a in enumerate(sl.attrs)
-        if isinstance(a, Split) and la2ta[a.axis] == k_tensor_axis
-    )
+    targets = split_target_axes(t.layout, t.shape)
+    return frozenset(p for p, ax in enumerate(targets) if ax == k_tensor_axis)
 
 
 def _broadcast_batch(lhs_batch, rhs_batch):
