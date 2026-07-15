@@ -10,6 +10,7 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    infer_call,
     mesh,
     run_typeinfer_case,
     sharded,
@@ -21,7 +22,7 @@ from tilefoundry.dsl.tf import gather
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.gather import Gather
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 from tilefoundry.passes.transforms import HirToTirPass
 
 _F = DType.f32
@@ -66,46 +67,59 @@ TYPEINFER_CASES = [
         (ten((2, 3, 4), DType.f32), ten((2,), DType.i32)),
         ExpectedError(match="out of range", exc=TypeError),
     ),
-    # ── sharded input, single-index gather on a NON-sharded middle axis ────────
-    # scalar index removes the middle axis's cute position; the Split on axis 0
-    # is remapped onto the surviving positions (the wsum / embed gap).
-    TypeInferCase(
-        "sharded_mid_axis_scalar_drops_position",
-        Gather(axis=1),
-        (sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32)),
-        sharded((6, 8), (Split(0),), _M, cute=(6, 8), strides=(32, 1)),
-    ),
-    # (1,)-shaped index keeps the middle axis at size 1; strides/attrs unchanged.
-    TypeInferCase(
-        "sharded_mid_axis_single_index_keeps_unit",
-        Gather(axis=1),
-        (sharded((6, 4, 8), (Split(0),), _M), ten((1,), DType.i32)),
-        sharded((6, 1, 8), (Split(0),), _M, cute=(6, 1, 8), strides=(32, 8, 1)),
-    ),
-    # a non-sharded LEADING axis scalar-gather remaps the Split from axis 1 -> 0.
-    TypeInferCase(
-        "sharded_leading_axis_scalar_remaps_split",
-        Gather(axis=0),
-        (sharded((6, 4, 8), (Split(1),), _M), ten((), DType.i32)),
-        sharded((4, 8), (Split(0),), _M, cute=(4, 8), strides=(8, 1)),
-    ),
-    # regression (AC-4-2): a gather ALONG the Split (sharded) axis is out of the
-    # slice's scope, so the input layout carries through unchanged.
-    TypeInferCase(
-        "sharded_axis_gather_passes_layout_through",
-        Gather(axis=0),
-        (sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32)),
-        sharded((4, 8), (Split(0),), _M, cute=(6, 4, 8), strides=(32, 8, 1)),
-    ),
-    # regression (AC-4-2): a multi-index gather whose total size is 1 (e.g.
-    # (1, 1)) is NOT a slice — the input layout carries through unchanged.
-    TypeInferCase(
-        "multi_index_total_size_one_passes_layout_through",
-        Gather(axis=1),
-        (sharded((6, 4, 8), (Split(0),), _M), ten((1, 1), DType.i32)),
-        sharded((6, 1, 1, 8), (Split(0),), _M, cute=(6, 4, 8), strides=(32, 8, 1)),
-    ),
 ]
+
+
+# ── sharded input, shard-attr migration ───────────────────────────────────
+#
+# Gather output is a new tensor: the internal cute layout is always natural
+# contiguous over the output shape, so these check tensor shape and shard
+# attrs (the actual contract) rather than the derived cute layout.
+
+
+def test_gather_shard_mid_axis_scalar_drops_position():
+    """Split on axis 0 (untouched by an axis-1 gather) carries through
+    unchanged."""
+    ty = infer_call(Gather(axis=1), sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32))
+    assert tuple(ty.shape) == (6, 8)
+    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
+
+
+def test_gather_shard_mid_axis_single_index_keeps_unit():
+    """A ``(1,)``-shaped index keeps the middle axis at size 1; the Split on
+    axis 0 is still unaffected."""
+    ty = infer_call(Gather(axis=1), sharded((6, 4, 8), (Split(0),), _M), ten((1,), DType.i32))
+    assert tuple(ty.shape) == (6, 1, 8)
+    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
+
+
+def test_gather_shard_leading_axis_scalar_remaps_split():
+    """A non-sharded LEADING axis scalar-gather renumbers the Split from axis
+    1 -> 0 (axis 0 is removed by the gather)."""
+    ty = infer_call(Gather(axis=0), sharded((6, 4, 8), (Split(1),), _M), ten((), DType.i32))
+    assert tuple(ty.shape) == (4, 8)
+    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
+
+
+def test_gather_shard_axis_gather_derives_partial():
+    """A gather ALONG the Split (sharded) axis is a masked-gather: every
+    device already holds a zero-filled partial of the gathered rows, so the
+    output sums to the true gather across that mesh axis."""
+    ty = infer_call(Gather(axis=0), sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32))
+    assert tuple(ty.shape) == (4, 8)
+    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (
+        Partial(reduction="sum"),
+    )
+
+
+def test_gather_shard_multi_index_with_split_elsewhere_derives():
+    """A multi-index gather (e.g. ``(1, 1)``) on a non-Split axis, with a
+    Split elsewhere in the layout: every device holds the full gathered axis
+    locally, so the Split on the OTHER axis carries through, renumbered for
+    the idx axes inserted at the gathered position."""
+    ty = infer_call(Gather(axis=1), sharded((6, 4, 8), (Split(0),), _M), ten((1, 1), DType.i32))
+    assert tuple(ty.shape) == (6, 1, 1, 8)
+    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
 
 @pytest.mark.parametrize("case", TYPEINFER_CASES, ids=lambda c: c.name)
