@@ -13,7 +13,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, partial_reductions
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -59,6 +59,29 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 @register_typeinfer(Reduce)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
+    kind = call.target.kind
+    reductions = partial_reductions(x_ty.layout)
+    if reductions:
+        # x's Partial(reduction) is a pending cross-device combine on a mesh
+        # axis, orthogonal to the tensor axes reduced here; it propagates only
+        # when `kind`'s own math commutes with it. SUM/MEAN are linear over
+        # the reduced axes (commute with sum only); MAX is the same
+        # associative operator applied over the combined tensor-axis and
+        # mesh-axis index set (commutes with max only, same R); ABS_MAX (a
+        # nonlinear abs composed with max) does not commute with any R.
+        if kind in (ReduceKind.SUM, ReduceKind.MEAN):
+            bad = reductions - {"sum"}
+        elif kind is ReduceKind.MAX:
+            bad = reductions - {"max"}
+        else:
+            bad = reductions
+        if bad:
+            ctx.error(
+                call,
+                f"Reduce {kind.name}: Partial({sorted(bad)}) input on x is "
+                "unsound — insert reshard(x, Broadcast) before this "
+                "consumer",
+            )
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)
     reduced = _reduced_axes(call, rank)

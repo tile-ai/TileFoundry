@@ -21,7 +21,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, partial_reductions
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -81,6 +81,70 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     return AccessRelationResult(domain=domain, maps=maps)
 
 
+def _check_partial_commutes(call: "Call", ctx: "TypeInferContext", op, la, lb) -> None:
+    """Reject a `Partial(reduction)` operand whose reduction the op's math
+    does not provably commute with.
+
+    ``ADD``: both-``Partial`` commutes only when both carry ``"sum"`` on the
+    same mesh axis (``max``/``min`` self-combine is nonsensical); one
+    ``Partial`` against a plain/``Broadcast`` operand commutes for
+    ``"max"``/``"min"`` (adding a replicated constant is order-preserving)
+    but not ``"sum"`` (today's bug — `sum(x)+b != sum(x+b)`). ``MUL``: one
+    ``Partial`` against a plain/``Broadcast`` operand commutes only for
+    ``"sum"`` (scaling by a replicated constant distributes over `sum`); both
+    ``Partial`` never commutes. Every other kind / shape rejects any
+    `Partial` operand — not proven safe.
+    """
+    lhs_r, rhs_r = partial_reductions(la), partial_reductions(lb)
+    if not lhs_r and not rhs_r:
+        return
+    fix = "insert reshard(<arg>, Broadcast) before this consumer"
+    if op.kind is BinaryKind.ADD:
+        if lhs_r and rhs_r:
+            if lhs_r != rhs_r or lhs_r != frozenset({"sum"}):
+                ctx.error(
+                    call,
+                    f"Binary ADD: Partial(lhs)={sorted(lhs_r)} vs "
+                    f"Partial(rhs)={sorted(rhs_r)} is unsound (ADD of two "
+                    "Partials only commutes when both are Partial(sum) on "
+                    "the same mesh axis) — " + fix,
+                )
+            return
+        arg, r = ("lhs", lhs_r) if lhs_r else ("rhs", rhs_r)
+        if "sum" in r:
+            ctx.error(
+                call,
+                f"Binary ADD: Partial(sum) input on {arg} against a "
+                f"plain/Broadcast operand is unsound (sum(x)+b != "
+                f"sum(x+b)) — {fix.replace('<arg>', arg)}",
+            )
+        return
+    if op.kind is BinaryKind.MUL:
+        if lhs_r and rhs_r:
+            ctx.error(
+                call,
+                f"Binary MUL: Partial(lhs)={sorted(lhs_r)} against "
+                f"Partial(rhs)={sorted(rhs_r)} is unsound (MUL of two "
+                "Partials is not linear) — " + fix,
+            )
+        arg, r = ("lhs", lhs_r) if lhs_r else ("rhs", rhs_r)
+        if r - {"sum"}:
+            ctx.error(
+                call,
+                f"Binary MUL: Partial({sorted(r)}) input on {arg} against a "
+                "plain/Broadcast operand is unsound (the operand's sign is "
+                "not statically provable, and a negative scale flips "
+                f"max/min) — {fix.replace('<arg>', arg)}",
+            )
+        return
+    arg, r = ("lhs", lhs_r) if lhs_r else ("rhs", rhs_r)
+    ctx.error(
+        call,
+        f"Binary {op.kind.name}: Partial({sorted(r)}) input on {arg} is not "
+        f"proven to commute with any reduction — {fix.replace('<arg>', arg)}",
+    )
+
+
 @register_typeinfer(Binary)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     op = call.target
@@ -102,6 +166,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else lhs_ty.dtype
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
+    _check_partial_commutes(call, ctx, op, la, lb)
     try:
         # Shape and shard share the relation as the single source: the forward
         # relation builds the broadcast domain, the output shape is read back

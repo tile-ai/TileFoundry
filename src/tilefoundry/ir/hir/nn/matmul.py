@@ -15,6 +15,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
     layout_axis_to_tensor_axis,
+    partial_reductions,
 )
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -141,6 +142,19 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             "MatMul contraction dim K must be split on the same mesh axes for "
             "both operands",
         )
+
+    # A pre-existing Partial(reduction) on either operand (weight replication)
+    # propagates only for "sum" — matmul is linear in each operand for the
+    # other fixed, but does not preserve order, so max/min never commute.
+    for arg, t in (("lhs", lhs), ("rhs", rhs)):
+        bad = partial_reductions(t.layout) - {"sum"}
+        if bad:
+            ctx.error(
+                call,
+                f"MatMul: Partial({sorted(bad)}) input on {arg} is unsound "
+                f"(matmul is linear, commutes with sum only) — insert "
+                f"reshard({arg}, Broadcast) before this consumer",
+            )
 
     relation = build_relation(call, (lhs, rhs), ctx)
     # Output shape comes from the relation (domain + output map), not a separate

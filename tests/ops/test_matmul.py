@@ -168,6 +168,26 @@ CASES = [
         ),
         expected=_shard_out((4, 16, 32), (512, 32, 1), (Split(axis=0),)),
     ),
+    # pre-existing Partial(max) on lhs (weight replication) is unsound: matmul
+    # is linear (commutes with sum), does not preserve order (max/min reject).
+    TypeInferCase(
+        name="pre_existing_partial_max_lhs_errors",
+        op=_MM,
+        inputs=(
+            _sharded((16, 8), (16, 8), (8, 1), (Partial(reduction="max"),)),
+            ten((8, 32), DType.bf16),
+        ),
+        expected=ExpectedError(match="MatMul"),
+    ),
+    TypeInferCase(
+        name="pre_existing_partial_max_rhs_errors",
+        op=_MM,
+        inputs=(
+            ten((16, 8), DType.bf16),
+            _sharded((8, 32), (8, 32), (32, 1), (Partial(reduction="max"),)),
+        ),
+        expected=ExpectedError(match="MatMul"),
+    ),
     # dtype mismatch → error
     TypeInferCase(
         name="dtype_mismatch",
@@ -188,6 +208,17 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_matmul_typeinfer(case):
     run_typeinfer_case(case)
+
+
+def test_pre_existing_partial_sum_lhs_passes():
+    # A pre-existing Partial(sum) on lhs (weight replication) commutes:
+    # matmul(sum_d(x_d), W) == sum_d(matmul(x_d, W)).
+    lhs = _sharded((16, 8), (16, 8), (8, 1), (Partial(reduction="sum"),))
+    rhs = ten((8, 32), DType.bf16)
+    out = infer_call(_MM, lhs, rhs)
+    assert any(
+        isinstance(a, Partial) and a.reduction == "sum" for a in out.layout.attrs
+    )
 
 
 def test_lhs_splits_k_rhs_unsplit_is_invalid():

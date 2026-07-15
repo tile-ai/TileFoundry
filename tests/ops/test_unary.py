@@ -11,7 +11,9 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     infer_call,
+    mesh,
     run_typeinfer_case,
+    sharded,
     ten,
     tensor_grid,
 )
@@ -24,10 +26,41 @@ from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
+from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 
 _NEG = Unary(kind=UnaryKind.NEG)
 _NOT = Unary(kind=UnaryKind.NOT)
+_EXP = Unary(kind=UnaryKind.EXP)
+_ABS = Unary(kind=UnaryKind.ABS)
+_RSQRT = Unary(kind=UnaryKind.RSQRT)
+
+_M = mesh((4,))
+_PSUM = sharded((16, 8), (Partial("sum"),), _M)
+_PMAX = sharded((16, 8), (Partial("max"),), _M)
+
+CASES_PARTIAL = [
+    # NEG is linear: commutes with sum, not max/min.
+    TypeInferCase("neg_partial_sum_passes", _NEG, (_PSUM,), _PSUM),
+    TypeInferCase(
+        "neg_partial_max_errors", _NEG, (_PMAX,),
+        ExpectedError(match="Unary NEG"),
+    ),
+    # EXP/LOG/RELU are monotone-increasing: commute with max/min, not sum.
+    TypeInferCase("exp_partial_max_passes", _EXP, (_PMAX,), _PMAX),
+    TypeInferCase(
+        "exp_partial_sum_errors", _EXP, (_PSUM,),
+        ExpectedError(match="Unary EXP"),
+    ),
+    # ABS/SQUARE/RSQRT/NOT are not proven to commute with any reduction.
+    TypeInferCase(
+        "abs_partial_sum_errors", _ABS, (_PSUM,),
+        ExpectedError(match="Unary ABS"),
+    ),
+    TypeInferCase(
+        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,),
+        ExpectedError(match="Unary RSQRT"),
+    ),
+]
 
 
 CASES = [
@@ -50,7 +83,7 @@ CASES = [
         expected=ten((4, 8), dt),
     )
     for dt in (DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1)
-]
+] + CASES_PARTIAL
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)

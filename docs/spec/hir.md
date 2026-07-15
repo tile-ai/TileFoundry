@@ -406,6 +406,26 @@ class Binary(Op):
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
   - The elementwise `min` / `max` kinds are also surfaced as `minimum` / `maximum`.
+  - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
+    output only when `kind` provably commutes with `reduction`
+    (`op(reduction(x)) == reduction(op(x))`); typeinfer rejects otherwise,
+    naming the offending operand and the fix (an explicit `Reshard` to
+    `Broadcast`).
+    - `ADD` with both operands `Partial`: commutes (passes) only when both
+      carry the same `reduction="sum"` on that mesh axis (`max`/`min` reject
+      — `max(x)+max(y)` is not `max(x+y)`).
+    - `ADD` with one `Partial` operand and the other plain/`Broadcast`:
+      commutes (passes) for `reduction` in `{"max", "min"}` (adding a
+      replicated constant is order-preserving) and rejects for `"sum"`
+      (`sum(x)+b != sum(x+b)`).
+    - `MUL` with one `Partial` operand and the other plain/`Broadcast`:
+      commutes (passes) only for `reduction="sum"` (scaling by a replicated
+      constant distributes over `sum`); rejects for `"max"`/`"min"` (the
+      constant's sign is not statically provable, and a negative scale flips
+      `max` to `min`).
+    - Every other `kind` / operand-shape combination involving a `Partial`
+      operand (including `MUL` with both operands `Partial`) rejects: not
+      proven to commute with any `reduction`.
 
 ##### Unary
 ```python
@@ -423,6 +443,15 @@ class Unary(Op):
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
   - `exp` is the natural exponential `e ** x`; `log` is the natural logarithm.
+  - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
+    output only when `kind` provably commutes with `reduction`; typeinfer
+    rejects otherwise, naming the offending operand and the fix (an explicit
+    `Reshard` to `Broadcast`). `exp` / `log` / `relu` are monotone
+    non-decreasing, so they commute with `max` / `min` but not `sum`. `neg`
+    is linear, so it commutes with `sum` but not `max` / `min` (negation
+    reverses order). `abs` / `square` / `rsqrt` / `logical_not` are not
+    proven to commute with any `reduction` and reject a `Partial` operand
+    unconditionally.
 
 #### `ir/hir/tensor/`
 
@@ -524,6 +553,15 @@ class Reduce(Op):
     typeinfer rejects it.
   - Lowering emits TIR `Reduce`; runtime dispatch is derived from operands, not
     from an HIR dispatch field.
+  - An `x` mesh axis carrying `Partial(reduction)` (a pending cross-device
+    reduction, orthogonal to the reduced tensor `axes`) propagates only when
+    `kind` commutes with `reduction`: `SUM` / `MEAN` (both linear over the
+    reduced axes) commute with `reduction="sum"` only; `MAX` commutes with
+    `reduction="max"` only (the same associative operator applied over the
+    combined tensor-axis and mesh-axis index set); `ABS_MAX` (a nonlinear
+    `abs` composed with `max`) does not commute with any `reduction`.
+    Typeinfer rejects a non-commuting combination, naming the offending
+    `reduction` and the fix (an explicit `Reshard` to `Broadcast`).
 
 ##### InsertSlice
 ```python
@@ -553,6 +591,13 @@ class InsertSlice(Op):
     checked at eval/runtime.
   - The value form writes `update` into a slice view of `dst`'s existing buffer
     (a loop-carried `dst` reuses one buffer with no replacement allocation).
+  - When `dst`'s `ShardLayout` carries a `Partial(reduction)` mesh axis,
+    `update` MUST carry the identical mesh and the identical per-mesh-axis
+    `ShardAttr` state (`update`'s own cute layout may still differ, since its
+    tensor shape is the smaller write window) for the write to type — writing
+    a differently-sharded (or unsharded) `update` into a still-partial `dst`
+    position under one output type is unrepresentable; typeinfer rejects
+    otherwise.
 
 ##### TopK
 ```python
@@ -585,6 +630,11 @@ class TopK(Op):
     layout keeps size parity with the result shape.
   - `sorted` returns the selected elements ordered by `largest`; otherwise the
     same selected set is returned in an unspecified order.
+  - `x` MUST NOT carry a `Partial(reduction)` mesh axis: `indices` identifies
+    *which* position wins, which cannot be recovered from a per-device
+    partial value without a paired value+device-identity reduction that a
+    plain `Partial` attr cannot express; typeinfer rejects any `Partial`
+    input regardless of `reduction` or `k`.
 
 #### `ir/hir/nn/`
 
@@ -593,6 +643,19 @@ Neural-network value Ops following torch semantics
 
 ##### MatMul / Conv2D / ReLU / Sigmoid / Tanh / SoftMax / LayerNorm
 Consensus torch.nn.functional ops.
+- constraints:
+  - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
+    output only when the op provably commutes with `reduction`; typeinfer
+    rejects otherwise, naming the offending operand and the fix (an explicit
+    `Reshard` to `Broadcast`).
+  - `ReLU` / `Sigmoid` / `Tanh` are monotone non-decreasing elementwise, so
+    they commute with `max` / `min` but not `sum`.
+  - `MatMul` / `Conv2D` are linear in each operand for the other operand
+    fixed (weight replication), so a `Partial` operand commutes with `sum`
+    but not `max` / `min` (matrix multiplication does not preserve order).
+  - `SoftMax` / `LayerNorm` normalize across an axis (a non-monotonic
+    combination of every value on that axis), so no `reduction` provably
+    commutes; typeinfer rejects any `Partial` operand.
 
 #### `ir/hir/shape/`
 

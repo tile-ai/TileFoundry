@@ -10,6 +10,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, partial_reductions
 
 
 @register_op(name="insert_slice")
@@ -68,6 +69,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if dst_ty.dtype != upd_ty.dtype:
         raise TypeError(
             f"insert_slice: dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}"
+        )
+    if partial_reductions(dst_ty.layout) and not (
+        isinstance(upd_ty.layout, ShardLayout)
+        and upd_ty.layout.mesh == dst_ty.layout.mesh
+        and upd_ty.layout.attrs == dst_ty.layout.attrs
+    ):
+        raise TypeError(
+            "insert_slice: dst carries a Partial(reduction) — update must "
+            "carry the identical per-mesh-axis ShardAttr state for the "
+            "write to type (writing a differently-sharded update into a "
+            "still-partial dst position under one output type is unsound)"
         )
     if isinstance(off_expr, Tuple):
         # rank-N: one rank-0 scalar offset per axis.

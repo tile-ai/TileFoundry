@@ -50,10 +50,13 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Mesh, Layout, Topology
 from tilefoundry.passes.transforms.hir_to_tir import HirToTirPass
 from tests.ops.eval_utils import EvalCase, run_eval_case
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    mesh,
     run_typeinfer_case,
+    sharded,
 )
 
 
@@ -114,6 +117,16 @@ CASES = [
         _RMS,
         (_ten((4, 2048), DType.bf16), _ten((1024,), DType.f32)),
         ExpectedError(match="last dim", exc=TypeError),
+    ),
+    # rms_norm normalizes across an axis (non-monotonic); no reduction commutes.
+    TypeInferCase(
+        "partial_input_rejected",
+        _RMS,
+        (
+            sharded((4, 2048), (Partial("sum"),), mesh((4,)), dtype=DType.bf16),
+            _ten((2048,), DType.f32),
+        ),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
 ]
 

@@ -17,6 +17,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 
 
 @register_op(dialect="tf", category="math")
@@ -24,6 +25,11 @@ class Unary(Op):
     """Value-form pointwise unary operation."""
     x = ParamDef(kind="input", pattern=Tensor)
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
+
+# Monotone non-decreasing: commutes with max/min, not sum.
+_MONOTONE_INCREASING = frozenset({UnaryKind.EXP, UnaryKind.LOG, UnaryKind.RELU})
+# Linear negation: commutes with sum, not max/min (reverses order).
+_LINEAR = frozenset({UnaryKind.NEG})
 
 @register_typeinfer(Unary)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -33,6 +39,34 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if op.kind is UnaryKind.NOT and x_ty.dtype != DType.bool:
         ctx.error(call, "Unary NOT: operand must be bool")
+    reductions = partial_reductions(x_ty.layout)
+    if reductions:
+        if op.kind in _MONOTONE_INCREASING:
+            if "sum" in reductions:
+                ctx.error(
+                    call,
+                    f"Unary {op.kind.name}: Partial(sum) input on x is "
+                    f"unsound ({op.kind.name.lower()} is nonlinear, does not "
+                    "commute with sum) — insert reshard(x, Broadcast) before "
+                    "this consumer",
+                )
+        elif op.kind in _LINEAR:
+            if reductions - {"sum"}:
+                ctx.error(
+                    call,
+                    f"Unary {op.kind.name}: Partial(max/min) input on x is "
+                    "unsound (negation reverses order, does not commute "
+                    "with max/min) — insert reshard(x, Broadcast) before "
+                    "this consumer",
+                )
+        else:
+            ctx.error(
+                call,
+                f"Unary {op.kind.name}: Partial input on x is unsound "
+                f"({op.kind.name.lower()} is not proven to commute with any "
+                "reduction) — insert reshard(x, Broadcast) before this "
+                "consumer",
+            )
     return TensorType(
         shape=x_ty.shape,
         dtype=x_ty.dtype,

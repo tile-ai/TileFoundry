@@ -28,15 +28,21 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 
 _ADD = Binary(kind=BinaryKind.ADD)
+_MUL = Binary(kind=BinaryKind.MUL)
+_SUB = Binary(kind=BinaryKind.SUB)
 _F = DType.f32
 
 # A single-axis mesh (g=4) for flat shards and a two-axis mesh (a=2, b=4) for
 # factorized shards; cases reuse these so no test hand-builds a Mesh.
 _M = mesh((4,))
 _MAB = mesh((2, 4), ("a", "b"))
+
+_PSUM = sharded((16, 8), (Partial("sum"),), _M)
+_PMAX = sharded((16, 8), (Partial("max"),), _M)
+_BCAST = ten((16, 8), _F)
 
 CASES = [
     # ── shape inference (unsharded) ──────────────────────────────────────────
@@ -157,6 +163,33 @@ CASES = [
         _ADD,
         (ten((4, 8), _F, storage="gmem"), ten((4, 8), _F, storage="rmem")),
         ExpectedError(match="conflicting storage"),
+    ),
+    # ── Partial(R) commutation ────────────────────────────────────────────────
+    # ADD(Partial(sum), Partial(sum)) is sound: sum_x + sum_y == sum(x + y).
+    TypeInferCase("add_partial_sum_partial_sum_passes", _ADD, (_PSUM, _PSUM), _PSUM),
+    # ADD(Partial(max), Partial(max)) is nonsensical: max(x)+max(y) != max(x+y).
+    TypeInferCase(
+        "add_partial_max_partial_max_errors", _ADD, (_PMAX, _PMAX),
+        ExpectedError(match="Binary ADD"),
+    ),
+    # ADD(Partial(sum), Broadcast) is the pinned bug: sum(x)+b != sum(x+b).
+    TypeInferCase(
+        "add_partial_sum_broadcast_errors", _ADD, (_PSUM, _BCAST),
+        ExpectedError(match="Binary ADD"),
+    ),
+    # ADD(Partial(max), Broadcast) is sound: max(x)+b == max(x+b).
+    TypeInferCase("add_partial_max_broadcast_passes", _ADD, (_PMAX, _BCAST), _PMAX),
+    # MUL(Partial(sum), Broadcast) is sound: b*sum(x) == sum(b*x).
+    TypeInferCase("mul_partial_sum_broadcast_passes", _MUL, (_PSUM, _BCAST), _PSUM),
+    # MUL(Partial(max), Broadcast) is unsound: b's sign is not provable.
+    TypeInferCase(
+        "mul_partial_max_broadcast_errors", _MUL, (_PMAX, _BCAST),
+        ExpectedError(match="Binary MUL"),
+    ),
+    # SUB is not in the finalized table: default-reject any Partial operand.
+    TypeInferCase(
+        "sub_partial_sum_broadcast_errors", _SUB, (_PSUM, _BCAST),
+        ExpectedError(match="Binary SUB"),
     ),
 ]
 

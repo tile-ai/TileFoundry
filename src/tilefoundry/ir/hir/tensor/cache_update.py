@@ -17,6 +17,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, partial_reductions
 
 # Data-dependent write region (``cur_pos`` / ``s`` are runtime values), so no
 # affine access relation is registered — the boundaries are opaque.
@@ -50,6 +51,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError("CacheUpdate: cache and new must be rank-4 [B, len, kv_heads, head_dim]")
     if cache_ty.dtype != new_ty.dtype:
         raise TypeError(f"CacheUpdate: cache/new dtype mismatch {cache_ty.dtype} vs {new_ty.dtype}")
+    if partial_reductions(cache_ty.layout) and not (
+        isinstance(new_ty.layout, ShardLayout)
+        and new_ty.layout.mesh == cache_ty.layout.mesh
+        and new_ty.layout.attrs == cache_ty.layout.attrs
+    ):
+        raise TypeError(
+            "CacheUpdate: cache carries a Partial(reduction) — new must "
+            "carry the identical per-mesh-axis ShardAttr state for the "
+            "write to type (writing a differently-sharded new into a "
+            "still-partial cache position under one output type is unsound)"
+        )
     for ax, label in ((0, "B"), (2, "kv_heads"), (3, "head_dim")):
         if cache_ty.shape[ax] != new_ty.shape[ax]:
             raise TypeError(

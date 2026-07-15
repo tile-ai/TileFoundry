@@ -25,13 +25,16 @@ from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
+    Partial,
     Split,
     layout_axis_to_tensor_axis,
 )
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
+    ExpectedError,
     TypeInferCase,
+    infer_call,
     mesh,
     run_typeinfer_case,
     sharded,
@@ -128,6 +131,61 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_reduce_typeinfer(case):
     run_typeinfer_case(case)
+
+
+# ── Partial(R) commutation (a mesh-axis pending reduction, orthogonal to the
+# reduced tensor axis) ────────────────────────────────────────────────────────
+
+_M1 = mesh((4,))
+_PSUM_IN = sharded((8, 16), (Partial("sum"),), _M1, dtype=DType.f32, storage="gmem")
+_PMAX_IN = sharded((8, 16), (Partial("max"),), _M1, dtype=DType.f32, storage="gmem")
+
+PARTIAL_CASES = [
+    # SUM/MEAN are linear over the reduced axes: commute with Partial(sum)
+    # only.
+    TypeInferCase(
+        "sum_over_partial_max_errors",
+        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+        (_PMAX_IN,),
+        ExpectedError(match="Reduce SUM"),
+    ),
+    TypeInferCase(
+        "mean_over_partial_max_errors",
+        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.MEAN),
+        (_PMAX_IN,),
+        ExpectedError(match="Reduce MEAN"),
+    ),
+    # MAX is the same associative operator over the combined tensor-axis and
+    # mesh-axis index set: commutes with Partial(max) only (same R).
+    TypeInferCase(
+        "max_over_partial_sum_errors",
+        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.MAX),
+        (_PSUM_IN,),
+        ExpectedError(match="Reduce MAX"),
+    ),
+    # ABS_MAX (nonlinear abs composed with max) does not commute with any R.
+    TypeInferCase(
+        "abs_max_over_partial_max_errors",
+        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.ABS_MAX),
+        (_PMAX_IN,),
+        ExpectedError(match="Reduce ABS_MAX"),
+    ),
+]
+
+
+@pytest.mark.parametrize("case", PARTIAL_CASES, ids=lambda c: c.name)
+def test_reduce_typeinfer_partial_rejects(case):
+    run_typeinfer_case(case)
+
+
+def test_reduce_sum_over_partial_sum_passes():
+    out = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), _PSUM_IN)
+    assert any(isinstance(a, Partial) for a in out.layout.attrs)
+
+
+def test_reduce_max_over_partial_max_passes():
+    out = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.MAX), _PMAX_IN)
+    assert any(isinstance(a, Partial) for a in out.layout.attrs)
 
 
 def test_layout_axis_to_tensor_axis_factorized() -> None:

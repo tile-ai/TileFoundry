@@ -24,7 +24,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, Split
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -78,6 +78,15 @@ CASES = [
         TopK(k=2, axis=-1),
         (sharded((4, 256), (Split(1),), mesh((4,))),),
         ExpectedError(match="must not be Split-sharded", exc=TypeError),
+    ),
+    # The selected indices cannot be recovered from a per-device partial
+    # value (a distributed top-k needs a paired value+device-identity
+    # reduction, which a plain Partial attr cannot express).
+    TypeInferCase(
+        "partial_input_rejected",
+        TopK(k=2, axis=-1),
+        (sharded((4, 256), (Partial("max"),), mesh((4,))),),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
 ]
 

@@ -103,18 +103,29 @@ op/relation:
    `Partial(reduction)` when the effect is `partial`, or `Broadcast`
    when the effect is `complete`. The resulting `Partial` carries no
    cute axis — it is a value state on that mesh axis.
-4. `Partial(reduction)` input — propagates on the **same mesh axis**:
-   propagate unchanged when the dataflow is homogeneous in `reduction`;
-   resolve to `Broadcast` via an explicit reduction / allreduce over that
-   axis; error on a non-homogeneous use or an unreduced function
-   output / return. There is no cute-axis mapping for a `Partial`.
+4. `Partial(reduction)` input — propagates on the **same mesh axis**, gated by
+   commutation: the op MUST propagate `Partial(reduction)` unchanged only
+   when its own math is proven to commute with `reduction` —
+   `op(reduction(x0..xn)) == reduction(op(x0)..op(xn))`. This service reads
+   only the relation's affine structure and has no notion of the calling
+   op's math, so it MUST NOT make that judgment itself; each op's own
+   typeinfer rule proves commutation (or rejects) before calling into
+   relation-driven shard propagation, the same way it would guard any other
+   op-specific precondition. Two or more `Partial` inputs combine only when
+   homogeneous in `reduction` (mixing `reduction`s on the same mesh axis is
+   never sound). `Partial` resolves to `Broadcast` only via an explicit
+   reduction / allreduce over that axis; an op that cannot prove commutation
+   MUST error, naming the offending argument and the fix, rather than
+   silently drop or misrepresent the `Partial`. There is no cute-axis mapping
+   for a `Partial`.
 5. A `Broadcast` (size-1) input axis contributes no `Split`.
 6. Two inputs binding the same domain dim to incompatible mesh axes is
    an error.
 
-A `Partial` MUST NOT be silently eliminated by an ordinary op
-(no silent loss); only an explicit `Reshard` / allreduce from `Partial`
-to `Broadcast` completes it.
+A `Partial` MUST NOT be silently eliminated, nor silently carried through a
+non-commuting op, by an ordinary op (no silent loss, no silent unsoundness);
+only an explicit `Reshard` / allreduce from `Partial` to `Broadcast`
+completes it.
 
 A fully-`Broadcast` input `ShardLayout` (every attr `Broadcast`) is
 **replicated**: it carries no real sharding, so it contributes no

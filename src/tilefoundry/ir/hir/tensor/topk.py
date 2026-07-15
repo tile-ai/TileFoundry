@@ -23,6 +23,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
     layout_axis_to_tensor_axis,
+    partial_reductions,
 )
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -91,6 +92,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             for a in x_ty.layout.attrs
         ):
             raise TypeError(f"TopK: selected axis {axis} must not be Split-sharded")
+    if partial_reductions(x_ty.layout):
+        raise TypeError(
+            "TopK: Partial input on x is unsound (the selected indices "
+            "cannot be recovered from a per-device partial value without a "
+            "paired value+device-identity reduction) — insert "
+            "reshard(x, Broadcast) before this consumer"
+        )
     out_shape = list(x_ty.shape)
     out_shape[axis] = call.target.k
     out_shape = tuple(out_shape)

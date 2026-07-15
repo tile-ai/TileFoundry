@@ -9,6 +9,7 @@ from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 
 
 @register_op
@@ -64,6 +65,18 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     kH, kW = static_dim_value(w.shape[2]), static_dim_value(w.shape[3])
     if kH is None or kW is None:
         ctx.error(call, "Conv2D kernel spatial dims (H, W) must be static")
+    # A pre-existing Partial(reduction) on either operand (weight replication)
+    # propagates only for "sum" — convolution is linear in each operand for
+    # the other fixed, but does not preserve order, so max/min never commute.
+    for arg, t in (("input", x), ("weight", w)):
+        bad = partial_reductions(t.layout) - {"sum"}
+        if bad:
+            ctx.error(
+                call,
+                f"Conv2D: Partial({sorted(bad)}) input on {arg} is unsound "
+                f"(convolution is linear, commutes with sum only) — insert "
+                f"reshard({arg}, Broadcast) before this consumer",
+            )
     N = x.shape[0]
     C_out = w.shape[0]
     H_out = _out_spatial(x.shape[2], kH, sH, pH, dH)

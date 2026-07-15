@@ -15,6 +15,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
@@ -45,6 +46,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         raise TypeError("MoEExpertCompute: x must be at least rank-1")
+    if partial_reductions(x_ty.layout):
+        raise TypeError(
+            "MoEExpertCompute: Partial input on x is unsound (an opaque "
+            "black box with nonlinear internals — SiLU, quant, weighted "
+            "expert sum — does not commute with any reduction) — insert "
+            "reshard(x, Broadcast) before this consumer"
+        )
     return TensorType(
         shape=x_ty.shape,
         dtype=x_ty.dtype,

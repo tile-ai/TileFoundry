@@ -12,13 +12,16 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    mesh,
     run_typeinfer_case,
+    sharded,
     ten,
 )
 
@@ -109,6 +112,31 @@ TYPEINFER_CASES = [
             ten((1, 4, 4, 8), DType.bf16),
         ),
         ExpectedError(match="must be a scalar", exc=TypeError),
+    ),
+    # cache carrying a Partial(reduction): new must carry the identical
+    # per-mesh-axis ShardAttr state (its own cute shape may differ — it's the
+    # smaller write window on the capacity axis).
+    TypeInferCase(
+        "partial_cache_matching_new_ok",
+        CacheUpdate(),
+        (
+            sharded((1, 16, 4, 8), (Partial("sum"),), mesh((4,)), dtype=DType.bf16),
+            ten((1,), DType.i32),
+            ten((1,), DType.i32),
+            sharded((1, 4, 4, 8), (Partial("sum"),), mesh((4,)), dtype=DType.bf16),
+        ),
+        sharded((1, 16, 4, 8), (Partial("sum"),), mesh((4,)), dtype=DType.bf16),
+    ),
+    TypeInferCase(
+        "partial_cache_plain_new_rejected",
+        CacheUpdate(),
+        (
+            sharded((1, 16, 4, 8), (Partial("sum"),), mesh((4,)), dtype=DType.bf16),
+            ten((1,), DType.i32),
+            ten((1,), DType.i32),
+            ten((1, 4, 4, 8), DType.bf16),
+        ),
+        ExpectedError(match="cache carries a Partial", exc=TypeError),
     ),
 ]
 

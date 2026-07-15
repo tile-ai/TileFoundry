@@ -23,6 +23,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
@@ -77,6 +78,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     else:
         raise TypeError(
             f"AttentionDecode: expected 3 (placeholder) or 7 (full) args, got {nargs}"
+        )
+    if partial_reductions(q_ty.layout):
+        raise TypeError(
+            "AttentionDecode: Partial input on q is unsound (an opaque "
+            "black box containing softmax internally does not commute with "
+            "any reduction) — insert reshard(q, Broadcast) before this "
+            "consumer"
         )
     return TensorType(
         shape=out_shape,

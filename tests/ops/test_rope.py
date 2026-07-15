@@ -11,23 +11,28 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    mesh,
     run_typeinfer_case,
+    sharded,
     ten,
 )
 
 _BF = DType.bf16
+_M = mesh((4,))
 
 
-def _rope_inputs(q_shape, k_shape):
-    """The (q, k, cos, sin, pos) input types for a RoPE call."""
+def _rope_inputs(q_shape, k_shape, *, q=None, k=None):
+    """The (q, k, cos, sin, pos) input types for a RoPE call. ``q``/``k``
+    override the q/k TensorType (e.g. to carry a ShardLayout)."""
     return (
-        ten(q_shape, _BF),
-        ten(k_shape, _BF),
+        q if q is not None else ten(q_shape, _BF),
+        k if k is not None else ten(k_shape, _BF),
         ten((4096, q_shape[-1]), _BF),
         ten((4096, q_shape[-1]), _BF),
         ten((1,), DType.i32),
@@ -52,6 +57,32 @@ CASES = [
         RoPE(),
         _rope_inputs((1, 32, 128), (1, 4, 64)),
         ExpectedError(match="!= k head_dim", exc=TypeError),
+    ),
+    # q_out = q*cos + rotate_half(q)*sin is linear in q: commutes with
+    # Partial(sum), not Partial(max)/Partial(min) (rotate_half's sign flip
+    # breaks monotonicity).
+    TypeInferCase(
+        "partial_sum_q_passes",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            q=sharded((1, 32, 128), (Partial("sum"),), _M, dtype=_BF),
+        ),
+        TupleType(
+            fields=(
+                sharded((1, 32, 128), (Partial("sum"),), _M, dtype=_BF),
+                ten((1, 4, 128), _BF),
+            )
+        ),
+    ),
+    TypeInferCase(
+        "partial_max_q_errors",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            q=sharded((1, 32, 128), (Partial("max"),), _M, dtype=_BF),
+        ),
+        ExpectedError(match="RoPE", exc=TypeError),
     ),
 ]
 

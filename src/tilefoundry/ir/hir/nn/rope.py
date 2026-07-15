@@ -21,6 +21,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TupleType
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
@@ -56,6 +57,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         raise TypeError(
             f"RoPE: q head_dim {head_dim_q} != k head_dim {head_dim_k}"
         )
+    # q_out = q*cos + rotate_half(q)*sin is linear in q for data-independent
+    # cos/sin (commutes with Partial(sum)); rotate_half's sign flip on half
+    # the vector breaks monotonicity, so max/min do not commute.
+    for arg, t in (("q", q_ty), ("k", k_ty)):
+        bad = partial_reductions(t.layout) - {"sum"}
+        if bad:
+            raise TypeError(
+                f"RoPE: Partial({sorted(bad)}) input on {arg} is unsound "
+                "(RoPE is linear in q/k, commutes with sum only) — insert "
+                f"reshard({arg}, Broadcast) before this consumer"
+            )
     return TupleType(fields=(q_ty, k_ty))
 
 @register_access_relation(RoPE)

@@ -4,8 +4,10 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.ir.hir.nn.softmax import SoftMax
 from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, mesh, run_typeinfer_case, sharded
+from tilefoundry.ir.hir.nn.softmax import SoftMax
+from tilefoundry.ir.types.shard.shard_layout import Partial
 
 
 @pytest.mark.parametrize(
@@ -17,3 +19,16 @@ def test_softmax_evaluate(shape, axis):
     torch.manual_seed(0)
     x = torch.randn(*shape)
     run_eval_case(EvalCase("", SoftMax(axis=axis), (x,), torch.softmax(x, dim=axis)))
+
+
+def test_softmax_typeinfer_partial_input_errors():
+    # softmax normalizes across an axis (non-monotonic); no reduction commutes.
+    m = mesh((4,))
+    run_typeinfer_case(
+        TypeInferCase(
+            "partial_sum_errors",
+            SoftMax(axis=-1),
+            (sharded((2, 8), (Partial("sum"),), m),),
+            ExpectedError(match="SoftMax"),
+        )
+    )

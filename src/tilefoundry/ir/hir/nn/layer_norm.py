@@ -6,6 +6,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 
 
 @register_op(name="layer_norm")
@@ -17,4 +18,13 @@ class LayerNorm(Op):
     eps = ParamDef(kind="attribute", annotation=float)
 @register_typeinfer(LayerNorm)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return ctx.type_of(call.args[0])
+    x_ty = ctx.type_of(call.args[0])
+    if partial_reductions(x_ty.layout):
+        ctx.error(
+            call,
+            "Partial input on x is unsound (layer_norm normalizes across an "
+            "axis, a non-monotonic combination that does not commute with "
+            "any reduction) — insert reshard(x, Broadcast) before this "
+            "consumer",
+        )
+    return x_ty

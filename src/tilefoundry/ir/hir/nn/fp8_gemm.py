@@ -27,6 +27,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
@@ -89,6 +90,20 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             call,
             f"FP8GEMM: rhs_scale shape {rhs_s.shape} != (..., K/block={expected_rhs_s_inner}, N={n})",
         )
+
+    # A pre-existing Partial(reduction) on either operand (weight replication)
+    # propagates only for "sum" — a block-scaled GEMM is linear in each
+    # operand for the other fixed, but does not preserve order, so max/min
+    # never commute.
+    for arg, t in (("lhs", lhs), ("rhs", rhs)):
+        bad = partial_reductions(t.layout) - {"sum"}
+        if bad:
+            ctx.error(
+                call,
+                f"FP8GEMM: Partial({sorted(bad)}) input on {arg} is unsound "
+                f"(GEMM is linear, commutes with sum only) — insert "
+                f"reshard({arg}, Broadcast) before this consumer",
+            )
 
     return TensorType(
         shape=batch + (m, n),

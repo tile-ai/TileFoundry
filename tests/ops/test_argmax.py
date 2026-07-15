@@ -5,10 +5,13 @@ import pytest
 
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    mesh,
     run_typeinfer_case,
+    sharded,
     ten,
 )
 
@@ -23,6 +26,13 @@ CASES = [
         ArgMax(axis=3),
         (ten((4,), DType.f32),),
         ExpectedError(match="out of range", exc=TypeError),
+    ),
+    # The winning index cannot be recovered from a per-device partial value.
+    TypeInferCase(
+        "partial_max_errors",
+        ArgMax(),
+        (sharded((1, 128), (Partial("max"),), mesh((4,))),),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
 ]
 

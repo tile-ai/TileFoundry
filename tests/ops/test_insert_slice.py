@@ -18,13 +18,16 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    mesh,
     run_typeinfer_case,
+    sharded,
     ten,
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -186,6 +189,25 @@ CASES = [
         _OP,
         (ten((8,), _F), ten((10,), _F), ten((), _I)),
         ExpectedError("exceeds dst extent", exc=TypeError),
+    ),
+    # dst carrying a Partial(reduction): update must carry the identical
+    # per-mesh-axis ShardAttr state (its own cute shape may differ — it's the
+    # smaller write window).
+    TypeInferCase(
+        "partial_dst_matching_update_ok",
+        _OP,
+        (
+            sharded((8,), (Partial("sum"),), mesh((4,))),
+            sharded((3,), (Partial("sum"),), mesh((4,))),
+            ten((), _I),
+        ),
+        sharded((8,), (Partial("sum"),), mesh((4,))),
+    ),
+    TypeInferCase(
+        "partial_dst_plain_update_rejected",
+        _OP,
+        (sharded((8,), (Partial("sum"),), mesh((4,))), ten((3,), _F), ten((), _I)),
+        ExpectedError("dst carries a Partial", exc=TypeError),
     ),
 ]
 

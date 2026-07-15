@@ -7,10 +7,13 @@ import pytest
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TupleType
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    mesh,
     run_typeinfer_case,
+    sharded,
     ten,
 )
 
@@ -53,6 +56,13 @@ CASES = [
         Quant(),
         (_g((), _BF),),
         ExpectedError(match="at least rank-1", exc=TypeError),
+    ),
+    # per-group amax normalization does not commute with any reduction.
+    TypeInferCase(
+        "partial_sum_errors",
+        Quant(),
+        (sharded((1, 2048), (Partial("sum"),), mesh((4,)), dtype=_BF, storage=_GMEM),),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
 ]
 

@@ -14,6 +14,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.shard.shard_layout import partial_reductions
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
@@ -32,6 +33,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     ids_ty = ctx.type_of(call.args[0])
     if len(ids_ty.shape) < 1:
         raise TypeError("MoERoute: topk_ids must be at least rank-1")
+    if partial_reductions(ids_ty.layout):
+        raise TypeError(
+            "MoERoute: Partial input on topk_ids is unsound (routing is an "
+            "opaque, data-dependent sort/permutation that does not commute "
+            "with any reduction) — insert reshard(topk_ids, Broadcast) "
+            "before this consumer"
+        )
     # sorted_token_ids: leading-dim aligned, but actual length is data-dependent.
     # We reuse topk_ids.shape as a placeholder upper bound; downstream consumers
     # treat the routing handle as opaque.
