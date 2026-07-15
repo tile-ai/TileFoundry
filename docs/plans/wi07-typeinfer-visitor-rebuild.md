@@ -256,6 +256,49 @@ argument layout propagates through the whole callee body, including a
 - [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
+### Milestone M4: Rework — 3 acceptance-review defects (D1/D2/D3)
+
+#### Depends
+- M1
+- M3
+
+#### Related Files
+- `src/tilefoundry/ir/hir/function.py`
+- `src/tilefoundry/parser/base.py`
+- `tests/ir/test_function_call_typeinfer.py`
+- `tests/parser/hir/test_nested_func_call.py`
+
+#### Plan
+- [ ] step 4.1 D1: `_Elaborator` (`function.py`) gains `visit_GridRegionExpr`,
+      re-stamping `carried_args` from the rewritten `init_args` (hir.md §1.2:
+      "the first-iteration value of each `carried_args` phi is its
+      `init_args` entry" — the same rule the parser applies) before
+      rewriting `body` / `yield_values`, so a wildcard-propagated layout
+      survives a carrying loop. `TypeInferVisitor.visit_GridRegionExpr`
+      (`visitors.py`) needs no change once `carried_args` is correctly
+      re-stamped.
+- [ ] step 4.2 D2: `_Elaborator` gains `visit_Call`, which re-elaborates a
+      nested Call's `target` (when it is a hir `Function`) against the
+      call's rewritten arg types, so `Call.target` — not just `Call.type`
+      — reflects the fresh per-call-site instance through a multi-level
+      wildcard chain.
+- [ ] step 4.3 D3: thread the originating `Call` through `elaborate()` /
+      `_bind_param_type()` (`function.py`) and the parser's pre-Call
+      surrogate (`parser/base.py::_build_function_call`) so an
+      arity/bind `VerifyError` reports `at <call.loc>` instead of the
+      callee's (always-`None`) own `.loc`.
+- [ ] step 4.4 Add regression cases to `tests/ir/test_function_call_typeinfer.py`
+      (D1, D3) and `tests/parser/hir/test_nested_func_call.py` (D2)
+      covering the three defects' observable behavior.
+
+#### Acceptance Criteria
+- [ ] AC-4-1: `gap-repros/repro_g10b.py::test_d1_carry_loop_propagates_split` passes.
+- [ ] AC-4-2: `gap-repros/repro_g10b.py::test_d2_nested_call_target_reelaborated` passes.
+- [ ] AC-4-3: `gap-repros/repro_g10b.py::test_d3_arg_mismatch_error_keeps_call_loc` passes.
+<!-- policy_ac:start -->
+- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+<!-- policy_ac:end -->
+
 ## Execution Preflight
 
 <!-- This block is auto-filled by `scripts/finalize_plan_context.py`.
