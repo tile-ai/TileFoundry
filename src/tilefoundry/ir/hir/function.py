@@ -7,6 +7,7 @@ from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.core.registry import register_typeinfer
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.target import CudaTarget, Target
 from tilefoundry.ir.types import CallableType, TensorType, Type, callable_type_for
 from tilefoundry.ir.types.shard.mesh import Topology
@@ -197,6 +198,37 @@ def elaborate(
 
         def visit_Constant(self, c: Constant) -> Expr:
             return c
+
+        def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
+            """Re-stamp the loop-phi ``carried_args`` from the rewritten
+            ``init_args`` (hir.md §1.2: "the first-iteration value of each
+            carried_args phi is its init_args entry"), the same rule the
+            parser applies when constructing the node, then substitute the
+            fresh phi into the body/yield_values before rebuilding them."""
+            new_init_args = tuple(self.visit(a) for a in grid.init_args)
+            new_phis = tuple(
+                old_phi if new_init.type == old_phi.type
+                else Var(type=new_init.type, name=old_phi.name)
+                for old_phi, new_init in zip(grid.carried_args, new_init_args)
+            )
+            for old_phi, new_phi in zip(grid.carried_args, new_phis):
+                if new_phi is not old_phi:
+                    subst[id(old_phi)] = new_phi
+            new_body = self.visit(grid.body)
+            new_yields = tuple(self.visit(y) for y in grid.yield_values)
+            unchanged = (
+                all(ni is oi for ni, oi in zip(new_init_args, grid.init_args))
+                and all(np_ is op for np_, op in zip(new_phis, grid.carried_args))
+                and new_body is grid.body
+                and all(ny is oy for ny, oy in zip(new_yields, grid.yield_values))
+            )
+            if unchanged:
+                return grid
+            rebuilt = dataclasses.replace(
+                grid, carried_args=new_phis, init_args=new_init_args,
+                body=new_body, yield_values=new_yields,
+            )
+            return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
 
         def generic_visit(self, expr: Expr) -> Expr:
             rebuilt = super().generic_visit(expr)

@@ -15,6 +15,7 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard.shard_layout import Split
@@ -55,6 +56,30 @@ def test_same_callee_specializes_per_call_site():
     split_out = infer_call(f, sharded((4, 8), (Split(0),), _M))
     assert plain_out.layout is None
     assert split_out.layout == sharded((4, 8), (Split(0),), _M).layout
+
+
+def _carry_callee(param_type):
+    """A callee whose body is a single-carry loop-phi ``GridRegionExpr``:
+    ``acc = x + x`` before the loop, ``acc = acc + x`` inside it."""
+    x = Var(type=param_type, name="x")
+    init = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(x, x))
+    phi = Var(type=param_type, name="acc")
+    iv = Var(type=ten((), DType.i64), name="i")
+    body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(phi, x))
+    grid = GridRegionExpr(
+        type=param_type, induction_var=iv, carried_args=(phi,),
+        init_args=(init,), body=body, yield_values=(body,),
+        extent=8, step=1,
+    )
+    return Function.build(name="carry", params=(x,), body=grid, return_type=param_type)
+
+
+def test_carrying_loop_propagates_split():
+    # The loop-phi's own type must re-derive from the elaborated init value
+    # (hir.md §1.2), not stay at the callee's parse-time unsharded type.
+    f = _carry_callee(ten((8,), _F))
+    out = infer_call(f, sharded((8,), (Split(0),), _M))
+    assert out == sharded((8,), (Split(0),), _M)
 
 
 def test_explicit_sharded_formal_accepts_matching_actual():

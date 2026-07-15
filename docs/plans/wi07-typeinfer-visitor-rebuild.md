@@ -269,7 +269,7 @@ argument layout propagates through the whole callee body, including a
 - `tests/parser/hir/test_nested_func_call.py`
 
 #### Plan
-- [ ] step 4.1 D1: `_Elaborator` (`function.py`) gains `visit_GridRegionExpr`,
+- [x] step 4.1 D1: `_Elaborator` (`function.py`) gains `visit_GridRegionExpr`,
       re-stamping `carried_args` from the rewritten `init_args` (hir.md §1.2:
       "the first-iteration value of each `carried_args` phi is its
       `init_args` entry" — the same rule the parser applies) before
@@ -292,7 +292,7 @@ argument layout propagates through the whole callee body, including a
       covering the three defects' observable behavior.
 
 #### Acceptance Criteria
-- [ ] AC-4-1: `gap-repros/repro_g10b.py::test_d1_carry_loop_propagates_split` passes.
+- [x] AC-4-1: `gap-repros/repro_g10b.py::test_d1_carry_loop_propagates_split` passes.
 - [ ] AC-4-2: `gap-repros/repro_g10b.py::test_d2_nested_call_target_reelaborated` passes.
 - [ ] AC-4-3: `gap-repros/repro_g10b.py::test_d3_arg_mismatch_error_keeps_call_loc` passes.
 <!-- policy_ac:start -->
