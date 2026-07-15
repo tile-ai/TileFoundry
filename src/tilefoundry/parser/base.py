@@ -11,6 +11,8 @@ from typing import Any, Literal
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, TypeInferContext, VerifyError
 from tilefoundry.ir.core.op_registry import _first_schema
 from tilefoundry.ir.core.op_schema import OpSchema
+from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.function import elaborate
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -400,11 +402,6 @@ class BaseExprVisitor:
         ``@func`` evaluates to the ``hir.Function`` directly, so a sibling
         callee binding *is* that Function (see :func:`tilefoundry.script.func`).
         """
-        # Avoid the import cycle: ``tilefoundry.ir.hir`` pulls in registries
-        # at module-import time and re-entering this parser would be
-        # unhealthy. Local-import.
-        from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
-
         val: Any = None
         if isinstance(func, ast.Name):
             val = self.env.lookup(func.id)
@@ -422,8 +419,11 @@ class BaseExprVisitor:
     ) -> Expr:
         """Build a ``Call(target=<hir.Function>, args=...)`` for a nested
         ``@func`` → ``@func`` call site. Arg-count enforcement lives in
-        the parser; argument *types* are checked by the
-        ``@register_typeinfer(Function)`` handler that runs on demand.
+        the parser; argument *types* are bound by elaboration
+        (``tilefoundry.ir.hir.function.elaborate``, hir.md §1.1) before the
+        ``Call`` is built, so ``Call.target`` is the actual per-call-site
+        instance (needed for the viewer/printer to read correctly-propagated
+        types off ``call.target.body``), not just ``Call.type``.
         ``loc=`` keyword is accepted and threaded onto ``Call.loc``;
         every other keyword is rejected because hir Function calls are
         positional-only at the IR level.
@@ -450,7 +450,19 @@ class BaseExprVisitor:
                 f"declares {expected} parameter(s), call passed {got}"
             )
         input_args = tuple(self.expr(a) for a in node.args)
-        call = self._build_call(callee, input_args)
+        # The real Call is built from `instance` below, so it doesn't exist
+        # yet at this point; a surrogate carrying the same loc an explicit
+        # `loc=` keyword would produce lets an arity/bind error report
+        # `at <loc>` instead of the callee's (always-None) own `.loc`.
+        call_for_errors = Call(
+            type=callee.return_type, target=callee, args=input_args,
+            loc=explicit_loc if explicit_loc_given else None,
+        )
+        instance = elaborate(
+            callee, tuple(a.type for a in input_args), self._ctx,
+            call=call_for_errors,
+        )
+        call = self._build_call(instance, input_args)
         if explicit_loc_given:
             call = dataclasses.replace(call, loc=explicit_loc)
             self._explicit_loc_call_ids.add(id(call))
