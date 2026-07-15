@@ -274,7 +274,7 @@ failing closed when it does not.
 - `docs/spec/hir.md`
 
 #### Plan
-- [ ] step 4.1 In `_carry_sharded_reshape`'s residual-carry branch
+- [x] step 4.1 In `_carry_sharded_reshape`'s residual-carry branch
       (`reshape.py`, the `needed % mesh_ext == 0` success path), when
       `needed != mesh_ext`, factor `needed` into `(mesh_ext, needed //
       mesh_ext)` instead of keeping the whole `needed` sub-factor under the
@@ -285,36 +285,37 @@ failing closed when it does not.
       above it (mirrors `parser/sugar.py::_canonicalize_single_axis`). When
       `needed == mesh_ext` the position already has local extent 1;
       behavior is unchanged.
-- [ ] step 4.2 Update `tests/ops/test_reshape.py::flat_split_divides_carries`
+- [x] step 4.2 Update `tests/ops/test_reshape.py::flat_split_divides_carries`
       to the finer `cute=`/`strides=` factorization this produces
       (`TensorType.shape` assertion unchanged); update the module and
       `_carry_sharded_reshape` docstrings to describe the two-position
       factorization instead of "reduced local extent".
-- [ ] step 4.3 Add a `Reshape -> Reshard(rmem)` regression test to
+- [x] step 4.3 Add a `Reshape -> Reshard(rmem)` regression test to
       `tests/ops/test_reshape.py` reproducing
       `repro_g08b.py::test_ogroup_reshape_then_rmem_reshard_no_aliasing`'s
       shape, asserting no stride-0/local-extent>1 aliasing survives the
       composition.
-- [ ] step 4.4 Update `docs/spec/hir.md`'s `Reshape` entry: replace "Split
+- [x] step 4.4 Update `docs/spec/hir.md`'s `Reshape` entry: replace "Split
       relocates to the outer (earlier) sub-factor at reduced local extent"
       with the two-position factorization, so the entry no longer
       contradicts `docs/spec/shard.md` §7.1.1.
 
 #### Acceptance Criteria
-- [ ] AC-4-1: `.venv/bin/python -m pytest
+- [x] AC-4-1: `.venv/bin/python -m pytest
       /home/qihang.zheng/zqh/TileOpsGov/research/deepseek-v4-flash-dataflow/gap-repros/repro_g08b.py
       -v` — 2 passed, repro file unmodified.
-- [ ] AC-4-2: same command against
+- [x] AC-4-2: same command against
       `.../gap-repros/repro_g08.py` — stays 3 passed.
-- [ ] AC-4-3: `.venv/bin/python -m pytest tests/ -q` — fully green.
-- [ ] AC-4-4: `python scripts/spec_rules_lint.py docs/spec/hir.md` and
+- [x] AC-4-3: `.venv/bin/python -m pytest tests/ -q` — 829 passed (net +1
+      from this milestone's `Reshape -> Reshard(rmem)` regression test).
+- [x] AC-4-4: `python scripts/spec_rules_lint.py docs/spec/hir.md` and
       `python scripts/spec_entropy_lint.py` on touched files — clean.
 <!-- policy_ac:start -->
-- [ ] Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs. <!-- policy_ac: spec_discipline-0 -->
-- [ ] Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section. <!-- policy_ac: spec_discipline-1 -->
-- [ ] Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names. <!-- policy_ac: spec_discipline-2 -->
-- [ ] Spec section MUST be in English. <!-- policy_ac: spec_discipline-3 -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs. <!-- policy_ac: spec_discipline-0 -->
+- [x] Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section. <!-- policy_ac: spec_discipline-1 -->
+- [x] Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names. <!-- policy_ac: spec_discipline-2 -->
+- [x] Spec section MUST be in English. <!-- policy_ac: spec_discipline-3 -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ## Execution Preflight

@@ -34,12 +34,14 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     axis, in either order). It can ALSO carry the sharding when a cute
     position must itself divide across a new-axis boundary, provided that
     position is `Split`-bound and its outer (earlier) sub-factor is evenly
-    divisible by the bound mesh extent: `Split` relocates to that outer
-    sub-factor (same mesh axis, reduced local extent), and the inner
-    residual carries forward as a plain (non-`Split`) cute position into the
-    next new axis. A plain (non-`Split`) position may divide at any boundary
-    that evenly factors it; only a `Split`-bound position whose boundary the
-    mesh extent does not divide fails closed. Size-1 axes are
+    divisible by the bound mesh extent: the sub-factor itself further
+    factors into `(mesh_ext, sub_factor // mesh_ext)` — `Split` relocates to
+    the `mesh_ext`-sized position (local extent 1, per
+    `docs/spec/shard.md` §7.1.1), and both the `sub_factor // mesh_ext`
+    remainder and the inner residual carry forward as plain (non-`Split`)
+    cute positions. A plain (non-`Split`) position may divide at any
+    boundary that evenly factors it; only a `Split`-bound position whose
+    boundary the mesh extent does not divide fails closed. Size-1 axes are
     inserted/dropped freely and hold no sharding. `Partial` / `Broadcast`
     carry through unchanged (mesh-axis states, no cute axis).
 
@@ -121,9 +123,23 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
             mesh_ext = split_mesh_extent.get(old_pos) if old_pos is not None else None
             if mesh_ext is not None and needed % mesh_ext != 0:
                 return None  # Split-bound: mesh extent must divide the outer sub-factor
-            if old_pos is not None:
+            base_stride = stride * residual
+            if mesh_ext is not None and needed != mesh_ext:
+                # The outer sub-factor exceeds the mesh extent: factor it
+                # further into (mesh_ext, Split-bound, local extent 1) and
+                # (needed // mesh_ext, plain), mirroring
+                # parser/sugar.py::_canonicalize_single_axis, so the
+                # Split-bound cute dim keeps local_shape == 1.
+                outer_residual = needed // mesh_ext
                 old_to_new[old_pos] = len(new_positions)
-            new_positions.append((needed, stride * residual, old_pos))
+                new_positions.append(
+                    (mesh_ext, base_stride * outer_residual, old_pos)
+                )
+                new_positions.append((outer_residual, base_stride, None))
+            else:
+                if old_pos is not None:
+                    old_to_new[old_pos] = len(new_positions)
+                new_positions.append((needed, base_stride, old_pos))
             pending = (residual, stride, None)
             prod = d
     if pending is not None or _next_nonunit(ci) < n_cute:

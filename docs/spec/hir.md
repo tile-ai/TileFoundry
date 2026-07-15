@@ -437,10 +437,11 @@ class Reshape(Op):
       position; `Partial` / `Broadcast` carry through unchanged (mesh-axis
       states, no cute axis); OR
     - a `Split`-bound cute position divides across a new-axis boundary at a
-      point its bound mesh extent evenly divides: `Split` relocates to the
-      outer (earlier) sub-factor at reduced local extent (the sub-factor
-      size divided by the mesh extent), and the inner residual becomes a
-      plain (non-`Split`) cute position.
+      point its bound mesh extent evenly divides: the outer (earlier)
+      sub-factor itself further factors into `(mesh_ext, Split-bound, local
+      extent 1)` and `(sub-factor / mesh_ext, plain)`, and the inner residual
+      becomes a plain (non-`Split`) cute position — every `Split`-bound cute
+      dim keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
   - Arbitrary rank-N regroup — a `Split`-bound position whose device-owned
     block spans a boundary deeper than one divide, or two or more
     `Split`-bound positions interacting across the same regroup — is not yet

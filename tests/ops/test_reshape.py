@@ -5,23 +5,33 @@ genuine sharding carries when every cute position lies entirely within one new
 axis (size-1 axes are inserted/dropped freely and the cute factorization of the
 surviving positions is preserved, with ``Split`` cute-axis references remapped),
 or when a ``Split``-bound position divides across a new-axis boundary at a
-point its bound mesh extent evenly divides (``Split`` relocates to the outer
-sub-factor); a reshape that cannot be expressed either way fails closed (no
-fake layout). See ``docs/spec/hir.md`` §1.3 ``Reshape``.
+point its bound mesh extent evenly divides (``Split`` relocates to the
+mesh-extent-sized sub-position, keeping local extent 1, with any remainder
+carried forward as a plain cute position); a reshape that cannot be expressed
+either way fails closed (no fake layout). See ``docs/spec/hir.md`` §1.3
+``Reshape``.
 """
 from __future__ import annotations
 
 import pytest
 import torch
 
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.shard_layout import Partial, Split
+from tilefoundry.ir.types.shard import Layout, ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import (
+    Partial,
+    Split,
+    shard_layout_local_shape,
+)
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
+    infer_call,
     mesh,
     run_typeinfer_case,
     sharded,
@@ -103,12 +113,17 @@ CASES = [
         sharded((4, 32), (Split(0),), _M, cute=(4, 4, 8), strides=(32, 8, 1)),
     ),
     # a flat split dim (4096) splits into (32, 128): the outer sub-factor (32)
-    # is divisible by the mesh extent (4) -> Split relocates to axis 0.
+    # is divisible by the mesh extent (4) but exceeds it, so it factors
+    # further into (4, Split-bound, local extent 1) and (8, plain); the
+    # inner residual (128) merges in as its own plain position.
     TypeInferCase(
         "flat_split_divides_carries",
         _reshape((32, 128)),
         (sharded((4096,), (Split(0),), _M),),
-        sharded((32, 128), (Split(0),), _M),
+        sharded(
+            (32, 128), (Split(0),), _M,
+            cute=(4, 8, 128), strides=(1024, 128, 1),
+        ),
     ),
     # ── misaligned sharded fails closed ───────────────────────────────────────
     # cute position 0 (size 6) would divide across the new size-3 boundary,
@@ -126,6 +141,37 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_reshape_typeinfer(case):
     run_typeinfer_case(case)
+
+
+def test_reshape_then_reshard_rmem_no_split_aliasing():
+    """A `Split`-bound position that must subdivide across a new-axis
+    boundary keeps local extent 1 through `Reshape` (`docs/spec/shard.md`
+    §7.1.1), so a follow-on `Reshard(rmem)` — which assigns stride 0 to
+    every `Split`-bound cute dim — never aliases distinct per-device
+    coordinates onto one physical slot."""
+    reshaped = infer_call(_reshape((32, 128)), sharded((4096,), (Split(0),), _M))
+    sl = reshaped.layout
+    resharded = infer_call(
+        Reshard(
+            layout=ShardLayout(
+                layout=Layout(shape=sl.layout.shape, strides=None),
+                attrs=sl.attrs,
+                mesh=sl.mesh,
+            ),
+            storage=StorageKind.RMEM,
+        ),
+        reshaped,
+    )
+    local = shard_layout_local_shape(resharded.layout)
+    strides = resharded.layout.layout.strides
+    aliased = [
+        i for i, (extent, stride) in enumerate(zip(local, strides))
+        if stride == 0 and extent > 1
+    ]
+    assert not aliased, (
+        f"stride-0 axes with local extent > 1: {aliased} "
+        f"(local={local}, strides={strides})"
+    )
 
 
 # A symbolic target axis (op metadata, not input data) inferred from the input.
