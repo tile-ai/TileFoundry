@@ -244,7 +244,6 @@ class ExprMutator:
 # partially-initialized module.
 from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Stmt visitor / mutator
 # ---------------------------------------------------------------------------
