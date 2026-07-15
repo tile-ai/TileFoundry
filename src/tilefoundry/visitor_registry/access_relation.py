@@ -20,7 +20,7 @@ Usage::
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Union
 
 import isl
@@ -101,13 +101,20 @@ class AccessRelationResult:
 
     ``domain`` is the bounded iteration domain as an ``isl.set``: static dims
     are constant constraints, dynamic dims are isl parameters (one per
-    ``DimVar``). ``maps`` holds one access ``isl.map`` per boundary value in
-    boundary order (inputs first, then outputs). The carrier holds no tensor
-    shape — output shape is typeinfer-side data, not part of the relation.
+    ``DimVar``, or an opaque parameter for a composite ``DimExpr`` extent).
+    ``maps`` holds one access ``isl.map`` per boundary value in boundary
+    order (inputs first, then outputs). The carrier holds no tensor shape —
+    output shape is typeinfer-side data, not part of the relation.
+
+    ``param_map`` resolves each of ``domain``'s isl parameter names back to
+    the ``ShapeDim`` it stands for (see
+    ``tilefoundry.utilities.isl_utility.to_domain``); it is this Call's own
+    data, never shared with any other Call's relation.
     """
 
     domain: "isl.set"
     maps: tuple["isl.map", ...]
+    param_map: dict = field(default_factory=dict)
 
 
 # ─────────────────────────────────────────────────────────────────────

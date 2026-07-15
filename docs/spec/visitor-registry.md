@@ -228,6 +228,7 @@ service that typeinfer consumes. Its result carrier is:
 class AccessRelationResult:
     domain: isl.set             # the op's bounded iteration domain as an isl.set
     maps: tuple[isl.map, ...]   # one access isl.map per boundary value, in boundary order (inputs then outputs)
+    param_map: dict             # domain's isl parameter name -> the ShapeDim it stands for; this Call's own data, never shared
 ```
 
 - constraints:
@@ -237,12 +238,20 @@ class AccessRelationResult:
 #### `domain`
 
 The op's bounded iteration domain as an `isl.set`. Static iteration
-extents are constant constraints (`0 <= i < N`); a dynamic extent is an
-isl parameter — one per `DimVar`, or an affine combination of such
-parameters. An extent that is not itself affine in isl (e.g. a floor
-division) binds to a fresh opaque isl parameter instead, keyed so the same
-extent always binds to the same parameter. The domain's rank is fixed and
-is read from the input types.
+extents are constant constraints (`0 <= i < N`); a bare `DimVar` extent is
+a same-name isl parameter bound to its own `[lo, hi)`. Any other
+`ShapeDim` expression binds to a fresh opaque isl parameter instead — its
+arithmetic structure never enters isl, only its value range does — keyed
+so the same expression always binds to the same parameter. The domain's
+rank is fixed and is read from the input types.
+
+#### `param_map`
+
+Maps each of `domain`'s isl parameter names back to the `ShapeDim` it
+stands for. Built once alongside `domain` and carried on this result —
+never module-level state, so it is safe across concurrent or repeated
+relation builds. The output-shape derivation that consumes `domain` reads
+`param_map` to resolve a recovered isl expression back to a `ShapeDim`.
 
 #### `maps`
 
