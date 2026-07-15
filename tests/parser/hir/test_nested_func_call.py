@@ -28,6 +28,9 @@ from tilefoundry.dsl.tf import (  # noqa: F401 — binds bare ``add``, ``mul``
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.function import elaborate
+from tilefoundry.ir.types.shard.shard_layout import Split
+from tests.ops.typeinfer_utils import mesh, sharded
 
 # ---------------------------------------------------------------------------
 # Fixtures — two ``@func``s where the outer one calls the inner one.
@@ -86,6 +89,31 @@ def test_arity_mismatch_rejected_at_parse_time() -> None:
         @func
         def _bad_arity(x: Tensor[(N,), "f32"]) -> Tensor[(N,), "f32"]:
             return _inner_double(x, x)  # type: ignore[call-arg]  # noqa: F841
+
+
+def test_wildcard_chain_reelaborates_nested_call_target() -> None:
+    # 3-level wildcard chain outer -> mid -> leaf, elaborated for a Split
+    # arg: Call.target must be the fresh Split instance at every level (a
+    # viewer/printer reads call.target.body), not the parse-time unsharded
+    # sibling Function that ``@func`` originally produced.
+    @func
+    def leaf(x: Tensor[(8, 64), "f32"]) -> Tensor[(8, 64), "f32"]:
+        return add(x, x)  # noqa: F821
+
+    @func
+    def mid(x: Tensor[(8, 64), "f32"]) -> Tensor[(8, 64), "f32"]:
+        return leaf(x)
+
+    @func
+    def outer_fn(x: Tensor[(8, 64), "f32"]) -> Tensor[(8, 64), "f32"]:
+        return mid(x)
+
+    x_split = sharded((8, 64), (Split(0),), mesh((4,)))
+    new_outer = elaborate(outer_fn, (x_split,))
+    tgt = new_outer.body.target
+    assert tgt is not mid
+    assert tgt.params[0].type == x_split
+    assert tgt.body.type == x_split
 
 
 def test_arg_type_mismatch_rejected_at_typeinfer() -> None:

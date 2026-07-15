@@ -277,7 +277,7 @@ argument layout propagates through the whole callee body, including a
       survives a carrying loop. `TypeInferVisitor.visit_GridRegionExpr`
       (`visitors.py`) needs no change once `carried_args` is correctly
       re-stamped.
-- [ ] step 4.2 D2: `_Elaborator` gains `visit_Call`, which re-elaborates a
+- [x] step 4.2 D2: `_Elaborator` gains `visit_Call`, which re-elaborates a
       nested Call's `target` (when it is a hir `Function`) against the
       call's rewritten arg types, so `Call.target` — not just `Call.type`
       — reflects the fresh per-call-site instance through a multi-level
@@ -293,7 +293,7 @@ argument layout propagates through the whole callee body, including a
 
 #### Acceptance Criteria
 - [x] AC-4-1: `gap-repros/repro_g10b.py::test_d1_carry_loop_propagates_split` passes.
-- [ ] AC-4-2: `gap-repros/repro_g10b.py::test_d2_nested_call_target_reelaborated` passes.
+- [x] AC-4-2: `gap-repros/repro_g10b.py::test_d2_nested_call_target_reelaborated` passes.
 - [ ] AC-4-3: `gap-repros/repro_g10b.py::test_d3_arg_mismatch_error_keeps_call_loc` passes.
 <!-- policy_ac:start -->
 - [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->

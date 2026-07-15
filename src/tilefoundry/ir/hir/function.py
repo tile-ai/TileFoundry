@@ -199,6 +199,24 @@ def elaborate(
         def visit_Constant(self, c: Constant) -> Expr:
             return c
 
+        def visit_Call(self, call_expr: Call) -> Expr:
+            """Rebuild args as usual; additionally, a Call whose target is
+            a hir Function is re-elaborated against the rewritten arg
+            types so ``.target`` (not just ``.type``) reflects the fresh
+            instance — required per hir.md §1.1 for a viewer/printer read
+            of ``call.target.body`` under a wildcard chain."""
+            new_args = tuple(self.visit(a) for a in call_expr.args)
+            args_changed = any(na is not oa for na, oa in zip(new_args, call_expr.args))
+            new_target = call_expr.target
+            if isinstance(call_expr.target, Function):
+                new_target = elaborate(
+                    call_expr.target, tuple(a.type for a in new_args), self.body_ctx,
+                )
+            if not args_changed and new_target is call_expr.target:
+                return call_expr
+            rebuilt = dataclasses.replace(call_expr, args=new_args, target=new_target)
+            return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
+
         def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
             """Re-stamp the loop-phi ``carried_args`` from the rewritten
             ``init_args`` (hir.md §1.2: "the first-iteration value of each
