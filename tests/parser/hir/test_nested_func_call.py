@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.ops.typeinfer_utils import mesh, sharded
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import (  # noqa: F401 — binds bare ``add``, ``mul``
@@ -30,7 +31,6 @@ from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.function import elaborate
 from tilefoundry.ir.types.shard.shard_layout import Split
-from tests.ops.typeinfer_utils import mesh, sharded
 
 # ---------------------------------------------------------------------------
 # Fixtures — two ``@func``s where the outer one calls the inner one.

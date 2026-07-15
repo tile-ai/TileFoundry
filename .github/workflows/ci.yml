@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+# Jobs run directly inside the self-hosted runner container, which carries the
+# toolchain (torch, CUDA, cutlass headers at /opt/cutlass/include, ruff,
+# clang-format, pre-commit). The runner container is launched pinned to one GPU
+# (e.g. --gpus device=4), so no per-job GPU selection is needed. `tilefoundry`
+# is the runner label — set it in the runner's RUNNER_LABELS at launch.
+jobs:
+  lint:
+    runs-on: [self-hosted, tilefoundry]
+    steps:
+      - uses: actions/checkout@v4
+      - name: pre-commit run --all-files
+        run: pre-commit run --all-files
+
+  test:
+    needs: lint
+    runs-on: [self-hosted, tilefoundry]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Link baked cutlass headers
+        run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
+      - name: Install tilefoundry (editable, deps already in the image)
+        run: pip install -e '.[test]' --no-build-isolation
+      - name: pytest tests/
+        run: pytest tests/

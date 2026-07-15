@@ -147,8 +147,7 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
 
 // Detector for a nested ``typename T::shard_layout_type``. Selects the sharded
 // tiers vs. the plain (non-sharded) path in the public ``reduce`` entry.
-template <class T, class = void>
-struct has_shard_layout : std::false_type {};
+template <class T, class = void> struct has_shard_layout : std::false_type {};
 template <class T>
 struct has_shard_layout<T, std::void_t<typename T::shard_layout_type>>
     : std::true_type {};

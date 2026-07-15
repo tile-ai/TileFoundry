@@ -11,9 +11,9 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.evaluator import evaluate
 from tests.models.qwen3_5_30b_a3b import common
 from tests.models.qwen3_5_30b_a3b.qwen3_module import Qwen3_30B_A3B
+from tilefoundry.evaluator import evaluate
 
 HEAD_DIM = common.HEAD_DIM
 HIDDEN = common.HIDDEN

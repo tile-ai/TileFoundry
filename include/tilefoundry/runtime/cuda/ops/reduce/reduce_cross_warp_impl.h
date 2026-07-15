@@ -46,8 +46,9 @@ template <class Op, class Axes> struct CrossWarp {
                 acc = -INFINITY;
                 for (int w = 0; w < warps_per_group; ++w)
                     acc = fmaxf(
-                        acc, static_cast<float>(ws(
-                                 ((group_start + w) * 32 + lane) * n_cells + j)));
+                        acc,
+                        static_cast<float>(
+                            ws(((group_start + w) * 32 + lane) * n_cells + j)));
             } else if constexpr (std::is_same_v<Op, sum_op>) {
                 acc = 0.f;
                 for (int w = 0; w < warps_per_group; ++w)

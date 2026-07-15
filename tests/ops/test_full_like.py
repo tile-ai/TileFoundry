@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import torch
 
-from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tests.ops.eval_utils import EvalCase, run_eval_case
+from tilefoundry.ir.hir.tensor.full_like import FullLike
 
 
 def test_full_like_evaluate():

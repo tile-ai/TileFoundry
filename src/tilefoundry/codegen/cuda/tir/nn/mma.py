@@ -16,7 +16,6 @@ from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cu
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.cuda.nn.mma import Mma
 
-
 # MmaOpSpec.name → runtime entry. One handler today; a new instruction adds a
 # row here, no change to the Mma op / T.mma surface.
 _MMA_RUNTIME = {

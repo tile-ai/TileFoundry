@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import torch
 
+from tests.ops.eval_utils import EvalCase, run_eval_case
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir.math.unary import Unary
-from tests.ops.eval_utils import EvalCase, run_eval_case
 
 
 def test_rsqrt_evaluate():

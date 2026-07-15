@@ -31,7 +31,7 @@ class LinkedModule:
     kernels: tuple[KernelInfo, ...]
 
 
-def _render_cmakelists(*, name: str, includes: list[str], device_options: str) -> str:
+def _render_cmakelists(*, name: str, includes: list[str], device_options: str, cuda_arch: str) -> str:
     """Render the split-pipeline CMake project from its Jinja template."""
     # noqa lazy: jinja2 is already a codegen dep; import here keeps the linker
     # load path light and avoids a hard import at module load.
@@ -47,7 +47,7 @@ def _render_cmakelists(*, name: str, includes: list[str], device_options: str) -
         keep_trailing_newline=True,
     )
     return env.get_template("CMakeLists.txt.j2").render(
-        name=name, includes=includes, device_options=device_options
+        name=name, includes=includes, device_options=device_options, cuda_arch=cuda_arch
     )
 
 
@@ -69,6 +69,7 @@ def link_modules(
     nvcc: str = "nvcc",
     host_cxx: str = "g++",
     extra_nvcc_flags: tuple[str, ...] = (),
+    cuda_arch: str = "90",
     include_dirs: tuple[Path, ...] = (),
 ) -> LinkedModule:
     """Separately compile a device ``cu`` module and a host ``cpp`` module, then
@@ -97,8 +98,9 @@ def link_modules(
     (workdir / "device.cu").write_text(cu[0].source)
     (workdir / "host.cpp").write_text(cpp[0].source)
 
-    # Device include set + nvcc flags. ``-arch=sm_80`` is supplied by the CMake
-    # target's ``CUDA_ARCHITECTURES 80``; ``-fPIC`` by ``POSITION_INDEPENDENT_CODE``;
+    # Device include set + nvcc flags. The arch is parameterized: the CMake
+    # target's ``CUDA_ARCHITECTURES {cuda_arch}`` emits both ``compute_<arch>``
+    # PTX and ``sm_<arch>`` SASS; ``-fPIC`` by ``POSITION_INDEPENDENT_CODE``;
     # ``-static-libstdc++`` by the template's link options. The host compiler
     # reuses the same include set.
     tvm_inc = _tvm_ffi_include()
@@ -108,6 +110,7 @@ def link_modules(
         name=lib_name,
         includes=[str(p) for p in includes],
         device_options=device_options,
+        cuda_arch=cuda_arch,
     )
     (workdir / "CMakeLists.txt").write_text(cmake_text)
 

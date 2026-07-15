@@ -16,7 +16,7 @@ import torch
 
 import tilefoundry
 from tilefoundry import module, prim_func
-from tilefoundry.dsl import DimVar, Tensor, T
+from tilefoundry.dsl import DimVar, T, Tensor
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType

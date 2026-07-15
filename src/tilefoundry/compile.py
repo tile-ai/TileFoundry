@@ -220,6 +220,7 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     # here rather than raising.
     grid, block = _derive_launch_config(kernel_fns[0].body)
 
+    cuda_arch = cuda_group[0].target.arch.removeprefix("sm_")
     linked_module = link_modules(
         (device_module, host_module),
         workdir=workdir,
@@ -227,6 +228,7 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
         entry=entry_type,
         launch_config=LaunchConfig(grid=grid, block=block),
         kernels=kernels,
+        cuda_arch=cuda_arch,
     )
     return load_linked_module(linked_module)
 

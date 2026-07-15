@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.ops.typeinfer_utils import infer_call, mesh, sharded, ten
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -21,7 +22,6 @@ from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard.shard_layout import Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
-from tests.ops.typeinfer_utils import infer_call, mesh, sharded, ten
 
 _F = DType.f32
 _M = mesh((4,))

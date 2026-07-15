@@ -15,13 +15,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tilefoundry.dsl.storage import gmem, rmem
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
-from tilefoundry.ir.types.shard.shard_layout import Split
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
@@ -29,6 +22,13 @@ from tests.ops.typeinfer_utils import (
     run_typeinfer_case,
     ten,
 )
+from tilefoundry.dsl.storage import gmem, rmem
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
+from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.shard.shard_layout import Split
 
 
 def _ten(shape, storage=gmem, layout=None):
