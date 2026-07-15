@@ -44,11 +44,17 @@ class TypeInferContext:
     ``verify_stmt`` handler (the stmt walk sets it before dispatch), so a
     mesh-scoped op (``Mma`` atom-scope, ``Sync``) can verify against its
     enclosing meshes without the generic verify importing those op classes.
+
+    ``elaboration_cache`` is ``ir.hir.function.elaborate``'s
+    (template id, arg types) -> instance memo, shared by reference across
+    one elaboration walk (and by the parser across one parse session) so
+    repeated call sites collapse onto the same instance.
     """
 
     module: Any = None
     cache: dict[Expr, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
+    elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
 
     def type_of(self, expr: Expr) -> Type:
         cached = self.cache.get(expr)

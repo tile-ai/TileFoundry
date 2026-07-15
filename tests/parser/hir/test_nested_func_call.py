@@ -116,6 +116,42 @@ def test_wildcard_chain_reelaborates_nested_call_target() -> None:
     assert tgt.body.type == x_split
 
 
+def test_two_parse_time_call_sites_share_target_instance() -> None:
+    # Two call sites of the same template with identical arg types must
+    # reference the same Function instance (identity), not just an equal one.
+    @func
+    def leaf2(x: Tensor[(N,), "f32"]) -> Tensor[(N,), "f32"]:
+        return add(x, x)  # noqa: F821
+
+    @func
+    def outer_two_calls(x: Tensor[(N,), "f32"]) -> Tensor[(N,), "f32"]:
+        p = leaf2(x)
+        q = leaf2(x)
+        return add(p, q)  # noqa: F821
+
+    body = outer_two_calls.body
+    assert body.args[0].target is body.args[1].target
+
+
+def test_reelaboration_same_args_share_target_instance() -> None:
+    # Same property under re-elaboration: the elaboration cache scoped to
+    # one elaborate() tree walk must dedup identical-typed call sites too.
+    @func
+    def leaf3(x: Tensor[(8, 64), "f32"]) -> Tensor[(8, 64), "f32"]:
+        return add(x, x)  # noqa: F821
+
+    @func
+    def outer_two_calls_split(x: Tensor[(8, 64), "f32"]) -> Tensor[(8, 64), "f32"]:
+        p = leaf3(x)
+        q = leaf3(x)
+        return add(p, q)  # noqa: F821
+
+    x_split = sharded((8, 64), (Split(0),), mesh((4,)))
+    inst = elaborate(outer_two_calls_split, (x_split,))
+    body = inst.body
+    assert body.args[0].target is body.args[1].target
+
+
 def test_arg_type_mismatch_rejected_at_typeinfer() -> None:
     # Callee declares ``Tensor[(N,), "f32"]`` but caller passes
     # ``Tensor[(N,), "bf16"]`` — typeinfer must surface the

@@ -161,7 +161,9 @@ def elaborate(
     envelope-matched, untouched by this function) and whenever every bound
     parameter type already equals the callee's current parameter type
     (dedup — an allowed optimization, not a semantic). ``call``, when
-    given, anchors an arity/bind error's location.
+    given, anchors an arity/bind error's location. Within one construction
+    session (``ctx.elaboration_cache``), repeated (callee, arg_types) call
+    sites reuse the same rebuilt instance.
     """
     if ctx is None:
         ctx = TypeInferContext()
@@ -181,6 +183,11 @@ def elaborate(
         return callee
     if all(bt == p.type for bt, p in zip(bound_types, callee.params)):
         return callee
+
+    cache_key = (id(callee), arg_types)
+    cached = ctx.elaboration_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     new_params = tuple(
         Var(type=bt, name=p.name) for bt, p in zip(bound_types, callee.params)
@@ -266,9 +273,9 @@ def elaborate(
                 return expr
             return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
 
-    body_ctx = TypeInferContext(module=ctx.module)
+    body_ctx = TypeInferContext(module=ctx.module, elaboration_cache=ctx.elaboration_cache)
     new_body = _Elaborator(body_ctx).visit(callee.body)
-    return Function.build(
+    instance = Function.build(
         name=callee.name,
         params=new_params,
         body=new_body,
@@ -277,6 +284,8 @@ def elaborate(
         specializations=callee.specializations,
         target=callee.target,
     )
+    ctx.elaboration_cache[cache_key] = instance
+    return instance
 
 
 @register_typeinfer(Function)

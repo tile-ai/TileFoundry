@@ -119,6 +119,15 @@ callee (`variants != ()`, `body is None`) is not elaborated: the call's
 result is the declared `return_type` and the `None` body is never inspected
 (variant selection is **Shape dispatch and specializations** below).
 
+Elaboration memoizes per construction session — one parser run, or one
+top-level `elaborate` call and every nested call it re-elaborates — keyed
+on (callee, argument types): two call sites of the same callee with
+identical argument types MUST resolve to the identical `Function`
+instance, not merely an equal one, so a viewer/printer keyed on instance
+identity renders one node per distinct specialization. The memo is
+session-local state, not module or process state; it carries nothing
+across sessions.
+
 **Signature annotation `Layout.strides` materialization.** A
 `Tensor[..., (sugar)]` annotation on a parameter or return appears
 at the kernel boundary, where the underlying engine is a shared
