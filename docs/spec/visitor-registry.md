@@ -238,8 +238,11 @@ class AccessRelationResult:
 
 The op's bounded iteration domain as an `isl.set`. Static iteration
 extents are constant constraints (`0 <= i < N`); a dynamic extent is an
-isl parameter (one per `DimVar`). The domain's rank is fixed and is read
-from the input types.
+isl parameter — one per `DimVar`, or an affine combination of such
+parameters. An extent that is not itself affine in isl (e.g. a floor
+division) binds to a fresh opaque isl parameter instead, keyed so the same
+extent always binds to the same parameter. The domain's rank is fixed and
+is read from the input types.
 
 #### `maps`
 

@@ -6,7 +6,7 @@ import pytest
 
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar
+from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMul, DimVar, simplify_dim
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult
 from tilefoundry.visitor_registry.relation_build import (
     build_domain,
@@ -46,10 +46,32 @@ def test_build_domain_rank0():
     assert dom.dim(isl.dim_type.SET) == 0
 
 
-def test_build_domain_non_affine_extent_raises():
+def test_build_domain_floordiv_binds_opaque_param():
     M = DimVar("M", 1, 4096)
-    floordiv = Call(type=_I64, target=DimFloorDiv(), args=(M, Constant(type=_I64, value=4)))
-    with pytest.raises(NotImplementedError, match="DimFloorDiv"):
+    floordiv = simplify_dim(DimFloorDiv, (M, 4))
+    dom = build_domain((floordiv,))
+    # The dividend's bound [1, 4096) derives the opaque parameter's own
+    # bound: M // 4 in [1 // 4, (4096 - 1) // 4 + 1) == [0, 1024).
+    assert dom.dim(isl.dim_type.PARAM) == 1
+    assert dom.dim(isl.dim_type.SET) == 1
+    name = dom.get_dim_name(isl.dim_type.PARAM, 0)
+    assert f"0 <= {name} <= 1023" in str(dom)
+
+
+def test_build_domain_floordiv_same_expr_dedups_param():
+    M = DimVar("M", 1, 4096)
+    floordiv = simplify_dim(DimFloorDiv, (M, 4))
+    # The same canonicalized DimFloorDiv used for two extents in one call
+    # binds to a single isl parameter, not two.
+    dom = build_domain((floordiv, floordiv))
+    assert dom.dim(isl.dim_type.PARAM) == 1
+
+
+def test_build_domain_floordiv_symbolic_divisor_raises():
+    M = DimVar("M", 1, 4096)
+    N = DimVar("N", 1, 8)
+    floordiv = Call(type=_I64, target=DimFloorDiv(), args=(M, N))
+    with pytest.raises(NotImplementedError, match="symbolic divisor"):
         build_domain((floordiv,))
 
 
@@ -105,6 +127,32 @@ def test_shape_from_relation_dimvar_param():
     rel = _relation((16, n), "d0, d1")
     # The dynamic axis resolves back to the same DimVar by parameter name.
     assert shape_from_relation((_ten((16, n)),), rel) == (16, n)
+
+
+def test_shape_from_relation_affine_sum_param():
+    n = DimVar("N", 1, 64)
+    plus_one = simplify_dim(DimAdd, (1, n))
+    rel = _relation((plus_one,), "d0")
+    # isl normalizes 1 + n's extent to `n`; the affine inverse rebuilds the
+    # nonzero constant offset back onto it (constant term first, matching
+    # simplify_dim's own argument order).
+    assert shape_from_relation((_ten((plus_one,)),), rel) == (plus_one,)
+
+
+def test_shape_from_relation_scaled_coefficient_param():
+    n = DimVar("N", 1, 64)
+    doubled = simplify_dim(DimMul, (2, n))
+    rel = _relation((doubled,), "d0")
+    assert shape_from_relation((_ten((doubled,)),), rel) == (doubled,)
+
+
+def test_shape_from_relation_floordiv_param():
+    n = DimVar("N", 2048, 1_048_577)
+    quarter = simplify_dim(DimFloorDiv, (n, 4))
+    rel = _relation((quarter,), "d0")
+    # The opaque isl parameter registered for the floordiv resolves back to
+    # the original DimExpr through the same lookup a bare DimVar uses.
+    assert shape_from_relation((_ten((quarter,)),), rel) == (quarter,)
 
 
 def test_shape_from_relation_broadcast_constant_axis():
