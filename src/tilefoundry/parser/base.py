@@ -457,7 +457,18 @@ class BaseExprVisitor:
         # dependency at module load time.
         from tilefoundry.ir.hir.function import elaborate  # noqa: PLC0415
 
-        instance = elaborate(callee, tuple(a.type for a in input_args), self._ctx)
+        # The real Call is built from `instance` below, so it doesn't exist
+        # yet at this point; a surrogate carrying the same loc an explicit
+        # `loc=` keyword would produce lets an arity/bind error report
+        # `at <loc>` instead of the callee's (always-None) own `.loc`.
+        call_for_errors = Call(
+            type=callee.return_type, target=callee, args=input_args,
+            loc=explicit_loc if explicit_loc_given else None,
+        )
+        instance = elaborate(
+            callee, tuple(a.type for a in input_args), self._ctx,
+            call=call_for_errors,
+        )
         call = self._build_call(instance, input_args)
         if explicit_loc_given:
             call = dataclasses.replace(call, loc=explicit_loc)

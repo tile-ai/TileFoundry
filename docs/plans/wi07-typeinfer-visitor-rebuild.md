@@ -282,21 +282,21 @@ argument layout propagates through the whole callee body, including a
       call's rewritten arg types, so `Call.target` — not just `Call.type`
       — reflects the fresh per-call-site instance through a multi-level
       wildcard chain.
-- [ ] step 4.3 D3: thread the originating `Call` through `elaborate()` /
+- [x] step 4.3 D3: thread the originating `Call` through `elaborate()` /
       `_bind_param_type()` (`function.py`) and the parser's pre-Call
       surrogate (`parser/base.py::_build_function_call`) so an
       arity/bind `VerifyError` reports `at <call.loc>` instead of the
       callee's (always-`None`) own `.loc`.
-- [ ] step 4.4 Add regression cases to `tests/ir/test_function_call_typeinfer.py`
+- [x] step 4.4 Add regression cases to `tests/ir/test_function_call_typeinfer.py`
       (D1, D3) and `tests/parser/hir/test_nested_func_call.py` (D2)
       covering the three defects' observable behavior.
 
 #### Acceptance Criteria
 - [x] AC-4-1: `gap-repros/repro_g10b.py::test_d1_carry_loop_propagates_split` passes.
 - [x] AC-4-2: `gap-repros/repro_g10b.py::test_d2_nested_call_target_reelaborated` passes.
-- [ ] AC-4-3: `gap-repros/repro_g10b.py::test_d3_arg_mismatch_error_keeps_call_loc` passes.
+- [x] AC-4-3: `gap-repros/repro_g10b.py::test_d3_arg_mismatch_error_keeps_call_loc` passes.
 <!-- policy_ac:start -->
-- [ ] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
+- [x] No touched C++/CUDA files in this milestone — clang-format gate N/A <!-- policy_ac: clang_format-na -->
 <!-- policy_ac:end -->
 
 ## Execution Preflight

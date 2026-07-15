@@ -19,6 +19,8 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 from tests.ops.typeinfer_utils import infer_call, mesh, sharded, ten
 
 _F = DType.f32
@@ -112,3 +114,13 @@ def test_plain_formal_rejects_dtype_mismatch():
     f = _add_callee(ten((4, 8), _F))
     with pytest.raises(VerifyError, match="shape/dtype mismatch"):
         infer_call(f, ten((4, 8), DType.bf16))
+
+
+def test_bind_error_reports_call_site_loc():
+    # A bind-mismatch VerifyError must report the *call's* loc, not the
+    # callee's own (always-None) .loc.
+    f = _add_callee(sharded((4, 8), (Split(0),), _M))
+    arg = Var(type=ten((4, 8), _F), name="x_arg")
+    call = Call(type=f.return_type, target=f, args=(arg,), loc="y")
+    with pytest.raises(VerifyError, match="at y"):
+        TypeInferVisitor(TypeInferContext()).visit(call)

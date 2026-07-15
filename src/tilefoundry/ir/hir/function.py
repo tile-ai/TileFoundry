@@ -107,20 +107,25 @@ def canonical_specialization_signature(
     return ";".join(parts)
 
 
-def _bind_param_type(ctx, callee: "Function", i: int, param: Var, arg_ty: Type) -> Type:
+def _bind_param_type(
+    ctx, callee: "Function", i: int, param: Var, arg_ty: Type,
+    call: Call | None = None,
+) -> Type:
     """Bind one parameter's elaborated type from the caller's argument type.
 
     A ``layout is None`` ``TensorType`` parameter is a template wildcard —
     the bound type is the argument's own full type (including any
     ``ShardLayout``), once its logical shape/dtype match. Any other
     parameter type is an explicit contract: the argument MUST match it
-    exactly (hir.md §1.1).
+    exactly (hir.md §1.1). ``call``, when given, anchors a bind error's
+    location instead of the callee's own (always ``None``) ``.loc``.
     """
+    error_node = call if call is not None else callee
     p = param.type
     if isinstance(p, TensorType) and isinstance(arg_ty, TensorType) and p.layout is None:
         if arg_ty.shape != p.shape or arg_ty.dtype != p.dtype:
             ctx.error(
-                callee,
+                error_node,
                 f"hir Function call {callee.name!r}: arg {i} shape/dtype "
                 f"mismatch — callee param {param.name!r} expects logical "
                 f"{p.shape} {p.dtype}, got {arg_ty.shape} {arg_ty.dtype}",
@@ -128,7 +133,7 @@ def _bind_param_type(ctx, callee: "Function", i: int, param: Var, arg_ty: Type) 
         return arg_ty
     if arg_ty != p:
         ctx.error(
-            callee,
+            error_node,
             f"hir Function call {callee.name!r}: arg {i} type mismatch — "
             f"callee param {param.name!r} expects {p!r}, got {arg_ty!r}",
         )
@@ -137,6 +142,7 @@ def _bind_param_type(ctx, callee: "Function", i: int, param: Var, arg_ty: Type) 
 
 def elaborate(
     callee: "Function", arg_types: tuple[Type, ...], ctx: TypeInferContext | None = None,
+    call: Call | None = None,
 ) -> "Function":
     """Construct the concrete callee instance for one call site's argument
     types (hir.md §1.1). The template lives at the Python-source level;
@@ -146,7 +152,8 @@ def elaborate(
     ()``/``body is None`` — no body to elaborate; shape dispatch stays
     envelope-matched, untouched by this function) and whenever every bound
     parameter type already equals the callee's current parameter type
-    (dedup — an allowed optimization, not a semantic).
+    (dedup — an allowed optimization, not a semantic). ``call``, when
+    given, anchors an arity/bind error's location.
     """
     if ctx is None:
         ctx = TypeInferContext()
@@ -154,12 +161,12 @@ def elaborate(
     got = len(arg_types)
     if got != expected:
         ctx.error(
-            callee,
+            call if call is not None else callee,
             f"hir Function call {callee.name!r}: arity mismatch — "
             f"callee declares {expected} parameter(s), call passed {got}",
         )
     bound_types = [
-        _bind_param_type(ctx, callee, i, param, arg_ty)
+        _bind_param_type(ctx, callee, i, param, arg_ty, call)
         for i, (param, arg_ty) in enumerate(zip(callee.params, arg_types))
     ]
     if callee.variants or callee.body is None:
@@ -211,6 +218,7 @@ def elaborate(
             if isinstance(call_expr.target, Function):
                 new_target = elaborate(
                     call_expr.target, tuple(a.type for a in new_args), self.body_ctx,
+                    call=call_expr,
                 )
             if not args_changed and new_target is call_expr.target:
                 return call_expr
@@ -276,7 +284,7 @@ def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
     dispatch prototype, whose ``None`` body is never inspected."""
     callee: Function = call.target  # type: ignore[assignment]
     arg_types = tuple(ctx.type_of(a) for a in call.args)
-    instance = elaborate(callee, arg_types, ctx)
+    instance = elaborate(callee, arg_types, ctx, call=call)
     if instance.body is None:
         return instance.return_type
     return TypeInferContext(module=ctx.module).type_of(instance.body)
