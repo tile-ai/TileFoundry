@@ -11,6 +11,8 @@ from typing import Any, Literal
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, TypeInferContext, VerifyError
 from tilefoundry.ir.core.op_registry import _first_schema
 from tilefoundry.ir.core.op_schema import OpSchema
+from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.function import elaborate
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -400,11 +402,6 @@ class BaseExprVisitor:
         ``@func`` evaluates to the ``hir.Function`` directly, so a sibling
         callee binding *is* that Function (see :func:`tilefoundry.script.func`).
         """
-        # Avoid the import cycle: ``tilefoundry.ir.hir`` pulls in registries
-        # at module-import time and re-entering this parser would be
-        # unhealthy. Local-import.
-        from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
-
         val: Any = None
         if isinstance(func, ast.Name):
             val = self.env.lookup(func.id)
@@ -453,10 +450,6 @@ class BaseExprVisitor:
                 f"declares {expected} parameter(s), call passed {got}"
             )
         input_args = tuple(self.expr(a) for a in node.args)
-        # Local import: avoids a parser <-> ir.hir.function import-order
-        # dependency at module load time.
-        from tilefoundry.ir.hir.function import elaborate  # noqa: PLC0415
-
         # The real Call is built from `instance` below, so it doesn't exist
         # yet at this point; a surrogate carrying the same loc an explicit
         # `loc=` keyword would produce lets an arity/bind error report

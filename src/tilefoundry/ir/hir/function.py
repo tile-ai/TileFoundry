@@ -86,6 +86,14 @@ class Function(Expr):
             v.seal()
 
 
+# ir.visitor imports Function from this module at module level; this
+# module-level import is positioned after Function is defined, so
+# whichever of the two modules loads first, the other's back-reference
+# finds an already-bound name instead of hitting a partially-initialized
+# module.
+from tilefoundry.ir.visitor import ExprMutator  # noqa: E402
+
+
 def canonical_specialization_signature(
     specializations: tuple[Pattern, ...],
 ) -> str:
@@ -178,10 +186,6 @@ def elaborate(
         Var(type=bt, name=p.name) for bt, p in zip(bound_types, callee.params)
     )
     subst = {id(old): new for old, new in zip(callee.params, new_params)}
-
-    # Local import: tilefoundry.ir.visitor imports Function from this
-    # module, so a module-level import here would cycle.
-    from tilefoundry.ir.visitor import ExprMutator  # noqa: PLC0415
 
     class _Elaborator(ExprMutator):
         """Rebuild ``callee.body`` under ``subst`` (memoized by node

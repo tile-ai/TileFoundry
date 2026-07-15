@@ -5,7 +5,6 @@ from dataclasses import replace
 from typing import Generic, TypeVar
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -236,6 +235,14 @@ class ExprMutator:
         if all(nc is oc for nc, oc in zip(new_children, children)):
             return expr
         return _rebuild_expr(expr, new_children)
+
+
+# ir.hir.function imports ExprMutator (for its elaboration mutator) at
+# module level, so this module-level import is positioned after
+# ExprMutator is defined: whichever of the two modules loads first, the
+# other's back-reference finds an already-bound name instead of hitting a
+# partially-initialized module.
+from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
