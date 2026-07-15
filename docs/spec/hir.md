@@ -403,11 +403,9 @@ class Unary(Op):
 
 #### `ir/hir/tensor/`
 
-Tensor structural operations; consensus ops follow torch / numpy
+Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
+/ `Stack` / `ShapeOf` / `Rank`) follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
-
-##### Transpose / Slice / Concat / Stack / ShapeOf / Rank
-Consensus torch / numpy structural ops.
 
 ##### Reshape
 ```python
