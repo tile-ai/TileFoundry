@@ -14,7 +14,6 @@ from tests.ops.typeinfer_utils import (
     infer_call,
     mesh,
     run_typeinfer_case,
-    sharded,
     ten,
 )
 from tilefoundry.evaluator import evaluate
@@ -22,8 +21,9 @@ from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.topk import TopK
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, TensorType, TupleType, make_shard_tensor_type
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, Split
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
@@ -76,7 +76,7 @@ CASES = [
     TypeInferCase(
         "split_on_selected_axis_rejected",
         TopK(k=2, axis=-1),
-        (sharded((4, 256), (Split(1),), mesh((4,))),),
+        (make_shard_tensor_type((4, 256), mesh=mesh((4,)), attrs=(Split(1),)),),
         ExpectedError(match="must not be Split-sharded", exc=TypeError),
     ),
 ]
@@ -155,7 +155,7 @@ def test_topk_printer_preserves_largest_sorted():
 def test_topk_output_layout_shrinks_selected_axis_preserving_split():
     """A Split on a non-selected axis must be preserved, and the output shard
     layout's selected axis must shrink to k so size(layout)==size(shape)."""
-    x_ty = sharded((4, 256), (Split(0),), mesh((4,)))  # split axis 0; TopK on axis 1
+    x_ty = make_shard_tensor_type((4, 256), mesh=mesh((4,)), attrs=(Split(0),))  # split axis 0; TopK on axis 1
     out = infer_call(TopK(k=6, axis=-1), x_ty)
     values_ty, indices_ty = out.fields
     assert values_ty.shape == (4, 6) and indices_ty.shape == (4, 6)
@@ -173,7 +173,7 @@ def test_topk_all_broadcast_layout_shrinks_selected_axis():
     """A replicated (all-Broadcast) ShardLayout has no Split/Partial to
     propagate, but its output layout must still shrink the selected axis to k
     (not retain the stale input extent)."""
-    x_ty = sharded((4, 256), (Broadcast(),), mesh((4,)))
+    x_ty = make_shard_tensor_type((4, 256), mesh=mesh((4,)), attrs=(Broadcast(),))
     values_ty, indices_ty = infer_call(TopK(k=6, axis=-1), x_ty).fields
     assert values_ty.shape == (4, 6) and indices_ty.shape == (4, 6)
     for t in (values_ty, indices_ty):
@@ -190,7 +190,13 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
     every post-typeinfer ShardLayout has concrete strides — it materializes
     explicit all-ones strides rather than leaving them None."""
     s = DimVar("S", 1, 64)
-    x_ty = sharded((256, s), (Broadcast(),), mesh((4,)), strides=None)
+    x_ty = TensorType(
+        shape=(256, s), dtype=_F32, storage="gmem",
+        layout=ShardLayout(
+            layout=Layout(shape=(256, s), strides=None),
+            attrs=(Broadcast(),), mesh=mesh((4,)),
+        ),
+    )
     values_ty, indices_ty = infer_call(TopK(k=6, axis=0), x_ty).fields  # select the static axis
     assert values_ty.shape == (6, s) and indices_ty.shape == (6, s)
     for t in (values_ty, indices_ty):

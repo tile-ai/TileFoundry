@@ -70,8 +70,8 @@ _M_SPLIT = Mesh(
 
 
 def build_split_inline_and_default_broadcast_func():
-    """``dim @ mesh.axis`` binds a Split on that cute axis; mesh axes named in
-    no Split default to Broadcast; cute strides auto-fill C-order."""
+    """``dim @ mesh.axis`` binds a Split on that layout axis; mesh axes named in
+    no Split default to Broadcast; layout strides auto-fill C-order."""
 
     @func
     def _f(
@@ -296,7 +296,7 @@ _M_CTA = Mesh(Topology("cta", 128), Layout((128,), (1,)), names=("cta",))
 
 def build_int_at_single_axis_mesh_func():
     """On a single-axis mesh, ``8192 @ cta`` (extent 128) canonicalises into
-    ``(128, 64)`` with the mesh axis bound as a Split on the new cute axis."""
+    ``(128, 64)`` with the mesh axis bound as a Split on the new layout axis."""
 
     @func
     def _f(

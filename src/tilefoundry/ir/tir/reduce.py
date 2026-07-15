@@ -36,6 +36,6 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     dst_ty = ctx.type_of(call.args[1])  # noqa: F841
     # Per-shard reshard lowering may produce rank-N (e.g.
     # ``(1, 1, 1, 8)``) src tensors. The runtime template
-    # (``tilefoundry::ops::reduce<Op, Axes>``) iterates via
-    # ``cute::size(src)`` so rank is no longer relevant at the verifier level —
+    # (``tilefoundry::ops::reduce<Op, Axes>``) iterates via the layout's
+    # ``size(src)`` so rank is no longer relevant at the verifier level —
     # the old rank<=2 guard predates the sharded reduce path.

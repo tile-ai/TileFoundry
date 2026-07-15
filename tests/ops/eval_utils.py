@@ -47,7 +47,7 @@ class EvalCase:
 
 
 def run_eval_case(case: EvalCase) -> None:
-    """Execute one ``EvalCase``: build the op's Function, evaluate on CPU, and
+    """Run one ``EvalCase``: build the op's Function, evaluate on CPU, and
     assert the result matches ``expected``."""
     storages = case.storages or ("gmem",) * len(case.inputs)
     params = tuple(

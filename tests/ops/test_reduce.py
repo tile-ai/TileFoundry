@@ -1,12 +1,13 @@
 """HIR Reduce typeinfer.
 
 The output ``ShardLayout`` of ``Reduce`` collapses every Split that lives on a
-reduced tensor axis into ``Broadcast`` and shrinks the matching cute layout
+reduced tensor axis into ``Broadcast`` and shrinks the matching layout
 positions to size 1 with stride 0 (broadcast view); a Split on a non-reduced
 axis is preserved. An unsharded input passes through.
 """
 from __future__ import annotations
 
+import math
 import re
 
 import pytest
@@ -16,9 +17,9 @@ import tilefoundry
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     TypeInferCase,
+    infer_call,
     mesh,
     run_typeinfer_case,
-    sharded,
     ten,
 )
 from tilefoundry import func, module
@@ -29,12 +30,14 @@ from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, TensorType, make_shard_tensor_type
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
+    ShardLayout,
     Split,
     layout_axis_to_tensor_axis,
+    shard_layout_local_shape,
 )
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
 
@@ -47,80 +50,12 @@ _M = mesh((6, 32), ("w", "t"))
 _MEAN_LAST = Reduce(axes=(-1,), keepdim=True, kind=ReduceKind.MEAN)
 
 CASES = [
-    # Reduced-axis Splits become Broadcast; cute positions on the reduced axis
-    # shrink to size 1 / stride 0 (broadcast view input).
-    TypeInferCase(
-        "reduced_axis_splits_become_broadcast",
-        _MEAN_LAST,
-        (
-            sharded(
-                (1, 1536), (Split(1), Split(2)), _M,
-                cute=(1, 6, 32, 8), strides=(0, 0, 0, 1), dtype=_BF, storage=_RMEM,
-            ),
-        ),
-        sharded(
-            (1, 1), (Broadcast(), Broadcast()), _M,
-            cute=(1, 1, 1, 1), strides=(0, 0, 0, 0), dtype=_BF, storage=_RMEM,
-        ),
-    ),
-    # Same, but the input cute carries a global (non-zero) stride view: reduced
-    # positions are still zeroed.
-    TypeInferCase(
-        "zeroes_reduced_positions_for_global_view",
-        _MEAN_LAST,
-        (
-            sharded(
-                (1, 1536), (Split(1), Split(2)), _M,
-                cute=(1, 6, 32, 8), strides=(1536, 256, 8, 1), dtype=_BF, storage=_RMEM,
-            ),
-        ),
-        sharded(
-            (1, 1), (Broadcast(), Broadcast()), _M,
-            cute=(1, 1, 1, 1), strides=(0, 0, 0, 0), dtype=_BF, storage=_RMEM,
-        ),
-    ),
-    # A Split on the non-reduced axis is preserved; the reduced axis -> Broadcast.
-    TypeInferCase(
-        "preserves_non_reduced_axis_split",
-        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
-        (sharded((16, 32), (Split(0), Split(1)), _M, dtype=_BF, storage=_RMEM),),
-        sharded(
-            (16, 1), (Split(0), Broadcast()), _M,
-            cute=(16, 1), strides=(1, 0), dtype=_BF, storage=_RMEM,
-        ),
-    ),
-    # keepdim=False pops the reduced axis from the shape; the layout still
-    # broadcasts the reduced positions.
-    TypeInferCase(
-        "keepdim_false_pops_shape",
-        Reduce(axes=(1,), keepdim=False, kind=ReduceKind.MEAN),
-        (
-            sharded(
-                (1, 1536), (Split(1), Split(2)), _M,
-                cute=(1, 6, 32, 8), strides=(1536, 256, 8, 1), dtype=_BF, storage=_RMEM,
-            ),
-        ),
-        sharded(
-            (1,), (Broadcast(), Broadcast()), _M,
-            cute=(1, 1, 1, 1), strides=(0, 0, 0, 0), dtype=_BF, storage=_RMEM,
-        ),
-    ),
     # Unsharded input passes through (no layout).
     TypeInferCase(
         "unsharded_passes_through",
         Reduce(axes=(0,), keepdim=True, kind=ReduceKind.SUM),
         (ten((8, 16), DType.f32, storage=_RMEM),),
         ten((1, 16), DType.f32, storage=_RMEM),
-    ),
-    # Implicit (None) strides reduce to a fresh C-order output (no None indexing).
-    TypeInferCase(
-        "implicit_strides_fresh_output",
-        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
-        (sharded((16, 32), (Split(0), Split(1)), _M, strides=None, dtype=_BF, storage=_RMEM),),
-        sharded(
-            (16, 1), (Split(0), Broadcast()), _M,
-            cute=(16, 1), strides=(1, 0), dtype=_BF, storage=_RMEM,
-        ),
     ),
 ]
 
@@ -130,8 +65,92 @@ def test_reduce_typeinfer(case):
     run_typeinfer_case(case)
 
 
+# ── sharded carries ───────────────────────────────────────────────────────
+# Reduce shrinks every reduced-axis layout position to size 1 / stride 0
+# (broadcast view) while preserving the layout's own rank, so these cases
+# check output shape and which mesh axis stays genuinely `Split` vs collapses
+# to `Broadcast`, not the internal layout position count a valid `Reduce`
+# happens to produce.
+
+
+def _attr_kinds(ty) -> tuple:
+    return tuple(type(a).__name__ for a in ty.layout.attrs)
+
+
+def _split_local_extents(ty) -> list:
+    local = shard_layout_local_shape(ty.layout)
+    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
+
+
+def test_reduced_axis_splits_become_broadcast():
+    """Reduced-axis Splits become Broadcast; layout positions on the reduced
+    axis shrink to size 1 / stride 0 (broadcast-view input)."""
+    x_ty = TensorType(
+        shape=(1, 1536), dtype=_BF, storage=_RMEM,
+        layout=ShardLayout(
+            layout=Layout(shape=(1, 6, 32, 8), strides=(0, 0, 0, 1)),
+            attrs=(Split(1), Split(2)), mesh=_M,
+        ),
+    )
+    ty = infer_call(_MEAN_LAST, x_ty)
+    assert tuple(ty.shape) == (1, 1)
+    assert _attr_kinds(ty) == ("Broadcast", "Broadcast")
+
+
+def test_zeroes_reduced_positions_for_global_view():
+    """Same, but the input layout carries a global (non-zero) stride view:
+    reduced positions are still zeroed."""
+    x_ty = make_shard_tensor_type(
+        (1, 1536), mesh=_M, attrs=(Split(1), Split(1)), dtype=_BF, storage=_RMEM,
+    )
+    ty = infer_call(_MEAN_LAST, x_ty)
+    assert tuple(ty.shape) == (1, 1)
+    assert _attr_kinds(ty) == ("Broadcast", "Broadcast")
+
+
+def test_preserves_non_reduced_axis_split():
+    """A Split on the non-reduced axis is preserved; the reduced axis ->
+    Broadcast."""
+    x_ty = make_shard_tensor_type(
+        (12, 32), mesh=_M, attrs=(Split(0), Split(1)), dtype=_BF, storage=_RMEM,
+    )
+    ty = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), x_ty)
+    assert tuple(ty.shape) == (12, 1)
+    assert _attr_kinds(ty) == ("Split", "Broadcast")
+    assert _split_local_extents(ty) == [1]
+
+
+def test_keepdim_false_pops_shape():
+    """keepdim=False pops the reduced axis from the shape; the layout still
+    broadcasts the reduced positions."""
+    x_ty = make_shard_tensor_type(
+        (1, 1536), mesh=_M, attrs=(Split(1), Split(1)), dtype=_BF, storage=_RMEM,
+    )
+    ty = infer_call(Reduce(axes=(1,), keepdim=False, kind=ReduceKind.MEAN), x_ty)
+    assert tuple(ty.shape) == (1,)
+    assert _attr_kinds(ty) == ("Broadcast", "Broadcast")
+
+
+def test_implicit_strides_fresh_output():
+    """Implicit (None) strides reduce to a fresh, concretely-strided output
+    (no None indexing); the non-reduced axis's Split survives, the reduced
+    axis becomes Broadcast."""
+    x_ty = TensorType(
+        shape=(12, 32), dtype=_BF, storage=_RMEM,
+        layout=ShardLayout(
+            layout=Layout(shape=(12, 32), strides=None),
+            attrs=(Split(0), Split(1)), mesh=_M,
+        ),
+    )
+    ty = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), x_ty)
+    assert tuple(ty.shape) == (12, 1)
+    assert _attr_kinds(ty) == ("Split", "Broadcast")
+    assert ty.layout.layout.strides is not None
+    assert math.prod(ty.layout.layout.shape) == math.prod(ty.shape)
+
+
 def test_layout_axis_to_tensor_axis_factorized() -> None:
-    # tensor (1, 1536) with cute (1, 6, 32, 8): cute pos 0 -> axis 0; 1/2/3 -> axis 1.
+    # tensor (1, 1536) with layout (1, 6, 32, 8): layout pos 0 -> axis 0; 1/2/3 -> axis 1.
     assert layout_axis_to_tensor_axis((1, 6, 32, 8), (1, 1536)) == [0, 1, 1, 1]
 
 
@@ -203,18 +222,22 @@ _MESH_B = mesh((4, 32), ("tk", "hc"), topology=_THREAD_B)
 
 
 def _case_a_src_dst():
-    src = sharded((1, 1536), (Split(1), Split(2)), _MESH_A,
-                  cute=(1, 6, 32, 8), strides=(1536, 256, 8, 1), dtype=_BF, storage=_RMEM)
-    dst = sharded((1, 1), (Broadcast(), Broadcast()), _MESH_A,
-                  cute=(1, 1, 1, 1), strides=(0, 0, 0, 0), dtype=_BF, storage=_RMEM)
+    src = make_shard_tensor_type(
+        (1, 1536), mesh=_MESH_A, attrs=(Split(1), Split(1)), dtype=_BF, storage=_RMEM,
+    )
+    dst = make_shard_tensor_type(
+        (1, 1), mesh=_MESH_A, attrs=(Broadcast(), Broadcast()), dtype=_BF, storage=_RMEM,
+    )
     return src, dst
 
 
 def _case_b_src_dst():
-    src = sharded((4, 32), (Split(0), Split(1)), _MESH_B,
-                  cute=(4, 32), strides=(32, 1), dtype=_BF, storage=_RMEM)
-    dst = sharded((1, 32), (Broadcast(), Split(1)), _MESH_B,
-                  cute=(1, 32), strides=(0, 1), dtype=_BF, storage=_RMEM)
+    src = make_shard_tensor_type(
+        (4, 32), mesh=_MESH_B, attrs=(Split(0), Split(1)), dtype=_BF, storage=_RMEM,
+    )
+    dst = make_shard_tensor_type(
+        (1, 32), mesh=_MESH_B, attrs=(Broadcast(), Split(1)), dtype=_BF, storage=_RMEM,
+    )
     return src, dst
 
 
@@ -241,8 +264,9 @@ def test_analyze_rejects_cross_cta_reduce():
         names=("c", "t"),
         topologies=(Topology("cta", 2), Topology("thread", 32)),
     )
-    src = sharded((2, 32), (Split(0), Split(1)), mesh_cta,
-                  cute=(2, 32), strides=(32, 1), dtype=_BF, storage=_RMEM)
+    src = make_shard_tensor_type(
+        (2, 32), mesh=mesh_cta, attrs=(Split(0), Split(1)), dtype=_BF, storage=_RMEM,
+    )
     with pytest.raises(NotImplementedError, match="cross-CTA"):
         _analyze_cross_warp_workspace(src, (0,))
 

@@ -129,7 +129,7 @@ class TestModuleRoundTrip:
                 # Per the sugar canonicalization rule, sugar ``N @ m.a``
                 # with N > mesh_extent(a) expands into the factorised pair on
                 # re-parse, so fn1 (built via constructor in legacy form) and
-                # fn2 (round-tripped through sugar) may differ in cute shape
+                # fn2 (round-tripped through sugar) may differ in layout shape
                 # rank. The Split-bearing layout-axis index is preserved by
                 # canonicalization (Split(k) stays Split(k)); only residual
                 # Broadcast dims may be appended.

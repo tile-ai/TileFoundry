@@ -43,7 +43,7 @@ def _c_order_strides(shape: tuple) -> tuple:
 def _shared_engine_strides(sl: ShardLayout) -> tuple:
     """Shared-engine strides for *sl*.
 
-    Strides are plain C-order over the canonical (unsharded) cute
+    Strides are plain C-order over the canonical (unsharded) layout
     shape ``sl.layout.shape``; multiple instances index a single
     underlying engine at disjoint offsets ``i · S[k]``.
     """
@@ -52,7 +52,7 @@ def _shared_engine_strides(sl: ShardLayout) -> tuple:
 def _per_instance_strides(sl: ShardLayout) -> tuple[int, ...]:
     """Per-instance strides for *sl*.
 
-    For each cute dim ``k``:
+    For each layout dim ``k``:
 
     - If some mesh axis has ``Split(k)`` → ``S[k] = 0`` (each instance
       gets a distinct engine; the mesh-axis contribution to the
@@ -193,5 +193,5 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Reshard)
 def _eval_reshard(ctx):
     # Value-preserving: the logical value is unchanged; only the type's
-    # layout / storage are updated (sharding distribution is not executed).
+    # layout / storage are updated (sharding distribution is not performed).
     return TensorValue(data=ctx.args[0].data, type=ctx.result_type)

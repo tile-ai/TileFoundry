@@ -345,7 +345,7 @@ from tilefoundry.ir.tir.stmts import (  # noqa: E402
     MeshScope,
     Sequential,
 )
-from tilefoundry.ir.types.shard import Layout as ShardCuteLayout  # noqa: E402
+from tilefoundry.ir.types.shard import Layout as ShardMeshLayout  # noqa: E402
 from tilefoundry.passes.transforms import HirToTirPass  # noqa: E402
 
 _DEC_D = 4
@@ -492,7 +492,7 @@ class _CrossCtaReshardOutput:
 
     @func(topologies=(Topology("cta", 2),))
     def xreshard(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_D), "f32"]:
-        with Mesh(topology="cta", layout=ShardCuteLayout(shape=(2,), strides=(1,))) as cta:
+        with Mesh(topology="cta", layout=ShardMeshLayout(shape=(2,), strides=(1,))) as cta:
             g1 = reshard(a, layout=(2 @ cta, _DEC_D), storage=gmem)
             return reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
 

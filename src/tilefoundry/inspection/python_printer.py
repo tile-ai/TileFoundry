@@ -110,7 +110,7 @@ def _shard_layout_surface_str(
     - ``((dims), {mesh.axis @ P(...)})``  value-state (Partial) set
     - ``((dims), (strides), {...})``      explicit strides + value-state
 
-    ``Split`` is inlined on its cute dim; ``Partial`` is a mesh-axis value
+    ``Split`` is inlined on its layout dim; ``Partial`` is a mesh-axis value
     state rendered in the ``{...}`` set; ``Broadcast`` is omitted. Returns
     ``None`` when the layout cannot be expressed in sugar (verbose fallback).
     """
@@ -182,7 +182,7 @@ def shard_compact_inline(
     Returns ``(split_ref_by_tensor_axis, partials)`` — a dict from tensor axis to
     the ``mesh.axis`` reference plus the ordered partial-suffix entries — or
     ``None`` when the layout cannot be inlined onto the tensor shape (a tensor
-    axis split across more than one cute position, an out-of-range or unknown
+    axis split across more than one layout position, an out-of-range or unknown
     attr, or a rank mismatch), in which case the caller falls back to canonical.
 
     Shares the ``Split`` / ``Partial`` / ``Broadcast`` classification and the
@@ -205,7 +205,7 @@ def shard_compact_inline(
                 return None
             t_axis = la2ta[attr.axis]
             if t_axis in split_ref:
-                return None  # tensor axis split across multiple cute positions
+                return None  # tensor axis split across multiple layout positions
             split_ref[t_axis] = axis_ref
         elif isinstance(attr, Partial):
             partials.append(f'{axis_ref} @ P("{attr.reduction or "sum"}")')

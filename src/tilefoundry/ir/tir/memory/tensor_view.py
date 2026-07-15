@@ -24,7 +24,7 @@ from tilefoundry.ir.types.shard.layout import Layout
 class TensorView(Op):
     """Derive a sub-view of a tensor (value form).
 
-    ``layout`` updates the ``ShardLayout`` / cute ``Layout``; the optional
+    ``layout`` updates the ``ShardLayout`` / ``Layout``; the optional
     ``shape`` overrides the logical shape (reshape). ``memory`` MAY be a
     ``PtrOf`` result (ptr + offset).
     """

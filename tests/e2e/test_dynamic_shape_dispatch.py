@@ -3,7 +3,7 @@
 A ``pass``-bodied ``main`` prototype declares a single envelope
 ``DimVar('S', 1, 8)`` on a 1-D input tensor; two ``main.specialize``
 variants partition it (half-open ranges ``[lo, hi)``). The runtime tensor
-shape selects which variant executes:
+shape selects which variant runs:
 
 - ``S in [1, 4)`` (1..3) → ``mul(x, x)`` (element-wise square).
 - ``S in [4, 8)`` (4..7) → ``add(x, x)`` (element-wise double).

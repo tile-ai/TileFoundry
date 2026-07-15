@@ -13,10 +13,9 @@ import pytest
 
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -44,29 +43,6 @@ def mesh(layout_shape, names=None, topology="gpu") -> Mesh:
         layout=Layout(shape=tuple(layout_shape), strides=_c_order(layout_shape)),
         names=tuple(names),
         topologies=(topology,),
-    )
-
-
-_DEFAULT = object()
-
-
-def sharded(
-    shape, attrs, mesh, *, cute=None, strides=_DEFAULT, dtype=DType.f32, storage="gmem"
-) -> TensorType:
-    """A sharded ``TensorType``. ``cute`` defaults to the tensor shape and
-    ``strides`` to C-order over the cute shape, so a test states only the parts
-    that matter (shape, attrs, mesh). Pass ``strides=None`` for an explicitly
-    un-materialized (implicit-stride) layout."""
-    cute = tuple(shape if cute is None else cute)
-    if strides is _DEFAULT:
-        strides = _c_order(cute)
-    elif strides is not None:
-        strides = tuple(strides)
-    return TensorType(
-        shape=tuple(shape),
-        dtype=dtype,
-        layout=ShardLayout(layout=Layout(shape=cute, strides=strides), attrs=tuple(attrs), mesh=mesh),
-        storage=storage,
     )
 
 
@@ -148,7 +124,7 @@ def assert_type(actual, expected) -> None:
 
 
 def run_typeinfer_case(case: TypeInferCase) -> None:
-    """Execute one ``TypeInferCase``: assert the output type or the error."""
+    """Run one ``TypeInferCase``: assert the output type or the error."""
     if isinstance(case.expected, ExpectedError):
         with pytest.raises(case.expected.exc, match=case.expected.match):
             infer_call(case.op, *case.inputs)

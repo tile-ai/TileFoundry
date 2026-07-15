@@ -1,6 +1,6 @@
 """IntTuple alias + helpers.
 
-CuTe-style nested int tuples (ints or tuples thereof). Used by `Layout`
+Nested int tuples (ints or tuples thereof). Used by `Layout`
 shape / stride arguments, whose entries may also be symbolic / dynamic dims
 (a ``ShapeDim``) or ``None`` for a launch-provided extent; the ``flatten`` /
 ``product`` helpers here are for the fully-static case. Consumers needing a

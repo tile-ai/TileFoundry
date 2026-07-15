@@ -11,11 +11,10 @@ from tests.ops.typeinfer_utils import (
     TypeInferCase,
     mesh,
     run_typeinfer_case,
-    sharded,
     ten,
 )
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, make_shard_tensor_type
 from tilefoundry.ir.types.shard.shard_layout import Split
 
 _F = DType.f32
@@ -32,7 +31,7 @@ CASES = [
     TypeInferCase(
         "sharded_drops_layout",
         Slice(begin=(0, 0), end=(16, 16), strides=(1, 1)),
-        (sharded((16, 32), (Split(0),), _M),),
+        (make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),)),),
         ten((16, 16), _F),
     ),
 ]

@@ -95,19 +95,19 @@ op/relation:
 
 **Propagation.** Per input mesh axis, by its attr:
 
-1. `Split(k)` — map cute axis `k` to the input's logical tensor axis,
+1. `Split(k)` — map layout axis `k` to the input's logical tensor axis,
    then to a domain dim via the input access map.
 2. If that domain dim appears in the output access map, the output
    carries `Split` on the **output layout axis** the domain dim maps to.
 3. If that domain dim is a reduction dim, the output mesh axis becomes
    `Partial(reduction)` when the effect is `partial`, or `Broadcast`
    when the effect is `complete`. The resulting `Partial` carries no
-   cute axis — it is a value state on that mesh axis.
+   layout axis — it is a value state on that mesh axis.
 4. `Partial(reduction)` input — propagates on the **same mesh axis**:
    propagate unchanged when the dataflow is homogeneous in `reduction`;
    resolve to `Broadcast` via an explicit reduction / allreduce over that
    axis; error on a non-homogeneous use or an unreduced function
-   output / return. There is no cute-axis mapping for a `Partial`.
+   output / return. There is no layout-axis mapping for a `Partial`.
 5. A `Broadcast` (size-1) input axis contributes no `Split`.
 6. Two inputs binding the same domain dim to incompatible mesh axes is
    an error.
@@ -129,9 +129,9 @@ reads only the access maps' affine structure (which domain dim each
 axis uses), never the domain bounds, so it is size-agnostic and
 identical for static and dynamic shapes.
 
-**Owner axis.** `Split(axis)` indexes an **output layout (cute) axis**,
+**Owner axis.** `Split(axis)` indexes an **output layout axis**,
 not the logical tensor axis. A reduction-induced `Partial` attaches to no
-cute axis — it is a value state on the mesh axis that was reduced.
+layout axis — it is a value state on the mesh axis that was reduced.
 
 ### 3.3 Output storage and mesh/layout compatibility
 

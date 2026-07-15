@@ -246,8 +246,8 @@ A valid participant set maps to exactly one hardware barrier:
 
 Codegen MUST guard the `__syncwarp(mask)` and `bar.sync` cases with the
 participant predicate `base <= tid < base+count` (`tid =
-program_id<thread>()`): a non-participant thread MUST NOT execute the barrier,
-and every participant MUST execute the same id and count.
+program_id<thread>()`): a non-participant thread MUST NOT run the barrier,
+and every participant MUST run with the same id and count.
 
 The first four rows synchronize threads **within one block**; their participant
 set is the contiguous thread interval above. A mesh whose topologies are all the
@@ -751,14 +751,14 @@ fragment layouts the per-target lowering chooses
 ([hir §1.3](./hir.md#irhirnn), [passes](./passes.md)). An MMA atom fixes a
 concrete hardware instruction, so the whole MMA surface is **target-owned**:
 the `Mma` op and the `MmaOpSpec` / `MmaAtom` descriptors
-(`tilefoundry.ir.tir.cuda.nn`, mirroring the CuTe `MMA_Op` → `MMA_Atom`
+(`tilefoundry.ir.tir.cuda.nn`, mirroring the vendored `MMA_Op` → `MMA_Atom`
 layering), the concrete instructions, and their fragment layouts all live
 under `tilefoundry.ir.tir.cuda.nn.mma` / `mma_atom`, following IR's dialect-first
 layout `ir/{dialect}/{target}/{category}`.
 
 ##### `MmaOpSpec`
 
-A named, fully-specified MMA instruction (the CuTe `MMA_Op` analog).
+A named, fully-specified MMA instruction (the vendored `MMA_Op` analog).
 
 ```python
 class MmaOpSpec:
@@ -807,7 +807,7 @@ class MmaOpSpec:
 
 ##### `MmaAtom`
 
-The realized atom for an `op` (the CuTe `MMA_Atom` analog), built by
+The realized atom for an `op` (the vendored `MMA_Atom` analog), built by
 `T.cuda.mma.atom(op=...)`
 ([parser §2.6](./parser.md#26-platform-sub-namespaces)).
 

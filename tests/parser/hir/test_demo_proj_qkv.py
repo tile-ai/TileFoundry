@@ -101,7 +101,7 @@ def proj_qkv_with_mma(
 ) -> Tensor[(16, 8), "f32"]:
     # One warp (32 threads, mesh shape (4, 8)) iterating the K dimension
     # in 16-wide tiles. Each iteration loads A and B fragments into the
-    # SM80 16x8x16 cute layouts and runs the matching mma atom. Carry-out
+    # SM80 16x8x16 layouts and runs the matching mma atom. Carry-out
     # via ``add(acc, mma(...))`` accumulates the C fragment across the
     # K-tile loop. Layouts use the parser sugar (axis-tuple,
     # stride-tuple) form with named mesh axes ``warp.x`` (size 4) and
@@ -176,7 +176,7 @@ def _module_demo_main(
 #     python tests/dsl/test_demo_proj_qkv.py
 #     python tests/dsl/test_demo_proj_qkv.py --fixture subset
 #
-# pytest does not execute the ``if __name__ == "__main__"`` block, so
+# pytest does not run the ``if __name__ == "__main__"`` block, so
 # this stays a side-channel utility and does not interfere with CI.
 
 

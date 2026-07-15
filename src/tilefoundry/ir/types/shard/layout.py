@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Layout:
-    """Cute-style layout: shape + per-axis cute strides."""
+    """Layout: shape + per-axis strides."""
 
     shape: tuple["ShapeDim | None", ...]
     strides: Optional[tuple["ShapeDim", ...]] = None
@@ -17,10 +17,11 @@ class Layout:
 
 @dataclass(frozen=True)
 class ComposedLayout:
-    """CuTe composed layout: ``image(c) = inner(offset + outer(c))``.
+    """Composed layout: ``image(c) = inner(offset + outer(c))``.
 
-    Field order + names mirror CuTeDSL ``make_composed_layout(inner, offset,
-    outer)`` (``third_party/cutlass/python/CuTeDSL/cutlass/cute/core.py``):
+    Field order + names mirror the reference composed-layout constructor
+    ``make_composed_layout(inner, offset, outer)`` (``third_party/cutlass``,
+    composed-layout core):
 
     - ``outer`` — applied **first** (domain / input side); the domain shape and
       axis numbering of the composition come from ``outer``, so a binding
@@ -28,7 +29,7 @@ class ComposedLayout:
     - ``offset`` — intermediate scalar offset added before ``inner``.
     - ``inner`` — applied **last** (codomain / output side).
 
-    The left inverse reverses the composition (see CuTe
+    The left inverse reverses the composition (see the reference
     ``layout_composed.hpp`` ``left_inverse``):
     ``image⁻¹(t) = outer⁻¹(inner⁻¹(t) − offset)``.
     """

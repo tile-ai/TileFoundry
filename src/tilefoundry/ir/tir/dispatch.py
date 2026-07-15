@@ -1,7 +1,7 @@
 """``tir.DispatchCall`` — pattern-based first-match dispatch op.
 
 The i-th ``case_patterns`` matches against ``subjects`` (by position);
-the first matching case executes ``case_calls[i]``. No match runs
+the first matching case runs ``case_calls[i]``. No match runs
 ``fallback``. Source order is part of the IR contract.
 """
 from __future__ import annotations

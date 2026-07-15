@@ -29,7 +29,7 @@ from tilefoundry.ir.types.shard import (
     Topology,
 )
 
-# A 3-axis mesh; ``l`` splits a cute dim and ``t`` carries a Partial value state.
+# A 3-axis mesh; ``l`` splits a layout dim and ``t`` carries a Partial value state.
 _TRD = Mesh(
     Topology("thread", 4 * 2 * 16), Layout((4, 2, 16), (32, 16, 1)), names=("l", "g", "t")
 )

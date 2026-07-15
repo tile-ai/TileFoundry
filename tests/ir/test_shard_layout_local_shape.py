@@ -32,10 +32,10 @@ def test_seq2_canonical() -> None:
 
 
 def test_rmsnorm_single_axis_two_splits() -> None:
-    """rmsnorm: global ``(1, 1536)`` with two Splits on cute dim 1
+    """rmsnorm: global ``(1, 1536)`` with two Splits on layout dim 1
     (y=4, t=32 both splitting axis 1) — wait, that's the old
     convention. Under new spec, layout.shape should be the
-    unsharded shape per attrs. A simple single-cute-dim case:
+    unsharded shape per attrs. A simple single-layout-dim case:
     global ``(128,)`` with two mesh axes (y=4, t=32) both splitting
     axis 0 → per-thread ``(1,)``."""
     mesh = Mesh(
@@ -62,13 +62,13 @@ def test_broadcast_does_not_divide() -> None:
         attrs=(Broadcast(), Split(0)),
         mesh=mesh,
     )
-    # Only t (mesh axis 1, extent 4) splits cute dim 0.
+    # Only t (mesh axis 1, extent 4) splits layout dim 0.
     assert shard_layout_local_shape(sl) == (1,)
 
 
-def test_partial_does_not_divide_cute_dim() -> None:
-    """``Partial`` is a mesh-axis value state with no cute axis: it does
-    NOT divide any cute dim (each shard keeps the full local shape)."""
+def test_partial_does_not_divide_layout_dim() -> None:
+    """``Partial`` is a mesh-axis value state with no layout axis: it does
+    NOT divide any layout dim (each shard keeps the full local shape)."""
     mesh = Mesh(
         topology=Topology("thread", 4),
         layout=Layout(shape=(4,), strides=(1,)),

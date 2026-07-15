@@ -50,20 +50,20 @@ class ShardLayout:
 
 
 def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
-    """Derive the per-thread local cute shape from a global
+    """Derive the per-thread local layout shape from a global
     ``ShardLayout``.
 
 . ``sl.layout.shape`` is the global / unsharded
-    cute layout shape; this helper divides each cute dim by its bound
-    ``Split`` mesh extent to produce the per-thread local cute shape.
+    layout shape; this helper divides each layout dim by its bound
+    ``Split`` mesh extent to produce the per-thread local layout shape.
 
     - ``Split(k)`` on mesh axis ``i`` divides ``layout.shape[k]`` by
       ``mesh.layout.shape[i]``.
     - ``Partial`` / ``Broadcast`` / ``Dynamic`` attrs do not consume any
-      cute dim. A ``Partial`` mesh axis holds an un-reduced partial of the
-      full value, so each shard keeps the full local cute shape.
+      layout dim. A ``Partial`` mesh axis holds an un-reduced partial of the
+      full value, so each shard keeps the full local layout shape.
 
-    Multiple ``Split`` attrs on the same cute dim multiply their
+    Multiple ``Split`` attrs on the same layout dim multiply their
     divisors together.
     """
     mesh_shape = sl.mesh.layout.shape
@@ -100,21 +100,21 @@ def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
 def layout_axis_to_tensor_axis(
     layout_shape: tuple, tensor_shape: tuple
 ) -> list[int]:
-    """Map each cute ``Layout`` position to the logical tensor axis it lives
+    """Map each ``Layout`` position to the logical tensor axis it lives
     within.
 
-    Convention: cute layout positions are consumed left-to-right; each tensor
-    axis ``k`` claims as many cute positions as needed to accumulate to
-    ``tensor_shape[k]``. Trailing cute positions (if any) attach to the last
+    Convention: layout positions are consumed left-to-right; each tensor
+    axis ``k`` claims as many layout positions as needed to accumulate to
+    ``tensor_shape[k]``. Trailing layout positions (if any) attach to the last
     tensor axis. Singleton tensor axes (``tensor_shape[k] == 1``) claim exactly
-    one cute position (which must also be size 1 by construction).
+    one layout position (which must also be size 1 by construction).
 
     Example — ``tensor_shape=(1, 1536)`` + ``layout_shape=(1, 6, 32, 8)``::
 
-        cute pos 0 (size 1)  -> tensor axis 0
-        cute pos 1 (size 6)  -> tensor axis 1 (running 6)
-        cute pos 2 (size 32) -> tensor axis 1 (running 192)
-        cute pos 3 (size 8)  -> tensor axis 1 (running 1536)
+        layout pos 0 (size 1)  -> tensor axis 0
+        layout pos 1 (size 6)  -> tensor axis 1 (running 6)
+        layout pos 2 (size 32) -> tensor axis 1 (running 192)
+        layout pos 3 (size 8)  -> tensor axis 1 (running 1536)
     """
     result: list[int] = []
     layout_idx = 0
@@ -122,7 +122,7 @@ def layout_axis_to_tensor_axis(
         try:
             t_dim_int = int(t_dim.value) if hasattr(t_dim, "value") else int(t_dim)
         except (TypeError, ValueError):
-            # Symbolic dim — attach all remaining cute positions here and stop.
+            # Symbolic dim — attach all remaining layout positions here and stop.
             while layout_idx < len(layout_shape):
                 result.append(t_axis)
                 layout_idx += 1

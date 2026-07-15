@@ -54,7 +54,7 @@ class LaunchAttrs:
 
 @dataclass(frozen=True)
 class LaunchConfig:
-    """Launch configuration authored in the IR (CuTeDSL ``.launch`` shape).
+    """Launch configuration authored in the IR (a ``.launch``-style grid/block shape).
 
     ``grid`` / ``block`` (and ``cluster`` when present) are 3-tuples of
     compile-time launch extents — ``ShapeDim`` (an ``int``, a ``DimVar``, or a

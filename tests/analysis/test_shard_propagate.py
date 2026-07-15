@@ -40,7 +40,7 @@ def _shard(shape, *attrs) -> ShardLayout:
 
 
 def test_rhs_n_split_to_output_split():
-    # rhs[K,N] split on N (cute axis 1) -> output Split on N (out axis 1).
+    # rhs[K,N] split on N (layout axis 1) -> output Split on N (out axis 1).
     rhs_t = _ten((4, 8), layout=_shard((4, 8), Split(1)))
     out = derive_output_shard_layout(
         (_ten((16, 4)), rhs_t), _matmul_relation(), (16, 8)
@@ -57,9 +57,9 @@ def test_lhs_m_split_to_output_split():
 
 
 def test_k_split_to_partial():
-    # Both lhs[M,K] (K = cute axis 1) and rhs[K,N] (K = cute axis 0) split on K
+    # Both lhs[M,K] (K = layout axis 1) and rhs[K,N] (K = layout axis 0) split on K
     # -> the Split of the contraction dim becomes a mesh-axis Partial value
-    # state on that mesh axis (no cute axis).
+    # state on that mesh axis (no layout axis).
     lhs_t = _ten((16, 4), layout=_shard((16, 4), Split(1)))
     rhs_t = _ten((4, 8), layout=_shard((4, 8), Split(0)))
     out = derive_output_shard_layout(
@@ -107,7 +107,7 @@ def _elementwise_relation() -> AccessRelationResult:
 
 def test_two_mesh_axes_on_same_output_axis_factorize():
     # lhs splits tensor axis 0 on mesh axis a, rhs splits tensor axis 0 on mesh
-    # axis b -> the output factorizes axis 0 into two cute sub-positions (one
+    # axis b -> the output factorizes axis 0 into two layout sub-positions (one
     # per mesh extent), each bound by its own mesh axis.
     lhs_t = _ten((4, 8), layout=_shard2((4, 8), Split(0), Broadcast()))
     rhs_t = _ten((4, 8), layout=_shard2((4, 8), Broadcast(), Split(0)))
@@ -120,7 +120,7 @@ def test_two_mesh_axes_on_same_output_axis_factorize():
 
 def test_carry_candidates_disagree_falls_through_to_synthesis():
     # Two full-shape inputs realise the same logical sharding (axis 0 split on
-    # both mesh axes) with different cute factorizations: lhs (2,2,2), rhs
+    # both mesh axes) with different layout factorizations: lhs (2,2,2), rhs
     # (2,4). The carry branch must not arbitrarily pick the first operand; it
     # falls through to the canonical synthesis, which is order-independent.
     lhs = _ten((8,), layout=_shard2((2, 2, 2), Split(0), Split(1)))
@@ -166,7 +166,7 @@ def test_input_partial_propagates_to_output_partial():
     ident = isl.map("{ [m, n] -> [m, n] }")
     rel = AccessRelationResult(domain=build_domain((4, 8)), maps=(ident, ident))
     # 2-axis mesh: a Partial value state on mesh axis 0 carries to the output on
-    # the same mesh axis (it has no cute axis).
+    # the same mesh axis (it has no layout axis).
     x_t = _ten((4, 8), layout=_shard2((4, 8), Partial("sum"), Broadcast()))
     out = derive_output_shard_layout((x_t,), rel, (4, 8))
     assert out.attrs == (Partial("sum"), Broadcast())

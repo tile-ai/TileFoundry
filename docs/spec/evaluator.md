@@ -1,6 +1,6 @@
 # TileFoundry Spec — evaluator (HIR reference interpreter)
 
-The evaluator executes a HIR `Function`'s SSA-DAG on a tensor backend
+The evaluator runs a HIR `Function`'s SSA-DAG on a tensor backend
 and returns concrete values. It is a codegen-independent reference
 oracle for parser output, type inference, and op value semantics; it
 does not lower to TIR or invoke codegen / runtime.

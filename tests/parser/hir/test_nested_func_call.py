@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.ops.typeinfer_utils import mesh, sharded
+from tests.ops.typeinfer_utils import mesh
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import (  # noqa: F401 — binds bare ``add``, ``mul``
@@ -30,6 +30,7 @@ from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.function import elaborate
+from tilefoundry.ir.types import make_shard_tensor_type
 from tilefoundry.ir.types.shard.shard_layout import Split
 
 # ---------------------------------------------------------------------------
@@ -108,7 +109,7 @@ def test_wildcard_chain_reelaborates_nested_call_target() -> None:
     def outer_fn(x: Tensor[(8, 64), "f32"]) -> Tensor[(8, 64), "f32"]:
         return mid(x)
 
-    x_split = sharded((8, 64), (Split(0),), mesh((4,)))
+    x_split = make_shard_tensor_type((8, 64), mesh=mesh((4,)), attrs=(Split(0),))
     new_outer = elaborate(outer_fn, (x_split,))
     tgt = new_outer.body.target
     assert tgt is not mid
@@ -146,7 +147,7 @@ def test_reelaboration_same_args_share_target_instance() -> None:
         q = leaf3(x)
         return add(p, q)  # noqa: F821
 
-    x_split = sharded((8, 64), (Split(0),), mesh((4,)))
+    x_split = make_shard_tensor_type((8, 64), mesh=mesh((4,)), attrs=(Split(0),))
     inst = elaborate(outer_two_calls_split, (x_split,))
     body = inst.body
     assert body.args[0].target is body.args[1].target

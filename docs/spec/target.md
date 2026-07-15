@@ -80,9 +80,9 @@ target group.
   also performs the `DispatchCall` selection (§6).
 - A `cuda`-target function emits the **device translation unit**: a
   `__global__` kernel plus its C-ABI launch shim. An operand's layout selects
-  how it is viewed inside the kernel — `cute::` for a plain `Layout`,
-  `tilefoundry::` shard tensor for a `ShardLayout` (§8) — it does not change the
-  function into a `__device__`-parameter function.
+  how it is viewed inside the kernel — a plain vendored tensor/layout view for a
+  plain `Layout`, a `tilefoundry::` shard tensor for a `ShardLayout` (§8) — it
+  does not change the function into a `__device__`-parameter function.
 
 ## 6. Dispatch and shape-scalar ABI
 
@@ -143,10 +143,11 @@ A `ShardLayout` ([shard §7](./shard.md)) on a TIR tensor type is materialised
 through `tilefoundry::make_shard_tensor(buffer, global_layout, shard_layout)`
 ([runtime](./runtime.md)). A handler that consumes a sharded operand emits the
 shard-tensor view; effect Ops then route through `tilefoundry::` runtime helpers
-(for example `tilefoundry::copy`) instead of plain `cute::` primitives. A plain
-`Layout` operand goes through `cute::` directly. The selection is handler-local,
+(for example `tilefoundry::copy`) instead of the plain vendored-layout primitives
+directly. A plain `Layout` operand goes through the vendored-layout primitives
+directly. The selection is handler-local,
 based on `arg.type.layout`.
 
 Codegen consumes the `ShardLayout` already present on the TIR tensor type; the
-cute MMA fragment → `ShardLayout` recipe that produces it is owned by the
+vendored MMA fragment → `ShardLayout` recipe that produces it is owned by the
 lowering pass ([passes.md §7.1](./passes.md#71-hirtotirpass)).

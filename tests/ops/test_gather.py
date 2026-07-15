@@ -13,7 +13,6 @@ from tests.ops.typeinfer_utils import (
     infer_call,
     mesh,
     run_typeinfer_case,
-    sharded,
     ten,
 )
 from tilefoundry import func
@@ -21,7 +20,7 @@ from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import gather
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.gather import Gather
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, make_shard_tensor_type
 from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 from tilefoundry.passes.transforms import HirToTirPass
 
@@ -72,15 +71,15 @@ TYPEINFER_CASES = [
 
 # ── sharded input, shard-attr migration ───────────────────────────────────
 #
-# Gather output is a new tensor: the internal cute layout is always natural
+# Gather output is a new tensor: the internal layout is always natural
 # contiguous over the output shape, so these check tensor shape and shard
-# attrs (the actual contract) rather than the derived cute layout.
+# attrs (the actual contract) rather than the derived layout.
 
 
 def test_gather_shard_mid_axis_scalar_drops_position():
     """Split on axis 0 (untouched by an axis-1 gather) carries through
     unchanged."""
-    ty = infer_call(Gather(axis=1), sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32))
+    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((), DType.i32))
     assert tuple(ty.shape) == (6, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -88,7 +87,7 @@ def test_gather_shard_mid_axis_scalar_drops_position():
 def test_gather_shard_mid_axis_single_index_keeps_unit():
     """A ``(1,)``-shaped index keeps the middle axis at size 1; the Split on
     axis 0 is still unaffected."""
-    ty = infer_call(Gather(axis=1), sharded((6, 4, 8), (Split(0),), _M), ten((1,), DType.i32))
+    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((1,), DType.i32))
     assert tuple(ty.shape) == (6, 1, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -96,7 +95,7 @@ def test_gather_shard_mid_axis_single_index_keeps_unit():
 def test_gather_shard_leading_axis_scalar_remaps_split():
     """A non-sharded LEADING axis scalar-gather renumbers the Split from axis
     1 -> 0 (axis 0 is removed by the gather)."""
-    ty = infer_call(Gather(axis=0), sharded((6, 4, 8), (Split(1),), _M), ten((), DType.i32))
+    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(1),)), ten((), DType.i32))
     assert tuple(ty.shape) == (4, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -105,7 +104,7 @@ def test_gather_shard_axis_gather_derives_partial():
     """A gather ALONG the Split (sharded) axis is a masked-gather: every
     device already holds a zero-filled partial of the gathered rows, so the
     output sums to the true gather across that mesh axis."""
-    ty = infer_call(Gather(axis=0), sharded((6, 4, 8), (Split(0),), _M), ten((), DType.i32))
+    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((), DType.i32))
     assert tuple(ty.shape) == (4, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (
         Partial(reduction="sum"),
@@ -117,7 +116,7 @@ def test_gather_shard_multi_index_with_split_elsewhere_derives():
     Split elsewhere in the layout: every device holds the full gathered axis
     locally, so the Split on the OTHER axis carries through, renumbered for
     the idx axes inserted at the gathered position."""
-    ty = infer_call(Gather(axis=1), sharded((6, 4, 8), (Split(0),), _M), ten((1, 1), DType.i32))
+    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((1, 1), DType.i32))
     assert tuple(ty.shape) == (6, 1, 1, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -292,13 +291,13 @@ BATCHED_TYPEINFER_CASES = [
     TypeInferCase(
         "sharded_source_batched_gather_not_implemented",
         Gather(axis=1, batch_dims=1),
-        (sharded((6, 4, 8), (Split(0),), _M), ten((6, 2), DType.i32)),
+        (make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((6, 2), DType.i32)),
         ExpectedError(match="Gather: batched gather .* sharded operand", exc=NotImplementedError),
     ),
     TypeInferCase(
         "sharded_index_batched_gather_not_implemented",
         Gather(axis=1, batch_dims=1),
-        (ten((6, 4, 8), DType.f32), sharded((6, 2), (Split(0),), _M, dtype=DType.i32)),
+        (ten((6, 4, 8), DType.f32), make_shard_tensor_type((6, 2), mesh=_M, attrs=(Split(0),), dtype=DType.i32)),
         ExpectedError(match="Gather: batched gather .* sharded operand", exc=NotImplementedError),
     ),
 ]

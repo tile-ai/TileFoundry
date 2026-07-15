@@ -1,6 +1,6 @@
 """RepeatInterleave typeinfer: the named axis grows by ``repeats``.
 
-The growing axis invalidates the input cute layout, so a sharded layout is not
+The growing axis invalidates the input layout, so a sharded layout is not
 carried: an unsharded or fully-replicated input yields an unsharded output, and
 a genuinely-sharded input fails closed rather than emit a stale layout.
 """
@@ -15,11 +15,10 @@ from tests.ops.typeinfer_utils import (
     TypeInferCase,
     mesh,
     run_typeinfer_case,
-    sharded,
     ten,
 )
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, make_shard_tensor_type
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
 
 _F = DType.f32
@@ -36,14 +35,14 @@ CASES = [
     TypeInferCase(
         "replicated_drops_to_none",
         RepeatInterleave(repeats=2, axis=1),
-        (sharded((4, 8), (Broadcast(),), _M),),
+        (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Broadcast(),)),),
         ten((4, 16), _F),
     ),
     # a genuine sharding cannot be re-expressed across the repeat -> fail closed.
     TypeInferCase(
         "sharded_fails_closed",
         RepeatInterleave(repeats=2, axis=1),
-        (sharded((4, 8), (Split(0),), _M),),
+        (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),)),),
         ExpectedError(match="cannot express a sharded layout"),
     ),
     TypeInferCase(
