@@ -9,15 +9,31 @@ from .space import EdgeOption, NodeOption, ScheduleSpace
 
 @dataclass(frozen=True, slots=True)
 class CostEstimate:
-    duration: float
-    bytes: int = 0
+    duration_ns: int
+    traffic_bytes: int = 0
     flops: int = 0
+    compute_time_ns: int = 0
+    memory_time_ns: int = 0
 
     def __post_init__(self) -> None:
-        if not math.isfinite(self.duration) or self.duration < 0:
-            raise ValueError("cost duration must be finite and non-negative")
-        if self.bytes < 0 or self.flops < 0:
-            raise ValueError("cost work values must be non-negative")
+        if self.duration_ns < 0 or self.traffic_bytes < 0 or self.flops < 0:
+            raise ValueError("cost values must be non-negative")
+        if not all(math.isfinite(float(value)) for value in (
+            self.duration_ns,
+            self.traffic_bytes,
+            self.flops,
+            self.compute_time_ns,
+            self.memory_time_ns,
+        )):
+            raise ValueError("cost values must be finite")
+
+    @property
+    def duration(self) -> float:
+        return float(self.duration_ns)
+
+    @property
+    def bytes(self) -> int:
+        return self.traffic_bytes
 
 
 class CostModel(Protocol):
@@ -32,12 +48,6 @@ class CostModel(Protocol):
 class CostTable:
     node_costs: tuple[tuple[int, CostEstimate], ...]
     edge_costs: tuple[tuple[int, CostEstimate], ...]
-
-    def __post_init__(self) -> None:
-        if len({option_id for option_id, _ in self.node_costs}) != len(self.node_costs):
-            raise ValueError("CostTable node option IDs must be unique")
-        if len({option_id for option_id, _ in self.edge_costs}) != len(self.edge_costs):
-            raise ValueError("CostTable edge option IDs must be unique")
 
     def node(self, option_id: int) -> CostEstimate:
         for candidate_id, estimate in self.node_costs:
@@ -56,15 +66,13 @@ class CostTable:
 
 
 def build_cost_table(space: ScheduleSpace, model: CostModel, context) -> CostTable:
-    node_costs = tuple(
-        (option.id, model.estimate_node(option, context))
-        for option in space.node_options
+    table = CostTable(
+        node_costs=tuple((option.id, model.estimate_node(option, context)) for option in space.node_options),
+        edge_costs=tuple((option.id, model.estimate_edge(option, context)) for option in space.edge_options),
     )
-    edge_costs = tuple(
-        (option.id, model.estimate_edge(option, context))
-        for option in space.edge_options
-    )
-    return CostTable(node_costs=node_costs, edge_costs=edge_costs)
+    if not all(math.isfinite(float(estimate.duration_ns)) for estimate in table.all()):
+        raise ValueError("cost model returned a non-finite estimate")
+    return table
 
 
 __all__ = ["CostEstimate", "CostModel", "CostTable", "build_cost_table"]

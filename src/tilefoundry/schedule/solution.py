@@ -1,32 +1,52 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
-from .space import EdgeKind, PlacementOption
+from .candidate import Submesh
+from .space import EdgeKind
+
+
+@dataclass(frozen=True, slots=True)
+class OpPlacement:
+    start_ns: int
+    end_ns: int
+    submesh: Submesh
+
+    def __post_init__(self) -> None:
+        if self.start_ns < 0 or self.end_ns < self.start_ns:
+            raise ValueError("operation placement times must be ordered and non-negative")
 
 
 @dataclass(frozen=True, slots=True)
 class NodeAssignment:
     node: int
+    candidate: int
     option: int
-    placement: PlacementOption
-    start_time: float
-    end_time: float
+    placement: OpPlacement
 
-    def __post_init__(self) -> None:
-        if not math.isfinite(self.start_time) or not math.isfinite(self.end_time):
-            raise ValueError("node assignment times must be finite")
-        if self.start_time < 0 or self.end_time < self.start_time:
-            raise ValueError("node assignment times must be ordered and non-negative")
+    @property
+    def start_ns(self) -> int:
+        return self.placement.start_ns
+
+    @property
+    def end_ns(self) -> int:
+        return self.placement.end_ns
+
+    @property
+    def start_time(self) -> int:
+        return self.start_ns
+
+    @property
+    def end_time(self) -> int:
+        return self.end_ns
 
     @property
     def axis_starts(self) -> tuple[int, ...]:
-        return self.placement.axis_starts
+        return self.placement.submesh.offsets
 
     @property
     def axis_extents(self) -> tuple[int, ...]:
-        return self.placement.axis_extents
+        return self.placement.submesh.extents
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,32 +54,29 @@ class EdgeAssignment:
     use: int
     option: int
     kind: EdgeKind
-    start_time: float
-    end_time: float
+    start_ns: int
+    end_ns: int
 
-    def __post_init__(self) -> None:
-        if not math.isfinite(self.start_time) or not math.isfinite(self.end_time):
-            raise ValueError("edge assignment times must be finite")
-        if self.start_time < 0 or self.end_time < self.start_time:
-            raise ValueError("edge assignment times must be ordered and non-negative")
+    @property
+    def start_time(self) -> int:
+        return self.start_ns
+
+    @property
+    def end_time(self) -> int:
+        return self.end_ns
 
 
 @dataclass(frozen=True, slots=True)
 class ScheduleSolution:
     node_assignments: tuple[NodeAssignment, ...]
     edge_assignments: tuple[EdgeAssignment, ...]
-    makespan: float
+    makespan_ns: int
     problem_fingerprint: str
+    status: str = "OPTIMAL"
 
-    def __post_init__(self) -> None:
-        if not self.problem_fingerprint:
-            raise ValueError("ScheduleSolution requires a problem fingerprint")
-        if not math.isfinite(self.makespan) or self.makespan < 0:
-            raise ValueError("ScheduleSolution makespan must be finite and non-negative")
-        if len({item.node for item in self.node_assignments}) != len(self.node_assignments):
-            raise ValueError("ScheduleSolution has duplicate node assignments")
-        if len({item.use for item in self.edge_assignments}) != len(self.edge_assignments):
-            raise ValueError("ScheduleSolution has duplicate edge assignments")
+    @property
+    def makespan(self) -> int:
+        return self.makespan_ns
 
     @property
     def assignments(self) -> tuple[NodeAssignment, ...]:
@@ -82,8 +99,4 @@ class ScheduleSolution:
         raise KeyError(use_id)
 
 
-__all__ = [
-    "EdgeAssignment",
-    "NodeAssignment",
-    "ScheduleSolution",
-]
+__all__ = ["EdgeAssignment", "NodeAssignment", "OpPlacement", "ScheduleSolution"]

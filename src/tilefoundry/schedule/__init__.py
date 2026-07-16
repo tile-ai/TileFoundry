@@ -1,14 +1,3 @@
-from .constraints import (
-    AgentConstraint,
-    AgentConstraintsMetadata,
-    ConstraintProvenance,
-    LayoutConstraint,
-    LayoutDimConstraint,
-    LayoutDimKind,
-    PartialConstraint,
-    SourceLocation,
-)
-from .fingerprint import logical_fingerprint
 from .candidate import (
     CandidateTable,
     DistributionError,
@@ -21,6 +10,19 @@ from .candidate import (
     WorkEstimate,
     generate_distribution_candidates,
 )
+from .constraints import (
+    AgentConstraint,
+    AgentConstraintsMetadata,
+    ConstraintProvenance,
+    LayoutConstraint,
+    LayoutDimConstraint,
+    LayoutDimKind,
+    PartialConstraint,
+    SourceLocation,
+)
+from .context import ScheduleContext
+from .cost import CostEstimate, CostModel, CostTable, build_cost_table
+from .fingerprint import logical_fingerprint
 from .graph import (
     CallInstance,
     FunctionRegion,
@@ -33,6 +35,24 @@ from .graph import (
     ProgramScheduleGraphBuilder,
     ScheduleGraphError,
     build_program_schedule_graph,
+)
+from .solution import EdgeAssignment, NodeAssignment, OpPlacement, ScheduleSolution
+from .solver import (
+    CpSatScheduleSolver,
+    ScheduleInfeasibleError,
+    SolveOptions,
+    SolveProblem,
+    problem_fingerprint,
+)
+from .space import (
+    EdgeKind,
+    EdgeOption,
+    NodeOption,
+    PhysicalRepresentation,
+    PlacementOption,
+    Resource,
+    ScheduleSpace,
+    build_schedule_space,
 )
 
 __all__ = [
@@ -55,6 +75,28 @@ __all__ = [
     "UnsupportedDistributionError",
     "WorkEstimate",
     "generate_distribution_candidates",
+    "ScheduleContext",
+    "CostEstimate",
+    "CostModel",
+    "CostTable",
+    "build_cost_table",
+    "EdgeKind",
+    "EdgeOption",
+    "NodeOption",
+    "PhysicalRepresentation",
+    "PlacementOption",
+    "Resource",
+    "ScheduleSpace",
+    "build_schedule_space",
+    "EdgeAssignment",
+    "NodeAssignment",
+    "OpPlacement",
+    "ScheduleSolution",
+    "CpSatScheduleSolver",
+    "ScheduleInfeasibleError",
+    "SolveOptions",
+    "SolveProblem",
+    "problem_fingerprint",
     "CallInstance",
     "FunctionRegion",
     "GraphConstraint",

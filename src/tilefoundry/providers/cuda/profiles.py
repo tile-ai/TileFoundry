@@ -34,7 +34,11 @@ def h200_sxm_profiles(arch: str) -> tuple[CudaArchitectureProfile, CudaDevicePro
             ("f16", 494.5e12),
             ("f32", 67.0e12),
             ("fp8e4m3", 989.0e12),
+            ("f8e8m0", 67.0e12),
             ("f4e2m1", 1_978.0e12),
+            ("i32", 67.0e12),
+            ("i64", 67.0e12),
+            ("bool", 67.0e12),
         ),
     )
     device = CudaDeviceProfile(name="h200_sxm", sm_count=132, hbm_bandwidth=4.8e12)
