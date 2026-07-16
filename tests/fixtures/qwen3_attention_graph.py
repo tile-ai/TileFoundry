@@ -451,4 +451,5 @@ def build_qwen3_attention_main_2cta_headnorm():
 # AllReduce lives outside the ``tilefoundry.ir.hir.*`` auto-import tree, so
 # we route it through ``@register_op`` explicitly using the OpSchema path.
 from tilefoundry.ir.core.register import register_op  # noqa: E402
+
 register_op(dialect="tf", category="sharding", name="all_reduce")(AllReduce)
