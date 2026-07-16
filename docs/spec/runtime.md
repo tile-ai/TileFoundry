@@ -388,7 +388,7 @@ Let `t: ShardTensor`, `sl = t.shard_layout`, `S = sl.layout.strides`,
 
 - `t.engine` is the per-instance cute tensor / view; `t.engine.data()`
   is the base ptr the current instance already holds.
-- `sl.layout.shape` is the canonical cute shape
+- `sl.layout.shape` is the canonical layout shape
   ([shard §7.1.1](./shard.md#711-layoutshape)).
 - `S` is storage-physical
   ([shard §7.1.2](./shard.md#712-layoutstrides)).

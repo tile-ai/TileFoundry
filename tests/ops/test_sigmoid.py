@@ -8,17 +8,17 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
-    mesh,
     run_typeinfer_case,
-    sharded,
 )
 from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
+from tilefoundry.ir.types import make_shard_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
 
 _OP = Sigmoid()
-_M = mesh((4,))
-_PSUM = sharded((16, 8), (Partial("sum"),), _M)
-_PMAX = sharded((16, 8), (Partial("max"),), _M)
+_M = make_mesh((4,))
+_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
+_PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 
 PARTIAL_CASES = [
     # sigmoid is monotone increasing: commutes with max/min, not sum.

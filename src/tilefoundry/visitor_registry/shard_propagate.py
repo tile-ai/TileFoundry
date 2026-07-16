@@ -102,10 +102,10 @@ def _carrier_layout(
     complete_reduction_dims,
     fresh_strides,
 ):
-    """Transform one input's cute ``ShardLayout`` into the output layout when
+    """Transform one input's ``ShardLayout`` into the output layout when
     that input's relation covers every output axis.
 
-    Each input cute position is routed to an output axis via its domain dim
+    Each input layout position is routed to an output axis via its domain dim
     (input map projection → output map projection); positions are emitted in
     output-axis order (preserving identity, applying a permutation, or
     collapsing a completely-reduced axis to size 1). Strides are carried from
@@ -115,14 +115,14 @@ def _carrier_layout(
     so a partial contributor never wins over the synthesis path.
     """
     sl = input_type.layout
-    cute = sl.layout
-    la2ta_in = layout_axis_to_tensor_axis(cute.shape, input_type.shape)
+    layout = sl.layout
+    la2ta_in = layout_axis_to_tensor_axis(layout.shape, input_type.shape)
     in_access = _result_access(input_map)
     out_access = _result_access(output_map)
     dom_to_out = {d: o for o, (k, d) in out_access.items() if k == "proj"}
 
     pos_dom: list = []
-    for p in range(len(cute.shape)):
+    for p in range(len(layout.shape)):
         kind, ddim = in_access[la2ta_in[p]]
         if kind != "proj":
             return None
@@ -137,7 +137,7 @@ def _carrier_layout(
             per_axis[dom_to_out[ddim]].append(p)
         elif ddim in complete_reduction_dims:
             # Reduced dim with no kept output axis (keepdim=False): the position
-            # is retained as a collapsed size-1 cute axis, trailing onto the
+            # is retained as a collapsed size-1 layout axis, trailing onto the
             # last surviving output axis (dropped only for a scalar output).
             if out_rank:
                 per_axis[out_rank - 1].append(p)
@@ -146,7 +146,7 @@ def _carrier_layout(
 
     new_shape: list = []
     new_pos_of: dict[int, int] = {}
-    src_pos: list = []  # the input cute position each new position came from, or None
+    src_pos: list = []  # the input layout position each new position came from, or None
     for o in range(out_rank):
         positions = per_axis[o]
         if not positions:
@@ -156,7 +156,7 @@ def _carrier_layout(
         for p in positions:
             reduced = pos_dom[p] in complete_reduction_dims
             new_pos_of[p] = len(new_shape)
-            new_shape.append(1 if reduced else cute.shape[p])
+            new_shape.append(1 if reduced else layout.shape[p])
             src_pos.append(None if reduced else p)
     if fresh_strides:
         # Fresh output buffer (e.g. Reduce): C-order strides over the new shape,
@@ -166,13 +166,13 @@ def _carrier_layout(
             0 if (isinstance(sz, int) and sz == 1) else cc
             for sz, cc in zip(new_shape, c)
         ]
-    elif cute.strides is None:
+    elif layout.strides is None:
         new_strides = None  # input is an implicit-stride layout: stay implicit
     else:
         # View transform (e.g. Transpose): carry each position's input stride;
         # collapsed / placeholder positions get stride 0.
         new_strides = [
-            0 if p is None else cute.strides[p] for p in src_pos
+            0 if p is None else layout.strides[p] for p in src_pos
         ]
 
     out_attrs: list = [Broadcast() for _ in range(mesh_rank)]
@@ -184,12 +184,12 @@ def _carrier_layout(
         ):
             out_attrs[p_mesh] = Split(new_pos_of[attr.axis])
         elif isinstance(attr, Partial):
-            # A Partial is a mesh-axis value state with no cute axis; it carries
+            # A Partial is a mesh-axis value state with no layout axis; it carries
             # through on the same mesh axis unchanged.
             out_attrs[p_mesh] = Partial(attr.reduction)
 
     # The carrier must realise exactly the full propagated sharding: map its
-    # output cute attrs back to output tensor axes and compare.
+    # output layout attrs back to output tensor axes and compare.
     la2ta_out = layout_axis_to_tensor_axis(tuple(new_shape), tuple(output_shape))
     mapped: list = [Broadcast() for _ in range(mesh_rank)]
     for p_mesh, attr in enumerate(out_attrs):
@@ -247,7 +247,7 @@ def derive_output_shard_layout(
         in_access = _result_access(input_maps[i])
         for p, attr in enumerate(sl.attrs):
             if isinstance(attr, Partial):
-                # A Partial is a mesh-axis value state (no cute axis); an ordinary
+                # A Partial is a mesh-axis value state (no layout axis); an ordinary
                 # op carries it through on the same mesh axis (no silent loss).
                 # It is discharged only by an explicit reduction/allreduce.
                 new_attr: object = Partial(attr.reduction)
@@ -292,13 +292,13 @@ def derive_output_shard_layout(
             attrs[p] = new_attr
 
     # If a single input's relation covers every output axis, transform that
-    # input's cute layout into the output (identity / permutation / reduction
-    # collapse) and carry it verbatim. The cute layout can be tiled / padded
+    # input's layout into the output (identity / permutation / reduction
+    # collapse) and carry it verbatim. The layout can be tiled / padded
     # (its position sizes need not be a clean factorisation of the tensor
     # shape), so synthesising it from mesh extents would be lossy or wrong; an
     # elementwise / transpose / reduce op preserves that operand's layout. Only
     # carry when the candidates agree — if two covering operands realise the
-    # same logical sharding with different cute factorisations the result is
+    # same logical sharding with different layout factorisations the result is
     # ambiguous, so fall through to the order-independent synthesis rather than
     # arbitrarily picking the first operand.
     carriers = [
@@ -322,20 +322,20 @@ def derive_output_shard_layout(
     if carriers and all(c == carriers[0] for c in carriers):
         return carriers[0]
 
-    # Otherwise synthesise the output cute layout from the per-mesh-axis
+    # Otherwise synthesise the output layout from the per-mesh-axis
     # bindings (combining partial shards from several inputs). An output
-    # logical tensor axis split by a single mesh axis stays a single cute
-    # position (flat); one split by several mesh axes factorizes into a cute
+    # logical tensor axis split by a single mesh axis stays a single layout
+    # position (flat); one split by several mesh axes factorizes into a layout
     # sub-position per mesh extent (each bound by one mesh axis, per shard.md
     # §6) plus a remainder, so the multi-mesh-axis split is representable.
-    # Only `Split` binds an output cute axis; a `Partial` is a mesh-axis value
-    # state with no cute axis, so it is carried through directly.
+    # Only `Split` binds an output layout axis; a `Partial` is a mesh-axis value
+    # state with no layout axis, so it is carried through directly.
     bindings: dict[int, list] = {}
     for p, a in enumerate(attrs):
         if isinstance(a, Split):
             bindings.setdefault(a.axis, []).append((p, a))
 
-    cute_shape: list = []
+    layout_shape: list = []
     out_attrs: list = [Broadcast() for _ in range(mesh_rank)]
     for p, a in enumerate(attrs):
         if isinstance(a, Partial):
@@ -344,7 +344,7 @@ def derive_output_shard_layout(
     for ax, size in enumerate(output_shape):
         binds = bindings.get(ax, [])
         if len(binds) <= 1:
-            cute_shape.append(size)
+            layout_shape.append(size)
             if binds:
                 p, a = binds[0]
                 out_attrs[p] = Split(pos)
@@ -362,7 +362,7 @@ def derive_output_shard_layout(
                     f"cannot factorize output axis {ax}: dynamic mesh extent on "
                     f"mesh axis {p}"
                 )
-            cute_shape.append(ext)
+            layout_shape.append(ext)
             out_attrs[p] = Split(pos)
             prod *= ext
             pos += 1
@@ -372,11 +372,11 @@ def derive_output_shard_layout(
             )
         rem = size // prod
         if rem != 1:
-            cute_shape.append(rem)
+            layout_shape.append(rem)
             pos += 1
 
     return ShardLayout(
-        layout=Layout(shape=tuple(cute_shape), strides=_c_order(tuple(cute_shape))),
+        layout=Layout(shape=tuple(layout_shape), strides=_c_order(tuple(layout_shape))),
         attrs=tuple(out_attrs),
         mesh=mesh,
     )

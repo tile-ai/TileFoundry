@@ -31,7 +31,7 @@ class Transpose(Op):
 def _transpose_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     """Forward relation for Transpose: an identity input map and an output map
     that permutes the iteration dims (output axis ``o`` reads domain dim
-    ``perm[o]``). The shard engine reorders the input's cute positions by their
+    ``perm[o]``). The shard engine reorders the input's layout positions by their
     owning tensor axis, preserving any factorization."""
     (x,) = input_types
     perm = call.target.perm

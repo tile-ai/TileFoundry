@@ -121,7 +121,7 @@ body and into the concrete return type, including tuple fields. Only an
 explicit `Reshard` or allreduce may complete that state.
 
 When the body cannot express a propagated sharding (e.g. a reshape
-whose cute factorization straddles a new axis), typeinfer fails at that
+whose layout factorization straddles a new axis), typeinfer fails at that
 op, not at the boundary. Reconstructing IR for every call is unnecessary
 when nothing would change: elaborating with argument types that already
 equal the callee's current parameter types returns the same `Function`
@@ -494,18 +494,18 @@ class Reshape(Op):
     sharding) reshapes to a plain (unsharded) output.
   - A genuine `ShardLayout` input (at least one non-`Broadcast` attr) carries
     through `Reshape` when the reshape is expressible as a view over the
-    input's cute positions (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)):
-    - every cute position lies entirely within one new axis — non-size-1 new
-      axes are the product of a contiguous run of whole cute positions, in
+    input's layout positions (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)):
+    - every layout position lies entirely within one new axis — non-size-1 new
+      axes are the product of a contiguous run of whole layout positions, in
       either merge direction; size-1 axes insert/drop freely and hold no
-      sharding; a `Split` cute-axis reference remaps to its new cute
+      sharding; a `Split` layout-axis reference remaps to its new layout
       position; `Partial` / `Broadcast` carry through unchanged (mesh-axis
-      states, no cute axis); OR
-    - a `Split`-bound cute position divides across a new-axis boundary at a
+      states, no layout axis); OR
+    - a `Split`-bound layout position divides across a new-axis boundary at a
       point its bound mesh extent evenly divides: the outer (earlier)
       sub-factor itself further factors into `(mesh_ext, Split-bound, local
       extent 1)` and `(sub-factor / mesh_ext, plain)`, and the inner residual
-      becomes a plain (non-`Split`) cute position — every `Split`-bound cute
+      becomes a plain (non-`Split`) layout position — every `Split`-bound layout
       dim keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
   - Arbitrary rank-N regroup — a `Split`-bound position whose device-owned
     block spans a boundary deeper than one divide, or two or more
@@ -560,7 +560,7 @@ class Gather(Op):
   - Element rule: `out[c.., i.., t..] = x[c.., index[b.., i..], t..]`, where the first `batch_dims` of the `axis` leading dims also index `index`.
   - `batch_dims=0` (default) inserts the full `index` shape at `axis`; a leading-dimension shape coincidence MUST NOT implicitly enable batching — batching is selected only by an explicit positive `batch_dims`.
   - `batch_dims > 0` is defined for type inference and evaluation over unsharded operands; a `ShardLayout` operand and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed.
-  - `Gather` produces a new tensor: for a `ShardLayout` operand, the internal cute `Layout` is always natural contiguous over the output shape; it MUST NOT be inherited from the input.
+  - `Gather` produces a new tensor: for a `ShardLayout` operand, the internal `Layout` is always natural contiguous over the output shape; it MUST NOT be inherited from the input.
   - Only the shard `attrs` migrate, per mesh axis. `Broadcast` and `Partial` carry through unchanged — gather is a linear row selection (`gather(Σᵢ xᵢ) == Σᵢ gather(xᵢ)`).
   - A `Split` targeting the gathered axis produces `Partial(sum)` on that mesh axis (each device already holds the true value at the rows it owns and a zero row elsewhere, so summing the per-device partials across the mesh axis reconstructs the true gather).
   - A `Split` targeting another axis carries through, with its logical axis renumbered for the axis removed at the gathered `axis` and `index`'s non-batch dims inserted in its place.
@@ -605,7 +605,7 @@ class Reduce(Op):
   - The logical result shape follows numpy reduction rules.
   - Storage is preserved.
   - Plain input layout passes through unchanged.
-  - For `ShardLayout` input, every split cute position that belongs to a
+  - For `ShardLayout` input, every split layout position that belongs to a
     reduced tensor axis collapses to broadcast with size-1 stride-0 output.
   - Non-default-stride sharded input must carry explicit producer strides, or
     typeinfer rejects it.

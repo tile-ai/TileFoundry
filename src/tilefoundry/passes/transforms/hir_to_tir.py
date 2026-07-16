@@ -101,7 +101,7 @@ def _eval_call(op, args: tuple) -> Evaluate:
 
 
 def _is_full_layout(layout) -> bool:
-    """True when ``layout`` is a full (bijective) embedding — its cute
+    """True when ``layout`` is a full (bijective) embedding — its
     cosize (``1 + Σ (shape[i]-1)·stride[i]``) equals the product of its
     shape — so the strides describe a complete global gather mapping
     rather than a collapsed per-instance form. Returns ``False`` when the
@@ -156,11 +156,11 @@ def _analyze_cross_warp_workspace(input_ty, reduce_axes):
     if not isinstance(layout, ShardLayout):
         return 0, input_ty.dtype, True
 
-    # ``layout.layout.shape`` is the **global** cute layout shape
-    # (= filled cute shape under the old convention),
+    # ``layout.layout.shape`` is the **global** layout shape
+    # (= filled layout shape under the old convention),
     # so it can be fed straight into ``_layout_axis_to_tensor_axis``.
-    cute_shape = tuple(int(s) for s in layout.layout.shape)
-    pos_to_axis = _layout_axis_to_tensor_axis(cute_shape, input_ty.shape)
+    layout_shape = tuple(int(s) for s in layout.layout.shape)
+    pos_to_axis = _layout_axis_to_tensor_axis(layout_shape, input_ty.shape)
     rank = len(input_ty.shape)
     normalized = tuple(a % rank if a < 0 else a for a in reduce_axes)
 
@@ -641,7 +641,7 @@ class _Lowerer:
             attr_idx += 1
         per_shard_shape = tuple(per_shard_shape)
         # ``ShardLayout.layout`` carries the global / unsharded
-        # cute shape with storage-physical strides. The TIR
+        # layout shape with storage-physical strides. The TIR
         # ``var.type.shape`` remains per-shard local — that's how
         # downstream alloc / arith size their iteration.
         dst_type = TensorType(
@@ -1077,11 +1077,11 @@ class _Lowerer:
         x = self.lower_expr(expr.args[0])
         axes = target.axes
         # The HIR Reduce typeinfer already computed the reduced
-        # ``ShardLayout`` (cute dims on reduced axes collapsed to
+        # ``ShardLayout`` (layout dims on reduced axes collapsed to
         # size 1 / stride 0; corresponding Split attrs rewritten to
         # Broadcast).  Reuse that layout instead of copying the
         # input layout — otherwise the TIR output type carries an
-        # un-reduced cute shape and downstream codegen iterates
+        # un-reduced layout shape and downstream codegen iterates
         # the wrong per-thread count.
         keepdim = target.keepdim
         new_shape = list(x.type.shape)
@@ -1114,7 +1114,7 @@ class _Lowerer:
         # (logical ``(1, 1536)``). After lowering, ``x.type.shape``
         # may be the per-shard local form ``(1, 1, 1, 8)``; using
         # that would silently mis-map ``axes=(-1,)`` to a non-Split
-        # cute position and skip the workspace alloc.
+        # layout position and skip the workspace alloc.
         ws_size, ws_dtype, lane_reduced = _analyze_cross_warp_workspace(
             expr.args[0].type, axes
         )
@@ -1460,7 +1460,7 @@ def _lower_single_output(
             sl = body_expr.target.layout
         if sl is None:
             sl = getattr(inner_ty, "layout", None)
-        # ``sl`` already carries the global cute shape from the
+        # ``sl`` already carries the global layout shape from the
         # reshard / parser layer; no re-expansion from local needed
         # any more.
         tv = TensorView(layout=sl)

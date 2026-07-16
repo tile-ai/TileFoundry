@@ -18,15 +18,13 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
-    mesh,
     run_typeinfer_case,
-    sharded,
-    ten,
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
@@ -36,8 +34,8 @@ _F = DType.f32
 _I = DType.i32
 _OP = InsertSlice()
 
-_SI64 = TensorType(shape=(), dtype=DType.i64, layout=None, storage="gmem")
-_SI32 = TensorType(shape=(), dtype=DType.i32, layout=None, storage="gmem")
+_SI64 = make_tensor_type((), DType.i64)
+_SI32 = make_tensor_type((), DType.i32)
 
 
 def _lit(v: int) -> Constant:
@@ -108,35 +106,35 @@ CASES = [
     TypeInferCase(
         "returns_dst_type",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((), _I)),
-        ten((8,), _F),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((), _I)),
+        make_tensor_type((8,), _F),
     ),
     # A full-width update (same extent as dst) is in bounds.
     TypeInferCase(
         "full_width_update_ok",
         _OP,
-        (ten((8,), _F), ten((8,), _F), ten((), _I)),
-        ten((8,), _F),
+        (make_tensor_type((8,), _F), make_tensor_type((8,), _F), make_tensor_type((), _I)),
+        make_tensor_type((8,), _F),
     ),
     # A rank-0 scalar offset is the canonical 1-D surface.
     TypeInferCase(
         "offsets_scalar_ok",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((), _I)),
-        ten((8,), _F),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((), _I)),
+        make_tensor_type((8,), _F),
     ),
     # An integer literal is carried as an i64 scalar and accepted.
     TypeInferCase(
         "offsets_i64_literal_ok",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((), DType.i64)),
-        ten((8,), _F),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((), DType.i64)),
+        make_tensor_type((8,), _F),
     ),
     # update rank must equal dst rank.
     TypeInferCase(
         "rank_mismatch_rejected",
         _OP,
-        (ten((8,), _F), ten((2, 4), _F), ten((), _I)),
+        (make_tensor_type((8,), _F), make_tensor_type((2, 4), _F), make_tensor_type((), _I)),
         ExpectedError("update rank .* must equal dst rank", exc=TypeError),
     ),
     # A bare scalar offset applies only to a rank-1 dst; a multi-D dst needs a
@@ -144,14 +142,14 @@ CASES = [
     TypeInferCase(
         "nd_scalar_offset_rejected",
         _OP,
-        (ten((4, 8), _F), ten((1, 8), _F), ten((), _I)),
+        (make_tensor_type((4, 8), _F), make_tensor_type((1, 8), _F), make_tensor_type((), _I)),
         ExpectedError("per-axis offset tuple", exc=TypeError),
     ),
     # A rank-1 vector offset is not a rank-0 scalar start for the 1-D case.
     TypeInferCase(
         "offsets_vector_rejected",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((2,), _I)),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((2,), _I)),
         ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
     ),
     # A one-element ``(1,)`` offset is the legacy spelling and is rejected —
@@ -159,55 +157,66 @@ CASES = [
     TypeInferCase(
         "offsets_one_vector_rejected",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((1,), _I)),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((1,), _I)),
         ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
     ),
     # A total-size-one multi-dim ``(1, 1)`` offset is also rejected.
     TypeInferCase(
         "offsets_multi_one_rejected",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((1, 1), _I)),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((1, 1), _I)),
         ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
     ),
     # offsets must be an integer scalar.
     TypeInferCase(
         "offsets_dtype_rejected",
         _OP,
-        (ten((8,), _F), ten((3,), _F), ten((), _F)),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((), _F)),
         ExpectedError("offsets must be an integer scalar", exc=TypeError),
     ),
     # dst / update dtype must match.
     TypeInferCase(
         "dtype_mismatch_rejected",
         _OP,
-        (ten((8,), _F), ten((3,), DType.bf16), ten((), _I)),
+        (make_tensor_type((8,), _F), make_tensor_type((3,), DType.bf16), make_tensor_type((), _I)),
         ExpectedError("dst/update dtype mismatch", exc=TypeError),
     ),
     # A statically over-long update is rejected.
     TypeInferCase(
         "static_overlong_update_rejected",
         _OP,
-        (ten((8,), _F), ten((10,), _F), ten((), _I)),
+        (make_tensor_type((8,), _F), make_tensor_type((10,), _F), make_tensor_type((), _I)),
         ExpectedError("exceeds dst extent", exc=TypeError),
     ),
-    # dst carrying a Partial(reduction): update must carry the identical
-    # per-mesh-axis ShardAttr state (its own cute shape may differ — it's the
-    # smaller write window).
     TypeInferCase(
         "partial_dst_matching_update_ok",
         _OP,
         (
-            sharded((8,), (Partial("sum"),), mesh((4,))),
-            sharded((3,), (Partial("sum"),), mesh((4,))),
-            ten((), _I),
+            make_shard_tensor_type((8,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_shard_tensor_type((3,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_tensor_type((), _I),
         ),
-        sharded((8,), (Partial("sum"),), mesh((4,))),
+        make_shard_tensor_type((8,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
     ),
     TypeInferCase(
         "partial_dst_plain_update_rejected",
         _OP,
-        (sharded((8,), (Partial("sum"),), mesh((4,))), ten((3,), _F), ten((), _I)),
+        (
+            make_shard_tensor_type((8,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_tensor_type((3,), _F),
+            make_tensor_type((), _I),
+        ),
         ExpectedError("dst carries a Partial", exc=TypeError),
+    ),
+    TypeInferCase(
+        "complete_dst_partial_update_rejected",
+        _OP,
+        (
+            make_tensor_type((8,), _F),
+            make_shard_tensor_type((3,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_tensor_type((), _I),
+        ),
+        ExpectedError("update carries Partial", exc=TypeError),
     ),
 ]
 
@@ -223,7 +232,7 @@ def test_insert_slice_rankn_tuple_returns_dst_type():
     """A rank-3 window with an all-literal in-bounds offset tuple returns the
     dst type unchanged."""
     out = _infer_insert(
-        ten((1, 16512, 512), _F), ten((1, 1, 512), _F), _offsets(_lit(0), _lit(5), _lit(0))
+        make_tensor_type((1, 16512, 512), _F), make_tensor_type((1, 1, 512), _F), _offsets(_lit(0), _lit(5), _lit(0))
     )
     assert out.shape == (1, 16512, 512) and out.dtype == _F
 
@@ -233,8 +242,8 @@ def test_insert_slice_rankn_static_oob_names_axis():
     rejected at typeinfer, and the error names the offending axis."""
     with pytest.raises(TypeError, match="axis 1"):
         _infer_insert(
-            ten((1, 16512, 512), _F),
-            ten((1, 1, 512), _F),
+            make_tensor_type((1, 16512, 512), _F),
+            make_tensor_type((1, 1, 512), _F),
             _offsets(_lit(0), _lit(16512), _lit(0)),  # 16512 + 1 > 16512 on axis 1
         )
 
@@ -242,8 +251,8 @@ def test_insert_slice_rankn_static_oob_names_axis():
 def test_insert_slice_rankn_negative_literal_rejected():
     with pytest.raises(TypeError, match="axis 1"):
         _infer_insert(
-            ten((1, 16512, 512), _F),
-            ten((1, 1, 512), _F),
+            make_tensor_type((1, 16512, 512), _F),
+            make_tensor_type((1, 1, 512), _F),
             _offsets(_lit(0), _lit(-1), _lit(0)),
         )
 
@@ -252,7 +261,7 @@ def test_insert_slice_rankn_runtime_member_deferred():
     """A runtime offset member is not statically checkable; typeinfer accepts it
     (deferred to eval) while the literal members are still bounds-checked."""
     out = _infer_insert(
-        ten((1, 16512, 512), _F), ten((1, 1, 512), _F), _offsets(_lit(0), _rt(), _lit(0))
+        make_tensor_type((1, 16512, 512), _F), make_tensor_type((1, 1, 512), _F), _offsets(_lit(0), _rt(), _lit(0))
     )
     assert out.shape == (1, 16512, 512)
 
@@ -260,7 +269,7 @@ def test_insert_slice_rankn_runtime_member_deferred():
 def test_insert_slice_tuple_len_must_equal_rank():
     with pytest.raises(TypeError, match="tuple length"):
         _infer_insert(
-            ten((1, 16512, 512), _F), ten((1, 1, 512), _F), _offsets(_lit(0), _lit(0))
+            make_tensor_type((1, 16512, 512), _F), make_tensor_type((1, 1, 512), _F), _offsets(_lit(0), _lit(0))
         )
 
 
@@ -331,7 +340,6 @@ def test_insert_slice_eval_out_of_bounds(dst, upd, start):
     from tilefoundry.evaluator import evaluate  # noqa: PLC0415
     from tilefoundry.ir.core import Call, Var  # noqa: PLC0415
     from tilefoundry.ir.hir.function import Function  # noqa: PLC0415
-    from tilefoundry.ir.types import TensorType  # noqa: PLC0415
     from tilefoundry.visitor_registry.contexts import TypeInferContext  # noqa: PLC0415
     from tilefoundry.visitor_registry.visitors import TypeInferVisitor  # noqa: PLC0415
 
@@ -339,7 +347,7 @@ def test_insert_slice_eval_out_of_bounds(dst, upd, start):
     inputs = (dst, upd, offs)
     dtypes = (_F, _F, _I)
     params = tuple(
-        Var(type=TensorType(shape=tuple(t.shape), dtype=d, layout=None, storage="gmem"), name=f"x{i}")
+        Var(type=make_tensor_type(tuple(t.shape), d), name=f"x{i}")
         for i, (t, d) in enumerate(zip(inputs, dtypes))
     )
     call = Call(type=params[0].type, target=_OP, args=params)
@@ -367,7 +375,7 @@ from tilefoundry.ir.tir.stmts import (  # noqa: E402
     MeshScope,
     Sequential,
 )
-from tilefoundry.ir.types.shard import Layout as ShardCuteLayout  # noqa: E402
+from tilefoundry.ir.types.shard import Layout as ShardMeshLayout  # noqa: E402
 from tilefoundry.passes.transforms import HirToTirPass  # noqa: E402
 
 _DEC_D = 4
@@ -514,7 +522,7 @@ class _CrossCtaReshardOutput:
 
     @func(topologies=(Topology("cta", 2),))
     def xreshard(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_D), "f32"]:
-        with Mesh(topology="cta", layout=ShardCuteLayout(shape=(2,), strides=(1,))) as cta:
+        with Mesh(topology="cta", layout=ShardMeshLayout(shape=(2,), strides=(1,))) as cta:
             g1 = reshard(a, layout=(2 @ cta, _DEC_D), storage=gmem)
             return reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
 

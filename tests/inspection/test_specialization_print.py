@@ -6,18 +6,16 @@ from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
 
 
-def _ty() -> TensorType:
-    S = DimVar(name="S", lo=1, hi=7)
-    return TensorType(shape=(S,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
+def _s_type():
+    return make_tensor_type((DimVar(name="S", lo=1, hi=7),))
 
 
 def _variant(lo: int, hi: int) -> HirFunction:
-    ty = _ty()
+    ty = _s_type()
     x = Var(type=ty, name="x")
     return HirFunction.build(
         name="main", params=(x,), body=x, return_type=ty,
@@ -26,7 +24,7 @@ def _variant(lo: int, hi: int) -> HirFunction:
 
 
 def _prototype() -> HirFunction:
-    ty = _ty()
+    ty = _s_type()
     x = Var(type=ty, name="x")
     base = HirFunction.build(name="main", params=(x,), body=None, return_type=ty)
     base.add_variant(_variant(1, 3))
@@ -35,7 +33,7 @@ def _prototype() -> HirFunction:
 
 
 def _normal() -> HirFunction:
-    ty = _ty()
+    ty = _s_type()
     x = Var(type=ty, name="x")
     return HirFunction.build(name="main", params=(x,), body=x, return_type=ty)
 

@@ -11,10 +11,7 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     infer_call,
-    mesh,
     run_typeinfer_case,
-    sharded,
-    ten,
     tensor_grid,
 )
 from tilefoundry import func
@@ -23,9 +20,9 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 
 _NEG = Unary(kind=UnaryKind.NEG)
@@ -33,34 +30,9 @@ _NOT = Unary(kind=UnaryKind.NOT)
 _EXP = Unary(kind=UnaryKind.EXP)
 _ABS = Unary(kind=UnaryKind.ABS)
 _RSQRT = Unary(kind=UnaryKind.RSQRT)
-
-_M = mesh((4,))
-_PSUM = sharded((16, 8), (Partial("sum"),), _M)
-_PMAX = sharded((16, 8), (Partial("max"),), _M)
-
-CASES_PARTIAL = [
-    # NEG is linear: commutes with sum, not max/min.
-    TypeInferCase("neg_partial_sum_passes", _NEG, (_PSUM,), _PSUM),
-    TypeInferCase(
-        "neg_partial_max_errors", _NEG, (_PMAX,),
-        ExpectedError(match="Unary NEG"),
-    ),
-    # EXP/LOG/RELU are monotone-increasing: commute with max/min, not sum.
-    TypeInferCase("exp_partial_max_passes", _EXP, (_PMAX,), _PMAX),
-    TypeInferCase(
-        "exp_partial_sum_errors", _EXP, (_PSUM,),
-        ExpectedError(match="Unary EXP"),
-    ),
-    # ABS/SQUARE/RSQRT/NOT are not proven to commute with any reduction.
-    TypeInferCase(
-        "abs_partial_sum_errors", _ABS, (_PSUM,),
-        ExpectedError(match="Unary ABS"),
-    ),
-    TypeInferCase(
-        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,),
-        ExpectedError(match="Unary RSQRT"),
-    ),
-]
+_M = make_mesh((4,))
+_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
+_PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 
 
 CASES = [
@@ -70,7 +42,7 @@ CASES = [
     TypeInferCase(
         name="not_requires_bool",
         op=_NOT,
-        inputs=(ten((4, 8), DType.f32),),
+        inputs=(make_tensor_type((4, 8), DType.f32),),
         expected=ExpectedError(match="bool"),
     ),
 ] + [
@@ -79,11 +51,26 @@ CASES = [
     TypeInferCase(
         name=f"low_precision_passthrough_{dt.value}",
         op=_NEG,
-        inputs=(ten((4, 8), dt),),
-        expected=ten((4, 8), dt),
+        inputs=(make_tensor_type((4, 8), dt),),
+        expected=make_tensor_type((4, 8), dt),
     )
     for dt in (DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1)
-] + CASES_PARTIAL
+] + [
+    TypeInferCase("neg_partial_sum_passes", _NEG, (_PSUM,), _PSUM),
+    TypeInferCase(
+        "neg_partial_max_errors", _NEG, (_PMAX,), ExpectedError(match="Unary NEG")
+    ),
+    TypeInferCase("exp_partial_max_passes", _EXP, (_PMAX,), _PMAX),
+    TypeInferCase(
+        "exp_partial_sum_errors", _EXP, (_PSUM,), ExpectedError(match="Unary EXP")
+    ),
+    TypeInferCase(
+        "abs_partial_sum_errors", _ABS, (_PSUM,), ExpectedError(match="Unary ABS")
+    ),
+    TypeInferCase(
+        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,), ExpectedError(match="Unary RSQRT")
+    ),
+]
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
@@ -92,18 +79,12 @@ def test_unary_typeinfer(case):
 
 
 def test_unary_passes_sharded_layout_through():
-    mesh = Mesh(
-        topology="gpu",
-        layout=Layout(shape=(4,), strides=(1,)),
-        names=("g",),
-        topologies=("gpu",),
-    )
     sl = ShardLayout(
         layout=Layout(shape=(16, 8), strides=(8, 1)),
         attrs=(Split(0),),
-        mesh=mesh,
+        mesh=make_mesh((4,)),
     )
-    x = TensorType(shape=(16, 8), dtype=DType.f32, layout=sl, storage="gmem")
+    x = make_tensor_type((16, 8), DType.f32, layout=sl)
     out = infer_call(_NEG, x)
     assert out.layout is sl
     assert out.shape == (16, 8)

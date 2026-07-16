@@ -13,61 +13,36 @@ import pytest
 
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 
-def ten(shape, dtype, *, layout=None, storage="gmem") -> TensorType:
-    """Convenience TensorType builder for op input types."""
-    return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
-
-
-def _c_order(shape) -> tuple:
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
-    return tuple(strides)
-
-
-def mesh(layout_shape, names=None, topology="gpu") -> Mesh:
-    """A ``Mesh`` with the given layout shape (C-order strides). Axis names
-    default to a, b, c, … (or ``g`` for a single axis) so a test states only the
-    extents instead of hand-building a ``Mesh``."""
-    if names is None:
-        names = ("g",) if len(layout_shape) == 1 else tuple("abcdef"[: len(layout_shape)])
-    return Mesh(
-        topology=topology,
-        layout=Layout(shape=tuple(layout_shape), strides=_c_order(layout_shape)),
-        names=tuple(names),
-        topologies=(topology,),
-    )
-
-
-_DEFAULT = object()
-
-
-def sharded(
-    shape, attrs, mesh, *, cute=None, strides=_DEFAULT, dtype=DType.f32, storage="gmem"
+def raw_shard_tensor_type(
+    shape, layout_shape, strides, attrs, mesh, *, dtype=DType.f32, storage="gmem"
 ) -> TensorType:
-    """A sharded ``TensorType``. ``cute`` defaults to the tensor shape and
-    ``strides`` to C-order over the cute shape, so a test states only the parts
-    that matter (shape, attrs, mesh). Pass ``strides=None`` for an explicitly
-    un-materialized (implicit-stride) layout."""
-    cute = tuple(shape if cute is None else cute)
-    if strides is _DEFAULT:
-        strides = _c_order(cute)
-    elif strides is not None:
-        strides = tuple(strides)
+    """A sharded ``TensorType`` built directly from an explicit (possibly
+    non-canonical) ``layout_shape``/``strides``, bypassing
+    ``make_shard_tensor_type``'s canonicalization. Only for the handful of
+    tests exercising a layout shape ``make_shard_tensor_type`` cannot itself
+    produce (an implicit ``strides=None`` layout, or a stride pattern that
+    isn't plain C-order)."""
     return TensorType(
-        shape=tuple(shape),
+        shape=shape,
         dtype=dtype,
-        layout=ShardLayout(layout=Layout(shape=cute, strides=strides), attrs=tuple(attrs), mesh=mesh),
         storage=storage,
+        layout=ShardLayout(layout=Layout(shape=layout_shape, strides=strides), attrs=attrs, mesh=mesh),
     )
+
+
+def split_local_extents(ty) -> list:
+    """`shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s
+    layout — every entry MUST be 1 on a canonical layout (`docs/spec/shard.md`
+    §7.1.1)."""
+    local = shard_layout_local_shape(ty.layout)
+    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
 
 
 def make_call(op, input_types) -> Call:
@@ -148,7 +123,7 @@ def assert_type(actual, expected) -> None:
 
 
 def run_typeinfer_case(case: TypeInferCase) -> None:
-    """Execute one ``TypeInferCase``: assert the output type or the error."""
+    """Run one ``TypeInferCase``: assert the output type or the error."""
     if isinstance(case.expected, ExpectedError):
         with pytest.raises(case.expected.exc, match=case.expected.match):
             infer_call(case.op, *case.inputs)
@@ -168,7 +143,7 @@ def tensor_grid(shape, dtype, *, layouts=(None,), storages=STORAGES):
     """All ``TensorType`` combinations of *layouts* × *storages* for a fixed
     ``shape`` / ``dtype`` — the ``LAYOUTS × STORAGES`` axis of an op's matrix."""
     return [
-        ten(shape, dtype, layout=layout, storage=storage)
+        make_tensor_type(shape, dtype, layout=layout, storage=storage)
         for layout in layouts
         for storage in storages
     ]

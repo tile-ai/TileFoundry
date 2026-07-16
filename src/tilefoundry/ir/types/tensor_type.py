@@ -65,6 +65,7 @@ class TensorType:
     ) -> "TensorType":
         return TensorType(shape=(), dtype=dtype, layout=layout, storage=storage)
 
+
 @dataclass(frozen=True)
 class TupleType:
     fields: tuple[Union["TensorType", "TupleType"], ...]

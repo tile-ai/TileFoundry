@@ -6,22 +6,21 @@ import pytest
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
-    mesh,
     run_typeinfer_case,
-    sharded,
-    ten,
 )
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
 
 _OP = LayerNorm(axis=-1, eps=1e-5)
 _F = DType.f32
-_X = ten((4, 8), _F)
-_W = ten((8,), _F)
-_B = ten((8,), _F)
-_W_PSUM = sharded((8,), (Partial("sum"),), mesh((4,)))
-_B_PSUM = sharded((8,), (Partial("sum"),), mesh((4,)))
+_M = make_mesh((4,))
+_X = make_tensor_type((4, 8), _F)
+_W = make_tensor_type((8,), _F)
+_B = make_tensor_type((8,), _F)
+_W_PSUM = make_shard_tensor_type((8,), mesh=_M, attrs=(Partial("sum"),))
+_B_PSUM = make_shard_tensor_type((8,), mesh=_M, attrs=(Partial("sum"),))
 
 CASES = [
     TypeInferCase("passthrough", _OP, (_X, _W, _B), _X),
@@ -30,7 +29,7 @@ CASES = [
     TypeInferCase(
         "partial_sum_errors",
         _OP,
-        (sharded((4, 8), (Partial("sum"),), mesh((4,))), _W, _B),
+        (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Partial("sum"),)), _W, _B),
         ExpectedError(match="LayerNorm"),
     ),
     TypeInferCase(

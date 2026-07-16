@@ -125,8 +125,8 @@ Field meanings:
 
 - `shape` — the layout-domain shape (flat or nested). When a `Layout`
   sits inside `ShardLayout.layout`, this describes the **global,
-  unsharded** cute layout shape — i.e., the shape *before* mesh
-  dividing. The per-thread local cute shape is derived from
+  unsharded** layout shape — i.e., the shape *before* mesh
+  dividing. The per-thread local layout shape is derived from
   `layout.shape` ÷ mesh extents per `Split` (see §7).
 - `stride` — the step rule from layout domain to physical index. When
   not explicitly given, it defaults to `prefix_product(shape)` in the
@@ -221,7 +221,7 @@ object.
 ## 6. `ShardAttr`
 
 ```python
-class Split:                          # binds the current mesh axis to the layout's `axis`-th cute domain axis
+class Split:                          # binds the current mesh axis to the layout's `axis`-th layout domain axis
     axis: int
 
 class Broadcast: ...                  # the value is replicated across this mesh axis
@@ -238,21 +238,21 @@ class Partial:                        # an un-reduced partial value (`sum` / `ma
 
 Each entry of `ShardLayout.attrs` describes one **mesh axis** (by its
 position in the tuple); the attr says what that mesh axis does. `Split`
-binds a mesh axis to a cute axis (placement); `Broadcast` and `Partial`
-are **value states** on a mesh axis and carry no cute axis.
+binds a mesh axis to a layout axis (placement); `Broadcast` and `Partial`
+are **value states** on a mesh axis and carry no layout axis.
 
 Field meanings:
 
 - `Split(axis)` — the current mesh axis is bound to the underlying
-  layout's `axis`-th cute domain axis (i.e., `layout.shape[axis]`).
+  layout's `axis`-th layout domain axis (i.e., `layout.shape[axis]`).
   `axis` MUST satisfy `0 <= axis < rank(flatten(domain(layout)))`.
   Across a single `ShardLayout.attrs`, an underlying-layout axis MAY
   be bound by at most one mesh axis: two `Split` attrs sharing the
   same `axis` are illegal. Since `layout.shape` is the **global
   unsharded shape** (§7), the binding constraint is
   `mesh.shape[mesh_axis_position] | layout.shape[axis]`
-  (mesh extent must divide the global cute extent). The per-thread
-  local extent on this cute dim is then
+  (mesh extent must divide the global layout extent). The per-thread
+  local extent on this layout dim is then
   `layout.shape[axis] // mesh.shape[mesh_axis_position]`.
 - `Broadcast` — the current mesh axis does not participate in
   splitting; the value is replicated across this mesh axis.
@@ -264,7 +264,7 @@ Field meanings:
   partial value**: the full result over this mesh axis is the
   `reduction` (`sum` / `max` / `min`) of the per-shard values, and a
   subsequent allreduce over this mesh axis is required to obtain it.
-  A `Partial` carries no cute axis — it is a value state on the mesh
+  A `Partial` carries no layout axis — it is a value state on the mesh
   axis given by its position in `attrs`. How a `Partial` propagates,
   resolves, and must not be silently lost is part of relation-driven
   propagation (§9).
@@ -313,20 +313,20 @@ free-standing primitive layout. These narrower meanings are defined in
 
 Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
 
-- `G` is the canonical / unsharded cute-domain shape; it MUST NOT
+- `G` is the canonical / unsharded layout-domain shape; it MUST NOT
   encode per-instance extents.
 - `rank(G)` MAY differ from `rank(T.shape)`.
 - `size(G) == size(T.shape)` MUST hold.
 - For any `Split(k)` in `sl.attrs`, `0 <= k < rank(G)` MUST hold.
-  `Partial` / `Broadcast` carry no cute axis.
+  `Partial` / `Broadcast` carry no layout axis.
 - `Split(k)` indexes into `G`; it MUST NOT refer to `T.shape` axes or
   mesh axes.
 - For every mesh axis `a` with `sl.attrs[a] = Split(k)`,
   `G[k] == sl.mesh.shape[a]` MUST hold. Equivalently, `local_shape(sl)[k] == 1`
-  on every `Split`-bound cute dim. Surface sugar `N @ m.a` with
+  on every `Split`-bound layout dim. Surface sugar `N @ m.a` with
   `N > mesh_extent(a)` is canonicalized at parse time into a
   factorised form (`(mesh_extent(a) @ m.a, N // mesh_extent(a))`); the
-  factorised residual axis enters the IR as a non-`Split` cute dim. See
+  factorised residual axis enters the IR as a non-`Split` layout dim. See
   [parser §1.5](./parser.md#15-layout-sugar).
 - `local_shape(sl)[k] = G[k] / sl.mesh.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
@@ -340,7 +340,7 @@ Let `sl: ShardLayout`, `S = sl.layout.strides`, and let `engine(i)`
 denote the `ShardTensor.engine` seen by instance index `i` along the
 relevant mesh axis.
 
-- `S` MAY be `None`. `S is None` ⇒ "un-materialized": the cute
+- `S` MAY be `None`. `S is None` ⇒ "un-materialized": the layout
   strides have not yet been fixed; the layout's `shape` /
   partition is determined but the per-axis stride form is deferred
   to `Reshard` typeinfer
@@ -354,7 +354,7 @@ relevant mesh axis.
   `None` sentinel; the empty tuple is never overloaded to mean
   un-materialized.
 - When `S` is a concrete tuple, `S[k]` is the element step along
-  cute dim `k` on the physical storage held by
+  layout dim `k` on the physical storage held by
   `ShardTensor.engine`; it MUST NOT be an abstract global stride.
 - For every mesh axis `a` with `sl.attrs[a] = Split(k)`,
   `S[k] ∈ {0} ∪ ℤ_{>0}` MUST hold.
@@ -364,7 +364,7 @@ relevant mesh axis.
 - `S[k] > 0` ⇒ mesh axis `a` contributes `i · S[k]` elements to
   intra-engine offset on dim `k`. Typical: `engine(i)` shares one
   base ptr across instances.
-- For cute dims `k` with no `Split` binding, `S[k]` follows §3
+- For layout dims `k` with no `Split` binding, `S[k]` follows §3
   semantics, evaluated on the engine's physical storage.
 - Layouts requiring more than one stride per `Split` axis (cyclic /
   interleaved) MUST be rejected by `ShardLayout` construction.
@@ -374,7 +374,7 @@ relevant mesh axis.
 Per-mesh-axis attributes (`Split | Broadcast | Dynamic | Partial`),
 ordered by mesh axis. `len(attrs)` MUST equal `rank(mesh)`.
 
-A `Split(k)` substitutes the current `mesh_coord` into cute dim `k` of
+A `Split(k)` substitutes the current `mesh_coord` into layout dim `k` of
 `layout`, producing the local projection on the current device. See
 §6 for individual `ShardAttr` semantics.
 

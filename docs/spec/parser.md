@@ -181,7 +181,7 @@ layout-sugar  ::= axis-tuple                                            ; implic
                 | '(' axis-tuple ',' value-state ')'                    ; implicit strides + value-state
                 | '(' axis-tuple ',' stride-tuple ',' value-state ')'   ; explicit strides + value-state
 axis-tuple    ::= '(' axis-spec (',' axis-spec)* ','? ')'
-axis-spec     ::= axis-extent                    ; a cute dim, not split (axis placement only)
+axis-spec     ::= axis-extent                    ; a layout dim, not split (axis placement only)
                 | static-extent '@' mesh-axis    ; Split(axis_index) on mesh-axis
                 | static-extent '@' '(' mesh-axis (',' mesh-axis)* ')'  ; sequential decomposition
 axis-extent    ::= static-extent | dim-ref        ; a bare axis may be dynamic
@@ -214,13 +214,13 @@ materialisation ([§Stride materialization](#stride-materialization-parser-surfa
 keeps static inner strides as plain ints and only the strides of axes
 *above* the dynamic axis become symbolic dim-exprs. In a **per-instance**
 materialisation (a high→low storage move, or a per-instance source), the
-per-shard local cute shape must be a static int — a register / shared buffer
+per-shard local layout shape must be a static int — a register / shared buffer
 cannot be sized by a non-split dynamic axis — so a dynamic non-split bare
 axis is rejected with a deliberate error (only a launch-provided CTA `Split`,
 whose per-shard extent is a static 1, may consume a dynamic axis).
 
 The `axis-tuple` carries only **axis placement** (`Split` inlined as
-`size @ mesh.axis`; a bare `size` is a non-split cute dim). The optional
+`size @ mesh.axis`; a bare `size` is a non-split layout dim). The optional
 `{...}` **value-state** set carries the mesh-axis `Partial` states
 (`mesh.axis @ P("reduction")`). It is a Python `set` literal recognized at
 the AST level (its element order carries no meaning) and MUST be the **last
@@ -254,7 +254,7 @@ opaque to the user: input `N @ m.a` and input
 
 The first sugar form
 (`'(' axis-spec ... ')'`) emits `Layout(shape=canonical,
-strides=None)` — the cute strides are deferred to `Reshard`
+strides=None)` — the layout strides are deferred to `Reshard`
 typeinfer, which fills them in based on the storage-level direction
 (see [hir.md §1.3](./hir.md#13-op)). The
 verbose form (`'(' axis-tuple ',' stride-tuple ')'`) emits a

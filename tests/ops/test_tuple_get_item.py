@@ -7,16 +7,15 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType, TupleType
+from tilefoundry.ir.types import DType, TupleType, make_tensor_type
 
 
 def _scalar(dtype):
-    return ten((), dtype, storage=StorageKind.RMEM)
+    return make_tensor_type((), dtype, storage=StorageKind.RMEM)
 
 
 CASES = [

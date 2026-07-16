@@ -92,9 +92,9 @@ relation's access maps by a single rule, shared across ops.
 
 **Mesh-axis value state.** `ShardLayout.attrs` is indexed by mesh axis. A
 `Partial(reduction)` is a value state at that exact index, not an unordered
-collection of reductions and not a cute-layout position. Every propagation
-decision MUST retain that index and its reduction independently of every other
-mesh axis.
+collection of reductions and not a layout position. Every propagation decision
+MUST retain that index and its reduction independently of every other mesh
+axis.
 
 **Reduction effect.** A reduction dim (a domain dim absent from the
 output access map) carries one of two effects, declared by the
@@ -107,39 +107,32 @@ op/relation:
 
 **Propagation.** Per input mesh axis, by its attr:
 
-1. `Split(k)` — map cute axis `k` to the input's logical tensor axis,
+1. `Split(k)` — map layout axis `k` to the input's logical tensor axis,
    then to a domain dim via the input access map.
 2. If that domain dim appears in the output access map, the output
    carries `Split` on the **output layout axis** the domain dim maps to.
 3. If that domain dim is a reduction dim, the output mesh axis becomes
    `Partial(reduction)` when the effect is `partial`, or `Broadcast`
    when the effect is `complete`. The resulting `Partial` carries no
-   cute axis — it is a value state on that mesh axis.
+   layout axis — it is a value state on that mesh axis.
 4. `Partial(reduction)` input — propagates on the **same mesh axis**, gated by
    commutation: the op MUST propagate `Partial(reduction)` unchanged only
    when its own math is proven to commute with `reduction` —
    `op(reduction(x0..xn)) == reduction(op(x0)..op(xn))`. This service reads
-   only the relation's affine structure and has no notion of the calling
-   op's math, so it MUST NOT make that judgment itself; each op's own
-   typeinfer rule proves commutation (or rejects) before calling into
-   relation-driven shard propagation, the same way it would guard any other
-   op-specific precondition. Two or more `Partial` inputs combine only when
-   homogeneous in `reduction` (mixing `reduction`s on the same mesh axis is
-   never sound). States on different mesh axes MUST NOT be compared as an
-   unordered set; the op evaluates each axis independently. `Partial` resolves
-   to `Broadcast` only via an explicit reduction / allreduce over that axis; an
-   op that cannot prove commutation
-   MUST error, naming the offending argument and the fix, rather than
-   silently drop or misrepresent the `Partial`. There is no cute-axis mapping
-   for a `Partial`.
+   only the relation's affine structure and MUST NOT make that mathematical
+   judgment itself; each op's typeinfer rule owns it. On each mesh axis, two
+   Partial inputs MUST be compatible with that op's rule. States on different
+   mesh axes MUST NOT be compared as an unordered set; the op evaluates each
+   axis independently. `Partial` resolves to `Broadcast` only via an explicit
+   reduction / allreduce over that axis. There is no layout-axis mapping for a
+   `Partial`.
 5. A `Broadcast` (size-1) input axis contributes no `Split`.
 6. Two inputs binding the same domain dim to incompatible mesh axes is
    an error.
 
 A `Partial` MUST NOT be silently eliminated, nor silently carried through a
-non-commuting op, by an ordinary op (no silent loss, no silent unsoundness);
-only an explicit `Reshard` / allreduce from `Partial` to `Broadcast`
-completes it.
+non-commuting ordinary op; only an explicit `Reshard` / allreduce from
+`Partial` to `Broadcast` completes it.
 
 An ordinary multi-input op MUST inspect every tensor input for a `Partial`.
 When its result type cannot represent a secondary input's axis-preserving
@@ -159,9 +152,9 @@ reads only the access maps' affine structure (which domain dim each
 axis uses), never the domain bounds, so it is size-agnostic and
 identical for static and dynamic shapes.
 
-**Owner axis.** `Split(axis)` indexes an **output layout (cute) axis**,
+**Owner axis.** `Split(axis)` indexes an **output layout axis**,
 not the logical tensor axis. A reduction-induced `Partial` attaches to no
-cute axis — it is a value state on the mesh axis that was reduced.
+layout axis — it is a value state on the mesh axis that was reduced.
 
 ### 3.3 Output storage and mesh/layout compatibility
 

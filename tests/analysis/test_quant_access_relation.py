@@ -7,20 +7,16 @@ import isl
 
 from tilefoundry.ir.core import Call, TypeInferContext, Var
 from tilefoundry.ir.hir.tensor.quant import Quant
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, make_tensor_type
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
 )
 
 
-def _ten(shape):
-    return TensorType(shape=shape, dtype=DType.bf16, layout=None, storage="gmem")
-
-
 def _quant_relations(shape, group=128) -> AccessRelations:
-    x = Var(type=_ten(shape), name="x")
-    call = Call(type=_ten(shape), target=Quant(group=group), args=(x,))
+    x = Var(type=make_tensor_type(shape, DType.bf16), name="x")
+    call = Call(type=make_tensor_type(shape, DType.bf16), target=Quant(group=group), args=(x,))
     fn = access_relation_registry.lookup(Quant)
     assert fn is not None
     return fn(call, TypeInferContext())

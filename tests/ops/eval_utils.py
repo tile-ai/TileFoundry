@@ -14,7 +14,7 @@ import torch
 
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -28,8 +28,10 @@ _DTYPE_OF = {
 }
 
 
-def _ttype(t: torch.Tensor, storage: str = "gmem") -> TensorType:
-    return TensorType(shape=tuple(t.shape), dtype=_DTYPE_OF[t.dtype], layout=None, storage=storage)
+def tensor_type_of(t: torch.Tensor, storage: str = "gmem") -> TensorType:
+    """The ``TensorType`` a torch tensor's shape/dtype maps to (for building
+    typeinfer inputs from concrete eval-case values)."""
+    return make_tensor_type(tuple(t.shape), _DTYPE_OF[t.dtype], storage)
 
 
 @dataclass(frozen=True)
@@ -47,11 +49,11 @@ class EvalCase:
 
 
 def run_eval_case(case: EvalCase) -> None:
-    """Execute one ``EvalCase``: build the op's Function, evaluate on CPU, and
+    """Run one ``EvalCase``: build the op's Function, evaluate on CPU, and
     assert the result matches ``expected``."""
     storages = case.storages or ("gmem",) * len(case.inputs)
     params = tuple(
-        Var(type=_ttype(t, s), name=f"x{i}")
+        Var(type=tensor_type_of(t, s), name=f"x{i}")
         for i, (t, s) in enumerate(zip(case.inputs, storages))
     )
     call = Call(type=params[0].type, target=case.op, args=params)

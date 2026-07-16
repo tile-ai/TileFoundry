@@ -20,30 +20,21 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import make_tensor_type
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Split
-
-
-def _ten(shape, storage=gmem, layout=None):
-    return ten(shape, DType.f32, layout=layout, storage=storage)
-
-
-def _mesh_cta128() -> Mesh:
-    return Mesh(topology=Topology("cta", 128), layout=Layout(shape=(128,), strides=(1,)))
 
 
 def _shard_layout(shape) -> ShardLayout:
     return ShardLayout(
         layout=Layout(shape=shape, strides=tuple([1] * len(shape))),
         attrs=(),
-        mesh=_mesh_cta128(),
+        mesh=make_mesh((128,), topology=Topology("cta", 128)),
     )
 
 
@@ -106,73 +97,73 @@ CASES = [
     TypeInferCase(
         "preserves_logical_shape",
         Reshard(layout=_SL_PRESERVES_SHAPE, storage=rmem),
-        (_ten((1, 1536)),),
-        _ten((1, 1536), storage=rmem, layout=_SL_PRESERVES_SHAPE),
+        (make_tensor_type((1, 1536)),),
+        make_tensor_type((1, 1536), storage=rmem, layout=_SL_PRESERVES_SHAPE),
     ),
     # Reshard targets a concrete residency; an unmaterialized destination is
     # rejected (umat is not a place a value can be resharded to).
     TypeInferCase(
         "destination_umat_rejected",
         Reshard(layout=_SL_PRESERVES_SHAPE, storage=StorageKind.UMAT),
-        (_ten((1, 1536)),),
+        (make_tensor_type((1, 1536)),),
         ExpectedError(match="unmaterialized"),
     ),
     TypeInferCase(
         "storage_unchanged_layout_none_is_noop",
         Reshard(),
-        (_ten((1, 1536)),),
-        _ten((1, 1536)),
+        (make_tensor_type((1, 1536)),),
+        make_tensor_type((1, 1536)),
     ),
     TypeInferCase(
         "layout_only_preserves_input_storage",
         Reshard(layout=_SL_LAYOUT_ONLY),
-        (_ten((1, 1536)),),
-        _ten((1, 1536), layout=_SL_LAYOUT_ONLY),
+        (make_tensor_type((1, 1536)),),
+        make_tensor_type((1, 1536), layout=_SL_LAYOUT_ONLY),
     ),
     TypeInferCase(
         "to_reg_preserves_explicit_non_default_strides",
         Reshard(layout=_FRAG_LAYOUT, storage=rmem),
-        (_ten((16, 8)),),
-        _ten((16, 8), storage=rmem, layout=_FRAG_LAYOUT),
+        (make_tensor_type((16, 8)),),
+        make_tensor_type((16, 8), storage=rmem, layout=_FRAG_LAYOUT),
     ),
     TypeInferCase(
         "high_to_low_sugar_materializes_per_instance",
         Reshard(layout=_SL_H2L, storage=rmem),
-        (_ten((2, 4, 128)),),
-        _ten((2, 4, 128), storage=rmem,
+        (make_tensor_type((2, 4, 128)),),
+        make_tensor_type((2, 4, 128), storage=rmem,
              layout=_materialized((2, 4, 128), (128, 0, 1), (Split(1),), _MESH_H2L)),
     ),
     TypeInferCase(
         "low_to_high_sugar_materializes_shared",
         Reshard(layout=_SL_L2H, storage=gmem),
-        (_ten((4, 64), storage=rmem, layout=_REG_L2H_LAYOUT),),
-        _ten((4, 64), storage=gmem,
+        (make_tensor_type((4, 64), storage=rmem, layout=_REG_L2H_LAYOUT),),
+        make_tensor_type((4, 64), storage=gmem,
              layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H)),
     ),
     TypeInferCase(
         "same_storage_sugar_plain_src_falls_back_to_shared",
         Reshard(layout=_SL_SAME_PLAIN, storage=None),
-        (_ten((8, 64)),),
-        _ten((8, 64), storage=gmem,
+        (make_tensor_type((8, 64)),),
+        make_tensor_type((8, 64), storage=gmem,
              layout=_materialized((8, 64), (64, 1), (Split(0),), _MESH_SAME_PLAIN)),
     ),
     TypeInferCase(
         "same_storage_sugar_matches_src_per_instance_form",
         Reshard(layout=_DST_SAME_PI_SUGAR, storage=None),
-        (_ten((4, 16), storage=rmem, layout=_SRC_SAME_PI_LAYOUT),),
-        _ten((4, 16), storage=rmem,
+        (make_tensor_type((4, 16), storage=rmem, layout=_SRC_SAME_PI_LAYOUT),),
+        make_tensor_type((4, 16), storage=rmem,
              layout=_materialized((4, 16), (0, 1), (Split(0),), _MESH_SAME_PI)),
     ),
     TypeInferCase(
         "explicit_fragment_strides_preserved_verbatim",
         Reshard(layout=_FRAG_VERBOSE, storage=rmem),
-        (_ten((16, 8)),),
-        _ten((16, 8), storage=rmem, layout=_FRAG_VERBOSE),
+        (make_tensor_type((16, 8)),),
+        make_tensor_type((16, 8), storage=rmem, layout=_FRAG_VERBOSE),
     ),
     TypeInferCase(
         "storage_change_without_layout_errors",
         Reshard(storage=rmem),
-        (_ten((1, 1536)),),
+        (make_tensor_type((1, 1536)),),
         ExpectedError(match="storage change requires"),
     ),
     # Dynamic non-split bare axis: same-storage plain source -> shared-engine,
@@ -180,8 +171,8 @@ CASES = [
     TypeInferCase(
         "same_storage_dynamic_bare_axis_shared_engine",
         Reshard(layout=_SL_DYN_BARE, storage=None),
-        (_ten((1, _S_DYN, 32, 128)),),
-        _ten((1, _S_DYN, 32, 128), storage=gmem,
+        (make_tensor_type((1, _S_DYN, 32, 128)),),
+        make_tensor_type((1, _S_DYN, 32, 128), storage=gmem,
              layout=_materialized((1, _S_DYN, 32, 128),
                                   (_DYN_OUTER_STRIDE, 32 * 128, 128, 1),
                                   (Split(2),), _MESH_DYN)),
@@ -191,7 +182,7 @@ CASES = [
     TypeInferCase(
         "high_to_low_dynamic_bare_axis_rejected",
         Reshard(layout=_SL_DYN_BARE, storage=rmem),
-        (_ten((1, _S_DYN, 32, 128)),),
+        (make_tensor_type((1, _S_DYN, 32, 128)),),
         ExpectedError(match="not static after sharding", exc=ValueError),
     ),
 ]

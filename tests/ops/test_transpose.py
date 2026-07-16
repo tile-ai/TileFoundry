@@ -1,11 +1,11 @@
-"""Transpose typeinfer over sharded (factorized cute) layouts.
+"""Transpose typeinfer over sharded (factorized) layouts.
 
-When a tensor axis is split, its cute ``Layout`` carries more positions than
+When a tensor axis is split, its ``Layout`` carries more positions than
 the tensor has axes (the split axis factorizes into mesh-extent × per-shard
-sub-axes). Transposing must reorder the cute positions by their owning tensor
+sub-axes). Transposing must reorder the layout positions by their owning tensor
 axis — keeping each tensor axis's sub-axes together — and remap the
-``Split`` / ``Partial`` references to the moved cute positions, rather than
-indexing cute positions with the tensor-axis permutation directly.
+``Split`` / ``Partial`` references to the moved layout positions, rather than
+indexing layout positions with the tensor-axis permutation directly.
 """
 from __future__ import annotations
 
@@ -15,63 +15,74 @@ import torch
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     TypeInferCase,
-    mesh,
+    infer_call,
+    raw_shard_tensor_type,
     run_typeinfer_case,
-    sharded,
-    ten,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.shard_layout import (
+    Broadcast,
+    ShardLayout,
+    Split,
+    shard_layout_local_shape,
+)
 
 # A 4-axis mesh whose split axis factorizes a tensor dim into mesh-extent ×
 # per-shard sub-positions (cluster, cta, warp, lane).
-_M = mesh((1, 128, 8, 32), ("cluster", "cta", "warp", "lane"))
+_M = make_mesh((1, 128, 8, 32), ("cluster", "cta", "warp", "lane"))
 _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 
 CASES = [
     # unsharded: shape permutes, layout passes through.
-    TypeInferCase("unsharded", _T10, (ten((4, 8), DType.f32),), ten((8, 4), DType.f32)),
-    # tensor (4096, 2048), axis 0 split on cta -> cute (128, 32, 2048). The
-    # transpose moves tensor axis 1 (cute pos 2) first; axis 0's sub-positions
-    # (cute pos 0, 1) follow in order; the Split moves from cute pos 0 to pos 1.
-    TypeInferCase(
-        "factorized_split_reorders_subaxes",
-        _T10,
-        (
-            sharded(
-                (4096, 2048),
-                (Broadcast(), Split(axis=0), Broadcast(), Broadcast()),
-                _M,
-                cute=(128, 32, 2048),
-                strides=(65536, 2048, 1),
-                dtype=DType.bf16,
-            ),
-        ),
-        sharded(
-            (2048, 4096),
-            (Broadcast(), Split(axis=1), Broadcast(), Broadcast()),
-            _M,
-            cute=(2048, 128, 32),
-            strides=(1, 65536, 2048),
-            dtype=DType.bf16,
-        ),
-    ),
-    # implicit (None) strides: shape + attrs permute, output keeps implicit
-    # strides (regression: no None-stride indexing crash).
-    TypeInferCase(
-        "implicit_strides",
-        _T10,
-        (sharded((16, 8), (Split(0), *_B4[1:]), _M, strides=None, dtype=DType.bf16),),
-        sharded((8, 16), (Split(1), *_B4[1:]), _M, strides=None, dtype=DType.bf16),
-    ),
+    TypeInferCase("unsharded", _T10, (make_tensor_type((4, 8), DType.f32),), make_tensor_type((8, 4), DType.f32)),
 ]
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_transpose_typeinfer(case):
     run_typeinfer_case(case)
+
+
+# ── sharded carries ───────────────────────────────────────────────────────
+# Transpose is a view: it reorders layout positions by owning tensor axis
+# rather than recomputing a fresh canonical layout, so its output strides are
+# a permutation of the input's, not necessarily C-order. These cases check
+# output shape and which mesh axis stays genuinely `Split` (and its local
+# extent), not the internal layout position / stride a valid `Transpose`
+# permutation produces.
+
+
+def test_factorized_split_reorders_subaxes():
+    """tensor (4096, 2048), axis 0 split on cta -> layout (128, 32, 2048). The
+    transpose moves tensor axis 1 (layout pos 2) first; axis 0's
+    sub-positions (layout pos 0, 1) follow in order; the Split moves from
+    layout pos 0 to pos 1."""
+    x_ty = make_shard_tensor_type(
+        (4096, 2048),
+        mesh=_M,
+        attrs=(Broadcast(), Split(axis=0), Broadcast(), Broadcast()),
+        dtype=DType.bf16,
+    )
+    ty = infer_call(_T10, x_ty)
+    assert tuple(ty.shape) == (2048, 4096)
+    assert isinstance(ty.layout, ShardLayout)
+    assert ty.layout.attrs == (Broadcast(), Split(axis=1), Broadcast(), Broadcast())
+    assert shard_layout_local_shape(ty.layout)[1] == 1
+
+
+def test_implicit_strides_no_crash():
+    """implicit (None) strides: shape + attrs permute, output keeps implicit
+    strides (regression: no None-stride indexing crash)."""
+    x_ty = raw_shard_tensor_type(
+        (16, 8), (16, 8), None, (Split(0), *_B4[1:]), _M, dtype=DType.bf16,
+    )
+    ty = infer_call(_T10, x_ty)
+    assert tuple(ty.shape) == (8, 16)
+    assert isinstance(ty.layout, ShardLayout)
+    assert ty.layout.attrs == (Split(1), *_B4[1:])
 
 
 @pytest.mark.parametrize(

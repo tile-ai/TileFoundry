@@ -9,41 +9,31 @@ from __future__ import annotations
 
 import pytest
 
-from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, mesh, run_typeinfer_case, ten
+from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, run_typeinfer_case
 from tilefoundry.ir.hir.nn.conv2d import Conv2D
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Partial, Split
 
 _OP = Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1)
-_M = mesh((4,))
+_M = make_mesh((4,))
 _F = DType.f32
 
+_X = make_tensor_type((1, 4, 8, 8), _F)
+_W = make_tensor_type((4, 4, 3, 3), _F)
+_BIAS = make_tensor_type((4,), _F)
 
-def _sharded_nchw(shape, attrs) -> TensorType:
-    return TensorType(
-        shape=shape,
-        dtype=_F,
-        layout=ShardLayout(layout=Layout(shape=shape, strides=None), attrs=attrs, mesh=_M),
-        storage="gmem",
-    )
-
-
-_X = ten((1, 4, 8, 8), _F)
-_W = ten((4, 4, 3, 3), _F)
-_BIAS = ten((4,), _F)
-
-_X_PSUM = _sharded_nchw((1, 4, 8, 8), (Partial("sum"),))
-_X_PMAX = _sharded_nchw((1, 4, 8, 8), (Partial("max"),))
-_W_PSUM = _sharded_nchw((4, 4, 3, 3), (Partial("sum"),))
-_W_PMAX = _sharded_nchw((4, 4, 3, 3), (Partial("max"),))
-_W_SPLIT = _sharded_nchw((4, 4, 3, 3), (Split(0),))
-_BIAS_PSUM = _sharded_nchw((4,), (Partial("sum"),))
+_X_PSUM = make_shard_tensor_type((1, 4, 8, 8), mesh=_M, attrs=(Partial("sum"),), dtype=_F)
+_X_PMAX = make_shard_tensor_type((1, 4, 8, 8), mesh=_M, attrs=(Partial("max"),), dtype=_F)
+_W_PSUM = make_shard_tensor_type((4, 4, 3, 3), mesh=_M, attrs=(Partial("sum"),), dtype=_F)
+_W_PMAX = make_shard_tensor_type((4, 4, 3, 3), mesh=_M, attrs=(Partial("max"),), dtype=_F)
+_W_SPLIT = make_shard_tensor_type((4, 4, 3, 3), mesh=_M, attrs=(Split(0),), dtype=_F)
+_BIAS_PSUM = make_shard_tensor_type((4,), mesh=_M, attrs=(Partial("sum"),), dtype=_F)
 
 CASES = [
     TypeInferCase(
         "partial_sum_input_passes", _OP, (_X_PSUM, _W, _BIAS),
-        ten((1, 4, 6, 6), _F, layout=_X_PSUM.layout),
+        make_tensor_type((1, 4, 6, 6), _F, layout=_X_PSUM.layout),
     ),
     TypeInferCase(
         "partial_sum_weight_is_rejected_as_secondary",

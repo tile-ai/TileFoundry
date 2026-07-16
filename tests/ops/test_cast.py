@@ -10,41 +10,30 @@ from tests.ops.typeinfer_utils import (
     TypeInferCase,
     infer_call,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.hir.tensor.cast import Cast
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
 from tilefoundry.parser.hir_parser import parse_script
 
-
-def _mesh() -> Mesh:
-    return Mesh(
-        topology="gpu",
-        layout=Layout(shape=(4,), strides=(1,)),
-        names=("g",),
-        topologies=("gpu",),
-    )
-
-
-_M = _mesh()
+_M = make_mesh((4,))
 
 CASES = [
     TypeInferCase(
         name="unsharded_dtype_change",
         op=Cast(dtype=DType.bf16),
-        inputs=(ten((4, 8), DType.f32),),
-        expected=ten((4, 8), DType.bf16),
+        inputs=(make_tensor_type((4, 8), DType.f32),),
+        expected=make_tensor_type((4, 8), DType.bf16),
     ),
     TypeInferCase(
         name="rank0",
         op=Cast(dtype=DType.f32),
-        inputs=(ten((), DType.i32),),
-        expected=ten((), DType.f32),
+        inputs=(make_tensor_type((), DType.i32),),
+        expected=make_tensor_type((), DType.f32),
     ),
 ]
 
@@ -60,7 +49,7 @@ def test_cast_carries_sharded_layout():
         attrs=(Split(axis=0),),
         mesh=_M,
     )
-    x = TensorType(shape=(16, 8), dtype=DType.f32, layout=sl, storage="gmem")
+    x = make_tensor_type((16, 8), DType.f32, layout=sl)
     out = infer_call(Cast(dtype=DType.bf16), x)
     assert out.dtype == DType.bf16
     assert out.shape == (16, 8)

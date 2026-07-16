@@ -31,7 +31,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"RepeatInterleave: axis {op.axis} out of range for rank {len(shape)}")
     shape[ax] = shape[ax] * op.repeats
 
-    # The named axis grows, so the input cute layout no longer describes the
+    # The named axis grows, so the input layout no longer describes the
     # output; do not carry a stale sharded layout. An unsharded or fully
     # replicated input produces an unsharded output; a genuine sharding fails
     # closed (re-expressing a repeat across a Split would need an explicit

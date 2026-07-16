@@ -27,9 +27,7 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
-    mesh,
     run_typeinfer_case,
-    sharded,
 )
 from tilefoundry.dsl import DimVar
 from tilefoundry.ir.core import Call, Constant, Var
@@ -54,15 +52,10 @@ from tilefoundry.ir.tir.stmts import (
     Sequential,
     While,
 )
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types import DType, TensorType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.passes.transforms.hir_to_tir import HirToTirPass
-
-
-def _ten(shape, dtype):
-    return TensorType(shape=shape, dtype=dtype, layout=None, storage="gmem")
-
 
 # ---------------------------------------------------------------------------
 # Typeinfer: rank-N input + dtype-mismatch (x bf16 / weight f32) accepted;
@@ -72,50 +65,51 @@ def _ten(shape, dtype):
 
 _CTX_LEN = DimVar("CTX_LEN", 1, 4097)
 _RMS = RMSNorm(eps=1e-6)
+_PARTIAL_MESH = make_mesh((4,))
 
 CASES = [
     TypeInferCase(
         "rank3_bf16_input_f32_weight",
         _RMS,
-        (_ten((1, 1, 2048), DType.bf16), _ten((2048,), DType.f32)),
-        _ten((1, 1, 2048), DType.bf16),
+        (make_tensor_type((1, 1, 2048), DType.bf16), make_tensor_type((2048,), DType.f32)),
+        make_tensor_type((1, 1, 2048), DType.bf16),
     ),
     # dynamic batch dim (DimVar arithmetic) flows through verbatim.
     TypeInferCase(
         "dim_arithmetic_batch_survives",
         _RMS,
-        (_ten((1, _CTX_LEN + 1, 2048), DType.bf16), _ten((2048,), DType.f32)),
-        _ten((1, _CTX_LEN + 1, 2048), DType.bf16),
+        (make_tensor_type((1, _CTX_LEN + 1, 2048), DType.bf16), make_tensor_type((2048,), DType.f32)),
+        make_tensor_type((1, _CTX_LEN + 1, 2048), DType.bf16),
     ),
     TypeInferCase(
         "rank2_same_dtype",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((2048,), DType.bf16)),
-        _ten((4, 2048), DType.bf16),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((2048,), DType.bf16)),
+        make_tensor_type((4, 2048), DType.bf16),
     ),
     # dtype mismatch (bf16 x / f32 weight) is legal; output keeps x's dtype.
     TypeInferCase(
         "rank2_dtype_mismatch_allowed",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((2048,), DType.f32)),
-        _ten((4, 2048), DType.bf16),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((2048,), DType.f32)),
+        make_tensor_type((4, 2048), DType.bf16),
     ),
     TypeInferCase(
         "rank0_x_rejected",
         _RMS,
-        (TensorType.scalar(DType.bf16), _ten((2048,), DType.f32)),
+        (TensorType.scalar(DType.bf16), make_tensor_type((2048,), DType.f32)),
         ExpectedError(match="x must be rank ≥ 1", exc=TypeError),
     ),
     TypeInferCase(
         "rank2_weight_rejected",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((1, 2048), DType.f32)),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1, 2048), DType.f32)),
         ExpectedError(match="weight must be rank-1", exc=TypeError),
     ),
     TypeInferCase(
         "last_dim_mismatch_rejected",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((1024,), DType.f32)),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1024,), DType.f32)),
         ExpectedError(match="last dim", exc=TypeError),
     ),
     # rms_norm normalizes across an axis (non-monotonic); no reduction commutes.
@@ -123,8 +117,10 @@ CASES = [
         "partial_input_rejected",
         _RMS,
         (
-            sharded((4, 2048), (Partial("sum"),), mesh((4,)), dtype=DType.bf16),
-            _ten((2048,), DType.f32),
+            make_shard_tensor_type(
+                (4, 2048), DType.bf16, mesh=_PARTIAL_MESH, attrs=(Partial("sum"),)
+            ),
+            make_tensor_type((2048,), DType.f32),
         ),
         ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
@@ -132,8 +128,10 @@ CASES = [
         "partial_weight_rejected",
         _RMS,
         (
-            _ten((4, 2048), DType.bf16),
-            sharded((2048,), (Partial("sum"),), mesh((4,)), dtype=DType.f32),
+            make_tensor_type((4, 2048), DType.bf16),
+            make_shard_tensor_type(
+                (2048,), DType.f32, mesh=_PARTIAL_MESH, attrs=(Partial("sum"),)
+            ),
         ),
         ExpectedError(match="Partial input on weight is unsound", exc=TypeError),
     ),

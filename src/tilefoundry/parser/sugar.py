@@ -416,7 +416,7 @@ def parse_shard_layout_sugar(
             raise ValueError(f"mesh axis {m_axis} already bound")
         attrs_list[m_axis] = Partial(reduction or "sum")
 
-    # Sugar (`strides is None`) leaves the cute strides un-materialized;
+    # Sugar (`strides is None`) leaves the layout strides un-materialized;
     # `Reshard` typeinfer / `Function` signature binding discharges them
     # per spec docs/spec/hir.md §3 / §1. Verbose `((shape),(strides))`
     # carries explicit strides verbatim.
@@ -623,7 +623,7 @@ def _canonicalize_single_axis(
     Per parser.md §1.5 / shard.md §7.1.1: surface sugar ``N @ m.a`` where
     ``N > mesh_extent(a)`` MUST be expanded into
     ``(mesh_extent(a) @ m.a, N // mesh_extent(a))`` so every Split-bound
-    cute dim has ``local_shape == 1``. ``N % mesh_extent(a) == 0`` is
+    layout dim has ``local_shape == 1``. ``N % mesh_extent(a) == 0`` is
     required; otherwise ``ValueError``.
     """
     extent = axis.size

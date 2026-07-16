@@ -65,7 +65,7 @@ def _check_batch_dims(batch_dims: int, axis: int, x_shape: tuple, idx_shape: tup
 def _gather_shard_layout(call, ctx, x_ty, axis: int, idx_shape: tuple, out_shape: tuple):
     """Derive the output ``ShardLayout`` for a non-batched gather.
 
-    Gather produces a new tensor: the internal cute ``Layout`` is always
+    Gather produces a new tensor: the internal ``Layout`` is always
     natural contiguous over ``out_shape``, never the input's. Only the shard
     ``attrs`` migrate, per mesh axis: ``Broadcast``/``Partial`` carry through
     unchanged (gather is a linear row selection); a ``Split`` targeting the

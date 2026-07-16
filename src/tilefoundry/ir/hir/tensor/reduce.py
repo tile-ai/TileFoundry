@@ -44,7 +44,7 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     """Forward relation for Reduce: an identity input map; the output map keeps
     every axis (keepdim) or drops the reduced axes (no keepdim). The reduced
     axes are reported as completely-reduced dims, so a Split on them collapses
-    to Broadcast and their cute positions collapse to size 1.
+    to Broadcast and their layout positions collapse to size 1.
     """
     (x,) = input_types
     rank = len(x.shape)

@@ -25,13 +25,13 @@ class Reshape(Op):
 
 
 def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
-    """Carry a genuine sharding across a reshape (a view) when the cute
+    """Carry a genuine sharding across a reshape (a view) when the layout
     factorization aligns with *new_shape*.
 
     A reshape is a view: it inserts/removes size-1 axes and groups along
-    boundaries. It can carry the sharding when every cute position lies
+    boundaries. It can carry the sharding when every layout position lies
     entirely within one new axis (whole positions merge into a coarser new
-    axis, in either order). It can ALSO carry the sharding when a cute
+    axis, in either order). It can ALSO carry the sharding when a layout
     position must itself divide across a new-axis boundary, provided that
     position is `Split`-bound and its outer (earlier) sub-factor is evenly
     divisible by the bound mesh extent: the sub-factor itself further
@@ -39,27 +39,27 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     the `mesh_ext`-sized position (local extent 1, per
     `docs/spec/shard.md` §7.1.1), and both the `sub_factor // mesh_ext`
     remainder and the inner residual carry forward as plain (non-`Split`)
-    cute positions. A plain (non-`Split`) position may divide at any
+    layout positions. A plain (non-`Split`) position may divide at any
     boundary that evenly factors it; only a `Split`-bound position whose
     boundary the mesh extent does not divide fails closed. Size-1 axes are
     inserted/dropped freely and hold no sharding. `Partial` / `Broadcast`
-    carry through unchanged (mesh-axis states, no cute axis).
+    carry through unchanged (mesh-axis states, no layout axis).
 
     Returns the carried ``ShardLayout``, or ``None`` when the reshape cannot
     express the sharding (the caller fails closed). All extents must be static
     to verify alignment.
     """
-    cute = layout.layout
-    cute_shape = cute.shape
-    if not all(isinstance(d, int) and not isinstance(d, bool) for d in cute_shape):
+    axis_layout = layout.layout
+    axis_shape = axis_layout.shape
+    if not all(isinstance(d, int) and not isinstance(d, bool) for d in axis_shape):
         return None
     if not all(isinstance(d, int) and not isinstance(d, bool) for d in new_shape):
         return None
 
-    cute_strides = cute.strides
-    n_cute = len(cute_shape)
+    axis_strides = axis_layout.strides
+    n_axis = len(axis_shape)
 
-    # The mesh extent bound to each Split-carrying cute axis (at most one
+    # The mesh extent bound to each Split-carrying layout axis (at most one
     # Split per axis -- ShardLayout construction forbids two Splits sharing
     # an axis).
     mesh_shape = layout.mesh.layout.shape
@@ -70,12 +70,12 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
 
     def _next_nonunit(start: int) -> int:
         i = start
-        while i < n_cute and int(cute_shape[i]) == 1:
+        while i < n_axis and int(axis_shape[i]) == 1:
             i += 1
         return i
 
     # Walk new axes; compose each non-size-1 new axis from a contiguous run of
-    # cute positions, recording the old cute position -> new cute position
+    # layout positions, recording the old layout position -> new layout position
     # remap. A position that overshoots the current new axis divides into an
     # outer sub-factor (completing the axis) and an inner residual carried
     # forward via `pending` to the next axis; only the outer sub-factor keeps
@@ -98,10 +98,10 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
                 pending = None
             else:
                 ci = _next_nonunit(ci)
-                if ci >= n_cute:
-                    return None  # ran out of cute positions to compose this axis
-                cs = int(cute_shape[ci])
-                stride = cute_strides[ci] if cute_strides is not None else 0
+                if ci >= n_axis:
+                    return None  # ran out of layout positions to compose this axis
+                cs = int(axis_shape[ci])
+                stride = axis_strides[ci] if axis_strides is not None else 0
                 old_pos = ci
                 ci += 1
             new_prod = prod * cs
@@ -129,7 +129,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
                 # further into (mesh_ext, Split-bound, local extent 1) and
                 # (needed // mesh_ext, plain), mirroring
                 # parser/sugar.py::_canonicalize_single_axis, so the
-                # Split-bound cute dim keeps local_shape == 1.
+                # Split-bound layout dim keeps local_shape == 1.
                 outer_residual = needed // mesh_ext
                 old_to_new[old_pos] = len(new_positions)
                 new_positions.append(
@@ -142,26 +142,26 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
                 new_positions.append((needed, base_stride, old_pos))
             pending = (residual, stride, None)
             prod = d
-    if pending is not None or _next_nonunit(ci) < n_cute:
-        return None  # leftover cute content cannot be placed
+    if pending is not None or _next_nonunit(ci) < n_axis:
+        return None  # leftover layout content cannot be placed
 
     new_attrs = []
     for attr in layout.attrs:
         if isinstance(attr, Split):
             if attr.axis not in old_to_new:
-                return None  # a sharded cute position was dropped -> fail closed
+                return None  # a sharded layout position was dropped -> fail closed
             new_attrs.append(replace(attr, axis=old_to_new[attr.axis]))
         else:
-            # Partial / Broadcast are mesh-axis states with no cute axis; they
+            # Partial / Broadcast are mesh-axis states with no layout axis; they
             # carry through the reshape unchanged.
             new_attrs.append(attr)
 
     out_shape = tuple(s for s, _, _ in new_positions)
     out_strides = (
-        None if cute_strides is None else tuple(st for _, st, _ in new_positions)
+        None if axis_strides is None else tuple(st for _, st, _ in new_positions)
     )
-    new_cute = Layout(shape=out_shape, strides=out_strides)
-    return ShardLayout(layout=new_cute, attrs=tuple(new_attrs), mesh=layout.mesh)
+    new_layout = Layout(shape=out_shape, strides=out_strides)
+    return ShardLayout(layout=new_layout, attrs=tuple(new_attrs), mesh=layout.mesh)
 
 
 @register_typeinfer(Reshape)
@@ -177,14 +177,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else:
             new_layout = _carry_sharded_reshape(x_ty.layout, new_shape)
             if new_layout is None:
-                # A genuine sharding whose cute factorization does not align with
+                # A genuine sharding whose layout factorization does not align with
                 # the new shape cannot be expressed; fail closed rather than
                 # fabricate a layout. (Re-laying-out across a misaligned reshape
                 # would need an explicit Reshard.)
                 ctx.error(
                     call,
                     "Reshape cannot express the sharded layout: new shape does "
-                    "not align with the input cute factorization",
+                    "not align with the input layout factorization",
                 )
     return TensorType(
         shape=new_shape,
