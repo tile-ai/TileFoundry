@@ -10,7 +10,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import partial_reductions
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -20,7 +20,10 @@ class SoftMax(Op):
 @register_typeinfer(SoftMax)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    if partial_reductions(x_ty.layout):
+    if any(
+        reduction is not None
+        for reduction in partial_reductions_by_axis(x_ty.layout)
+    ):
         ctx.error(
             call,
             "Partial input on x is unsound (softmax normalizes across an "

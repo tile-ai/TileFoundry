@@ -14,7 +14,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import partial_reductions
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
@@ -36,7 +36,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         axis += rank
     if axis < 0 or axis >= rank:
         raise TypeError(f"ArgMax: axis {call.target.axis} out of range for rank {rank}")
-    if partial_reductions(x_ty.layout):
+    if any(
+        reduction is not None
+        for reduction in partial_reductions_by_axis(x_ty.layout)
+    ):
         raise TypeError(
             "ArgMax: Partial input on x is unsound (the winning index "
             "cannot be recovered from a per-device partial value without a "

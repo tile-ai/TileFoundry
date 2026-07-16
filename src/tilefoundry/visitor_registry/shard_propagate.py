@@ -19,6 +19,23 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 
 
+def partial_reductions_by_axis(
+    layout: object,
+) -> tuple[str | None, ...]:
+    """Return each mesh axis's carried Partial reduction, if any.
+
+    The tuple index is the mesh-axis index in ``ShardLayout.attrs``. A
+    ``None`` entry denotes an attr that is not a ``Partial``; a non-sharded
+    layout returns an empty tuple.
+    """
+    if not isinstance(layout, ShardLayout):
+        return ()
+    return tuple(
+        attr.reduction if isinstance(attr, Partial) else None
+        for attr in layout.attrs
+    )
+
+
 def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
     """Classify each result (out) axis of *m* by how it accesses the domain:
 
@@ -365,4 +382,4 @@ def derive_output_shard_layout(
     )
 
 
-__all__ = ["derive_output_shard_layout"]
+__all__ = ["derive_output_shard_layout", "partial_reductions_by_axis"]

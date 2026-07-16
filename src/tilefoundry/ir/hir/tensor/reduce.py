@@ -13,14 +13,17 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, partial_reductions
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    derive_output_shard_layout,
+    partial_reductions_by_axis,
+)
 
 __all__ = ["ReduceKind", "Reduce"]
 
@@ -60,7 +63,11 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     kind = call.target.kind
-    reductions = partial_reductions(x_ty.layout)
+    reductions = tuple(
+        reduction
+        for reduction in partial_reductions_by_axis(x_ty.layout)
+        if reduction is not None
+    )
     if reductions:
         # x's Partial(reduction) is a pending cross-device combine on a mesh
         # axis, orthogonal to the tensor axes reduced here; it propagates only
@@ -70,9 +77,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         # mesh-axis index set (commutes with max only, same R); ABS_MAX (a
         # nonlinear abs composed with max) does not commute with any R.
         if kind in (ReduceKind.SUM, ReduceKind.MEAN):
-            bad = reductions - {"sum"}
+            bad = tuple(reduction for reduction in reductions if reduction != "sum")
         elif kind is ReduceKind.MAX:
-            bad = reductions - {"max"}
+            bad = tuple(reduction for reduction in reductions if reduction != "max")
         else:
             bad = reductions
         if bad:

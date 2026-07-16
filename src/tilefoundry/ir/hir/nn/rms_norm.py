@@ -25,7 +25,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import partial_reductions
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op(name="rms_norm")
@@ -50,7 +50,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError(
             f"RMSNorm: x last dim {x_ty.shape[-1]} != weight dim {w_ty.shape[0]}"
         )
-    if partial_reductions(x_ty.layout):
+    if any(
+        reduction is not None
+        for reduction in partial_reductions_by_axis(x_ty.layout)
+    ):
         raise TypeError(
             "RMSNorm: Partial input on x is unsound (rms_norm normalizes "
             "across an axis, a non-monotonic combination that does not "

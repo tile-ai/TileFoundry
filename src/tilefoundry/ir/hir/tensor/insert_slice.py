@@ -10,7 +10,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, partial_reductions
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op(name="insert_slice")
@@ -70,7 +71,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError(
             f"insert_slice: dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}"
         )
-    if partial_reductions(dst_ty.layout) and not (
+    if any(
+        reduction is not None
+        for reduction in partial_reductions_by_axis(dst_ty.layout)
+    ) and not (
         isinstance(upd_ty.layout, ShardLayout)
         and upd_ty.layout.mesh == dst_ty.layout.mesh
         and upd_ty.layout.attrs == dst_ty.layout.attrs

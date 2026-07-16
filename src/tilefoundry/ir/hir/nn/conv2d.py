@@ -9,7 +9,7 @@ from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard.shard_layout import partial_reductions
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -69,7 +69,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     # propagates only for "sum" — convolution is linear in each operand for
     # the other fixed, but does not preserve order, so max/min never commute.
     for arg, t in (("input", x), ("weight", w)):
-        bad = partial_reductions(t.layout) - {"sum"}
+        bad = tuple(
+            reduction
+            for reduction in partial_reductions_by_axis(t.layout)
+            if reduction not in (None, "sum")
+        )
         if bad:
             ctx.error(
                 call,

@@ -21,7 +21,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, partial_reductions
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -29,7 +29,10 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import shape_from_relation
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    derive_output_shard_layout,
+    partial_reductions_by_axis,
+)
 
 from ._helpers import _broadcast, _is_one, _merge_layout, resolve_anchor_storage
 
@@ -96,23 +99,25 @@ def _check_partial_commutes(call: "Call", ctx: "TypeInferContext", op, la, lb) -
     ``Partial`` never commutes. Every other kind / shape rejects any
     `Partial` operand — not proven safe.
     """
-    lhs_r, rhs_r = partial_reductions(la), partial_reductions(lb)
-    if not lhs_r and not rhs_r:
+    lhs_r, rhs_r = partial_reductions_by_axis(la), partial_reductions_by_axis(lb)
+    lhs_has = any(r is not None for r in lhs_r)
+    rhs_has = any(r is not None for r in rhs_r)
+    if not lhs_has and not rhs_has:
         return
     fix = "insert reshard(<arg>, Broadcast) before this consumer"
     if op.kind is BinaryKind.ADD:
-        if lhs_r and rhs_r:
-            if lhs_r != rhs_r or lhs_r != frozenset({"sum"}):
+        if lhs_has and rhs_has:
+            if lhs_r != rhs_r or any(r not in (None, "sum") for r in lhs_r):
                 ctx.error(
                     call,
-                    f"Binary ADD: Partial(lhs)={sorted(lhs_r)} vs "
-                    f"Partial(rhs)={sorted(rhs_r)} is unsound (ADD of two "
+                    f"Binary ADD: Partial(lhs)={tuple(r for r in lhs_r if r is not None)} vs "
+                    f"Partial(rhs)={tuple(r for r in rhs_r if r is not None)} is unsound (ADD of two "
                     "Partials only commutes when both are Partial(sum) on "
                     "the same mesh axis) — " + fix,
                 )
             return
-        arg, r = ("lhs", lhs_r) if lhs_r else ("rhs", rhs_r)
-        if "sum" in r:
+        arg, r = ("lhs", lhs_r) if lhs_has else ("rhs", rhs_r)
+        if any(reduction == "sum" for reduction in r):
             ctx.error(
                 call,
                 f"Binary ADD: Partial(sum) input on {arg} against a "
@@ -121,27 +126,27 @@ def _check_partial_commutes(call: "Call", ctx: "TypeInferContext", op, la, lb) -
             )
         return
     if op.kind is BinaryKind.MUL:
-        if lhs_r and rhs_r:
+        if lhs_has and rhs_has:
             ctx.error(
                 call,
-                f"Binary MUL: Partial(lhs)={sorted(lhs_r)} against "
-                f"Partial(rhs)={sorted(rhs_r)} is unsound (MUL of two "
+                f"Binary MUL: Partial(lhs)={tuple(r for r in lhs_r if r is not None)} against "
+                f"Partial(rhs)={tuple(r for r in rhs_r if r is not None)} is unsound (MUL of two "
                 "Partials is not linear) — " + fix,
             )
-        arg, r = ("lhs", lhs_r) if lhs_r else ("rhs", rhs_r)
-        if r - {"sum"}:
+        arg, r = ("lhs", lhs_r) if lhs_has else ("rhs", rhs_r)
+        if any(reduction not in (None, "sum") for reduction in r):
             ctx.error(
                 call,
-                f"Binary MUL: Partial({sorted(r)}) input on {arg} against a "
+                f"Binary MUL: Partial({tuple(reduction for reduction in r if reduction is not None)}) input on {arg} against a "
                 "plain/Broadcast operand is unsound (the operand's sign is "
                 "not statically provable, and a negative scale flips "
                 f"max/min) — {fix.replace('<arg>', arg)}",
             )
         return
-    arg, r = ("lhs", lhs_r) if lhs_r else ("rhs", rhs_r)
+    arg, r = ("lhs", lhs_r) if lhs_has else ("rhs", rhs_r)
     ctx.error(
         call,
-        f"Binary {op.kind.name}: Partial({sorted(r)}) input on {arg} is not "
+        f"Binary {op.kind.name}: Partial({tuple(reduction for reduction in r if reduction is not None)}) input on {arg} is not "
         f"proven to commute with any reduction — {fix.replace('<arg>', arg)}",
     )
 

@@ -23,7 +23,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.shard.shard_layout import partial_reductions
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
@@ -42,7 +42,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         raise TypeError("Quant: x must be at least rank-1")
-    if partial_reductions(x_ty.layout):
+    if any(
+        reduction is not None
+        for reduction in partial_reductions_by_axis(x_ty.layout)
+    ):
         raise TypeError(
             "Quant: Partial input on x is unsound (per-group amax "
             "normalization is non-monotonic and does not commute with any "

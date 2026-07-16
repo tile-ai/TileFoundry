@@ -23,7 +23,6 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
     layout_axis_to_tensor_axis,
-    partial_reductions,
 )
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -36,6 +35,7 @@ from tilefoundry.visitor_registry.relation_build import build_domain
 from tilefoundry.visitor_registry.shard_propagate import (
     _c_order,
     derive_output_shard_layout,
+    partial_reductions_by_axis,
 )
 
 
@@ -92,7 +92,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             for a in x_ty.layout.attrs
         ):
             raise TypeError(f"TopK: selected axis {axis} must not be Split-sharded")
-    if partial_reductions(x_ty.layout):
+    if any(
+        reduction is not None
+        for reduction in partial_reductions_by_axis(x_ty.layout)
+    ):
         raise TypeError(
             "TopK: Partial input on x is unsound (the selected indices "
             "cannot be recovered from a per-device partial value without a "

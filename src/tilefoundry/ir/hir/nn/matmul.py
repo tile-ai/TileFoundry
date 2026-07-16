@@ -11,11 +11,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import (
-    ShardLayout,
-    partial_reductions,
-    split_target_axes,
-)
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -23,7 +19,10 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import shape_from_relation
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    derive_output_shard_layout,
+    partial_reductions_by_axis,
+)
 
 from ..math._helpers import resolve_anchor_storage
 
@@ -142,7 +141,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     # propagates only for "sum" — matmul is linear in each operand for the
     # other fixed, but does not preserve order, so max/min never commute.
     for arg, t in (("lhs", lhs), ("rhs", rhs)):
-        bad = partial_reductions(t.layout) - {"sum"}
+        bad = tuple(
+            reduction
+            for reduction in partial_reductions_by_axis(t.layout)
+            if reduction not in (None, "sum")
+        )
         if bad:
             ctx.error(
                 call,

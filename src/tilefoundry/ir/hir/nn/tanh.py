@@ -6,7 +6,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import partial_reductions
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -15,7 +15,10 @@ class Tanh(Op):
 @register_typeinfer(Tanh)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    if "sum" in partial_reductions(x_ty.layout):
+    if any(
+        reduction == "sum"
+        for reduction in partial_reductions_by_axis(x_ty.layout)
+    ):
         ctx.error(
             call,
             "Partial(sum) input on x is unsound (tanh is nonlinear, does "

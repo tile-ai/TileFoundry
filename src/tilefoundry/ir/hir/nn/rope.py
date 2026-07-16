@@ -21,7 +21,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TupleType
-from tilefoundry.ir.types.shard.shard_layout import partial_reductions
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
@@ -61,7 +61,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     # cos/sin (commutes with Partial(sum)); rotate_half's sign flip on half
     # the vector breaks monotonicity, so max/min do not commute.
     for arg, t in (("q", q_ty), ("k", k_ty)):
-        bad = partial_reductions(t.layout) - {"sum"}
+        bad = tuple(
+            reduction
+            for reduction in partial_reductions_by_axis(t.layout)
+            if reduction not in (None, "sum")
+        )
         if bad:
             raise TypeError(
                 f"RoPE: Partial({sorted(bad)}) input on {arg} is unsound "

@@ -49,14 +49,6 @@ class ShardLayout:
     mesh: Mesh
 
 
-def partial_reductions(layout: object) -> frozenset[str]:
-    """The distinct ``Partial.reduction`` values carried by *layout*'s attrs,
-    or an empty set when *layout* isn't a ``ShardLayout`` or carries none."""
-    if not isinstance(layout, ShardLayout):
-        return frozenset()
-    return frozenset(a.reduction for a in layout.attrs if isinstance(a, Partial))
-
-
 def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
     """Derive the per-thread local cute shape from a global
     ``ShardLayout``.
@@ -174,6 +166,5 @@ __all__ = [
     "ShardLayout",
     "shard_layout_local_shape",
     "layout_axis_to_tensor_axis",
-    "partial_reductions",
     "split_target_axes",
 ]
