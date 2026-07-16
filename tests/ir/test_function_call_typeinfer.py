@@ -12,14 +12,14 @@ from __future__ import annotations
 import pytest
 
 from tests.ops.typeinfer_utils import infer_call, mesh, sharded, ten
-from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.core import Call, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.ir.types import DType, TupleType
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -114,6 +114,28 @@ def test_plain_formal_rejects_dtype_mismatch():
     f = _add_callee(ten((4, 8), _F))
     with pytest.raises(VerifyError, match="shape/dtype mismatch"):
         infer_call(f, ten((4, 8), DType.bf16))
+
+
+def test_function_call_preserves_partial_in_tuple_return():
+    mesh_ab = mesh((2, 4), ("a", "b"))
+    plain = ten((4, 8), _F)
+    partial = sharded(
+        (4, 8), (Broadcast(), Partial("max")), mesh_ab
+    )
+    param = Var(type=plain, name="x")
+    return_type = TupleType(fields=(plain, plain))
+    body = Tuple(type=return_type, elements=(param, param))
+    callee = Function.build(
+        name="partial_pair", params=(param,), body=body, return_type=return_type
+    )
+    arg = Var(type=partial, name="arg")
+    call = Call(type=return_type, target=callee, args=(arg,))
+
+    result = TypeInferVisitor(TypeInferContext()).visit(call)
+
+    assert result == TupleType(fields=(partial, partial))
+    assert result.fields[0].layout.mesh == mesh_ab
+    assert result.fields[0].layout.attrs == (Broadcast(), Partial("max"))
 
 
 def test_bind_error_reports_call_site_loc():

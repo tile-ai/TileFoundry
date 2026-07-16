@@ -68,6 +68,12 @@ TIR-only (see [tir](./tir.md)). `HirToTirPass` materialises the HIR
 return value into a TIR explicit output buffer parameter at the
 HIR → TIR boundary.
 
+The return type MAY carry a `Partial(reduction)` in a `TensorType`, or in any
+tensor field of a nested `TupleType`. Function construction, type inference,
+and call elaboration MUST allow that state. A Function boundary MUST preserve
+the `ShardLayout` mesh and per-axis reduction; it MUST NOT complete the value
+or reject it merely because it is `Partial`.
+
 `topologies` is the convenience declaration for a single-function
 program. Before `compile` / `jit`, it lifts to `Module.topologies`
 ([core-ir §1](./core-ir.md)). A `with Mesh(topology="cta", ...) as cta:`
@@ -107,6 +113,12 @@ Argument ↔ parameter binding is:
 - `DimVar` shapes keep envelope matching — elaboration does not
   monomorphize a dynamic shape into a concrete one (that is **Shape
   dispatch and specializations** below, unaffected by elaboration).
+
+The per-mesh-axis `Partial` state is part of the actual argument type. When a
+layout-unconstrained parameter binds to a sharded argument, elaboration MUST
+carry each `Partial(reduction)` at its original mesh-axis index through the
+body and into the concrete return type, including tuple fields. Only an
+explicit `Reshard` or allreduce may complete that state.
 
 When the body cannot express a propagated sharding (e.g. a reshape
 whose cute factorization straddles a new axis), typeinfer fails at that
@@ -411,6 +423,9 @@ class Binary(Op):
     (`op(reduction(x)) == reduction(op(x))`); typeinfer rejects otherwise,
     naming the offending operand and the fix (an explicit `Reshard` to
     `Broadcast`).
+    Decisions are made independently for each mesh axis. `Partial` states on
+    different axes are not interchangeable; `ADD` rejects two Partial inputs
+    when their states occupy different mesh axes.
     - `ADD` with both operands `Partial`: commutes (passes) only when both
       carry the same `reduction="sum"` on that mesh axis (`max`/`min` reject
       — `max(x)+max(y)` is not `max(x+y)`).
@@ -641,6 +656,9 @@ class InsertSlice(Op):
     a differently-sharded (or unsharded) `update` into a still-partial `dst`
     position under one output type is unrepresentable; typeinfer rejects
     otherwise.
+  - When `dst` is complete, an `update` carrying a `Partial` MUST be rejected;
+    the write result cannot preserve that secondary value state. An explicit
+    `Reshard(update, Broadcast)` completes it.
 
 ##### TopK
 ```python
@@ -693,12 +711,38 @@ Consensus torch.nn.functional ops.
     `Reshard` to `Broadcast`).
   - `ReLU` / `Sigmoid` / `Tanh` are monotone non-decreasing elementwise, so
     they commute with `max` / `min` but not `sum`.
-  - `MatMul` / `Conv2D` are linear in each operand for the other operand
-    fixed (weight replication), so a `Partial` operand commutes with `sum`
-    but not `max` / `min` (matrix multiplication does not preserve order).
+  - `MatMul` is linear in one value input when the other value-carrying input
+    is `Broadcast` / replicated. On each mesh axis, one `Partial(sum)` is
+    therefore allowed; a double-Partial input or a non-`sum` reduction is
+    rejected.
+  - `Conv2D` applies the same per-axis multilinear constraint to `input`,
+    `weight`, and `bias`. A `Partial(sum)` on `input` is preserved only when
+    the other value inputs are replicated. A secondary `Partial` on `weight`
+    or `bias` is rejected when the result layout cannot preserve that state.
   - `SoftMax` / `LayerNorm` normalize across an axis (a non-monotonic
     combination of every value on that axis), so no `reduction` provably
-    commutes; typeinfer rejects any `Partial` operand.
+    commutes; typeinfer rejects any `Partial` operand, including secondary
+    affine inputs.
+
+##### RoPE
+```python
+class RoPE(Op):
+    """Rotate query and key tensors using position-indexed cos/sin caches."""
+
+    q: Tensor
+    k: Tensor
+    cos_cache: Tensor
+    sin_cache: Tensor
+    pos_ids: Tensor
+```
+- constraints:
+  - The result is `(q_rope, k_rope)` and each branch preserves the layout of
+    its corresponding `q` or `k` input.
+  - On each mesh axis, a branch MAY preserve one `Partial(sum)` on its
+    corresponding query or key input only when `cos_cache`, `sin_cache`, and
+    `pos_ids` are `Broadcast` / replicated on that axis.
+  - A non-`sum` Partial, multiple value-carrying Partials, or a Partial on a
+    secondary cache/index input MUST be rejected with a `Reshard` remedy.
 
 #### `ir/hir/shape/`
 
