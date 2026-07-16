@@ -8,7 +8,7 @@ separate call boundaries.
 
 from __future__ import annotations
 
-from tilefoundry import func
+from tilefoundry import Module, func
 from tilefoundry.dsl import ReduceKind, Tensor, tf
 
 DIM = 4096
@@ -28,7 +28,7 @@ def pre_moe_rms_norm(
 
 
 @func
-def _dequant_shared_w1(
+def shared_fp8_dequant_w1(
     weight: Tensor[(MOE_INTER, DIM), "fp8e4m3"],
     scale: Tensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
 ) -> Tensor[(MOE_INTER, DIM), "bf16"]:
@@ -44,7 +44,7 @@ def _dequant_shared_w1(
 
 
 @func
-def _dequant_shared_w2(
+def shared_fp8_dequant_w2(
     weight: Tensor[(DIM, MOE_INTER), "fp8e4m3"],
     scale: Tensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
 ) -> Tensor[(DIM, MOE_INTER), "bf16"]:
@@ -60,10 +60,10 @@ def _dequant_shared_w2(
 
 
 @func
-def routed_expert(
+def moe_experts_core(
     x: Tensor[(1, 1, DIM), "bf16"],
-    gate_weight: Tensor[(N_ROUTED, DIM), "bf16"],
-    gate_bias: Tensor[(N_ROUTED,), "f32"],
+    gweights: Tensor[(1, N_ACT), "f32"],
+    eids: Tensor[(1, N_ACT), "i64"],
     w1_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
     w1_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
     w3_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
@@ -72,34 +72,22 @@ def routed_expert(
     w2_scale: Tensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     xt = tf.reshape(x, new_shape=(1, DIM))
-    gate = tf.matmul(
-        tf.cast(xt, dtype="f32"),
-        tf.transpose(tf.cast(gate_weight, dtype="f32"), perm=(1, 0)),
-    )
-    softplus = tf.log(tf.exp(gate) + tf.full_like(gate, value=1.0))
-    scores = softplus * tf.rsqrt(softplus)
-    selection = scores + tf.reshape(gate_bias, new_shape=(1, N_ROUTED))
-    _, expert_ids = tf.topk(selection, k=N_ACT, axis=-1)
-    weights = tf.gather(scores, expert_ids, axis=1, batch_dims=1)
-    weight_sum = tf.reduce(weights, axes=(-1,), keepdim=True, kind=ReduceKind.SUM)
-    weights = (weights / weight_sum) * tf.full_like(weights, value=ROUTE_SCALE)
-
-    gathered_w1 = tf.cast(tf.gather(w1_weight, expert_ids, axis=0), dtype="bf16")
-    gathered_s1 = tf.cast(tf.gather(w1_scale, expert_ids, axis=0), dtype="bf16")
+    gathered_w1 = tf.cast(tf.gather(w1_weight, eids, axis=0), dtype="bf16")
+    gathered_s1 = tf.cast(tf.gather(w1_scale, eids, axis=0), dtype="bf16")
     w1 = tf.reshape(
         tf.reshape(gathered_w1, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 32))
         * tf.reshape(gathered_s1, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 1)),
         new_shape=(1, N_ACT, MOE_INTER, DIM),
     )
-    gathered_w3 = tf.cast(tf.gather(w3_weight, expert_ids, axis=0), dtype="bf16")
-    gathered_s3 = tf.cast(tf.gather(w3_scale, expert_ids, axis=0), dtype="bf16")
+    gathered_w3 = tf.cast(tf.gather(w3_weight, eids, axis=0), dtype="bf16")
+    gathered_s3 = tf.cast(tf.gather(w3_scale, eids, axis=0), dtype="bf16")
     w3 = tf.reshape(
         tf.reshape(gathered_w3, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 32))
         * tf.reshape(gathered_s3, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 1)),
         new_shape=(1, N_ACT, MOE_INTER, DIM),
     )
-    gathered_w2 = tf.cast(tf.gather(w2_weight, expert_ids, axis=0), dtype="bf16")
-    gathered_s2 = tf.cast(tf.gather(w2_scale, expert_ids, axis=0), dtype="bf16")
+    gathered_w2 = tf.cast(tf.gather(w2_weight, eids, axis=0), dtype="bf16")
+    gathered_s2 = tf.cast(tf.gather(w2_scale, eids, axis=0), dtype="bf16")
     w2 = tf.reshape(
         tf.reshape(gathered_w2, new_shape=(1, N_ACT, DIM, MOE_INTER // 32, 32))
         * tf.reshape(gathered_s2, new_shape=(1, N_ACT, DIM, MOE_INTER // 32, 1)),
@@ -128,12 +116,49 @@ def routed_expert(
         dtype="f32",
     )
     routed = tf.reduce(
-        expert_output * tf.reshape(weights, new_shape=(1, N_ACT, 1)),
+        expert_output * tf.reshape(gweights, new_shape=(1, N_ACT, 1)),
         axes=(1,),
         keepdim=False,
         kind=ReduceKind.SUM,
     )
     return tf.reshape(tf.cast(routed, dtype="bf16"), new_shape=(1, 1, DIM))
+
+
+@func
+def moe_topk(
+    x: Tensor[(1, 1, DIM), "bf16"],
+    gate_weight: Tensor[(N_ROUTED, DIM), "bf16"],
+    gate_bias: Tensor[(N_ROUTED,), "f32"],
+    w1_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    w1_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    w3_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    w3_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    w2_weight: Tensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
+    w2_scale: Tensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
+) -> Tensor[(1, 1, DIM), "bf16"]:
+    xt = tf.reshape(x, new_shape=(1, DIM))
+    gate = tf.matmul(
+        tf.cast(xt, dtype="f32"),
+        tf.transpose(tf.cast(gate_weight, dtype="f32"), perm=(1, 0)),
+    )
+    softplus = tf.log(tf.exp(gate) + tf.full_like(gate, value=1.0))
+    scores = softplus * tf.rsqrt(softplus)
+    selection = scores + tf.reshape(gate_bias, new_shape=(1, N_ROUTED))
+    _, eids = tf.topk(selection, k=N_ACT, axis=-1)
+    gweights = tf.gather(scores, eids, axis=1, batch_dims=1)
+    weight_sum = tf.reduce(gweights, axes=(-1,), keepdim=True, kind=ReduceKind.SUM)
+    gweights = (gweights / weight_sum) * tf.full_like(gweights, value=ROUTE_SCALE)
+    return moe_experts_core(
+        x,
+        gweights,
+        eids,
+        w1_weight,
+        w1_scale,
+        w3_weight,
+        w3_scale,
+        w2_weight,
+        w2_scale,
+    )
 
 
 @func
@@ -147,8 +172,8 @@ def shared_expert(
     w2_scale: Tensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     xt = tf.reshape(x, new_shape=(1, DIM))
-    w1 = _dequant_shared_w1(w1_weight, w1_scale)
-    w3 = _dequant_shared_w1(w3_weight, w3_scale)
+    w1 = shared_fp8_dequant_w1(w1_weight, w1_scale)
+    w3 = shared_fp8_dequant_w1(w3_weight, w3_scale)
     gate = tf.cast(
         tf.matmul(xt, tf.transpose(w1, perm=(1, 0))), dtype="f32"
     )
@@ -157,7 +182,7 @@ def shared_expert(
     up = tf.maximum(tf.minimum(up, limit), tf.full_like(up, value=-SWIGLU_LIMIT))
     gate = tf.minimum(gate, limit)
     hidden = tf.cast((gate * tf.sigmoid(gate)) * up, dtype="bf16")
-    w2 = _dequant_shared_w2(w2_weight, w2_scale)
+    w2 = shared_fp8_dequant_w2(w2_weight, w2_scale)
     output = tf.cast(tf.matmul(hidden, tf.transpose(w2, perm=(1, 0))), dtype="bf16")
     return tf.reshape(output, new_shape=(1, 1, DIM))
 
@@ -170,6 +195,7 @@ def combine_expert_outputs(
     return tf.add(routed, shared)
 
 
+@func
 def dsv4_moe_layer(
     x: Tensor[(1, 1, DIM), "bf16"],
     rms_weight: Tensor[(DIM,), "f32"],
@@ -189,7 +215,7 @@ def dsv4_moe_layer(
     shared_w2_scale: Tensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     hidden = pre_moe_rms_norm(x, rms_weight)
-    routed_value: where(layout=(_, _, H @ cta)) = routed_expert(
+    routed_value: where(layout=(_, _, H @ cta)) = moe_topk(
         hidden,
         gate_weight,
         gate_bias,
@@ -212,6 +238,22 @@ def dsv4_moe_layer(
     return combine_expert_outputs(routed_value, shared_value)
 
 
+dsv4_moe_module = Module(
+    name="DeepSeekV4FlashMoe",
+    functions=(
+        shared_fp8_dequant_w1,
+        shared_fp8_dequant_w2,
+        pre_moe_rms_norm,
+        moe_experts_core,
+        moe_topk,
+        shared_expert,
+        combine_expert_outputs,
+        dsv4_moe_layer,
+    ),
+    entry="dsv4_moe_layer",
+)
+
+
 __all__ = [
     "DIM",
     "MOE_INTER",
@@ -219,7 +261,11 @@ __all__ = [
     "N_ROUTED",
     "combine_expert_outputs",
     "dsv4_moe_layer",
+    "dsv4_moe_module",
+    "moe_experts_core",
+    "moe_topk",
     "pre_moe_rms_norm",
-    "routed_expert",
+    "shared_fp8_dequant_w1",
+    "shared_fp8_dequant_w2",
     "shared_expert",
 ]

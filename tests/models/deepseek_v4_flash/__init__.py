@@ -5,9 +5,13 @@ from .moe import (
     N_ROUTED,
     combine_expert_outputs,
     dsv4_moe_layer,
+    dsv4_moe_module,
+    moe_experts_core,
+    moe_topk,
     pre_moe_rms_norm,
-    routed_expert,
     shared_expert,
+    shared_fp8_dequant_w1,
+    shared_fp8_dequant_w2,
 )
 
 __all__ = [
@@ -17,7 +21,11 @@ __all__ = [
     "N_ROUTED",
     "combine_expert_outputs",
     "dsv4_moe_layer",
+    "dsv4_moe_module",
+    "moe_experts_core",
+    "moe_topk",
     "pre_moe_rms_norm",
-    "routed_expert",
+    "shared_fp8_dequant_w1",
+    "shared_fp8_dequant_w2",
     "shared_expert",
 ]

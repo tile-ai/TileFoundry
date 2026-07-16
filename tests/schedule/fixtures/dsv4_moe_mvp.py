@@ -1,7 +1,5 @@
-"""Schedule entry imported from the canonical DeepSeek V4 model package."""
+"""Compatibility import for the canonical real DSV4 MoE model."""
 
-from tests.models.deepseek_v4 import dsv4_moe_layer
-
-moe_entry = dsv4_moe_layer
+from tests.models.deepseek_v4_flash import dsv4_moe_layer as moe_entry
 
 __all__ = ["moe_entry"]
