@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout
 from tilefoundry.schedule.constraints import AgentConstraint, constraint_metadata
 
 from .fingerprint import logical_fingerprint
@@ -152,6 +153,10 @@ class ProgramScheduleGraphBuilder:
         entry = module.entry_function()
         if not isinstance(entry, Function):
             raise ScheduleGraphError("schedule graph currently supports HIR functions only")
+        entry_type = getattr(entry.body, "type", None)
+        if isinstance(getattr(entry_type, "layout", None), ShardLayout):
+            if any(isinstance(attr, Partial) for attr in entry_type.layout.attrs):
+                raise ScheduleGraphError("Module.entry must not return an unresolved Partial value")
         entry_id = self._function_id(entry)
         self._expand_region(entry, (), entry_id)
         regions = tuple(self._regions)

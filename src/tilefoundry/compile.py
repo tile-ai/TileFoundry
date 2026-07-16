@@ -10,10 +10,25 @@ import tempfile
 from dataclasses import dataclass
 
 from tilefoundry.inspection import as_script as _as_script
+from tilefoundry.ir.core import Call, Expr, Tuple
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import BufferizePass, HirToTirPass
+from tilefoundry.schedule.constraints import AgentConstraintsMetadata
+
+
+def _has_agent_constraints(expr: Expr | None) -> bool:
+    if expr is None:
+        return False
+    if getattr(expr, "metadata", ()):
+        if any(isinstance(item, AgentConstraintsMetadata) for item in expr.metadata):
+            return True
+    if isinstance(expr, Call):
+        return any(_has_agent_constraints(argument) for argument in expr.args)
+    if isinstance(expr, Tuple):
+        return any(_has_agent_constraints(element) for element in expr.elements)
+    return False
 
 # ── Compiler Options ─────────────────────────────────────────────────────────
 
@@ -83,6 +98,18 @@ def lower(
         )
     if target != "cuda":
         raise ValueError(f"tilefoundry.lower: target {target!r} not supported yet")
+
+    for fn in mod.functions:
+        if any(_has_agent_constraints(param) for param in getattr(fn, "params", ())):
+            raise ValueError(
+                "tilefoundry.lower: Module contains unresolved Agent Constraints; "
+                "run tilefoundry.schedule.auto_dist first"
+            )
+        if _has_agent_constraints(getattr(fn, "body", None)):
+            raise ValueError(
+                "tilefoundry.lower: Module contains unresolved Agent Constraints; "
+                "run tilefoundry.schedule.auto_dist first"
+            )
 
     # Validate every declared program topology level against the target before
     # lowering — a function may declare an unsupported level (e.g. ``gpu``)

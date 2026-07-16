@@ -5,8 +5,10 @@ from dataclasses import replace
 import pytest
 
 from tilefoundry import VerifyError
+from tilefoundry.compile import lower
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
+from tilefoundry.ir.core.module import Module
 from tilefoundry.parser import parse_func_source
 from tilefoundry.schedule.constraints import (
     AgentConstraintsMetadata,
@@ -107,3 +109,14 @@ def test_metadata_is_ignored_by_expr_equality_and_hashing():
 def test_removed_or_invalid_constraint_forms_fail(annotation):
     with pytest.raises(VerifyError):
         parse_func_source(_source(f"    y: {annotation} = tf.add(x, x)\n    return y"))
+
+
+def test_lower_rejects_unresolved_agent_constraints() -> None:
+    fn = parse_func_source(
+        _source(
+            """    y: where(layout=(_, H @ cta)) = tf.add(x, x)
+    return y"""
+        )
+    )
+    with pytest.raises(ValueError, match="unresolved Agent Constraints"):
+        lower(Module(name="candidate", functions=(fn,), entry="candidate"))

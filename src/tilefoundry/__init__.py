@@ -89,6 +89,13 @@ def view(root, *, port: int = 0, open_browser: bool = True) -> int:
     """
     return _Viewer(root).serve(port=port, open_browser=open_browser)
 
+
+def auto_dist(*args, **kwargs):
+    """Resolve and run the schedule AutoDist entry point lazily."""
+    from tilefoundry.schedule import auto_dist as _auto_dist  # noqa: PLC0415
+
+    return _auto_dist(*args, **kwargs)
+
 __all__ = [
     # core
     "Expr", "Var", "Constant", "Call", "Stmt", "TupleGetItem", "Module",
@@ -115,4 +122,5 @@ __all__ = [
     "lower", "build", "compile", "jit",
     "normalize_to_module", "CompilerOptions",
     "view",
+    "auto_dist",
 ]
