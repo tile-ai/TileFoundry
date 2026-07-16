@@ -13,6 +13,7 @@ from .context import ScheduleContext
 from .cost import build_cost_table
 from .graph import ProgramScheduleGraph, build_program_schedule_graph
 from .materialize import materialize_schedule
+from .report import ScheduleReport, build_schedule_report
 from .solver import CpSatScheduleSolver, SolveOptions, SolveProblem, problem_fingerprint
 from .space import ScheduleSpace, build_schedule_space
 
@@ -20,7 +21,7 @@ from .space import ScheduleSpace, build_schedule_space
 @dataclass(frozen=True, slots=True)
 class SolveResult:
     solution: Module
-    report: object | None
+    report: ScheduleReport
     graph: ProgramScheduleGraph
     space: ScheduleSpace
     costs: object
@@ -86,9 +87,10 @@ def auto_dist(
     problem = SolveProblem(graph, space, costs, graph.constraints, fingerprint)
     solution = CpSatScheduleSolver().solve(problem, options or SolveOptions())
     materialized = materialize_schedule(problem, solution, context)
+    report = build_schedule_report(problem, solution, context)
     return SolveResult(
         solution=materialized,
-        report=None,
+        report=report,
         graph=graph,
         space=space,
         costs=costs,

@@ -37,6 +37,15 @@ from .graph import (
     build_program_schedule_graph,
 )
 from .pipeline import SolveResult, auto_dist
+from .report import (
+    ConstraintReport,
+    FunctionRegionReport,
+    FusionOpportunity,
+    OperationReport,
+    ReshardReport,
+    ScheduleReport,
+    build_schedule_report,
+)
 from .solution import EdgeAssignment, NodeAssignment, OpPlacement, ScheduleSolution
 from .solver import (
     CpSatScheduleSolver,
@@ -100,6 +109,13 @@ __all__ = [
     "problem_fingerprint",
     "SolveResult",
     "auto_dist",
+    "ConstraintReport",
+    "FunctionRegionReport",
+    "FusionOpportunity",
+    "OperationReport",
+    "ReshardReport",
+    "ScheduleReport",
+    "build_schedule_report",
     "CallInstance",
     "FunctionRegion",
     "GraphConstraint",

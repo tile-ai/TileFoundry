@@ -2,21 +2,17 @@ from __future__ import annotations
 
 import dataclasses
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, TypeInferContext, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, ShardLayout, Split
 
 from .candidate import DistributionState, LayoutState
 from .graph import GraphOp
 from .solution import NodeAssignment, ScheduleSolution
 from .solver import SolveProblem
-
-
-def _placeholder_type() -> TensorType:
-    return TensorType.scalar(DType.f32)
 
 
 class _Materializer:
@@ -69,10 +65,11 @@ class _Materializer:
             self.function_cache[id(function)] = result
             return result
         self.active.add(id(function))
+        is_entry = function is self.graph.module.entry_function()
         parameter_map = {
-            id(old): self._parameter(old) for old in function.params
+            id(old): self._parameter(old, concrete=is_entry) for old in function.params
         }
-        body = self.visit_expr(function.body, parameter_map)
+        body = self.visit_expr(function.body, parameter_map, {})
         if function is self.graph.module.entry_function():
             body = self._reshard_to_parent(body)
         result = Function.build(
@@ -88,9 +85,9 @@ class _Materializer:
         self.function_cache[id(function)] = result
         return result
 
-    def _parameter(self, param: Var) -> Var:
+    def _parameter(self, param: Var, *, concrete: bool) -> Var:
         ty = param.type
-        if isinstance(ty, TensorType):
+        if concrete and isinstance(ty, TensorType):
             ty = dataclasses.replace(ty, layout=self._layout_for_state(ty, self._broadcast_state(ty), self.parent_mesh))
         return Var(type=ty, name=param.name, loc=param.loc, metadata=())
 
@@ -126,9 +123,13 @@ class _Materializer:
         if value.type.layout == layout and storage is not None:
             return value
         target = Reshard(layout=layout, storage=storage)
-        call = Call(type=_placeholder_type(), target=target, args=(value,), metadata=())
-        inferred = TypeInferContext().type_of(call)
-        return dataclasses.replace(call, type=inferred, metadata=())
+        result_type = TensorType(
+            shape=value.type.shape,
+            dtype=value.type.dtype,
+            layout=layout,
+            storage=storage,
+        )
+        return Call(type=result_type, target=target, args=(value,), metadata=())
 
     def _reshard_to_parent(self, value: Expr) -> Expr:
         if not isinstance(value.type, TensorType):
@@ -150,6 +151,9 @@ class _Materializer:
         assignment = self._assignment_for_expr(original)
         if assignment is None or not isinstance(rebuilt.type, TensorType):
             return dataclasses.replace(rebuilt, metadata=())
+        op = self.op_by_expr[id(original)]
+        if op.call_instance is None:
+            return dataclasses.replace(rebuilt, metadata=())
         selected = next(
             node_option
             for node_option in self.problem.space.node_options
@@ -159,29 +163,51 @@ class _Materializer:
         mesh = self._mesh_for_assignment(assignment)
         return self._reshard(rebuilt, self._layout_for_state(rebuilt.type, output_state, mesh))
 
-    def visit_expr(self, expr: Expr, substitutions: dict[int, Expr]) -> Expr:
+    def visit_expr(
+        self,
+        expr: Expr,
+        substitutions: dict[int, Expr],
+        memo: dict[int, Expr],
+    ) -> Expr:
+        cached = memo.get(id(expr))
+        if cached is not None:
+            return cached
         if isinstance(expr, Var):
-            return substitutions.get(id(expr), self._strip_expr(expr))
+            result = substitutions.get(id(expr), self._strip_expr(expr))
+            memo[id(expr)] = result
+            return result
         if isinstance(expr, Constant):
-            return self._strip_expr(expr)
+            result = self._strip_expr(expr)
+            memo[id(expr)] = result
+            return result
         if isinstance(expr, Tuple):
-            elements = tuple(self.visit_expr(element, substitutions) for element in expr.elements)
-            return dataclasses.replace(
+            elements = tuple(self.visit_expr(element, substitutions, memo) for element in expr.elements)
+            result = dataclasses.replace(
                 expr,
                 elements=elements,
                 type=TupleType(tuple(element.type for element in elements)),
                 metadata=(),
             )
+            memo[id(expr)] = result
+            return result
         if not isinstance(expr, Call):
-            return self._strip_expr(expr)
+            result = self._strip_expr(expr)
+            memo[id(expr)] = result
+            return result
 
         op = self.op_by_expr.get(id(expr))
         args = []
         for index, argument in enumerate(expr.args):
-            value = self.visit_expr(argument, substitutions)
+            value = self.visit_expr(argument, substitutions, memo)
             edge = None if op is None else self._edge_for_operand(op, index)
             assignment = None if edge is None else self.edge_by_key.get(edge.id)
-            if assignment is not None and assignment.kind.value == "reshard" and isinstance(value.type, TensorType):
+            if (
+                assignment is not None
+                and assignment.kind.value == "reshard"
+                and op is not None
+                and (op.call_instance is not None or op.call_path == ())
+                and isinstance(value.type, TensorType)
+            ):
                 if op is not None:
                     consumer_assignment = self.assignment_by_op.get(op.id)
                     if consumer_assignment is not None:
@@ -208,12 +234,19 @@ class _Materializer:
                     break
                 parameter_type = target.params[index].type
                 if isinstance(argument.type, TensorType) and isinstance(parameter_type, TensorType):
-                    if argument.type.layout != parameter_type.layout:
-                        args[index] = self._reshard(argument, parameter_type.layout)
-        call = Call(type=_placeholder_type(), target=target, args=tuple(args), loc=expr.loc, metadata=())
-        inferred = TypeInferContext().type_of(call)
-        rebuilt = dataclasses.replace(call, type=inferred, metadata=())
-        return self._materialize_output(expr, rebuilt)
+                    desired_layout = parameter_type.layout
+                    if desired_layout is None and argument.type.layout is not None:
+                        desired_layout = self._layout_for_state(
+                            argument.type,
+                            self._broadcast_state(argument.type),
+                            self.parent_mesh,
+                        )
+                    if argument.type.layout != desired_layout and desired_layout is not None:
+                        args[index] = self._reshard(argument, desired_layout)
+        rebuilt = Call(type=expr.type, target=target, args=tuple(args), loc=expr.loc, metadata=())
+        result = self._materialize_output(expr, rebuilt)
+        memo[id(expr)] = result
+        return result
 
 
 def materialize_schedule(problem: SolveProblem, solution: ScheduleSolution, context) -> Module:

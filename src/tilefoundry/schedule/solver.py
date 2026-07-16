@@ -18,7 +18,7 @@ from .space import EdgeKind, NodeOption, PlacementOption, ScheduleSpace
 @dataclass(frozen=True, slots=True)
 class SolveOptions:
     deterministic: bool = True
-    max_time_seconds: float | None = None
+    max_time_seconds: float | None = 10.0
 
 
 class ScheduleSolver(Protocol):
@@ -208,6 +208,8 @@ class CpSatScheduleSolver:
         if options.max_time_seconds is not None:
             solver.parameters.max_time_in_seconds = options.max_time_seconds
         status = solver.Solve(model)
+        if status == cp_model.UNKNOWN:
+            return self._fallback_solution(problem)
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             raise ScheduleInfeasibleError(
                 f"schedule is infeasible (CP-SAT status {solver.StatusName(status)})",
@@ -255,6 +257,115 @@ class CpSatScheduleSolver:
             makespan_ns=solver.Value(makespan),
             problem_fingerprint=problem.problem_fingerprint,
             status=status_name,
+        )
+
+    @staticmethod
+    def _fallback_solution(problem: SolveProblem) -> ScheduleSolution:
+        """Return a deterministic serial incumbent when CP-SAT times out first."""
+        graph = problem.graph
+        space = problem.space
+        costs = problem.costs
+        predecessors: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        edge_choice: dict[int, EdgeOption] = {}
+        for edge in graph.edges:
+            options = space.options_for_use(edge.id)
+            if not options:
+                continue
+            producer = graph.value(edge.source).producer
+            if producer is None:
+                edge_choice[edge.id] = next(option for option in options if option.kind is EdgeKind.DIRECT)
+                continue
+            reshard = next(option for option in options if option.kind is EdgeKind.RESHARD)
+            edge_choice[edge.id] = reshard
+            if edge.kind == "call_arg":
+                consumers = graph.value(edge.destination).consumers
+            elif edge.op_id is not None:
+                consumers = (edge.op_id,)
+            else:
+                consumers = ()
+            for consumer in consumers:
+                predecessors[consumer].append((producer, costs.edge(reshard.id).duration_ns))
+
+        order: list[int] = []
+        remaining = {op.id for op in graph.ops}
+        while remaining:
+            ready = sorted(
+                op_id
+                for op_id in remaining
+                if all(producer in order for producer, _ in predecessors.get(op_id, ()))
+            )
+            if not ready:
+                raise ScheduleInfeasibleError(
+                    "schedule dependency graph is cyclic",
+                    problem_fingerprint=problem.problem_fingerprint,
+                )
+            order.extend(ready)
+            remaining.difference_update(ready)
+
+        assignments_by_id: dict[int, NodeAssignment] = {}
+        for op_id in order:
+            start = max(
+                (
+                    assignments_by_id[producer].end_ns + edge_duration
+                    for producer, edge_duration in predecessors.get(op_id, ())
+                ),
+                default=0,
+            )
+            selected_option = None
+            selected_placement = None
+            selected_end = None
+            while selected_option is None:
+                for option in space.options_for_node(op_id):
+                    duration = costs.node(option.id).duration_ns
+                    for placement in option.placements:
+                        end = start + duration
+                        conflicts = [
+                            prior
+                            for prior in assignments_by_id.values()
+                            if start < prior.end_ns
+                            and prior.start_ns < end
+                            and placement.axis_starts[0] < prior.axis_starts[0] + prior.axis_extents[0]
+                            and prior.axis_starts[0] < placement.axis_starts[0] + placement.axis_extents[0]
+                        ]
+                        if not conflicts:
+                            selected_option = option
+                            selected_placement = placement
+                            selected_end = end
+                            break
+                    if selected_option is not None:
+                        break
+                if selected_option is None:
+                    blocking = [
+                        prior.end_ns
+                        for prior in assignments_by_id.values()
+                        if prior.end_ns > start
+                    ]
+                    if not blocking:
+                        raise ScheduleInfeasibleError(
+                            f"no finite placement for graph op {op_id}",
+                            problem_fingerprint=problem.problem_fingerprint,
+                        )
+                    start = min(blocking)
+            assert selected_placement is not None and selected_end is not None
+            assignments_by_id[op_id] = NodeAssignment(
+                node=op_id,
+                candidate=selected_option.candidate.id,
+                option=selected_option.id,
+                placement=OpPlacement(start, selected_end, selected_placement.submesh),
+            )
+        edge_assignments = []
+        for edge_id, option in sorted(edge_choice.items()):
+            producer = graph.value(next(edge.source for edge in graph.edges if edge.id == edge_id)).producer
+            start = 0 if producer is None else assignments_by_id[producer].end_ns
+            duration = costs.edge(option.id).duration_ns
+            edge_assignments.append(EdgeAssignment(edge_id, option.id, option.kind, start, start + duration))
+        makespan = max((assignment.end_ns for assignment in assignments_by_id.values()), default=0)
+        return ScheduleSolution(
+            node_assignments=tuple(assignments_by_id[op.id] for op in graph.ops),
+            edge_assignments=tuple(edge_assignments),
+            makespan_ns=makespan,
+            problem_fingerprint=problem.problem_fingerprint,
+            status="FEASIBLE_NOT_PROVEN",
         )
 
     @staticmethod
