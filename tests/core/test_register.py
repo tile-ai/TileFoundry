@@ -51,10 +51,10 @@ def test_build_schema_explicit_args_and_validation() -> None:
     assert schema.is_pure
 
     # default name = cls.__name__.lower() (simple, NOT snake_case)
-    class FP8GEMM(_DummyBase):
+    class ScaledGemm(_DummyBase):
         x = ParamDef(kind="input", pattern=Tensor)
 
-    assert _build_schema(FP8GEMM, dialect="tf", category="nn").name == "fp8gemm"
+    assert _build_schema(ScaledGemm, dialect="tf", category="nn").name == "scaledgemm"
 
     with pytest.raises(ValueError, match="dialect"):
         _build_schema(Add, dialect="zzz", category="nn")

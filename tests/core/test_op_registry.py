@@ -24,9 +24,8 @@ from tilefoundry.parser.dispatch import resolve_callable
 # through ``_first_schema`` rather than ``get_op_by_name``. Listed
 # separately to keep the original "real Op class" lock intact.
 _HIR_REAL_OP_NAMES = frozenset({
-    "argmax", "attention_decode", "cast", "concat", "conv2d", "fp8_gemm",
-    "gather", "layer_norm", "local", "matmul", "moe_expert_compute",
-    "moe_route", "quant", "rank", "relu", "reshape", "reshard", "rms_norm",
+    "argmax", "cast", "concat", "conv2d", "gather", "layer_norm", "local",
+    "matmul", "quant", "rank", "relu", "reshape", "reshard", "rms_norm",
     "rope", "shape_of", "sigmoid", "slice", "softmax", "split", "stack",
     "tanh", "topk", "transpose",
 })

@@ -1,8 +1,7 @@
 """Per-token-group FP8 quantization op.
 
 SGLang baseline uses ``per_token_group_quant_8bit_kernel`` for K01/K07/K14/K17.
-This op covers the attention-path K01/K07 (K14/K17 are absorbed into the
-``MoEExpertCompute`` big op).
+This op covers the attention-path K01/K07.
 
 
 Semantics: split the last axis into groups of size ``group``; for each group

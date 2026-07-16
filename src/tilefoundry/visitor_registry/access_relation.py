@@ -36,9 +36,9 @@ class OpaqueRelation:
     """Marker object for an access relation that cannot be expressed in the
     affine framework at the queried memory level.
 
-    Big ops (``AttentionDecode``, ``MoEExpertCompute``) and routing-style ops
-    (``MoERoute``) return ``OPAQUE`` for their boundaries because their access
-    pattern is data-dependent or otherwise outside isl multi_aff / map.
+    Data-dependent or otherwise non-affine operations return ``OPAQUE`` for
+    their boundaries because their access pattern is outside isl multi_aff /
+    map.
 
     Distinct from ``isl.multi_aff`` / ``isl.map`` so downstream passes do not
     confuse "opaque" with "identity".

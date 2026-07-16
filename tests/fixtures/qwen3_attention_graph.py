@@ -17,7 +17,7 @@ Main chain with per-op meshes:
   reshape_k (4,128)        mesh=(4,2,8,32)     S(0),S(1),B,B
   k_norm (4,128)           mesh=(4,2,8,32)     S(0),S(1),P,P
   v_proj (1,512)           mesh=(1,128,8,32)   B,S(1),P,P
-  attention_decode (1,4096) mesh=(32,2,8,32)   carries q's head mesh
+  ordinary attention (32,1,128)                  complete q/k/v values
   reshard_attn (1,4096)    mesh=(1,128,8,32)   B,S(1),B,B   → onto proj mesh
   o_proj (1,2048)          mesh=(1,128,8,32)   B,P(),B,B   → K split on cta, partial sum
   all_reduce (1,2048)      mesh=(1,128,8,32)   B,B,B,B      → boxing
@@ -32,9 +32,11 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.nn.attention_decode import AttentionDecode
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
+from tilefoundry.ir.hir.nn.softmax import SoftMax
+from tilefoundry.ir.hir.tensor.gather import Gather
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 
 
@@ -109,10 +111,7 @@ def _sharded(logical_shape, cluster_attr, cta_attr, warp_attr, lane_attr,
     )
 
 
-# ── Fused HIR Op stubs ───────────────────────────────────────────────
-
-# AttentionDecode lives in ``src/tilefoundry/ir/hir/nn/attention_decode.py``.
-# The 3-arg call form is preserved as the "placeholder mode" of that op.
+# ── Local HIR sharding helper ────────────────────────────────────────
 
 
 class AllReduce(Op):
@@ -156,6 +155,9 @@ def build_qwen3_attention_main_2cta_headnorm():
     rms_w_ty    = _sharded((HIDDEN,), *B4, mesh=_M_1x1)
     q_norm_w_ty = _sharded((HEAD_DIM,), *B4, mesh=_M_32x2)
     k_norm_w_ty = _sharded((HEAD_DIM,), *B4, mesh=_M_4x2)
+    kv_head_map_ty = _sharded(
+        (NUM_Q_HEADS,), *B4, mesh=_M_1x1, dtype=DType.i64
+    )
 
     hidden   = Var(type=hidden_ty, name="hidden")
     q_weight = Var(type=q_weight_ty, name="q_weight")
@@ -165,6 +167,7 @@ def build_qwen3_attention_main_2cta_headnorm():
     rms_w    = Var(type=rms_w_ty, name="rms_weight")
     q_norm_w = Var(type=q_norm_w_ty, name="q_norm_weight")
     k_norm_w = Var(type=k_norm_w_ty, name="k_norm_weight")
+    kv_head_map = Var(type=kv_head_map_ty, name="kv_head_map")
 
     # ── input_rmsnorm: B,B,B,B ─────────────────────────────────────
     rms_out = Call(
@@ -267,17 +270,145 @@ def build_qwen3_attention_main_2cta_headnorm():
         loc="v_proj",
     )
 
-    # ── attention_decode placeholder ──────────────────────────────
+    # ── ordinary attention ─────────────────────────────────────────
+    # Projection and head-normalization reductions are completed before the
+    # nonlinear score/probability path. The attention inputs are then plain
+    # values, so the ordinary HIR ops express the model computation directly.
+    q_complete = Call(
+        type=_sharded((NUM_Q_HEADS, HEAD_DIM), *B4, mesh=_M_32x2),
+        target=Reshard(
+            layout=_sl(*B4, (NUM_Q_HEADS, HEAD_DIM), _M_32x2)
+        ),
+        args=(q_normed,), loc="reshard_q_complete",
+    )
+    q_attn = Call(
+        type=TensorType(
+            shape=(NUM_Q_HEADS, 1, HEAD_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Reshape(new_shape=(NUM_Q_HEADS, 1, HEAD_DIM)),
+        args=(q_complete,), loc="reshape_q_for_attention",
+    )
+
+    k_complete = Call(
+        type=_sharded((NUM_KV_HEADS, HEAD_DIM), *B4, mesh=_M_4x2),
+        target=Reshard(
+            layout=_sl(*B4, (NUM_KV_HEADS, HEAD_DIM), _M_4x2)
+        ),
+        args=(k_normed,), loc="reshard_k_complete",
+    )
+    k_heads = Call(
+        type=TensorType(
+            shape=(NUM_KV_HEADS, HEAD_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Reshape(new_shape=(NUM_KV_HEADS, HEAD_DIM)),
+        args=(k_complete,), loc="reshape_k_for_attention",
+    )
+    k_gathered = Call(
+        type=TensorType(
+            shape=(NUM_Q_HEADS, HEAD_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Gather(axis=0), args=(k_heads, kv_head_map),
+        loc="gather_kv_heads_k",
+    )
+    k_attn = Call(
+        type=TensorType(
+            shape=(NUM_Q_HEADS, 1, HEAD_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Reshape(new_shape=(NUM_Q_HEADS, 1, HEAD_DIM)),
+        args=(k_gathered,), loc="reshape_k_for_scores",
+    )
+
+    v_complete = Call(
+        type=_sharded((1, KV_PROJ_DIM), *B4, mesh=_M_1x128),
+        target=Reshard(
+            layout=_sl(*B4, (1, KV_PROJ_DIM), _M_1x128)
+        ),
+        args=(v,), loc="reshard_v_complete",
+    )
+    v_heads = Call(
+        type=TensorType(
+            shape=(NUM_KV_HEADS, HEAD_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Reshape(new_shape=(NUM_KV_HEADS, HEAD_DIM)),
+        args=(v_complete,), loc="reshape_v_for_attention",
+    )
+    v_gathered = Call(
+        type=TensorType(
+            shape=(NUM_Q_HEADS, HEAD_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Gather(axis=0), args=(v_heads, kv_head_map),
+        loc="gather_kv_heads_v",
+    )
+    v_attn = Call(
+        type=TensorType(
+            shape=(NUM_Q_HEADS, 1, HEAD_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Reshape(new_shape=(NUM_Q_HEADS, 1, HEAD_DIM)),
+        args=(v_gathered,), loc="reshape_v_for_attention",
+    )
+    k_transposed = Call(
+        type=TensorType(
+            shape=(NUM_Q_HEADS, HEAD_DIM, 1),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Transpose(perm=(0, 2, 1)), args=(k_attn,),
+        loc="transpose_k_for_scores",
+    )
+    scores = Call(
+        type=TensorType(
+            shape=(NUM_Q_HEADS, 1, 1),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=MatMul(), args=(q_attn, k_transposed), loc="attention_scores",
+    )
+    probs = Call(
+        type=scores.type,
+        target=SoftMax(axis=-1), args=(scores,), loc="attention_probs",
+    )
+    out_heads = Call(
+        type=v_attn.type,
+        target=MatMul(), args=(probs, v_attn), loc="attention_out",
+    )
     attn = Call(
-        type=_sharded((1, Q_PROJ_DIM), B(), S(1), B(), B(), mesh=_M_1x128),
-        target=AttentionDecode(), args=(q_normed, k_normed, v),
-        loc="attention_decode",
+        type=TensorType(
+            shape=(1, Q_PROJ_DIM),
+            dtype=DTYPE,
+            layout=None,
+            storage=StorageKind.GMEM,
+        ),
+        target=Reshape(new_shape=(1, Q_PROJ_DIM)),
+        args=(out_heads,), loc="reshape_attention_out",
     )
 
     # ── o_proj: matmul(reshard(attn), transpose(o_weight)) → P(sum) ─
-    # attention_decode carries q's head-parallel mesh through; reshard the
-    # result onto the flat 128-CTA projection mesh so o_proj's contraction
-    # dim K = Q_PROJ_DIM is split on the same (cta) mesh axis as the weight.
+    # Reshard the complete attention result onto the flat projection mesh so
+    # o_proj's contraction dim K is split on the same CTA mesh axis as its
+    # weight.
     attn_proj = Call(
         type=_sharded((1, Q_PROJ_DIM), B(), S(1), B(), B(), mesh=_M_1x128),
         target=Reshard(layout=_sl(B(), S(1), B(), B(), (1, Q_PROJ_DIM), _M_1x128)),
@@ -311,7 +442,7 @@ def build_qwen3_attention_main_2cta_headnorm():
     return Function.build(
         name="qwen3_attention_main_2cta_headnorm",
         params=(hidden, q_weight, k_weight, v_weight, o_weight,
-                rms_w, q_norm_w, k_norm_w),
+                rms_w, q_norm_w, k_norm_w, kv_head_map),
         body=residual,
         return_type=residual.type,
     )
@@ -320,6 +451,4 @@ def build_qwen3_attention_main_2cta_headnorm():
 # AllReduce lives outside the ``tilefoundry.ir.hir.*`` auto-import tree, so
 # we route it through ``@register_op`` explicitly using the OpSchema path.
 from tilefoundry.ir.core.register import register_op  # noqa: E402
-from tilefoundry.ir.hir.tensor.reshape import Reshape  # noqa: E402
-
 register_op(dialect="tf", category="sharding", name="all_reduce")(AllReduce)
