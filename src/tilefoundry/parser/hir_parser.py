@@ -5,6 +5,7 @@ import dataclasses
 from typing import Any
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -1183,16 +1184,59 @@ def parse_script(src: str) -> Function:
         if has_module:
             break
     if has_module:
-        return _parse_module_source_tree(tree)
+        return parse_module_source(src).entry_function()
     return parse_func_source(src)
 
-# backward-compat aliases
-def parse_module_source(src: str) -> Function:
-    """Backward-compat alias for parse_script with @module source."""
-    return parse_script(src)
+def parse_module_source(src: str) -> Module:
+    """Parse every reachable ``@func`` in an ``@module`` source into a Module."""
+    tree = ast.parse(src)
+    return _parse_module_source_tree(tree)
 
-def _parse_module_source_tree(tree: ast.Module) -> Function:
-    """Parse ``@module``-wrapped AST into a HIR Function."""
+
+def _module_entry_name(node: ast.ClassDef) -> str:
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call) or not _is_module_decorator(decorator):
+            continue
+        for keyword in decorator.keywords:
+            if keyword.arg == "entry" and isinstance(keyword.value, ast.Constant):
+                if isinstance(keyword.value.value, str):
+                    return keyword.value.value
+    raise VerifyError("@module requires a string entry=... argument")
+
+
+def _module_prelude(tree: ast.Module, module_cls: ast.ClassDef) -> dict[str, Any]:
+    """Evaluate only source-level imports and constant assignments for parsing."""
+    closure: dict[str, Any] = {}
+    prelude_lines: list[str] = []
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ClassDef):
+            continue
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                name = alias.asname or alias.name
+                prelude_lines.append(f"import {alias.name} as {name}")
+        elif isinstance(stmt, ast.ImportFrom):
+            names = ", ".join(
+                a.name + (f" as {a.asname}" if a.asname else "")
+                for a in stmt.names
+            )
+            prelude_lines.append(f"from {stmt.module or ''} import {names}")
+        elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            prelude_lines.append(ast.unparse(stmt))
+    # A class-body constant is visible to subsequent methods in ordinary
+    # Python, but the HIR module parser only admits function members. Keeping
+    # this hook makes source-level mesh/layout definitions usable without
+    # executing decorators or the module class itself.
+    for stmt in module_cls.body:
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            prelude_lines.append(ast.unparse(stmt))
+    if prelude_lines:
+        exec("\n".join(prelude_lines), closure)
+    return closure
+
+
+def _parse_module_source_tree(tree: ast.Module) -> Module:
+    """Parse an ``@module`` class and all of its HIR function members."""
     module_cls = None
     for stmt in tree.body:
         if isinstance(stmt, ast.ClassDef):
@@ -1204,45 +1248,52 @@ def _parse_module_source_tree(tree: ast.Module) -> Function:
     if module_cls is None:
         raise ValueError("no @module-decorated class found in source")
 
-    # Build closure from module-level and class-level non-@func statements
-    closure: dict[str, Any] = {}
-    prelude_lines: list[str] = []
-    func_node: ast.FunctionDef | None = None
+    entry = _module_entry_name(module_cls)
+    closure = _module_prelude(tree, module_cls)
+    function_nodes = [
+        stmt
+        for stmt in module_cls.body
+        if isinstance(stmt, ast.FunctionDef)
+        and any(_is_func_decorator(dec) for dec in stmt.decorator_list)
+    ]
+    if not function_nodes:
+        raise VerifyError("@module class contains no @func members")
 
-    # Collect module-level prelude (imports) and class-level statements
-    all_statements = list(tree.body) + list(module_cls.body)
-
-    def _collect_prelude(stmts):
-        nonlocal func_node
-        for stmt in stmts:
-            if isinstance(stmt, ast.ClassDef):
-                continue  # skip the module class itself
-            if isinstance(stmt, ast.FunctionDef):
-                for dec in stmt.decorator_list:
-                    if _is_func_decorator(dec):
-                        func_node = stmt
-                        return  # stop collecting after finding @func
-            elif isinstance(stmt, ast.Import):
-                for alias in stmt.names:
-                    name = alias.asname or alias.name
-                    prelude_lines.append(f"import {alias.name} as {name}")
-            elif isinstance(stmt, ast.ImportFrom):
-                names = ", ".join(
-                    a.name + (f" as {a.asname}" if a.asname else "")
-                    for a in stmt.names
+    parsed: dict[str, Function] = {}
+    pending = list(function_nodes)
+    last_error: Exception | None = None
+    while pending:
+        progress = False
+        remaining: list[ast.FunctionDef] = []
+        for node in pending:
+            try:
+                parsed[node.name] = _parse_func_node(
+                    node,
+                    {**closure, **parsed},
+                    topologies=_extract_topologies_from_decorator(node),
                 )
-                prelude_lines.append(f"from {stmt.module or ''} import {names}")
-            elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-                prelude_lines.append(ast.unparse(stmt))
+                progress = True
+            except VerifyError as exc:
+                if "undefined name" not in str(exc):
+                    raise
+                last_error = exc
+                remaining.append(node)
+        if not progress:
+            raise VerifyError(
+                f"unable to resolve @func members in module {module_cls.name!r}: "
+                f"{last_error or 'no function definitions'}"
+            )
+        pending = remaining
 
-    _collect_prelude(all_statements)
-
-    if func_node is None:
-        raise ValueError("no @func-decorated method found in module class")
-
-    exec("\n".join(prelude_lines), closure)
-
-    parsed_topologies = _extract_topologies_from_decorator(func_node)
-    return _parse_func_node(func_node, closure, topologies=parsed_topologies)
+    if entry not in parsed:
+        raise VerifyError(
+            f"@module entry {entry!r} does not name an @func member; "
+            f"available: {tuple(parsed)}"
+        )
+    return Module(
+        name=module_cls.name,
+        functions=tuple(parsed[node.name] for node in function_nodes),
+        entry=entry,
+    )
 
 __all__ = ["parse_func", "parse_func_source", "parse_module_source", "parse_script"]

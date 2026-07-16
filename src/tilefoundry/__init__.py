@@ -31,6 +31,7 @@ from tilefoundry.ir.core import (
     typeinfer_registry,
     verify_stmt_registry,
 )
+from tilefoundry.ir.core.module import Module
 
 # Type system
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
@@ -90,7 +91,7 @@ def view(root, *, port: int = 0, open_browser: bool = True) -> int:
 
 __all__ = [
     # core
-    "Expr", "Var", "Constant", "Call", "Stmt", "TupleGetItem",
+    "Expr", "Var", "Constant", "Call", "Stmt", "TupleGetItem", "Module",
     "IRMetadata",
     "Op", "ParameterInfo",
     "AnalysisRegistry",

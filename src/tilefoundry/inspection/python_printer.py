@@ -12,6 +12,7 @@ import re
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.math.binary import Binary
@@ -635,6 +636,11 @@ def _emit_def(
                 lines.append(
                     f"{indent}{name} = reshard({src_name}{layout_kw}{storage}){loc}"
                 )
+            elif isinstance(target, HirFunction):
+                arg_names = [_arg_ref(a) for a in expr.args]
+                call_str = f"{target.name}({', '.join(arg_names)})"
+                loc = f'  # loc="{name}"' if expr.loc else ""
+                lines.append(f"{indent}{name} = {call_str}{loc}")
             else:
                 # Generic op: op_name(arg1, arg2, ..., attr=val)
                 op_name_str = _op_name(target)
@@ -780,7 +786,7 @@ def hir_function_to_python(fn: HirFunction) -> str:
     return "\n".join(lines) + "\n"
 
 
-def as_script(fn: HirFunction, *, module: str | None = None) -> str:
+def as_script(fn: HirFunction | Module, *, module: str | None = None) -> str:
     """Convert a HIR Function to Python DSL source.
 
     Without *module*: standalone ``@func`` output.
@@ -797,14 +803,72 @@ def as_script(fn: HirFunction, *, module: str | None = None) -> str:
     Returns:
         Python source string.
     """
+    if isinstance(fn, Module):
+        if module is not None:
+            raise TypeError("as_script(Module) does not accept module=...")
+        return _module_to_python_module(fn, fn.name)
     if module is not None:
         return _module_to_python(fn, module)
     return hir_function_to_python(fn)
 
-# backward-compat alias
-def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
-    """Backward-compat alias for ``as_script(fn, module=module_name)``."""
-    return as_script(fn, module=module_name)
+
+def module_to_python(
+    root: HirFunction | Module, module_name: str | None = None
+) -> str:
+    """Render a Function or complete Module as executable canonical Python."""
+    if isinstance(root, Module):
+        return _module_to_python_module(root, module_name or root.name)
+    return as_script(root, module=module_name or "M")
+
+
+def _module_to_python_module(mod: Module, module_name: str) -> str:
+    """Render every HIR function in a Module inside one ``@module`` class."""
+    functions = tuple(fn for fn in mod.functions if isinstance(fn, HirFunction))
+    if len(functions) != len(mod.functions):
+        raise TypeError("canonical module printer currently supports HIR functions only")
+
+    meshes: dict = {}
+    for fn in functions:
+        meshes.update(_collect_meshes(fn))
+    mesh_map = _mesh_name_map(meshes)
+    indent = "    "
+    lines = [
+        "from __future__ import annotations",
+        "",
+        "from tilefoundry.module import module",
+        "from tilefoundry import func",
+        "from tilefoundry.dsl.tf import *  # noqa: F401, F403",
+        "from tilefoundry.dsl import Tensor",
+        "from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401",
+        "from tilefoundry.ir.types.shard import (",
+        f"{indent}B, S, P, Layout, Mesh, ShardLayout, Topology,",
+        ")",
+    ]
+    if any(mesh.names for mesh in meshes.values()):
+        lines.append("")
+        for mesh_id, mesh in meshes.items():
+            if not mesh.names:
+                continue
+            name = mesh_map[mesh_id]
+            lines.append(
+                f"{name} = Mesh(Topology({mesh.topology.name!r}, {mesh.topology.size}), "
+                f"Layout({_shape_tuple(mesh.layout.shape)}, {_shape_tuple(mesh.layout.strides)}), "
+                f"names={tuple(mesh.names)!r})"
+            )
+    lines.extend(["", f'@module(entry="{mod.entry}")', f"class {module_name}:"])
+
+    for index, fn in enumerate(functions):
+        source_lines = hir_function_to_python(fn).rstrip("\n").splitlines()
+        start = next(
+            (i for i, line in enumerate(source_lines) if line.startswith("@func")),
+            None,
+        )
+        if start is None:
+            raise ValueError(f"function {fn.name!r} has no @func printer form")
+        if index:
+            lines.append("")
+        lines.extend(f"{indent}{line}" for line in source_lines[start:])
+    return "\n".join(lines) + "\n"
 
 
 def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:

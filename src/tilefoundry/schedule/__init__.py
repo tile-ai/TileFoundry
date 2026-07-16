@@ -8,6 +8,20 @@ from .constraints import (
     PartialConstraint,
     SourceLocation,
 )
+from .fingerprint import logical_fingerprint
+from .graph import (
+    CallInstance,
+    FunctionRegion,
+    GraphConstraint,
+    GraphEdge,
+    GraphOp,
+    GraphValue,
+    GraphValueRef,
+    ProgramScheduleGraph,
+    ProgramScheduleGraphBuilder,
+    ScheduleGraphError,
+    build_program_schedule_graph,
+)
 
 __all__ = [
     "AgentConstraint",
@@ -18,4 +32,16 @@ __all__ = [
     "LayoutDimKind",
     "PartialConstraint",
     "SourceLocation",
+    "logical_fingerprint",
+    "CallInstance",
+    "FunctionRegion",
+    "GraphConstraint",
+    "GraphEdge",
+    "GraphOp",
+    "GraphValue",
+    "GraphValueRef",
+    "ProgramScheduleGraph",
+    "ProgramScheduleGraphBuilder",
+    "ScheduleGraphError",
+    "build_program_schedule_graph",
 ]
