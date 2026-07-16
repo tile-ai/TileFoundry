@@ -16,6 +16,7 @@ import torch
 import tilefoundry
 from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
+    ExpectedError,
     TypeInferCase,
     infer_call,
     raw_shard_tensor_type,
@@ -34,6 +35,7 @@ from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
+    Partial,
     Split,
     layout_axis_to_tensor_axis,
 )
@@ -46,6 +48,9 @@ _BF = DType.bf16
 _M = make_mesh((6, 32), ("w", "t"))
 
 _MEAN_LAST = Reduce(axes=(-1,), keepdim=True, kind=ReduceKind.MEAN)
+_PARTIAL_MESH = make_mesh((4,))
+_PSUM = make_shard_tensor_type((8, 16), mesh=_PARTIAL_MESH, attrs=(Partial("sum"),), dtype=DType.f32)
+_PMAX = make_shard_tensor_type((8, 16), mesh=_PARTIAL_MESH, attrs=(Partial("max"),), dtype=DType.f32)
 
 CASES = [
     # Unsharded input passes through (no layout).
@@ -60,6 +65,47 @@ CASES = [
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_reduce_typeinfer(case):
+    run_typeinfer_case(case)
+
+
+@pytest.mark.parametrize(
+    "op,input_type,expected",
+    [
+        (Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), _PSUM, _PSUM),
+        (Reduce(axes=(1,), keepdim=True, kind=ReduceKind.MAX), _PMAX, _PMAX),
+    ],
+    ids=["sum_over_partial_sum", "max_over_partial_max"],
+)
+def test_reduce_partial_commutes(op, input_type, expected):
+    out = infer_call(op, input_type)
+    assert out.layout.attrs == expected.layout.attrs
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        TypeInferCase(
+            "sum_over_partial_max",
+            Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+            (_PMAX,),
+            ExpectedError(match="mesh axis 0"),
+        ),
+        TypeInferCase(
+            "max_over_partial_sum",
+            Reduce(axes=(1,), keepdim=True, kind=ReduceKind.MAX),
+            (_PSUM,),
+            ExpectedError(match="mesh axis 0"),
+        ),
+        TypeInferCase(
+            "abs_max_over_partial",
+            Reduce(axes=(1,), keepdim=True, kind=ReduceKind.ABS_MAX),
+            (_PSUM,),
+            ExpectedError(match="mesh axis 0"),
+        ),
+    ],
+    ids=lambda case: case.name,
+)
+def test_reduce_partial_rejects_noncommuting(case):
     run_typeinfer_case(case)
 
 

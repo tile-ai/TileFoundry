@@ -21,7 +21,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -29,7 +29,10 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import shape_from_relation
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    derive_output_shard_layout,
+    partial_reductions_by_axis,
+)
 
 from ._helpers import _broadcast, _is_one, _merge_layout, resolve_anchor_storage
 
@@ -82,6 +85,98 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
+def _state_at(layout, axis: int):
+    if not isinstance(layout, ShardLayout) or axis >= len(layout.attrs):
+        return None
+    return layout.attrs[axis]
+
+
+def _is_replicated_at(layout, axis: int) -> bool:
+    state = _state_at(layout, axis)
+    return state is None or isinstance(state, Broadcast)
+
+
+def _check_partial_commutes(
+    call: "Call", ctx: "TypeInferContext", op, la, lb
+) -> None:
+    """Check Binary Partial states independently on each mesh axis."""
+    lhs_r = partial_reductions_by_axis(la)
+    rhs_r = partial_reductions_by_axis(lb)
+    lhs_axes = tuple(i for i, reduction in enumerate(lhs_r) if reduction is not None)
+    rhs_axes = tuple(i for i, reduction in enumerate(rhs_r) if reduction is not None)
+    if lhs_axes and rhs_axes and lhs_axes != rhs_axes:
+        axis = next(
+            axis
+            for axis in range(max(len(lhs_r), len(rhs_r)))
+            if (lhs_r[axis] if axis < len(lhs_r) else None)
+            != (rhs_r[axis] if axis < len(rhs_r) else None)
+        )
+        lhs_reduction = lhs_r[axis] if axis < len(lhs_r) else None
+        rhs_reduction = rhs_r[axis] if axis < len(rhs_r) else None
+        ctx.error(
+            call,
+            f"Binary {op.kind.name}: Partial axis mismatch on mesh axis {axis} "
+            f"(lhs reduction={lhs_reduction!r}, rhs reduction={rhs_reduction!r}); "
+            "Reshard the Partial input to Broadcast before this consumer",
+        )
+
+    for axis in range(max(len(lhs_r), len(rhs_r))):
+        lhs_reduction = lhs_r[axis] if axis < len(lhs_r) else None
+        rhs_reduction = rhs_r[axis] if axis < len(rhs_r) else None
+        if lhs_reduction is None and rhs_reduction is None:
+            continue
+        if lhs_reduction is not None and rhs_reduction is not None:
+            if op.kind is BinaryKind.ADD and (
+                lhs_reduction == rhs_reduction == "sum"
+            ):
+                continue
+            ctx.error(
+                call,
+                f"Binary {op.kind.name}: lhs carries Partial({lhs_reduction}) "
+                f"and rhs carries Partial({rhs_reduction}) on mesh axis {axis}; "
+                "two value-carrying Partials do not commute here. Reshard "
+                "lhs or rhs to Broadcast before this consumer",
+            )
+        if lhs_reduction is not None:
+            if not _is_replicated_at(lb, axis):
+                ctx.error(
+                    call,
+                    f"Binary {op.kind.name}: lhs carries Partial({lhs_reduction}) "
+                    f"on mesh axis {axis}, but rhs is not Broadcast/replicated "
+                    "on that axis. Reshard rhs to Broadcast before this consumer",
+                )
+            allowed = (
+                op.kind is BinaryKind.ADD
+                and lhs_reduction in ("max", "min")
+            ) or (op.kind is BinaryKind.MUL and lhs_reduction == "sum")
+            if not allowed:
+                ctx.error(
+                    call,
+                    f"Binary {op.kind.name}: lhs Partial({lhs_reduction}) on "
+                    f"mesh axis {axis} is not proven to commute; Reshard lhs "
+                    "to Broadcast before this consumer",
+                )
+        if rhs_reduction is not None:
+            if not _is_replicated_at(la, axis):
+                ctx.error(
+                    call,
+                    f"Binary {op.kind.name}: rhs carries Partial({rhs_reduction}) "
+                    f"on mesh axis {axis}, but lhs is not Broadcast/replicated "
+                    "on that axis. Reshard lhs to Broadcast before this consumer",
+                )
+            allowed = (
+                op.kind is BinaryKind.ADD
+                and rhs_reduction in ("max", "min")
+            ) or (op.kind is BinaryKind.MUL and rhs_reduction == "sum")
+            if not allowed:
+                ctx.error(
+                    call,
+                    f"Binary {op.kind.name}: rhs Partial({rhs_reduction}) on "
+                    f"mesh axis {axis} is not proven to commute; Reshard rhs "
+                    "to Broadcast before this consumer",
+                )
+
+
 @register_typeinfer(Binary)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     op = call.target
@@ -103,6 +198,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else lhs_ty.dtype
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
+    _check_partial_commutes(call, ctx, op, la, lb)
     try:
         # Shape and shard share the relation as the single source: the forward
         # relation builds the broadcast domain, the output shape is read back

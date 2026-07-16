@@ -23,7 +23,9 @@ from tests.ops.typeinfer_utils import (
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.types import DType, TupleType, make_tensor_type
+from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -185,6 +187,36 @@ CASES = [
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((10,), _F), make_tensor_type((), _I)),
         ExpectedError("exceeds dst extent", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_dst_matching_update_ok",
+        _OP,
+        (
+            make_shard_tensor_type((8,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_shard_tensor_type((3,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_tensor_type((), _I),
+        ),
+        make_shard_tensor_type((8,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+    ),
+    TypeInferCase(
+        "partial_dst_plain_update_rejected",
+        _OP,
+        (
+            make_shard_tensor_type((8,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_tensor_type((3,), _F),
+            make_tensor_type((), _I),
+        ),
+        ExpectedError("dst carries a Partial", exc=TypeError),
+    ),
+    TypeInferCase(
+        "complete_dst_partial_update_rejected",
+        _OP,
+        (
+            make_tensor_type((8,), _F),
+            make_shard_tensor_type((3,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_tensor_type((), _I),
+        ),
+        ExpectedError("update carries Partial", exc=TypeError),
     ),
 ]
 

@@ -20,7 +20,10 @@ from tilefoundry.visitor_registry.access_relation import (
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    derive_output_shard_layout,
+    partial_reductions_by_axis,
+)
 
 __all__ = ["ReduceKind", "Reduce"]
 
@@ -59,6 +62,26 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 @register_typeinfer(Reduce)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
+    kind = call.target.kind
+    # x's Partial state is a pending cross-device combine on a mesh axis,
+    # independent of the tensor axes reduced by this operation.
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is None:
+            continue
+        allowed = (
+            reduction == "sum"
+            if kind in (ReduceKind.SUM, ReduceKind.MEAN)
+            else reduction == "max"
+            if kind is ReduceKind.MAX
+            else False
+        )
+        if not allowed:
+            ctx.error(
+                call,
+                f"Reduce {kind.name}: x carries Partial({reduction}) on mesh "
+                f"axis {axis}, which does not commute; insert reshard(x, "
+                "Broadcast) before this consumer",
+            )
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)
     reduced = _reduced_axes(call, rank)

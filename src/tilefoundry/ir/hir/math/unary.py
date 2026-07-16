@@ -17,6 +17,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op(dialect="tf", category="math")
@@ -24,6 +25,11 @@ class Unary(Op):
     """Value-form pointwise unary operation."""
     x = ParamDef(kind="input", pattern=Tensor)
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
+
+# Monotone non-decreasing: commutes with max/min, not sum.
+_MONOTONE_INCREASING = frozenset({UnaryKind.EXP, UnaryKind.LOG, UnaryKind.RELU})
+# Linear negation: commutes with sum, not max/min (reverses order).
+_LINEAR = frozenset({UnaryKind.NEG})
 
 @register_typeinfer(Unary)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -33,6 +39,30 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if op.kind is UnaryKind.NOT and x_ty.dtype != DType.bool:
         ctx.error(call, "Unary NOT: operand must be bool")
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is None:
+            continue
+        if op.kind in _MONOTONE_INCREASING and reduction == "sum":
+            ctx.error(
+                call,
+                f"Unary {op.kind.name}: x carries Partial(sum) on mesh axis "
+                f"{axis}, which does not commute; insert reshard(x, Broadcast) "
+                "before this consumer",
+            )
+        elif op.kind in _LINEAR and reduction != "sum":
+            ctx.error(
+                call,
+                f"Unary {op.kind.name}: x carries Partial({reduction}) on mesh "
+                f"axis {axis}, which does not commute; insert reshard(x, "
+                "Broadcast) before this consumer",
+            )
+        elif op.kind not in _MONOTONE_INCREASING and op.kind not in _LINEAR:
+            ctx.error(
+                call,
+                f"Unary {op.kind.name}: x carries Partial({reduction}) on mesh "
+                f"axis {axis}, which is not proven to commute; insert "
+                "reshard(x, Broadcast) before this consumer",
+            )
     return TensorType(
         shape=x_ty.shape,
         dtype=x_ty.dtype,

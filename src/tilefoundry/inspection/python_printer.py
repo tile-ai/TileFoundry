@@ -320,7 +320,6 @@ _OP_NAME_MAP: dict[str, str] = {
     "Reduce": "reduce",
     "Reshard": "reshard",
     "AllReduce": "all_reduce",
-    "AttentionDecode": "attention_decode",
     "Reshape": "reshape",
 }
 
@@ -504,7 +503,7 @@ def _emit_def(
         else:
             name = f"v{_counter[0]}"
             _counter[0] += 1
-        # Avoid shadowing op names (e.g. attention_decode = attention_decode(...))
+        # Avoid shadowing op names when assigning a call result.
         if name in _op_names_set:
             name = f"{name}_out"
         base = name

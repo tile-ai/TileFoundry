@@ -35,6 +35,7 @@ from tilefoundry.visitor_registry.relation_build import build_domain
 from tilefoundry.visitor_registry.shard_propagate import (
     _c_order,
     derive_output_shard_layout,
+    partial_reductions_by_axis,
 )
 
 
@@ -91,6 +92,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             for a in x_ty.layout.attrs
         ):
             raise TypeError(f"TopK: selected axis {axis} must not be Split-sharded")
+    for mesh_axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is not None:
+            raise TypeError(
+                f"TopK: Partial input on x is unsound: x carries Partial({reduction}) "
+                f"on mesh axis {mesh_axis}; "
+                "the selected index is not recoverable. Insert reshard(x, "
+                "Broadcast) before this consumer"
+            )
     out_shape = list(x_ty.shape)
     out_shape[axis] = call.target.k
     out_shape = tuple(out_shape)

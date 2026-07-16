@@ -27,15 +27,26 @@ from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 
 _ADD = Binary(kind=BinaryKind.ADD)
+_MUL = Binary(kind=BinaryKind.MUL)
+_SUB = Binary(kind=BinaryKind.SUB)
 _F = DType.f32
 
 # A single-axis mesh (g=4) for flat shards and a two-axis mesh (a=2, b=4) for
 # factorized shards; cases reuse these so no test hand-builds a Mesh.
 _M = make_mesh((4,))
 _MAB = make_mesh((2, 4), ("a", "b"))
+_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
+_PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
+_BCAST = make_tensor_type((16, 8), _F)
+_PSUM_AXIS0 = make_shard_tensor_type(
+    (16, 8), mesh=_MAB, attrs=(Partial("sum"), Broadcast())
+)
+_PSUM_AXIS1 = make_shard_tensor_type(
+    (16, 8), mesh=_MAB, attrs=(Broadcast(), Partial("sum"))
+)
 
 CASES = [
     # ── shape inference (unsharded) ──────────────────────────────────────────
@@ -158,6 +169,48 @@ CASES = [
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_binary_typeinfer(case):
+    run_typeinfer_case(case)
+
+
+PARTIAL_CASES = [
+    TypeInferCase("add_partial_sum_partial_sum_passes", _ADD, (_PSUM, _PSUM), _PSUM),
+    TypeInferCase(
+        "add_partial_max_partial_max_errors",
+        _ADD,
+        (_PMAX, _PMAX),
+        ExpectedError(match="Binary ADD"),
+    ),
+    TypeInferCase(
+        "add_partial_sum_broadcast_errors",
+        _ADD,
+        (_PSUM, _BCAST),
+        ExpectedError(match="Binary ADD"),
+    ),
+    TypeInferCase("add_partial_max_broadcast_passes", _ADD, (_PMAX, _BCAST), _PMAX),
+    TypeInferCase("mul_partial_sum_broadcast_passes", _MUL, (_PSUM, _BCAST), _PSUM),
+    TypeInferCase(
+        "mul_partial_max_broadcast_errors",
+        _MUL,
+        (_PMAX, _BCAST),
+        ExpectedError(match="Binary MUL"),
+    ),
+    TypeInferCase(
+        "sub_partial_sum_broadcast_errors",
+        _SUB,
+        (_PSUM, _BCAST),
+        ExpectedError(match="Binary SUB"),
+    ),
+    TypeInferCase(
+        "partial_sum_different_mesh_axes_errors",
+        _ADD,
+        (_PSUM_AXIS0, _PSUM_AXIS1),
+        ExpectedError(match="mesh axis 0"),
+    ),
+]
+
+
+@pytest.mark.parametrize("case", PARTIAL_CASES, ids=lambda c: c.name)
+def test_binary_partial_typeinfer(case):
     run_typeinfer_case(case)
 
 

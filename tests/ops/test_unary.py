@@ -20,13 +20,19 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
+from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 
 _NEG = Unary(kind=UnaryKind.NEG)
 _NOT = Unary(kind=UnaryKind.NOT)
+_EXP = Unary(kind=UnaryKind.EXP)
+_ABS = Unary(kind=UnaryKind.ABS)
+_RSQRT = Unary(kind=UnaryKind.RSQRT)
+_M = make_mesh((4,))
+_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
+_PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 
 
 CASES = [
@@ -49,6 +55,21 @@ CASES = [
         expected=make_tensor_type((4, 8), dt),
     )
     for dt in (DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1)
+] + [
+    TypeInferCase("neg_partial_sum_passes", _NEG, (_PSUM,), _PSUM),
+    TypeInferCase(
+        "neg_partial_max_errors", _NEG, (_PMAX,), ExpectedError(match="Unary NEG")
+    ),
+    TypeInferCase("exp_partial_max_passes", _EXP, (_PMAX,), _PMAX),
+    TypeInferCase(
+        "exp_partial_sum_errors", _EXP, (_PSUM,), ExpectedError(match="Unary EXP")
+    ),
+    TypeInferCase(
+        "abs_partial_sum_errors", _ABS, (_PSUM,), ExpectedError(match="Unary ABS")
+    ),
+    TypeInferCase(
+        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,), ExpectedError(match="Unary RSQRT")
+    ),
 ]
 
 

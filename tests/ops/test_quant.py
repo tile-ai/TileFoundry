@@ -10,7 +10,9 @@ from tests.ops.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.tensor.quant import Quant
-from tilefoundry.ir.types import DType, TupleType, make_tensor_type
+from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Partial
 
 _BF = DType.bf16
 _FP8 = DType.fp8e4m3
@@ -47,6 +49,12 @@ CASES = [
         Quant(),
         (make_tensor_type((), _BF),),
         ExpectedError(match="at least rank-1", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_input_rejected",
+        Quant(),
+        (make_shard_tensor_type((1, 2048), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
 ]
 

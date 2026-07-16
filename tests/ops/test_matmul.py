@@ -176,6 +176,32 @@ def test_k_split_both_operands_becomes_partial():
     assert out.layout.attrs == (Partial(reduction="sum"),)
 
 
+def test_double_partial_same_mesh_axis_errors():
+    lhs = _sharded((16, 8), (Partial("sum"),))
+    rhs = _sharded((8, 32), (Partial("sum"),))
+    run_typeinfer_case(
+        TypeInferCase(
+            "double_partial_same_mesh_axis",
+            _MM,
+            (lhs, rhs),
+            ExpectedError(match="mesh axis 0"),
+        )
+    )
+
+
+def test_partial_max_lhs_errors():
+    lhs = _sharded((16, 8), (Partial("max"),))
+    rhs = make_tensor_type((8, 32), DType.bf16)
+    run_typeinfer_case(
+        TypeInferCase(
+            "partial_max_lhs",
+            _MM,
+            (lhs, rhs),
+            ExpectedError(match="MatMul"),
+        )
+    )
+
+
 def test_lhs_m_split_becomes_output_split():
     lhs = _sharded((16, 8), (Split(axis=0),))
     rhs = make_tensor_type((8, 32), DType.bf16)

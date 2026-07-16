@@ -1,4 +1,4 @@
-"""Access relation handlers for HIR ``nn`` primitives (MoERoute / Reduce / TopK / etc.)."""
+"""Access relation handlers for HIR ``nn`` and tensor primitives."""
 from __future__ import annotations
 
 import isl

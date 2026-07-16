@@ -25,6 +25,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op(name="rms_norm")
@@ -49,6 +50,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError(
             f"RMSNorm: x last dim {x_ty.shape[-1]} != weight dim {w_ty.shape[0]}"
         )
+    for arg, ty in (("x", x_ty), ("weight", w_ty)):
+        for axis, reduction in enumerate(partial_reductions_by_axis(ty.layout)):
+            if reduction is not None:
+                raise TypeError(
+                    f"RMSNorm: Partial input on {arg} is unsound: {arg} carries "
+                    f"Partial({reduction}) on mesh "
+                    f"axis {axis}, which does not commute; insert reshard({arg}, "
+                    "Broadcast) before this consumer"
+                )
 
     # Output preserves x's full shape (batch dims flow verbatim,
     # including DimVar / dim-arithmetic entries) and x's dtype. The

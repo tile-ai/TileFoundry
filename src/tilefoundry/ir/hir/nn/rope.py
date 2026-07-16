@@ -21,11 +21,13 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TupleType
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -36,10 +38,66 @@ class RoPE(Op):
     cos_cache = ParamDef(kind="input", pattern=Tensor)
     sin_cache = ParamDef(kind="input", pattern=Tensor)
     pos_ids = ParamDef(kind="input", pattern=Tensor)
+
+
+def _is_replicated_at(layout, axis: int) -> bool:
+    if not isinstance(layout, ShardLayout) or axis >= len(layout.attrs):
+        return True
+    return isinstance(layout.attrs[axis], Broadcast)
+
+
+def _check_linear_inputs(operands) -> None:
+    states = {
+        name: partial_reductions_by_axis(ty.layout) for name, ty in operands
+    }
+    for axis in range(max((len(s) for s in states.values()), default=0)):
+        partials = [
+            (name, reductions[axis])
+            for name, reductions in states.items()
+            if axis < len(reductions) and reductions[axis] is not None
+        ]
+        if not partials:
+            continue
+        for name, reduction in partials:
+            if name != operands[0][0]:
+                raise TypeError(
+                    f"RoPE: {name} carries Partial({reduction}) on mesh axis "
+                    f"{axis}; the output tuple cannot preserve this secondary "
+                    f"state. Use Reshard({name}, Broadcast) before this consumer"
+                )
+        if len(partials) > 1:
+            details = ", ".join(
+                f"{name}=Partial({reduction})" for name, reduction in partials
+            )
+            raise TypeError(
+                f"RoPE: multiple value-carrying Partials on mesh axis {axis} "
+                f"({details}) do not commute; insert Reshard to Broadcast "
+                "before this consumer"
+            )
+        name, reduction = partials[0]
+        if reduction != "sum":
+            raise TypeError(
+                f"RoPE: {name} carries Partial({reduction}) on mesh axis "
+                f"{axis}; RoPE commutes with sum only. Insert reshard({name}, "
+                "Broadcast) before this consumer"
+            )
+        for other_name, other_ty in operands:
+            if other_name == name:
+                continue
+            if not _is_replicated_at(other_ty.layout, axis):
+                raise TypeError(
+                    f"RoPE: {name} carries Partial(sum) on mesh axis {axis}, "
+                    f"but {other_name} is not Broadcast/replicated on that "
+                    f"axis; insert reshard({other_name}, Broadcast) before "
+                    "this consumer"
+                )
 @register_typeinfer(RoPE)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     q_ty = ctx.type_of(call.args[0])
     k_ty = ctx.type_of(call.args[1])
+    cos_ty = ctx.type_of(call.args[2])
+    sin_ty = ctx.type_of(call.args[3])
+    pos_ty = ctx.type_of(call.args[4])
     if not q_ty.shape or not k_ty.shape:
         raise TypeError("RoPE: q and k must be at least rank-1")
     head_dim_q = q_ty.shape[-1]
@@ -56,6 +114,22 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         raise TypeError(
             f"RoPE: q head_dim {head_dim_q} != k head_dim {head_dim_k}"
         )
+    # q*cos + rotate_half(q)*sin is multilinear in each value input. Each
+    # output branch therefore allows one sum Partial only when all other
+    # value-carrying inputs on that mesh axis are replicated.
+    _check_linear_inputs(
+        (("q", q_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+    )
+    _check_linear_inputs(
+        (("k", k_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+    )
+    for axis, reduction in enumerate(partial_reductions_by_axis(pos_ty.layout)):
+        if reduction is not None:
+            raise TypeError(
+                f"RoPE: pos_ids carries Partial({reduction}) on mesh axis "
+                f"{axis}; indexed cache access does not commute. Insert "
+                "reshard(pos_ids, Broadcast) before this consumer"
+            )
     return TupleType(fields=(q_ty, k_ty))
 
 @register_access_relation(RoPE)

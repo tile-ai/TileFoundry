@@ -10,6 +10,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op(name="insert_slice")
@@ -68,6 +70,37 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if dst_ty.dtype != upd_ty.dtype:
         raise TypeError(
             f"insert_slice: dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}"
+        )
+    dst_partials = tuple(
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(dst_ty.layout))
+        if reduction is not None
+    )
+    update_partials = tuple(
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(upd_ty.layout))
+        if reduction is not None
+    )
+    if dst_partials:
+        if not (
+            isinstance(dst_ty.layout, ShardLayout)
+            and isinstance(upd_ty.layout, ShardLayout)
+            and upd_ty.layout.mesh == dst_ty.layout.mesh
+            and upd_ty.layout.attrs == dst_ty.layout.attrs
+        ):
+            axis, reduction = dst_partials[0]
+            raise TypeError(
+                f"insert_slice: dst carries a Partial({reduction}) on mesh axis "
+                f"{axis}; update must carry the identical per-mesh-axis state. "
+                "Insert Reshard(update, Broadcast) or match dst before this "
+                "consumer"
+            )
+    elif update_partials:
+        axis, reduction = update_partials[0]
+        raise TypeError(
+            f"insert_slice: update carries Partial({reduction}) on mesh axis "
+            f"{axis}, but dst is complete; insert reshard(update, Broadcast) "
+            "before this consumer"
         )
     if isinstance(off_expr, Tuple):
         # rank-N: one rank-0 scalar offset per axis.

@@ -52,8 +52,9 @@ from tilefoundry.ir.tir.stmts import (
     Sequential,
     While,
 )
-from tilefoundry.ir.types import DType, TensorType, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types import DType, TensorType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology, make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.passes.transforms.hir_to_tir import HirToTirPass
 
 # ---------------------------------------------------------------------------
@@ -64,6 +65,7 @@ from tilefoundry.passes.transforms.hir_to_tir import HirToTirPass
 
 _CTX_LEN = DimVar("CTX_LEN", 1, 4097)
 _RMS = RMSNorm(eps=1e-6)
+_PARTIAL_MESH = make_mesh((4,))
 
 CASES = [
     TypeInferCase(
@@ -109,6 +111,29 @@ CASES = [
         _RMS,
         (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1024,), DType.f32)),
         ExpectedError(match="last dim", exc=TypeError),
+    ),
+    # rms_norm normalizes across an axis (non-monotonic); no reduction commutes.
+    TypeInferCase(
+        "partial_input_rejected",
+        _RMS,
+        (
+            make_shard_tensor_type(
+                (4, 2048), DType.bf16, mesh=_PARTIAL_MESH, attrs=(Partial("sum"),)
+            ),
+            make_tensor_type((2048,), DType.f32),
+        ),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_weight_rejected",
+        _RMS,
+        (
+            make_tensor_type((4, 2048), DType.bf16),
+            make_shard_tensor_type(
+                (2048,), DType.f32, mesh=_PARTIAL_MESH, attrs=(Partial("sum"),)
+            ),
+        ),
+        ExpectedError(match="Partial input on weight is unsound", exc=TypeError),
     ),
 ]
 

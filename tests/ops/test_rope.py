@@ -16,21 +16,24 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.rope import RoPE
-from tilefoundry.ir.types import DType, TupleType, make_tensor_type
+from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 _BF = DType.bf16
+_M = make_mesh((4,))
 
 
-def _rope_inputs(q_shape, k_shape):
+def _rope_inputs(q_shape, k_shape, *, q=None, k=None, cos=None, sin=None, pos=None):
     """The (q, k, cos, sin, pos) input types for a RoPE call."""
     return (
-        make_tensor_type(q_shape, _BF),
-        make_tensor_type(k_shape, _BF),
-        make_tensor_type((4096, q_shape[-1]), _BF),
-        make_tensor_type((4096, q_shape[-1]), _BF),
-        make_tensor_type((1,), DType.i32),
+        q if q is not None else make_tensor_type(q_shape, _BF),
+        k if k is not None else make_tensor_type(k_shape, _BF),
+        cos if cos is not None else make_tensor_type((4096, q_shape[-1]), _BF),
+        sin if sin is not None else make_tensor_type((4096, q_shape[-1]), _BF),
+        pos if pos is not None else make_tensor_type((1,), DType.i32),
     )
 
 
@@ -52,6 +55,61 @@ CASES = [
         RoPE(),
         _rope_inputs((1, 32, 128), (1, 4, 64)),
         ExpectedError(match="!= k head_dim", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_sum_q_passes",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
+        ),
+        TupleType(
+            fields=(
+                make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
+                make_tensor_type((1, 4, 128), _BF),
+            )
+        ),
+    ),
+    TypeInferCase(
+        "partial_sum_k_passes",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            k=make_shard_tensor_type((1, 4, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
+        ),
+        TupleType(
+            fields=(
+                make_tensor_type((1, 32, 128), _BF),
+                make_shard_tensor_type((1, 4, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
+            )
+        ),
+    ),
+    TypeInferCase(
+        "partial_max_q_errors",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("max"),), dtype=_BF),
+        ),
+        ExpectedError(match="RoPE", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_sum_cos_errors",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            cos=make_shard_tensor_type((4096, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
+        ),
+        ExpectedError(match="cos_cache carries Partial.*mesh axis 0", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_sum_pos_errors",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            pos=make_shard_tensor_type((1,), mesh=_M, attrs=(Partial("sum"),), dtype=DType.i32),
+        ),
+        ExpectedError(match="pos_ids carries Partial.*mesh axis 0", exc=TypeError),
     ),
 ]
 

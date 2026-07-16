@@ -12,7 +12,10 @@ from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult
 from tilefoundry.visitor_registry.relation_build import build_domain
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    derive_output_shard_layout,
+    partial_reductions_by_axis,
+)
 
 _GPU = Mesh(Topology("gpu", 8), (8,), names=("g",))
 
@@ -179,3 +182,19 @@ def test_replicated_input_on_other_mesh_is_ignored():
     )
     assert out.mesh is _GPU
     assert out.attrs == (Split(1),)
+
+
+def test_partial_reductions_by_axis_keeps_same_reduction_axis_identity():
+    axis_a = _shard2((4, 8), Partial("sum"), Broadcast())
+    axis_b = _shard2((4, 8), Broadcast(), Partial("sum"))
+
+    assert partial_reductions_by_axis(axis_a) == ("sum", None)
+    assert partial_reductions_by_axis(axis_b) == (None, "sum")
+    assert partial_reductions_by_axis(axis_a) != partial_reductions_by_axis(axis_b)
+
+
+def test_partial_reductions_by_axis_keeps_distinct_reductions():
+    layout = _shard2((4, 8), Partial("sum"), Partial("max"))
+
+    assert partial_reductions_by_axis(layout) == ("sum", "max")
+    assert partial_reductions_by_axis(make_tensor_type((4, 8))) == ()

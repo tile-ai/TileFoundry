@@ -17,6 +17,8 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 # Data-dependent write region (``cur_pos`` / ``s`` are runtime values), so no
 # affine access relation is registered — the boundaries are opaque.
@@ -50,6 +52,37 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError("CacheUpdate: cache and new must be rank-4 [B, len, kv_heads, head_dim]")
     if cache_ty.dtype != new_ty.dtype:
         raise TypeError(f"CacheUpdate: cache/new dtype mismatch {cache_ty.dtype} vs {new_ty.dtype}")
+    cache_partials = tuple(
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(cache_ty.layout))
+        if reduction is not None
+    )
+    new_partials = tuple(
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(new_ty.layout))
+        if reduction is not None
+    )
+    if cache_partials:
+        if not (
+            isinstance(cache_ty.layout, ShardLayout)
+            and isinstance(new_ty.layout, ShardLayout)
+            and new_ty.layout.mesh == cache_ty.layout.mesh
+            and new_ty.layout.attrs == cache_ty.layout.attrs
+        ):
+            axis, reduction = cache_partials[0]
+            raise TypeError(
+                f"CacheUpdate: cache carries a Partial({reduction}) on mesh axis "
+                f"{axis}; new must carry the identical per-mesh-axis state. "
+                "Insert Reshard(new, Broadcast) or match the cache before "
+                "this consumer"
+            )
+    elif new_partials:
+        axis, reduction = new_partials[0]
+        raise TypeError(
+            f"CacheUpdate: new carries Partial({reduction}) on mesh axis "
+            f"{axis}, but cache is complete; insert reshard(new, Broadcast) "
+            "before this consumer"
+        )
     for ax, label in ((0, "B"), (2, "kv_heads"), (3, "head_dim")):
         if cache_ty.shape[ax] != new_ty.shape[ax]:
             raise TypeError(

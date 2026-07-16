@@ -17,7 +17,9 @@ from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
-from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -108,6 +110,49 @@ TYPEINFER_CASES = [
             make_tensor_type((1, 4, 4, 8), DType.bf16),
         ),
         ExpectedError(match="must be a scalar", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_cache_matching_new_ok",
+        CacheUpdate(),
+        (
+            make_shard_tensor_type(
+                (1, 16, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+            ),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1,), DType.i32),
+            make_shard_tensor_type(
+                (1, 4, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+            ),
+        ),
+        make_shard_tensor_type(
+            (1, 16, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+        ),
+    ),
+    TypeInferCase(
+        "partial_cache_plain_new_rejected",
+        CacheUpdate(),
+        (
+            make_shard_tensor_type(
+                (1, 16, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+            ),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1, 4, 4, 8), DType.bf16),
+        ),
+        ExpectedError(match="cache carries a Partial", exc=TypeError),
+    ),
+    TypeInferCase(
+        "complete_cache_partial_new_rejected",
+        CacheUpdate(),
+        (
+            make_tensor_type((1, 16, 4, 8), DType.bf16),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1,), DType.i32),
+            make_shard_tensor_type(
+                (1, 4, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+            ),
+        ),
+        ExpectedError(match="new carries Partial", exc=TypeError),
     ),
 ]
 

@@ -1,8 +1,7 @@
 """Per-token-group FP8 quantization op.
 
 SGLang baseline uses ``per_token_group_quant_8bit_kernel`` for K01/K07/K14/K17.
-This op covers the attention-path K01/K07 (K14/K17 are absorbed into the
-``MoEExpertCompute`` big op).
+This op covers the attention-path K01/K07.
 
 
 Semantics: split the last axis into groups of size ``group``; for each group
@@ -28,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -42,6 +42,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         raise TypeError("Quant: x must be at least rank-1")
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is not None:
+            raise TypeError(
+                f"Quant: Partial input on x is unsound: x carries Partial({reduction}) "
+                f"on mesh axis {axis}; "
+                "per-group normalization does not commute. Insert reshard(x, "
+                "Broadcast) before this consumer"
+            )
     last = x_ty.shape[-1]
     group = call.target.group
     # Static divisibility check when last dim is a Python int.

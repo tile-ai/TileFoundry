@@ -9,7 +9,9 @@ from tests.ops.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
-from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Partial
 
 _I64 = DType.i64
 
@@ -22,6 +24,12 @@ CASES = [
         ArgMax(axis=3),
         (make_tensor_type((4,), DType.f32),),
         ExpectedError(match="out of range", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_input_rejected",
+        ArgMax(),
+        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
 ]
 

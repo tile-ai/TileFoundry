@@ -28,7 +28,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, Split
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -82,6 +82,12 @@ CASES = [
         TopK(k=2, axis=-1),
         (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(1),)),),
         ExpectedError(match="must not be Split-sharded", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_input_rejected",
+        TopK(k=2, axis=-1),
+        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
+        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
 ]
 

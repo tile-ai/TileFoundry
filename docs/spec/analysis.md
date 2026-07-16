@@ -20,6 +20,12 @@ reconstructed and each of its nodes re-derives through the same per-op
 rules under the call's actual argument types, so a relation-derived rule
 never needs its own function-boundary case.
 
+A function boundary MUST NOT complete or reject a legal `Partial`. A function
+return MAY carry a `Partial(reduction)` in a `TensorType`, and a tuple return
+MAY carry it in any nested tensor field. Call elaboration MUST preserve the
+`ShardLayout` mesh-axis position and reduction on the actual value; completion
+remains the responsibility of an explicit `Reshard` or allreduce.
+
 ### 1.1 Relation-derived type behavior
 
 An op's typeinfer MAY derive the output type from a forward access
@@ -84,6 +90,12 @@ relation ([§1.1](#11-relation-derived-type-behavior)), the
 output `ShardAttr`s are determined from the input shards and the
 relation's access maps by a single rule, shared across ops.
 
+**Mesh-axis value state.** `ShardLayout.attrs` is indexed by mesh axis. A
+`Partial(reduction)` is a value state at that exact index, not an unordered
+collection of reductions and not a layout position. Every propagation decision
+MUST retain that index and its reduction independently of every other mesh
+axis.
+
 **Reduction effect.** A reduction dim (a domain dim absent from the
 output access map) carries one of two effects, declared by the
 op/relation:
@@ -103,18 +115,29 @@ op/relation:
    `Partial(reduction)` when the effect is `partial`, or `Broadcast`
    when the effect is `complete`. The resulting `Partial` carries no
    layout axis — it is a value state on that mesh axis.
-4. `Partial(reduction)` input — propagates on the **same mesh axis**:
-   propagate unchanged when the dataflow is homogeneous in `reduction`;
-   resolve to `Broadcast` via an explicit reduction / allreduce over that
-   axis; error on a non-homogeneous use or an unreduced function
-   output / return. There is no layout-axis mapping for a `Partial`.
+4. `Partial(reduction)` input — propagates on the **same mesh axis**, gated by
+   commutation: the op MUST propagate `Partial(reduction)` unchanged only
+   when its own math is proven to commute with `reduction` —
+   `op(reduction(x0..xn)) == reduction(op(x0)..op(xn))`. This service reads
+   only the relation's affine structure and MUST NOT make that mathematical
+   judgment itself; each op's typeinfer rule owns it. On each mesh axis, two
+   Partial inputs MUST be compatible with that op's rule. States on different
+   mesh axes MUST NOT be compared as an unordered set; the op evaluates each
+   axis independently. `Partial` resolves to `Broadcast` only via an explicit
+   reduction / allreduce over that axis. There is no layout-axis mapping for a
+   `Partial`.
 5. A `Broadcast` (size-1) input axis contributes no `Split`.
 6. Two inputs binding the same domain dim to incompatible mesh axes is
    an error.
 
-A `Partial` MUST NOT be silently eliminated by an ordinary op
-(no silent loss); only an explicit `Reshard` / allreduce from `Partial`
-to `Broadcast` completes it.
+A `Partial` MUST NOT be silently eliminated, nor silently carried through a
+non-commuting ordinary op; only an explicit `Reshard` / allreduce from
+`Partial` to `Broadcast` completes it.
+
+An ordinary multi-input op MUST inspect every tensor input for a `Partial`.
+When its result type cannot represent a secondary input's axis-preserving
+state, typeinfer MUST reject that input and name the `Reshard` remedy rather
+than silently dropping the state.
 
 A fully-`Broadcast` input `ShardLayout` (every attr `Broadcast`) is
 **replicated**: it carries no real sharding, so it contributes no

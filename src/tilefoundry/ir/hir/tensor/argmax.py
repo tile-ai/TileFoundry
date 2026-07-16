@@ -18,6 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -35,6 +36,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         axis += rank
     if axis < 0 or axis >= rank:
         raise TypeError(f"ArgMax: axis {call.target.axis} out of range for rank {rank}")
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is not None:
+            raise TypeError(
+                f"ArgMax: Partial input on x is unsound: x carries Partial({reduction}) "
+                f"on mesh axis {axis}; "
+                "the winning index is not recoverable. Insert reshard(x, "
+                "Broadcast) before this consumer"
+            )
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
     return TensorType(
         shape=out_shape,
