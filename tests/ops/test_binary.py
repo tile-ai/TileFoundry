@@ -43,6 +43,8 @@ _MAB = mesh((2, 4), ("a", "b"))
 _PSUM = sharded((16, 8), (Partial("sum"),), _M)
 _PMAX = sharded((16, 8), (Partial("max"),), _M)
 _BCAST = ten((16, 8), _F)
+_PSUM_AXIS0 = sharded((16, 8), (Partial("sum"), Broadcast()), _MAB)
+_PSUM_AXIS1 = sharded((16, 8), (Broadcast(), Partial("sum")), _MAB)
 
 CASES = [
     # ── shape inference (unsharded) ──────────────────────────────────────────
@@ -104,6 +106,12 @@ CASES = [
         _ADD,
         (sharded((16, 8), (Split(0),), _M), sharded((16, 8), (Split(1),), _M)),
         ExpectedError(match="incompatible"),
+    ),
+    TypeInferCase(
+        "partial_sum_different_mesh_axes_errors",
+        _ADD,
+        (_PSUM_AXIS0, _PSUM_AXIS1),
+        ExpectedError(match="mesh axis 0"),
     ),
     # two mesh axes split the same tensor axis (neither operand supplies both):
     # the output factorizes axis 0 into one sub-position per mesh extent.

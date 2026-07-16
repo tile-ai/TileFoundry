@@ -11,7 +11,11 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
+from tilefoundry.ir.types.shard.shard_layout import (
+    Broadcast,
+    ShardLayout,
+    split_target_axes,
+)
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -44,6 +48,63 @@ def _k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
         return frozenset()
     targets = split_target_axes(t.layout, t.shape)
     return frozenset(p for p, ax in enumerate(targets) if ax == k_tensor_axis)
+
+
+def _is_replicated_at(layout, axis: int) -> bool:
+    if not isinstance(layout, ShardLayout) or axis >= len(layout.attrs):
+        return True
+    return isinstance(layout.attrs[axis], Broadcast)
+
+
+def _check_partial_commutes(call, ctx, lhs, rhs) -> None:
+    states = (
+        partial_reductions_by_axis(lhs.layout),
+        partial_reductions_by_axis(rhs.layout),
+    )
+    for axis in range(max((len(s) for s in states), default=0)):
+        lhs_reduction = states[0][axis] if axis < len(states[0]) else None
+        rhs_reduction = states[1][axis] if axis < len(states[1]) else None
+        if lhs_reduction is None and rhs_reduction is None:
+            continue
+        if lhs_reduction is not None and rhs_reduction is not None:
+            ctx.error(
+                call,
+                f"MatMul: lhs carries Partial({lhs_reduction}) and rhs carries "
+                f"Partial({rhs_reduction}) on mesh axis {axis}; MatMul is "
+                "linear in one value input only when the other is "
+                "Broadcast/replicated. Reshard lhs or rhs to Broadcast before "
+                "this consumer",
+            )
+        if lhs_reduction is not None:
+            if lhs_reduction != "sum":
+                ctx.error(
+                    call,
+                    f"MatMul: lhs carries Partial({lhs_reduction}) on mesh axis "
+                    f"{axis}; MatMul commutes with sum only. Insert reshard(lhs, "
+                    "Broadcast) before this consumer",
+                )
+            if not _is_replicated_at(rhs.layout, axis):
+                ctx.error(
+                    call,
+                    f"MatMul: lhs carries Partial(sum) on mesh axis {axis}, but "
+                    "rhs is not Broadcast/replicated on that axis. Insert "
+                    "reshard(rhs, Broadcast) before this consumer",
+                )
+        if rhs_reduction is not None:
+            if rhs_reduction != "sum":
+                ctx.error(
+                    call,
+                    f"MatMul: rhs carries Partial({rhs_reduction}) on mesh axis "
+                    f"{axis}; MatMul commutes with sum only. Insert reshard(rhs, "
+                    "Broadcast) before this consumer",
+                )
+            if not _is_replicated_at(lhs.layout, axis):
+                ctx.error(
+                    call,
+                    f"MatMul: rhs carries Partial(sum) on mesh axis {axis}, but "
+                    "lhs is not Broadcast/replicated on that axis. Insert "
+                    "reshard(lhs, Broadcast) before this consumer",
+                )
 
 
 def _broadcast_batch(lhs_batch, rhs_batch):
@@ -137,22 +198,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             "both operands",
         )
 
-    # A pre-existing Partial(reduction) on either operand (weight replication)
-    # propagates only for "sum" — matmul is linear in each operand for the
-    # other fixed, but does not preserve order, so max/min never commute.
-    for arg, t in (("lhs", lhs), ("rhs", rhs)):
-        bad = tuple(
-            reduction
-            for reduction in partial_reductions_by_axis(t.layout)
-            if reduction not in (None, "sum")
-        )
-        if bad:
-            ctx.error(
-                call,
-                f"MatMul: Partial({sorted(bad)}) input on {arg} is unsound "
-                f"(matmul is linear, commutes with sum only) — insert "
-                f"reshard({arg}, Broadcast) before this consumer",
-            )
+    _check_partial_commutes(call, ctx, lhs, rhs)
 
     relation = build_relation(call, (lhs, rhs), ctx)
     # Output shape comes from the relation (domain + output map), not a separate

@@ -20,6 +20,8 @@ _F = DType.f32
 _X = ten((4, 8), _F)
 _W = ten((8,), _F)
 _B = ten((8,), _F)
+_W_PSUM = sharded((8,), (Partial("sum"),), mesh((4,)))
+_B_PSUM = sharded((8,), (Partial("sum"),), mesh((4,)))
 
 CASES = [
     TypeInferCase("passthrough", _OP, (_X, _W, _B), _X),
@@ -30,6 +32,18 @@ CASES = [
         _OP,
         (sharded((4, 8), (Partial("sum"),), mesh((4,))), _W, _B),
         ExpectedError(match="LayerNorm"),
+    ),
+    TypeInferCase(
+        "partial_weight_errors",
+        _OP,
+        (_X, _W_PSUM, _B),
+        ExpectedError(match="weight.*Partial.*mesh axis 0"),
+    ),
+    TypeInferCase(
+        "partial_bias_errors",
+        _OP,
+        (_X, _W, _B_PSUM),
+        ExpectedError(match="bias.*Partial.*mesh axis 0"),
     ),
 ]
 

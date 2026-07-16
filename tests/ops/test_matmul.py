@@ -147,6 +147,15 @@ CASES = [
         ),
         expected=_shard_out((16, 32), (32, 1), (Partial(reduction="sum"),)),
     ),
+    TypeInferCase(
+        name="double_partial_same_mesh_axis_errors",
+        op=_MM,
+        inputs=(
+            _sharded((16, 8), (16, 8), (8, 1), (Partial("sum"),)),
+            _sharded((8, 32), (8, 32), (32, 1), (Partial("sum"),)),
+        ),
+        expected=ExpectedError(match="mesh axis 0"),
+    ),
     # lhs M-split → output Split on M axis
     TypeInferCase(
         name="lhs_m_split",

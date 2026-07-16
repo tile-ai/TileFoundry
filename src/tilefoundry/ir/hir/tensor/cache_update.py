@@ -52,19 +52,36 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError("CacheUpdate: cache and new must be rank-4 [B, len, kv_heads, head_dim]")
     if cache_ty.dtype != new_ty.dtype:
         raise TypeError(f"CacheUpdate: cache/new dtype mismatch {cache_ty.dtype} vs {new_ty.dtype}")
-    if any(
-        reduction is not None
-        for reduction in partial_reductions_by_axis(cache_ty.layout)
-    ) and not (
-        isinstance(new_ty.layout, ShardLayout)
-        and new_ty.layout.mesh == cache_ty.layout.mesh
-        and new_ty.layout.attrs == cache_ty.layout.attrs
-    ):
+    cache_partials = tuple(
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(cache_ty.layout))
+        if reduction is not None
+    )
+    new_partials = tuple(
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(new_ty.layout))
+        if reduction is not None
+    )
+    if cache_partials:
+        if not (
+            isinstance(cache_ty.layout, ShardLayout)
+            and isinstance(new_ty.layout, ShardLayout)
+            and new_ty.layout.mesh == cache_ty.layout.mesh
+            and new_ty.layout.attrs == cache_ty.layout.attrs
+        ):
+            axis, reduction = cache_partials[0]
+            raise TypeError(
+                f"CacheUpdate: cache carries a Partial({reduction}) on mesh axis "
+                f"{axis}; new must carry the identical per-mesh-axis state. "
+                "Insert Reshard(new, Broadcast) or match the cache before "
+                "this consumer"
+            )
+    elif new_partials:
+        axis, reduction = new_partials[0]
         raise TypeError(
-            "CacheUpdate: cache carries a Partial(reduction) — new must "
-            "carry the identical per-mesh-axis ShardAttr state for the "
-            "write to type (writing a differently-sharded new into a "
-            "still-partial cache position under one output type is unsound)"
+            f"CacheUpdate: new carries Partial({reduction}) on mesh axis "
+            f"{axis}, but cache is complete; insert reshard(new, Broadcast) "
+            "before this consumer"
         )
     for ax, label in ((0, "B"), (2, "kv_heads"), (3, "head_dim")):
         if cache_ty.shape[ax] != new_ty.shape[ax]:

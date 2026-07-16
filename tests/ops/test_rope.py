@@ -27,15 +27,14 @@ _BF = DType.bf16
 _M = mesh((4,))
 
 
-def _rope_inputs(q_shape, k_shape, *, q=None, k=None):
-    """The (q, k, cos, sin, pos) input types for a RoPE call. ``q``/``k``
-    override the q/k TensorType (e.g. to carry a ShardLayout)."""
+def _rope_inputs(q_shape, k_shape, *, q=None, k=None, cos=None, sin=None, pos=None):
+    """The (q, k, cos, sin, pos) input types for a RoPE call."""
     return (
         q if q is not None else ten(q_shape, _BF),
         k if k is not None else ten(k_shape, _BF),
-        ten((4096, q_shape[-1]), _BF),
-        ten((4096, q_shape[-1]), _BF),
-        ten((1,), DType.i32),
+        cos if cos is not None else ten((4096, q_shape[-1]), _BF),
+        sin if sin is not None else ten((4096, q_shape[-1]), _BF),
+        pos if pos is not None else ten((1,), DType.i32),
     )
 
 
@@ -83,6 +82,38 @@ CASES = [
             q=sharded((1, 32, 128), (Partial("max"),), _M, dtype=_BF),
         ),
         ExpectedError(match="RoPE", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_sum_k_passes",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            k=sharded((1, 4, 128), (Partial("sum"),), _M, dtype=_BF),
+        ),
+        TupleType(
+            fields=(
+                ten((1, 32, 128), _BF),
+                sharded((1, 4, 128), (Partial("sum"),), _M, dtype=_BF),
+            )
+        ),
+    ),
+    TypeInferCase(
+        "partial_sum_cos_errors",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            cos=sharded((4096, 128), (Partial("sum"),), _M, dtype=_BF),
+        ),
+        ExpectedError(match="cos_cache carries Partial.*mesh axis 0", exc=TypeError),
+    ),
+    TypeInferCase(
+        "partial_sum_pos_errors",
+        RoPE(),
+        _rope_inputs(
+            (1, 32, 128), (1, 4, 128),
+            pos=sharded((1,), (Partial("sum"),), _M, dtype=DType.i32),
+        ),
+        ExpectedError(match="pos_ids carries Partial.*mesh axis 0", exc=TypeError),
     ),
 ]
 

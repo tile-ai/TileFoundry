@@ -19,16 +19,14 @@ class Sigmoid(Op):
 @register_typeinfer(Sigmoid)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    if any(
-        reduction == "sum"
-        for reduction in partial_reductions_by_axis(x_ty.layout)
-    ):
-        ctx.error(
-            call,
-            "Partial(sum) input on x is unsound (sigmoid is nonlinear, does "
-            "not commute with sum) — insert reshard(x, Broadcast) before "
-            "this consumer",
-        )
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction == "sum":
+            ctx.error(
+                call,
+                f"Sigmoid: x carries Partial(sum) on mesh axis {axis}, which "
+                "does not commute; insert reshard(x, Broadcast) before this "
+                "consumer",
+            )
     return x_ty
 
 

@@ -39,37 +39,29 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if op.kind is UnaryKind.NOT and x_ty.dtype != DType.bool:
         ctx.error(call, "Unary NOT: operand must be bool")
-    reductions = tuple(
-        reduction
-        for reduction in partial_reductions_by_axis(x_ty.layout)
-        if reduction is not None
-    )
-    if reductions:
-        if op.kind in _MONOTONE_INCREASING:
-            if "sum" in reductions:
-                ctx.error(
-                    call,
-                    f"Unary {op.kind.name}: Partial(sum) input on x is "
-                    f"unsound ({op.kind.name.lower()} is nonlinear, does not "
-                    "commute with sum) — insert reshard(x, Broadcast) before "
-                    "this consumer",
-                )
-        elif op.kind in _LINEAR:
-            if any(reduction != "sum" for reduction in reductions):
-                ctx.error(
-                    call,
-                    f"Unary {op.kind.name}: Partial(max/min) input on x is "
-                    "unsound (negation reverses order, does not commute "
-                    "with max/min) — insert reshard(x, Broadcast) before "
-                    "this consumer",
-                )
-        else:
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is None:
+            continue
+        if op.kind in _MONOTONE_INCREASING and reduction == "sum":
             ctx.error(
                 call,
-                f"Unary {op.kind.name}: Partial input on x is unsound "
-                f"({op.kind.name.lower()} is not proven to commute with any "
-                "reduction) — insert reshard(x, Broadcast) before this "
-                "consumer",
+                f"Unary {op.kind.name}: x carries Partial(sum) on mesh axis "
+                f"{axis}, which does not commute; insert reshard(x, Broadcast) "
+                "before this consumer",
+            )
+        elif op.kind in _LINEAR and reduction != "sum":
+            ctx.error(
+                call,
+                f"Unary {op.kind.name}: x carries Partial({reduction}) on mesh "
+                f"axis {axis}, which does not commute; insert reshard(x, "
+                "Broadcast) before this consumer",
+            )
+        elif op.kind not in _MONOTONE_INCREASING and op.kind not in _LINEAR:
+            ctx.error(
+                call,
+                f"Unary {op.kind.name}: x carries Partial({reduction}) on mesh "
+                f"axis {axis}, which is not proven to commute; insert "
+                "reshard(x, Broadcast) before this consumer",
             )
     return TensorType(
         shape=x_ty.shape,

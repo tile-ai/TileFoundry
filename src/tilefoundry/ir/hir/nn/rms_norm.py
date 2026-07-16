@@ -50,16 +50,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         raise TypeError(
             f"RMSNorm: x last dim {x_ty.shape[-1]} != weight dim {w_ty.shape[0]}"
         )
-    if any(
-        reduction is not None
-        for reduction in partial_reductions_by_axis(x_ty.layout)
-    ):
-        raise TypeError(
-            "RMSNorm: Partial input on x is unsound (rms_norm normalizes "
-            "across an axis, a non-monotonic combination that does not "
-            "commute with any reduction) — insert reshard(x, Broadcast) "
-            "before this consumer"
-        )
+    for arg, ty in (("x", x_ty), ("weight", w_ty)):
+        for axis, reduction in enumerate(partial_reductions_by_axis(ty.layout)):
+            if reduction is not None:
+                raise TypeError(
+                    f"RMSNorm: Partial input on {arg} is unsound: {arg} carries "
+                    f"Partial({reduction}) on mesh "
+                    f"axis {axis}, which does not commute; insert reshard({arg}, "
+                    "Broadcast) before this consumer"
+                )
 
     # Output preserves x's full shape (batch dims flow verbatim,
     # including DimVar / dim-arithmetic entries) and x's dtype. The

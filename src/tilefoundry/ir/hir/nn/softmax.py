@@ -20,17 +20,14 @@ class SoftMax(Op):
 @register_typeinfer(SoftMax)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    if any(
-        reduction is not None
-        for reduction in partial_reductions_by_axis(x_ty.layout)
-    ):
-        ctx.error(
-            call,
-            "Partial input on x is unsound (softmax normalizes across an "
-            "axis, a non-monotonic combination that does not commute with "
-            "any reduction) — insert reshard(x, Broadcast) before this "
-            "consumer",
-        )
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is not None:
+            ctx.error(
+                call,
+                f"SoftMax: x carries Partial({reduction}) on mesh axis {axis}, "
+                "which does not commute; insert reshard(x, Broadcast) before "
+                "this consumer",
+            )
     return x_ty
 
 

@@ -23,11 +23,11 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -42,16 +42,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         raise TypeError("Quant: x must be at least rank-1")
-    if any(
-        reduction is not None
-        for reduction in partial_reductions_by_axis(x_ty.layout)
-    ):
-        raise TypeError(
-            "Quant: Partial input on x is unsound (per-group amax "
-            "normalization is non-monotonic and does not commute with any "
-            "reduction) — insert reshard(x, Broadcast) before this "
-            "consumer"
-        )
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is not None:
+            raise TypeError(
+                f"Quant: Partial input on x is unsound: x carries Partial({reduction}) "
+                f"on mesh axis {axis}; "
+                "per-group normalization does not commute. Insert reshard(x, "
+                "Broadcast) before this consumer"
+            )
     last = x_ty.shape[-1]
     group = call.target.group
     # Static divisibility check when last dim is a Python int.

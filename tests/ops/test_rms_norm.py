@@ -128,6 +128,15 @@ CASES = [
         ),
         ExpectedError(match="Partial input on x is unsound", exc=TypeError),
     ),
+    TypeInferCase(
+        "partial_weight_rejected",
+        _RMS,
+        (
+            _ten((4, 2048), DType.bf16),
+            sharded((2048,), (Partial("sum"),), mesh((4,)), dtype=DType.f32),
+        ),
+        ExpectedError(match="Partial input on weight is unsound", exc=TypeError),
+    ),
 ]
 
 

@@ -92,16 +92,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             for a in x_ty.layout.attrs
         ):
             raise TypeError(f"TopK: selected axis {axis} must not be Split-sharded")
-    if any(
-        reduction is not None
-        for reduction in partial_reductions_by_axis(x_ty.layout)
-    ):
-        raise TypeError(
-            "TopK: Partial input on x is unsound (the selected indices "
-            "cannot be recovered from a per-device partial value without a "
-            "paired value+device-identity reduction) — insert "
-            "reshard(x, Broadcast) before this consumer"
-        )
+    for mesh_axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is not None:
+            raise TypeError(
+                f"TopK: Partial input on x is unsound: x carries Partial({reduction}) "
+                f"on mesh axis {mesh_axis}; "
+                "the selected index is not recoverable. Insert reshard(x, "
+                "Broadcast) before this consumer"
+            )
     out_shape = list(x_ty.shape)
     out_shape[axis] = call.target.k
     out_shape = tuple(out_shape)

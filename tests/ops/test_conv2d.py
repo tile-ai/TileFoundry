@@ -13,7 +13,7 @@ from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, mesh, run_ty
 from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 
 _OP = Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1)
 _M = mesh((4,))
@@ -37,6 +37,8 @@ _X_PSUM = _sharded_nchw((1, 4, 8, 8), (Partial("sum"),))
 _X_PMAX = _sharded_nchw((1, 4, 8, 8), (Partial("max"),))
 _W_PSUM = _sharded_nchw((4, 4, 3, 3), (Partial("sum"),))
 _W_PMAX = _sharded_nchw((4, 4, 3, 3), (Partial("max"),))
+_W_SPLIT = _sharded_nchw((4, 4, 3, 3), (Split(0),))
+_BIAS_PSUM = _sharded_nchw((4,), (Partial("sum"),))
 
 CASES = [
     TypeInferCase(
@@ -44,8 +46,10 @@ CASES = [
         ten((1, 4, 6, 6), _F, layout=_X_PSUM.layout),
     ),
     TypeInferCase(
-        "partial_sum_weight_passes", _OP, (_X, _W_PSUM, _BIAS),
-        ten((1, 4, 6, 6), _F, layout=_X.layout),
+        "partial_sum_weight_is_rejected_as_secondary",
+        _OP,
+        (_X, _W_PSUM, _BIAS),
+        ExpectedError(match="weight carries Partial.*mesh axis 0"),
     ),
     TypeInferCase(
         "partial_max_input_errors", _OP, (_X_PMAX, _W, _BIAS),
@@ -54,6 +58,18 @@ CASES = [
     TypeInferCase(
         "partial_max_weight_errors", _OP, (_X, _W_PMAX, _BIAS),
         ExpectedError(match="Conv2D"),
+    ),
+    TypeInferCase(
+        "partial_input_with_split_weight_errors",
+        _OP,
+        (_X_PSUM, _W_SPLIT, _BIAS),
+        ExpectedError(match="weight is not Broadcast/replicated on that axis"),
+    ),
+    TypeInferCase(
+        "partial_bias_is_rejected_as_secondary",
+        _OP,
+        (_X, _W, _BIAS_PSUM),
+        ExpectedError(match="bias carries Partial.*mesh axis 0"),
     ),
 ]
 

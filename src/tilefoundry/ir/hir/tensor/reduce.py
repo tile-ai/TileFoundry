@@ -63,31 +63,24 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     kind = call.target.kind
-    reductions = tuple(
-        reduction
-        for reduction in partial_reductions_by_axis(x_ty.layout)
-        if reduction is not None
-    )
-    if reductions:
-        # x's Partial(reduction) is a pending cross-device combine on a mesh
-        # axis, orthogonal to the tensor axes reduced here; it propagates only
-        # when `kind`'s own math commutes with it. SUM/MEAN are linear over
-        # the reduced axes (commute with sum only); MAX is the same
-        # associative operator applied over the combined tensor-axis and
-        # mesh-axis index set (commutes with max only, same R); ABS_MAX (a
-        # nonlinear abs composed with max) does not commute with any R.
-        if kind in (ReduceKind.SUM, ReduceKind.MEAN):
-            bad = tuple(reduction for reduction in reductions if reduction != "sum")
-        elif kind is ReduceKind.MAX:
-            bad = tuple(reduction for reduction in reductions if reduction != "max")
-        else:
-            bad = reductions
-        if bad:
+    # x's Partial state is a pending cross-device combine on a mesh axis,
+    # independent of the tensor axes reduced by this operation.
+    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
+        if reduction is None:
+            continue
+        allowed = (
+            reduction == "sum"
+            if kind in (ReduceKind.SUM, ReduceKind.MEAN)
+            else reduction == "max"
+            if kind is ReduceKind.MAX
+            else False
+        )
+        if not allowed:
             ctx.error(
                 call,
-                f"Reduce {kind.name}: Partial({sorted(bad)}) input on x is "
-                "unsound — insert reshard(x, Broadcast) before this "
-                "consumer",
+                f"Reduce {kind.name}: x carries Partial({reduction}) on mesh "
+                f"axis {axis}, which does not commute; insert reshard(x, "
+                "Broadcast) before this consumer",
             )
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)

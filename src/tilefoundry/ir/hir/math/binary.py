@@ -21,7 +21,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
@@ -85,70 +85,96 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
-def _check_partial_commutes(call: "Call", ctx: "TypeInferContext", op, la, lb) -> None:
-    """Reject a `Partial(reduction)` operand whose reduction the op's math
-    does not provably commute with.
+def _state_at(layout, axis: int):
+    if not isinstance(layout, ShardLayout) or axis >= len(layout.attrs):
+        return None
+    return layout.attrs[axis]
 
-    ``ADD``: both-``Partial`` commutes only when both carry ``"sum"`` on the
-    same mesh axis (``max``/``min`` self-combine is nonsensical); one
-    ``Partial`` against a plain/``Broadcast`` operand commutes for
-    ``"max"``/``"min"`` (adding a replicated constant is order-preserving)
-    but not ``"sum"`` (today's bug — `sum(x)+b != sum(x+b)`). ``MUL``: one
-    ``Partial`` against a plain/``Broadcast`` operand commutes only for
-    ``"sum"`` (scaling by a replicated constant distributes over `sum`); both
-    ``Partial`` never commutes. Every other kind / shape rejects any
-    `Partial` operand — not proven safe.
-    """
-    lhs_r, rhs_r = partial_reductions_by_axis(la), partial_reductions_by_axis(lb)
-    lhs_has = any(r is not None for r in lhs_r)
-    rhs_has = any(r is not None for r in rhs_r)
-    if not lhs_has and not rhs_has:
-        return
-    fix = "insert reshard(<arg>, Broadcast) before this consumer"
-    if op.kind is BinaryKind.ADD:
-        if lhs_has and rhs_has:
-            if lhs_r != rhs_r or any(r not in (None, "sum") for r in lhs_r):
+
+def _is_replicated_at(layout, axis: int) -> bool:
+    state = _state_at(layout, axis)
+    return state is None or isinstance(state, Broadcast)
+
+
+def _check_partial_commutes(
+    call: "Call", ctx: "TypeInferContext", op, la, lb
+) -> None:
+    """Check Binary Partial states independently on each mesh axis."""
+    lhs_r = partial_reductions_by_axis(la)
+    rhs_r = partial_reductions_by_axis(lb)
+    lhs_axes = tuple(i for i, reduction in enumerate(lhs_r) if reduction is not None)
+    rhs_axes = tuple(i for i, reduction in enumerate(rhs_r) if reduction is not None)
+    if lhs_axes and rhs_axes and lhs_axes != rhs_axes:
+        axis = next(
+            axis
+            for axis in range(max(len(lhs_r), len(rhs_r)))
+            if (lhs_r[axis] if axis < len(lhs_r) else None)
+            != (rhs_r[axis] if axis < len(rhs_r) else None)
+        )
+        lhs_reduction = lhs_r[axis] if axis < len(lhs_r) else None
+        rhs_reduction = rhs_r[axis] if axis < len(rhs_r) else None
+        ctx.error(
+            call,
+            f"Binary {op.kind.name}: Partial axis mismatch on mesh axis {axis} "
+            f"(lhs reduction={lhs_reduction!r}, rhs reduction={rhs_reduction!r}); "
+            "Reshard the Partial input to Broadcast before this consumer",
+        )
+
+    for axis in range(max(len(lhs_r), len(rhs_r))):
+        lhs_reduction = lhs_r[axis] if axis < len(lhs_r) else None
+        rhs_reduction = rhs_r[axis] if axis < len(rhs_r) else None
+        if lhs_reduction is None and rhs_reduction is None:
+            continue
+        if lhs_reduction is not None and rhs_reduction is not None:
+            if op.kind is BinaryKind.ADD and (
+                lhs_reduction == rhs_reduction == "sum"
+            ):
+                continue
+            ctx.error(
+                call,
+                f"Binary {op.kind.name}: lhs carries Partial({lhs_reduction}) "
+                f"and rhs carries Partial({rhs_reduction}) on mesh axis {axis}; "
+                "two value-carrying Partials do not commute here. Reshard "
+                "lhs or rhs to Broadcast before this consumer",
+            )
+        if lhs_reduction is not None:
+            if not _is_replicated_at(lb, axis):
                 ctx.error(
                     call,
-                    f"Binary ADD: Partial(lhs)={tuple(r for r in lhs_r if r is not None)} vs "
-                    f"Partial(rhs)={tuple(r for r in rhs_r if r is not None)} is unsound (ADD of two "
-                    "Partials only commutes when both are Partial(sum) on "
-                    "the same mesh axis) — " + fix,
+                    f"Binary {op.kind.name}: lhs carries Partial({lhs_reduction}) "
+                    f"on mesh axis {axis}, but rhs is not Broadcast/replicated "
+                    "on that axis. Reshard rhs to Broadcast before this consumer",
                 )
-            return
-        arg, r = ("lhs", lhs_r) if lhs_has else ("rhs", rhs_r)
-        if any(reduction == "sum" for reduction in r):
-            ctx.error(
-                call,
-                f"Binary ADD: Partial(sum) input on {arg} against a "
-                f"plain/Broadcast operand is unsound (sum(x)+b != "
-                f"sum(x+b)) — {fix.replace('<arg>', arg)}",
-            )
-        return
-    if op.kind is BinaryKind.MUL:
-        if lhs_has and rhs_has:
-            ctx.error(
-                call,
-                f"Binary MUL: Partial(lhs)={tuple(r for r in lhs_r if r is not None)} against "
-                f"Partial(rhs)={tuple(r for r in rhs_r if r is not None)} is unsound (MUL of two "
-                "Partials is not linear) — " + fix,
-            )
-        arg, r = ("lhs", lhs_r) if lhs_has else ("rhs", rhs_r)
-        if any(reduction not in (None, "sum") for reduction in r):
-            ctx.error(
-                call,
-                f"Binary MUL: Partial({tuple(reduction for reduction in r if reduction is not None)}) input on {arg} against a "
-                "plain/Broadcast operand is unsound (the operand's sign is "
-                "not statically provable, and a negative scale flips "
-                f"max/min) — {fix.replace('<arg>', arg)}",
-            )
-        return
-    arg, r = ("lhs", lhs_r) if lhs_has else ("rhs", rhs_r)
-    ctx.error(
-        call,
-        f"Binary {op.kind.name}: Partial({tuple(reduction for reduction in r if reduction is not None)}) input on {arg} is not "
-        f"proven to commute with any reduction — {fix.replace('<arg>', arg)}",
-    )
+            allowed = (
+                op.kind is BinaryKind.ADD
+                and lhs_reduction in ("max", "min")
+            ) or (op.kind is BinaryKind.MUL and lhs_reduction == "sum")
+            if not allowed:
+                ctx.error(
+                    call,
+                    f"Binary {op.kind.name}: lhs Partial({lhs_reduction}) on "
+                    f"mesh axis {axis} is not proven to commute; Reshard lhs "
+                    "to Broadcast before this consumer",
+                )
+        if rhs_reduction is not None:
+            if not _is_replicated_at(la, axis):
+                ctx.error(
+                    call,
+                    f"Binary {op.kind.name}: rhs carries Partial({rhs_reduction}) "
+                    f"on mesh axis {axis}, but lhs is not Broadcast/replicated "
+                    "on that axis. Reshard lhs to Broadcast before this consumer",
+                )
+            allowed = (
+                op.kind is BinaryKind.ADD
+                and rhs_reduction in ("max", "min")
+            ) or (op.kind is BinaryKind.MUL and rhs_reduction == "sum")
+            if not allowed:
+                ctx.error(
+                    call,
+                    f"Binary {op.kind.name}: rhs Partial({rhs_reduction}) on "
+                    f"mesh axis {axis} is not proven to commute; Reshard rhs "
+                    "to Broadcast before this consumer",
+                )
 
 
 @register_typeinfer(Binary)
