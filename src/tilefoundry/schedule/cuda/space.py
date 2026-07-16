@@ -111,9 +111,11 @@ def build_cuda_space(graph: ScheduleGraph, context: ScheduleContext) -> Schedule
 
         candidates: list[tuple[str, PlacementOption, int]]
         if "routed" in name:
-            candidates = [("left", left, 2), ("full", full, 0)]
+            lane_rep = output_rep if output_storage is not StorageKind.GMEM else 2
+            candidates = [("left", left, lane_rep), ("full", full, output_rep)]
         elif "shared" in name:
-            candidates = [("right", right, 3), ("full", full, 0)]
+            lane_rep = output_rep if output_storage is not StorageKind.GMEM else 3
+            candidates = [("right", right, lane_rep), ("full", full, output_rep)]
         else:
             candidates = [("full", full, output_rep)]
 
@@ -153,24 +155,50 @@ def build_cuda_space(graph: ScheduleGraph, context: ScheduleContext) -> Schedule
             )
         payload_bytes = _value_bytes(graph.value(use.value).ir_value)
         for source_rep in source_reps:
-            kind = EdgeKind.DIRECT if source_rep == destination_rep else EdgeKind.RESHARD
             same_placement = (
-                kind is EdgeKind.DIRECT
+                source_rep == destination_rep
                 and producer is not None
                 and "route" not in producer.callee.name.lower()
             )
-            edge_options.append(
-                EdgeOption(
-                    id=next_edge_id,
-                    use=use.id,
-                    kind=kind,
-                    source_representation=source_rep,
-                    destination_representation=destination_rep,
-                    same_placement_required=same_placement,
-                    payload_bytes=payload_bytes,
+            if source_rep == destination_rep:
+                edge_options.append(
+                    EdgeOption(
+                        id=next_edge_id,
+                        use=use.id,
+                        kind=EdgeKind.DIRECT,
+                        source_representation=source_rep,
+                        destination_representation=destination_rep,
+                        same_placement_required=same_placement,
+                        payload_bytes=payload_bytes,
+                    )
                 )
-            )
-            next_edge_id += 1
+                next_edge_id += 1
+                if producer is not None:
+                    edge_options.append(
+                        EdgeOption(
+                            id=next_edge_id,
+                            use=use.id,
+                            kind=EdgeKind.RESHARD,
+                            source_representation=source_rep,
+                            destination_representation=destination_rep,
+                            same_placement_required=False,
+                            payload_bytes=payload_bytes,
+                        )
+                    )
+                    next_edge_id += 1
+            else:
+                edge_options.append(
+                    EdgeOption(
+                        id=next_edge_id,
+                        use=use.id,
+                        kind=EdgeKind.RESHARD,
+                        source_representation=source_rep,
+                        destination_representation=destination_rep,
+                        same_placement_required=False,
+                        payload_bytes=payload_bytes,
+                    )
+                )
+                next_edge_id += 1
 
     return ScheduleSpace(
         node_options=tuple(node_options),

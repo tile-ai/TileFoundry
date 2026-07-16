@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.fixtures.demo_canonical import build_demo_canonical
+from tests.models.demo.demo_canonical import build_demo_canonical
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function

@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import pytest
 
-from tests.fixtures.demo_ir import build_demo
+from tests.models.demo.demo_ir import build_demo
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- binds bare op names (reshard, ...)

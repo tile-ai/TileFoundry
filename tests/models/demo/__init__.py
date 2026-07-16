@@ -1,0 +1,1 @@
+"""Reusable demo model definitions."""

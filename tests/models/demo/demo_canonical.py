@@ -6,7 +6,7 @@ Uses ``@func(topologies=...)`` with nested
 
 The old ``build_demo()`` (closure-captured ``shared_layout`` /
 ``reg_layout`` / ``cta_mesh`` / ``thread_mesh``) remains in
-``tests/fixtures/demo_ir.py`` as temporary backward-compat for
+``tests/models/demo/demo_ir.py`` as temporary backward-compat for
 existing lower/codegen tests.
 """
 

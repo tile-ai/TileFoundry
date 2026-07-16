@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.parser.hir.test_demo_proj_qkv import proj_qkv_with_mma
+from tests.models.demo.proj_qkv import proj_qkv_with_mma
 from tilefoundry.ir.core import TypeInferContext
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.core.kinds import UnaryKind

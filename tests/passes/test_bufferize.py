@@ -5,7 +5,7 @@ pass leaves the ``PrimFunction`` body structurally unchanged.
 """
 from __future__ import annotations
 
-from tests.fixtures.demo_ir import build_demo
+from tests.models.demo.demo_ir import build_demo
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp

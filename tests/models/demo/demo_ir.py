@@ -2,7 +2,7 @@
 
 ⚠️ **Legacy fixture** — Uses closure-captured ``shared_layout`` /
 ``reg_layout`` / ``cta_mesh`` / ``thread_mesh`` at module level. This
-pattern is NOT canonical. Prefer ``tests/fixtures/demo_canonical.py``
+pattern is NOT canonical. Prefer ``tests/models/demo/demo_canonical.py``
 which uses ``@func(topologies=...)`` + ``with Mesh(topology="cta", ...)``.
 
 Also provides the legacy ``build_demo()`` API returning ``(Function, cta_mesh,

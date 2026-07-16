@@ -3,8 +3,10 @@
 import os
 from math import prod
 
-from tests.fixtures.demo_ir import build_demo
-from tests.fixtures.qwen3_attention_graph import build_qwen3_attention_main_2cta_headnorm
+from tests.models.demo.demo_ir import build_demo
+from tests.models.qwen3_5_30b_a3b.qwen3_attention_graph import (
+    build_qwen3_attention_main_2cta_headnorm,
+)
 from tilefoundry.dump import DumpFlags, FileDumper, current_scope, dump
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Var

@@ -6,7 +6,7 @@ import textwrap
 
 import pytest
 
-from tests.fixtures.demo_ir import build_demo
+from tests.models.demo.demo_ir import build_demo
 
 # DSL surface imported at module scope so ``@func`` closure
 # resolution sees ``Tensor`` / ``Mesh`` / ... when the tests below

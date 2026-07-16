@@ -26,7 +26,21 @@ def _type_call(target, args: tuple[Expr, ...], loc: str | None = None) -> Call:
 
 
 def _layout_for_value(value_type: TensorType, mesh, *, split: bool) -> ShardLayout:
-    attrs = (S(0),) if split and value_type.shape else (Broadcast(),)
+    if split and value_type.shape:
+        extent = mesh.shape[0]
+        axes = [
+            axis
+            for axis, dim in enumerate(value_type.shape)
+            if type(dim) is int and dim >= extent and dim % extent == 0
+        ]
+        if not axes:
+            raise ValueError(
+                "schedule materialization needs a tensor axis divisible by "
+                f"the CTA slice extent {extent}"
+            )
+        attrs = (S(axes[-1]),)
+    else:
+        attrs = (Broadcast(),)
     return ShardLayout(
         layout=Layout(shape=tuple(value_type.shape), strides=None),
         attrs=attrs,

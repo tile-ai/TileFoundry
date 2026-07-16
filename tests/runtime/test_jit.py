@@ -4,8 +4,8 @@ import hashlib
 
 import pytest
 
-from tests.fixtures.demo_canonical import build_demo_canonical
-from tests.fixtures.demo_ir import build_demo
+from tests.models.demo.demo_canonical import build_demo_canonical
+from tests.models.demo.demo_ir import build_demo
 from tilefoundry import jit
 from tilefoundry.compile import _canonical_module_text, _jit_cache_key_payload
 from tilefoundry.ir.core.module import Module

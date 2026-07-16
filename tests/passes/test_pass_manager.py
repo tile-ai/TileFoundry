@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 import tilefoundry
-from tests.fixtures.demo_ir import build_demo
+from tests.models.demo.demo_ir import build_demo
 from tilefoundry.dump import DumpFlags, DumpScope, MemoryDumper
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -137,5 +137,4 @@ def test_tilefoundry_lower_auto_derives_meshes():
     result = tilefoundry.lower(mod, target="cuda")
     [out_fn] = result.functions
     assert isinstance(out_fn, PrimFunction)
-
 
