@@ -52,14 +52,9 @@ from tilefoundry.ir.tir.stmts import (
     Sequential,
     While,
 )
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.passes.transforms.hir_to_tir import HirToTirPass
-
-
-def _ten(shape, dtype):
-    return TensorType(shape=shape, dtype=dtype, layout=None, storage="gmem")
-
 
 # ---------------------------------------------------------------------------
 # Typeinfer: rank-N input + dtype-mismatch (x bf16 / weight f32) accepted;
@@ -74,45 +69,45 @@ CASES = [
     TypeInferCase(
         "rank3_bf16_input_f32_weight",
         _RMS,
-        (_ten((1, 1, 2048), DType.bf16), _ten((2048,), DType.f32)),
-        _ten((1, 1, 2048), DType.bf16),
+        (make_tensor_type((1, 1, 2048), DType.bf16), make_tensor_type((2048,), DType.f32)),
+        make_tensor_type((1, 1, 2048), DType.bf16),
     ),
     # dynamic batch dim (DimVar arithmetic) flows through verbatim.
     TypeInferCase(
         "dim_arithmetic_batch_survives",
         _RMS,
-        (_ten((1, _CTX_LEN + 1, 2048), DType.bf16), _ten((2048,), DType.f32)),
-        _ten((1, _CTX_LEN + 1, 2048), DType.bf16),
+        (make_tensor_type((1, _CTX_LEN + 1, 2048), DType.bf16), make_tensor_type((2048,), DType.f32)),
+        make_tensor_type((1, _CTX_LEN + 1, 2048), DType.bf16),
     ),
     TypeInferCase(
         "rank2_same_dtype",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((2048,), DType.bf16)),
-        _ten((4, 2048), DType.bf16),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((2048,), DType.bf16)),
+        make_tensor_type((4, 2048), DType.bf16),
     ),
     # dtype mismatch (bf16 x / f32 weight) is legal; output keeps x's dtype.
     TypeInferCase(
         "rank2_dtype_mismatch_allowed",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((2048,), DType.f32)),
-        _ten((4, 2048), DType.bf16),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((2048,), DType.f32)),
+        make_tensor_type((4, 2048), DType.bf16),
     ),
     TypeInferCase(
         "rank0_x_rejected",
         _RMS,
-        (TensorType.scalar(DType.bf16), _ten((2048,), DType.f32)),
+        (TensorType.scalar(DType.bf16), make_tensor_type((2048,), DType.f32)),
         ExpectedError(match="x must be rank ≥ 1", exc=TypeError),
     ),
     TypeInferCase(
         "rank2_weight_rejected",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((1, 2048), DType.f32)),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1, 2048), DType.f32)),
         ExpectedError(match="weight must be rank-1", exc=TypeError),
     ),
     TypeInferCase(
         "last_dim_mismatch_rejected",
         _RMS,
-        (_ten((4, 2048), DType.bf16), _ten((1024,), DType.f32)),
+        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1024,), DType.f32)),
         ExpectedError(match="last dim", exc=TypeError),
     ),
 ]

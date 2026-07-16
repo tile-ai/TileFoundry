@@ -21,17 +21,15 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     infer_call,
-    mesh,
     run_typeinfer_case,
     split_local_extents,
-    ten,
 )
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType, make_shard_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Layout, ShardLayout
+from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Partial,
     Split,
@@ -39,7 +37,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 
 _F = DType.f32
-_M = mesh((4,))
+_M = make_mesh((4,))
 
 
 def _reshape(new_shape):
@@ -61,7 +59,7 @@ def _partial_reductions(ty) -> dict:
 
 CASES = [
     # ── unsharded ────────────────────────────────────────────────────────────
-    TypeInferCase("unsharded", _reshape((32,)), (ten((4, 8), _F),), ten((32,), _F)),
+    TypeInferCase("unsharded", _reshape((32,)), (make_tensor_type((4, 8), _F),), make_tensor_type((32,), _F)),
     # drop a leading unit axis: mesh axis 0 stays genuinely split.
     TypeInferCase(
         "remove_leading_unit",
@@ -76,7 +74,7 @@ CASES = [
     TypeInferCase(
         "straddle_fails_closed",
         _reshape((3, 8)),
-        (make_shard_tensor_type((6, 4), mesh=mesh((2,)), attrs=(Split(0),)),),
+        (make_shard_tensor_type((6, 4), mesh=make_mesh((2,)), attrs=(Split(0),)),),
         ExpectedError(match="align"),
     ),
 ]
@@ -127,7 +125,7 @@ def test_split_remaps_partial_carries():
     the `Partial` mesh axis carries through unchanged."""
     ty = infer_call(
         _reshape((1, 32, 128)),
-        make_shard_tensor_type((32, 128), mesh=mesh((2, 2)), attrs=(Split(0), Partial("sum"))),
+        make_shard_tensor_type((32, 128), mesh=make_mesh((2, 2)), attrs=(Split(0), Partial("sum"))),
     )
     assert tuple(ty.shape) == (1, 32, 128)
     assert _split_mesh_axes(ty) == {0}

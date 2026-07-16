@@ -13,38 +13,11 @@ import pytest
 
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
-
-
-def ten(shape, dtype, *, layout=None, storage="gmem") -> TensorType:
-    """Convenience TensorType builder for op input types."""
-    return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
-
-
-def _c_order(shape) -> tuple:
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
-    return tuple(strides)
-
-
-def mesh(layout_shape, names=None, topology="gpu") -> Mesh:
-    """A ``Mesh`` with the given layout shape (C-order strides). Axis names
-    default to a, b, c, … (or ``g`` for a single axis) so a test states only the
-    extents instead of hand-building a ``Mesh``."""
-    if names is None:
-        names = ("g",) if len(layout_shape) == 1 else tuple("abcdef"[: len(layout_shape)])
-    return Mesh(
-        topology=topology,
-        layout=Layout(shape=tuple(layout_shape), strides=_c_order(layout_shape)),
-        names=tuple(names),
-        topologies=(topology,),
-    )
 
 
 def raw_shard_tensor_type(
@@ -170,7 +143,7 @@ def tensor_grid(shape, dtype, *, layouts=(None,), storages=STORAGES):
     """All ``TensorType`` combinations of *layouts* × *storages* for a fixed
     ``shape`` / ``dtype`` — the ``LAYOUTS × STORAGES`` axis of an op's matrix."""
     return [
-        ten(shape, dtype, layout=layout, storage=storage)
+        make_tensor_type(shape, dtype, layout=layout, storage=storage)
         for layout in layouts
         for storage in storages
     ]

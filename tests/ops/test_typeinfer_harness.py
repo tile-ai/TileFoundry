@@ -8,13 +8,12 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     run_typeinfer_case,
-    ten,
     tensor_grid,
 )
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, make_tensor_type
 
 _ADD = Binary(kind=BinaryKind.ADD)
 
@@ -22,19 +21,19 @@ CASES = [
     TypeInferCase(
         name="same_shape",
         op=_ADD,
-        inputs=(ten((4, 8), DType.f32), ten((4, 8), DType.f32)),
-        expected=ten((4, 8), DType.f32),
+        inputs=(make_tensor_type((4, 8), DType.f32), make_tensor_type((4, 8), DType.f32)),
+        expected=make_tensor_type((4, 8), DType.f32),
     ),
     TypeInferCase(
         name="broadcast_size1",
         op=_ADD,
-        inputs=(ten((4, 8), DType.f32), ten((1, 8), DType.f32)),
-        expected=ten((4, 8), DType.f32),
+        inputs=(make_tensor_type((4, 8), DType.f32), make_tensor_type((1, 8), DType.f32)),
+        expected=make_tensor_type((4, 8), DType.f32),
     ),
     TypeInferCase(
         name="dtype_mismatch_errors",
         op=_ADD,
-        inputs=(ten((4, 8), DType.f32), ten((4, 8), DType.bf16)),
+        inputs=(make_tensor_type((4, 8), DType.f32), make_tensor_type((4, 8), DType.bf16)),
         expected=ExpectedError(match="dtype mismatch"),
     ),
 ]

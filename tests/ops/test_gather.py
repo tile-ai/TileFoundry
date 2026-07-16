@@ -11,21 +11,20 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     infer_call,
-    mesh,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import gather
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.gather import Gather
-from tilefoundry.ir.types import DType, make_shard_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 from tilefoundry.passes.transforms import HirToTirPass
 
 _F = DType.f32
-_M = mesh((2,))
+_M = make_mesh((2,))
 
 
 def _gather_ref(x, axis, idx):
@@ -57,13 +56,13 @@ TYPEINFER_CASES = [
     TypeInferCase(
         "neg_axis_normalizes",
         Gather(axis=-1),
-        (ten((2, 3, 4), DType.f32), ten((2,), DType.i32)),
-        ten((2, 3, 2), DType.f32),
+        (make_tensor_type((2, 3, 4), DType.f32), make_tensor_type((2,), DType.i32)),
+        make_tensor_type((2, 3, 2), DType.f32),
     ),
     TypeInferCase(
         "axis_out_of_range",
         Gather(axis=5),
-        (ten((2, 3, 4), DType.f32), ten((2,), DType.i32)),
+        (make_tensor_type((2, 3, 4), DType.f32), make_tensor_type((2,), DType.i32)),
         ExpectedError(match="out of range", exc=TypeError),
     ),
 ]
@@ -79,7 +78,7 @@ TYPEINFER_CASES = [
 def test_gather_shard_mid_axis_scalar_drops_position():
     """Split on axis 0 (untouched by an axis-1 gather) carries through
     unchanged."""
-    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((), DType.i32))
+    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((), DType.i32))
     assert tuple(ty.shape) == (6, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -87,7 +86,7 @@ def test_gather_shard_mid_axis_scalar_drops_position():
 def test_gather_shard_mid_axis_single_index_keeps_unit():
     """A ``(1,)``-shaped index keeps the middle axis at size 1; the Split on
     axis 0 is still unaffected."""
-    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((1,), DType.i32))
+    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((1,), DType.i32))
     assert tuple(ty.shape) == (6, 1, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -95,7 +94,7 @@ def test_gather_shard_mid_axis_single_index_keeps_unit():
 def test_gather_shard_leading_axis_scalar_remaps_split():
     """A non-sharded LEADING axis scalar-gather renumbers the Split from axis
     1 -> 0 (axis 0 is removed by the gather)."""
-    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(1),)), ten((), DType.i32))
+    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(1),)), make_tensor_type((), DType.i32))
     assert tuple(ty.shape) == (4, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -104,7 +103,7 @@ def test_gather_shard_axis_gather_derives_partial():
     """A gather ALONG the Split (sharded) axis is a masked-gather: every
     device already holds a zero-filled partial of the gathered rows, so the
     output sums to the true gather across that mesh axis."""
-    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((), DType.i32))
+    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((), DType.i32))
     assert tuple(ty.shape) == (4, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (
         Partial(reduction="sum"),
@@ -116,7 +115,7 @@ def test_gather_shard_multi_index_with_split_elsewhere_derives():
     Split elsewhere in the layout: every device holds the full gathered axis
     locally, so the Split on the OTHER axis carries through, renumbered for
     the idx axes inserted at the gathered position."""
-    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((1, 1), DType.i32))
+    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((1, 1), DType.i32))
     assert tuple(ty.shape) == (6, 1, 1, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
@@ -210,63 +209,63 @@ BATCHED_TYPEINFER_CASES = [
     TypeInferCase(
         "ac_kv_row_gather_batched",
         Gather(axis=1, batch_dims=1),
-        (ten((1, 16512, 512), DType.bf16), ten((1, 1, 640), DType.i32)),
-        ten((1, 1, 640, 512), DType.bf16),
+        (make_tensor_type((1, 16512, 512), DType.bf16), make_tensor_type((1, 1, 640), DType.i32)),
+        make_tensor_type((1, 1, 640, 512), DType.bf16),
     ),
     # AC-3-2: embedding lookup, axis 0, default batch_dims.
     TypeInferCase(
         "ac_embedding_lookup",
         Gather(axis=0),
-        (ten((129280, 4096), DType.bf16), ten((1, 1), DType.i64)),
-        ten((1, 1, 4096), DType.bf16),
+        (make_tensor_type((129280, 4096), DType.bf16), make_tensor_type((1, 1), DType.i64)),
+        make_tensor_type((1, 1, 4096), DType.bf16),
     ),
     # AC-3-3: stacked-weight gather, axis 0, default batch_dims.
     TypeInferCase(
         "ac_stacked_weight_gather",
         Gather(axis=0),
-        (ten((256, 2048, 4096), DType.f32), ten((1, 6), DType.i64)),
-        ten((1, 6, 2048, 4096), DType.f32),
+        (make_tensor_type((256, 2048, 4096), DType.f32), make_tensor_type((1, 6), DType.i64)),
+        make_tensor_type((1, 6, 2048, 4096), DType.f32),
     ),
     # Shape coincidence with default batch_dims=0 stays non-batched.
     TypeInferCase(
         "coincident_leading_dim_default_non_batched",
         Gather(axis=1),
-        (ten((6, 3, 4), DType.f32), ten((6,), DType.i32)),
-        ten((6, 6, 4), DType.f32),
+        (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((6,), DType.i32)),
+        make_tensor_type((6, 6, 4), DType.f32),
     ),
     # Same index, explicit batch_dims=1, collapses the batch dim.
     TypeInferCase(
         "coincident_leading_dim_explicit_batched",
         Gather(axis=1, batch_dims=1),
-        (ten((6, 3, 4), DType.f32), ten((6,), DType.i32)),
-        ten((6, 4), DType.f32),
+        (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((6,), DType.i32)),
+        make_tensor_type((6, 4), DType.f32),
     ),
     # batch_dims < axis: dims between batch prefix and gather axis pass through.
     TypeInferCase(
         "batch_dims_less_than_axis",
         Gather(axis=2, batch_dims=1),
-        (ten((2, 4, 7, 5), DType.f32), ten((2, 3), DType.i32)),
-        ten((2, 4, 3, 5), DType.f32),
+        (make_tensor_type((2, 4, 7, 5), DType.f32), make_tensor_type((2, 3), DType.i32)),
+        make_tensor_type((2, 4, 3, 5), DType.f32),
     ),
     # batch_dims == rank(index) is the boundary "one scalar index per batch".
     TypeInferCase(
         "batch_dims_equals_index_rank_boundary",
         Gather(axis=1, batch_dims=1),
-        (ten((6, 3, 4), DType.f32), ten((6,), DType.i32)),
-        ten((6, 4), DType.f32),
+        (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((6,), DType.i32)),
+        make_tensor_type((6, 4), DType.f32),
     ),
     # batch_dims must not exceed axis.
     TypeInferCase(
         "batch_dims_exceeds_axis_rejected",
         Gather(axis=0, batch_dims=1),
-        (ten((6, 3, 4), DType.f32), ten((6,), DType.i32)),
+        (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((6,), DType.i32)),
         ExpectedError(match="batch_dims", exc=TypeError),
     ),
     # batch dims must match between x and index.
     TypeInferCase(
         "batch_dims_prefix_mismatch_rejected",
         Gather(axis=1, batch_dims=1),
-        (ten((6, 3, 4), DType.f32), ten((5, 2), DType.i32)),
+        (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((5, 2), DType.i32)),
         ExpectedError(match="batch", exc=TypeError),
     ),
     # index must be an integer tensor (spec "integer index tensor") — reject
@@ -275,13 +274,13 @@ BATCHED_TYPEINFER_CASES = [
     TypeInferCase(
         "float_index_rejected_non_batched",
         Gather(axis=1),
-        (ten((6, 3, 4), DType.f32), ten((2,), DType.f32)),
+        (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((2,), DType.f32)),
         ExpectedError(match="integer", exc=TypeError),
     ),
     TypeInferCase(
         "float_index_rejected_batched",
         Gather(axis=1, batch_dims=1),
-        (ten((2, 3, 4), DType.f32), ten((2, 5), DType.f32)),
+        (make_tensor_type((2, 3, 4), DType.f32), make_tensor_type((2, 5), DType.f32)),
         ExpectedError(match="integer", exc=TypeError),
     ),
     # A batched gather over a sharded operand is not yet supported: fail-closed
@@ -291,13 +290,13 @@ BATCHED_TYPEINFER_CASES = [
     TypeInferCase(
         "sharded_source_batched_gather_not_implemented",
         Gather(axis=1, batch_dims=1),
-        (make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), ten((6, 2), DType.i32)),
+        (make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((6, 2), DType.i32)),
         ExpectedError(match="Gather: batched gather .* sharded operand", exc=NotImplementedError),
     ),
     TypeInferCase(
         "sharded_index_batched_gather_not_implemented",
         Gather(axis=1, batch_dims=1),
-        (ten((6, 4, 8), DType.f32), make_shard_tensor_type((6, 2), mesh=_M, attrs=(Split(0),), dtype=DType.i32)),
+        (make_tensor_type((6, 4, 8), DType.f32), make_shard_tensor_type((6, 2), mesh=_M, attrs=(Split(0),), dtype=DType.i32)),
         ExpectedError(match="Gather: batched gather .* sharded operand", exc=NotImplementedError),
     ),
 ]

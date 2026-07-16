@@ -16,6 +16,7 @@ from .shard_layout import (
     ShardLayout,
     Split,
 )
+from .utils import make_mesh
 
 __all__ = [
     # int tuple
@@ -23,7 +24,7 @@ __all__ = [
     # layout
     "Layout", "ComposedLayout", "LayoutLike",
     # mesh
-    "Topology", "MeshAxis", "Mesh",
+    "Topology", "MeshAxis", "Mesh", "make_mesh",
     # shard
     "ShardAttr", "Split", "Partial", "Broadcast", "Dynamic", "ShardLayout",
     "S", "P", "B",

@@ -16,13 +16,12 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     TypeInferCase,
     infer_call,
-    mesh,
     raw_shard_tensor_type,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType, make_shard_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -32,13 +31,13 @@ from tilefoundry.ir.types.shard.shard_layout import (
 
 # A 4-axis mesh whose split axis factorizes a tensor dim into mesh-extent ×
 # per-shard sub-positions (cluster, cta, warp, lane).
-_M = mesh((1, 128, 8, 32), ("cluster", "cta", "warp", "lane"))
+_M = make_mesh((1, 128, 8, 32), ("cluster", "cta", "warp", "lane"))
 _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 
 CASES = [
     # unsharded: shape permutes, layout passes through.
-    TypeInferCase("unsharded", _T10, (ten((4, 8), DType.f32),), ten((8, 4), DType.f32)),
+    TypeInferCase("unsharded", _T10, (make_tensor_type((4, 8), DType.f32),), make_tensor_type((8, 4), DType.f32)),
 ]
 
 

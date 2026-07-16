@@ -6,19 +6,18 @@ from dataclasses import replace
 import pytest
 import torch
 
-from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.ops.eval_utils import EvalCase, run_eval_case, tensor_type_of
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, make_tensor_type
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -59,21 +58,21 @@ TYPEINFER_CASES = [
         "output_same_shape_as_cache",
         CacheUpdate(),
         (
-            ten((1, 16, 4, 8), DType.bf16),
-            ten((1,), DType.i32),
-            ten((1,), DType.i32),
-            ten((1, 4, 4, 8), DType.bf16),
+            make_tensor_type((1, 16, 4, 8), DType.bf16),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1, 4, 4, 8), DType.bf16),
         ),
-        ten((1, 16, 4, 8), DType.bf16),
+        make_tensor_type((1, 16, 4, 8), DType.bf16),
     ),
     TypeInferCase(
         "s_cap_exceeds_capacity",
         CacheUpdate(),
         (
-            ten((1, 4, 4, 8), DType.bf16),
-            ten((1,), DType.i32),
-            ten((1,), DType.i32),
-            ten((1, 8, 4, 8), DType.bf16),
+            make_tensor_type((1, 4, 4, 8), DType.bf16),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1, 8, 4, 8), DType.bf16),
         ),
         ExpectedError(match="exceeds cache capacity", exc=TypeError),
     ),
@@ -81,10 +80,10 @@ TYPEINFER_CASES = [
         "cur_pos_not_i32",
         CacheUpdate(),
         (
-            ten((1, 16, 4, 8), DType.bf16),
-            ten((1,), DType.f32),
-            ten((1,), DType.i32),
-            ten((1, 4, 4, 8), DType.bf16),
+            make_tensor_type((1, 16, 4, 8), DType.bf16),
+            make_tensor_type((1,), DType.f32),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1, 4, 4, 8), DType.bf16),
         ),
         ExpectedError(match="cur_pos must be an i32 scalar", exc=TypeError),
     ),
@@ -92,10 +91,10 @@ TYPEINFER_CASES = [
         "kv_heads_mismatch",
         CacheUpdate(),
         (
-            ten((1, 16, 4, 8), DType.bf16),
-            ten((1,), DType.i32),
-            ten((1,), DType.i32),
-            ten((1, 4, 2, 8), DType.bf16),
+            make_tensor_type((1, 16, 4, 8), DType.bf16),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1, 4, 2, 8), DType.bf16),
         ),
         ExpectedError(match="kv_heads mismatch", exc=TypeError),
     ),
@@ -103,10 +102,10 @@ TYPEINFER_CASES = [
         "cur_pos_not_scalar",
         CacheUpdate(),
         (
-            ten((1, 16, 4, 8), DType.bf16),
-            ten((2,), DType.i32),
-            ten((1,), DType.i32),
-            ten((1, 4, 4, 8), DType.bf16),
+            make_tensor_type((1, 16, 4, 8), DType.bf16),
+            make_tensor_type((2,), DType.i32),
+            make_tensor_type((1,), DType.i32),
+            make_tensor_type((1, 4, 4, 8), DType.bf16),
         ),
         ExpectedError(match="must be a scalar", exc=TypeError),
     ),
@@ -125,15 +124,7 @@ def _run(cur_pos, s):
     new = torch.randn(1, 4, 4, 8)
     inputs = (cache, _i32(cur_pos), _i32(s), new)
 
-    def _tt(t):
-        return TensorType(
-            shape=tuple(t.shape),
-            dtype={torch.float32: DType.f32, torch.int32: DType.i32}[t.dtype],
-            layout=None,
-            storage="gmem",
-        )
-
-    params = tuple(Var(type=_tt(t), name=f"x{i}") for i, t in enumerate(inputs))
+    params = tuple(Var(type=tensor_type_of(t), name=f"x{i}") for i, t in enumerate(inputs))
     call = Call(type=params[0].type, target=CacheUpdate(), args=params)
     result_type = TypeInferVisitor(TypeInferContext()).visit(call)
     call = replace(call, type=result_type)

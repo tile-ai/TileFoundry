@@ -8,50 +8,44 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry.ir.hir.tensor.quant import Quant
-from tilefoundry.ir.target.storage import StorageKind
-from tilefoundry.ir.types import DType, TupleType
+from tilefoundry.ir.types import DType, TupleType, make_tensor_type
 
 _BF = DType.bf16
 _FP8 = DType.fp8e4m3
-_GMEM = StorageKind.GMEM
-
-
-def _g(shape, dtype):
-    return ten(shape, dtype, storage=_GMEM)
-
 
 CASES = [
     TypeInferCase(
         "rank2_per_token_group_128",
         Quant(),
-        (_g((1, 2048), _BF),),
-        TupleType(fields=(_g((1, 2048), _FP8), _g((1, 16), DType.f32))),
+        (make_tensor_type((1, 2048), _BF),),
+        TupleType(fields=(make_tensor_type((1, 2048), _FP8), make_tensor_type((1, 16), DType.f32))),
     ),
     TypeInferCase(
         "rank3_attn_path",
         Quant(),
-        (_g((1, 1, 4096), _BF),),
-        TupleType(fields=(_g((1, 1, 4096), _FP8), _g((1, 1, 32), DType.f32))),
+        (make_tensor_type((1, 1, 4096), _BF),),
+        TupleType(
+            fields=(make_tensor_type((1, 1, 4096), _FP8), make_tensor_type((1, 1, 32), DType.f32))
+        ),
     ),
     TypeInferCase(
         "custom_group_size",
         Quant(group=64),
-        (_g((1, 256), _BF),),
-        TupleType(fields=(_g((1, 256), _FP8), _g((1, 4), DType.f32))),
+        (make_tensor_type((1, 256), _BF),),
+        TupleType(fields=(make_tensor_type((1, 256), _FP8), make_tensor_type((1, 4), DType.f32))),
     ),
     TypeInferCase(
         "indivisible_last_dim",
         Quant(),
-        (_g((1, 100), _BF),),
+        (make_tensor_type((1, 100), _BF),),
         ExpectedError(match="not divisible by group", exc=TypeError),
     ),
     TypeInferCase(
         "rank0",
         Quant(),
-        (_g((), _BF),),
+        (make_tensor_type((), _BF),),
         ExpectedError(match="at least rank-1", exc=TypeError),
     ),
 ]

@@ -12,18 +12,22 @@ from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     infer_call,
-    mesh,
     raw_shard_tensor_type,
     run_typeinfer_case,
-    ten,
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.topk import TopK
-from tilefoundry.ir.types import DType, TensorType, TupleType, make_shard_tensor_type
+from tilefoundry.ir.types import (
+    DType,
+    TupleType,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, Split
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
@@ -40,43 +44,43 @@ CASES = [
     TypeInferCase(
         "decode_axis_last",
         TopK(k=512, axis=-1),
-        (ten((1, 1, 16384), _BF),),
-        TupleType(fields=(ten((1, 1, 512), _BF), ten((1, 1, 512), _I64))),
+        (make_tensor_type((1, 1, 16384), _BF),),
+        TupleType(fields=(make_tensor_type((1, 1, 512), _BF), make_tensor_type((1, 1, 512), _I64))),
     ),
     TypeInferCase(
         "small_2d",
         TopK(k=6),
-        (ten((4, 256), _F32),),
-        TupleType(fields=(ten((4, 6), _F32), ten((4, 6), _I64))),
+        (make_tensor_type((4, 256), _F32),),
+        TupleType(fields=(make_tensor_type((4, 6), _F32), make_tensor_type((4, 6), _I64))),
     ),
     TypeInferCase(
         "explicit_axis",
         TopK(k=2, axis=1),
-        (ten((4, 8, 16), _BF),),
-        TupleType(fields=(ten((4, 2, 16), _BF), ten((4, 2, 16), _I64))),
+        (make_tensor_type((4, 8, 16), _BF),),
+        TupleType(fields=(make_tensor_type((4, 2, 16), _BF), make_tensor_type((4, 2, 16), _I64))),
     ),
     TypeInferCase(
         "axis_out_of_range",
         TopK(k=2, axis=5),
-        (ten((4,), _BF),),
+        (make_tensor_type((4,), _BF),),
         ExpectedError(match="out of range", exc=TypeError),
     ),
     TypeInferCase(
         "oversized_k_rejected",
         TopK(k=300, axis=-1),
-        (ten((4, 256), _F32),),
+        (make_tensor_type((4, 256), _F32),),
         ExpectedError(match="exceeds axis", exc=TypeError),
     ),
     TypeInferCase(
         "negative_k_rejected",
         TopK(k=-1, axis=-1),
-        (ten((4, 256), _F32),),
+        (make_tensor_type((4, 256), _F32),),
         ExpectedError(match="non-negative", exc=TypeError),
     ),
     TypeInferCase(
         "split_on_selected_axis_rejected",
         TopK(k=2, axis=-1),
-        (make_shard_tensor_type((4, 256), mesh=mesh((4,)), attrs=(Split(1),)),),
+        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(1),)),),
         ExpectedError(match="must not be Split-sharded", exc=TypeError),
     ),
 ]
@@ -90,10 +94,7 @@ def test_topk_typeinfer(case):
 # ─── evaluation (AC-0-2 values/indices vs torch.topk) ───────────────────────
 
 def _run_topk(x: torch.Tensor, **attrs):
-    param = Var(
-        type=TensorType(shape=tuple(x.shape), dtype=DType.f32, layout=None, storage="gmem"),
-        name="x",
-    )
+    param = Var(type=make_tensor_type(tuple(x.shape), DType.f32), name="x")
     call = Call(type=param.type, target=TopK(**attrs), args=(param,))
     result_type = TypeInferVisitor(TypeInferContext()).visit(call)
     call = replace(call, type=result_type)
@@ -138,10 +139,7 @@ def test_topk_unsorted_selects_same_set():
 # ─── DSL print/parse preserves largest & sorted (AC-0-2) ────────────────────
 
 def test_topk_printer_preserves_largest_sorted():
-    param = Var(
-        type=TensorType(shape=(4, 256), dtype=DType.f32, layout=None, storage="gmem"),
-        name="x",
-    )
+    param = Var(type=make_tensor_type((4, 256), DType.f32), name="x")
     call = Call(type=param.type, target=TopK(k=6, axis=-1, largest=False, sorted=True), args=(param,))
     result_type = TypeInferVisitor(TypeInferContext()).visit(call)
     call = replace(call, type=result_type)
@@ -155,7 +153,7 @@ def test_topk_printer_preserves_largest_sorted():
 def test_topk_output_layout_shrinks_selected_axis_preserving_split():
     """A Split on a non-selected axis must be preserved, and the output shard
     layout's selected axis must shrink to k so size(layout)==size(shape)."""
-    x_ty = make_shard_tensor_type((4, 256), mesh=mesh((4,)), attrs=(Split(0),))  # split axis 0; TopK on axis 1
+    x_ty = make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(0),))  # split axis 0; TopK on axis 1
     out = infer_call(TopK(k=6, axis=-1), x_ty)
     values_ty, indices_ty = out.fields
     assert values_ty.shape == (4, 6) and indices_ty.shape == (4, 6)
@@ -173,7 +171,7 @@ def test_topk_all_broadcast_layout_shrinks_selected_axis():
     """A replicated (all-Broadcast) ShardLayout has no Split/Partial to
     propagate, but its output layout must still shrink the selected axis to k
     (not retain the stale input extent)."""
-    x_ty = make_shard_tensor_type((4, 256), mesh=mesh((4,)), attrs=(Broadcast(),))
+    x_ty = make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Broadcast(),))
     values_ty, indices_ty = infer_call(TopK(k=6, axis=-1), x_ty).fields
     assert values_ty.shape == (4, 6) and indices_ty.shape == (4, 6)
     for t in (values_ty, indices_ty):
@@ -191,7 +189,7 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
     explicit all-ones strides rather than leaving them None."""
     s = DimVar("S", 1, 64)
     x_ty = raw_shard_tensor_type(
-        (256, s), (256, s), None, (Broadcast(),), mesh((4,)), dtype=_F32,
+        (256, s), (256, s), None, (Broadcast(),), make_mesh((4,)), dtype=_F32,
     )
     values_ty, indices_ty = infer_call(TopK(k=6, axis=0), x_ty).fields  # select the static axis
     assert values_ty.shape == (6, s) and indices_ty.shape == (6, s)

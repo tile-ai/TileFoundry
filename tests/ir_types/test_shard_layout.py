@@ -9,19 +9,15 @@ from tilefoundry.ir.types.shard import (
     Broadcast,
     ComposedLayout,
     Layout,
-    Mesh,
     P,
     Partial,
     S,
     ShardLayout,
     Split,
     Topology,
+    make_mesh,
 )
 from tilefoundry.ir.types.shard import layout_algebra as la
-
-
-def _mesh() -> Mesh:
-    return Mesh(topology=Topology("cta", 128), layout=Layout(shape=(128,), strides=(1,)))
 
 
 def test_s_returns_split_with_axis():
@@ -42,9 +38,11 @@ def test_b_returns_broadcast():
 
 def test_shard_layout_keeps_layout_and_mesh():
     layout = Layout(shape=(4, 8), strides=(8, 1))
-    sl = ShardLayout(layout=layout, attrs=(S(0), S(1)), mesh=_mesh())
+    sl = ShardLayout(
+        layout=layout, attrs=(S(0), S(1)), mesh=make_mesh((128,), topology=Topology("cta", 128))
+    )
     assert sl.layout is layout
-    assert sl.mesh == _mesh()
+    assert sl.mesh == make_mesh((128,), topology=Topology("cta", 128))
 
 
 def test_composed_layout_nests_layouts():

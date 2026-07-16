@@ -18,11 +18,9 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     TypeInferCase,
     infer_call,
-    mesh,
     raw_shard_tensor_type,
     run_typeinfer_case,
     split_local_extents,
-    ten,
 )
 from tilefoundry import func, module
 from tilefoundry.codegen.cuda.module import emit_cuda_module
@@ -32,7 +30,8 @@ from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
-from tilefoundry.ir.types import DType, make_shard_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
     Split,
@@ -44,7 +43,7 @@ _RMEM = StorageKind.RMEM
 _BF = DType.bf16
 # Two-axis mesh; the reduce cases reuse it for input and expectation so the
 # preserved mesh compares equal.
-_M = mesh((6, 32), ("w", "t"))
+_M = make_mesh((6, 32), ("w", "t"))
 
 _MEAN_LAST = Reduce(axes=(-1,), keepdim=True, kind=ReduceKind.MEAN)
 
@@ -53,8 +52,8 @@ CASES = [
     TypeInferCase(
         "unsharded_passes_through",
         Reduce(axes=(0,), keepdim=True, kind=ReduceKind.SUM),
-        (ten((8, 16), DType.f32, storage=_RMEM),),
-        ten((1, 16), DType.f32, storage=_RMEM),
+        (make_tensor_type((8, 16), DType.f32, storage=_RMEM),),
+        make_tensor_type((1, 16), DType.f32, storage=_RMEM),
     ),
 ]
 
@@ -201,11 +200,11 @@ def test_reduce_max_is_signed_not_abs_max():
 # rmsnorm-like: reduce the last axis, whose Split covers both the warp (w) and
 # lane (t) mesh axes → a reduced lane axis → intra-cta.
 _THREAD_A = Topology("thread", 6 * 32)
-_MESH_A = mesh((6, 32), ("w", "t"), topology=_THREAD_A)
+_MESH_A = make_mesh((6, 32), ("w", "t"), topology=_THREAD_A)
 # cross-expert-like: reduce the warp axis (tk) only; the lane axis (hc) carries
 # distinct output cells → no reduced lane axis → cross-warp.
 _THREAD_B = Topology("thread", 4 * 32)
-_MESH_B = mesh((4, 32), ("tk", "hc"), topology=_THREAD_B)
+_MESH_B = make_mesh((4, 32), ("tk", "hc"), topology=_THREAD_B)
 
 
 def _case_a_src():

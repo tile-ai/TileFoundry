@@ -7,28 +7,25 @@ from tilefoundry.ir.core import Call, TypeInferContext, Var
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.topk import TopK
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, make_tensor_type
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
     access_relation_registry,
 )
 
-
-def _ten(shape, dtype=DType.bf16):
-    return TensorType(shape=shape, dtype=dtype, layout=None, storage="gmem")
-
-
 # ── RoPE ──────────────────────────────────────────────────────────────
 
 
 def test_rope_relation_boundary_counts():
-    q = Var(type=_ten((1, 32, 128)), name="q")
-    k = Var(type=_ten((1, 4, 128)), name="k")
-    cos = Var(type=_ten((4096, 128)), name="cos")
-    sin = Var(type=_ten((4096, 128)), name="sin")
-    pos = Var(type=_ten((1,), DType.i32), name="pos")
-    call = Call(type=_ten((1, 32, 128)), target=RoPE(), args=(q, k, cos, sin, pos))
+    q = Var(type=make_tensor_type((1, 32, 128), DType.bf16), name="q")
+    k = Var(type=make_tensor_type((1, 4, 128), DType.bf16), name="k")
+    cos = Var(type=make_tensor_type((4096, 128), DType.bf16), name="cos")
+    sin = Var(type=make_tensor_type((4096, 128), DType.bf16), name="sin")
+    pos = Var(type=make_tensor_type((1,), DType.i32), name="pos")
+    call = Call(
+        type=make_tensor_type((1, 32, 128), DType.bf16), target=RoPE(), args=(q, k, cos, sin, pos)
+    )
     fn = access_relation_registry.lookup(RoPE)
     rel = fn(call, TypeInferContext())
     assert isinstance(rel, AccessRelations)
@@ -50,8 +47,8 @@ def test_rope_relation_boundary_counts():
 
 
 def test_topk_relation_input_is_axis_scan_map():
-    x = Var(type=_ten((1, 128)), name="logits")
-    call = Call(type=_ten((1, 128)), target=TopK(k=8), args=(x,))
+    x = Var(type=make_tensor_type((1, 128), DType.bf16), name="logits")
+    call = Call(type=make_tensor_type((1, 128), DType.bf16), target=TopK(k=8), args=(x,))
     fn = access_relation_registry.lookup(TopK)
     rel = fn(call, TypeInferContext())
     assert len(rel.inputs) == 1
@@ -66,8 +63,8 @@ def test_topk_relation_input_is_axis_scan_map():
 
 
 def test_argmax_relation_input_is_axis_scan_map():
-    x = Var(type=_ten((1, 151936), DType.f32), name="logits")
-    call = Call(type=_ten((1, 151936), DType.f32), target=ArgMax(), args=(x,))
+    x = Var(type=make_tensor_type((1, 151936), DType.f32), name="logits")
+    call = Call(type=make_tensor_type((1, 151936), DType.f32), target=ArgMax(), args=(x,))
     fn = access_relation_registry.lookup(ArgMax)
     rel = fn(call, TypeInferContext())
     assert len(rel.inputs) == 1
@@ -77,8 +74,8 @@ def test_argmax_relation_input_is_axis_scan_map():
 
 
 def test_argmax_relation_rank1_input_scalar_output():
-    x = Var(type=_ten((128,), DType.f32), name="x")
-    call = Call(type=_ten((128,), DType.f32), target=ArgMax(), args=(x,))
+    x = Var(type=make_tensor_type((128,), DType.f32), name="x")
+    call = Call(type=make_tensor_type((128,), DType.f32), target=ArgMax(), args=(x,))
     rel = access_relation_registry.lookup(ArgMax)(call, TypeInferContext())
     assert isinstance(rel.inputs[0], isl.map)
     assert isinstance(rel.outputs[0], isl.multi_aff)

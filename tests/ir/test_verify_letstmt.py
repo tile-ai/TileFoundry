@@ -9,11 +9,7 @@ from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import LetStmt, Return, Sequential
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.ir.types import DType, TensorType
-
-
-def _t() -> TensorType:
-    return TensorType(shape=(4,), dtype=DType.f32, layout=None, storage="rmem")
+from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 
 
 def _alloc_call(t: TensorType) -> Call:
@@ -22,15 +18,15 @@ def _alloc_call(t: TensorType) -> Call:
 
 def test_letstmt_rejects_reused_var_nested():
     """Binding the same Var object in an outer+inner Let must raise."""
-    v = Var(type=_t(), name="v")
+    v = Var(type=make_tensor_type((4,), storage="rmem"), name="v")
     inner_let = LetStmt(
         var=v,
-        value=_alloc_call(_t()),
+        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
         body=Sequential(body=(Return(),)),
     )
     outer_let = LetStmt(
         var=v,
-        value=_alloc_call(_t()),
+        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
         body=Sequential(body=(inner_let,)),
     )
     pf = PrimFunction(
@@ -46,15 +42,15 @@ def test_letstmt_rejects_reused_var_sibling():
     """Two sibling LetStmts in the same Sequential rebinding the
     same Var instance must also raise — fresh-Var applies across the whole
     function, not merely within the current lexical scope."""
-    v = Var(type=_t(), name="v")
+    v = Var(type=make_tensor_type((4,), storage="rmem"), name="v")
     first_let = LetStmt(
         var=v,
-        value=_alloc_call(_t()),
+        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
         body=Sequential(body=(Return(),)),
     )
     second_let = LetStmt(
         var=v,
-        value=_alloc_call(_t()),
+        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
         body=Sequential(body=(Return(),)),
     )
     pf = PrimFunction(
@@ -68,8 +64,8 @@ def test_letstmt_rejects_reused_var_sibling():
 
 def test_letstmt_rejects_type_mismatch():
     """var.type must equal type_of(value)."""
-    t_reg = _t()
-    t_shared = TensorType(shape=(4,), dtype=DType.f32, layout=None, storage="smem")
+    t_reg = make_tensor_type((4,), storage="rmem")
+    t_shared = make_tensor_type((4,), DType.f32, storage="smem")
     v = Var(type=t_shared, name="v")  # declared shared
     let = LetStmt(
         var=v,

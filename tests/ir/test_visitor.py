@@ -19,8 +19,8 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology
+from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.visitor import (
     ExprMutator,
     ExprVisitor,
@@ -62,13 +62,6 @@ def _call(op: Op, *args: Expr) -> Call:
 
 def _eval_call(op: Op, *args: Expr) -> Evaluate:
     return Evaluate(callable=op, args=args)
-
-
-def _mesh() -> Mesh:
-    return Mesh(
-        topology=Topology(name="chip", size=2),
-        layout=Layout(shape=(2,), strides=(1,)),
-    )
 
 
 # ── ExprVisitor / ExprMutator ─────────────────────────────────────────────
@@ -223,8 +216,11 @@ def test_stmt_mutator_covers_all_subclasses_with_identity_invariant() -> None:
         ),
         While(cond=_var("c"), body=_seq(_eval_call(Copy(), _var("s2"), _var("d2")))),
         If(cond=_var("c2"), then_body=_seq(), else_body=_seq()),
-        MeshScope(mesh=_mesh(), binding=binding,
-                  body=_seq(_eval_call(Copy(), _var("s3"), _var("d3")))),
+        MeshScope(
+            mesh=make_mesh((2,), topology=Topology(name="chip", size=2)),
+            binding=binding,
+            body=_seq(_eval_call(Copy(), _var("s3"), _var("d3"))),
+        ),
         _eval_call(Copy(), _var("s4"), _var("d4")),
         _eval_call(Fill(), _var("t"), _const(0.0)),
         _eval_call(Mma(), _var("L"), _var("R"), _var("A")),
