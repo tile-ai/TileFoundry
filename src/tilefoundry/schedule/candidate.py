@@ -7,6 +7,7 @@ from tilefoundry.ir.core import Tuple
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
+from tilefoundry.schedule.constraints import LayoutConstraint, LayoutDimKind, PartialConstraint
 
 from .graph import GraphOp, ProgramScheduleGraph
 
@@ -261,7 +262,7 @@ def _input_states_for(op: GraphOp, state: DistributionState) -> tuple[Distributi
 def _candidate_states(op: GraphOp, max_ctas: int) -> tuple[DistributionState, ...]:
     target_name = type(op.target).__name__
     if isinstance(op.target, Function):
-        return (_base_state(op.ir_expr),)
+        return _split_states(op.ir_expr, max_ctas)
     if target_name == "MatMul" and len(op.ir_expr.args) >= 2:
         lhs = op.ir_expr.args[0]
         rhs = op.ir_expr.args[1]
@@ -334,10 +335,32 @@ def generate_distribution_candidates(
     graph: ProgramScheduleGraph, *, max_ctas: int = 132
 ) -> CandidateTable:
     """Generate finite common candidates for every logical graph operation."""
+    constraints_by_op: dict[int, list[object]] = {}
+    for graph_constraint in graph.constraints:
+        producer = graph.value(graph_constraint.target).producer
+        if producer is not None:
+            constraints_by_op.setdefault(producer, []).append(graph_constraint.constraint)
+
+    def allowed(state: DistributionState, constraints: Iterable[object]) -> bool:
+        for constraint in constraints:
+            if isinstance(constraint, LayoutConstraint):
+                for dim in constraint.dims:
+                    if dim.kind is LayoutDimKind.BROADCAST and state.layout.split_axis == dim.index:
+                        return False
+                    if dim.kind is LayoutDimKind.SPLIT and state.layout.split_axis != dim.index:
+                        return False
+            elif isinstance(constraint, PartialConstraint):
+                if state.partial is None or state.partial.reduction != constraint.reduction:
+                    return False
+        return True
+
     options: list[tuple[int, tuple[OpCandidate, ...]]] = []
     next_id = 0
     for op in graph.ops:
-        states = _candidate_states(op, max_ctas)
+        states = tuple(
+            state for state in _candidate_states(op, max_ctas)
+            if allowed(state, constraints_by_op.get(op.id, ()))
+        )
         if not states:
             raise DistributionError(f"no legal distribution candidates for op {op.id}")
         work = _work(op)

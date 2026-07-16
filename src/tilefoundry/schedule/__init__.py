@@ -36,6 +36,7 @@ from .graph import (
     ScheduleGraphError,
     build_program_schedule_graph,
 )
+from .pipeline import SolveResult, auto_dist
 from .solution import EdgeAssignment, NodeAssignment, OpPlacement, ScheduleSolution
 from .solver import (
     CpSatScheduleSolver,
@@ -97,6 +98,8 @@ __all__ = [
     "SolveOptions",
     "SolveProblem",
     "problem_fingerprint",
+    "SolveResult",
+    "auto_dist",
     "CallInstance",
     "FunctionRegion",
     "GraphConstraint",

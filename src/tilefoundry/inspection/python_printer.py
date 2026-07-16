@@ -253,7 +253,7 @@ def _shard_attr_str(attr) -> str:
 def _mesh_str(mesh: Mesh) -> str:
     """Mesh(...) constructor string, includes ``names=`` when non-empty."""
     topo = mesh.topology
-    layout = mesh.layout
+    layout = mesh.layout.outer if hasattr(mesh.layout, "outer") else mesh.layout
     base = (
         f'Mesh(Topology("{topo.name}", {topo.size}), '
         f"Layout({_shape_tuple(layout.shape)}, {_shape_tuple(layout.strides)})"
@@ -265,9 +265,11 @@ def _mesh_str(mesh: Mesh) -> str:
 
 def _shard_layout_str(sl: ShardLayout, indent: str = "") -> str:
     """ShardLayout(...) constructor string, multi-line for readability."""
-    layout = sl.layout
+    layout = sl.layout.outer if hasattr(sl.layout, "outer") else sl.layout
     mesh = _mesh_str(sl.mesh)
     attrs = ", ".join(_shard_attr_str(a) for a in sl.attrs)
+    if len(sl.attrs) == 1:
+        attrs += ","
     shape_tup = _shape_tuple(layout.shape)
     # ``layout.strides`` may be ``None`` for un-materialized sugar; the
     # printer surfaces that explicitly rather than crashing.
@@ -850,9 +852,10 @@ def _module_to_python_module(mod: Module, module_name: str) -> str:
             if not mesh.names:
                 continue
             name = mesh_map[mesh_id]
+            mesh_layout = mesh.layout.outer if hasattr(mesh.layout, "outer") else mesh.layout
             lines.append(
                 f"{name} = Mesh(Topology({mesh.topology.name!r}, {mesh.topology.size}), "
-                f"Layout({_shape_tuple(mesh.layout.shape)}, {_shape_tuple(mesh.layout.strides)}), "
+                f"Layout({_shape_tuple(mesh_layout.shape)}, {_shape_tuple(mesh_layout.strides)}), "
                 f"names={tuple(mesh.names)!r})"
             )
     lines.extend(["", f'@module(entry="{mod.entry}")', f"class {module_name}:"])

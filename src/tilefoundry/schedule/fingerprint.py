@@ -27,6 +27,11 @@ def _canonical(value: Any, function_ids: dict[int, int], expr_ids: dict[int, int
             if info.kind == "attribute":
                 attrs[info.name] = _canonical(getattr(value, info.name), function_ids, expr_ids)
         return {"op": type(value).__name__, "attrs": attrs}
+    if type(value).__name__ == "TensorType":
+        return {
+            "shape": _canonical(value.shape, function_ids, expr_ids),
+            "dtype": _canonical(value.dtype, function_ids, expr_ids),
+        }
     if isinstance(value, tuple):
         return [_canonical(item, function_ids, expr_ids) for item in value]
     if isinstance(value, list):
@@ -73,6 +78,10 @@ def _expr_key(expr: Expr, function_ids: dict[int, int], expr_ids: dict[int, int]
     }
 
 
+def _is_reshard(expr: Expr) -> bool:
+    return isinstance(expr, Call) and type(expr.target).__name__ == "Reshard"
+
+
 def _reachable_functions(module: Module) -> tuple[Function, ...]:
     ordered: list[Function] = []
     seen: set[int] = set()
@@ -109,23 +118,32 @@ def logical_fingerprint(module: Module) -> str:
     function_payload = []
     next_expr_id = 0
     for fn in functions:
-        exprs: list[Expr] = [*fn.params]
-        if fn.body is not None:
-            stack = [fn.body]
-            while stack:
-                expr = stack.pop()
-                if id(expr) not in expr_ids:
-                    expr_ids[id(expr)] = next_expr_id
-                    next_expr_id += 1
-                    exprs.append(expr)
-                if isinstance(expr, Call):
-                    stack.extend(reversed(expr.args))
-                elif isinstance(expr, Tuple):
-                    stack.extend(reversed(expr.elements))
+        exprs: list[Expr] = []
+
+        def visit_expr(expr: Expr) -> int:
+            nonlocal next_expr_id
+            if _is_reshard(expr):
+                ref = visit_expr(expr.args[0])
+                expr_ids[id(expr)] = ref
+                return ref
+            existing = expr_ids.get(id(expr))
+            if existing is not None:
+                return existing
+            ref = next_expr_id
+            next_expr_id += 1
+            expr_ids[id(expr)] = ref
+            exprs.append(expr)
+            if isinstance(expr, Call):
+                for arg in expr.args:
+                    visit_expr(arg)
+            elif isinstance(expr, Tuple):
+                for element in expr.elements:
+                    visit_expr(element)
+            return ref
+
         for param in fn.params:
-            if id(param) not in expr_ids:
-                expr_ids[id(param)] = next_expr_id
-                next_expr_id += 1
+            visit_expr(param)
+        body_ref = None if fn.body is None else visit_expr(fn.body)
         nodes = []
         for expr in exprs:
             node = _expr_key(expr, function_ids, expr_ids)
@@ -135,7 +153,7 @@ def logical_fingerprint(module: Module) -> str:
             {
                 "id": function_ids[id(fn)],
                 "params": [expr_ids[id(param)] for param in fn.params],
-                "body": None if fn.body is None else expr_ids[id(fn.body)],
+                "body": body_ref,
                 "return_type": _canonical(fn.return_type, function_ids, expr_ids),
                 "nodes": nodes,
             }
