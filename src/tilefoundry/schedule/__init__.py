@@ -9,6 +9,18 @@ from .constraints import (
     SourceLocation,
 )
 from .fingerprint import logical_fingerprint
+from .candidate import (
+    CandidateTable,
+    DistributionError,
+    DistributionState,
+    LayoutState,
+    OpCandidate,
+    PartialState,
+    Submesh,
+    UnsupportedDistributionError,
+    WorkEstimate,
+    generate_distribution_candidates,
+)
 from .graph import (
     CallInstance,
     FunctionRegion,
@@ -33,6 +45,16 @@ __all__ = [
     "PartialConstraint",
     "SourceLocation",
     "logical_fingerprint",
+    "CandidateTable",
+    "DistributionError",
+    "DistributionState",
+    "LayoutState",
+    "OpCandidate",
+    "PartialState",
+    "Submesh",
+    "UnsupportedDistributionError",
+    "WorkEstimate",
+    "generate_distribution_candidates",
     "CallInstance",
     "FunctionRegion",
     "GraphConstraint",
