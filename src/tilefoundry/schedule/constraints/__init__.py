@@ -1,12 +1,16 @@
-from .constraints import (
+from .base import (
     AgentConstraint,
     AgentConstraintsMetadata,
     ConstraintProvenance,
+    SourceLocation,
+    constraint_metadata,
+    merge_constraints,
+)
+from .layout import (
     LayoutConstraint,
     LayoutDimConstraint,
     LayoutDimKind,
     PartialConstraint,
-    SourceLocation,
 )
 
 __all__ = [
@@ -18,4 +22,6 @@ __all__ = [
     "LayoutDimKind",
     "PartialConstraint",
     "SourceLocation",
+    "constraint_metadata",
+    "merge_constraints",
 ]

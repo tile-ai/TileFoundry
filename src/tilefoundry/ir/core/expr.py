@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.core.op import Op
 
 from ..types.tensor_type import Type
@@ -17,6 +18,13 @@ class Expr:
     """
     type: Type = field(kw_only=True)
     loc: str | None = field(default=None, kw_only=True)
+    metadata: tuple[IRMetadata, ...] = field(
+        default_factory=tuple,
+        kw_only=True,
+        compare=False,
+        hash=False,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -46,5 +54,3 @@ class Tuple(Expr):
     offsets).
     """
     elements: tuple[Expr, ...]
-
-

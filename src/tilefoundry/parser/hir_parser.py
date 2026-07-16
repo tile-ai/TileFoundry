@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 from typing import Any
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.target.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -21,13 +21,17 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.shard.mesh import Mesh, Topology
+from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.schedule.constraints import (
-    ConstraintList,
+    AgentConstraint,
     ConstraintProvenance,
+    LayoutConstraint,
+    LayoutDimConstraint,
+    LayoutDimKind,
+    PartialConstraint,
     SourceLocation,
-    StorageConstraint,
+    merge_constraints,
 )
-from tilefoundry.schedule.input import ScheduleInput
 
 from .base import BaseExprVisitor, _constant_from_py, _warn_if_ir_object, extract_ast
 from .range_slice import RangeSlice
@@ -76,30 +80,13 @@ def parse_func(fn, *, topologies=(), specializations=(), target=None, extra_clos
     resolve sibling ``@func`` methods (which are ``hir.Function`` values) as
     nested-call targets.
     """
+    if isinstance(fn, Function):
+        return fn
     node = extract_ast(fn)
     closure = _collect_closure(fn, extra_closure)
     return _parse_func_node(
         node, closure, topologies=topologies,
         specializations=specializations, target=target,
-        source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
-    )
-
-
-def parse_schedule_func(
-    fn, *, topologies=(), specializations=(), target=None, extra_closure=None
-) -> ScheduleInput:
-    """Parse a schedule entry through the shared HIR parser."""
-    if isinstance(fn, Function):
-        return ScheduleInput(function=fn, constraints=ConstraintList())
-    node = extract_ast(fn)
-    closure = _collect_closure(fn, extra_closure)
-    return _parse_func_node(
-        node,
-        closure,
-        topologies=topologies,
-        specializations=specializations,
-        target=target,
-        schedule_mode=True,
         source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
     )
 
@@ -157,9 +144,8 @@ def _parse_func_node(
     topologies=(),
     specializations=(),
     target=None,
-    schedule_mode: bool = False,
     source_filename: str = "<string>",
-) -> Function | ScheduleInput:
+) -> Function:
     env = LexicalEnv()
     params = _build_params(node, closure)
     for p in params:
@@ -174,7 +160,6 @@ def _parse_func_node(
         env,
         closure,
         topo_ns=topo_ns,
-        schedule_mode=schedule_mode,
         source_filename=source_filename,
     )
     if _is_pass_body(node.body):
@@ -184,6 +169,9 @@ def _parse_func_node(
     else:
         body_expr = visitor.visit_body(node.body)
     return_type = _resolve_return_type(node, closure, body_expr)
+    params, body_expr = _finalize_agent_metadata(
+        params, body_expr, visitor.pending_constraints
+    )
     function = Function.build(
         name=node.name,
         params=params,
@@ -193,12 +181,47 @@ def _parse_func_node(
         specializations=tuple(specializations),
         target=target,
     )
-    if schedule_mode:
-        return ScheduleInput(
-            function=function,
-            constraints=ConstraintList(tuple(visitor.constraints)),
-        )
     return function
+
+
+class _AgentMetadataFinalizer(ExprMutator):
+    """Rebuild the parsed DAG once so metadata follows shared SSA identity."""
+
+    def __init__(self, pending, parameter_replacements):
+        self.pending = pending
+        self.parameter_replacements = parameter_replacements
+        self.memo: dict[int, Expr] = {}
+
+    def visit(self, expr: Expr) -> Expr:
+        cached = self.memo.get(id(expr))
+        if cached is not None:
+            return cached
+        rebuilt = super().visit(expr)
+        constraints = self.pending.get(id(expr))
+        if constraints:
+            source_loc = constraints[0].source_loc
+            rebuilt = dataclasses.replace(
+                rebuilt,
+                metadata=merge_constraints(
+                    rebuilt.metadata, tuple(constraints), source_loc
+                ),
+            )
+        self.memo[id(expr)] = rebuilt
+        return rebuilt
+
+    def visit_Var(self, var: Var) -> Expr:
+        return self.parameter_replacements.get(id(var), var)
+
+
+def _finalize_agent_metadata(params, body, pending):
+    replacements = {}
+    for param in params:
+        if id(param) in pending:
+            replacements[id(param)] = dataclasses.replace(param)
+    finalizer = _AgentMetadataFinalizer(pending, replacements)
+    new_params = tuple(finalizer.visit(param) for param in params)
+    new_body = None if body is None else finalizer.visit(body)
+    return new_params, new_body
 
 def _extract_topologies_from_decorator(node: ast.FunctionDef) -> list["Topology"]:
     """Parse ``@func(topologies=(...))`` from the function's decorator AST.
@@ -289,6 +312,86 @@ def _eval_topology_expr(node: ast.AST) -> int | None:
                 return -val
         return None
     return None
+
+
+def _constraint_value(node: ast.AST):
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return ast.unparse(node)
+    return ast.unparse(node)
+
+
+def _parse_partial_value(node: ast.AST) -> str:
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        raise VerifyError("partial constraint must be P(\"reduction\")")
+    if node.func.id != "P" or len(node.args) != 1 or node.keywords:
+        raise VerifyError("partial constraint must be P(\"reduction\")")
+    value = _constraint_value(node.args[0])
+    if not isinstance(value, str) or not value:
+        raise VerifyError("partial reduction must be a non-empty string")
+    return value
+
+
+def _parse_partial_set(node: ast.AST) -> list[tuple[str | None, str]]:
+    if not isinstance(node, ast.Set):
+        raise VerifyError("layout Partial sugar must be a set")
+    out: list[tuple[str | None, str]] = []
+    for item in node.elts:
+        if not isinstance(item, ast.BinOp) or not isinstance(item.op, ast.MatMult):
+            raise VerifyError("Partial sugar must use `cta @ P(\"sum\")`")
+        reduction = _parse_partial_value(item.right)
+        topology = _constraint_value(item.left)
+        if not isinstance(topology, str):
+            raise VerifyError("Partial sugar topology must be symbolic")
+        out.append((topology, reduction))
+    return out
+
+
+def _parse_layout_constraint(
+    node: ast.AST,
+) -> tuple[list[LayoutDimConstraint], list[tuple[str | None, str]]]:
+    if not isinstance(node, ast.Tuple):
+        raise VerifyError("layout constraint must be a tuple")
+    dims_node = node
+    partial_node = None
+    if node.elts and isinstance(node.elts[0], ast.Tuple):
+        dims_node = node.elts[0]
+        extras = node.elts[1:]
+        if len(extras) > 1:
+            raise VerifyError("layout constraint accepts at most one Partial set")
+        if extras:
+            partial_node = extras[0]
+    if not dims_node.elts:
+        raise VerifyError("layout constraint cannot be empty")
+    dims: list[LayoutDimConstraint] = []
+    for index, item in enumerate(dims_node.elts):
+        if isinstance(item, ast.Name) and item.id == "_":
+            dims.append(LayoutDimConstraint(index, LayoutDimKind.UNCONSTRAINED))
+            continue
+        if isinstance(item, ast.Name) and item.id == "D":
+            dims.append(LayoutDimConstraint(index, LayoutDimKind.BROADCAST))
+            continue
+        if isinstance(item, ast.BinOp) and isinstance(item.op, ast.MatMult):
+            topology = _constraint_value(item.right)
+            if topology != "cta" and not str(topology).endswith(".cta"):
+                raise VerifyError("layout Split constraint must target symbolic cta")
+            dims.append(
+                LayoutDimConstraint(
+                    index=index,
+                    kind=LayoutDimKind.SPLIT,
+                    extent=_constraint_value(item.left),
+                    topology="cta",
+                )
+            )
+            continue
+        raise VerifyError(
+            "layout dimensions must use `_`, `D`, or `H @ cta`/`N @ cta`"
+        )
+    partials = [] if partial_node is None else _parse_partial_set(partial_node)
+    return dims, partials
 
 def _is_func_decorator(dec: ast.AST) -> bool:
     """Check if an AST decorator node is ``@func`` or ``@func(...)``."""
@@ -387,15 +490,12 @@ class _HirBodyVisitor(BaseExprVisitor):
         closure,
         *,
         topo_ns=None,
-        schedule_mode: bool = False,
         source_filename: str = "<string>",
     ):
         super().__init__(env, closure)
         self.topo_ns: dict[str, "Topology"] = topo_ns or {}
-        self.schedule_mode = schedule_mode
         self.source_filename = source_filename
-        self.constraints: list[StorageConstraint] = []
-        self._constraint_targets: set[int] = set()
+        self.pending_constraints: dict[int, list[AgentConstraint]] = {}
 
     # Function body: assignment statements only update the symtab; hir is
     # SSA-as-DAG (§8.6), so variable sharing is expressed by the tail Expr
@@ -504,96 +604,85 @@ class _HirBodyVisitor(BaseExprVisitor):
         idx: int,
         require_return: bool,
     ) -> Expr | None:
-        if not self.schedule_mode:
-            raise VerifyError(
-                "hir: `where(...)` annotations are schedule-only; "
-                "call parse_schedule_func(...)"
-            )
         if not isinstance(node.target, ast.Name):
-            raise VerifyError("schedule where assignment target must be a plain Name")
+            raise VerifyError("where assignment target must be a plain Name")
         if node.value is None:
-            raise VerifyError("schedule where assignment must have a value")
-        self._record_annotated_assignment(node)
+            target = self.env.lookup(node.target.id)
+            if not isinstance(target, Expr):
+                raise VerifyError(
+                    f"where annotation target {node.target.id!r} is not an existing Expr"
+                )
+        else:
+            target = self._maybe_autofill_loc(
+                self.expr(node.value), node.target.id
+            )
+            self.env.define(node.target.id, target)
+        self._record_annotated_assignment(node, target)
         return self._visit_chain(stmts, idx + 1, require_return)
 
-    def _record_annotated_assignment(self, node: ast.AnnAssign) -> Expr:
-        if not self.schedule_mode:
-            raise VerifyError(
-                "hir: `where(...)` annotations are schedule-only; "
-                "call parse_schedule_func(...)"
-            )
-        if not isinstance(node.target, ast.Name):
-            raise VerifyError("schedule where assignment target must be a plain Name")
-        if node.value is None:
-            raise VerifyError("schedule where assignment must have a value")
-        storage = self._parse_where_annotation(node.annotation)
-        rhs = self._maybe_autofill_loc(self.expr(node.value), node.target.id)
-        if not isinstance(rhs.type, TensorType):
-            raise VerifyError(
-                "schedule where target must be tensor-valued, got "
-                f"{type(rhs.type).__name__}"
-            )
-        target_id = id(rhs)
-        if target_id in self._constraint_targets:
-            raise VerifyError(
-                "schedule where may be attached only once to one HIR object; "
-                "the target is an alias of an already constrained value"
-            )
-        self._constraint_targets.add(target_id)
-        self.constraints.append(
-            StorageConstraint(
-                id=len(self.constraints),
-                target=rhs,
-                storage=storage,
-                source_loc=SourceLocation(
-                    filename=self.source_filename,
-                    line=node.lineno,
-                    column=node.col_offset,
-                    end_line=getattr(node, "end_lineno", None),
-                    end_column=getattr(node, "end_col_offset", None),
-                ),
-                provenance=ConstraintProvenance.AUTHOR,
-            )
-        )
-        self.env.define(node.target.id, rhs)
-        return rhs
-
-    def _parse_where_annotation(self, annotation: ast.AST) -> StorageKind:
-        if not isinstance(annotation, ast.Call) or not (
-            isinstance(annotation.func, ast.Name)
-            and annotation.func.id in {"where", "require"}
+    def _record_annotated_assignment(self, node: ast.AnnAssign, target: Expr) -> None:
+        constraints = self._parse_where_annotation(node.annotation, node)
+        if any(isinstance(c, LayoutConstraint) for c in constraints) and not isinstance(
+            target.type, TensorType
         ):
-            raise VerifyError(
-                "schedule annotations must use `where(storage=...)`; "
-                "require(...) is not supported"
-            )
-        if annotation.func.id == "require":
-            raise VerifyError("schedule require(...) annotations are not supported")
+            raise VerifyError("layout where constraint requires a tensor-valued Expr")
+        self.pending_constraints.setdefault(id(target), []).extend(constraints)
+
+    def _parse_where_annotation(
+        self, annotation: ast.AST, node: ast.AnnAssign
+    ) -> tuple[AgentConstraint, ...]:
+        if not isinstance(annotation, ast.Call) or not isinstance(
+            annotation.func, ast.Name
+        ) or annotation.func.id != "where":
+            raise VerifyError("annotations must use `where(...)`; require(...) is not supported")
         if annotation.args:
-            raise VerifyError("schedule where(...) accepts keyword arguments only")
+            raise VerifyError("where(...) accepts keyword arguments only")
         if not annotation.keywords:
-            raise VerifyError("schedule where(...) cannot be empty")
-        values: dict[str, Any] = {}
+            raise VerifyError("where(...) cannot be empty")
+        source_loc = SourceLocation(
+            filename=self.source_filename,
+            line=node.lineno,
+            column=node.col_offset,
+            end_line=getattr(node, "end_lineno", None),
+            end_column=getattr(node, "end_col_offset", None),
+        )
+        out: list[AgentConstraint] = []
         for keyword in annotation.keywords:
             if keyword.arg is None:
-                raise VerifyError("schedule where(...) does not accept **kwargs")
-            if keyword.arg != "storage":
-                raise VerifyError(
-                    f"schedule where(...) has unknown field {keyword.arg!r}; "
-                    "only storage is supported"
+                raise VerifyError("where(...) does not accept **kwargs")
+            if keyword.arg == "layout":
+                dims, partials = _parse_layout_constraint(keyword.value)
+                out.append(
+                    LayoutConstraint(
+                        dims=tuple(dims),
+                        source_loc=source_loc,
+                        provenance=ConstraintProvenance.AUTHOR,
+                    )
                 )
-            if keyword.arg in values:
-                raise VerifyError("schedule where(...) has duplicate storage fields")
-            values[keyword.arg] = self._eval_static(keyword.value)
-        if "storage" not in values:
-            raise VerifyError("schedule where(...) requires storage=...")
-        try:
-            storage = resolve_storage(values["storage"])
-        except (TypeError, ValueError) as exc:
-            raise VerifyError(f"invalid schedule storage: {exc}") from None
-        if storage is None or storage is StorageKind.UMAT:
-            raise VerifyError("schedule storage must be a concrete materialized storage")
-        return storage
+                out.extend(
+                    PartialConstraint(
+                        reduction=reduction,
+                        topology=topology,
+                        source_loc=source_loc,
+                        provenance=ConstraintProvenance.AUTHOR,
+                    )
+                    for topology, reduction in partials
+                )
+            elif keyword.arg == "partial":
+                reduction = _parse_partial_value(keyword.value)
+                out.append(
+                    PartialConstraint(
+                        reduction=reduction,
+                        source_loc=source_loc,
+                        provenance=ConstraintProvenance.AUTHOR,
+                    )
+                )
+            else:
+                raise VerifyError(
+                    f"where(...) has unknown field {keyword.arg!r}; "
+                    "use layout=... or partial=..."
+                )
+        return tuple(out)
 
     def _resolve_loop_bound(self, node: ast.AST):
         """Resolve a ``tile`` / ``range`` bound (extent / step / start) to an

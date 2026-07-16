@@ -189,7 +189,7 @@ def dsv4_moe_layer(
     shared_w2_scale: Tensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     hidden = pre_moe_rms_norm(x, rms_weight)
-    routed_value: where(storage="rmem") = routed_expert(
+    routed_value: where(layout=(_, _, H @ cta)) = routed_expert(
         hidden,
         gate_weight,
         gate_bias,

@@ -39,6 +39,12 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
     layout_axis_to_tensor_axis,
 )
+from tilefoundry.schedule.constraints import (
+    LayoutConstraint,
+    LayoutDimKind,
+    PartialConstraint,
+    constraint_metadata,
+)
 
 # ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -405,6 +411,37 @@ def _sanitize_name(name: str) -> str:
     return safe or "v"
 
 
+def _constraint_value_str(value) -> str:
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", value):
+        return value
+    return repr(value)
+
+
+def _constraint_str(constraint) -> str:
+    if isinstance(constraint, LayoutConstraint):
+        dims: list[str] = []
+        for dim in constraint.dims:
+            if dim.kind is LayoutDimKind.UNCONSTRAINED:
+                dims.append("_")
+            elif dim.kind is LayoutDimKind.BROADCAST:
+                dims.append("D")
+            elif dim.kind is LayoutDimKind.SPLIT:
+                dims.append(f"{_constraint_value_str(dim.extent)} @ cta")
+            else:  # pragma: no cover - closed enum
+                raise ValueError(f"unknown layout constraint kind {dim.kind!r}")
+        return "where(layout=(" + ", ".join(dims) + ("," if len(dims) == 1 else "" ) + "))"
+    if isinstance(constraint, PartialConstraint):
+        return f'where(partial=P("{constraint.reduction}"))'
+    raise ValueError(f"unsupported Agent Constraint {type(constraint).__name__}")
+
+
+def _constraint_lines(expr: Expr, indent: str, name: str) -> list[str]:
+    metadata = constraint_metadata(expr)
+    if metadata is None:
+        return []
+    return [f"{indent}{name}: {_constraint_str(c)}" for c in metadata.constraints]
+
+
 def _collect_meshes(fn: HirFunction) -> dict[int, Mesh]:
     """Collect unique Mesh objects from all ShardLayouts in *fn*."""
     meshes: dict[int, Mesh] = {}
@@ -554,6 +591,9 @@ def _emit_def(
     lines.append(",\n".join(param_strs))
     lines.append(f"){arrow}:")
 
+    for p in fn.params:
+        lines.extend(_constraint_lines(p, indent, _names[id(p)]))
+
     # A dispatch prototype has no body — declare signature only.
     if fn.body is None:
         lines.append(f"{indent}pass")
@@ -565,6 +605,7 @@ def _emit_def(
         if isinstance(expr, Constant):
             name = _names[id(expr)]
             lines.append(f"{indent}{name} = {repr(expr.value)}")
+            lines.extend(_constraint_lines(expr, indent, name))
             continue
         if isinstance(expr, Tuple):
             # A tuple is rendered inline at its use site: as a literal argument
@@ -652,6 +693,7 @@ def _emit_def(
 
                 loc = f'  # loc="{name}"' if expr.loc else ""
                 lines.append(f"{indent}{name} = {call_str}{loc}")
+            lines.extend(_constraint_lines(expr, indent, name))
 
     # Return statement. A literal tuple body renders its elements inline
     # (``return (e0, e1)``) rather than a name for the un-emitted Tuple node.

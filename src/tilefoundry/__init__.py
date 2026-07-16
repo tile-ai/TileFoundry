@@ -14,6 +14,7 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
+    IRMetadata,
     Op,
     ParameterInfo,
     TypeInferContext,
@@ -80,10 +81,6 @@ from tilefoundry.inspection.viewer import Viewer as _Viewer
 # All imports done — now invoke the deferred dim typeinfer registration.
 _register_dim_typeinfer()
 
-# Register target-owned schedule backends after the neutral package API is ready.
-from tilefoundry.schedule import cuda as _schedule_cuda  # noqa: E402, F401
-
-
 def view(root, *, port: int = 0, open_browser: bool = True) -> int:
     """Start the interactive HIR viewer for *root* (Function or Module).
 
@@ -94,6 +91,7 @@ def view(root, *, port: int = 0, open_browser: bool = True) -> int:
 __all__ = [
     # core
     "Expr", "Var", "Constant", "Call", "Stmt", "TupleGetItem",
+    "IRMetadata",
     "Op", "ParameterInfo",
     "AnalysisRegistry",
     "typeinfer_registry", "verify_stmt_registry", "costmodel_registry",
