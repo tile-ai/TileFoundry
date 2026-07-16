@@ -62,7 +62,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     # The mesh extent bound to each Split-carrying layout axis (at most one
     # Split per axis -- ShardLayout construction forbids two Splits sharing
     # an axis).
-    mesh_shape = layout.mesh.layout.shape
+    mesh_shape = layout.mesh.shape
     split_mesh_extent: dict[int, int] = {}
     for mesh_axis_idx, attr in enumerate(layout.attrs):
         if isinstance(attr, Split) and mesh_axis_idx < len(mesh_shape):

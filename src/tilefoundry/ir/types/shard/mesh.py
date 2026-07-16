@@ -106,8 +106,16 @@ class Mesh:
     @property
     def axes(self) -> tuple[MeshAxis, ...]:
         return tuple(
-            MeshAxis(mesh=self, index=i, size=sz) for i, sz in enumerate(self.layout.shape)
+            MeshAxis(mesh=self, index=i, size=sz) for i, sz in enumerate(self.shape)
         )
+
+    @property
+    def shape(self) -> tuple:
+        """Return the selected mesh-domain shape, including composed slices."""
+        layout = self.layout
+        if isinstance(layout, ComposedLayout):
+            return tuple(layout.outer.shape)
+        return tuple(layout.shape)
 
     @property
     def x(self) -> MeshAxis:
@@ -125,7 +133,7 @@ class Mesh:
         """Find a named axis, or None."""
         for i, n in enumerate(self.names):
             if n == name:
-                return MeshAxis(mesh=self, index=i, size=self.layout.shape[i])
+                return MeshAxis(mesh=self, index=i, size=self.shape[i])
         return None
 
     def __getitem__(self, key) -> "Mesh":

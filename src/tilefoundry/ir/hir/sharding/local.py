@@ -25,7 +25,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = list(x_ty.shape)
     for mesh_axis, attr in enumerate(sl.attrs):
         if isinstance(attr, Split):
-            mesh_extent = sl.mesh.layout.shape[mesh_axis]
+            mesh_extent = sl.mesh.shape[mesh_axis]
             dim = new_shape[attr.axis]
             v = static_dim_value(dim)
             if v is not None:

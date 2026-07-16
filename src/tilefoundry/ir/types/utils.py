@@ -51,7 +51,7 @@ def make_shard_tensor_type(
     if mesh is None or not attrs:
         return TensorType(shape=shape, dtype=dtype, layout=None, storage=storage)
 
-    mesh_shape = mesh.layout.shape
+    mesh_shape = mesh.shape
     bindings: dict[int, list[int]] = {}
     for mesh_axis, attr in enumerate(attrs):
         if isinstance(attr, Split):

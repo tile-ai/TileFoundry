@@ -66,7 +66,7 @@ def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
     Multiple ``Split`` attrs on the same layout dim multiply their
     divisors together.
     """
-    mesh_shape = sl.mesh.layout.shape
+    mesh_shape = sl.mesh.shape
     local = list(sl.layout.shape)
     for mesh_axis_idx, attr in enumerate(sl.attrs):
         if mesh_axis_idx >= len(mesh_shape):

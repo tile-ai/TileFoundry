@@ -339,7 +339,7 @@ def derive_output_shard_layout(
             )
         prod = 1
         for p, a in binds:
-            ext = mesh.layout.shape[p]
+            ext = mesh.shape[p]
             if not (isinstance(ext, int) and not isinstance(ext, bool)):
                 raise ValueError(
                     f"cannot factorize output axis {ax}: dynamic mesh extent on "
