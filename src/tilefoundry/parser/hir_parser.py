@@ -7,6 +7,7 @@ from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.target.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -20,6 +21,13 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.shard.mesh import Mesh, Topology
+from tilefoundry.schedule.constraints import (
+    ConstraintList,
+    ConstraintProvenance,
+    SourceLocation,
+    StorageConstraint,
+)
+from tilefoundry.schedule.input import ScheduleInput
 
 from .base import BaseExprVisitor, _constant_from_py, _warn_if_ir_object, extract_ast
 from .range_slice import RangeSlice
@@ -73,6 +81,26 @@ def parse_func(fn, *, topologies=(), specializations=(), target=None, extra_clos
     return _parse_func_node(
         node, closure, topologies=topologies,
         specializations=specializations, target=target,
+        source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
+    )
+
+
+def parse_schedule_func(
+    fn, *, topologies=(), specializations=(), target=None, extra_closure=None
+) -> ScheduleInput:
+    """Parse a schedule entry through the shared HIR parser."""
+    if isinstance(fn, Function):
+        return ScheduleInput(function=fn, constraints=ConstraintList())
+    node = extract_ast(fn)
+    closure = _collect_closure(fn, extra_closure)
+    return _parse_func_node(
+        node,
+        closure,
+        topologies=topologies,
+        specializations=specializations,
+        target=target,
+        schedule_mode=True,
+        source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
     )
 
 def parse_func_source(src: str) -> Function:
@@ -122,7 +150,16 @@ def parse_func_source(src: str) -> Function:
     parsed_topologies = _extract_topologies_from_decorator(func_node)
     return _parse_func_node(func_node, closure, topologies=parsed_topologies)
 
-def _parse_func_node(node: ast.FunctionDef, closure: dict[str, Any], *, topologies=(), specializations=(), target=None) -> Function:
+def _parse_func_node(
+    node: ast.FunctionDef,
+    closure: dict[str, Any],
+    *,
+    topologies=(),
+    specializations=(),
+    target=None,
+    schedule_mode: bool = False,
+    source_filename: str = "<string>",
+) -> Function | ScheduleInput:
     env = LexicalEnv()
     params = _build_params(node, closure)
     for p in params:
@@ -133,7 +170,13 @@ def _parse_func_node(node: ast.FunctionDef, closure: dict[str, Any], *, topologi
         if t.name in topo_ns:
             raise VerifyError(f"duplicate topology name {t.name!r}")
         topo_ns[t.name] = t
-    visitor = _HirBodyVisitor(env, closure, topo_ns=topo_ns)
+    visitor = _HirBodyVisitor(
+        env,
+        closure,
+        topo_ns=topo_ns,
+        schedule_mode=schedule_mode,
+        source_filename=source_filename,
+    )
     if _is_pass_body(node.body):
         # A `pass` body declares a dispatch prototype: signature + envelope
         # only, no implementation (hir §5). Its variants carry the bodies.
@@ -141,7 +184,7 @@ def _parse_func_node(node: ast.FunctionDef, closure: dict[str, Any], *, topologi
     else:
         body_expr = visitor.visit_body(node.body)
     return_type = _resolve_return_type(node, closure, body_expr)
-    return Function.build(
+    function = Function.build(
         name=node.name,
         params=params,
         body=body_expr,
@@ -150,6 +193,12 @@ def _parse_func_node(node: ast.FunctionDef, closure: dict[str, Any], *, topologi
         specializations=tuple(specializations),
         target=target,
     )
+    if schedule_mode:
+        return ScheduleInput(
+            function=function,
+            constraints=ConstraintList(tuple(visitor.constraints)),
+        )
+    return function
 
 def _extract_topologies_from_decorator(node: ast.FunctionDef) -> list["Topology"]:
     """Parse ``@func(topologies=(...))`` from the function's decorator AST.
@@ -332,9 +381,21 @@ def _resolve_return_type(node: ast.FunctionDef, closure, body_expr) -> TensorTyp
 class _HirBodyVisitor(BaseExprVisitor):
     token = "hir"
 
-    def __init__(self, env, closure, *, topo_ns=None):
+    def __init__(
+        self,
+        env,
+        closure,
+        *,
+        topo_ns=None,
+        schedule_mode: bool = False,
+        source_filename: str = "<string>",
+    ):
         super().__init__(env, closure)
         self.topo_ns: dict[str, "Topology"] = topo_ns or {}
+        self.schedule_mode = schedule_mode
+        self.source_filename = source_filename
+        self.constraints: list[StorageConstraint] = []
+        self._constraint_targets: set[int] = set()
 
     # Function body: assignment statements only update the symtab; hir is
     # SSA-as-DAG (§8.6), so variable sharing is expressed by the tail Expr
@@ -423,6 +484,8 @@ class _HirBodyVisitor(BaseExprVisitor):
                     self.env.define(nm, item)
                 return self._visit_chain(stmts, idx + 1, require_return)
             raise VerifyError("hir: only single-target Name or Tuple assignments supported in V1")
+        if isinstance(node, ast.AnnAssign):
+            return self._visit_annotated_assignment(node, stmts, idx, require_return)
         if isinstance(node, ast.With):
             return self._visit_with(node, stmts, idx, require_return)
         if isinstance(node, ast.Expr):
@@ -433,6 +496,104 @@ class _HirBodyVisitor(BaseExprVisitor):
         if isinstance(node, ast.For):
             return self._visit_loop_for(node, stmts, idx, require_return)
         raise VerifyError(f"hir: unsupported statement {type(node).__name__}")
+
+    def _visit_annotated_assignment(
+        self,
+        node: ast.AnnAssign,
+        stmts: list[ast.stmt],
+        idx: int,
+        require_return: bool,
+    ) -> Expr | None:
+        if not self.schedule_mode:
+            raise VerifyError(
+                "hir: `where(...)` annotations are schedule-only; "
+                "call parse_schedule_func(...)"
+            )
+        if not isinstance(node.target, ast.Name):
+            raise VerifyError("schedule where assignment target must be a plain Name")
+        if node.value is None:
+            raise VerifyError("schedule where assignment must have a value")
+        self._record_annotated_assignment(node)
+        return self._visit_chain(stmts, idx + 1, require_return)
+
+    def _record_annotated_assignment(self, node: ast.AnnAssign) -> Expr:
+        if not self.schedule_mode:
+            raise VerifyError(
+                "hir: `where(...)` annotations are schedule-only; "
+                "call parse_schedule_func(...)"
+            )
+        if not isinstance(node.target, ast.Name):
+            raise VerifyError("schedule where assignment target must be a plain Name")
+        if node.value is None:
+            raise VerifyError("schedule where assignment must have a value")
+        storage = self._parse_where_annotation(node.annotation)
+        rhs = self._maybe_autofill_loc(self.expr(node.value), node.target.id)
+        if not isinstance(rhs.type, TensorType):
+            raise VerifyError(
+                "schedule where target must be tensor-valued, got "
+                f"{type(rhs.type).__name__}"
+            )
+        target_id = id(rhs)
+        if target_id in self._constraint_targets:
+            raise VerifyError(
+                "schedule where may be attached only once to one HIR object; "
+                "the target is an alias of an already constrained value"
+            )
+        self._constraint_targets.add(target_id)
+        self.constraints.append(
+            StorageConstraint(
+                id=len(self.constraints),
+                target=rhs,
+                storage=storage,
+                source_loc=SourceLocation(
+                    filename=self.source_filename,
+                    line=node.lineno,
+                    column=node.col_offset,
+                    end_line=getattr(node, "end_lineno", None),
+                    end_column=getattr(node, "end_col_offset", None),
+                ),
+                provenance=ConstraintProvenance.AUTHOR,
+            )
+        )
+        self.env.define(node.target.id, rhs)
+        return rhs
+
+    def _parse_where_annotation(self, annotation: ast.AST) -> StorageKind:
+        if not isinstance(annotation, ast.Call) or not (
+            isinstance(annotation.func, ast.Name)
+            and annotation.func.id in {"where", "require"}
+        ):
+            raise VerifyError(
+                "schedule annotations must use `where(storage=...)`; "
+                "require(...) is not supported"
+            )
+        if annotation.func.id == "require":
+            raise VerifyError("schedule require(...) annotations are not supported")
+        if annotation.args:
+            raise VerifyError("schedule where(...) accepts keyword arguments only")
+        if not annotation.keywords:
+            raise VerifyError("schedule where(...) cannot be empty")
+        values: dict[str, Any] = {}
+        for keyword in annotation.keywords:
+            if keyword.arg is None:
+                raise VerifyError("schedule where(...) does not accept **kwargs")
+            if keyword.arg != "storage":
+                raise VerifyError(
+                    f"schedule where(...) has unknown field {keyword.arg!r}; "
+                    "only storage is supported"
+                )
+            if keyword.arg in values:
+                raise VerifyError("schedule where(...) has duplicate storage fields")
+            values[keyword.arg] = self._eval_static(keyword.value)
+        if "storage" not in values:
+            raise VerifyError("schedule where(...) requires storage=...")
+        try:
+            storage = resolve_storage(values["storage"])
+        except (TypeError, ValueError) as exc:
+            raise VerifyError(f"invalid schedule storage: {exc}") from None
+        if storage is None or storage is StorageKind.UMAT:
+            raise VerifyError("schedule storage must be a concrete materialized storage")
+        return storage
 
     def _resolve_loop_bound(self, node: ast.AST):
         """Resolve a ``tile`` / ``range`` bound (extent / step / start) to an
@@ -696,6 +857,9 @@ class _HirBodyVisitor(BaseExprVisitor):
                 raise VerifyError(
                     "hir tile-for body: assignment target must be Name or Tuple"
                 )
+            if isinstance(stmt, ast.AnnAssign):
+                last_expr = self._record_annotated_assignment(stmt)
+                continue
             raise VerifyError(
                 f"hir tile-for body: unsupported statement {type(stmt).__name__}"
             )
