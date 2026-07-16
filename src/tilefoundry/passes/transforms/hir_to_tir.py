@@ -569,8 +569,8 @@ class _Lowerer:
         if isinstance(src_ty.layout, ShardLayout):
             src_sl = src_ty.layout
             # Intermediate sharded source: a ShardTensor is bound for
-            # ``src``. A ``TensorView``'s memory must be a pointer (the
-            # underlying ``make_tensor`` needs an iterator, not a ShardTensor), so
+            # ``src``. A ``TensorView``'s memory must be a pointer (cute
+            # ``make_tensor`` needs an iterator, not a ShardTensor), so
             # take ``PtrOf(src)`` first — same shape as the Reshape
             # lowering below.
             ptr_call = Call(type=src_ty, target=PtrOf(), args=(src,))
@@ -675,7 +675,7 @@ class _Lowerer:
         # Per-thread C fragment shape: for SM80 16x8x16 each lane
         # owns 4 f32 (the SM80_16x8_Row CLayout value layout (2, 2)
         # at row-major strides (1, 64)). The per-shard buffer
-        # therefore stays at 4 elements in layout terms — match by
+        # therefore stays at 4 elements in cute terms — match by
         # allocating ``shape = (2, 2)`` so the fragment has the
         # same multi-axis layout as the A/B operands after their
         # own per-shard sizing.

@@ -11,7 +11,7 @@ are supported:
   matching variant's launch shim, and the fallback throws.
 
 The host module compiles with a plain host compiler — it includes only
-tvm-ffi / DLPack / std headers and never references CUDA, cutlass, ``<<<>>>``,
+tvm-ffi / DLPack / std headers and never references CUDA, CuTe, ``<<<>>>``,
 ``dim3`` or ``cudaStream_t``; those live exclusively in the device module and
 its shims.
 """

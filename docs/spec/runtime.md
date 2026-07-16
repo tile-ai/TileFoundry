@@ -7,7 +7,8 @@ two surfaces:
   examples/tests
 - the C++ runtime surface included by generated CUDA source
 
-The C++ runtime is built on a vendored `cutlass/include` snapshot.
+The C++ runtime is built on a vendored `cutlass/include/{cute,cutlass}`
+snapshot.
 
 ## 1. Python Runtime Surface
 
@@ -236,12 +237,12 @@ always a runtime query returning the current execution instance id.
 
 ```cpp
 /**
- * @brief A device mesh: a layout whose axes map to program topology levels.
+ * @brief A device mesh: a CuTe layout whose axes map to program topology levels.
  */
 template <class MeshLayout, TopologyScope... Topos>
 struct Mesh {
-  MeshLayout mesh_layout;                                        ///< a layout-compatible type
-  static constexpr auto topologies = make_tuple(Topos...);       ///< sparse TopologyScope list this mesh uses (type-level, not runtime state)
+  MeshLayout mesh_layout;                                        ///< a CuTe-compatible layout type
+  static constexpr auto topologies = cute::make_tuple(Topos...); ///< sparse TopologyScope list this mesh uses (type-level, not runtime state)
   auto local_index() const noexcept;                             ///< full mesh coordinate for this execution instance
 };
 ```
@@ -254,7 +255,7 @@ struct Mesh {
   - `local_index()` — for each topology in `topologies`, calls `program_id<T>()`
     to get the runtime id, converts each runtime id to sub-coordinates via
     `idx2crd(id, sub_shape, sub_stride)`, and concatenates into a full mesh
-    coordinate (a coord / int-tuple).
+    coordinate (CuTe coord / int-tuple).
   - for each topology `T` in `topologies`, the product of its assigned axes'
     extents equals the device count of `T`
 
@@ -266,7 +267,7 @@ struct Mesh {
  */
 template <class Layout, class Attrs, class Mesh>
 struct ShardLayout {
-  Layout layout;   ///< the underlying layout
+  Layout layout;   ///< the underlying CuTe layout
   Attrs attrs;     ///< shard attributes, ordered by mesh axis
   Mesh mesh;       ///< the bound device domain
 };
@@ -293,34 +294,34 @@ Shorthand: `S<Axis>` = Split, `B` = Broadcast, `P<Reduction>` = Partial.
 
 ```cpp
 /**
- * @brief A tensor/view paired with its runtime shard layout.
+ * @brief A CuTe tensor/view paired with its runtime shard layout.
  */
 template <class Engine_, class GlobalLayout_, class ShardLayout_>
 struct ShardTensor {
   using engine_type = Engine_;
   using global_layout_type = GlobalLayout_;
   using shard_layout_type = ShardLayout_;
-  Engine_ engine;             ///< tensor/view (gmem/smem/rmem); raw pointer rejected
+  Engine_ engine;             ///< CuTe tensor/view (gmem/smem/rmem); raw pointer rejected
   ShardLayout_ shard_layout;  ///< runtime shard-layout value (dynamic dims carry real extents)
-  auto data();                ///< underlying pointer of the wrapped tensor
+  auto data();                ///< underlying pointer of the wrapped cute tensor
   auto data() const;
 };
 ```
 
 - constraints:
-  - `engine` must be a full tensor/view, never a raw pointer (residency
+  - `engine` must be a full cute tensor/view, never a raw pointer (residency
     lives on the engine type); `data()` drops the residency tag. The full
     residency / raw-pointer rules are stated below.
 
-`engine` holds the **full tensor/view, not a raw pointer**. The
-gmem / smem / rmem **residency category** lives on the engine *type*;
-a raw `T*` loses it (a bare pointer mis-classifies as `rmem` even for
+`engine` holds the **full cute tensor/view, not a raw pointer**. The
+gmem / smem / rmem **residency category** lives on the cute engine *type*;
+a raw `T*` loses it (cute mis-classifies a bare pointer as `rmem` even for
 a gmem tensor), which would break residency-aware projection in `local()`
 and residency dispatch in `copy()`. `make_shard_tensor` therefore rejects
 raw pointers at compile time.
 
-`data()` mirrors the wrapped tensor's `data()` accessor so a `ShardTensor` and
-a plain tensor can be accessed uniformly. Because it returns a raw pointer, it
+`data()` mirrors `cute::Tensor::data()` so a `ShardTensor` and a plain cute
+tensor can be accessed uniformly. Because it returns a raw pointer, it
 **drops the residency tag** and MUST only be used where residency no longer
 matters (e.g. the per-thread MMA register fragment); residency-aware paths
 use `local()` instead.
@@ -329,8 +330,8 @@ use `local()` instead.
 
 ```cpp
 /**
- * @brief Factory: bind a global layout and a shard layout onto a tensor.
- * @param tensor a tensor / view (raw pointers rejected at compile time)
+ * @brief Factory: bind a global layout and a shard layout onto a CuTe tensor.
+ * @param tensor a CuTe tensor / view (raw pointers rejected at compile time)
  * @param global_layout the global layout to bind
  * @param shard_layout the shard layout to bind
  */
@@ -340,7 +341,7 @@ auto make_shard_tensor(T const& tensor, GL global_layout, SL shard_layout)
 ```
 
 - constraints:
-  - Factory. `T` must be a tensor/view; raw pointers rejected at compile time.
+  - Factory. `T` must be a CuTe tensor/view; raw pointers rejected at compile time.
 
 ### 2.8 `tilefoundry::copy` — Shard-aware Overloads
 
@@ -377,7 +378,7 @@ auto local(ShardTensor<E, GL, SL> const& t) noexcept;
 ```
 
 - constraints:
-  - Returns the `Tensor` view this execution instance owns on `t`.
+  - Returns the cute `Tensor` view this execution instance owns on `t`.
 
 #### 2.10.1 Inputs
 
@@ -385,7 +386,7 @@ Let `t: ShardTensor`, `sl = t.shard_layout`, `S = sl.layout.strides`,
 `A = sl.attrs`, and `coord = sl.mesh.local_index()`
 ([§2.3](#23-tilefoundrymesh)).
 
-- `t.engine` is the per-instance tensor / view; `t.engine.data()`
+- `t.engine` is the per-instance cute tensor / view; `t.engine.data()`
   is the base ptr the current instance already holds.
 - `sl.layout.shape` is the canonical layout shape
   ([shard §7.1.1](./shard.md#711-layoutshape)).
@@ -397,7 +398,7 @@ Let `t: ShardTensor`, `sl = t.shard_layout`, `S = sl.layout.strides`,
     offset = Σ_{m : A[m] = Split(k)}  coord[m] · S[k]
     ptr    = t.engine.data() + offset
     shape' = shard_layout_local_shape(sl)
-    return make_tensor(ptr, Layout(shape', S))
+    return cute::make_tensor(ptr, Layout(shape', S))
 
 - `A[m] ∈ {Broadcast, Partial}` contributes `0` to `offset`.
 - `A[m] = Dynamic` MUST have been resolved before `local()`; otherwise
@@ -417,12 +418,12 @@ storage-specific branching is required.
 
 ```cpp
 /**
- * @brief A tensor: an engine plus a layout.
- * @tparam Engine the engine / iterator / pointer category
- * @tparam Layout a layout or tilefoundry::ShardLayout
+ * @brief A CuTe tensor: an engine plus a layout.
+ * @tparam Engine the CuTe engine / iterator / pointer category
+ * @tparam Layout a CuTe layout or tilefoundry::ShardLayout
  */
 template <class Engine, class Layout>
-class Tensor;
+class cute::Tensor;
 ```
 
 - constraints:
@@ -430,8 +431,8 @@ class Tensor;
 
 | storage | C++ |
 |---------|-----|
-| `"gmem"` | `T*` / `gmem_ptr<T>` |
-| `"smem"` | `smem_ptr<T>` |
+| `"gmem"` | `T*` / `cute::gmem_ptr<T>` |
+| `"smem"` | `cute::smem_ptr<T>` |
 | `"rmem"` | register-resident engine |
 
 ## 3. Runtime Ops
@@ -468,7 +469,7 @@ public entry or its observable result. The
 codegen side is
 [codegen §3](./codegen.md#3-runtime-owned-op-dispatch).
 
-### 3.1 `copy`
+### 3.1 `cute::copy`
 
 ```cpp
 /**
@@ -485,7 +486,7 @@ void copy(SrcTensor const& src, DstTensor& dst);
   - `size(src) == size(dst)`
   - source and destination dtypes are compatible
 
-### 3.2 `fill`
+### 3.2 `cute::fill`
 
 ```cpp
 /**
@@ -515,7 +516,7 @@ auto shard_partition(Tensor const& tensor);
   - extracts `mesh` from `tensor.layout()`
   - calls `mesh.local_index()` to get the current device coordinate
   - projects the tensor to the local view at that coordinate
-  - returns a `Tensor` with a plain layout
+  - returns a `cute::Tensor` with plain CuTe layout
   - `tensor.layout()` is a `ShardLayout`
 
 ### 3.4 `tilefoundry::ops::sync` (mesh-scoped barrier)
@@ -537,7 +538,7 @@ __device__ void sync(unsigned int* grid_bar = nullptr);
 - constraints:
   - Codegen emits only `sync`; it does not call lower-level barrier helpers.
   - Grid barriers require every CTA of the launch to be co-resident and to
-    run the barrier.
+    execute the barrier.
   - A grid barrier's counter pair is zero-initialized before first use and is
     owned by the generated module.
 

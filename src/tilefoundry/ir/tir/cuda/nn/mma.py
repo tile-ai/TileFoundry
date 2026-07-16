@@ -110,8 +110,8 @@ _SM80_THREAD_MESH = Mesh(
 )
 
 # Fragment derivation recipe (per operand):
-#   1. Extract the MMA_Atom thread-value layout from cutlass's
-#      ``atom/mma_traits_sm80.hpp``.
+#   1. Extract the cute MMA_Atom thread-value layout from
+#      cute/atom/mma_traits_sm80.hpp.
 #   2. Reorder axes by stride (ascending) under tilefoundry's row-major
 #      interpretation of the (M,K)/(K,N)/(M,N) tensor.
 #   3. Locate the mesh-axis stride positions; attach Split to the corresponding
@@ -120,7 +120,7 @@ _SM80_THREAD_MESH = Mesh(
 # count per thread (8 / 4 / 4 for A / B / C).
 
 # ── A-fragment: (M=16, K=16) bf16, row-major ─────────────────────────────
-# cutlass ALayout (col-major source):
+# cute ALayout (col-major source):
 #   Layout<Shape<Shape<_4,_8>, Shape<_2,_2,_2>>,
 #          Stride<Stride<_32,_1>, Stride<_16,_8,_128>>>
 # Per-thread map (lane t=(tx∈[0,4), ty∈[0,8)), values v0/v1/v2):
@@ -135,7 +135,7 @@ _A_FRAG_SHARD = ShardLayout(
 )
 
 # ── B-fragment: (K=16, N=8) bf16, row-major ──────────────────────────────
-# cutlass BLayout (col-major source):
+# cute BLayout (col-major source):
 #   Layout<Shape<Shape<_4,_8>, Shape<_2,_2>>, Stride<Stride<_16,_1>, Stride<_8,_64>>>
 # Per-thread map (lane t=(tx,ty), values v0/v1):
 #   N = ty ; K = 2*tx + v0 + 8*v1
@@ -149,7 +149,7 @@ _B_FRAG_SHARD = ShardLayout(
 )
 
 # ── C/D-fragment: (M=16, N=8) f32, row-major ─────────────────────────────
-# cutlass CLayout = SM80_16x8_Row (col-major source):
+# cute CLayout = SM80_16x8_Row (col-major source):
 #   Layout<Shape<Shape<_4,_8>, Shape<_2,_2>>, Stride<Stride<_32,_1>, Stride<_16,_8>>>
 # Per-thread map (lane t=(tx,ty), values v0/v1):
 #   M = ty + 8*v1 ; N = 2*tx + v0
@@ -187,7 +187,7 @@ _ATOM_TABLE: dict[
 
 
 def make_atom(op: MmaOpSpec) -> MmaAtom:
-    """Build the :class:`MmaAtom` for ``op`` (cutlass ``make_tiled_mma`` analog).
+    """Build the :class:`MmaAtom` for ``op`` (CuTe ``make_tiled_mma`` analog).
 
     Raises ``KeyError`` (with a clear message) for an instruction that has no
     registered fragment layouts yet.

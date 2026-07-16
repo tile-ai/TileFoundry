@@ -1,4 +1,4 @@
-"""CUDA MMA op / atom model (cutlass ``MMA_Op`` → ``MMA_Atom``)."""
+"""CUDA MMA op / atom model (CuTe ``MMA_Op`` → ``MMA_Atom``)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,7 +9,7 @@ from tilefoundry.ir.types.shard import Mesh, ShardLayout
 
 @dataclass(frozen=True)
 class MmaOpSpec:
-    """A named, fully-specified MMA instruction (cutlass ``MMA_Op``)."""
+    """A named, fully-specified MMA instruction (CuTe ``MMA_Op``)."""
     name: str
     shape_mnk: tuple[int, int, int]
     dtype_a: DType
@@ -20,7 +20,7 @@ class MmaOpSpec:
 
 @dataclass(frozen=True)
 class MmaAtom:
-    """Realized MMA atom (cutlass ``MMA_Atom``) — op + fragment layouts + required scope."""
+    """Realized MMA atom (CuTe ``MMA_Atom``) — op + fragment layouts + required scope."""
     op: MmaOpSpec
     A: ShardLayout
     B: ShardLayout

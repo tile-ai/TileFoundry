@@ -55,7 +55,7 @@ def test_composed_layout_nests_layouts():
     assert c.outer is outer
 
 
-# --- layout algebra: left/right inverse (ported, ``layout_algebra``) --------
+# --- layout algebra: CuTe left/right inverse (ported, ``layout_algebra``) ----
 
 _INJECTIVE_LAYOUTS = [
     Layout(shape=(4, 32), strides=(32, 1)),
@@ -69,7 +69,7 @@ _INJECTIVE_LAYOUTS = [
 
 @pytest.mark.parametrize("layout", _INJECTIVE_LAYOUTS, ids=lambda l: f"{l.shape}:{l.strides}")
 def test_left_inverse_round_trip(layout):
-    """``left_inverse(L)(L(c)) == c`` for every domain coord (layout-algebra contract)."""
+    """``left_inverse(L)(L(c)) == c`` for every domain coord (CuTe contract)."""
     inv = la.left_inverse(layout)
     for c in range(la.size(layout)):
         assert la.apply(inv, la.apply(layout, c)) == c
@@ -84,7 +84,7 @@ def test_right_inverse_round_trip(layout):
 
 
 def test_left_inverse_explicit_values():
-    # Hand-verified against a pure-Python reference layout-algebra implementation.
+    # Hand-verified against the pure-Python CuTe reference (pycute).
     assert la.left_inverse(Layout(shape=(128,), strides=(2,))) == Layout(
         shape=(2, 128), strides=(128, 1)
     )
@@ -188,7 +188,7 @@ def test_non_injective_outer_rejected(outer):
         Layout(shape=(2, 2), strides=(1, 1)),
         Layout(shape=(4,), strides=(0,)),
         Layout(shape=(2, 2), strides=(2, 2)),
-        Layout(shape=(5, 3), strides=(3, 8)),  # injective but not inverse-projectable
+        Layout(shape=(5, 3), strides=(3, 8)),  # injective but not CuTe-projectable
     ],
     ids=lambda l: f"{l.shape}:{l.strides}",
 )

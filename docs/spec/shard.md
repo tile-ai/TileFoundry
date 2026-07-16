@@ -52,7 +52,7 @@ checks live in [tir §1.3](./tir.md#13-primfunction) (TIR side) and
 
 ## 1. `IntTuple`
 
-The primitive building block, following the standard `shape` / `stride`
+The primitive building block, taken from pycute's `shape` / `stride`
 convention. It is not just a flat tuple — nested tuples are allowed:
 
 ```python
@@ -109,7 +109,7 @@ An object that does not satisfy these conditions cannot enter
 
 ## 3. `Layout` (pure, primitive)
 
-The Layout primitive mirrors pycute/CuTe's shape-stride algebra:
+Mirrors `pycute.layout.Layout`:
 
 ```python
 class Layout(LayoutBase):
@@ -129,8 +129,8 @@ Field meanings:
   dividing. The per-thread local layout shape is derived from
   `layout.shape` ÷ mesh extents per `Split` (see §7).
 - `stride` — the step rule from layout domain to physical index. When
-  not explicitly given, it defaults to `prefix_product(shape)` (a
-  row-major prefix-product convention). When a `Layout` sits inside `ShardLayout.layout`,
+  not explicitly given, it defaults to `prefix_product(shape)` in the
+  pycute style. When a `Layout` sits inside `ShardLayout.layout`,
   `stride[k]` is the **storage-physical** step on the engine attached
   to that `ShardTensor` (see §7).
 
@@ -147,7 +147,7 @@ The primitive `Layout` has **no** `offset` field. `offset` belongs to
 
 ## 4. `ComposedLayout`
 
-The composition `make_composed_layout(inner, offset, outer)`:
+Mirrors CuTeDSL `make_composed_layout(inner, offset, outer)`:
 
 ```python
 class ComposedLayout(LayoutBase):
@@ -422,7 +422,7 @@ canonical global shape — `strides = (1536, 384, 128, 4, 1)` — so the
 8 warps write to disjoint offsets of a single underlying gmem
 buffer.
 
-A reshard whose user-provided layout strides are non-default (e.g. an
+A reshard whose user-provided cute strides are non-default (e.g. an
 SM80 mma fragment) bypasses this materialization step: the layout
 already has a concrete `strides` tuple, so the `Reshard` typeinfer
 rule ([hir.md §1.3](./hir.md#13-op)) preserves

@@ -79,7 +79,7 @@ def parse_func_source(src: str) -> Function:
     """Parse @func-decorated function from Python source string.
 
     Used for round-trip: ``parse_func_source(printer_output)`` reconstructs
-    the HIR Function. Imports are run to build a source-level prelude
+    the HIR Function. Imports are executed to build a source-level prelude
     namespace (legacy compat); the canonical path relies on parser-recognised
     AST constructors (Topology, Layout, etc.) and string-name topology
     resolution rather than arbitrary Python object capture.

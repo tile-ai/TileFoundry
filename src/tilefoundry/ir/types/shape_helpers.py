@@ -7,7 +7,7 @@ Two helper modes:
 - ``upper_bound(dim)`` returns a concrete ``int`` — the maximum runtime
   value of the dim (``hi - 1`` for a ``DimVar``, since ``hi`` is exclusive),
   which is the natural allocation count for static buffer sizing.
-  Used to size **compile-time** layouts and per-thread register
+  Used to size **compile-time** cute layouts and per-thread register
   buffers so a single binary covers every runtime shape that flows
   through the dispatch.
 

@@ -193,5 +193,5 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Reshard)
 def _eval_reshard(ctx):
     # Value-preserving: the logical value is unchanged; only the type's
-    # layout / storage are updated (sharding distribution is not performed).
+    # layout / storage are updated (sharding distribution is not executed).
     return TensorValue(data=ctx.args[0].data, type=ctx.result_type)

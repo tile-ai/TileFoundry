@@ -1,18 +1,18 @@
-"""Flat layout algebra for mesh execution scopes.
+"""Flat CuTe layout algebra for mesh execution scopes.
 
-Ported from a reference pure-Python shape-stride layout algebra
-(``third_party/cutlass``), restricted to the **flat** (non-hierarchical)
-``Layout`` / ``ComposedLayout`` the shard IR uses. The ported pieces are
-exactly what the mesh model needs:
+Ported from the pure-Python CuTe reference
+(``third_party/cutlass/python/pycute/{int_tuple,layout}.py``), restricted to
+the **flat** (non-hierarchical) ``Layout`` / ``ComposedLayout`` the shard IR
+uses. The ported pieces are exactly what the mesh model needs:
 
 - ``apply`` — ``crd2idx`` of a 1-D domain coord (the layout as a function);
-- ``left_inverse`` / ``right_inverse`` — the reference inverses, used to recover a
+- ``left_inverse`` / ``right_inverse`` — the CuTe inverses, used to recover a
   coordinate from a thread index;
 - ``contains`` / ``project`` over a ``ComposedLayout`` execution scope:
   ``project`` is ``left_inverse`` applied to the thread index, ``contains`` adds
   the domain-bounds + round-trip check (see ``docs/plans/mesh-warp-specialization.md``).
 
-``image(c) = inner(offset + outer(c))`` matches the reference ``make_composed_layout``.
+``image(c) = inner(offset + outer(c))`` matches CuTeDSL ``make_composed_layout``.
 Only inverse-projectable (injective, compact-image) layouts are admissible
 execution scopes; a non-injective layout raises ``NotProjectable``.
 """
@@ -70,12 +70,12 @@ def cosize(layout: Layout) -> int:
 
 
 def idx2crd(idx: int, shape: tuple[int, ...], stride: tuple[int, ...]) -> tuple[int, ...]:
-    """Per-mode ``(idx // stride_i) % shape_i`` (the reference ``idx2crd``)."""
+    """Per-mode ``(idx // stride_i) % shape_i`` (CuTe ``idx2crd``)."""
     return tuple((idx // d) % s for s, d in zip(shape, stride))
 
 
 def coalesce(layout: Layout) -> Layout:
-    """Flatten + merge contiguous modes, drop shape-1 modes (the reference ``coalesce``)."""
+    """Flatten + merge contiguous modes, drop shape-1 modes (CuTe ``coalesce``)."""
     result_shape: list[int] = [1]
     result_stride: list[int] = [0]
     for shape, stride in zip(_shape(layout), _stride(layout)):
@@ -93,7 +93,7 @@ def coalesce(layout: Layout) -> Layout:
 
 
 def complement(layout: Layout, max_idx: int = 1) -> Layout:
-    """The reference ``complement``: the modes that fill the gaps below ``max_idx``."""
+    """CuTe ``complement``: the modes that fill the gaps below ``max_idx``."""
     result_shape: list[int] = []
     result_stride: list[int] = []
     current_idx = 1
@@ -111,12 +111,12 @@ def complement(layout: Layout, max_idx: int = 1) -> Layout:
 
 
 def _make_flat(a: Layout, b: Layout) -> Layout:
-    """Concatenate two flat layouts into one (the reference ``make_layout`` after flatten)."""
+    """Concatenate two flat layouts into one (CuTe ``make_layout`` after flatten)."""
     return Layout(shape=_shape(a) + _shape(b), strides=_stride(a) + _stride(b))
 
 
 def is_inverse_projectable(layout: Layout) -> bool:
-    """Can ``layout`` be inverted by the reference ``left_inverse`` algorithm (and so
+    """Can ``layout`` be inverted by the CuTe ``left_inverse`` algorithm (and so
     serve as a mesh execution scope) — i.e. is it injective *and* compact-ordered.
 
     Drop shape-1 modes, sort the rest by stride; each stride must be non-zero
@@ -138,7 +138,7 @@ def is_inverse_projectable(layout: Layout) -> bool:
 
 
 def _right_inverse_layout(layout: Layout) -> Layout:
-    """The reference ``right_inverse``: ``layout(right_inverse(layout)(i)) == i``."""
+    """CuTe ``right_inverse``: ``layout(right_inverse(layout)(i)) == i``."""
     result_shape: list[int] = []
     result_stride: list[int] = []
     current_idx = 1
@@ -157,7 +157,7 @@ def _right_inverse_layout(layout: Layout) -> Layout:
 
 
 def _left_inverse_layout(layout: Layout) -> Layout:
-    """The reference ``left_inverse``: ``left_inverse(layout)(layout(i)) == i`` (injective)."""
+    """CuTe ``left_inverse``: ``left_inverse(layout)(layout(i)) == i`` (injective)."""
     return _right_inverse_layout(_make_flat(layout, complement(layout)))
 
 
@@ -187,7 +187,7 @@ def _check_admissible(scope: ComposedLayout) -> None:
 
 
 def left_inverse(layout: Union[Layout, ComposedLayout]):
-    """The reference ``left_inverse``, dispatched.
+    """CuTe ``left_inverse``, dispatched.
 
     Plain ``Layout`` → the flat algebra. ``ComposedLayout`` → the recursive
     rule ``inverse-of-composed = composition of component inverses``
@@ -206,7 +206,7 @@ def left_inverse(layout: Union[Layout, ComposedLayout]):
 
 
 def right_inverse(layout: Union[Layout, ComposedLayout]):
-    """The reference ``right_inverse``, dispatched (mirror of :func:`left_inverse`)."""
+    """CuTe ``right_inverse``, dispatched (mirror of :func:`left_inverse`)."""
     if isinstance(layout, ComposedLayout):
         _check_admissible(layout)
         return ComposedLayout(
@@ -260,7 +260,7 @@ def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
 
 
 def contains(scope: ComposedLayout, t: int) -> bool:
-    """Does thread ``t`` run this mesh scope's body."""
+    """Does thread ``t`` execute this mesh scope's body."""
     return project(scope, t) is not None
 
 

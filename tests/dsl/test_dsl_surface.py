@@ -76,7 +76,7 @@ def test_dir_lists_registered_dialect_names() -> None:
 # A ``pass``-bodied ``@func`` base declares a dispatch prototype; each
 # ``@base.specialize(DimVarRangePat(...))`` registers a variant in source
 # order on ``base.variants``. This is the public DSL surface contract for
-# dynamic-shape specialization; compile / codegen / run lives in
+# dynamic-shape specialization; compile / codegen / execute lives in
 # ``tests/e2e/``.
 
 _S = DimVar("S", 1, 7)

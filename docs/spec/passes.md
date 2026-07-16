@@ -278,30 +278,30 @@ sequence:
 Outer-level `add(acc, mma(a, b))` accumulation patterns lower to a
 separate `tir.arith.Binary` downstream.
 
-The vendored MMA fragment → `ShardLayout` recipe — the general
+The cute MMA fragment → `ShardLayout` recipe — the general
 arch-specific contract for lowering an MMA SSA Op's A / B / C fragments
-to a row-major `ShardLayout` — is owned here. It depends on the vendored
+to a row-major `ShardLayout` — is owned here. It depends on the cute
 atom traits and on the row-major reinterpretation the CUDA target
 chooses, so it lives in this lowering pass, not in
-[shard](./shard.md). For an arbitrary vendored MMA atom:
+[shard](./shard.md). For an arbitrary cute MMA atom:
 
-1. From the vendored `MMA_Traits<Atom>::ALayout` / `BLayout` / `CLayout`
+1. From the cute `MMA_Traits<Atom>::ALayout` / `BLayout` / `CLayout`
    extract the nested
    `Layout<Shape<Shape<...>, Shape<...>>, Stride<Stride<...>, Stride<...>>>`
    — the outer nested shape is the **thread layout**, the inner is the
    **value layout**.
 2. Re-derive the per-axis stride under TileFoundry's row-major
-   interpretation of the (M, K) / (K, N) / (M, N) tile. The vendored layout is
+   interpretation of the (M, K) / (K, N) / (M, N) tile. Cute is
    column-major by default, so a strict sort by stride is required.
 3. Sort all axes (thread + value) by ascending stride to flatten the
-   vendored nested layout into a TileFoundry flat `Layout(shape, strides)`.
+   cute nested layout into a TileFoundry flat `Layout(shape, strides)`.
 4. For each thread-mesh axis, attach a `Split(tensor_axis)` attr
    pointing at the corresponding axis position in the flattened layout.
    The remaining axes are per-thread *value* axes (no `ShardAttr`);
    their product equals the PTX register count per lane.
 
 Worked example: `SM80_16x8x16_F32BF16BF16F32_TN` with
-`Layout(shape=(4, 8), strides=(1, 4))` aligning with the vendored
+`Layout(shape=(4, 8), strides=(1, 4))` aligning with cute's
 `Shape<_4, _8>` ThrID decomposition.
 
 #### Dispatch lowering

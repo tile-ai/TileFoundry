@@ -30,7 +30,7 @@ flowchart LR
 - Codegen does not run passes, does not load or launch device code, and does
   not own the user-facing entry points (`compile` / `build` / `jit`).
 - **Host / device boundary.** A host `LinkableModule` MUST NOT reference CUDA or
-  device-side tensor/layout-library symbols or types. A CUDA `LinkableModule` owns the kernels and their
+  CuTe symbols or types. A CUDA `LinkableModule` owns the kernels and their
   C-ABI launch shims. The host module invokes device code only through that
   C-ABI shim.
 
