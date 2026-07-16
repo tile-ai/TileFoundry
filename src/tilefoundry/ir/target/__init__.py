@@ -23,6 +23,7 @@ class CudaTarget(Target):
 
     name: str = "cuda"
     arch: str = "sm_90"
+    device: str | None = None
 
     # Program topology levels this target supports (single-card). A kernel's
     # declared topology levels must be a subset; finer levels such as ``warp``
