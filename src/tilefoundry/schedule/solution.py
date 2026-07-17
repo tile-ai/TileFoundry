@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .candidate import Submesh
+from .candidate import DistributionState, Submesh
+from .graph import GraphValueRef
 from .space import EdgeKind
 
 
@@ -67,12 +68,30 @@ class EdgeAssignment:
 
 
 @dataclass(frozen=True, slots=True)
+class ValueAssignment:
+    value: GraphValueRef
+    state: DistributionState
+    placement: Submesh
+
+
+@dataclass(frozen=True, slots=True)
+class UseAssignment:
+    edge_id: int
+    kind: EdgeKind
+    source_state: DistributionState
+    destination_state: DistributionState
+    moved_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class ScheduleSolution:
     node_assignments: tuple[NodeAssignment, ...]
     edge_assignments: tuple[EdgeAssignment, ...]
     makespan_ns: int
     problem_fingerprint: str
     status: str = "OPTIMAL"
+    value_assignments: tuple[ValueAssignment, ...] = ()
+    use_assignments: tuple[UseAssignment, ...] = ()
 
     @property
     def makespan(self) -> int:
@@ -98,5 +117,24 @@ class ScheduleSolution:
                 return assignment
         raise KeyError(use_id)
 
+    def value_for(self, value: GraphValueRef) -> ValueAssignment:
+        for assignment in self.value_assignments:
+            if assignment.value == value:
+                return assignment
+        raise KeyError(value)
 
-__all__ = ["EdgeAssignment", "NodeAssignment", "OpPlacement", "ScheduleSolution"]
+    def use_for(self, edge_id: int) -> UseAssignment:
+        for assignment in self.use_assignments:
+            if assignment.edge_id == edge_id:
+                return assignment
+        raise KeyError(edge_id)
+
+
+__all__ = [
+    "EdgeAssignment",
+    "NodeAssignment",
+    "OpPlacement",
+    "ScheduleSolution",
+    "UseAssignment",
+    "ValueAssignment",
+]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Iterable
 
 from tilefoundry.ir.core import Tuple
 from tilefoundry.ir.hir.function import Function
@@ -147,6 +148,31 @@ def _dtype_name(ty: object) -> str:
     return getattr(getattr(ty, "dtype", None), "value", "f32")
 
 
+_DTYPE_BITS = {
+    "f4e2m1": 4,
+    "fp8e4m3": 8,
+    "f8e8m0": 8,
+    "bf16": 16,
+    "f16": 16,
+    "f32": 32,
+    "i32": 32,
+    "i64": 64,
+    "bool": 1,
+}
+
+
+def dtype_bits(dtype: str) -> int:
+    return _DTYPE_BITS.get(dtype, 32)
+
+
+def tensor_bytes(ty: object) -> int:
+    if isinstance(ty, TensorType):
+        return max(1, math.ceil(_numel(ty) * dtype_bits(_dtype_name(ty)) / 8))
+    if isinstance(ty, TupleType):
+        return sum(tensor_bytes(field) for field in ty.fields)
+    return 0
+
+
 def _static_dim(ty: object, axis: int) -> int | None:
     if not isinstance(ty, TensorType) or axis < 0 or axis >= len(ty.shape):
         return None
@@ -203,6 +229,12 @@ def _work(op: GraphOp) -> WorkEstimate:
     output_elements = _numel(output_type)
     dtype = _dtype_name(output_type)
     target_name = type(op.target).__name__
+    traffic_bytes = sum(tensor_bytes(arg.type) for arg in op.ir_expr.args)
+    traffic_bytes += tensor_bytes(output_type)
+    if isinstance(op.target, Function):
+        return WorkEstimate(0.0, 0.0, dtype)
+    if target_name in {"Reshape", "TupleGetItem"}:
+        return WorkEstimate(0.0, 0.0, dtype)
     if target_name == "MatMul" and len(op.ir_expr.args) >= 2:
         lhs = getattr(op.ir_expr.args[0], "type", None)
         rhs = getattr(op.ir_expr.args[1], "type", None)
@@ -210,10 +242,10 @@ def _work(op: GraphOp) -> WorkEstimate:
             m, k, n = lhs.shape[-2], lhs.shape[-1], rhs.shape[-1]
             if all(isinstance(dim, int) for dim in (m, k, n)):
                 batch = math.prod(lhs.shape[:-2]) if all(isinstance(dim, int) for dim in lhs.shape[:-2]) else 1
-                return WorkEstimate(2.0 * batch * m * k * n, sum(_numel(arg.type) for arg in op.ir_expr.args) * 2.0, dtype)
+                return WorkEstimate(2.0 * batch * m * k * n, traffic_bytes, dtype)
     if target_name == "Reduce":
-        return WorkEstimate(2.0 * output_elements, output_elements * 4.0, dtype)
-    return WorkEstimate(float(output_elements), float(output_elements * 2), dtype)
+        return WorkEstimate(float(_numel(op.ir_expr.args[0].type)), traffic_bytes, dtype)
+    return WorkEstimate(float(output_elements), traffic_bytes, dtype)
 
 
 def _state_for_output(op: GraphOp, state: DistributionState) -> DistributionState:
@@ -331,6 +363,34 @@ def _candidate_states(op: GraphOp, max_ctas: int) -> tuple[DistributionState, ..
     return tuple(_state_for_output(op, state) for state in _split_states(source, max_ctas))
 
 
+def state_satisfies_constraints(
+    state: DistributionState, constraints: Iterable[object]
+) -> bool:
+    for constraint in constraints:
+        if isinstance(constraint, LayoutConstraint):
+            for dim in constraint.dims:
+                if dim.kind is LayoutDimKind.BROADCAST and state.layout.split_axis == dim.index:
+                    return False
+                if dim.kind is LayoutDimKind.SPLIT and state.layout.split_axis != dim.index:
+                    return False
+        elif isinstance(constraint, PartialConstraint):
+            if state.partial is None or state.partial.reduction != constraint.reduction:
+                return False
+    return True
+
+
+def candidate_states_for_value(
+    expr: object,
+    max_ctas: int,
+    constraints: Iterable[object] = (),
+) -> tuple[DistributionState, ...]:
+    return tuple(
+        state
+        for state in _split_states(expr, max_ctas)
+        if state_satisfies_constraints(state, constraints)
+    )
+
+
 def generate_distribution_candidates(
     graph: ProgramScheduleGraph, *, max_ctas: int = 132
 ) -> CandidateTable:
@@ -341,25 +401,12 @@ def generate_distribution_candidates(
         if producer is not None:
             constraints_by_op.setdefault(producer, []).append(graph_constraint.constraint)
 
-    def allowed(state: DistributionState, constraints: Iterable[object]) -> bool:
-        for constraint in constraints:
-            if isinstance(constraint, LayoutConstraint):
-                for dim in constraint.dims:
-                    if dim.kind is LayoutDimKind.BROADCAST and state.layout.split_axis == dim.index:
-                        return False
-                    if dim.kind is LayoutDimKind.SPLIT and state.layout.split_axis != dim.index:
-                        return False
-            elif isinstance(constraint, PartialConstraint):
-                if state.partial is None or state.partial.reduction != constraint.reduction:
-                    return False
-        return True
-
     options: list[tuple[int, tuple[OpCandidate, ...]]] = []
     next_id = 0
     for op in graph.ops:
         states = tuple(
             state for state in _candidate_states(op, max_ctas)
-            if allowed(state, constraints_by_op.get(op.id, ()))
+            if state_satisfies_constraints(state, constraints_by_op.get(op.id, ()))
         )
         if not states:
             raise DistributionError(f"no legal distribution candidates for op {op.id}")
@@ -385,12 +432,16 @@ def generate_distribution_candidates(
 
 __all__ = [
     "CandidateTable",
+    "candidate_states_for_value",
+    "dtype_bits",
     "DistributionError",
     "DistributionState",
     "LayoutState",
     "OpCandidate",
     "PartialState",
     "Submesh",
+    "state_satisfies_constraints",
+    "tensor_bytes",
     "UnsupportedDistributionError",
     "WorkEstimate",
     "generate_distribution_candidates",

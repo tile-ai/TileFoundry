@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .candidate import state_satisfies_constraints
 from .solution import ScheduleSolution
 from .solver import SolveProblem
 
@@ -138,7 +139,15 @@ def build_schedule_report(problem: SolveProblem, solution: ScheduleSolution, con
         for region in sorted(graph.regions, key=lambda item: (item.call_path, item.function_id))
     )
     constraints = tuple(
-        ConstraintReport(item.id, type(item.constraint).__name__, item.target, True)
+        ConstraintReport(
+            item.id,
+            type(item.constraint).__name__,
+            item.target,
+            state_satisfies_constraints(
+                solution.value_for(item.target).state,
+                (item.constraint,),
+            ),
+        )
         for item in graph.constraints
     )
     operations = []
@@ -176,14 +185,53 @@ def build_schedule_report(problem: SolveProblem, solution: ScheduleSolution, con
     )
     fusion = []
     for edge in graph.edges:
-        assignment = next((item for item in solution.edge_assignments if item.use == edge.id), None)
-        if assignment is None or assignment.kind.value != "direct":
+        try:
+            use = solution.use_for(edge.id)
+            source = solution.value_for(edge.source)
+            destination = solution.value_for(edge.destination)
+        except KeyError:
+            continue
+        if (
+            use.kind.value != "direct"
+            or use.source_state != use.destination_state
+            or source.placement != destination.placement
+        ):
             continue
         source_op = graph.value(edge.source).producer
         destination_op = edge.op_id
         if source_op is not None and destination_op is not None:
             fusion.append(FusionOpportunity(edge.id, source_op, destination_op, "identical selected representation and zero reshard"))
-    critical_path = tuple(item.op_id for item in sorted(operations, key=lambda item: (item.end_ns, item.op_id)))
+    operation_by_id = {item.op_id: item for item in operations}
+    predecessor: dict[int, int] = {}
+    predecessor_ready: dict[int, int] = {}
+    for edge in graph.edges:
+        source_op = graph.value(edge.source).producer
+        if source_op is None or source_op not in operation_by_id:
+            continue
+        edge_assignment = solution.edge_for(edge.id)
+        edge_duration = edge_assignment.end_ns - edge_assignment.start_ns
+        if edge.kind == "call_arg":
+            consumers = graph.value(edge.destination).consumers
+        else:
+            consumers = () if edge.op_id is None else (edge.op_id,)
+        for consumer in consumers:
+            ready = operation_by_id[source_op].end_ns + edge_duration
+            if ready >= predecessor_ready.get(consumer, -1):
+                predecessor_ready[consumer] = ready
+                predecessor[consumer] = source_op
+    if operation_by_id:
+        current = max(operation_by_id.values(), key=lambda item: (item.end_ns, item.op_id)).op_id
+        path = []
+        seen = set()
+        while current not in seen:
+            seen.add(current)
+            path.append(current)
+            if current not in predecessor:
+                break
+            current = predecessor[current]
+        critical_path = tuple(reversed(path))
+    else:
+        critical_path = ()
     target = repr(context.target)
     return ScheduleReport(
         status=solution.status,

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from enum import Enum
 
-from .candidate import CandidateTable, OpCandidate, Submesh
-from .graph import ProgramScheduleGraph
+from .candidate import (
+    CandidateTable,
+    DistributionState,
+    OpCandidate,
+    Submesh,
+    candidate_states_for_value,
+    tensor_bytes,
+)
+from .graph import GraphValueRef, ProgramScheduleGraph
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,12 @@ class NodeOption:
         return self.placements[0]
 
 
+@dataclass(frozen=True, slots=True)
+class ValueOption:
+    value: GraphValueRef
+    states: tuple[DistributionState, ...]
+
+
 class EdgeKind(str, Enum):
     DIRECT = "direct"
     RESHARD = "reshard"
@@ -82,6 +94,7 @@ class ScheduleSpace:
     resources: tuple[Resource, ...]
     representations: tuple[PhysicalRepresentation, ...] = ()
     candidates: CandidateTable | None = None
+    value_options: tuple[ValueOption, ...] = ()
 
     def __post_init__(self) -> None:
         for values, label in (
@@ -106,6 +119,12 @@ class ScheduleSpace:
                 return representation
         raise KeyError(representation_id)
 
+    def options_for_value(self, value: GraphValueRef) -> ValueOption:
+        for option in self.value_options:
+            if option.value == value:
+                return option
+        raise KeyError(value)
+
 
 def _parent_extent(mesh: object) -> int:
     shape = tuple(getattr(mesh, "shape", ()))
@@ -124,22 +143,7 @@ def _placement_starts(parent_extent: int, extent: int) -> tuple[int, ...]:
 
 
 def _value_bytes(value: object) -> int:
-    ty = getattr(value, "type", None)
-    shape = getattr(ty, "shape", ())
-    if not shape or not all(isinstance(dim, int) for dim in shape):
-        return 4
-    itemsize = {
-        "f32": 4,
-        "f16": 2,
-        "bf16": 2,
-        "fp8e4m3": 1,
-        "f8e8m0": 1,
-        "f4e2m1": 1,
-        "i32": 4,
-        "i64": 8,
-        "bool": 1,
-    }.get(getattr(getattr(ty, "dtype", None), "value", "f32"), 4)
-    return max(1, math.prod(shape) * itemsize)
+    return tensor_bytes(getattr(value, "type", None)) or 4
 
 
 def build_schedule_space(
@@ -215,12 +219,34 @@ def build_schedule_space(
         )
         edge_id += 1
 
+    constraints_by_value: dict[GraphValueRef, list[object]] = {}
+    for graph_constraint in graph.constraints:
+        constraints_by_value.setdefault(graph_constraint.target, []).append(
+            graph_constraint.constraint
+        )
+    value_options = []
+    for value in graph.values:
+        if value.producer is not None:
+            continue
+        states = candidate_states_for_value(
+            value.ir_value,
+            parent_extent,
+            constraints_by_value.get(value.ref, ()),
+        )
+        if not states:
+            raise ValueError(
+                f"no legal distribution state for graph value {value.ref}; "
+                f"constraint target {value.ir_value!r} is unsatisfiable"
+            )
+        value_options.append(ValueOption(value.ref, states))
+
     return ScheduleSpace(
         node_options=tuple(node_options),
         edge_options=tuple(edge_options),
         resources=(Resource(0, "cta", parent_extent),),
         representations=representations,
         candidates=candidates,
+        value_options=tuple(value_options),
     )
 
 
@@ -232,5 +258,6 @@ __all__ = [
     "PlacementOption",
     "Resource",
     "ScheduleSpace",
+    "ValueOption",
     "build_schedule_space",
 ]

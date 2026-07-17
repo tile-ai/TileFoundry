@@ -303,6 +303,7 @@ class ProgramScheduleGraphBuilder:
             self._calls.append(call)
             state.calls.append(call_instance_id)
             for index, (source, destination) in enumerate(zip(inputs, child.inputs)):
+                state.consumers.setdefault(source, []).append(op_id)
                 self._edges.append(
                     GraphEdge(len(self._edges), source, destination, "call_arg", op_id, index)
                 )
@@ -323,11 +324,12 @@ class ProgramScheduleGraphBuilder:
             call_instance=call_instance_id,
         )
         self._ops.append(graph_op)
-        for index, source in enumerate(inputs):
-            state.consumers.setdefault(source, []).append(op_id)
-            self._edges.append(
-                GraphEdge(len(self._edges), source, output, "data", op_id, index)
-            )
+        if not isinstance(expr.target, Function):
+            for index, source in enumerate(inputs):
+                state.consumers.setdefault(source, []).append(op_id)
+                self._edges.append(
+                    GraphEdge(len(self._edges), source, output, "data", op_id, index)
+                )
         return output
 
 

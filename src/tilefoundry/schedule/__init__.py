@@ -8,7 +8,10 @@ from .candidate import (
     Submesh,
     UnsupportedDistributionError,
     WorkEstimate,
+    candidate_states_for_value,
+    dtype_bits,
     generate_distribution_candidates,
+    tensor_bytes,
 )
 from .constraints import (
     AgentConstraint,
@@ -46,7 +49,14 @@ from .report import (
     ScheduleReport,
     build_schedule_report,
 )
-from .solution import EdgeAssignment, NodeAssignment, OpPlacement, ScheduleSolution
+from .solution import (
+    EdgeAssignment,
+    NodeAssignment,
+    OpPlacement,
+    ScheduleSolution,
+    UseAssignment,
+    ValueAssignment,
+)
 from .solver import (
     CpSatScheduleSolver,
     ScheduleInfeasibleError,
@@ -62,6 +72,7 @@ from .space import (
     PlacementOption,
     Resource,
     ScheduleSpace,
+    ValueOption,
     build_schedule_space,
 )
 
@@ -76,8 +87,10 @@ __all__ = [
     "SourceLocation",
     "logical_fingerprint",
     "CandidateTable",
+    "candidate_states_for_value",
     "DistributionError",
     "DistributionState",
+    "dtype_bits",
     "LayoutState",
     "OpCandidate",
     "PartialState",
@@ -85,6 +98,7 @@ __all__ = [
     "UnsupportedDistributionError",
     "WorkEstimate",
     "generate_distribution_candidates",
+    "tensor_bytes",
     "ScheduleContext",
     "CostEstimate",
     "CostModel",
@@ -97,11 +111,14 @@ __all__ = [
     "PlacementOption",
     "Resource",
     "ScheduleSpace",
+    "ValueOption",
     "build_schedule_space",
     "EdgeAssignment",
     "NodeAssignment",
     "OpPlacement",
     "ScheduleSolution",
+    "UseAssignment",
+    "ValueAssignment",
     "CpSatScheduleSolver",
     "ScheduleInfeasibleError",
     "SolveOptions",

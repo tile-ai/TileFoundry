@@ -178,7 +178,25 @@ class CallBoundary:
             forced_options.append(replace(option, placements=(placement,)))
         else:
             forced_options.append(option)
-    space = replace(initial_space, node_options=tuple(forced_options))
+    callee_param = next(
+        value.ref
+        for value in graph.values
+        if value.ref.call_path == (0,) and value.producer is None
+    )
+    value_options = tuple(
+        replace(
+            option,
+            states=tuple(state for state in option.states if state.cta_count == 4),
+        )
+        if option.value == callee_param
+        else option
+        for option in initial_space.value_options
+    )
+    space = replace(
+        initial_space,
+        node_options=tuple(forced_options),
+        value_options=value_options,
+    )
     costs = build_cost_table(space, services.get(CudaFormulaCostModel), context)
     fingerprint = problem_fingerprint(graph, space, costs, graph.constraints)
     solution = CpSatScheduleSolver().solve(
