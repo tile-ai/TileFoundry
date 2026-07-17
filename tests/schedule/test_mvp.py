@@ -102,11 +102,12 @@ def test_real_dsv4_moe_passes_whole_graph_autodist_mvp() -> None:
         for function in result.solution.functions
         for call in _walk(function.body)
     )
-    actual_reshards = sum(
-        type(call.target).__name__ == "Reshard"
+    actual_reshards = len({
+        id(call)
         for function in result.solution.functions
         for call in _walk(function.body)
-    )
+        if type(call.target).__name__ == "Reshard"
+    })
     assert actual_reshards == len(result.report.reshards)
 
     printed = as_script(result.solution)

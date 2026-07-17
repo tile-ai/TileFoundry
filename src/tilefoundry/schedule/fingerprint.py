@@ -82,6 +82,88 @@ def _is_reshard(expr: Expr) -> bool:
     return isinstance(expr, Call) and type(expr.target).__name__ == "Reshard"
 
 
+def _logical_type(value: Any) -> Any:
+    if type(value).__name__ == "TensorType":
+        return {
+            "shape": tuple(value.shape),
+            "dtype": getattr(getattr(value, "dtype", None), "value", value.dtype),
+        }
+    if type(value).__name__ == "TupleType":
+        return {"tuple": tuple(_logical_type(field) for field in value.fields)}
+    if isinstance(value, tuple):
+        return tuple(_logical_type(item) for item in value)
+    if isinstance(value, enum.Enum):
+        return (type(value).__name__, value.value)
+    if isinstance(value, (bool, int, float, str)) or value is None:
+        return value
+    return repr(value)
+
+
+def _logical_function_signature(
+    function: Function,
+    memo: dict[int, Any],
+    active: set[int],
+) -> Any:
+    cached = memo.get(id(function))
+    if cached is not None:
+        return cached
+    if id(function) in active:
+        return ("recursive", function.name)
+    active.add(id(function))
+    expr_ids: dict[int, int] = {}
+    nodes: list[Any] = []
+
+    def visit(expr: Expr) -> int:
+        if _is_reshard(expr):
+            return visit(expr.args[0])
+        existing = expr_ids.get(id(expr))
+        if existing is not None:
+            return existing
+        ref = len(expr_ids)
+        expr_ids[id(expr)] = ref
+        if isinstance(expr, Var):
+            node = ("Var", _logical_type(expr.type))
+        elif isinstance(expr, Constant):
+            node = ("Constant", _logical_type(expr.type), expr.value)
+        elif isinstance(expr, Tuple):
+            node = ("Tuple", _logical_type(expr.type), tuple(visit(item) for item in expr.elements))
+        elif isinstance(expr, Call):
+            if isinstance(expr.target, Function):
+                target = (
+                    "Function",
+                    _logical_function_signature(expr.target, memo, active),
+                )
+            else:
+                attrs = tuple(
+                    (info.name, _logical_type(getattr(expr.target, info.name)))
+                    for info in type(expr.target).params()
+                    if info.kind == "attribute"
+                )
+                target = (type(expr.target).__name__, attrs)
+            node = (
+                "Call",
+                _logical_type(expr.type),
+                target,
+                tuple(visit(argument) for argument in expr.args),
+            )
+        else:
+            node = (type(expr).__name__, _logical_type(expr.type))
+        nodes.append((ref, node))
+        return ref
+
+    params = tuple(visit(param) for param in function.params)
+    body = None if function.body is None else visit(function.body)
+    signature = (
+        params,
+        body,
+        _logical_type(function.return_type),
+        tuple(nodes),
+    )
+    active.remove(id(function))
+    memo[id(function)] = signature
+    return signature
+
+
 def _reachable_functions(module: Module) -> tuple[Function, ...]:
     ordered: list[Function] = []
     seen: set[int] = set()
@@ -113,11 +195,23 @@ def _reachable_functions(module: Module) -> tuple[Function, ...]:
 def logical_fingerprint(module: Module) -> str:
     """Hash logical HIR semantics while ignoring names, locations, and metadata."""
     functions = _reachable_functions(module)
-    function_ids = {id(fn): index for index, fn in enumerate(functions)}
+    signature_memo: dict[int, Any] = {}
+    signature_ids: dict[str, int] = {}
+    representatives: list[Function] = []
+    function_ids: dict[int, int] = {}
+    for function in functions:
+        signature = _logical_function_signature(function, signature_memo, set())
+        signature_key = json.dumps(signature, sort_keys=True, default=repr)
+        function_id = signature_ids.get(signature_key)
+        if function_id is None:
+            function_id = len(representatives)
+            signature_ids[signature_key] = function_id
+            representatives.append(function)
+        function_ids[id(function)] = function_id
     expr_ids: dict[int, int] = {}
     function_payload = []
     next_expr_id = 0
-    for fn in functions:
+    for fn in representatives:
         exprs: list[Expr] = []
 
         def visit_expr(expr: Expr) -> int:

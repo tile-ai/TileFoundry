@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Expr, Var
@@ -11,6 +12,7 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.target import CudaTarget, Target
 from tilefoundry.ir.types import CallableType, TensorType, Type, callable_type_for
 from tilefoundry.ir.types.shard.mesh import Topology
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 
@@ -139,13 +141,31 @@ def _bind_param_type(
                 f"{p.shape} {p.dtype}, got {arg_ty.shape} {arg_ty.dtype}",
             )
         return arg_ty
-    if arg_ty != p:
+    if arg_ty != p and not _is_broadcast_refinement(arg_ty, p):
         ctx.error(
             error_node,
             f"hir Function call {callee.name!r}: arg {i} type mismatch — "
             f"callee param {param.name!r} expects {p!r}, got {arg_ty!r}",
         )
     return p
+
+
+def _is_broadcast_refinement(arg_ty: Type, param_ty: Type) -> bool:
+    if not isinstance(arg_ty, TensorType) or not isinstance(param_ty, TensorType):
+        return False
+    if arg_ty.shape != param_ty.shape or arg_ty.dtype != param_ty.dtype:
+        return False
+    source = arg_ty.layout
+    destination = param_ty.layout
+    if not isinstance(source, ShardLayout) or not isinstance(destination, ShardLayout):
+        return False
+    if not source.attrs or not all(isinstance(attr, Broadcast) for attr in source.attrs):
+        return False
+    if any(not isinstance(attr, (Broadcast, Split)) for attr in destination.attrs):
+        return False
+    source_extent = math.prod(source.mesh.shape)
+    destination_extent = math.prod(destination.mesh.shape)
+    return source_extent >= destination_extent
 
 
 def elaborate(

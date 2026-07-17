@@ -1,6 +1,27 @@
 from __future__ import annotations
 
+from .layout import ComposedLayout, Layout
 from .mesh import Mesh, Topology
+
+
+def _as_layout(mesh: Mesh) -> Layout:
+    layout = mesh.layout
+    if isinstance(layout, ComposedLayout):
+        layout = layout.outer
+    return Layout(shape=tuple(layout.shape), strides=tuple(layout.strides))
+
+
+def _topology_domain(mesh: Mesh) -> int | None:
+    """Return the selected mesh domain, or None for a dynamic extent."""
+    extents = mesh.shape if isinstance(mesh.layout, ComposedLayout) else tuple(
+        topology.size for topology in (mesh.topologies or (mesh.topology,))
+    )
+    domain = 1
+    for extent in extents:
+        if not isinstance(extent, int):
+            return None
+        domain *= extent
+    return domain
 
 
 def make_mesh(

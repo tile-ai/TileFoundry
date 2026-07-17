@@ -105,7 +105,7 @@ def _gather_shard_layout(call, ctx, x_ty, axis: int, idx_shape: tuple, out_shape
     # No Split targets the gathered axis: every attr carries through, a Split
     # elsewhere renumbered for the axis removed at `axis` and the `idx_shape`
     # axes inserted in its place.
-    shift = len(idx_shape) - 1
+    shift = len(idx_shape) - call.target.batch_dims - 1
     new_attrs = tuple(
         Split(axis=t + shift if t > axis else t) if isinstance(a, Split) else a
         for a, t in zip(sl.attrs, targets)
@@ -123,15 +123,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     axis = _norm_axis(call.target.axis, len(x_ty.shape))
     b = _check_batch_dims(call.target.batch_dims, axis, tuple(x_ty.shape), tuple(idx_ty.shape))
-    if b > 0 and (
-        isinstance(x_ty.layout, ShardLayout) or isinstance(idx_ty.layout, ShardLayout)
-    ):
-        # batch_dims stays a stable interface for a future sharded/collective
-        # implementation; the batched path over a sharded operand is not landed.
-        raise NotImplementedError(
-            "Gather: batched gather (batch_dims>0) over a sharded operand "
-            "(ShardLayout) is not yet supported"
-        )
     # The gathered axis is replaced by the index's non-batch dims; leading axes
     # and trailing axes of x pass through (batch_dims=0 => full index inserted).
     new_shape = list(x_ty.shape[:axis]) + list(idx_ty.shape[b:]) + list(x_ty.shape[axis + 1:])

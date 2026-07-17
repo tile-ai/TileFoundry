@@ -948,7 +948,21 @@ class _HirBodyVisitor(BaseExprVisitor):
                     "hir tile-for body: assignment target must be Name or Tuple"
                 )
             if isinstance(stmt, ast.AnnAssign):
-                last_expr = self._record_annotated_assignment(stmt)
+                if not isinstance(stmt.target, ast.Name):
+                    raise VerifyError("where assignment target must be a plain Name")
+                if stmt.value is None:
+                    target = self.env.lookup(stmt.target.id)
+                    if not isinstance(target, Expr):
+                        raise VerifyError(
+                            f"where annotation target {stmt.target.id!r} is not an existing Expr"
+                        )
+                else:
+                    target = self._maybe_autofill_loc(
+                        self.expr(stmt.value), stmt.target.id
+                    )
+                    self.env.define(stmt.target.id, target)
+                self._record_annotated_assignment(stmt, target)
+                last_expr = target
                 continue
             raise VerifyError(
                 f"hir tile-for body: unsupported statement {type(stmt).__name__}"
@@ -1274,7 +1288,10 @@ def _parse_module_source_tree(tree: ast.Module) -> Module:
                 )
                 progress = True
             except VerifyError as exc:
-                if "undefined name" not in str(exc):
+                if (
+                    "undefined name" not in str(exc)
+                    and "unknown Op name" not in str(exc)
+                ):
                     raise
                 last_error = exc
                 remaining.append(node)

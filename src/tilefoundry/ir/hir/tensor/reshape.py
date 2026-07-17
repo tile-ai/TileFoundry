@@ -11,6 +11,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard.layout import Layout
+from tilefoundry.ir.types.shard.layout_algebra import prefix_product
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -173,7 +174,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if isinstance(x_ty.layout, ShardLayout):
         genuine = any(not isinstance(a, Broadcast) for a in x_ty.layout.attrs)
         if not genuine:
-            new_layout = None  # replicated input -> unsharded output
+            new_layout = ShardLayout(
+                layout=Layout(shape=new_shape, strides=prefix_product(new_shape)),
+                attrs=x_ty.layout.attrs,
+                mesh=x_ty.layout.mesh,
+            )
         else:
             new_layout = _carry_sharded_reshape(x_ty.layout, new_shape)
             if new_layout is None:

@@ -1,31 +1,9 @@
 """Match an enclosing mesh scope against an op's required thread scope."""
 from __future__ import annotations
 
-from .layout import ComposedLayout, Layout
 from .layout_algebra import is_inverse_projectable, size
 from .mesh import Mesh
-
-
-def _as_layout(mesh: Mesh) -> Layout:
-    layout = mesh.layout
-    if isinstance(layout, ComposedLayout):
-        layout = layout.outer
-    return Layout(shape=tuple(layout.shape), strides=tuple(layout.strides))
-
-
-def _topology_domain(mesh: Mesh) -> "int | None":
-    """Total thread count = product of the mesh's topology extents; ``None`` if
-    any extent is dynamic (launch-provided)."""
-    if isinstance(mesh.layout, ComposedLayout):
-        extents = mesh.shape
-    else:
-        extents = tuple(t.size for t in (mesh.topologies or (mesh.topology,)))
-    domain = 1
-    for extent in extents:
-        if not isinstance(extent, int):
-            return None
-        domain *= extent
-    return domain
+from .utils import _as_layout, _topology_domain
 
 
 def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
