@@ -13,7 +13,6 @@ from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Expr, Tuple
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.target import CudaTarget
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.parser import parse_module_source
 from tilefoundry.schedule import auto_dist, logical_fingerprint
 
@@ -58,11 +57,9 @@ def test_real_dsv4_moe_passes_whole_graph_autodist_mvp() -> None:
     assert N_ACT == 6
     assert MOE_INTER == 2048
 
-    mesh = Mesh(Topology("cta", 8), Layout((8,), (1,)))
     result = auto_dist(
         dsv4_moe_module,
         target=CudaTarget(arch="sm_90", device="h200_sxm"),
-        mesh=mesh,
     )
 
     root_targets = {
@@ -75,6 +72,7 @@ def test_real_dsv4_moe_passes_whole_graph_autodist_mvp() -> None:
     assert len(result.graph.constraints) == 1
     assert len(result.report.constraints) == 1
     assert result.report.constraints[0].satisfied is True
+    assert result.space.resources[0].capacity == 132
 
     assert all(math.isfinite(float(cost.duration_ns)) for cost in result.costs.all())
     assert all(
@@ -104,6 +102,12 @@ def test_real_dsv4_moe_passes_whole_graph_autodist_mvp() -> None:
         for function in result.solution.functions
         for call in _walk(function.body)
     )
+    actual_reshards = sum(
+        type(call.target).__name__ == "Reshard"
+        for function in result.solution.functions
+        for call in _walk(function.body)
+    )
+    assert actual_reshards == len(result.report.reshards)
 
     printed = as_script(result.solution)
     reparsed = parse_module_source(printed)

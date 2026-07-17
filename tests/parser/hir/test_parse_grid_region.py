@@ -18,6 +18,7 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.parser.hir_parser import parse_script
+from tilefoundry.schedule.constraints import AgentConstraintsMetadata
 
 
 def _dedent(src: str) -> str:
@@ -60,6 +61,21 @@ def test_no_carry_keeps_empty_carried_args():
     assert grid.carried_args == ()
     assert grid.init_args == ()
     assert grid.yield_values == ()
+
+
+def test_tile_loop_where_assignment_parses_and_attaches_metadata():
+    src = """
+from tilefoundry import func
+from tilefoundry.dsl import Tensor, tf
+
+@func
+def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+    for i in tile(8):
+        y: where(layout=(H @ cta,)) = tf.add(x, x)
+"""
+    fn = parse_script(_dedent(src))
+    assert isinstance(fn.body, GridRegionExpr)
+    assert isinstance(fn.body.body.metadata[0], AgentConstraintsMetadata)
 
 
 # ── Iteration domain (extent / step) --------------------------------------

@@ -9,7 +9,10 @@ from tilefoundry.compile import lower
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
-from tilefoundry.parser import parse_func_source
+from tilefoundry.ir.target import CudaTarget
+from tilefoundry.ir.types.shard import ShardLayout, Split
+from tilefoundry.parser import parse_func_source, parse_module_source
+from tilefoundry.schedule import auto_dist
 from tilefoundry.schedule.constraints import (
     AgentConstraintsMetadata,
     LayoutConstraint,
@@ -120,3 +123,25 @@ def test_lower_rejects_unresolved_agent_constraints() -> None:
     )
     with pytest.raises(ValueError, match="unresolved Agent Constraints"):
         lower(Module(name="candidate", functions=(fn,), entry="candidate"))
+
+
+def test_parameter_layout_constraint_is_materialized_and_verified() -> None:
+    module = parse_module_source(
+        '''from __future__ import annotations
+from tilefoundry import module, func
+from tilefoundry.dsl import Tensor, tf
+
+@module(entry="main")
+class ParameterConstraint:
+    @func
+    def main(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
+        x: where(layout=(H @ cta,))
+        return tf.add(x, x)
+'''
+    )
+
+    result = auto_dist(module, target=CudaTarget(device="h200_sxm"))
+    layout = result.solution.entry_function().params[0].type.layout
+    assert isinstance(layout, ShardLayout)
+    assert any(isinstance(attr, Split) for attr in layout.attrs)
+    assert result.report.constraints[0].satisfied is True
