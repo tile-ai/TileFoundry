@@ -1,35 +1,24 @@
 """``tir.Launch`` — host-side device-kernel launch effect Op.
 
-The authored-IR launch descriptors (``LaunchAttrs`` / ``LaunchConfig`` /
-``CudaLaunchAttr`` / ``CudaClusterDim``) live beside the Op that consumes
-them. ``LaunchConfig`` describes a launch *as authored in the IR*: ``grid``
-and ``block`` are 3-tuples of scalar expressions (an ``int`` constant or a
-dim-arithmetic ``Expr`` such as ``ceildiv(N, tile)``), so the host can
-compute a runtime grid. This is distinct from
-:class:`tilefoundry.runtime.module.LaunchConfig`, which is the post-codegen,
-fully-resolved ``dim3`` metadata of the generated launcher — alias-import one
-of them when both are used in the same module. ``cluster`` / ``stream`` /
-``attrs`` are representable but a target's lowering rejects any value it
-does not support.
+``LaunchAttrs`` and ``CudaLaunchAttr`` are authored-IR metadata consumed by
+``Launch``. CUDA lowering interprets their selector/value pairs. The runtime
+``tilefoundry.runtime.module.LaunchConfig`` remains separate post-codegen
+launch metadata.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import IntEnum
-from typing import TYPE_CHECKING, Optional, Union
 
 from tilefoundry.ir.core.op import Op
 from tilefoundry.ir.core.param_def import ParamDef
 
-if TYPE_CHECKING:
-    from tilefoundry.ir.types.shape_dim import ShapeDim
-
 
 class CudaLaunchAttr(IntEnum):
-    """CUDA launch attribute selector (subset of ``cudaLaunchAttributeID``).
+    """Authored selector for a CUDA launch attribute.
 
-    CUDA-prefixed because the value space is backend-specific; another
-    backend would define its own attribute enum.
+    The values are a subset of ``cudaLaunchAttributeID`` and are interpreted
+    by CUDA target lowering when carried in ``LaunchAttrs``.
     """
 
     COOPERATIVE = 1
@@ -37,44 +26,15 @@ class CudaLaunchAttr(IntEnum):
     CLUSTER_DIMENSION = 3
 
 
-class CudaClusterDim(IntEnum):
-    """Axis index for a CUDA thread-block-cluster dimension."""
-
-    X = 0
-    Y = 1
-    Z = 2
-
-
 @dataclass(frozen=True)
 class LaunchAttrs:
-    """Neutral container of target-interpreted launch attributes.
+    """Authored launch attribute selector/value pairs.
 
-    ``entries`` pairs an attribute selector with its value; CUDA lowering
-    interprets them. v1 is empty by default.
+    CUDA target lowering interprets ``entries``; unsupported values are
+    rejected there.
     """
 
     entries: tuple[tuple[CudaLaunchAttr, object], ...] = ()
-
-
-@dataclass(frozen=True)
-class LaunchConfig:
-    """Launch configuration authored in the IR (CuTeDSL ``.launch`` shape).
-
-    ``grid`` / ``block`` (and ``cluster`` when present) are 3-tuples of
-    compile-time launch extents — ``ShapeDim`` (an ``int``, a ``DimVar``, or a
-    dim-arithmetic expression such as ``ceildiv(S, tile)``) — so the host can
-    size them from a runtime shape; ``dynamic_smem`` is a ``ShapeDim`` or
-    ``int``. These are launch configuration, not runtime Exprs. ``stream`` /
-    ``attrs`` are representable; unsupported values error in the target's
-    lowering.
-    """
-
-    grid: "tuple[ShapeDim, ShapeDim, ShapeDim]"
-    block: "tuple[ShapeDim, ShapeDim, ShapeDim]"
-    cluster: "Optional[tuple[ShapeDim, ShapeDim, ShapeDim]]" = None
-    dynamic_smem: "Union[ShapeDim, int]" = 0
-    stream: object = None
-    attrs: LaunchAttrs = field(default_factory=LaunchAttrs)
 
 
 class Launch(Op):
@@ -200,8 +160,6 @@ def launch_call(
 __all__ = [
     "Launch",
     "launch_call",
-    "CudaClusterDim",
     "CudaLaunchAttr",
     "LaunchAttrs",
-    "LaunchConfig",
 ]

@@ -699,6 +699,27 @@ Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
 the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
 the non-grid/block launch config through the Op attributes.
 
+The authored launch-attribute descriptors are owned by
+`tilefoundry.ir.tir.launch`:
+
+```python
+class CudaLaunchAttr(IntEnum):
+    """Authored selector for a CUDA launch attribute."""
+    ...
+
+
+class LaunchAttrs:
+    """Authored launch attribute selector/value pairs."""
+
+    entries: tuple[tuple[CudaLaunchAttr, object], ...] = ()
+```
+
+`CudaLaunchAttr` identifies the CUDA launch-attribute values carried by
+`LaunchAttrs.entries`; CUDA target lowering interprets them and rejects
+unsupported values. These are authored-IR selectors, not a target registration
+API. Runtime `tilefoundry.runtime.module.LaunchConfig` is separate metadata
+for post-codegen launch geometry and is not part of the `Launch` schema.
+
 ```python
 class Launch(Op):
     """Effect form; host launch of a device kernel, producing no value.
