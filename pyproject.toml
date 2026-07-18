@@ -66,6 +66,7 @@ ignore = ["E501", "F821", "E741"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "typing.TYPE_CHECKING".msg = "Use quoted forward references; TYPE_CHECKING shims are not used in TileFoundry."
+"typing_extensions.TYPE_CHECKING".msg = "Use quoted forward references; TYPE_CHECKING shims are not used in TileFoundry."
 
 [tool.ruff.lint.per-file-ignores]
 # DSL tests use `from tilefoundry.dsl import *` as part of the
