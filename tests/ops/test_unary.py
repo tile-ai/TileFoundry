@@ -49,7 +49,7 @@ CASES = [
     # Low-precision dtypes are legal typeinfer operands: inference is purely
     # logical, so they pass through like any other element type.
     TypeInferCase(
-        name=f"low_precision_passthrough_{dt.value}",
+        name=f"low_precision_passthrough_{dt.name}",
         op=_NEG,
         inputs=(make_tensor_type((4, 8), dt),),
         expected=make_tensor_type((4, 8), dt),

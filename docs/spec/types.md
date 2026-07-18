@@ -49,13 +49,15 @@ its derivations: `TensorType` / `TupleType` / `UnitType` /
 class TensorType(IRType):
     shape: tuple[ShapeDim, ...]                      # logical shape; invariant under sharding / storage / layout
     dtype: DType                                     # element dtype
-    layout: Layout | ShardLayout | ComposedLayout    # member of the Layout family (see shard)
+    layout: LayoutBase | None                        # member of the Layout family, or no assigned layout (see shard)
     storage: StorageKind | None                      # abstract result residency, or umat / None
 ```
 
 - constraints:
   - A *scalar* is `TensorType(shape=(), ...)` — a rank-0 tensor. There
     is no separate `Scalar` type.
+  - `layout` is either `None` or one member of the `LayoutBase` hierarchy
+    defined by [shard §2](./shard.md#2-layout-hierarchy).
   - `storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` / `tmem` /
     `umat`) or `None`. A concrete level (`gmem` / `smem` / `rmem` / `host` /
     `tmem`) is the value's **abstract result residency** — where the result tensor
@@ -66,9 +68,9 @@ class TensorType(IRType):
     unmaterialized value MUST be resolved to a concrete residency (or otherwise
     materialized) before codegen consumes it. `None` is unchanged — a tensor with
     no memory space (a shape-element scalar), distinct from `umat`.
-  - For plain `Layout` / `ComposedLayout`, `len(shape)` MUST equal the
-    layout's logical axis count; for `ComposedLayout` this is the
-    outer-layout's axis count after expansion.
+  - For plain `Layout` / `ComposedLayout`, `len(shape)` MUST equal
+    `layout.domain_rank`; consumers use this common contract rather than
+    inspecting a `ComposedLayout` component.
   - For `ShardLayout`, `TensorType.shape` remains the logical shape;
     `ShardLayout.layout.shape` is the sharding-internal / per-shard
     layout shape and need not match `shape` axis-by-axis. `Reshard`
@@ -90,22 +92,67 @@ dispatch is described in
 ## 3. `DType`
 
 ```python
-class DType(enum.Enum):    # enumerated dtype values, extended on demand
-    f32 = "f32"
-    f16 = "f16"
-    bf16 = "bf16"
-    fp8e4m3 = "fp8e4m3"
-    f8e8m0 = "f8e8m0"
-    f4e2m1 = "f4e2m1"
-    i32 = "i32"
-    i64 = "i64"
-    bool = "bool"
+class DType:
+    """Describe an element type.
+
+    Attributes:
+        name: Canonical DSL spelling.
+        bit_width: Logical number of bits per element.
+    """
+
+    name: str
+    bit_width: int
+
+
+class FloatDType(DType):
+    """Describe a floating-point element type.
+
+    Attributes:
+        exponent_bits: Number of exponent bits.
+        mantissa_bits: Number of explicit mantissa bits.
+    """
+
+    exponent_bits: int
+    mantissa_bits: int
+
+
+class IntegerDType(DType):
+    """Describe an integer element type.
+
+    Attributes:
+        signed: Whether the integer representation is signed.
+    """
+
+    signed: bool
+
+
+class BoolDType(DType):
+    """Describe the boolean element type."""
 ```
 
-`DType` is a value enumeration, independent of `layout` / `storage`.
+The canonical descriptors are:
+
+| Surface | Descriptor class | `bit_width` | Family-specific facts |
+| --- | --- | ---: | --- |
+| `DType.f32` | `FloatDType` | 32 | `exponent_bits=8`, `mantissa_bits=23` |
+| `DType.f16` | `FloatDType` | 16 | `exponent_bits=5`, `mantissa_bits=10` |
+| `DType.bf16` | `FloatDType` | 16 | `exponent_bits=8`, `mantissa_bits=7` |
+| `DType.fp8e4m3` | `FloatDType` | 8 | `exponent_bits=4`, `mantissa_bits=3` |
+| `DType.f8e8m0` | `FloatDType` | 8 | `exponent_bits=8`, `mantissa_bits=0` |
+| `DType.f4e2m1` | `FloatDType` | 4 | `exponent_bits=2`, `mantissa_bits=1` |
+| `DType.i32` | `IntegerDType` | 32 | `signed=True` |
+| `DType.i64` | `IntegerDType` | 64 | `signed=True` |
+| `DType.bool` | `BoolDType` | 1 | none |
 
 - constraints:
-  - Each member's value equals its name.
+  - `DType` MUST be an immutable descriptor hierarchy, not an `enum.Enum`.
+  - Each surface value MUST be a process-lifetime singleton whose `name` equals
+    the attribute spelling after `DType.`.
+  - The table above is the complete built-in set. The type system MUST NOT
+    expose custom registration or Enum-style `.value`, `__members__`, indexing,
+    or iteration surfaces.
+  - Descriptor equality and hashing MUST use the complete descriptor fields.
+  - `DType` is independent of `layout` and `storage`.
   - `fp8e4m3` is the canonical fp8 spelling; no alternate fp8 spelling (e.g.
     `f8e4m3`) exists.
   - `fp8e4m3`, `f8e8m0`, and `f4e2m1` are low-precision dtypes: logical element

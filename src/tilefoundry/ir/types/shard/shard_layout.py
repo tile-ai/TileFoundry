@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .layout import ComposedLayout, Layout
+from .layout import LayoutBase
 from .mesh import Mesh
 
 
@@ -43,10 +43,16 @@ def B() -> Broadcast:
 
 
 @dataclass(frozen=True)
-class ShardLayout:
-    layout: "Layout | ComposedLayout"
+class ShardLayout(LayoutBase):
+    """Bind an underlying layout's domain axes to a mesh."""
+
+    layout: LayoutBase
     attrs: tuple[ShardAttr, ...]
     mesh: Mesh
+
+    @property
+    def shape(self) -> tuple:
+        return self.layout.shape
 
 
 def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
