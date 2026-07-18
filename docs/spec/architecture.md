@@ -18,6 +18,7 @@ graph TD
         coreir["<b>core-ir</b>"]
         hir["<b>hir</b>"]
         tir["<b>tir</b>"]
+        schedule["<b>schedule</b>"]
         passes["<b>passes</b>"]
         target["<b>target</b>"]
         runtime["<b>runtime</b>"]
@@ -43,10 +44,13 @@ graph TD
     parser --> coreir
     coreir --> hir
     coreir --> tir
+    hir --> schedule
+    schedule --> passes
     hir --> passes
     tir --> passes
     passes --> target
     target --> runtime
+    target -. provides named service .-> schedule
 
     types -. carried by Expr type .-> coreir
     shard -. layout sublayer .-> types
@@ -63,7 +67,9 @@ graph TD
 ```
 
 A TileFoundry compilation flows left to right along the **pipeline**:
-`parser → core-ir → {hir, tir} → passes → target → runtime`. The
+`parser → core-ir → {hir, tir} → passes → target → runtime`. Typed HIR MAY
+first pass through an explicitly selected `schedule` service that returns
+materialized HIR before pass sequencing. The
 **type system** (types + shard) and the **IR framework**
 (visitor-mutator + visitor-registry) cut across every pipeline stage:
 they are co-designed with the IR, not standalone modules. Auxiliary
@@ -140,6 +146,12 @@ IR traversal / rewrite utilities (`ExprVisitor` / `ExprMutator` /
 infrastructure used by both passes and codegen walkers; the framework
 contract lives in [visitor-mutator](./visitor-mutator.md).
 
+Scheduling is an explicit HIR materialization service, not a pass-manager
+stage. A caller selects a named service from the root Function's Target and
+invokes it directly; the service returns HIR to the ordinary pass pipeline.
+The direct invocation contract and public result structures are owned by
+[schedule](./schedule.md).
+
 ## 6. Target / codegen
 
 Codegen is the back end. **TIR is the lowest IR**, and each target
@@ -198,6 +210,7 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[analysis](./analysis.md)** | Static analysis service semantics: type propagation (relation-derived type behavior), access relation analysis, shard propagation (logical shape → layout domain, relation-driven propagation, output storage + mesh/layout compatibility). The registration mechanism itself is owned by visitor-registry |
 | **[visitor-mutator](./visitor-mutator.md)** | IR traversal / rewrite infrastructure: expr / stmt visitors, mutators, identity-preserving rewrite invariants, mixed stmt-expr traversal |
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
+| **[schedule](./schedule.md)** | Explicit Target-owned HIR scheduling service: direct invocation protocol, shared options, materialized result, and stable objective report |
 | **[tilegraph](./tilegraph.md)** | TileGraph — pass-internal IR for polyhedral / tile-search passes |
 | **[target](./target.md)** | Target capability descriptors (`Target` / `CudaTarget` / `CpuTarget`) and the admitted program topology levels |
 | **[codegen](./codegen.md)** | Emit / link pipeline and products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), emitter registry, dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |

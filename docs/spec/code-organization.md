@@ -24,6 +24,7 @@ truth for the directory's structure and invariants.
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` (§2 rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` (§2 rule 5). |
 | `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per §2 Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
+| `schedule/` | [schedule](./schedule.md) | Direct public Schedule service protocol and immutable options, result, and report structures. The compact public surface lives in `schedule/__init__.py`; concrete stage services live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, §2 rule 6). |
 | `ir/target/` | [target](./target.md) | Compilation target capability descriptors: `Target` / `CudaTarget` / `CpuTarget` / `resolve_target`. |
 | `codegen/` | [codegen](./codegen.md) | Code generation: the emitter registry, the linkable / linked products and the linker, and per-target emitters under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, §2 rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only (kernel shells / host stubs). |
@@ -35,9 +36,9 @@ truth for the directory's structure and invariants.
 
 **Stage boundary.** The pipeline picture in
 [architecture §1](./architecture.md#1-spec-relationship-map) places
-`parser/` and `codegen/` outside `ir/` (front-end producer / back-end
-consumer); the physical directory layout reflects that boundary
-directly.
+`parser/`, `schedule/`, and `codegen/` outside `ir/` (front-end producer,
+HIR materialization service, and back-end consumer); the physical directory
+layout reflects that boundary directly.
 
 **Reading notes:**
 
@@ -54,6 +55,10 @@ directly.
   [architecture §1](./architecture.md#1-spec-relationship-map)
   pipeline they are the front-end producer and back-end consumer of
   IR, not IR sublayers.
+- `schedule/` sits outside `ir/` because it defines a service over typed HIR,
+  not a new IR layer. The public package contains only the direct service
+  protocol and its shared value structures; Target-owned implementations
+  remain outside the public package.
 - `codegen/<target>/` consumes only TIR. The subtree mirrors
   `ir/tir/`: `prim_function` lives in `tir/`, Stmt emitters in
   `tir/stmts/`, and `memory/` / `nn/` / `arith/` / `reduce/` /
