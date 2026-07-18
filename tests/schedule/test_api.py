@@ -1,20 +1,19 @@
-"""Tests for the stage-agnostic public scheduling contract."""
+"""Tests for the direct public Schedule service contract."""
 
 from __future__ import annotations
 
-import inspect
 import json
-from dataclasses import dataclass, field
+from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 
+import tilefoundry.schedule as schedule_api
 from tilefoundry.schedule import (
     Schedule,
-    ScheduleError,
     ScheduleOptions,
     ScheduleReport,
     ScheduleResult,
-    solve,
 )
 
 
@@ -35,115 +34,57 @@ def _report() -> ScheduleReport:
     )
 
 
-@dataclass
 class _FakeSchedule:
-    stage: str = "cta"
-    calls: list[tuple[object, object, ScheduleOptions]] = field(default_factory=list)
+    stage = "cta"
 
     def solve(self, module, root, options: ScheduleOptions) -> ScheduleResult:
-        self.calls.append((module, root, options))
         return ScheduleResult(module=module, report=_report())
 
 
-@dataclass
-class _FakeTarget:
-    schedule: _FakeSchedule
-    lookups: list[tuple[type, str]] = field(default_factory=list)
-
-    def service(self, interface: type, stage: str):
-        self.lookups.append((interface, stage))
-        if interface is not Schedule or stage != self.schedule.stage:
-            raise LookupError(f"fake target has no {interface.__name__} service for {stage!r}")
-        return self.schedule
-
-
-@dataclass
-class _Root:
-    name: str
-    target: _FakeTarget
+def test_public_surface_is_the_direct_service_contract() -> None:
+    assert set(schedule_api.__all__) == {
+        "Schedule",
+        "ScheduleOptions",
+        "ScheduleReport",
+        "ScheduleResult",
+    }
+    assert not hasattr(schedule_api, "solve")
+    assert not hasattr(schedule_api, "ScheduleError")
 
 
-@dataclass
-class _Module:
-    functions: tuple[_Root, ...]
+def test_schedule_options_are_immutable_values() -> None:
+    options = ScheduleOptions(
+        timeout_seconds=5.0,
+        workers=1,
+        random_seed=7,
+        debug_dump_dir=Path("debug"),
+    )
+
+    assert options == ScheduleOptions(5.0, 1, 7, Path("debug"))
+    with pytest.raises(FrozenInstanceError):
+        options.workers = 2
 
 
-def _fixture():
-    schedule = _FakeSchedule()
-    target = _FakeTarget(schedule)
-    root = _Root("root", target)
-    module = _Module((root,))
-    return module, root, target, schedule
+def test_schedule_service_is_invoked_directly() -> None:
+    service: Schedule = _FakeSchedule()
+    module = object()
+    root = object()
 
+    result = service.solve(module, root, ScheduleOptions())
 
-def test_solve_dispatches_exact_stage_with_default_options() -> None:
-    module, root, target, schedule = _fixture()
-
-    result = solve(module, root=root, stage="cta")
-
-    assert target.lookups == [(Schedule, "cta")]
-    assert schedule.calls == [(module, root, ScheduleOptions())]
+    assert service.stage == "cta"
     assert result.module is module
-    assert result.report.stage == "cta"
+    assert result.report == _report()
 
 
-def test_solve_forwards_the_exact_options_instance() -> None:
-    module, root, _, schedule = _fixture()
-    options = ScheduleOptions(timeout_seconds=5.0, workers=1, random_seed=7)
+def test_schedule_report_and_result_are_immutable_values() -> None:
+    report = _report()
+    result = ScheduleResult(module=object(), report=report)
 
-    solve(module, root=root, stage="cta", options=options)
-
-    assert schedule.calls[0][2] is options
-
-
-def test_solve_has_no_target_override() -> None:
-    assert "target" not in inspect.signature(solve).parameters
-
-
-def test_solve_requires_root_membership_before_lookup() -> None:
-    module, _, target, _ = _fixture()
-    other = _Root("other", target)
-
-    with pytest.raises(ScheduleError, match="root 'other' is not one of module.functions"):
-        solve(module, root=other, stage="cta")
-
-    assert target.lookups == []
-
-
-@pytest.mark.parametrize("stage", ["", None, 0])
-def test_solve_rejects_invalid_stage_before_lookup(stage) -> None:
-    module, root, target, _ = _fixture()
-
-    with pytest.raises(ScheduleError, match="stage must be a non-empty str"):
-        solve(module, root=root, stage=stage)
-
-    assert target.lookups == []
-
-
-def test_solve_requires_explicit_stage() -> None:
-    module, root, _, _ = _fixture()
-
-    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'stage'"):
-        solve(module, root=root)
-
-
-def test_solve_rejects_invalid_options_before_lookup() -> None:
-    module, root, target, _ = _fixture()
-
-    with pytest.raises(ScheduleError, match="options must be ScheduleOptions or None"):
-        solve(module, root=root, stage="cta", options=False)
-
-    assert target.lookups == []
-
-
-def test_solve_does_not_fall_back_when_stage_lookup_fails() -> None:
-    module, root, target, schedule = _fixture()
-
-    with pytest.raises(LookupError, match="no Schedule service for 'warp'"):
-        solve(module, root=root, stage="warp")
-
-    assert target.lookups == [(Schedule, "warp")]
-    assert schedule.calls == []
+    with pytest.raises(FrozenInstanceError):
+        report.selected = 70
+    with pytest.raises(FrozenInstanceError):
+        result.module = object()
 
 
 def test_report_json_contains_only_the_public_summary_fields() -> None:
