@@ -30,7 +30,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.shard.layout import Layout
+from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
@@ -243,14 +243,31 @@ def _shard_attr_str(attr) -> str:
     return f"/* {type(attr).__name__} */"
 
 
-def _mesh_str(mesh: Mesh) -> str:
+def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
+    """Render a complete layout descriptor without flattening compositions."""
+    if layout is None:
+        return "None"
+    if isinstance(layout, Layout):
+        strides = _shape_tuple(layout.strides) if layout.strides is not None else "None"
+        return f"Layout({_shape_tuple(layout.shape)}, {strides})"
+    if isinstance(layout, ShardLayout):
+        return _shard_layout_str(layout, indent=indent)
+    if isinstance(layout, ComposedLayout):
+        child_indent = indent + "    "
+        return (
+            "ComposedLayout(\n"
+            f"{child_indent}inner={_layout_str(layout.inner, child_indent)},\n"
+            f"{child_indent}offset={layout.offset},\n"
+            f"{child_indent}outer={_layout_str(layout.outer, child_indent)},\n"
+            f"{indent})"
+        )
+    raise TypeError(f"unsupported layout type: {type(layout).__name__}")
+
+
+def _mesh_str(mesh: Mesh, indent: str = "") -> str:
     """Mesh(...) constructor string, includes ``names=`` when non-empty."""
     topo = mesh.topology
-    layout = mesh.layout
-    base = (
-        f'Mesh(Topology("{topo.name}", {topo.size}), '
-        f"Layout({_shape_tuple(layout.shape)}, {_shape_tuple(layout.strides)})"
-    )
+    base = f'Mesh(Topology("{topo.name}", {topo.size}), {_layout_str(mesh.layout, indent)}'
     if mesh.names:
         base += f", names={repr(tuple(mesh.names))}"
     return base + ")"
@@ -258,18 +275,17 @@ def _mesh_str(mesh: Mesh) -> str:
 
 def _shard_layout_str(sl: ShardLayout, indent: str = "") -> str:
     """ShardLayout(...) constructor string, multi-line for readability."""
-    layout = sl.layout
-    mesh = _mesh_str(sl.mesh)
+    child_indent = indent + "    "
+    layout = _layout_str(sl.layout, child_indent)
+    mesh = _mesh_str(sl.mesh, child_indent)
     attrs = ", ".join(_shard_attr_str(a) for a in sl.attrs)
-    shape_tup = _shape_tuple(layout.shape)
-    # ``layout.strides`` may be ``None`` for un-materialized sugar; the
-    # printer surfaces that explicitly rather than crashing.
-    stride_tup = _shape_tuple(layout.strides) if layout.strides is not None else "None"
+    if len(sl.attrs) == 1:
+        attrs += ","
     return (
         f"ShardLayout(\n"
-        f"{indent}    layout=Layout({shape_tup}, {stride_tup}),\n"
-        f"{indent}    attrs=({attrs}),\n"
-        f"{indent}    mesh={mesh},\n"
+        f"{child_indent}layout={layout},\n"
+        f"{child_indent}attrs=({attrs}),\n"
+        f"{child_indent}mesh={mesh},\n"
         f"{indent})"
     )
 
@@ -695,7 +711,7 @@ def hir_function_to_python(fn: HirFunction) -> str:
     lines.append("from tilefoundry.dsl import Tensor")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
     lines.append("from tilefoundry.ir.types.shard import (")
-    lines.append(f"{indent}B, S, P, Layout, Mesh, ShardLayout, Topology,")
+    lines.append(f"{indent}B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,")
     lines.append(")")
     if fn.variants:
         lines.append("from tilefoundry.ir.core.pattern import DimVarRangePat")
@@ -712,7 +728,7 @@ def hir_function_to_python(fn: HirFunction) -> str:
             lines.append(
                 f"{name} = Mesh("
                 f'Topology("{topo.name}", {topo.size}), '
-                f"Layout({_shape_tuple(ml.shape)}, {_shape_tuple(ml.strides)}), "
+                f"{_layout_str(ml)}, "
                 f"names={names_repr}"
                 f")"
             )
@@ -789,7 +805,7 @@ def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:
     lines.append("from tilefoundry.dsl import Tensor")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
     lines.append("from tilefoundry.ir.types.shard import (")
-    lines.append(f"{indent4}B, S, P, Layout, Mesh, ShardLayout, Topology,")
+    lines.append(f"{indent4}B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,")
     lines.append(")")
     lines.append("")
 
@@ -805,7 +821,7 @@ def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:
             lines.append(
                 f"{name} = Mesh("
                 f'Topology("{topo.name}", {topo.size}), '
-                f"Layout({_shape_tuple(ml.shape)}, {_shape_tuple(ml.strides)}), "
+                f"{_layout_str(ml)}, "
                 f"names={names_repr}"
                 f")"
             )

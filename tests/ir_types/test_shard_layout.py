@@ -9,6 +9,7 @@ from tilefoundry.ir.types.shard import (
     Broadcast,
     ComposedLayout,
     Layout,
+    LayoutBase,
     P,
     Partial,
     S,
@@ -51,6 +52,20 @@ def test_composed_layout_nests_layouts():
     c = ComposedLayout(inner=inner, offset=0, outer=outer)
     assert c.inner is inner
     assert c.outer is outer
+
+
+def test_layout_base_contract_preserves_nested_shard_domain():
+    base = Layout(shape=((2, 4), 8), strides=None)
+    mesh = make_mesh((2,), topology=Topology("thread", 2))
+    prior_stage = ShardLayout(layout=base, attrs=(B(),), mesh=mesh)
+    composed = ComposedLayout(inner=None, offset=3, outer=prior_stage)
+
+    assert isinstance(base, LayoutBase)
+    assert isinstance(prior_stage, LayoutBase)
+    assert isinstance(composed, LayoutBase)
+    assert prior_stage.shape == base.shape
+    assert composed.shape == base.shape
+    assert base.domain_rank == prior_stage.domain_rank == composed.domain_rank == 3
 
 
 # --- layout algebra: CuTe left/right inverse (ported, ``layout_algebra``) ----
