@@ -1,17 +1,18 @@
 # TileFoundry Spec — core_ir
 
-Defines the shared node algebra — `Module` / `Expr` / `Op` / `Call` /
-`Var` / `Constant` / `Tuple` — that both HIR and TIR consume. `core_ir` is the
-shared node algebra layer, not a standalone IR: HIR and TIR each extend it with
-their own `Function` container and their own `Op` / `Stmt` subclasses. Types
-carried by `Expr.type` are defined in [types](./types.md); the distributed
-layout layer is [shard](./shard.md); `Stmt` is not here — it lives only in
-[tir §1](./tir.md) as a TIR-only base class.
+Defines the shared node algebra — `Module` / `Expr` / `IRMetadata` / `Op` /
+`Call` / `Var` / `Constant` / `Tuple` — that both HIR and TIR consume.
+`core_ir` is the shared node algebra layer, not a standalone IR: HIR and TIR
+each extend it with their own `Function` container and their own `Op` / `Stmt`
+subclasses. Types carried by `Expr.type` are defined in [types](./types.md);
+the distributed layout layer is [shard](./shard.md); `Stmt` is not here — it
+lives only in [tir §1](./tir.md) as a TIR-only base class.
 
 ```mermaid
 flowchart TB
     Module["<b>Module</b>"]
     Expr["<b>Expr</b>"]
+    IRMetadata["<b>IRMetadata</b>"]
     Op["<b>Op</b>"]
     Call["<b>Call</b>"]
     Var["<b>Var</b>"]
@@ -21,6 +22,7 @@ flowchart TB
     Expr --> Constant
     Expr --> Tuple
     Expr --> Call
+    Expr -. metadata .-> IRMetadata
     Call -. target .-> Op
 ```
 
@@ -93,14 +95,45 @@ entries — so name resolution is always single-valued.
 ## 2. `Expr`
 
 ```python
+class IRMetadata:
+    def format_comment(self) -> str | None: ...
+```
+
+- constraints:
+  - the immutable base of every typed annotation stored on an `Expr`;
+    `format_comment()` returns `None` unless a concrete metadata class provides
+    a printable comment.
+
+```python
 class Expr:
-    type: IRType        # the node's IRType; always present
-    source: str | None  # optional original source slice for debug / error location
+    type: Type
+    loc: str | None = None
+    metadata: tuple[IRMetadata, ...] = ()
 ```
 
 - constraints:
   - base of every expression node; concrete subclasses are dialect-owned, not
     introduced per Op (value-producing Ops appear as `Call` nodes).
+  - `metadata` contains only `IRMetadata` values and contains at most one value
+    of each exact concrete metadata class; invalid entries or duplicate classes
+    raise `VerifyError`, including `loc` when it is available.
+  - `metadata` MUST NOT participate in expression equality, hashing, or repr.
+
+```python
+def get_metadata(expr: "Expr", cls: type[T]) -> T | None: ...
+def replace_metadata(expr: "Expr", value: IRMetadata) -> "Expr": ...
+def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
+```
+
+- constraints:
+  - all three helpers match an exact concrete class, not subclasses, and never
+    mutate the input expression.
+  - `get_metadata` returns the unique matching value or `None`.
+  - `replace_metadata` returns a copy with the matching value replaced in its
+    existing position; every other value keeps its relative order, and a value
+    whose class is absent is appended.
+  - `remove_metadata` returns a copy without the matching value; when the class
+    is absent it returns the input expression unchanged.
 
 `Expr` always carries a `type`. The runtime class of `Expr.type` is
 one of `TensorType` / `TupleType` / `UnitType`

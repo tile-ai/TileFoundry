@@ -173,6 +173,14 @@ Tensor[(4096, 2048), "bf16", (4096 @ gpu.cta, 2048), "smem"]
 Tensor[(), "bf16"]                                    # scalar
 ```
 
+- constraints:
+  - The dtype slot MUST use a canonical quoted `DType.name` from
+    [types §3](./types.md#3-dtype).
+  - The parser MUST normalize that string to the corresponding process-lifetime
+    descriptor before constructing `TensorType`.
+  - An unknown dtype string MUST be rejected; it MUST NOT fall back to another
+    descriptor.
+
 ### 1.5 Layout sugar
 
 ```
@@ -449,17 +457,16 @@ Conventions:
   (`int` / `str` / `ShardLayout` / …). Referenced types
   are auto-imported in the generated header so the `.pyi` is
   self-contained.
-- An attribute whose `annotation` is a string-valued enum (e.g.
-  `DType`, `ReduceKind`) renders as `Literal[<member strings>] |
-  <EnumType>`, with the `Literal` members derived from the enum
-  itself so the candidate set has a single source of truth. The DSL
-  surface accepts the string form (`dtype="f32"`, `kind="sum"`),
-  which the parser normalizes to the enum at the call boundary (§3);
-  the enum remains the IR-canonical attribute type and is kept in
-  the union for back-compatibility. Static enum objects are not
-  exported as a parallel authoring surface — the string form is the
-  authoring path, matching the `Tensor[..., "bf16"]` dtype slot
-  (§1.4).
+- A `DType` attribute renders as `Literal[<canonical names>] | DType`, with the
+  `Literal` members derived from the closed descriptor set in
+  [types §3](./types.md#3-dtype). The string form is the canonical DSL authoring
+  path and the parser normalizes it to the corresponding descriptor at the call
+  boundary. A descriptor value remains accepted as the IR-canonical attribute
+  value in direct Python expressions.
+- Any other string-valued enum attribute, such as `ReduceKind`, renders as
+  `Literal[<member strings>] | <EnumType>`. Its `Literal` members derive from
+  the enum, and the parser normalizes a string to the corresponding enum member
+  at the call boundary.
 
 Stubs are not part of the runtime resolution path; the parser still
 goes through §2.3. They exist solely so editors can show typed
@@ -706,6 +713,13 @@ ParamDef declares a layout annotation. Ops without a registered
 schema fall through to a small legacy heuristic
 (`attr_name == "layout"` ⇒ `ShardLayout` sugar) until they migrate.
 
+Attribute string normalization is also annotation-driven:
+
+- `annotation=DType` resolves a canonical string by descriptor `name` and
+  rejects any other string with a `VerifyError`.
+- A string-valued Enum annotation resolves by Enum value and rejects any other
+  string with a `VerifyError`.
+
 ### 3.5 `Tensor[...]` annotation surface
 
 `Tensor[shape, dtype, layout, storage]` is recognised by
@@ -714,6 +728,9 @@ both `@func` and `@prim_func` parsers when reading parameter and
 return-type annotations. The shape and dtype slots are required;
 the layout and storage slots are optional. The same routine reads
 the layout sugar described in §1.4.
+
+The dtype slot MUST resolve to the canonical descriptor named by its string.
+Unknown names MUST be rejected and MUST NOT silently select `DType.f32`.
 
 ### 3.6 Per-dialect strict resolution
 

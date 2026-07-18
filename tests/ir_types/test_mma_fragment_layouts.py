@@ -121,7 +121,7 @@ def _assert_reshard_typeinfer_ok(
     resulting TensorType pins the requested rank-5 ShardLayout while
     preserving the logical shape."""
 
-    dtype = DType[src_dtype_name]
+    dtype = getattr(DType, src_dtype_name)
     src_ty = TensorType(
         shape=src_shape, dtype=dtype, layout=None, storage=StorageKind.GMEM
     )

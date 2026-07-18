@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .errors import VerifyError
 from .expr import Call, Constant, Expr, Tuple, Var
+from .metadata import IRMetadata, get_metadata, remove_metadata, replace_metadata
 from .op import Op, ParameterInfo
 from .registry import (
     AnalysisRegistry,
@@ -23,6 +24,8 @@ from .context import TypeInferContext
 __all__ = [
     # exprs
     "Expr", "Var", "Constant", "Call", "Tuple",
+    # metadata
+    "IRMetadata", "get_metadata", "replace_metadata", "remove_metadata",
     # op
     "Op", "ParameterInfo",
     # registry

@@ -158,7 +158,8 @@ def _auto_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
 def _resolve_dtype_ast(node: ast.AST, closure: dict[str, Any]) -> DType | None:
     """Resolve a dtype from an AST node (bare name, string, or DType.attr)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return getattr(DType, node.value, DType.f32)
+        member = getattr(DType, node.value, None)
+        return member if isinstance(member, DType) else None
     if isinstance(node, ast.Name):
         val = closure.get(node.id)
         if isinstance(val, DType):

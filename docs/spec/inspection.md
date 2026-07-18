@@ -65,6 +65,10 @@ Both modes MUST agree on semantics; only the level of detail differs.
 The meaning of `Split` / `Partial` / `Broadcast` is owned by
 [shard](./shard.md); these forms define only render syntax.
 
+Canonical DType text is the descriptor's `name`. Tensor annotations and DType
+op attributes MUST emit that name as a quoted DSL string. Compact labels MAY
+omit the quotes, but MUST NOT use the descriptor's raw `repr()`.
+
 ### 2.4 Pretty-print / debug display contract
 
 Pretty print is the core presentation layer.  Sugar, debug dumps, and
@@ -72,7 +76,8 @@ viewer type/value text reuse the same DSL text forms in §2.3.  That keeps
 round-trippable source, labels, and detail panes semantically aligned.
 
 - op attributes that are `DType`, `TensorType`, `Layout`, or `ShardLayout` are
-  rendered through the §2.3 printer, not through raw dataclass / enum `repr()`
+  rendered through the §2.3 printer; `DType` uses its canonical name and these
+  values do not use raw `repr()` output
 
 `repr()` is a debug surface, not the source of truth.  It may delegate to
 the §2.3 implementation for context-free values, but context-dependent
@@ -121,6 +126,8 @@ MUST round-trip: `print → parse → structural_equal` holds over
 
 - Params: shape, dtype, storage, layout.attrs, layout.shape, layout.strides, mesh identity (topology name/size, layout shape, names)
 - Body: op class, args, keyword attrs, types
+- DType annotations and op attributes preserve the selected descriptor singleton
+  through their canonical names
 - Partial layouts preserve mesh names through the canonical
   parser §1.5 value-state form, and preserve `Partial.reduction` plus the
   attrs-position mesh axis in the underlying IR

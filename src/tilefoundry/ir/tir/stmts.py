@@ -13,15 +13,10 @@ positions.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.types.shard.mesh import Mesh
-
-if TYPE_CHECKING:
-    from tilefoundry.ir.core.op import Op
-    from tilefoundry.ir.tir.symbol_ref import SymbolRef
 
 
 @dataclass(frozen=True)
