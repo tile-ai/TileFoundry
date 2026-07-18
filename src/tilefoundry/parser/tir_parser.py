@@ -8,8 +8,7 @@ from typing import Any, Union
 from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.target import CudaTarget
-from tilefoundry.ir.target.launch import LaunchAttrs
-from tilefoundry.ir.tir.launch import launch_call
+from tilefoundry.ir.tir.launch import LaunchAttrs, launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import shape_var_name
 from tilefoundry.ir.tir.stmt import Stmt

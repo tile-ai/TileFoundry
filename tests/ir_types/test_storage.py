@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.target.storage import StorageKind, resolve_storage
+from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
 
 def test_canonical_short_names_resolve() -> None:

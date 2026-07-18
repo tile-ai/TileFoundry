@@ -17,7 +17,6 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -39,6 +38,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
     layout_axis_to_tensor_axis,
 )
+from tilefoundry.ir.types.storage import StorageKind
 
 # ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {

@@ -23,9 +23,9 @@ import tilefoundry
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.ir.types.storage import StorageKind
 
 
 @module(entry="sync_square_host")

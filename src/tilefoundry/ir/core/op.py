@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
 from tilefoundry.ir.core.param_def import MISSING, ParamDef
-from tilefoundry.ir.target.storage import resolve_storage
+from tilefoundry.ir.types.storage import resolve_storage
 
 _ParamKind = Literal["input", "attribute"]
 

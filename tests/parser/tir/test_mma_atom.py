@@ -16,12 +16,12 @@ import pytest
 from tilefoundry import prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.cuda.nn.mma import make_atom
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom, MmaOpSpec
 from tilefoundry.ir.tir.stmts import LetStmt, MeshScope
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.storage import StorageKind
 
 # Module-level pre-instantiated alias (equivalent to building it inline).
 _OP = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN

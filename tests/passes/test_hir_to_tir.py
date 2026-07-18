@@ -21,7 +21,6 @@ from tilefoundry.dsl import (
 )
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -29,6 +28,7 @@ from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, MeshScope, Return, Sequential
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.passes.transforms import HirToTirPass
 

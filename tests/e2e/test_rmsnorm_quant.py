@@ -11,8 +11,8 @@ import torch
 import tilefoundry
 from tilefoundry import module
 from tilefoundry.dsl import *  # Tensor, tf, T, func, Mesh, Topology, ReduceKind, B, ...
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import TupleType
+from tilefoundry.ir.types.storage import StorageKind
 
 
 @module(entry="rmsnorm")

@@ -6,8 +6,8 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer, register_verify_stmt
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.types.storage import StorageKind
 
 
 @register_op(dialect="T", category="async", name="copy_async")

@@ -17,7 +17,6 @@ from tilefoundry.inspection.viewer.builder import (
     type_to_canonical_pretty,
     type_to_compact_pretty,
 )
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import (
     B,
@@ -28,6 +27,7 @@ from tilefoundry.ir.types.shard import (
     ShardLayout,
     Topology,
 )
+from tilefoundry.ir.types.storage import StorageKind
 
 # A 3-axis mesh; ``l`` splits a layout dim and ``t`` carries a Partial value state.
 _TRD = Mesh(

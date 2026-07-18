@@ -13,13 +13,13 @@ import tilefoundry.codegen.cuda  # noqa: F401  — trigger emitter autodiscovery
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import Abort, Sequential
 from tilefoundry.ir.tir.symbol_ref import symbol_call
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.storage import StorageKind
 
 
 def _tensor_var(name: str, shape: tuple[int, ...]) -> Var:

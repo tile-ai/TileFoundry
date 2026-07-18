@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from tilefoundry.ir.core import Constant
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
+from tilefoundry.ir.types.storage import StorageKind
 
 
 def _dtype_promote(a: DType, b: DType) -> DType:

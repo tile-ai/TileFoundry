@@ -29,7 +29,6 @@ from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
@@ -39,6 +38,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
     layout_axis_to_tensor_axis,
 )
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
 
 _RMEM = StorageKind.RMEM

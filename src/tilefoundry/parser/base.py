@@ -17,11 +17,11 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.target.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
 from .dispatch import (
     _binary_kind_for_ast_op,

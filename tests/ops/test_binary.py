@@ -23,11 +23,11 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
+from tilefoundry.ir.types.storage import StorageKind
 
 _ADD = Binary(kind=BinaryKind.ADD)
 _MUL = Binary(kind=BinaryKind.MUL)

@@ -23,7 +23,6 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- binds bare op names (res
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import (
@@ -34,6 +33,7 @@ from tilefoundry.ir.types.shard import (
     Topology,
 )
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser.sugar import parse_shard_layout_sugar
 
 # ── shared assertion helpers ─────────────────────────────────────────────────

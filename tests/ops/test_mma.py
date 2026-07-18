@@ -6,8 +6,8 @@ import pytest
 
 from tests.ops.typeinfer_utils import TypeInferCase, run_typeinfer_case
 from tilefoundry.ir.hir.cuda.nn.mma import Mma, Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types.storage import StorageKind
 
 _BF = DType.bf16
 _RMEM = StorageKind.RMEM

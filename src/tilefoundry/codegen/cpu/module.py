@@ -28,7 +28,6 @@ from tilefoundry.codegen.cuda.tir.prim_function import (
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -44,6 +43,7 @@ from tilefoundry.ir.types.dim import (
     DimMul,
     DimSub,
 )
+from tilefoundry.ir.types.storage import StorageKind
 
 # Memory-space → required DLPack device type for a host ABI tensor argument.
 _STORAGE_DEVICE_TYPE = {

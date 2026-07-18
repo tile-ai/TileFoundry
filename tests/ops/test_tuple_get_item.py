@@ -10,8 +10,8 @@ from tests.ops.typeinfer_utils import (
 )
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TupleType, make_tensor_type
+from tilefoundry.ir.types.storage import StorageKind
 
 
 def _scalar(dtype):

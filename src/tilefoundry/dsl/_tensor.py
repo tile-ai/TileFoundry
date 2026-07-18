@@ -9,8 +9,8 @@ is `tilefoundry.ir.types.TensorType`.
 
 from __future__ import annotations
 
-from tilefoundry.ir.target.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
 
 class Tensor:

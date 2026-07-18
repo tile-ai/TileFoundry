@@ -11,8 +11,8 @@ from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser.hir_parser import parse_script
 
 
