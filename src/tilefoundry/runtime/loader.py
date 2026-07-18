@@ -1,12 +1,7 @@
 """Runtime loader — turn a ``LinkedModule`` into a callable ``RuntimeModule``."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from tilefoundry.runtime.module import RuntimeFunction, RuntimeModule
-
-if TYPE_CHECKING:
-    from tilefoundry.codegen.linker import LinkedModule
 
 
 def load_linked_module(linked: "LinkedModule") -> RuntimeModule:
