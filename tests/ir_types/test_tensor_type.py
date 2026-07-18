@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
+import tilefoundry.ir.types.tensor_type as tensor_type_module
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar
 
@@ -12,6 +15,14 @@ def test_scalar_builds_rank0_tensor_type():
     t = TensorType.scalar(DType.f32)
     assert t.shape == ()
     assert t.dtype == DType.f32
+
+
+def test_layout_annotations_use_layout_base_forward_reference():
+    class_annotation = TensorType.__annotations__["layout"]
+    scalar_annotation = inspect.signature(TensorType.scalar).parameters["layout"].annotation
+
+    assert class_annotation.strip("'\"") == scalar_annotation.strip("'\"") == "LayoutBase | None"
+    assert "LayoutBase" not in vars(tensor_type_module)
 
 
 def test_tensor_type_equality_on_fields():
