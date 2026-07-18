@@ -44,6 +44,12 @@ target_repo: tilefoundry
      not allowed. -->
 - <path>
 
+#### Spec Impact
+<!-- List one or more owning `docs/spec/*.md` paths and repeat them in this
+     milestone's effective Related Files. If no public contract changes, use exactly
+     one reasoned entry: `- N/A: <reason>`. Do not mix paths and N/A. -->
+- N/A: <reason this milestone does not change a public contract>
+
 #### Plan
 - [ ] step 0.1 <action with affected files>
 - [ ] step 0.2 <action>
@@ -61,6 +67,9 @@ target_repo: tilefoundry
 
 #### Related Files
 - <path>
+
+#### Spec Impact
+- `docs/spec/<name>.md`
 
 #### Plan
 - [ ] step 1.1 <action>

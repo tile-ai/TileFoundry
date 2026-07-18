@@ -15,10 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import TYPE_CHECKING, Optional, Union
-
-if TYPE_CHECKING:
-    from tilefoundry.ir.types.shape_dim import ShapeDim
+from typing import Optional, Union
 
 
 class CudaLaunchAttr(IntEnum):

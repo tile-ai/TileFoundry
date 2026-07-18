@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union
-
-if TYPE_CHECKING:
-    from tilefoundry.ir.types.shape_dim import ShapeDim
+from typing import Optional, Union
 
 
 def _domain_rank(shape: tuple) -> int:

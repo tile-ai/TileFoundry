@@ -16,7 +16,9 @@ generated regions:
 
 The finalizer never touches handwritten content outside the marker
 ranges. A ``policy_*`` HTML comment appearing outside any allowed
-range is a hard validation failure.
+range is a hard validation failure. Every milestone must also declare
+its public-contract impact in ``Spec Impact`` as either owning
+``docs/spec/*.md`` paths or one reasoned ``N/A:`` entry.
 """
 from __future__ import annotations
 
@@ -155,6 +157,17 @@ def _strip_path_bullet(item: str) -> str:
     return s
 
 
+def _is_spec_path(path: str) -> bool:
+    """Return whether *path* is a repo-relative Markdown spec path."""
+    parts = Path(path).parts
+    return (
+        len(parts) >= 3
+        and parts[:2] == ("docs", "spec")
+        and all(part not in ("", ".", "..") for part in parts)
+        and path.endswith(".md")
+    )
+
+
 class PlanModel:
     def __init__(self, plan_path: Path) -> None:
         self.path = plan_path
@@ -252,6 +265,7 @@ class PlanModel:
         for required in (
             "Depends",
             "Related Files",
+            "Spec Impact",
             "Plan",
             "Acceptance Criteria",
         ):
@@ -287,6 +301,12 @@ class PlanModel:
             else:
                 effective_paths.append(_strip_path_bullet(item))
 
+        self._validate_spec_impact(
+            name,
+            sections["Spec Impact"],
+            effective_paths,
+        )
+
         ac_section = sections["Acceptance Criteria"]
 
         # Locate the local policy_ac marker pair inside the AC section.
@@ -316,6 +336,49 @@ class PlanModel:
             "policy_ac_start_idx": ac_start,
             "policy_ac_end_idx": ac_end,
         }
+
+    def _validate_spec_impact(
+        self,
+        milestone_name: str,
+        section: tuple[int, int],
+        related_files: list[str],
+    ) -> None:
+        items = _list_bullets(self.lines, section[0] + 1, section[1])
+        label = f"{self.path}: milestone {milestone_name!r} `#### Spec Impact`"
+        if not items:
+            raise FinalizeError(
+                f"{label} must contain one or more bullet entries."
+            )
+
+        na_items = [item for item in items if item.upper().startswith("N/A")]
+        if na_items:
+            if len(items) != 1:
+                raise FinalizeError(
+                    f"{label} cannot mix an `N/A:` entry with spec paths."
+                )
+            if re.fullmatch(r"N/A:\s+\S(?:.*\S)?", items[0], re.IGNORECASE) is None:
+                raise FinalizeError(
+                    f"{label} must use one reasoned `N/A: <reason>` entry."
+                )
+            return
+
+        spec_paths: list[str] = []
+        for item in items:
+            path = _strip_path_bullet(item)
+            if not _is_spec_path(path):
+                raise FinalizeError(
+                    f"{label} entry {item!r} must be a `docs/spec/*.md` path "
+                    "or one reasoned `N/A:` entry."
+                )
+            spec_paths.append(path)
+
+        missing = [path for path in spec_paths if path not in related_files]
+        if missing:
+            formatted = ", ".join(repr(path) for path in missing)
+            raise FinalizeError(
+                f"{label} path(s) {formatted} must also appear in the milestone's "
+                "effective `#### Related Files`."
+            )
 
 
 # ---------------------------------------------------------------------------
