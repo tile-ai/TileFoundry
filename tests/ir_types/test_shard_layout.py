@@ -55,7 +55,7 @@ def test_composed_layout_nests_layouts():
 
 
 def test_layout_base_contract_preserves_nested_shard_domain():
-    base = Layout(shape=((2, 4), 8), strides=None)
+    base = Layout(shape=((None, 4), 8), strides=None)
     mesh = make_mesh((2,), topology=Topology("thread", 2))
     prior_stage = ShardLayout(layout=base, attrs=(B(),), mesh=mesh)
     composed = ComposedLayout(inner=None, offset=3, outer=prior_stage)

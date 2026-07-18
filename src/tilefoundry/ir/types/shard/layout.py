@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-
-def _domain_rank(shape: tuple) -> int:
-    return sum(_domain_rank(dim) if isinstance(dim, tuple) else 1 for dim in shape)
+from .int_tuple import flatten
 
 
 class LayoutBase:
@@ -13,7 +11,7 @@ class LayoutBase:
 
     @property
     def domain_rank(self) -> int:
-        return _domain_rank(self.shape)
+        return len(flatten(self.shape))
 
 
 @dataclass(frozen=True)

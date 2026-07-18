@@ -10,18 +10,23 @@ fail closed otherwise.
 
 from __future__ import annotations
 
-from typing import Union
+from typing import Union, overload
 
 IntTuple = Union[int, tuple["IntTuple", ...]]
 
 
-def flatten(t: IntTuple) -> tuple[int, ...]:
-    if isinstance(t, int):
+@overload
+def flatten(t: IntTuple) -> tuple[int, ...]: ...
+
+
+@overload
+def flatten(t: object) -> tuple[object, ...]: ...
+
+
+def flatten(t: object) -> tuple[object, ...]:
+    if not isinstance(t, tuple):
         return (t,)
-    out: list[int] = []
-    for x in t:
-        out.extend(flatten(x))
-    return tuple(out)
+    return tuple(value for item in t for value in flatten(item))
 
 
 def product(t: IntTuple) -> int:
