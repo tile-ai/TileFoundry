@@ -93,6 +93,24 @@ short bullet list — keep it that way.
 - Out-of-scope changes that cannot be split MUST be called out in the
   commit body.
 
+### Spec impact
+
+- Every milestone declares `#### Spec Impact`, including documentation-only
+  and internal-only milestones.
+- A public-contract change lists its owning `docs/spec/*.md` files and repeats
+  those files in the milestone's effective `#### Related Files`.
+- A milestone without public-contract changes uses exactly one reasoned
+  `N/A:` entry; it never mixes `N/A:` with spec paths.
+- Contract-changing implementation and its specification ship in the same
+  milestone.
+
+### Forward references
+
+- Break type-only import cycles with quoted forward-reference annotations.
+- Do not guard type-only imports with `typing.TYPE_CHECKING`; Ruff rejects that
+  shim.
+- Import runtime dependencies normally or lazily at their point of use.
+
 ### Tests
 
 - Write meaningful positive tests that exercise the intended path.
@@ -127,4 +145,3 @@ short bullet list — keep it that way.
   headers use `.cuh`, target-neutral / cpu headers use `.h`; exactly one
   `TILEFOUNDRY_TARGET_*` macro is defined per translation unit and the build
   injects it per target.
-

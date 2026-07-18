@@ -49,9 +49,10 @@ target-version = "py311"
 #   E, W  pycodestyle (PEP 8 errors / warnings)
 #   F     pyflakes    (unused / undefined / shadowed)
 #   I     isort       (import order)
-# Plus one extra rule from pylint conventions:
+# Plus targeted rules from pylint and flake8-tidy-imports:
 #   PLC0415  import-outside-top-level
-select = ["E", "F", "W", "I", "PLC0415"]
+#   TID251   banned-api
+select = ["E", "F", "W", "I", "PLC0415", "TID251"]
 
 # Ignored rules:
 #   E501  line-too-long — long strings / compact code stay on one line.
@@ -63,9 +64,12 @@ select = ["E", "F", "W", "I", "PLC0415"]
 #         ``r`` / ``a``) are allowed.
 ignore = ["E501", "F821", "E741"]
 
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.TYPE_CHECKING".msg = "Use quoted forward references; TYPE_CHECKING shims are not used in TileFoundry."
+"typing_extensions.TYPE_CHECKING".msg = "Use quoted forward references; TYPE_CHECKING shims are not used in TileFoundry."
+
 [tool.ruff.lint.per-file-ignores]
 # DSL tests use `from tilefoundry.dsl import *` as part of the
 # authoring-surface ergonomics. Internal implementation code in
 # `src/` must NOT use star imports (no exception here).
 "tests/**/*.py" = ["F403", "F405"]
-

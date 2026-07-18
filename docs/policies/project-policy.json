@@ -34,6 +34,41 @@
       }
     },
     {
+      "id": "spec_impact",
+      "name": "Spec impact",
+      "description": "Every source milestone explicitly classifies whether it changes a public contract and names the owning specifications when it does.",
+      "when": {
+        "path_glob": ["src/**", "include/**"]
+      },
+      "ac": [
+        "Milestone MUST classify public-contract impact in `#### Spec Impact`: list owning `docs/spec/*.md` paths or exactly one reasoned `N/A:` entry."
+      ],
+      "rules": {
+        "implementer": [
+          {"path": "docs/develop.md", "section": "Spec impact"}
+        ],
+        "reviewer": [
+          {"path": "docs/develop.md", "section": "Spec impact"}
+        ]
+      }
+    },
+    {
+      "id": "forward_references",
+      "name": "Forward references",
+      "description": "Python type-only cycles use quoted forward references without `typing.TYPE_CHECKING` shims.",
+      "when": {
+        "path_glob": ["**/*.py"]
+      },
+      "rules": {
+        "implementer": [
+          {"path": "docs/develop.md", "section": "Forward references"}
+        ],
+        "reviewer": [
+          {"path": "docs/develop.md", "section": "Forward references"}
+        ]
+      }
+    },
+    {
       "id": "clang_format",
       "name": "C++ formatting",
       "description": "C++/CUDA sources follow the repo .clang-format; touched files are formatted by the versioned pre-commit clang-format hook (touched-files scope, no tree-wide pass).",
