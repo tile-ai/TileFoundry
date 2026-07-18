@@ -29,14 +29,21 @@ from tilefoundry.dsl.tf import *
 """
 
 
-def test_string_dtype_parses() -> None:
-    src = _HEADER + """
+@pytest.mark.parametrize(
+    "name",
+    ("f32", "f16", "bf16", "fp8e4m3", "f8e8m0", "f4e2m1", "i32", "i64", "bool"),
+)
+def test_string_dtype_parses_and_prints_canonically(name: str) -> None:
+    src = _HEADER + f"""
 @func
-def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
-    return cast(x, dtype="bf16")
+def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "{name}"]:
+    return cast(x, dtype="{name}")
 """
     fn = parse_script(_dedent(src))
+
     assert fn.body is not None
+    assert fn.body.target.dtype is getattr(DType, name)
+    assert f'dtype="{name}"' in as_script(fn)
 
 
 def test_string_and_descriptor_dtype_forms_are_equivalent() -> None:
@@ -95,6 +102,16 @@ def test_invalid_dtype_string_raises() -> None:
 @func
 def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
     return cast(x, dtype="float32")
+"""
+    with pytest.raises(VerifyError, match=r"DType: unknown value 'float32'"):
+        parse_script(_dedent(src))
+
+
+def test_invalid_tensor_annotation_dtype_raises() -> None:
+    src = _HEADER + """
+@func
+def f(x: Tensor[(8,), "float32"]) -> Tensor[(8,), "f32"]:
+    return cast(x, dtype="f32")
 """
     with pytest.raises(VerifyError, match=r"DType: unknown value 'float32'"):
         parse_script(_dedent(src))

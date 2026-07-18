@@ -41,3 +41,5 @@ def test_dtype_members_are_stable_singletons() -> None:
     assert DType.f32 is DType.f32
     assert DType.f32 is not DType.f16
     assert {DType.f32, FloatDType("f32", 32, 8, 23)} == {DType.f32}
+    assert not hasattr(DType.f32, "value")
+    assert not hasattr(DType, "__members__")
