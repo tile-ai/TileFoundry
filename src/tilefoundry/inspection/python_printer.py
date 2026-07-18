@@ -642,11 +642,10 @@ def _emit_def(
                 for k, v in attrs.items():
                     if isinstance(v, str):
                         attr_strs.append(f'{k}="{v}"')
+                    elif isinstance(v, DType):
+                        attr_strs.append(f'{k}="{v.name}"')
                     elif isinstance(v, enum.Enum) and isinstance(v.value, str):
-                        # A string-valued enum attribute (ReduceKind / DType /
-                        # ...) prints as its DSL string value so the source
-                        # re-parses without a bare enum reference — the parser
-                        # promotes the string back via the ParamDef annotation.
+                        # String-valued enum attributes print in their DSL form.
                         attr_strs.append(f'{k}="{v.value}"')
                     elif isinstance(v, float):
                         attr_strs.append(f"{k}={v!r}")
