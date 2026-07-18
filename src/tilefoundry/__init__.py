@@ -43,7 +43,6 @@ from tilefoundry.ir.types.shard import (
     IntTuple,
     Layout,
     LayoutBase,
-    LayoutLike,
     Mesh,
     MeshAxis,
     P,
@@ -104,7 +103,7 @@ __all__ = [
     "DType", "TensorType", "TupleType", "Type",
     "Pattern", "DimVarRangePat", "DimVar",
     # shard
-    "IntTuple", "LayoutBase", "Layout", "ComposedLayout", "LayoutLike",
+    "IntTuple", "LayoutBase", "Layout", "ComposedLayout",
     "Topology", "MeshAxis", "Mesh",
     "ShardAttr", "Split", "Partial", "Broadcast", "Dynamic", "ShardLayout",
     "S", "P", "B",

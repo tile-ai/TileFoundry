@@ -94,9 +94,10 @@ class ShardLayout(LayoutBase): ...       # concrete `LayoutBase` member
 
 Common contract — every legal layout object MUST satisfy:
 
-- a stable domain shape (`domain(layout)`),
+- a stable domain shape exposed as `shape`,
 - a coord-to-physical mapping (`layout(coord) → physical index / offset`),
-- a stable domain-axis numbering (`range(rank(layout))`),
+- a stable domain-axis numbering exposed as `domain_rank`, where
+  `domain_rank == rank(flatten(shape))`,
 - **injective mapping** — overlapping / aliasing layouts are not
   permitted; distinct domain coords MUST NOT map to the same physical
   element. Extending to non-injective cases (padding / broadcast
@@ -151,32 +152,40 @@ Mirrors CuTeDSL `make_composed_layout(inner, offset, outer)`:
 
 ```python
 class ComposedLayout(LayoutBase):
-    inner: LayoutBase   # applied last (output-side layout)
-    offset: int         # intermediate scalar offset (a property of the composition)
-    outer: LayoutBase   # applied first (input / domain-side layout)
+    inner: LayoutBase | None   # applied last (output-side layout); `None` is identity
+    offset: int                # intermediate scalar offset (a property of the composition)
+    outer: LayoutBase | None   # applied first (input / domain-side layout); `None` is identity
 ```
 
 - constraints:
-  - `idx = inner(offset + outer(coord))`; inherits domain shape and axis numbering
-    from `outer`.
+  - `idx = apply(inner, offset + apply(outer, coord))`, where
+    `apply(None, value) == value`.
+  - `shape` and `domain_rank` come from `outer` when it is present, otherwise
+    from `inner`; a composition with no explicit domain has `shape == ()`.
+  - either non-`None` component MAY be any `LayoutBase`, including a
+    `ShardLayout` that preserves an earlier distribution.
 
 Field meanings:
 
-- `outer` — applied **first** (the input / domain-side layout)
+- `outer` — applied **first** (the input / domain-side layout); `None`
+  applies the identity mapping
 - `offset` — the intermediate scalar offset (a property of the
   composition object, not of the primitive `Layout`)
-- `inner` — applied **last** (the output-side layout)
+- `inner` — applied **last** (the output-side layout); `None` applies
+  the identity mapping
 
 Minimum semantics:
 
 ```python
-idx = inner(offset + outer(coord))
+idx = apply(inner, offset + apply(outer, coord))
+assert apply(None, value) == value
 ```
 
-A `ComposedLayout` inherits its domain shape and axis numbering from
-`outer`. Therefore, when an outer `ShardLayout` binds a
-`ComposedLayout`, a `Split(k)` attr still references the stable domain
-axis exposed by `outer`.
+A `ComposedLayout` normally inherits its domain shape and axis numbering
+from `outer`. When `outer=None`, the identity mapping contributes no explicit
+domain, so the composition inherits them from `inner`. Therefore, when an
+outer `ShardLayout` binds a `ComposedLayout`, a `Split(k)` attr still
+references the composition's stable `shape` / `domain_rank` contract.
 
 ---
 
@@ -285,7 +294,7 @@ axes to mesh axes.
 
 ```python
 class ShardLayout(LayoutBase):
-    layout: LayoutBase                                        # the underlying `Layout` / `ComposedLayout` being bound
+    layout: LayoutBase                                        # the underlying layout-family member being bound
     attrs: tuple[Split | Broadcast | Dynamic | Partial, ...]  # per-mesh-axis attributes, ordered by mesh axis
     mesh: Mesh                                                # the device-domain `Mesh`
 ```
@@ -299,9 +308,10 @@ itself an IR op (`hir.sharding.Reshard`, see [hir](./hir.md) §2.5).
 
 ### 7.1 `layout`
 
-The underlying `Layout` / `ComposedLayout`. `Layout` /
-`ComposedLayout` (§3, §4) own the layout algebra; `ShardLayout` does
-not redefine it.
+The underlying `LayoutBase`. `Layout` / `ComposedLayout` (§3, §4) own
+the layout algebra; `ShardLayout` binds their stable `shape` and
+`domain_rank` to a mesh without redefining that algebra. Nested stage
+layouts remain represented through the `LayoutBase` hierarchy.
 
 When a `Layout` sits inside `ShardLayout.layout`, its `shape` and
 `stride` carry **additional, narrower semantics** beyond the plain

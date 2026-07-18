@@ -68,6 +68,17 @@ def test_layout_base_contract_preserves_nested_shard_domain():
     assert base.domain_rank == prior_stage.domain_rank == composed.domain_rank == 3
 
 
+def test_composed_layout_none_components_are_identity():
+    base = Layout(shape=(4,), strides=(2,))
+    inner_identity = ComposedLayout(inner=None, offset=3, outer=base)
+    outer_identity = ComposedLayout(inner=base, offset=0, outer=None)
+
+    assert la._apply_any(inner_identity, 1) == 5
+    assert la._apply_any(outer_identity, 1) == 2
+    assert inner_identity.shape == outer_identity.shape == base.shape
+    assert inner_identity.domain_rank == outer_identity.domain_rank == 1
+
+
 # --- layout algebra: CuTe left/right inverse (ported, ``layout_algebra``) ----
 
 _INJECTIVE_LAYOUTS = [
@@ -220,6 +231,8 @@ def test_composed_left_inverse_round_trip():
     scope = ComposedLayout(inner=None, offset=128, outer=Layout(shape=(4, 32), strides=(32, 1)))
     inv = la.left_inverse(scope)
     assert isinstance(inv, ComposedLayout)
+    assert inv.shape == inv.inner.shape
+    assert inv.domain_rank == inv.inner.domain_rank
     for c in range(la.size(scope.outer)):
         t = la.image(scope, c)
         assert la._apply_any(inv, t) == c

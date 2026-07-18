@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional
 
 
 def _domain_rank(shape: tuple) -> int:
@@ -46,9 +46,9 @@ class ComposedLayout(LayoutBase):
     ``image⁻¹(t) = outer⁻¹(inner⁻¹(t) − offset)``.
     """
 
-    inner: "LayoutLike | None"
+    inner: LayoutBase | None
     offset: int
-    outer: "LayoutLike | None"
+    outer: LayoutBase | None
 
     @property
     def shape(self) -> tuple:
@@ -58,10 +58,7 @@ class ComposedLayout(LayoutBase):
         return domain.shape
 
 
-# Forward ref resolved after shard_layout import
-LayoutLike = Union[Layout, ComposedLayout, "ShardLayout"]  # noqa: F821
-
 EMPTY_LAYOUT = Layout(shape=(), strides=())
 
 
-__all__ = ["LayoutBase", "Layout", "ComposedLayout", "LayoutLike", "EMPTY_LAYOUT"]
+__all__ = ["LayoutBase", "Layout", "ComposedLayout", "EMPTY_LAYOUT"]
