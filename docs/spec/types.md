@@ -49,13 +49,15 @@ its derivations: `TensorType` / `TupleType` / `UnitType` /
 class TensorType(IRType):
     shape: tuple[ShapeDim, ...]                      # logical shape; invariant under sharding / storage / layout
     dtype: DType                                     # element dtype
-    layout: Layout | ShardLayout | ComposedLayout    # member of the Layout family (see shard)
+    layout: LayoutBase | None                        # member of the Layout family, or no assigned layout (see shard)
     storage: StorageKind | None                      # abstract result residency, or umat / None
 ```
 
 - constraints:
   - A *scalar* is `TensorType(shape=(), ...)` — a rank-0 tensor. There
     is no separate `Scalar` type.
+  - `layout` is either `None` or one member of the `LayoutBase` hierarchy
+    defined by [shard §2](./shard.md#2-layout-hierarchy).
   - `storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` / `tmem` /
     `umat`) or `None`. A concrete level (`gmem` / `smem` / `rmem` / `host` /
     `tmem`) is the value's **abstract result residency** — where the result tensor
@@ -66,9 +68,9 @@ class TensorType(IRType):
     unmaterialized value MUST be resolved to a concrete residency (or otherwise
     materialized) before codegen consumes it. `None` is unchanged — a tensor with
     no memory space (a shape-element scalar), distinct from `umat`.
-  - For plain `Layout` / `ComposedLayout`, `len(shape)` MUST equal the
-    layout's logical axis count; for `ComposedLayout` this is the
-    outer-layout's axis count after expansion.
+  - For plain `Layout` / `ComposedLayout`, `len(shape)` MUST equal
+    `layout.domain_rank`; consumers use this common contract rather than
+    inspecting a `ComposedLayout` component.
   - For `ShardLayout`, `TensorType.shape` remains the logical shape;
     `ShardLayout.layout.shape` is the sharding-internal / per-shard
     layout shape and need not match `shape` axis-by-axis. `Reshard`

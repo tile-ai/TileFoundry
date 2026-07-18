@@ -37,7 +37,7 @@ def _canonicalize_static_dims(shape: tuple) -> tuple:
 class TensorType:
     shape: tuple[ShapeDim, ...]
     dtype: DType
-    layout: object
+    layout: "LayoutBase | None"
     # Memory space of the tensor. ``None`` marks a non-memory-resident
     # compile-time / shape scalar; a memory-resident tensor must carry a
     # concrete ``StorageKind``.
@@ -60,7 +60,7 @@ class TensorType:
     @staticmethod
     def scalar(
         dtype: DType,
-        layout: object = None,
+        layout: "LayoutBase | None" = None,
         storage: Optional[StorageKind] = StorageKind.RMEM,
     ) -> "TensorType":
         return TensorType(shape=(), dtype=dtype, layout=layout, storage=storage)
