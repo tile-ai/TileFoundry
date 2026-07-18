@@ -1,9 +1,9 @@
 """String dtype / reduce-kind authoring surface (parser.md §2.4).
 
 The DSL surface accepts the string form (`dtype="f32"`, `kind="sum"`); the
-parser normalizes it to the IR-canonical enum at the call boundary, and an
-unknown string raises a clear error. The string and enum forms parse to the
-same IR.
+parser normalizes it to the IR-canonical descriptor or enum at the call
+boundary, and an unknown string raises a clear error. Both authoring forms
+print to the same canonical IR.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import pytest
 
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import VerifyError
+from tilefoundry.ir.types import DType
 from tilefoundry.parser.hir_parser import parse_script
 
 
@@ -36,6 +37,30 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
 """
     fn = parse_script(_dedent(src))
     assert fn.body is not None
+
+
+def test_string_and_descriptor_dtype_forms_are_equivalent() -> None:
+    string_form = _HEADER + """
+@func
+def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
+    return cast(x, dtype="bf16")
+"""
+    descriptor_form = _HEADER + """
+from tilefoundry.ir.types import DType
+@func
+def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
+    return cast(x, dtype=DType.bf16)
+"""
+
+    string_ir = parse_script(_dedent(string_form))
+    descriptor_ir = parse_script(_dedent(descriptor_form))
+
+    assert string_ir.body is not None
+    assert descriptor_ir.body is not None
+    assert string_ir.body.target.dtype is DType.bf16
+    assert descriptor_ir.body.target.dtype is DType.bf16
+    assert as_script(string_ir) == as_script(descriptor_ir)
+    assert 'dtype="bf16"' in as_script(string_ir)
 
 
 def test_string_reduce_kind_parses() -> None:

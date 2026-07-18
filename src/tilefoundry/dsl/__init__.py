@@ -20,7 +20,7 @@ via ``python -m tilefoundry.dsl regen``).
 
 DType values use **string form** in DSL source —
 ``Tensor[(8,), "bf16"]``, ``zeros((1, 64), "bf16", ...)`` — and the
-parser auto-converts the string to the corresponding ``DType`` enum
+parser auto-converts the string to the corresponding ``DType`` descriptor
 at attribute-binding time.
 """
 

@@ -36,6 +36,7 @@ from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import MISSING, ParamDef
+from tilefoundry.ir.types import DType
 
 # Builtin type names that don't need an explicit ``import`` in the .pyi.
 _BUILTIN_TYPE_NAMES: frozenset[str] = frozenset({
@@ -59,13 +60,24 @@ def _annotation_type(pd: ParamDef) -> tuple[str, str]:
     """Render an attribute ParamDef's annotation as ``(stub_type, import_name)``.
 
     ``import_name`` is the bare class name to import (``""`` for builtins).
-    A string-valued enum attribute renders as ``Literal[<values>] | EnumName``
-    so the authoring surface accepts the string form while the enum stays the
-    IR-canonical type; the import name is the enum class (not ``Literal``).
+    A DType or string-valued enum attribute renders as
+    ``Literal[<values>] | TypeName`` so the authoring surface accepts the
+    string form while the descriptor or enum stays IR-canonical.
     """
     ann = pd.annotation
     if ann is object:
         return "Any", ""
+    if ann is DType:
+        members = ", ".join(
+            repr(candidate.name)
+            for candidate in vars(DType).values()
+            if isinstance(candidate, DType)
+        )
+        name = ann.__name__
+        base = f"Literal[{members}] | {name}"
+        if pd.optional:
+            base = f"{base} | None"
+        return base, name
     if isinstance(ann, type) and issubclass(ann, enum.Enum):
         members = ", ".join(repr(e.value) for e in ann)
         name = ann.__name__

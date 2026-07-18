@@ -729,13 +729,7 @@ class BaseExprVisitor:
             except ValueError:
                 pass
         value = self._eval_static(node)
-        # String-enum sugar: when the receiving ParamDef declares a
-        # string-valued enum annotation (``DType`` / ``ReduceKind`` /
-        # ``BinaryKind`` / ``UnaryKind``) and the user passed a plain string
-        # literal (``"bf16"`` / ``"sum"`` / ...), promote it to the enum
-        # member by VALUE so DSL source can stay free of ``DType.bf16`` /
-        # ``ReduceKind.SUM`` etc. (the enum stays the IR-canonical attribute
-        # type; this is the parser/Call-build boundary).
+        # String-enum sugar: promote plain strings to the receiving enum member.
         if (
             isinstance(value, str)
             and isinstance(annotation, type)
@@ -749,6 +743,18 @@ class BaseExprVisitor:
                     f"{annotation.__name__}: unknown value {value!r}; "
                     f"valid values are {valid}"
                 ) from None
+        if isinstance(value, str) and annotation is DType:
+            member = getattr(DType, value, None)
+            if not isinstance(member, DType):
+                valid = ", ".join(
+                    repr(name)
+                    for name, candidate in vars(DType).items()
+                    if isinstance(candidate, DType)
+                )
+                raise VerifyError(
+                    f"DType: unknown value {value!r}; valid values are {valid}"
+                )
+            return member
         return value
 
     def _lookup_param_annotation(

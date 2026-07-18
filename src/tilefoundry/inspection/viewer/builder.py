@@ -156,7 +156,7 @@ def _format_constant(c: Constant) -> str:
     ``const([1.0f, 2.0f, ...])`` truncated to the first 8 elements."""
     ty = getattr(c, "type", None)
     suffix = (
-        _CONST_DTYPE_SUFFIX.get(ty.dtype.value, "")
+        _CONST_DTYPE_SUFFIX.get(ty.dtype.name, "")
         if isinstance(ty, TensorType) and isinstance(ty.dtype, DType) else ""
     )
 
