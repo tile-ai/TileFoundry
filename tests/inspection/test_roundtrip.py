@@ -431,3 +431,36 @@ def test_tuple_return_with_mesh_element_roundtrips() -> None:
     assert "return (" in printed, printed
     fn2 = parse_script(printed)
     assert _structural_equal(fn, fn2), f"round-trip mismatch:\n{printed}"
+
+
+def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.ir.types.shard import (\n"
+        "    B, S, ComposedLayout, Layout, Mesh, ShardLayout, Topology,\n"
+        ")\n"
+        "thread = Mesh(Topology('thread', 2), Layout((2,), (1,)))\n"
+        "cta = Mesh(Topology('cta', 4), Layout((4,), (1,)))\n"
+        "prior = ShardLayout(\n"
+        "    layout=Layout((8,), (1,)), attrs=(S(0),), mesh=thread,\n"
+        ")\n"
+        "nested = ShardLayout(\n"
+        "    layout=ComposedLayout(inner=None, offset=1, outer=prior),\n"
+        "    attrs=(B(),),\n"
+        "    mesh=cta,\n"
+        ")\n"
+        "\n"
+        "@func\n"
+        "def f(a: Tensor[(8,), 'f32', nested]) -> Tensor[(8,), 'f32', nested]:\n"
+        "    return a\n"
+    )
+    fn = parse_script(src)
+
+    printed = as_script(fn)
+
+    assert "layout=ComposedLayout(" in printed
+    assert "outer=ShardLayout(" in printed
+    reparsed = parse_script(printed)
+    assert _structural_equal(fn, reparsed), f"round-trip mismatch:\n{printed}"
