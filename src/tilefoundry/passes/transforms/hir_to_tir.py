@@ -36,7 +36,6 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice as HirInsertSlice
 from tilefoundry.ir.hir.tensor.reduce import Reduce as HirReduce
 from tilefoundry.ir.hir.tensor.reshape import Reshape as HirReshape
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem as HirTupleGetItem
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.arith import (
     Binary as TirBinary,
 )
@@ -88,6 +87,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis as _layout_axis_to_tensor_axis,
 )
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.visitor_registry.registries import (
     hir_lowering_registry,

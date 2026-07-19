@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types.storage import StorageKind
 
 _lazy_dt_map: dict[str, object] | None = None
 

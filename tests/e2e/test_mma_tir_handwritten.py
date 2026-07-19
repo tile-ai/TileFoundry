@@ -16,9 +16,9 @@ import torch
 import tilefoundry
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types.storage import StorageKind
 
 _OP = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
 

@@ -21,7 +21,6 @@ from tests.ops.typeinfer_utils import infer_call
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncCommit, CpAsyncWait
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
@@ -29,6 +28,7 @@ from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType, UnitType, make_tensor_type
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.shard.shard_layout import Broadcast
+from tilefoundry.ir.types.storage import StorageKind
 
 # ── typeinfer ────────────────────────────────────────────────────────────────
 

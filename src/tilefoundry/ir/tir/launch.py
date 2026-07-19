@@ -1,9 +1,40 @@
-"""``tir.Launch`` — host-side device-kernel launch effect Op."""
+"""``tir.Launch`` — host-side device-kernel launch effect Op.
+
+``LaunchAttrs`` and ``CudaLaunchAttr`` are authored-IR metadata consumed by
+``Launch``. CUDA lowering interprets their selector/value pairs. The runtime
+``tilefoundry.runtime.module.LaunchConfig`` remains separate post-codegen
+launch metadata.
+"""
 from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import IntEnum
 
 from tilefoundry.ir.core.op import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.target.launch import LaunchAttrs
+
+
+class CudaLaunchAttr(IntEnum):
+    """Authored selector for a CUDA launch attribute.
+
+    The values are a subset of ``cudaLaunchAttributeID`` and are interpreted
+    by CUDA target lowering when carried in ``LaunchAttrs``.
+    """
+
+    COOPERATIVE = 1
+    PROGRAMMATIC_STREAM_SERIALIZATION = 2
+    CLUSTER_DIMENSION = 3
+
+
+@dataclass(frozen=True)
+class LaunchAttrs:
+    """Authored launch attribute selector/value pairs.
+
+    CUDA target lowering interprets ``entries``; unsupported values are
+    rejected there.
+    """
+
+    entries: tuple[tuple[CudaLaunchAttr, object], ...] = ()
 
 
 class Launch(Op):
@@ -126,4 +157,9 @@ def launch_call(
     return Evaluate(callable=op, args=(ref, *grid_e, *block_e, *forwarded_args))
 
 
-__all__ = ["Launch", "launch_call"]
+__all__ = [
+    "Launch",
+    "launch_call",
+    "CudaLaunchAttr",
+    "LaunchAttrs",
+]

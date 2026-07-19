@@ -26,7 +26,6 @@ from tests.ops.typeinfer_utils import (
 )
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
@@ -35,6 +34,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
     shard_layout_local_shape,
 )
+from tilefoundry.ir.types.storage import StorageKind
 
 _F = DType.f32
 _M = make_mesh((4,))

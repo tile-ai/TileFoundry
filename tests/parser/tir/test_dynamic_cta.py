@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from tilefoundry import prim_func
 from tilefoundry.dsl import DimVar, T, Tensor
-from tilefoundry.ir.target.storage import StorageKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.ir.types.storage import StorageKind
 
 _TILE = 12
 _NT = DimVar("Ntile", 1, 64)

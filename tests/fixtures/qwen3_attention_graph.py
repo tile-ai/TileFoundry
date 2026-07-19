@@ -48,7 +48,6 @@ from tilefoundry.ir.core import Op, register_typeinfer  # noqa: E402
 from tilefoundry.ir.core.param_def import ParamDef  # noqa: E402
 from tilefoundry.ir.core.pattern import Tensor  # noqa: E402
 from tilefoundry.ir.hir.sharding.reshard import Reshard  # noqa: E402
-from tilefoundry.ir.target.storage import StorageKind  # noqa: E402
 from tilefoundry.ir.types import DType, TensorType  # noqa: E402
 from tilefoundry.ir.types.shard import (  # noqa: E402
     B,
@@ -59,6 +58,7 @@ from tilefoundry.ir.types.shard import (  # noqa: E402
     ShardLayout,
     Topology,
 )
+from tilefoundry.ir.types.storage import StorageKind  # noqa: E402
 
 # ── Model constants ──────────────────────────────────────────────────
 

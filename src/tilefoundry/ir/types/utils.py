@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
 from .shard import Layout, Mesh, ShardLayout, Split

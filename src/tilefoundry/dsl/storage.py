@@ -1,12 +1,12 @@
 """DSL storage constants.
 
-User-facing short names for :class:`tilefoundry.ir.target.storage.StorageKind`,
+User-facing short names for :class:`tilefoundry.ir.types.storage.StorageKind`,
 imported directly (``from tilefoundry.dsl.storage import gmem, smem, ...``) rather
 than hung under the auto-generated ``T`` op namespace.
 """
 from __future__ import annotations
 
-from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types.storage import StorageKind
 
 host = StorageKind.HOST
 gmem = StorageKind.GMEM

@@ -16,7 +16,6 @@ import ast
 from typing import Any, Callable
 
 from tilefoundry.ir.core.expr import Expr
-from tilefoundry.ir.target.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.layout import Layout
@@ -28,6 +27,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
 )
+from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
 
 class LayoutSugarError(ValueError):

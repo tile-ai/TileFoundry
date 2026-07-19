@@ -14,7 +14,7 @@ from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call, Constant
-from tilefoundry.ir.target.storage import StorageKind
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser.hir_parser import parse_script
 
 

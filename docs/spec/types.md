@@ -87,6 +87,44 @@ Enforcement is owned by [tir §1.3](./tir.md#13-primfunction) / [hir §1.3](./hi
 dispatch is described in
 [visitor-registry](./visitor-registry.md).
 
+### `StorageKind` and `resolve_storage`
+
+`StorageKind` is the type-system vocabulary for abstract tensor residency.
+Target lowering decides whether a concrete level is supported by the active
+target; storage resolution does not perform target capability validation.
+
+```python
+class StorageKind(IntEnum):
+    """Memory-space level (backend-generic)."""
+
+    HOST = 1
+    GMEM = 2
+    SMEM = 3
+    RMEM = 4
+    TMEM = 5
+    UMAT = 6
+
+    def __str__(self) -> str: ...
+
+
+def resolve_storage(value: "str | StorageKind | None") -> "StorageKind | None":
+    """Normalize a surface storage specification."""
+    ...
+```
+
+- constraints:
+  - `StorageKind` is defined and owned by `ir/types/storage.py`.
+  - The member values and `str` spellings are `HOST=1` / `host`,
+    `GMEM=2` / `gmem`, `SMEM=3` / `smem`, `RMEM=4` / `rmem`,
+    `TMEM=5` / `tmem`, and `UMAT=6` / `umat`.
+  - `resolve_storage` MUST pass through `None` and a `StorageKind` instance.
+    It MUST accept exactly the canonical strings `host`, `gmem`, `smem`,
+    `rmem`, and `tmem`, and MUST reject other strings and non-storage values.
+  - `UMAT` is an IR-internal unmaterialized value and MUST NOT be accepted as
+    a surface string.
+  - The storage vocabulary is closed at the IR type boundary. It MUST NOT
+    provide target-specific registration or capability validation.
+
 ---
 
 ## 3. `DType`

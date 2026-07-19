@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Union
 
-from tilefoundry.ir.target.storage import StorageKind, resolve_storage
+from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
 from .dtype import DType
 from .shape_dim import ShapeDim

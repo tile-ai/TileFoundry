@@ -18,11 +18,11 @@ truth for the directory's structure and invariants.
 | Directory | Owning spec | Contents |
 |---|---|---|
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / `@register_op` / `@register_alias` / `op_registry` / `errors` / `registry`. |
-| `ir/types/` | [types](./types.md) | Type-system root: `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `Storage` / `dim.*` (with their typeinfer). |
+| `ir/types/` | [types](./types.md) | Type-system root: `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / `dim.*` (with their typeinfer). |
 | `ir/types/shard/` | [shard](./shard.md) | Shard / layout sublayer: `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`). The physical nesting reflects the spec's "sublayer" relationship. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprVisitor` / `ExprMutator` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`. |
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` (§2 rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` (§2 rule 5). |
-| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per §2 Rule 1c. |
+| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per §2 Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
 | `schedule/` | [schedule](./schedule.md) | Direct public Schedule service protocol and immutable options, result, and report structures. The compact public surface lives in `schedule/__init__.py`; concrete stage services live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, §2 rule 6). |
@@ -64,6 +64,10 @@ layout reflects that boundary directly.
   `tir/stmts/`, and `memory/` / `nn/` / `arith/` / `reduce/` /
   `tensor/` each have their own subdirectory. There is no
   `codegen/<target>/hir/`.
+- Authored launch attributes belong to `ir/tir/launch.py`; runtime
+  `LaunchConfig` metadata belongs to `runtime/` and describes post-codegen
+  launch geometry. The two launch contracts are distinct even though both
+  are consumed across the codegen boundary.
 
 ## 2. File naming and content rules
 
