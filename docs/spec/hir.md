@@ -806,7 +806,8 @@ class Reshard(Op):
   - Supplied `layout` is a `ShardLayout`.
   - Destination storage is concrete, not unmaterialized.
   - The single op covers zero-copy view, cross-storage copy, cross-CTA
-    redistribute, and mixed cases; typeinfer/costmodel classify the call.
+  redistribute, and mixed cases; typeinfer and the recursive-local Cost
+  Evaluator classify the call.
 
 **Stride resolution.** Storage direction follows the physical addressability
 hierarchy `rmem < smem < gmem` (per-thread / per-CTA / per-program). Typeinfer

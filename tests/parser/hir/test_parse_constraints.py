@@ -6,6 +6,7 @@ from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Tuple, VerifyError
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Broadcast, Partial, Split
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.schedule.constraints import (
@@ -82,6 +83,68 @@ def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
     assert _constraint_signature(constraint_metadata(reparsed.body)) == _constraint_signature(
         metadata
     )
+
+
+def _closure_source(preamble: str, body: str) -> str:
+    """Like ``_source``, but with extra module-level (closure) bindings
+    spliced in before ``candidate`` — for names resolved via
+    ``fn.__globals__`` rather than the HIR SSA env."""
+    return f'''from __future__ import annotations
+from tilefoundry import func
+from tilefoundry.dsl import Tensor, tf
+
+{preamble}
+
+@func
+def candidate(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
+{body}
+'''
+
+
+def test_named_layout_extent_resolves_through_closure_to_int() -> None:
+    fn = parse_script(
+        _closure_source(
+            "N = 16",
+            '''    y: where(layout=(_, N @ cta)) = tf.add(x, x)
+    return y''',
+        )
+    )
+    layout = constraint_metadata(fn.body).constraints[0]
+    assert isinstance(layout, LayoutConstraint)
+    assert repr(layout.layout.shape[0]) == "_"
+    assert layout.layout.shape[1] == 16
+
+
+def test_named_layout_extent_resolves_through_closure_to_dim_var() -> None:
+    fn = parse_script(
+        _closure_source(
+            'from tilefoundry.ir.types.dim import DimVar\n\nS = DimVar("S", 1, 128)',
+            '''    y: where(layout=(_, S @ cta)) = tf.add(x, x)
+    return y''',
+        )
+    )
+    layout = constraint_metadata(fn.body).constraints[0]
+    assert isinstance(layout, LayoutConstraint)
+    assert isinstance(layout.layout.shape[1], DimVar)
+    assert layout.layout.shape[1].name == "S"
+
+
+def test_unresolvable_layout_extent_fails_at_source_annotation() -> None:
+    with pytest.raises(VerifyError, match="undefined name|where layout extent"):
+        parse_script(
+            _source(
+                '''    y: where(layout=(_, UNDEFINED_NAME @ cta)) = tf.add(x, x)
+    return y'''
+            )
+        )
+    with pytest.raises(VerifyError, match="must resolve to an int or DimVar"):
+        parse_script(
+            _closure_source(
+                'BAD = "not-an-int"',
+                '''    y: where(layout=(_, BAD @ cta)) = tf.add(x, x)
+    return y''',
+            )
+        )
 
 
 def test_broadcast_and_partial_bindings_reuse_existing_shard_attrs() -> None:

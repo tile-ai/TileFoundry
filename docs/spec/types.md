@@ -87,6 +87,21 @@ Enforcement is owned by [tir §1.3](./tir.md#13-primfunction) / [hir §1.3](./hi
 dispatch is described in
 [visitor-registry](./visitor-registry.md).
 
+### 2.1 Recursive local projection
+
+```python
+def local_type_of(type: IRType) -> IRType: ...
+```
+
+- constraints:
+  - `local_type_of` MUST recursively project every tensor leaf and rebuild
+    `TupleType` structure.
+  - A resolved nested `ShardLayout` MUST be applied exactly once per layer.
+  - The result MUST remain an ordinary IR Type and MUST NOT introduce a
+    schedule-specific tensor type.
+  - Unresolved layouts and local extents that are not concrete positive
+    integers MUST raise at the projection boundary.
+
 ### `StorageKind` and `resolve_storage`
 
 `StorageKind` is the type-system vocabulary for abstract tensor residency.

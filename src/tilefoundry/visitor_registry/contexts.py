@@ -1,7 +1,8 @@
 """Per-analysis Context dataclasses.
 
 TypeInferContext is the type-of-cache + unified error helper. VerifyContext
-extends it with a mesh scope stack. CostContext is a placeholder.
+extends it with a mesh scope stack. CostContext seeds recursive-local Cost
+Evaluators with the selected candidate's input/output Types.
 
 The concrete CUDA CodegenContext lives in tilefoundry.codegen.cuda.context —
 this module only needs the generic contract, so codegen-side context is
@@ -9,6 +10,7 @@ imported indirectly (no cycle).
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, Union
 
@@ -17,6 +19,7 @@ from tilefoundry.ir.core.expr import Call, Expr
 from tilefoundry.ir.core.stmt import Stmt
 from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.tensor_type import DType, TensorType, Type
+from tilefoundry.ir.types.utils import local_type_of
 
 
 def _constant_type(value: object) -> TensorType:
@@ -92,15 +95,54 @@ class VerifyContext(TypeInferContext):
 
 @dataclass
 class CostContext(TypeInferContext):
-    """Cost-model context. MVP placeholder — no handlers registered."""
+    """Recursive-local Cost Evaluator context.
+
+    A Cost Evaluator needs no active-topology selector: ``local_type_of``
+    projects every already-resolved nested ``ShardLayout`` exactly once, so
+    the same registered handler returns per-GPU work for a GPU-local Type
+    and per-CTA work for the corresponding nested GPU-plus-CTA Type.
+    """
+
+    selected_types: Mapping[int, Type] = field(default_factory=dict)
+    selected_output_type: Type | None = None
+
+    def type_of(self, expr: Expr) -> Type:
+        selected = self.selected_types.get(id(expr))
+        if selected is not None:
+            return selected
+        return super().type_of(expr)
+
+    def local_type_of(self, expr: Expr) -> Type:
+        """Return ``expr``'s recursive-local Type (thin wrapper over the
+        shared ``ir.types.utils.local_type_of`` projection)."""
+        return local_type_of(self.type_of(expr))
+
+    def local_output_type(self, call: Call) -> Type:
+        """Return the selected candidate output in recursive-local form."""
+        output = self.selected_output_type
+        if output is None:
+            output = self.type_of(call)
+        return local_type_of(output)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Cost:
-    """Placeholder cost record. Populated by future costmodel handlers."""
+    """Leaf-local logical work for one selected ``OpCandidate``.
 
-    flops: int = 0
-    bytes: int = 0
+    ``flops`` groups leaf-local logical work by compute ``DType`` so one Op
+    can report mixed work without selecting an ALU/TensorCore
+    implementation. ``bytes`` is scalar logical byte traffic. Neither field
+    selects a hardware implementation.
+    """
+
+    flops: Mapping[DType, int]
+    bytes: int
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(value, int) or value < 0 for value in self.flops.values()):
+            raise ValueError("Cost flops must be non-negative integers")
+        if not isinstance(self.bytes, int) or self.bytes < 0:
+            raise ValueError("Cost bytes must be a non-negative integer")
 
 
 __all__ = [

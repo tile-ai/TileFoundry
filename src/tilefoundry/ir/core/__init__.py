@@ -8,10 +8,10 @@ from .metadata import IRMetadata, get_metadata, remove_metadata, replace_metadat
 from .op import Op, ParameterInfo
 from .registry import (
     AnalysisRegistry,
-    costmodel_registry,
+    cost_evaluator_registry,
     lower_cpu_registry,
     lower_cuda_registry,
-    register_costmodel,
+    register_cost_evaluator,
     register_lower_cpu,
     register_lower_cuda,
     register_typeinfer,
@@ -30,9 +30,9 @@ __all__ = [
     "Op", "ParameterInfo",
     # registry
     "AnalysisRegistry",
-    "typeinfer_registry", "verify_stmt_registry", "costmodel_registry",
+    "typeinfer_registry", "verify_stmt_registry", "cost_evaluator_registry",
     "lower_cuda_registry", "lower_cpu_registry",
-    "register_typeinfer", "register_verify_stmt", "register_costmodel",
+    "register_typeinfer", "register_verify_stmt", "register_cost_evaluator",
     "register_lower_cuda", "register_lower_cpu",
     # context
     "TypeInferContext",

@@ -302,18 +302,29 @@ def _shard_layout_str(sl: ShardLayout, indent: str = "") -> str:
     )
 
 
+def _tensor_import_names(fn: HirFunction) -> str:
+    """``"Tensor"`` or ``"ConstTensor, Tensor"`` — whichever the printed
+    signature (base plus every variant) actually references."""
+    if any(p.is_const for f in (fn, *fn.variants) for p in f.params):
+        return "ConstTensor, Tensor"
+    return "Tensor"
+
+
 def _tensor_annotation(
     ty: TensorType,
     *,
     mesh_name_map: dict[int, str] | None = None,
     indent: str = "",
+    is_const: bool = False,
 ) -> str:
     """Tensor[(shape), dtype, ShardLayout?, storage?] annotation string.
 
     When *mesh_name_map* is provided and the layout's mesh has named axes,
     compact sugar form is used instead of verbose ``ShardLayout(...)``.
+    ``is_const`` selects the ``ConstTensor[...]`` head instead of ``Tensor``.
     """
-    base = f'Tensor[{_shape_tuple(ty.shape)}, "{_dtype_str(ty.dtype)}"'
+    head = "ConstTensor" if is_const else "Tensor"
+    base = f'{head}[{_shape_tuple(ty.shape)}, "{_dtype_str(ty.dtype)}"'
     if isinstance(ty.layout, ShardLayout):
         sl = ty.layout
         mesh = sl.mesh
@@ -718,7 +729,9 @@ def _emit_def(
     for p in fn.params:
         name = _names[id(p)]
         if isinstance(p.type, TensorType):
-            ann = _tensor_annotation(p.type, mesh_name_map=mesh_map, indent=indent)
+            ann = _tensor_annotation(
+                p.type, mesh_name_map=mesh_map, indent=indent, is_const=p.is_const,
+            )
             param_strs.append(f"{indent}{name}: {ann}")
         else:
             param_strs.append(f"{indent}{name}")
@@ -1036,7 +1049,7 @@ def hir_function_to_python(fn: HirFunction) -> str:
         if isinstance(fn.target, CudaTarget) and fn.target.architecture != SM90():
             lines.append("from tilefoundry.ir.types import DType")
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
-    lines.append("from tilefoundry.dsl import Tensor")
+    lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
     lines.append("from tilefoundry.ir.types.shard import (")
     lines.append(f"{indent}B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,")
@@ -1139,7 +1152,7 @@ def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:
         if isinstance(fn.target, CudaTarget) and fn.target.architecture != SM90():
             lines.append("from tilefoundry.ir.types import DType")
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
-    lines.append("from tilefoundry.dsl import Tensor")
+    lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
     lines.append("from tilefoundry.ir.types.shard import (")
     lines.append(f"{indent4}B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,")

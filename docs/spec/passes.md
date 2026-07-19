@@ -392,7 +392,7 @@ src/tilefoundry/passes/
 ```
 
 `passes/analysis/` is reserved but currently unused — the analysis
-registries (`typeinfer` / `verify` / `costmodel`) live in
+registries (`typeinfer` / `verify` / `cost_evaluator`) live in
 [visitor-registry](./visitor-registry.md) and do not move into
 `passes/`. Only a standalone analysis pass that needs to run
 independently and cache its result (such as an `AliasAnalysisPass`)

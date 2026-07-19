@@ -745,7 +745,12 @@ def try_parse_sugar_tensor_type(
     node: ast.AST,
     closure: dict[str, Any],
 ) -> TensorType | None:
-    """Parse a ``Tensor[...]`` annotation with sugar layout.
+    """Parse a ``Tensor[...]`` or ``ConstTensor[...]`` annotation with sugar
+    layout.
+
+    ``ConstTensor[...]`` resolves to the same ``TensorType`` as
+    ``Tensor[...]``; the caller reads the annotation head name separately to
+    set ``Var.is_const``.
 
     Returns the parsed ``TensorType`` on success, or ``None`` if the
     annotation is not in sugar form (caller falls through to ``eval()``
@@ -753,7 +758,9 @@ def try_parse_sugar_tensor_type(
     """
     if not isinstance(node, ast.Subscript):
         return None
-    if not isinstance(node.value, ast.Name) or node.value.id != "Tensor":
+    if not isinstance(node.value, ast.Name) or node.value.id not in (
+        "Tensor", "ConstTensor",
+    ):
         return None
     if not isinstance(node.slice, ast.Tuple):
         return None

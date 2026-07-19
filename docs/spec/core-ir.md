@@ -173,6 +173,7 @@ class Call(Expr):
 class Var(Expr):
     name: str     # a named value (HIR params, TIR bindings)
     type: IRType  # declaration-side type
+    is_const: bool = False
 
 class Constant(Expr):
     value: object  # a literal; a scalar is a rank-0 TensorType
@@ -183,6 +184,9 @@ class Tuple(Expr):
 
 - constraints:
   - `Tuple` is an `Expr` in the IR graph, distinct from the `TupleType` it carries.
+  - `Var.is_const` MUST be preserved for HIR function parameters and MUST mark
+    an external constant tensor parameter without embedding a tensor payload or
+    changing its `TensorType`.
 
 `Tuple` is the value-level aggregate node; it pairs with `TupleType`
 ([types §4](./types.md)) but is not the same — `Tuple` is an `Expr`

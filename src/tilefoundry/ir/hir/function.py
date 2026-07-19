@@ -190,7 +190,8 @@ def elaborate(
         return cached
 
     new_params = tuple(
-        Var(type=bt, name=p.name) for bt, p in zip(bound_types, callee.params)
+        Var(type=bt, name=p.name, is_const=p.is_const)
+        for bt, p in zip(bound_types, callee.params)
     )
     subst = {id(old): new for old, new in zip(callee.params, new_params)}
 

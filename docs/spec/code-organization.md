@@ -113,7 +113,7 @@ each get their own file. Codegen consumes TIR only.
 **Rule 3 — what an IR-class file contains:**
 
 - **HIR Op file** (`ir/hir/<cat>/<name>.py`): Op class +
-  `@register_typeinfer(Op)` + `@register_costmodel(Op)` (if any).
+  `@register_typeinfer(Op)` + `@register_cost_evaluator(Op)` (if any).
 - **TIR effect Op file** (`ir/tir/<cat>/<name>.py`): Op class +
   `@register_typeinfer(Op)` (returning `UnitType`) +
   `@register_verify_stmt(Op)`. The verify rule keys on the Op class
@@ -122,7 +122,7 @@ each get their own file. Codegen consumes TIR only.
 - **TIR-owned Expr Op file**
   (`ir/tir/memory/{alloc_tensor,ptr_of,memory_span,tensor_view}.py`,
   …): Op class + `@register_typeinfer(Op)` +
-  `@register_costmodel(Op)` (if any). Call-position constraints
+  `@register_cost_evaluator(Op)` (if any). Call-position constraints
   (e.g. `AllocTensor` may only appear as `LetStmt.value`) are
   checked by the **enclosing Stmt's** `@register_verify_stmt`; there
   is no separate Op-level verify decorator for these.

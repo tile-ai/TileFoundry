@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import func
-from tilefoundry.dsl import ReduceKind, Tensor, tf
+from tilefoundry.dsl import ConstTensor, ReduceKind, Tensor, tf
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
@@ -19,15 +19,15 @@ SWIGLU_LIMIT = 10.0
 @func
 def pre_moe_rms_norm(
     x: Tensor[(1, 1, DIM), "bf16"],
-    weight: Tensor[(DIM,), "f32"],
+    weight: ConstTensor[(DIM,), "f32"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     return tf.rms_norm(x, weight)
 
 
 @func
 def shared_fp8_dequant_w1(
-    weight: Tensor[(MOE_INTER, DIM), "fp8e4m3"],
-    scale: Tensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
+    scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
 ) -> Tensor[(MOE_INTER, DIM), "bf16"]:
     blocks = tf.reshape(
         tf.cast(weight, dtype="bf16"),
@@ -42,8 +42,8 @@ def shared_fp8_dequant_w1(
 
 @func
 def shared_fp8_dequant_w2(
-    weight: Tensor[(DIM, MOE_INTER), "fp8e4m3"],
-    scale: Tensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
+    weight: ConstTensor[(DIM, MOE_INTER), "fp8e4m3"],
+    scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
 ) -> Tensor[(DIM, MOE_INTER), "bf16"]:
     blocks = tf.reshape(
         tf.cast(weight, dtype="bf16"),
@@ -61,12 +61,12 @@ def moe_experts_core(
     x: Tensor[(1, 1, DIM), "bf16"],
     gweights: Tensor[(1, N_ACT), "f32"],
     eids: Tensor[(1, N_ACT), "i64"],
-    w1_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w1_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w3_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w3_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w2_weight: Tensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
-    w2_scale: Tensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
+    w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    w1_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    w3_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
+    w2_scale: ConstTensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
 ) -> Tensor[(1, N_ACT, DIM), "bf16"]:
     xt = tf.reshape(x, new_shape=(1, DIM))
     gathered_w1 = tf.cast(tf.gather(w1_weight, eids, axis=0), dtype="bf16")
@@ -124,14 +124,14 @@ def moe_experts_core(
 @func
 def moe_topk(
     x: Tensor[(1, 1, DIM), "bf16"],
-    gate_weight: Tensor[(N_ROUTED, DIM), "bf16"],
-    gate_bias: Tensor[(N_ROUTED,), "f32"],
-    w1_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w1_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w3_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w3_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w2_weight: Tensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
-    w2_scale: Tensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
+    gate_weight: ConstTensor[(N_ROUTED, DIM), "bf16"],
+    gate_bias: ConstTensor[(N_ROUTED,), "f32"],
+    w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    w1_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    w3_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
+    w2_scale: ConstTensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
 ) -> Tensor[(1, N_ACT, DIM), "bf16"]:
     xt = tf.reshape(x, new_shape=(1, DIM))
     gate = tf.matmul(
@@ -165,12 +165,12 @@ def moe_topk(
 @func
 def shared_expert(
     x: Tensor[(1, 1, DIM), "bf16"],
-    w1_weight: Tensor[(MOE_INTER, DIM), "fp8e4m3"],
-    w1_scale: Tensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
-    w3_weight: Tensor[(MOE_INTER, DIM), "fp8e4m3"],
-    w3_scale: Tensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
-    w2_weight: Tensor[(DIM, MOE_INTER), "fp8e4m3"],
-    w2_scale: Tensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
+    w1_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
+    w1_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    w3_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
+    w3_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    w2_weight: ConstTensor[(DIM, MOE_INTER), "fp8e4m3"],
+    w2_scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     xt = tf.reshape(x, new_shape=(1, DIM))
     w1 = shared_fp8_dequant_w1(w1_weight, w1_scale)
@@ -203,21 +203,21 @@ def combine_expert_outputs(
 @func(target=CudaTarget(), topologies=(Topology("cta", 132),))
 def deepseek_v4_flash_moe(
     x: Tensor[(1, 1, DIM), "bf16"],
-    rms_weight: Tensor[(DIM,), "f32"],
-    gate_weight: Tensor[(N_ROUTED, DIM), "bf16"],
-    gate_bias: Tensor[(N_ROUTED,), "f32"],
-    routed_w1_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    routed_w1_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    routed_w3_weight: Tensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    routed_w3_scale: Tensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    routed_w2_weight: Tensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
-    routed_w2_scale: Tensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
-    shared_w1_weight: Tensor[(MOE_INTER, DIM), "fp8e4m3"],
-    shared_w1_scale: Tensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
-    shared_w3_weight: Tensor[(MOE_INTER, DIM), "fp8e4m3"],
-    shared_w3_scale: Tensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
-    shared_w2_weight: Tensor[(DIM, MOE_INTER), "fp8e4m3"],
-    shared_w2_scale: Tensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
+    rms_weight: ConstTensor[(DIM,), "f32"],
+    gate_weight: ConstTensor[(N_ROUTED, DIM), "bf16"],
+    gate_bias: ConstTensor[(N_ROUTED,), "f32"],
+    routed_w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    routed_w1_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    routed_w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
+    routed_w3_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
+    routed_w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
+    routed_w2_scale: ConstTensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
+    shared_w1_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
+    shared_w1_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    shared_w3_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
+    shared_w3_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    shared_w2_weight: ConstTensor[(DIM, MOE_INTER), "fp8e4m3"],
+    shared_w2_scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     hidden = pre_moe_rms_norm(x, rms_weight)
     routed_experts: where(layout=(_, 6 @ cta, DIM)) = moe_topk(

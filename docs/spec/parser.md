@@ -143,16 +143,16 @@ directly (§2). When `op-name` is registered with multiple schemas
 trailing-underscore selector is gated to the TIR token; using it in
 HIR is a verify error.
 
-### 1.4 `Tensor[...]` annotations
+### 1.4 `Tensor[...]` and `ConstTensor[...]` annotations
 
-`Tensor` is the parser-owned **DSL authoring annotation sugar**,
+`Tensor` and `ConstTensor` are parser-owned **DSL authoring annotation sugar**,
 imported from `tilefoundry.dsl` (`from tilefoundry.dsl import Tensor`). It
 is distinct from the IR-level `tilefoundry.ir.types.TensorType` (the
 runtime carrier on `Expr.type`); the parser resolves a `Tensor[...]`
 annotation into a `TensorType` at parameter / return-binding time.
 
 ```
-tensor-annot   ::= 'Tensor' '[' shape ',' dtype (',' layout)? (',' storage)? ']'
+tensor-annot   ::= ('Tensor' | 'ConstTensor') '[' shape ',' dtype (',' layout)? (',' storage)? ']'
 shape          ::= '(' (dim (',' dim)*)? ')'        ; '()' is rank-0
 dim            ::= integer-literal | dim-Expr        ; dim-Expr per types §4
 dtype          ::= '"f32"' | '"f16"' | '"bf16"' | …  ; see types §3
@@ -161,7 +161,10 @@ layout         ::= layout-sugar                      ; see §1.5
 storage        ::= '"host"' | '"gmem"' | '"smem"' | '"rmem"' | '"tmem"'
 ```
 
-`Tensor[...]` is the carrier of optional layout sugar; it does not
+`Tensor[...]` and `ConstTensor[...]` resolve to the same ordinary `TensorType`;
+the latter sets `Var.is_const=True` on a function parameter. `is_const` marks
+external residency semantics only and does not embed a payload. `Tensor[...]` is
+the carrier of optional layout sugar; it does not
 own the sugar (which lives at §1.5). A rank-0 (scalar) tensor is
 written `Tensor[(), "bf16"]`; the form `Tensor["bf16"]` (without
 shape) is rejected.

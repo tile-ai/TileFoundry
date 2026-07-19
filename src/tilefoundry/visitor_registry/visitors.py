@@ -1,4 +1,4 @@
-"""Derived Visitors — TypeInferVisitor / VerifyVisitor / CodegenVisitor / CostVisitor.
+"""Derived Visitors — TypeInferVisitor / VerifyVisitor / CodegenVisitor / CostEvaluator.
 
 `AnalysisRegistry` instance with a traversal skeleton from
 tilefoundry.ir.visitor.
@@ -23,7 +23,7 @@ from .registries import (
     AnalysisRegistry,
     codegen_cpu_registry,
     codegen_cuda_registry,
-    costmodel_registry,
+    cost_evaluator_registry,
     typeinfer_registry,
     verify_stmt_registry,
 )
@@ -183,14 +183,17 @@ class CodegenVisitor:
         )
 
 
-class CostVisitor(ExprVisitor[Cost]):
-    """Placeholder. MVP does not implement a cost model; the class / registry
-    are in place so future handlers can register without a spec churn."""
+class CostEvaluator(ExprVisitor[Cost]):
+    """Dispatch the registered recursive-local Cost Evaluator per Op class.
+
+    A missing evaluator fails closed — it is a construction error, not a
+    zero-Cost default.
+    """
 
     def __init__(
         self,
         ctx: CostContext,
-        registry: AnalysisRegistry = costmodel_registry,
+        registry: AnalysisRegistry = cost_evaluator_registry,
     ) -> None:
         self.ctx = ctx
         self.registry = registry
@@ -198,7 +201,9 @@ class CostVisitor(ExprVisitor[Cost]):
     def visit_Call(self, call: Call) -> Cost:
         fn = self.registry.lookup(type(call.target))
         if fn is None:
-            return Cost()
+            self.ctx.error(
+                call, f"no cost evaluator registered for {type(call.target).__name__}"
+            )
         return fn(call, self.ctx)
 
 
@@ -214,5 +219,5 @@ __all__ = [
     "TypeInferVisitor",
     "VerifyVisitor",
     "CodegenVisitor",
-    "CostVisitor",
+    "CostEvaluator",
 ]

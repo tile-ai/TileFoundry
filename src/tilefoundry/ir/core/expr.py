@@ -49,6 +49,7 @@ class Expr:
 @dataclass(frozen=True)
 class Var(Expr):
     name: str
+    is_const: bool = False
 
 
 @dataclass(frozen=True)

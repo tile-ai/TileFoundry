@@ -420,6 +420,7 @@ def _parse_binding_set(node: ast.AST) -> list[tuple[str, Broadcast | Partial]]:
 
 def _parse_layout_constraint(
     node: ast.AST,
+    resolve_extent,
 ) -> LayoutConstraint:
     if not isinstance(node, ast.Tuple):
         raise VerifyError("layout constraint must be a tuple")
@@ -441,22 +442,14 @@ def _parse_layout_constraint(
         if isinstance(item, ast.Name) and item.id == "D":
             raise VerifyError("layout broadcast must use a `{topology @ B()}` binding")
         if isinstance(item, ast.BinOp) and isinstance(item.op, ast.MatMult):
-            extent = _constraint_value(item.left)
+            extent = resolve_extent(item.left)
             topology = _constraint_value(item.right)
             if not isinstance(topology, str) or not topology:
                 raise VerifyError("layout topology binding must be symbolic")
-            if isinstance(extent, bool) or not isinstance(extent, (int, str)):
-                raise VerifyError("layout split extent must be an integer or symbolic name")
             shape.append(extent)
             bindings.append((topology, Split(index)))
             continue
-        extent = _constraint_value(item)
-        if isinstance(extent, bool) or not isinstance(extent, (int, str)):
-            raise VerifyError(
-                "layout dimensions must use `_`, an integer, or a symbolic "
-                "extent with `@ topology`"
-            )
-        shape.append(extent)
+        shape.append(resolve_extent(item))
     if extras:
         bindings.extend(_parse_binding_set(extras[0]))
     if len({topology for topology, _ in bindings}) != len(bindings):
@@ -490,13 +483,33 @@ def _collect_closure(fn, extra: dict[str, Any] | None = None) -> dict[str, Any]:
                 pass
     return closure
 
+def _annotation_head_name(node: ast.AST) -> str | None:
+    """Return the subscript base identifier (``Tensor`` / ``ConstTensor``),
+    resolving through an attribute path such as ``dsl.ConstTensor``."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _is_const_tensor_annotation(node: ast.AST) -> bool:
+    """``ConstTensor[...]`` marks a parameter ``is_const=True``; ``Tensor[...]``
+    and every other annotation form leave it ``False``."""
+    return (
+        isinstance(node, ast.Subscript)
+        and _annotation_head_name(node.value) == "ConstTensor"
+    )
+
+
 def _build_params(node: ast.FunctionDef, closure: dict[str, Any]) -> tuple[Var, ...]:
     out: list[Var] = []
     for a in node.args.args:
         if a.annotation is None:
             raise VerifyError(f"@tilefoundry.func param {a.arg!r} must be annotated")
         ann_type = _resolve_tensor_type(a.annotation, closure)
-        out.append(Var(type=ann_type, name=a.arg))
+        is_const = _is_const_tensor_annotation(a.annotation)
+        out.append(Var(type=ann_type, name=a.arg, is_const=is_const))
     return tuple(out)
 
 def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
@@ -736,7 +749,9 @@ class _HirBodyVisitor(BaseExprVisitor):
                 )
             fields.add(keyword.arg)
             if keyword.arg == "layout":
-                layout = _parse_layout_constraint(keyword.value)
+                layout = _parse_layout_constraint(
+                    keyword.value, self._resolve_layout_extent
+                )
                 constraints.append(
                     dataclasses.replace(
                         layout,
@@ -781,6 +796,38 @@ class _HirBodyVisitor(BaseExprVisitor):
                 )
         return ScheduleConstraintMetadata(
             constraints=tuple(constraints), source_loc=source_loc
+        )
+
+    def _resolve_layout_extent(self, node: ast.AST) -> int | DimVar:
+        """Resolve one ``where(layout=...)`` shape entry to a concrete
+        ``int``/``DimVar`` (the ``_`` wildcard is handled by the caller before
+        this is reached). A literal resolves directly; a symbolic name
+        resolves through the lexical env / authoring closure, matching
+        ``_eval_static``'s ``Name`` resolution."""
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise VerifyError(
+                    "layout dimensions must use `_`, an integer, or a "
+                    "symbolic extent with `@ topology`"
+                )
+            return value
+        if isinstance(node, ast.Name):
+            try:
+                resolved = self._eval_static(node)
+            except (TypeError, ValueError, VerifyError) as exc:
+                raise VerifyError(
+                    f"where layout extent {node.id!r} could not be resolved: {exc}"
+                ) from exc
+            if isinstance(resolved, bool) or not isinstance(resolved, (int, DimVar)):
+                raise VerifyError(
+                    f"where layout extent {node.id!r} must resolve to an "
+                    f"int or DimVar, got {type(resolved).__name__}"
+                )
+            return resolved
+        raise VerifyError(
+            "layout dimensions must use `_`, an integer, or a symbolic "
+            "extent with `@ topology`"
         )
 
     def _resolve_loop_bound(self, node: ast.AST):

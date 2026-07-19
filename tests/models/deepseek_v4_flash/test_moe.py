@@ -62,7 +62,7 @@ def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
     routed = constraint_metadata(routed_call).constraints[0]
     assert isinstance(routed, LayoutConstraint)
     assert repr(routed.layout.shape[0]) == "_"
-    assert routed.layout.shape[1:] == (N_ACT, "DIM")
+    assert routed.layout.shape[1:] == (N_ACT, DIM)
     assert routed.bindings == (("cta", Split(1)),)
     assert routed_call.type.shape == (1, N_ACT, DIM)
 
@@ -114,5 +114,5 @@ def test_routed_path_is_ordinary_batched_dataflow() -> None:
 def test_root_printer_keeps_explicit_input_contracts() -> None:
     printed = as_script(deepseek_v4_flash_moe)
     assert "@func(target=CudaTarget(), topologies=(Topology(" in printed
-    assert "routed_experts: where(layout=(_, 6 @ cta, DIM))" in printed
-    assert "combined: where(layout=((_, _, DIM), {cta @ B()}))" in printed
+    assert f"routed_experts: where(layout=(_, 6 @ cta, {DIM}))" in printed
+    assert f"combined: where(layout=((_, _, {DIM}), {{cta @ B()}}))" in printed

@@ -33,7 +33,7 @@ flowchart LR
         TypeVis["<b>TypeInferVisitor</b>"]
         VerifyVis["<b>VerifyVisitor</b>"]
         CodegenVis["<b>CodegenVisitor</b>"]
-        CostVis["<b>CostVisitor</b><br/>(placeholder)"]
+        CostVis["<b>CostEvaluator</b>"]
         TICtx["<b>TypeInferContext</b>"]
         VCtx["<b>VerifyContext</b>"]
         CCtx["<b>CodegenContext</b>"]
@@ -130,7 +130,7 @@ instances split as follows:
 | **typeinfer** | `(Call, TypeInferContext) -> TensorType \| TupleType` | — | Value-producing only |
 | **verify** | — | `(Stmt, VerifyContext) -> None` | Effect-side constraints; for `Evaluate(op, args)`, dispatch keys on the Op class — see [§5](#5-instance-2--verify) |
 | **codegen_\<target\>** | `(Call, CodegenContext) -> str` | `(Stmt, CodegenContext) -> None` | Both sides are emitted |
-| **cost** (placeholder) | `(Call, CostContext) -> Cost` | `(Stmt, CostContext) -> Cost` (optional) | Not implemented in MVP |
+| **cost** | `(Call, CostContext) -> Cost` | `(Stmt, CostContext) -> Cost` (optional) | Recursive-local logical work |
 
 Generic control-flow / binding Stmts (`For` / `If` / `While` /
 `LetStmt` / `Sequential` / `MeshScope` / `Return`) are handled by
@@ -440,32 +440,38 @@ User extension path — adding a new Stmt `MyIntrinsic`:
 
 The visitor / pass pipeline / parser do not change.
 
-## 7. Instance 4 — `cost` (placeholder)
+## 7. Instance 4 — `cost`
 
-The interface mirrors `typeinfer` / `codegen` but **MVP registers no
-handlers**.
+Cost evaluation is a recursive-local analysis. A handler receives selected
+candidate Types through `CostContext`; it does not select hardware resources.
 
 ```python
 @dataclass
 class Cost:
-    flops: int     # the cost carrier's flop count
-    bytes: int     # the cost carrier's byte count
+    flops: Mapping[DType, int]
+    bytes: int
 
-@dataclass
-class CostContext(TypeInferContext): ...           # TypeInferContext subclass reserved for cost state
+class CostContext(TypeInferContext):
+    selected_types: Mapping[int, IRType] = {}
+    selected_output_type: IRType | None = None
 
-costmodel_registry: AnalysisRegistry[type[Op]]     # the cost registry (MVP registers no handlers)
-def register_costmodel(op_cls: type[Op]): ...       # decorator: register a cost handler for one Op class
+    def local_type_of(self, expr: Expr) -> IRType: ...
+    def local_output_type(self, call: Call) -> IRType: ...
 
-class CostVisitor(ExprVisitor[Cost]): ...          # the cost walker
+cost_evaluator_registry: AnalysisRegistry[type[Op]]
+def register_cost_evaluator(op_cls: type[Op]): ...
+
+class CostEvaluator(ExprVisitor[Cost]): ...
 ```
 
 - constraints:
-  - placeholder: the interface signature is reserved for future extension; MVP
-    registers no handlers and cost-based decision rules are out of scope here.
-
-Only the interface signature is reserved for future extension.
-Cost-based decision rules are not in scope here.
+  - every required primitive Op MUST have one registered evaluator; a missing
+    evaluator MUST fail with the Op name and source location.
+  - `flops` MUST group leaf-local logical work by compute `DType`, and `bytes`
+    MUST be one scalar logical byte count.
+  - `CostContext.local_type_of` MUST apply every resolved nested `ShardLayout`
+    exactly once and MUST reject unresolved or non-concrete local extents at the
+    point where the evaluator requires them.
 
 ## 8. Shared helpers
 

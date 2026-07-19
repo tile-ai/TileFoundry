@@ -33,7 +33,7 @@ typeinfer_registry: AnalysisRegistry = AnalysisRegistry("typeinfer")
 verify_stmt_registry: AnalysisRegistry = AnalysisRegistry("verify_stmt")
 codegen_cuda_registry: AnalysisRegistry = AnalysisRegistry("codegen_cuda")
 codegen_cpu_registry: AnalysisRegistry = AnalysisRegistry("codegen_cpu")
-costmodel_registry: AnalysisRegistry = AnalysisRegistry("costmodel")
+cost_evaluator_registry: AnalysisRegistry = AnalysisRegistry("cost_evaluator")
 # HIR op class → its HIR→TIR lowering handler. The HirToTir pass dispatches on
 # ``type(call.target)`` through this registry instead of an isinstance chain, so
 # a target-owned op (e.g. the CUDA MMA op) registers its own lowering.
@@ -72,9 +72,9 @@ def register_codegen_cpu(cls: type):
     return decorator
 
 
-def register_costmodel(op_cls: type):
+def register_cost_evaluator(op_cls: type):
     def decorator(fn: Callable) -> Callable:
-        costmodel_registry.register(op_cls, fn)
+        cost_evaluator_registry.register(op_cls, fn)
         return fn
 
     return decorator
@@ -94,12 +94,12 @@ __all__ = [
     "verify_stmt_registry",
     "codegen_cuda_registry",
     "codegen_cpu_registry",
-    "costmodel_registry",
+    "cost_evaluator_registry",
     "hir_lowering_registry",
     "register_typeinfer",
     "register_verify_stmt",
     "register_codegen_cuda",
     "register_codegen_cpu",
-    "register_costmodel",
+    "register_cost_evaluator",
     "register_hir_lowering",
 ]

@@ -17,14 +17,13 @@ from tilefoundry.visitor_registry import (
     typeinfer_registry,
 )
 from tilefoundry.visitor_registry.contexts import (
-    Cost,
     CostContext,
     TypeInferContext,
     VerifyContext,
 )
 from tilefoundry.visitor_registry.visitors import (
     CodegenVisitor,
-    CostVisitor,
+    CostEvaluator,
     TypeInferVisitor,
     VerifyVisitor,
 )
@@ -99,15 +98,15 @@ def test_codegen_visitor_missing_handler_raises_for_op() -> None:
         v.emit_expr(call)
 
 
-def test_cost_visitor_default_zero_when_unregistered() -> None:
-    """MVP: no costmodel handlers registered → ``Cost()`` placeholder."""
+def test_cost_evaluator_fails_closed_when_unregistered() -> None:
+    """A missing Cost Evaluator is a construction error, not a zero Cost."""
     class _Op(Op):
         pass
 
-    out = CostVisitor(CostContext()).visit_Call(
-        Call(type=_t(), target=_Op(), args=())
-    )
-    assert out == Cost()
+    with pytest.raises(VerifyError, match="no cost evaluator registered for _Op"):
+        CostEvaluator(CostContext()).visit_Call(
+            Call(type=_t(), target=_Op(), args=())
+        )
 
 
 def test_register_typeinfer_double_register_rejected() -> None:
