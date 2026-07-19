@@ -24,7 +24,13 @@ from tests.models.qwen3_5_30b_a3b.gqa_online import (
     NUM_SPLITS,
     gqa_online_attend,
 )
+from tests.models.qwen3_5_30b_a3b.static_online import qwen_static_online
 from tilefoundry.evaluator import evaluate
+from tilefoundry.inspection import as_script
+from tilefoundry.ir.core import Call, Tuple
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.parser.hir_parser import parse_script
+from tilefoundry.target import CudaTarget
 
 Hq, Hkv, D, G = NUM_Q_HEADS, NUM_KV_HEADS, HEAD_DIM, GQA_GROUP
 _SCALE = 1.0 / math.sqrt(D)
@@ -99,3 +105,45 @@ def test_context_variant_fails_closed_on_unaligned_ctx(ctx):
     q, k, v = _inputs(2, ctx)
     with pytest.raises(RuntimeError, match="invalid for input of size"):
         evaluate(_CTX_VARIANT, q, k, v, device="cpu")
+
+
+def _walk_ir(expr, seen=None):
+    if seen is None:
+        seen = set()
+    if expr is None or id(expr) in seen:
+        return
+    seen.add(id(expr))
+    yield expr
+    if isinstance(expr, Call):
+        for arg in expr.args:
+            yield from _walk_ir(arg, seen)
+    elif isinstance(expr, Tuple):
+        for element in expr.elements:
+            yield from _walk_ir(element, seen)
+    elif isinstance(expr, GridRegionExpr):
+        for arg in expr.init_args:
+            yield from _walk_ir(arg, seen)
+        yield from _walk_ir(expr.body, seen)
+        for value in expr.yield_values:
+            yield from _walk_ir(value, seen)
+
+
+def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
+    regions = tuple(
+        expr for expr in _walk_ir(qwen_static_online.body) if isinstance(expr, GridRegionExpr)
+    )
+    assert len(regions) == 1
+    region = regions[0]
+    assert (region.start, region.extent, region.step) == (0, 4096, 1)
+    assert {value.name for value in region.carried_args} == {"m", "l", "o"}
+    assert qwen_static_online.target == CudaTarget()
+    assert tuple(
+        (topology.name, topology.size) for topology in qwen_static_online.topologies
+    ) == (("cta", 132),)
+
+    reparsed = parse_script(as_script(qwen_static_online))
+    reparsed_regions = tuple(
+        expr for expr in _walk_ir(reparsed.body) if isinstance(expr, GridRegionExpr)
+    )
+    assert len(reparsed_regions) == 1
+    assert reparsed_regions[0].extent == 4096
