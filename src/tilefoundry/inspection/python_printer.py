@@ -42,15 +42,13 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule.constraints import (
-    WILDCARD,
     LayoutConstraint,
-    LayoutDimKind,
     MeshConstraint,
-    PartialConstraint,
     ScheduleConstraintMetadata,
     StorageConstraint,
     constraint_metadata,
 )
+from tilefoundry.schedule.constraints.layout import is_layout_wildcard
 from tilefoundry.target import CpuTarget, CudaTarget, Target
 from tilefoundry.target.cuda import SM90
 
@@ -437,36 +435,48 @@ def _sanitize_name(name: str) -> str:
 
 
 def _constraint_value_str(value: object) -> str:
-    if value is WILDCARD:
+    if is_layout_wildcard(value):
         return "_"
     if isinstance(value, str) and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", value):
         return value
     return repr(value)
 
 
-def _layout_constraint_str(constraint: LayoutConstraint, partials: list[PartialConstraint]) -> str:
+def _layout_constraint_str(constraint: LayoutConstraint) -> str:
+    split_bindings = {
+        attr.axis: (topology, attr)
+        for topology, attr in constraint.bindings
+        if isinstance(attr, Split)
+    }
     dims: list[str] = []
-    for dim in constraint.dims:
-        if dim.kind in (LayoutDimKind.WILDCARD, LayoutDimKind.UNCONSTRAINED):
-            dims.append("_")
-        elif dim.kind is LayoutDimKind.BROADCAST:
-            dims.append("D")
-        elif dim.kind is LayoutDimKind.SPLIT:
+    for index, extent in enumerate(constraint.layout.shape):
+        if index in split_bindings:
+            topology, _ = split_bindings[index]
             dims.append(
-                f"{_constraint_value_str(dim.extent)} @ "
-                f"{_constraint_value_str(dim.topology)}"
+                f"{_constraint_value_str(extent)} @ "
+                f"{_constraint_value_str(topology)}"
             )
         else:
-            dims.append(_constraint_value_str(dim.extent))
+            dims.append(_constraint_value_str(extent))
     dims_str = "(" + ", ".join(dims) + ("," if len(dims) == 1 else "") + ")"
-    topology_partials = [item for item in partials if item.topology is not None]
-    if not topology_partials:
+    bindings = [
+        (topology, attr)
+        for topology, attr in constraint.bindings
+        if not isinstance(attr, Split)
+    ]
+    if not bindings:
         return dims_str
-    partial_str = ", ".join(
-        f'{_constraint_value_str(item.topology)} @ P("{item.reduction}")'
-        for item in topology_partials
-    )
-    return f"({dims_str}, {{{partial_str}}})"
+    binding_str = []
+    for topology, attr in bindings:
+        if isinstance(attr, Broadcast):
+            binding_str.append(f"{_constraint_value_str(topology)} @ B()")
+        elif isinstance(attr, Partial):
+            binding_str.append(
+                f'{_constraint_value_str(topology)} @ P("{attr.reduction}")'
+            )
+        else:  # pragma: no cover - LayoutConstraint validates this type
+            raise TypeError(f"unsupported layout binding {type(attr).__name__}")
+    return f"({dims_str}, {{{', '.join(binding_str)}}})"
 
 
 def _where_str(metadata: ScheduleConstraintMetadata) -> str:
@@ -474,19 +484,14 @@ def _where_str(metadata: ScheduleConstraintMetadata) -> str:
         (item for item in metadata.constraints if isinstance(item, LayoutConstraint)),
         None,
     )
-    partials = [
-        item for item in metadata.constraints if isinstance(item, PartialConstraint)
-    ]
     fields: list[str] = []
     if layout is not None:
-        fields.append(f"layout={_layout_constraint_str(layout, partials)}")
+        fields.append(f"layout={_layout_constraint_str(layout)}")
     for item in metadata.constraints:
         if isinstance(item, MeshConstraint):
             fields.append(f"mesh={_mesh_str(item.mesh)}")
         elif isinstance(item, StorageConstraint):
             fields.append(f'storage="{item.storage.name.lower()}"')
-        elif isinstance(item, PartialConstraint) and item.topology is None:
-            fields.append(f'partial=P("{item.reduction}")')
     return "where(" + ", ".join(fields) + ")"
 
 

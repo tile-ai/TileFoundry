@@ -449,16 +449,3 @@ logical shape → layout domain in
 [analysis §3.1](./analysis.md#31-logical-shape-to-layout-domain), and
 relation-driven propagation in
 [analysis §3.2](./analysis.md#32-relation-driven-shard-propagation).
-
-## 9. Constraint-only physical patterns
-
-Constraint layout patterns use `_` for a private wildcard dimension, an
-integer or symbolic name for an exact dimension, `D` for broadcast, and
-`extent @ topology` for a split dimension. A wildcard is distinct from
-`Layout`'s `None` value and MUST NOT be stored as a `TensorType.layout`.
-
-The constraint parser derives physical shape and layout attributes from these
-patterns while retaining all topology bindings. A concrete `ShardLayout`
-combines a physical `Layout` with its mesh and remains the representation used
-by executable tensor types; a constraint pattern alone does not create a
-complete shard layout.

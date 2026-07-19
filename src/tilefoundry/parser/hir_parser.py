@@ -20,21 +20,18 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology
+from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
 from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.schedule.constraints import (
-    WILDCARD,
     ConstraintProvenance,
     LayoutConstraint,
-    LayoutDimConstraint,
-    LayoutDimKind,
     MeshConstraint,
-    PartialConstraint,
     ScheduleConstraint,
     ScheduleConstraintMetadata,
     SourceLocation,
     StorageConstraint,
 )
+from tilefoundry.schedule.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.target import Target, resolve_target
 
 from .base import BaseExprVisitor, _constant_from_py, _warn_if_ir_object, extract_ast
@@ -386,34 +383,44 @@ def _constraint_value(node: ast.AST):
     )
 
 
-def _parse_partial_value(node: ast.AST) -> str:
+def _parse_partial_value(node: ast.AST) -> Partial:
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-        raise VerifyError('partial constraint must be P("reduction")')
+        raise VerifyError('Partial binding must use P("reduction")')
     if node.func.id != "P" or len(node.args) != 1 or node.keywords:
-        raise VerifyError('partial constraint must be P("reduction")')
+        raise VerifyError('Partial binding must use P("reduction")')
     value = _constraint_value(node.args[0])
     if not isinstance(value, str) or not value:
         raise VerifyError("partial reduction must be a non-empty string")
-    return value
+    return Partial(value)
 
 
-def _parse_partial_set(node: ast.AST) -> list[tuple[str, str]]:
+def _parse_binding_set(node: ast.AST) -> list[tuple[str, Broadcast | Partial]]:
     if not isinstance(node, ast.Set):
-        raise VerifyError("layout Partial sugar must be a set")
-    out: list[tuple[str, str]] = []
+        raise VerifyError("layout bindings must be a set")
+    out: list[tuple[str, Broadcast | Partial]] = []
     for item in node.elts:
         if not isinstance(item, ast.BinOp) or not isinstance(item.op, ast.MatMult):
-            raise VerifyError('Partial sugar must use `cta @ P("sum")`')
+            raise VerifyError('layout bindings must use `topology @ B()` or `P()`')
         topology = _constraint_value(item.left)
         if not isinstance(topology, str) or not topology:
-            raise VerifyError("Partial sugar topology must be symbolic")
-        out.append((topology, _parse_partial_value(item.right)))
+            raise VerifyError("layout binding topology must be symbolic")
+        if (
+            isinstance(item.right, ast.Call)
+            and isinstance(item.right.func, ast.Name)
+            and item.right.func.id == "B"
+            and not item.right.args
+            and not item.right.keywords
+        ):
+            attr: Broadcast | Partial = Broadcast()
+        else:
+            attr = _parse_partial_value(item.right)
+        out.append((topology, attr))
     return out
 
 
 def _parse_layout_constraint(
     node: ast.AST,
-) -> tuple[tuple[LayoutDimConstraint, ...], tuple[tuple[str, str], ...]]:
+) -> LayoutConstraint:
     if not isinstance(node, ast.Tuple):
         raise VerifyError("layout constraint must be a tuple")
     dims_node = node
@@ -422,40 +429,39 @@ def _parse_layout_constraint(
         dims_node = node.elts[0]
         extras = tuple(node.elts[1:])
         if len(extras) > 1:
-            raise VerifyError("layout constraint accepts at most one Partial set")
+            raise VerifyError("layout constraint accepts one binding set")
     if not dims_node.elts:
         raise VerifyError("layout constraint cannot be empty")
-    dims: list[LayoutDimConstraint] = []
+    shape: list[object] = []
+    bindings: list[tuple[str, Split | Broadcast | Partial]] = []
     for index, item in enumerate(dims_node.elts):
         if isinstance(item, ast.Name) and item.id == "_":
-            dims.append(LayoutDimConstraint(index, LayoutDimKind.WILDCARD, WILDCARD))
+            shape.append(_LAYOUT_WILDCARD)
             continue
         if isinstance(item, ast.Name) and item.id == "D":
-            dims.append(LayoutDimConstraint(index, LayoutDimKind.BROADCAST, 1))
-            continue
+            raise VerifyError("layout broadcast must use a `{topology @ B()}` binding")
         if isinstance(item, ast.BinOp) and isinstance(item.op, ast.MatMult):
             extent = _constraint_value(item.left)
             topology = _constraint_value(item.right)
             if not isinstance(topology, str) or not topology:
                 raise VerifyError("layout topology binding must be symbolic")
-            dims.append(
-                LayoutDimConstraint(
-                    index=index,
-                    kind=LayoutDimKind.SPLIT,
-                    extent=extent,
-                    topology=topology,
-                )
-            )
+            if isinstance(extent, bool) or not isinstance(extent, (int, str)):
+                raise VerifyError("layout split extent must be an integer or symbolic name")
+            shape.append(extent)
+            bindings.append((topology, Split(index)))
             continue
         extent = _constraint_value(item)
         if isinstance(extent, bool) or not isinstance(extent, (int, str)):
             raise VerifyError(
-                "layout dimensions must use `_`, `D`, an integer, or a symbolic "
+                "layout dimensions must use `_`, an integer, or a symbolic "
                 "extent with `@ topology`"
             )
-        dims.append(LayoutDimConstraint(index, LayoutDimKind.EXACT, extent))
-    partials = () if not extras else tuple(_parse_partial_set(extras[0]))
-    return tuple(dims), partials
+        shape.append(extent)
+    if extras:
+        bindings.extend(_parse_binding_set(extras[0]))
+    if len({topology for topology, _ in bindings}) != len(bindings):
+        raise VerifyError("layout constraint cannot bind one topology more than once")
+    return LayoutConstraint(layout=Layout(shape=tuple(shape)), bindings=tuple(bindings))
 
 def _is_func_decorator(dec: ast.AST) -> bool:
     """Check if an AST decorator node is ``@func`` or ``@func(...)``."""
@@ -730,44 +736,10 @@ class _HirBodyVisitor(BaseExprVisitor):
                 )
             fields.add(keyword.arg)
             if keyword.arg == "layout":
-                dims, partials = _parse_layout_constraint(keyword.value)
-                split_topologies = [
-                    dim.topology
-                    for dim in dims
-                    if dim.kind is LayoutDimKind.SPLIT
-                ]
-                if len(split_topologies) != len(set(split_topologies)):
-                    raise VerifyError(
-                        f"layout constraint repeats a topology binding at "
-                        f"{source_loc.describe()}"
-                    )
+                layout = _parse_layout_constraint(keyword.value)
                 constraints.append(
-                    LayoutConstraint(
-                        dims=dims,
-                        source_loc=source_loc,
-                        provenance=ConstraintProvenance.AUTHOR,
-                    )
-                )
-                partial_topologies: set[str] = set()
-                for topology, reduction in partials:
-                    if topology in partial_topologies:
-                        raise VerifyError(
-                            f"layout constraint repeats Partial topology "
-                            f"{topology!r} at {source_loc.describe()}"
-                        )
-                    partial_topologies.add(topology)
-                    constraints.append(
-                        PartialConstraint(
-                            reduction=reduction,
-                            topology=topology,
-                            source_loc=source_loc,
-                            provenance=ConstraintProvenance.AUTHOR,
-                        )
-                    )
-            elif keyword.arg == "partial":
-                constraints.append(
-                    PartialConstraint(
-                        reduction=_parse_partial_value(keyword.value),
+                    dataclasses.replace(
+                        layout,
                         source_loc=source_loc,
                         provenance=ConstraintProvenance.AUTHOR,
                     )
@@ -805,7 +777,7 @@ class _HirBodyVisitor(BaseExprVisitor):
             else:
                 raise VerifyError(
                     f"where(...) has unknown field {keyword.arg!r}; use "
-                    "layout=..., mesh=..., storage=..., or partial=..."
+                    "layout=..., mesh=..., or storage=..."
                 )
         return ScheduleConstraintMetadata(
             constraints=tuple(constraints), source_loc=source_loc

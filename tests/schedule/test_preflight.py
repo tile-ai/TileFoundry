@@ -16,7 +16,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.parser import parse_func_source
+from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.target.cuda.preflight import CtaPreflightResult, preflight_cta
 
@@ -131,7 +131,7 @@ def test_recursive_and_kernel_calls_are_rejected() -> None:
 
 
 def test_nested_static_regions_pass_and_dynamic_region_fails() -> None:
-    nested = parse_func_source(
+    nested = parse_script(
         '''from __future__ import annotations
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf

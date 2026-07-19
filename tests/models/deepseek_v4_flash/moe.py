@@ -250,7 +250,7 @@ def deepseek_v4_flash_moe(
         shared_w2_weight,
         shared_w2_scale,
     )
-    combined: where(layout=(D, D, D)) = combine_expert_outputs(
+    combined: where(layout=((_, _, DIM), {cta @ B()})) = combine_expert_outputs(
         routed_value,
         shared_value,
     )

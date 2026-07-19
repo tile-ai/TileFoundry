@@ -160,17 +160,33 @@ class Schedule(Protocol):
 
 Hard schedule constraints are represented by one stage-neutral
 `ScheduleConstraintMetadata` record attached to the constrained HIR
-expression. The record contains zero or more independent
-`LayoutConstraint`, `MeshConstraint`, `StorageConstraint`, and
-`PartialConstraint` values.
+expression. The record contains zero or one `LayoutConstraint`,
+`MeshConstraint`, and `StorageConstraint` value, represented by the existing
+constraint base and source-location fields.
 
-`LayoutConstraint` preserves exact, symbolic, wildcard, broadcast, and split
-dimensions, including split topology bindings and the derived physical shape
-and layout attributes. `MeshConstraint` preserves the complete `Mesh`;
-`StorageConstraint` preserves every storage kind accepted by the storage
-registry; and `PartialConstraint` preserves both the reduction name and
-topology. Metadata is not part of expression equality, hashing, or the
-printed `repr`.
+```python
+class LayoutConstraint(ScheduleConstraint):
+    """Fix a physical Layout pattern and ShardAttr bindings."""
+
+    layout: Layout
+    bindings: tuple[tuple[str, ShardAttr], ...]
+
+class MeshConstraint(ScheduleConstraint):
+    """Filter an eventual ShardLayout by one Mesh value."""
+
+    mesh: Mesh
+
+class StorageConstraint(ScheduleConstraint):
+    """Filter a value by one current StorageKind."""
+
+    storage: StorageKind
+```
+
+`LayoutConstraint.layout` is constraint-owned and may contain the private
+wildcard sentinel. Its `bindings` reuse `Split`, `Broadcast`, and `Partial`
+from [shard](./shard.md). A wildcard is never stored as `Layout(None)` and
+never enters a `TensorType.layout`. Metadata is not part of expression
+equality, hashing, or the printed `repr`.
 
 These values are hard filters for later scheduling stages. They carry no
 preferences, candidate rows, costs, solver state, or CTA capability
