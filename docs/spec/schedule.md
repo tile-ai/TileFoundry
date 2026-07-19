@@ -192,25 +192,38 @@ These values are hard filters for later scheduling stages. They carry no
 preferences, candidate rows, costs, solver state, or CTA capability
 decisions, and they do not register a scheduling service on a `CudaTarget`.
 
-## 4. CTA input preflight
+## 4. Private parallel-planning construction
 
-CTA input preflight is a private validation boundary over a root HIR
-`Function` or a `Module` entry. The root MUST carry an explicit
-`CudaTarget` and exactly one `Topology("cta", n)` with a static integer
-`1 <= n <= device.sm_count`. A dynamic or missing CTA extent is invalid for
-this boundary.
+The CTA parallel planner has one private construction boundary:
 
-Other root topology declarations are retained on the HIR and are ignored by
-CTA preflight. They do not participate in CTA validation. A helper function
-with no target and no program topologies inherits the caller's effective
-target without mutating its source value. An explicit helper target MUST match
-that effective target, and a helper with program topologies is rejected as a
-kernel boundary. Recursive helper calls, TIR kernel calls, and dispatch
-prototypes are invalid HIR CTA inputs.
+```python
+def build_planning_problem(module: Module, root: Function) -> PlanningProblem: ...
+```
 
-Preflight recursively visits expression arguments and nested
-`GridRegionExpr` values. Region `start` MUST be non-negative, while
-`extent` and `step` MUST be positive static integers. Dynamic bounds fail
-with the owning function and root context. Successful preflight returns only
-immutable root CTA facts and the reachable HIR function set; it does not
-register or invoke a scheduling service.
+- constraints:
+  - `root` MUST be one of `module.functions`, carry an explicit `CudaTarget`,
+    and declare exactly one static `Topology("cta", n)` with
+    `1 <= n <= root.target.device.sm_count`.
+  - Construction MUST read typed HIR directly and MUST use object identity for
+    site, value, use, function-instance, and region traversal.
+  - Each ordinary helper call MUST receive a distinct function-instance path;
+    helper parameters MUST alias caller Values and MUST NOT create source
+    buckets.
+  - `Tuple` containers and `TupleGetItem` projections MUST remain structural.
+    Tensor leaves receive distinct ValueIds, while a projection resolves to an
+    existing leaf Value and creates no operation candidate.
+  - Static `GridRegionExpr` bodies MUST be represented once per region. The
+    planner MUST record `ceil_div(extent - start, step)` and reject dynamic,
+    empty, or non-positive domains with source context.
+  - The private `PlanningProblem` MUST contain candidate buckets, unified
+    `OpCandidate` records, candidate dependencies, complete where requirements,
+    fixed target-derived cost facts, and region facts. It MUST NOT contain
+    solver variables, selected candidates, rewritten HIR, or a public report.
+  - Scheduled tensor buckets MUST use `StorageKind.GMEM`; an authored type or
+    hard constraint requiring another storage kind MUST fail at this boundary.
+  - A complete `where(layout=..., mesh=..., storage=...)` annotation MUST match
+    one concrete `(Value, Type)` bucket conjunctively. `_` is the only layout
+    wildcard. A sliced Mesh constraint MAY set the bucket's fixed offset.
+  - Direct dependencies MUST carry `SAME_INTERVAL` or `CONTAINED` placement
+    relations. Missing legal operation candidates, evaluator registrations,
+    matching requirements, or root-connected paths MUST fail with source context.

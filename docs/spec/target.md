@@ -171,14 +171,14 @@ class CpuTarget(Target):
      equal architecture and device facts. A mismatch MUST fail before codegen
      grouping.
 
-## 7. CTA preflight ownership
+## 7. CTA planning ownership
 
-CTA input validation is owned by the private CUDA target boundary. It reads
-the explicit root `CudaTarget`, its single static CTA topology, reachable
-helper boundaries, and nested HIR grid regions. It MUST use the target's fixed
-`H200SXM.sm_count` resource fact and MUST NOT infer a root CTA extent from
-the target.
+CTA parallel-planning construction is owned by the private CUDA target module.
+It reads the explicit root `CudaTarget`, its single static CTA topology,
+call-path helper instances, and nested HIR grid regions. It MUST use the
+target's fixed `H200SXM.sm_count`, `peak_for(dtype)`, and HBM bandwidth facts;
+it MUST NOT infer a root CTA extent from the target.
 
 The CUDA target MUST remain free of a default CTA scheduling service. Target
 construction therefore does not expose a partially functional `solve`
-operation, and preflight does not change target state or attach services.
+operation, and planning does not change target state or attach services.
