@@ -301,3 +301,20 @@ dump("ir.py", src, DumpFlags.PASS_IR)
 
 Output rooted at `test_results/{worker_id}/{nodeid}/` (per-test
 subdirectory).  `pytest.mark.no_dump` opt-out available.
+
+## 5. Schedule constraint presentation
+
+The Python printer MUST present hard schedule constraints as one
+keyword-only `where(...)` annotation attached to the constrained tensor:
+
+```python
+y: where(layout=(_, 16 @ cta), mesh=cta_mesh,
+         storage="gmem", partial=P("sum")) = tf.add(x, x)
+```
+
+The printer MUST preserve every constraint field, including exact and
+symbolic extents, topology bindings, wildcard dimensions, mesh values,
+storage kinds, and partial-reduction values. A wildcard is printed as `_`;
+it MUST NOT be printed as `None` or as a complete `Layout`. The printer
+MUST keep unconstrained functions and expressions byte-for-byte compatible
+with the existing output contract.

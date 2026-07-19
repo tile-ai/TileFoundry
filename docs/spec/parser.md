@@ -828,3 +828,31 @@ TIR has no SSA-as-DAG sharing rule; every binding is an explicit
 - Layout sugar that would lose mesh information falls through to the
   verbose form (§1.4); if neither is acceptable, the type is
   rejected.
+
+## 8. Hard schedule constraints
+
+The HIR parser accepts hard schedule constraints through a keyword-only
+`where(...)` annotation on a tensor binding or tensor parameter:
+
+```python
+y: where(layout=(S, 16 @ cta), mesh=cta_mesh,
+         storage="gmem", partial=P("sum")) = value
+```
+
+The annotation MUST be non-empty and MAY contain each of `layout`,
+`mesh`, `storage`, and `partial` at most once. The layout value MUST
+be a non-empty tuple. An integer or symbolic name is an exact extent; `_`
+is a private wildcard; `D` is a broadcast dimension; and `extent @
+topology` is a split dimension bound to that topology. The parser MUST
+preserve the distinction between wildcard, broadcast, exact, and split
+dimensions.
+
+`mesh` MUST resolve to an existing `Mesh`, `storage` MUST resolve
+through the current storage-kind registry, and `partial` MUST use
+`P("reduction")` with a non-empty reduction name. A concrete tensor
+expression MUST have at most one constraint metadata record; repeated
+annotations and duplicate topology bindings are rejected. Tuple-valued,
+scalar, unit, direct-subscript, and unresolved annotation subjects are
+rejected. Source locations MUST be retained on the metadata and each
+constraint. Constraint parsing is stage-neutral and MUST NOT consult a CTA
+capability table.

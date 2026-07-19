@@ -39,6 +39,16 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
 )
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.schedule.constraints import (
+    WILDCARD,
+    LayoutConstraint,
+    LayoutDimKind,
+    MeshConstraint,
+    PartialConstraint,
+    ScheduleConstraintMetadata,
+    StorageConstraint,
+    constraint_metadata,
+)
 
 # ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -420,6 +430,67 @@ def _sanitize_name(name: str) -> str:
     return safe or "v"
 
 
+def _constraint_value_str(value: object) -> str:
+    if value is WILDCARD:
+        return "_"
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", value):
+        return value
+    return repr(value)
+
+
+def _layout_constraint_str(constraint: LayoutConstraint, partials: list[PartialConstraint]) -> str:
+    dims: list[str] = []
+    for dim in constraint.dims:
+        if dim.kind in (LayoutDimKind.WILDCARD, LayoutDimKind.UNCONSTRAINED):
+            dims.append("_")
+        elif dim.kind is LayoutDimKind.BROADCAST:
+            dims.append("D")
+        elif dim.kind is LayoutDimKind.SPLIT:
+            dims.append(
+                f"{_constraint_value_str(dim.extent)} @ "
+                f"{_constraint_value_str(dim.topology)}"
+            )
+        else:
+            dims.append(_constraint_value_str(dim.extent))
+    dims_str = "(" + ", ".join(dims) + ("," if len(dims) == 1 else "") + ")"
+    topology_partials = [item for item in partials if item.topology is not None]
+    if not topology_partials:
+        return dims_str
+    partial_str = ", ".join(
+        f'{_constraint_value_str(item.topology)} @ P("{item.reduction}")'
+        for item in topology_partials
+    )
+    return f"({dims_str}, {{{partial_str}}})"
+
+
+def _where_str(metadata: ScheduleConstraintMetadata) -> str:
+    layout = next(
+        (item for item in metadata.constraints if isinstance(item, LayoutConstraint)),
+        None,
+    )
+    partials = [
+        item for item in metadata.constraints if isinstance(item, PartialConstraint)
+    ]
+    fields: list[str] = []
+    if layout is not None:
+        fields.append(f"layout={_layout_constraint_str(layout, partials)}")
+    for item in metadata.constraints:
+        if isinstance(item, MeshConstraint):
+            fields.append(f"mesh={_mesh_str(item.mesh)}")
+        elif isinstance(item, StorageConstraint):
+            fields.append(f'storage="{item.storage.name.lower()}"')
+        elif isinstance(item, PartialConstraint) and item.topology is None:
+            fields.append(f'partial=P("{item.reduction}")')
+    return "where(" + ", ".join(fields) + ")"
+
+
+def _constraint_line(expr: Expr, indent: str, name: str) -> str | None:
+    metadata = constraint_metadata(expr)
+    if metadata is None:
+        return None
+    return f"{indent}{name}: {_where_str(metadata)}"
+
+
 def _collect_meshes(fn: HirFunction) -> dict[int, Mesh]:
     """Collect unique Mesh objects from all ShardLayouts in *fn*."""
     meshes: dict[int, Mesh] = {}
@@ -569,6 +640,11 @@ def _emit_def(
     lines.append(",\n".join(param_strs))
     lines.append(f"){arrow}:")
 
+    for param in fn.params:
+        line = _constraint_line(param, indent, _names[id(param)])
+        if line is not None:
+            lines.append(line)
+
     # A dispatch prototype has no body — declare signature only.
     if fn.body is None:
         lines.append(f"{indent}pass")
@@ -580,6 +656,9 @@ def _emit_def(
         if isinstance(expr, Constant):
             name = _names[id(expr)]
             lines.append(f"{indent}{name} = {repr(expr.value)}")
+            line = _constraint_line(expr, indent, name)
+            if line is not None:
+                lines.append(line)
             continue
         if isinstance(expr, Tuple):
             # A tuple is rendered inline at its use site: as a literal argument
@@ -666,6 +745,9 @@ def _emit_def(
 
                 loc = f'  # loc="{name}"' if expr.loc else ""
                 lines.append(f"{indent}{name} = {call_str}{loc}")
+            line = _constraint_line(expr, indent, name)
+            if line is not None:
+                lines.append(line)
 
     # Return statement. A literal tuple body renders its elements inline
     # (``return (e0, e1)``) rather than a name for the un-emitted Tuple node.

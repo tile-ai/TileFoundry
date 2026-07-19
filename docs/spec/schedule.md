@@ -155,3 +155,23 @@ class Schedule(Protocol):
     `ScheduleResult`.
   - Stage-specific candidate rows, cost data, solver state, and materialization
     helpers MUST remain private to the concrete service.
+
+## 3. Constraint metadata
+
+Hard schedule constraints are represented by one stage-neutral
+`ScheduleConstraintMetadata` record attached to the constrained HIR
+expression. The record contains zero or more independent
+`LayoutConstraint`, `MeshConstraint`, `StorageConstraint`, and
+`PartialConstraint` values.
+
+`LayoutConstraint` preserves exact, symbolic, wildcard, broadcast, and split
+dimensions, including split topology bindings and the derived physical shape
+and layout attributes. `MeshConstraint` preserves the complete `Mesh`;
+`StorageConstraint` preserves every storage kind accepted by the storage
+registry; and `PartialConstraint` preserves both the reduction name and
+topology. Metadata is not part of expression equality, hashing, or the
+printed `repr`.
+
+These values are hard filters for later scheduling stages. They carry no
+preferences, candidate rows, costs, solver state, or CTA capability
+decisions, and they do not register a scheduling service on a `CudaTarget`.
