@@ -35,7 +35,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.visitor import StmtVisitor
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CudaTarget, default_target
 
 from .base import BaseExprVisitor, _i64, extract_ast
 from .dispatch import resolve_stmt
@@ -366,7 +366,12 @@ class _TirBodyVisitor(BaseExprVisitor):
                 f"tir: launch(...) callee {callee_node.id!r} must be a @func or "
                 f"@prim_func device function"
             )
-        if not isinstance(callee_ir.target, CudaTarget):
+        effective_target = (
+            callee_ir.target
+            if callee_ir.target is not None
+            else default_target()
+        )
+        if not isinstance(effective_target, CudaTarget):
             raise VerifyError(
                 f"tir: launch(...) callee {callee_node.id!r} must target a CUDA device"
             )
