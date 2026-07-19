@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.types import DType
+from tilefoundry.target.base import Architecture
 
 
 @dataclass(frozen=True)
-class SM90:
+class SM90(Architecture):
     """SM90 compilation identity and structural capabilities."""
 
     name: str = "sm_90"

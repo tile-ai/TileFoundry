@@ -12,7 +12,20 @@ from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import Schedule
-from tilefoundry.target import H200SXM, SM90, CpuTarget, CudaTarget, Target
+from tilefoundry.target import (
+    H200SXM,
+    SM90,
+    Architecture,
+    CpuTarget,
+    CudaTarget,
+    Device,
+    Target,
+)
+
+
+def test_concrete_hardware_facts_derive_from_target_base_values() -> None:
+    assert isinstance(SM90(), Architecture)
+    assert isinstance(H200SXM(), Device)
 
 
 def test_cuda_target_composes_fixed_architecture_and_device_facts() -> None:

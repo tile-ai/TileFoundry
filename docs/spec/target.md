@@ -29,6 +29,38 @@ class Target:
   - Target values MUST NOT own code emission, linking, loading, or the public
     compile/build/jit entry points.
 
+### 1.1 `Architecture`
+
+```python
+class Architecture:
+    """Describe compilation architecture identity and structural facts."""
+
+    name: str
+    max_threads_per_cta: int
+```
+
+- constraints:
+  - Concrete architecture values MUST be immutable.
+  - `name` MUST be the stable architecture identity used by compilation.
+  - `max_threads_per_cta` MUST describe the architecture's static CTA thread
+    limit.
+
+### 1.2 `Device`
+
+```python
+class Device:
+    """Describe one concrete device's fixed resource facts."""
+
+    name: str
+    sm_count: int
+```
+
+- constraints:
+  - Concrete device values MUST be immutable and describe one device.
+  - `name` MUST be the stable product identity.
+  - Device-specific capacity, bandwidth, and compute-throughput facts belong
+    to concrete subclasses.
+
 ## 2. `SM90`
 
 ```python

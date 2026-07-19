@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target.base import Target, bind_services
+from tilefoundry.target.base import Architecture, Device, Target, bind_services
 
 from .architecture import SM90
 from .device import H200SXM
@@ -16,26 +16,26 @@ class CudaTarget(Target):
     """CUDA target composed from one architecture and one device."""
 
     name: str = field(default="cuda", init=False)
-    architecture: SM90 = field(default_factory=SM90)
-    device: H200SXM = field(default_factory=H200SXM)
+    architecture: Architecture = field(default_factory=SM90)
+    device: Device = field(default_factory=H200SXM)
 
     def __init__(
         self,
-        architecture: SM90 | None = None,
-        device: H200SXM | None = None,
+        architecture: Architecture | None = None,
+        device: Device | None = None,
         *,
         arch: str | None = None,
     ) -> None:
         architecture = SM90() if architecture is None else architecture
         device = H200SXM() if device is None else device
-        if not isinstance(architecture, SM90):
+        if not isinstance(architecture, Architecture):
             raise TypeError(
-                f"CudaTarget.architecture must be SM90, got "
+                f"CudaTarget.architecture must be an Architecture, got "
                 f"{type(architecture).__name__}"
             )
-        if not isinstance(device, H200SXM):
+        if not isinstance(device, Device):
             raise TypeError(
-                f"CudaTarget.device must be H200SXM, got {type(device).__name__}"
+                f"CudaTarget.device must be a Device, got {type(device).__name__}"
             )
         if arch is not None and arch != architecture.name:
             raise ValueError(

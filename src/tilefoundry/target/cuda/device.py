@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.types import DType
+from tilefoundry.target.base import Device
 
 _H200_DENSE_FLOPS = (
     (DType.f32, 67_000_000_000_000),
@@ -15,7 +16,7 @@ _H200_DENSE_FLOPS = (
 
 
 @dataclass(frozen=True)
-class H200SXM:
+class H200SXM(Device):
     """One H200 SXM device with fixed hard resource limits."""
 
     name: str = field(default="h200_sxm", init=False)

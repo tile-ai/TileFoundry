@@ -5,6 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+class Architecture:
+    """Base value for compilation architecture facts."""
+
+    name: str
+    max_threads_per_cta: int
+
+
+class Device:
+    """Base value for one concrete device's resource facts."""
+
+    name: str
+    sm_count: int
+
+
 @dataclass(frozen=True)
 class Target:
     """Identify a compilation backend and its private stage services."""
@@ -64,4 +78,4 @@ class CpuTarget(Target):
     name: str = field(default="cpu", init=False)
 
 
-__all__ = ["CpuTarget", "Target", "bind_services"]
+__all__ = ["Architecture", "CpuTarget", "Device", "Target", "bind_services"]
