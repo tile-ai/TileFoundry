@@ -35,6 +35,7 @@ from tilefoundry.schedule.constraints import (
     SourceLocation,
     StorageConstraint,
 )
+from tilefoundry.target import Target, resolve_target
 
 from .base import BaseExprVisitor, _constant_from_py, _warn_if_ir_object, extract_ast
 from .range_slice import RangeSlice
@@ -136,8 +137,13 @@ def parse_func_source(src: str) -> Function:
 
     # Extract topologies from decorator AST
     parsed_topologies = _extract_topologies_from_decorator(func_node)
+    parsed_target = _extract_target_from_decorator(func_node, closure)
     return _parse_func_node(
-        func_node, closure, topologies=parsed_topologies, source_filename="<string>"
+        func_node,
+        closure,
+        topologies=parsed_topologies,
+        target=parsed_target,
+        source_filename="<string>",
     )
 
 def _parse_func_node(
@@ -243,6 +249,67 @@ def _extract_topologies_from_decorator(node: ast.FunctionDef) -> list["Topology"
                     # Single variable reference from closure (legacy)
                     pass  # handled by the decorator's runtime kwarg passing
     return result
+
+
+def _eval_decorator_static(node: ast.AST, closure: dict[str, Any]):
+    """Evaluate the static expression subset used by decorator kwargs."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        try:
+            return closure[node.id]
+        except KeyError as exc:
+            raise VerifyError(
+                f"undefined name in decorator argument: {node.id!r}"
+            ) from exc
+    if isinstance(node, ast.Attribute):
+        owner = _eval_decorator_static(node.value, closure)
+        try:
+            return getattr(owner, node.attr)
+        except AttributeError as exc:
+            raise VerifyError(
+                f"unknown decorator attribute {node.attr!r} on "
+                f"{type(owner).__name__}"
+            ) from exc
+    if isinstance(node, ast.Tuple):
+        return tuple(_eval_decorator_static(item, closure) for item in node.elts)
+    if isinstance(node, ast.List):
+        return [_eval_decorator_static(item, closure) for item in node.elts]
+    if isinstance(node, ast.Call):
+        if any(keyword.arg is None for keyword in node.keywords):
+            raise VerifyError("decorator arguments do not accept **kwargs")
+        fn = _eval_decorator_static(node.func, closure)
+        args = tuple(_eval_decorator_static(arg, closure) for arg in node.args)
+        kwargs = {
+            keyword.arg: _eval_decorator_static(keyword.value, closure)
+            for keyword in node.keywords
+        }
+        return fn(*args, **kwargs)
+    raise VerifyError(
+        f"unsupported decorator argument {type(node).__name__}; "
+        "expected a static target value"
+    )
+
+
+def _extract_target_from_decorator(
+    node: ast.FunctionDef, closure: dict[str, Any]
+) -> Target | None:
+    """Parse an explicit target value from an @func decorator."""
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call) or not _is_func_decorator(dec):
+            continue
+        for keyword in dec.keywords:
+            if keyword.arg != "target":
+                continue
+            value = _eval_decorator_static(keyword.value, closure)
+            try:
+                target = resolve_target(value)
+            except (TypeError, ValueError) as exc:
+                raise VerifyError(
+                    f"func target must resolve to a Target, got {value!r}"
+                ) from exc
+            return target
+    return None
 
 def _parse_topology_item(node: ast.AST) -> "Topology | None":
     """Parse a single topology declaration from an AST node.
@@ -1300,6 +1367,12 @@ def _parse_module_source_tree(tree: ast.Module) -> Function:
     exec("\n".join(prelude_lines), closure)
 
     parsed_topologies = _extract_topologies_from_decorator(func_node)
-    return _parse_func_node(func_node, closure, topologies=parsed_topologies)
+    parsed_target = _extract_target_from_decorator(func_node, closure)
+    return _parse_func_node(
+        func_node,
+        closure,
+        topologies=parsed_topologies,
+        target=parsed_target,
+    )
 
 __all__ = ["parse_func", "parse_func_source", "parse_module_source", "parse_script"]

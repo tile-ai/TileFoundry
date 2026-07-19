@@ -14,9 +14,11 @@ from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -49,6 +51,8 @@ from tilefoundry.schedule.constraints import (
     StorageConstraint,
     constraint_metadata,
 )
+from tilefoundry.target import CpuTarget, CudaTarget, Target
+from tilefoundry.target.cuda import SM90
 
 # ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -366,6 +370,8 @@ def _op_name(target) -> str:
        ``_op_schema`` (kept for backward compat with hand-built fixtures).
     4. CamelCase → snake_case fallback.
     """
+    if isinstance(target, HirFunction):
+        return target.name
     alias_name = _kinded_alias_name(target)
     if alias_name is not None:
         return alias_name
@@ -567,6 +573,12 @@ def _emit_def(
         elif isinstance(expr, Tuple):
             for el in expr.elements:
                 _topo(el)
+        elif isinstance(expr, GridRegionExpr):
+            for init in expr.init_args:
+                _topo(init)
+            _topo(expr.body)
+            for value in expr.yield_values:
+                _topo(value)
         _order.append(expr)
 
     _topo(fn.body)
@@ -579,17 +591,70 @@ def _emit_def(
         if isinstance(expr, Call):
             _op_names_set.add(_op_name(expr.target))
 
+    _forced_names: dict[int, str] = {}
+    _grid_internal_ids: set[int] = set()
+    _grid_init_ids: set[int] = set()
+
+    def _mark_grid_internal(expr: Expr) -> None:
+        if id(expr) in _grid_internal_ids:
+            return
+        _grid_internal_ids.add(id(expr))
+        if isinstance(expr, Call):
+            for arg in expr.args:
+                _mark_grid_internal(arg)
+        elif isinstance(expr, Tuple):
+            for element in expr.elements:
+                _mark_grid_internal(element)
+        elif isinstance(expr, GridRegionExpr):
+            for init in expr.init_args:
+                _mark_grid_internal(init)
+            _mark_grid_internal(expr.body)
+            for value in expr.yield_values:
+                _mark_grid_internal(value)
+
+    def _mark_grid_init(expr: Expr) -> None:
+        if id(expr) in _grid_init_ids:
+            return
+        _grid_init_ids.add(id(expr))
+        if isinstance(expr, Call):
+            for arg in expr.args:
+                _mark_grid_init(arg)
+        elif isinstance(expr, Tuple):
+            for element in expr.elements:
+                _mark_grid_init(element)
+
+    for expr in _order:
+        if not isinstance(expr, GridRegionExpr):
+            continue
+        for carry, init, value in zip(
+            expr.carried_args, expr.init_args, expr.yield_values
+        ):
+            _forced_names[id(carry)] = _sanitize_name(carry.name)
+            _forced_names[id(init)] = _sanitize_name(carry.name)
+            _forced_names[id(value)] = _sanitize_name(carry.name)
+        _mark_grid_internal(expr.body)
+        for value in expr.yield_values:
+            _mark_grid_internal(value)
+        for init in expr.init_args:
+            _mark_grid_init(init)
+    _grid_internal_ids.difference_update(_grid_init_ids)
+
     def _assign_name(expr: Expr) -> str:
         key = id(expr)
         if key in _names:
             return _names[key]
-        if isinstance(expr, Var):
+        if key in _forced_names:
+            name = _forced_names[key]
+        elif isinstance(expr, Var):
             name = _sanitize_name(expr.name)
         elif isinstance(expr, Call) and expr.loc:
             name = _sanitize_name(expr.loc)
         else:
             name = f"v{_counter[0]}"
             _counter[0] += 1
+        if key in _forced_names and name in _names.values():
+            _names[key] = name
+            return name
         # Avoid shadowing op names when assigning a call result.
         if name in _op_names_set:
             name = f"{name}_out"
@@ -604,18 +669,33 @@ def _emit_def(
     # Assign names
     for expr in _order:
         _assign_name(expr)
+    for expr in _order:
+        if isinstance(expr, GridRegionExpr):
+            for carry in expr.carried_args:
+                _assign_name(carry)
 
     def _tuple_literal(elements) -> str:
-        inner = ", ".join(_names[id(el)] for el in elements)
+        inner = ", ".join(_expr_ref(el) for el in elements)
         if len(elements) == 1:
             inner += ","
         return f"({inner})"
+
+    def _expr_ref(expr: Expr) -> str:
+        if (
+            isinstance(expr, Call)
+            and isinstance(expr.target, TupleGetItem)
+            and len(expr.args) == 1
+            and isinstance(expr.args[0], GridRegionExpr)
+        ):
+            grid = expr.args[0]
+            return _names[id(grid.carried_args[expr.target.index])]
+        return _names[id(expr)]
 
     def _arg_ref(a) -> str:
         # A tuple-valued input (e.g. insert_slice's per-axis offsets) renders
         # inline as a literal so the parser's narrow route lifts it back to a
         # core Tuple on re-parse.
-        return _tuple_literal(a.elements) if isinstance(a, Tuple) else _names[id(a)]
+        return _tuple_literal(a.elements) if isinstance(a, Tuple) else _expr_ref(a)
 
     # Function signature. A ``TupleType`` return has no surface annotation; it
     # is re-inferred from the literal tuple ``return`` body on re-parse.
@@ -650,15 +730,132 @@ def _emit_def(
         lines.append(f"{indent}pass")
         return lines
 
-    for expr in _order:
+    printed: set[int] = {id(param) for param in fn.params}
+
+    def _emit_inline_call(expr: Call, level: str) -> None:
+        name = _names[id(expr)]
+        target = expr.target
+        args_str = ", ".join(_arg_ref(arg) for arg in expr.args)
+        if isinstance(target, Reshard):
+            layout_kw = ""
+            if target.layout is not None:
+                layout_kw = ", layout=" + _shard_layout_str(
+                    target.layout, indent=level + "    "
+                )
+            storage = (
+                f", storage={target.storage.name.lower()}"
+                if target.storage is not None
+                else ""
+            )
+            call_str = f"reshard({args_str}{layout_kw}{storage})"
+        elif isinstance(target, HirFunction):
+            call_str = f"{target.name}({args_str})"
+        else:
+            alias_name = _kinded_alias_name(target)
+            suppress_attrs = {"kind"} if alias_name is not None else set()
+            attr_strs = []
+            for param in type(target).params():
+                if param.kind != "attribute":
+                    continue
+                value = getattr(target, param.name, None)
+                if value is None or param.name in suppress_attrs or param.name == "layout":
+                    continue
+                if isinstance(value, str):
+                    attr_strs.append(f'{param.name}="{value}"')
+                elif isinstance(value, DType):
+                    attr_strs.append(f'{param.name}="{value.name}"')
+                elif isinstance(value, enum.Enum) and isinstance(value.value, str):
+                    attr_strs.append(f'{param.name}="{value.value}"')
+                elif isinstance(value, float):
+                    attr_strs.append(f"{param.name}={value!r}")
+                elif isinstance(value, tuple):
+                    attr_strs.append(f"{param.name}={value}")
+                else:
+                    attr_strs.append(f"{param.name}={value}")
+            call_str = f"{_op_name(target)}({args_str}"
+            if attr_strs:
+                call_str += ", " + ", ".join(attr_strs)
+            call_str += ")"
+        lines.append(f"{level}{name} = {call_str}")
+        printed.add(id(expr))
+
+    def _emit_expr(expr: Expr, level: str) -> None:
+        key = id(expr)
+        if key in printed:
+            return
         if isinstance(expr, Var):
+            printed.add(key)
+            return
+        if isinstance(expr, Constant):
+            lines.append(f"{level}{_names[key]} = {repr(expr.value)}")
+            printed.add(key)
+            return
+        if isinstance(expr, Tuple):
+            for element in expr.elements:
+                _emit_expr(element, level)
+            printed.add(key)
+            return
+        if isinstance(expr, GridRegionExpr):
+            _emit_grid(expr, level)
+            return
+        if isinstance(expr, Call):
+            if (
+                isinstance(expr.target, TupleGetItem)
+                and len(expr.args) == 1
+                and isinstance(expr.args[0], GridRegionExpr)
+            ):
+                _emit_grid(expr.args[0], level)
+                printed.add(key)
+                return
+            for arg in expr.args:
+                _emit_expr(arg, level)
+            _emit_inline_call(expr, level)
+
+    def _emit_grid(grid: GridRegionExpr, level: str) -> None:
+        key = id(grid)
+        if key in printed:
+            return
+        for init in grid.init_args:
+            _emit_expr(init, level)
+        for carry in grid.carried_args:
+            printed.add(id(carry))
+        extent = shape_entry_str(grid.extent)
+        step = shape_entry_str(grid.step)
+        start = shape_entry_str(grid.start)
+        if grid.start == 0 and grid.step == 1:
+            loop = f"tile({extent})"
+        elif grid.start == 0:
+            loop = f"tile({extent}, {step})"
+        else:
+            loop = f"range({start}, {extent}, {step})"
+        lines.append(f"{level}for {grid.induction_var.name} in {loop}:")
+        printed.add(key)
+        inner = level + "    "
+        _emit_expr(grid.body, inner)
+        for value in grid.yield_values:
+            _emit_expr(value, inner)
+
+    for expr in _order:
+        if isinstance(expr, Var) or id(expr) in _grid_internal_ids:
             continue  # params already in signature
+        if isinstance(expr, GridRegionExpr):
+            _emit_grid(expr, indent)
+            continue
+        if (
+            isinstance(expr, Call)
+            and isinstance(expr.target, TupleGetItem)
+            and len(expr.args) == 1
+            and isinstance(expr.args[0], GridRegionExpr)
+        ):
+            printed.add(id(expr))
+            continue
         if isinstance(expr, Constant):
             name = _names[id(expr)]
             lines.append(f"{indent}{name} = {repr(expr.value)}")
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
+            printed.add(id(expr))
             continue
         if isinstance(expr, Tuple):
             # A tuple is rendered inline at its use site: as a literal argument
@@ -693,6 +890,16 @@ def _emit_def(
                 op_name_str = _op_name(target)
                 arg_names = [_arg_ref(a) for a in expr.args]
                 args_str = ", ".join(arg_names)
+
+                if isinstance(target, HirFunction):
+                    call_str = f"{op_name_str}({args_str})"
+                    loc = f'  # loc="{name}"' if expr.loc else ""
+                    lines.append(f"{indent}{name} = {call_str}{loc}")
+                    line = _constraint_line(expr, indent, name)
+                    if line is not None:
+                        lines.append(line)
+                    printed.add(id(expr))
+                    continue
 
                 # Extract keyword attributes from the op.
                 # When the target prints as a kinded alias name
@@ -748,13 +955,18 @@ def _emit_def(
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
+            printed.add(id(expr))
 
     # Return statement. A literal tuple body renders its elements inline
     # (``return (e0, e1)``) rather than a name for the un-emitted Tuple node.
     if isinstance(fn.body, Tuple):
         lines.append(f"{indent}return {_tuple_literal(fn.body.elements)}")
+    elif isinstance(fn.body, GridRegionExpr):
+        values = tuple(_names[id(carry)] for carry in fn.body.carried_args)
+        result = values[0] if len(values) == 1 else "(" + ", ".join(values) + ")"
+        lines.append(f"{indent}return {result}")
     else:
-        body_name = _names[id(fn.body)]
+        body_name = _expr_ref(fn.body)
         lines.append(f"{indent}return {body_name}")
     return lines
 
@@ -764,6 +976,32 @@ def _pattern_ctor(pat: Pattern) -> str:
     if isinstance(pat, DimVarRangePat):
         return f'DimVarRangePat("{pat.dim_var}", {pat.lo}, {pat.hi})'
     return repr(pat)
+
+
+def _target_str(target: Target) -> str:
+    """Render one explicit target decorator value."""
+    if isinstance(target, CpuTarget):
+        return "CpuTarget()"
+    if isinstance(target, CudaTarget):
+        architecture = target.architecture
+        if architecture == SM90():
+            return "CudaTarget()"
+        dtypes = ", ".join(
+            f"DType.{dtype.name}" for dtype in architecture.supported_compute_dtypes
+        )
+        if len(architecture.supported_compute_dtypes) == 1:
+            dtypes += ","
+        return (
+            "CudaTarget(architecture=SM90("
+            f"name={architecture.name!r}, "
+            f"supported_compute_dtypes=({dtypes}), "
+            f"instruction_capabilities={architecture.instruction_capabilities!r}, "
+            f"max_threads_per_cta={architecture.max_threads_per_cta}, "
+            f"max_threads_per_warp={architecture.max_threads_per_warp}, "
+            f"max_warps_per_cta={architecture.max_warps_per_cta}"
+            "))"
+        )
+    raise TypeError(f"unsupported target for Python printing: {type(target).__name__}")
 
 
 def hir_function_to_python(fn: HirFunction) -> str:
@@ -788,6 +1026,10 @@ def hir_function_to_python(fn: HirFunction) -> str:
     lines.append("from __future__ import annotations")
     lines.append("")
     lines.append("from tilefoundry import func")
+    if fn.target is not None:
+        lines.append("from tilefoundry.target import CpuTarget, CudaTarget")
+        if isinstance(fn.target, CudaTarget) and fn.target.architecture != SM90():
+            lines.append("from tilefoundry.ir.types import DType")
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
     lines.append("from tilefoundry.dsl import Tensor")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
@@ -816,9 +1058,14 @@ def hir_function_to_python(fn: HirFunction) -> str:
         lines.append("")
 
     # Base @func decorator (with topologies if any), then the def block.
+    decorator_kwargs = []
+    if fn.target is not None:
+        decorator_kwargs.append(f"target={_target_str(fn.target)}")
     if fn.topologies:
         topo_strs = [f'Topology("{t.name}", {t.size})' for t in fn.topologies]
-        lines.append(f'@func(topologies=({", ".join(topo_strs)},))')
+        decorator_kwargs.append(f'topologies=({", ".join(topo_strs)},)')
+    if decorator_kwargs:
+        lines.append(f"@func({', '.join(decorator_kwargs)})")
     else:
         lines.append("@func")
     lines.extend(_emit_def(fn, fn.name, mesh_map, indent))
@@ -882,6 +1129,10 @@ def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:
     lines.append("")
     lines.append("from tilefoundry.module import module")
     lines.append("from tilefoundry import func")
+    if fn.target is not None:
+        lines.append("from tilefoundry.target import CpuTarget, CudaTarget")
+        if isinstance(fn.target, CudaTarget) and fn.target.architecture != SM90():
+            lines.append("from tilefoundry.ir.types import DType")
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
     lines.append("from tilefoundry.dsl import Tensor")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
@@ -920,6 +1171,10 @@ def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:
         if fl.startswith("from __future__"):
             continue
         if fl.startswith("from tilefoundry import func"):
+            continue
+        if fl.startswith("from tilefoundry.target import"):
+            continue
+        if fl.startswith("from tilefoundry.ir.types import DType"):
             continue
         if fl.startswith("from tilefoundry.ir.types import"):
             continue
