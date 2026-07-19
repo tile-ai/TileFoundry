@@ -26,7 +26,7 @@ truth for the directory's structure and invariants.
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
 | `schedule/` | [schedule](./schedule.md) | Direct public Schedule service protocol and immutable options, result, and report structures. The compact public surface lives in `schedule/__init__.py`; concrete stage services live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, §2 rule 6). |
-| `ir/target/` | [target](./target.md) | Compilation target capability descriptors: `Target` / `CudaTarget` / `CpuTarget` / `resolve_target`. |
+| `target/` | [target](./target.md) | Compilation target capability descriptors, architecture/device facts, and immutable internal stage-service lookup: `Target` / `CudaTarget` / `CpuTarget` / `resolve_target`. |
 | `codegen/` | [codegen](./codegen.md) | Code generation: the emitter registry, the linkable / linked products and the linker, and per-target emitters under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, §2 rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only (kernel shells / host stubs). |
 | `runtime/` | [runtime](./runtime.md) | Runtime support (per-target headers, function templates, launch helpers). |
 | `inspection/` | [inspection](./inspection.md) | IR visualisation: DOT, Python printer, web viewer. |

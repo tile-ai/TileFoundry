@@ -11,7 +11,6 @@ from tilefoundry.ir.hir.function import (
     Function as HirFunction,
 )
 from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.target import CudaTarget
 from tilefoundry.ir.types import (
     DType,
     TensorType,
@@ -29,6 +28,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.target import CudaTarget
 
 from .dispatch import DispatchCall
 from .launch import Launch

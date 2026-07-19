@@ -7,7 +7,6 @@ from typing import Any, Union
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.target import CudaTarget
 from tilefoundry.ir.tir.launch import LaunchAttrs, launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import shape_var_name
@@ -36,6 +35,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.visitor import StmtVisitor
+from tilefoundry.target import CudaTarget
 
 from .base import BaseExprVisitor, _i64, extract_ast
 from .dispatch import resolve_stmt

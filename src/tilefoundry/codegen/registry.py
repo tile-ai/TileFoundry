@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Callable
 
 from tilefoundry.ir.core.module import Module, ModuleFunction
-from tilefoundry.ir.target import Target
+from tilefoundry.target import Target
 
 _EMITTERS: dict[str, Callable] = {}
 
@@ -51,10 +51,26 @@ def get_emitter(target: "str | Target") -> Callable:
 
 
 def group_functions_by_target(module: Module) -> dict[str, tuple[ModuleFunction, ...]]:
-    """Group ``module.functions`` by their target name, preserving order."""
+    """Group functions by target name after checking CUDA identity."""
     groups: dict[str, list[ModuleFunction]] = {}
     for fn in module.functions:
+        if fn.target is None:
+            raise ValueError(
+                f"tilefoundry: function {fn.name!r} has no resolved Target "
+                "at codegen grouping"
+            )
         groups.setdefault(fn.target.name, []).append(fn)
+    cuda_group = groups.get("cuda", ())
+    if cuda_group:
+        first = cuda_group[0].target
+        for fn in cuda_group[1:]:
+            if fn.target != first:
+                raise ValueError(
+                    f"tilefoundry: module {module.name!r} mixes CUDA functions "
+                    f"with differing Target facts: {first!r} "
+                    f"(function {cuda_group[0].name!r}) vs {fn.target!r} "
+                    f"(function {fn.name!r})"
+                )
     return {name: tuple(fns) for name, fns in groups.items()}
 
 

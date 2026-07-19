@@ -87,11 +87,15 @@ def lower(
     # Validate every declared program topology level against the target before
     # lowering — a function may declare an unsupported level (e.g. ``gpu``)
     # without ever emitting a MeshScope, so the codegen-side check is not enough.
-    from tilefoundry.ir.target import validate_cuda_topology_levels  # noqa: PLC0415
+    from tilefoundry.target import default_target  # noqa: PLC0415
     declared = list(mod.topologies)
     for fn in mod.functions:
-        declared.extend(getattr(fn, "topologies", ()) or ())
-    validate_cuda_topology_levels(t.name for t in declared)
+        target_value = fn.target or default_target()
+        for topology in getattr(fn, "topologies", ()) or ():
+            target_value.validate_program_topology(topology)
+    entry_target = mod.entry_function().target or default_target()
+    for topology in declared:
+        entry_target.validate_program_topology(topology)
 
     pm = _build_default_pipeline()
     result = pm.run(mod)

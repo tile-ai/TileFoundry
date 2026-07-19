@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Var
-from tilefoundry.ir.target import CudaTarget, Target
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Sequential
+from tilefoundry.target import CudaTarget, Target
 
 
 @dataclass(frozen=True)

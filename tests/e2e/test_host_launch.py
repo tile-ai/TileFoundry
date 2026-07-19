@@ -227,12 +227,12 @@ def _launch_entry_with_grid_x(extent):
     """A CPU host entry whose single launch uses *extent* as ``grid_x`` — for
     exercising the grid/block extent verifier on constructed IR."""
     from tilefoundry.ir.core import Constant, Var  # noqa: PLC0415
-    from tilefoundry.ir.target import CpuTarget  # noqa: PLC0415
     from tilefoundry.ir.tir.launch import Launch  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.stmts import Evaluate, Sequential  # noqa: PLC0415
     from tilefoundry.ir.tir.symbol_ref import SymbolRef  # noqa: PLC0415
     from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType  # noqa: PLC0415
+    from tilefoundry.target import CpuTarget  # noqa: PLC0415
 
     t = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem")
     a = Var(type=t, name="a")

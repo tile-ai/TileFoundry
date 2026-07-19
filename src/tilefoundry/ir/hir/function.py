@@ -8,9 +8,9 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.target import CudaTarget, Target
 from tilefoundry.ir.types import CallableType, TensorType, Type, callable_type_for
 from tilefoundry.ir.types.shard.mesh import Topology
+from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 
@@ -31,7 +31,7 @@ class Function(Expr):
     topologies: tuple[Topology, ...] = field(default_factory=tuple)
     specializations: tuple[Pattern, ...] = field(default_factory=tuple)
     variants: tuple["Function", ...] = field(default_factory=tuple)
-    target: Target = field(default_factory=CudaTarget)
+    target: Target | None = None
 
     @classmethod
     def build(
@@ -56,7 +56,7 @@ class Function(Expr):
             topologies=tuple(topologies),
             specializations=tuple(specializations),
             variants=tuple(variants),
-            target=target if target is not None else CudaTarget(),
+            target=target,
             type=_callable_type_for(params, return_type),
             loc=loc,
         )

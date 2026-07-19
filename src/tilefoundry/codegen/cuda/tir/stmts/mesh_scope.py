@@ -4,8 +4,8 @@ constexpr Mesh type alias (spec 010 §5)."""
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
-from tilefoundry.ir.target import validate_cuda_topology_levels
 from tilefoundry.ir.tir.stmts import MeshScope
+from tilefoundry.target import validate_cuda_topology_levels
 
 
 def _validate_topology(mesh) -> None:

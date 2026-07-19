@@ -1,152 +1,140 @@
 # TileFoundry Spec — Target
 
-A `Target` is the back-end a verified, lowered `tir.PrimFunction` is compiled
-for. It is a capability descriptor: it names the back-end and carries the
-back-end's compile-time parameters and the program topology levels it admits. A
-function carries a single `target`, which selects its target-specific lowering
-and codegen. Emitting source and linking the artifact are owned by
-[codegen](./codegen.md); loading the artifact as a `RuntimeModule` is owned by
-[runtime](./runtime.md).
+A `Target` is the immutable capability context used by compilation and
+Target-owned HIR services. Architecture describes compilation identity and
+instruction structure. Device describes fixed product resources. A target's
+private service bindings are selected by exact interface identity and stage.
 
-## 1. Role and scope
-
-- **Input** is verified TIR. HIR Ops MUST NOT reach a `Target`.
-- A `Target` describes capability; it does not emit source, link, run passes,
-  load or launch device code, or own the user-facing entry points
-  (`compile` / `build` / `jit`).
-- A target is resolved by name: a string reflects into that back-end's default
-  target object (`"cuda"` → `CudaTarget()`), and a `Target` object passes
-  through unchanged. Codegen groups a module's functions by their target name
-  and emits one `LinkableModule` per group
-  ([codegen §1](./codegen.md#1-pipeline)).
-
-## 2. `Target`
+## 1. `Target`
 
 ```python
 class Target:
-    name: str    # the stable back-end identifier
+    """Identify a compilation backend and its private stage services."""
+
+    name: str
+    _services: tuple[tuple[type, str, object], ...] = ()
+
+    def service(self, interface: type, stage: str) -> object: ...
 ```
 
 - constraints:
-  - MUST be the stable back-end identifier used for target resolution and for the
-    function-target grouping in codegen.
+  - `name` MUST be the stable backend identifier used for target resolution and
+    codegen grouping.
+  - `_services` MUST be immutable and populated only by target construction.
+    It MUST NOT participate in equality, hashing, or `repr`.
+  - `service` MUST require a non-empty stage string and match the interface by
+    object identity plus one exact stage string.
+  - Missing or duplicate matches MUST raise an actionable built-in error that
+    names the target, interface, and stage.
+  - Target values MUST NOT own code emission, linking, loading, or the public
+    compile/build/jit entry points.
 
-A `Target` MUST NOT carry the linkable / linked artifact dataclasses; those are
-codegen products ([codegen §4](./codegen.md#4-codegen-products)).
-
-## 3. `CudaTarget`
-
-CUDA is the current reference target.
+## 2. `SM90`
 
 ```python
-class CudaTarget:
-    name: str = "cuda"                                     # the back-end identifier, fixed to "cuda"
-    arch: str = "sm_90"                                    # the SM architecture the device source is compiled for
-    topology_levels: tuple[str, ...] = ("cta", "thread")  # the program topology level set the target admits
+class SM90:
+    """SM90 compilation identity and structural capabilities."""
+
+    name: str = "sm_90"
+    supported_compute_dtypes: tuple[DType, ...] = ...
+    instruction_capabilities: tuple[str, ...] = ...
+    max_threads_per_cta: int = 1024
+    max_threads_per_warp: int = 32
+    max_warps_per_cta: int = 32
+
+    def supports_compute_dtype(self, dtype: DType) -> bool: ...
+
+    def topology_limit(self, name: str) -> int: ...
 ```
 
 - constraints:
-  - MUST be `"cuda"`.
-  - MUST name the SM architecture the device source is compiled for.
-  - MUST be the program topology level set the target admits: `{cta, thread}`.
-  - `warp` / `lane` / `warpgroup` MUST be expressed as axes of a thread mesh
-    layout ([shard](./shard.md)), not as program topology levels.
-  - A function whose declared program topology levels are not a subset of this set
-    MUST raise at lowering. The level set is consumed by the device program
-    accessors ([§7](#7-program-shape-and-dynamic-cta)).
+  - `name` MUST be the architecture identity used by CUDA compilation.
+  - SM90 MUST own supported compute DTypes, instruction capabilities, and
+    thread/CTA structural limits.
+  - Storage and scale DTypes `f4e2m1` and `f8e8m0` MUST NOT be reported as
+    compute DTypes by SM90.
+  - Device-frequency-dependent FLOP/s values MUST NOT be stored on SM90.
 
-## 4. `CpuTarget`
+## 3. `H200SXM`
 
 ```python
-class CpuTarget:
-    name: str = "cpu"    # the back-end identifier, fixed to "cpu"
+class H200SXM:
+    """One H200 SXM device with fixed hard resource limits."""
+
+    name: str = "h200_sxm"
+    sm_count: int = 132
+    hbm_capacity_bytes: int = 141_000_000_000
+    hbm_bandwidth_bytes_per_second: int = 4_800_000_000_000
+
+    def peak_for(self, dtype: DType) -> int: ...
 ```
 
 - constraints:
-  - MUST be `"cpu"`.
+  - H200SXM MUST describe one device and MUST NOT carry a GPU count.
+  - The resource values MUST be fixed to the stated decimal-SI constants;
+    callers MUST NOT provide lower effective SM-count, bandwidth, or capacity
+    overrides.
+  - `peak_for` MUST expose the dense integer FLOP/s map:
+    `f32: 67_000_000_000_000`, `f16: 989_500_000_000_000`,
+    `bf16: 989_500_000_000_000`, and
+    `fp8e4m3: 1_979_000_000_000_000`.
+  - `f4e2m1` and `f8e8m0` MUST have no compute-throughput entry.
+  - Unknown compute DTypes MUST raise an actionable error.
 
-The CPU target hosts the entry that marshals arguments and invokes the device
-entry through its C-ABI launch shim
-([§5](#5-target-driven-emission)).
+## 4. `CudaTarget`
 
-## 5. Target-driven emission
+```python
+class CudaTarget(Target):
+    """CUDA target composed from one architecture and one device."""
 
-Emission is split by function `target`; one `LinkableModule` is produced per
-target group.
+    name: str = "cuda"
+    architecture: SM90 = SM90()
+    device: H200SXM = H200SXM()
+    arch: str
+    topology_levels: tuple[str, ...]
 
-- A `cpu`-target entry function emits the **host translation unit**: a host
-  wrapper that marshals `tvm::ffi::Tensor` arguments and invokes the device
-  entry through its C-ABI launch shim. For a dispatch prototype the wrapper
-  also performs the `DispatchCall` selection (§6).
-- A `cuda`-target function emits the **device translation unit**: a
-  `__global__` kernel plus its C-ABI launch shim. An operand's layout selects
-  how it is viewed inside the kernel — `cute::` for a plain `Layout`,
-  `tilefoundry::` shard tensor for a `ShardLayout` (§8) — it does not change the
-  function into a `__device__`-parameter function.
+    def topology_limit(self, name: str) -> int: ...
 
-## 6. Dispatch and shape-scalar ABI
-
-
-A `tir.PrimFunction` produced by HIR→TIR lowering for a dispatch prototype
-([hir §1.1](./hir.md#11-function)) emits as a host dispatch entry
-plus its variant kernels:
-
-- **Dispatch entry** (PrimFunction whose body is a single `tir.DispatchCall`):
-  the host module emits a host-only entry — no kernel. It reads the dispatch
-  subject from the host-visible tensor shape, evaluates the case predicates in
-  source order, and invokes the matching variant's C-ABI launch shim. The
-  `fallback` MUST fail the host call with a host-side error.
-- **Variant**: a `cuda`-target function (§5) — a `__global__` kernel plus its
-  C-ABI launch shim in the CUDA module, carrying the hidden shape-scalar
-  parameters below. A variant has no host wrapper of its own; the dispatch entry
-  calls its shim.
-
-**Host-visible entry symbol.** The host-visible entry wrapper (the CPU entry) is
-emitted under an internal symbol `__tilefoundry_<sanitized>_host`, where
-`<sanitized>` is the user-facing name with `$` replaced by `__` (`$` is a GCC
-extension, not portable C++). The user-facing name is republished via the
-runtime ABI macro:
-
-```cpp
-TVM_FFI_DLL_EXPORT_TYPED_FUNC(<name>, __tilefoundry_<sanitized>_host);
+    def validate_program_topology(self, topology: Topology) -> None: ...
 ```
 
-**Shape-scalar parameter ABI.** Each `tir.ShapeOf(param, axis)`
-([tir §2.2](./tir.md#22-shapeof)) reachable from a PrimFunction body adds a hidden
-kernel-scalar parameter named `f"{param.name}_shape_<axis>"` — a rank-0 `i32`
-shape-scalar `TensorType` with `storage=None`. The host wrapper extracts the
-value from the
-corresponding `tvm::ffi::Tensor.shape()[axis]` and forwards it. These hidden
-parameters are filtered out of the exported `CallableType.params` so they remain
-invisible at the user FFI surface. A user-declared rank-0 `i32` parameter is
-*not* filtered — the filter is keyed on the canonical `<name>_shape_<axis>` form
-synthesised by lowering.
+- constraints:
+  - `CudaTarget()` MUST use SM90 and H200SXM, and `arch` MUST equal
+    `architecture.name`.
+  - `topology_levels` MUST be `("cta", "thread")` for this single-device
+    target. Warp/lane/warpgroup structure belongs in thread mesh layouts.
+  - `topology_limit("cta")` MUST equal `device.sm_count` and
+    `topology_limit("thread")` MUST equal `architecture.max_threads_per_cta`.
+  - Static declared topology extents MUST be positive integers within their
+    target resource limits. `Topology("cta", None)` MUST remain valid for the
+    handwritten dynamic-launch compile path.
+  - Unsupported topology levels MUST fail at the generic lowering boundary.
+  - A `CudaTarget` MUST currently expose no concrete CTA scheduling service.
 
-## 7. Program shape and dynamic CTA
+## 5. `CpuTarget`
 
-The emitted device source reads its program geometry through two accessors:
+```python
+class CpuTarget(Target):
+    """Identify the CPU host backend."""
 
-- `program_shape<T>()` MUST be the shape composed of a topology level's program
-  dims.
-- `program_dim<T>()` MUST be the size of one topology level `T`.
+    name: str = "cpu"
+```
 
-For a static CTA count, `program_dim<cta>()` is a compile-time constant and a
-constexpr `program_shape<cta>` is emitted. For a launch-provided (dynamic) CTA
-count, the emitter MUST NOT emit a constexpr `program_shape<cta>`; device code
-MUST read the count through `program_dim<cta>()`, which resolves to the
-launch-provided grid extent. The topology level set a target admits is owned by
-[§3](#3-cudatarget).
+- constraints:
+  - `name` MUST be `"cpu"`.
+  - CPU host Functions MAY coexist with CUDA Functions in one module and are
+    exempt from CUDA hardware-fact equality checks.
 
-## 8. `ShardLayout` / `ShardTensor` mapping
+## 6. Target ownership and compile resolution
 
-A `ShardLayout` ([shard §7](./shard.md)) on a TIR tensor type is materialised
-through `tilefoundry::make_shard_tensor(buffer, global_layout, shard_layout)`
-([runtime](./runtime.md)). A handler that consumes a sharded operand emits the
-shard-tensor view; effect Ops then route through `tilefoundry::` runtime helpers
-(for example `tilefoundry::copy`) instead of plain `cute::` primitives. A plain
-`Layout` operand goes through `cute::` directly. The selection is handler-local,
-based on `arg.type.layout`.
-
-Codegen consumes the `ShardLayout` already present on the TIR tensor type; the
-cute MMA fragment → `ShardLayout` recipe that produces it is owned by the
-lowering pass ([passes.md §7.1](./passes.md#71-hirtotirpass)).
+- `tilefoundry.target` MUST be the sole Target implementation package. The IR
+  package MUST NOT own Target classes or Target imports.
+- `resolve_target("cuda")` MUST return a default `CudaTarget`,
+  `resolve_target("cpu")` MUST return a `CpuTarget`, and a Target object MUST
+  pass through unchanged.
+- Authored HIR `Function.target` MUST default to `None`. A normal compile
+  boundary MAY resolve that omission to the default CUDA target for lowering,
+  but scheduling lookup MUST NOT apply that fallback.
+- After target resolution, CUDA Functions in one compilation group MUST carry
+  equal architecture and device facts. A mismatch MUST fail before codegen
+  grouping.

@@ -212,7 +212,7 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
 | **[schedule](./schedule.md)** | Explicit Target-owned HIR scheduling service: direct invocation protocol, shared options, materialized result, and stable objective report |
 | **[tilegraph](./tilegraph.md)** | TileGraph — pass-internal IR for polyhedral / tile-search passes |
-| **[target](./target.md)** | Target capability descriptors (`Target` / `CudaTarget` / `CpuTarget`) and the admitted program topology levels |
+| **[target](./target.md)** | Target capability descriptors, architecture/device facts, immutable stage-service lookup, and admitted program topology levels |
 | **[codegen](./codegen.md)** | Emit / link pipeline and products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), emitter registry, dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
 | **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |

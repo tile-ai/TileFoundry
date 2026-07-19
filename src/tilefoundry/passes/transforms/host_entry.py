@@ -20,10 +20,10 @@ from tilefoundry.codegen.cuda.emit import _derive_launch_config
 from tilefoundry.codegen.cuda.tir.prim_function import _is_dispatch_entry_shape
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.target import CpuTarget
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
+from tilefoundry.target import CpuTarget
 
 _DEFAULT_ENTRY_NAME = "main"
 

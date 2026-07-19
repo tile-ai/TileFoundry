@@ -27,10 +27,10 @@ from typing import Any
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.target import resolve_target
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.parser import parse_func, parse_prim_func
+from tilefoundry.target import resolve_target
 
 
 def _validate_one_pattern(pattern: Any) -> Pattern:
@@ -77,8 +77,9 @@ def func(fn=None, *, topologies=(), target=None):
     The decorated name binds to the resulting ``hir.Function``. ``topologies``
     declares the topology namespace for this function, enabling
     ``with Mesh(topology="cta", ...)`` string-name resolution. ``target``
-    selects the function's compilation target (a string reflected to a default
-    target object, or a target object); defaults to the device CUDA target.
+    selects the function's compilation target (a string reflected to a target
+    object, or a target object); an omitted target remains unresolved until a
+    normal compile entry resolves its backend default.
 
     A ``pass`` body declares a dispatch prototype (``Function.body is None``);
     its implementations are registered via :meth:`Function.specialize`.
@@ -144,8 +145,9 @@ def prim_func(fn=None, *, target=None):
     """Decorator: parse a ``@prim_func`` function into a ``tir.PrimFunction``.
 
     The decorated name binds to the resulting ``tir.PrimFunction``. ``target``
-    selects the function's compilation target (string reflected to a default
-    target object, or a target object); defaults to device CUDA.
+    selects the function's compilation target (string reflected to a target
+    object, or a target object); an omitted target uses the normal compile-entry
+    default.
     """
     resolved_target = resolve_target(target) if target is not None else None
 
