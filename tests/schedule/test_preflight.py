@@ -1,159 +1,112 @@
+"""Private CTA planning-problem construction contract."""
+
 from __future__ import annotations
 
 from dataclasses import replace
 
 import pytest
 
+import tilefoundry.schedule as schedule
 from tests.models.deepseek_v4_flash.moe import (
     deepseek_v4_flash_module,
     deepseek_v4_flash_moe,
 )
-from tests.models.qwen3_5_30b_a3b.gqa_online import gqa_online_attend
 from tests.models.qwen3_5_30b_a3b.static_online import qwen_static_online
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.core import Call
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import CpuTarget, CudaTarget
-from tilefoundry.target.cuda.preflight import CtaPreflightResult, preflight_cta
+from tilefoundry.target.cuda.planner import build_planning_problem
 
 
 @func
-def _preflight_leaf(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+def _planner_helper(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     return tf.add(x, x)
 
 
 @func(target=CudaTarget(), topologies=(Topology("cta", 4),))
-def _preflight_root(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return _preflight_leaf(x)
+def _planner_root(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+    return tf.add(_planner_helper(x), _planner_helper(x))
 
 
-def _replace_root_call_target(root: Function, target: Function | object) -> Function:
-    assert isinstance(root.body, Call)
-    return replace(root, body=replace(root.body, target=target))
-
-
-def test_real_roots_pass_private_cta_preflight() -> None:
-    deepseek = preflight_cta(deepseek_v4_flash_module)
-    qwen = preflight_cta(qwen_static_online)
-    assert isinstance(deepseek, CtaPreflightResult)
-    assert deepseek.cta_count == 132
-    assert qwen.cta_count == 132
-    assert deepseek.reachable_functions[0] is deepseek_v4_flash_moe
-    assert all(fn.target is None for fn in deepseek.reachable_functions[1:])
-
-
-def test_non_cta_topologies_are_preserved_and_ignored() -> None:
-    extended = replace(
-        deepseek_v4_flash_moe,
-        topologies=(
-            Topology("cta", 132),
-            Topology("gpu", 2),
-            Topology("thread", 1024),
-            Topology("warp", 32),
-            Topology("future_level", 7),
-        ),
+def test_real_fixtures_build_finite_problems() -> None:
+    deepseek = build_planning_problem(deepseek_v4_flash_module, deepseek_v4_flash_moe)
+    qwen = build_planning_problem(
+        Module("qwen", (qwen_static_online,), "qwen_static_online"), qwen_static_online
     )
-    result = preflight_cta(extended)
-    assert result.cta_count == 132
-    assert tuple(topology.name for topology in extended.topologies) == (
-        "cta",
-        "gpu",
-        "thread",
-        "warp",
-        "future_level",
+
+    assert deepseek.site_order == tuple(range(len(deepseek.site_order)))
+    assert qwen.site_order == tuple(range(len(qwen.site_order)))
+    assert any(
+        type(candidate.op).__name__ == "Reshard" and candidate.site_id is not None
+        for candidate in qwen.candidates.values()
+    )
+    assert any(
+        type(candidate.op).__name__ == "Reshard" and candidate.site_id is None
+        for candidate in qwen.candidates.values()
     )
 
 
-@pytest.mark.parametrize(
-    "topologies, pattern",
-    [
-        ((), "exactly one"),
-        ((Topology("cta", 1), Topology("cta", 2)), "exactly one"),
-        ((Topology("cta", None),), "dynamic"),
-        ((Topology("cta", 133),), "supports"),
-    ],
-)
-def test_root_cta_declarations_fail_before_traversal(topologies, pattern) -> None:
-    invalid = replace(deepseek_v4_flash_moe, topologies=topologies)
-    with pytest.raises(ValueError, match=pattern):
-        preflight_cta(invalid)
+def test_repeated_helper_calls_get_distinct_function_instances() -> None:
+    problem = build_planning_problem(Module("m", (_planner_root,), "_planner_root"), _planner_root)
+    instances = [function for _, function in problem.function_instances]
+    assert len(instances) == 3
+    assert instances[1] is instances[2]
+    helper_paths = [
+        path for path, function in problem.function_instances if function.name == "_planner_helper"
+    ]
+    assert len(helper_paths) == 2
+    assert helper_paths[0] != helper_paths[1]
+    assert len(problem.site_order) == 3
 
 
-def test_root_target_is_explicit_cuda() -> None:
-    with pytest.raises(ValueError, match="no explicit CUDA"):
-        preflight_cta(replace(deepseek_v4_flash_moe, target=None))
-    with pytest.raises(ValueError, match="requires CudaTarget"):
-        preflight_cta(replace(deepseek_v4_flash_moe, target=CpuTarget()))
-
-
-def test_empty_topology_helper_inherits_without_mutation() -> None:
-    result = preflight_cta(_preflight_root)
-    assert result.cta_count == 4
-    assert _preflight_leaf.target is None
-    assert _preflight_leaf.topologies == ()
-
-
-def test_helper_target_conflict_and_program_topology_fail_at_call() -> None:
-    conflict = _replace_root_call_target(
-        _preflight_root,
-        replace(_preflight_leaf, target=CpuTarget()),
-    )
-    with pytest.raises(ValueError, match="conflicts.*call"):
-        preflight_cta(conflict)
-
-    topology_helper = _replace_root_call_target(
-        _preflight_root,
-        replace(_preflight_leaf, topologies=(Topology("cta", 1),)),
-    )
-    with pytest.raises(ValueError, match="program topologies.*call"):
-        preflight_cta(topology_helper)
-
-
-def test_recursive_and_kernel_calls_are_rejected() -> None:
-    recursive = replace(_preflight_root, body=replace(_preflight_root.body, target=None))
-    assert isinstance(recursive.body, Call)
-    object.__setattr__(recursive.body, "target", recursive)
-    with pytest.raises(ValueError, match="recursive helper call"):
-        preflight_cta(recursive)
-
-    kernel_call = Call(
-        type=_preflight_root.return_type,
-        target=Launch(),
-        args=(),
-    )
-    kernel_root = replace(_preflight_root, body=kernel_call)
-    with pytest.raises(ValueError, match="kernel call"):
-        preflight_cta(kernel_root)
-
-
-def test_nested_static_regions_pass_and_dynamic_region_fails() -> None:
-    nested = parse_script(
-        '''from __future__ import annotations
-from tilefoundry import func
+def test_grid_region_records_static_trip_count_without_unrolling() -> None:
+    root = parse_script(
+        '''from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
-from tilefoundry.dsl.tf import *
 from tilefoundry.target import CudaTarget
 from tilefoundry.ir.types.shard import Topology
 
 @func(target=CudaTarget(), topologies=(Topology("cta", 1),))
-def nested(x: Tensor[(4, 4), "f32"]) -> Tensor[(4, 4), "f32"]:
+def root(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
     acc = tf.full_like(x, value=0.0)
-    for i in tile(4):
-        for j in tile(2):
-            acc = acc + x
+    for i in range(1, 8, 2):
+        acc = tf.add(acc, x)
     return acc
 '''
     )
-    assert preflight_cta(nested).cta_count == 1
+    problem = build_planning_problem(Module("m", (root,), "root"), root)
+    assert len(problem.regions) == 1
+    region = next(iter(problem.regions.values()))
+    assert region.trip_count == 4
+    assert len(region.operation_site_ids) == 1
 
-    dynamic = replace(gqa_online_attend.variants[0], target=CudaTarget())
-    with pytest.raises(ValueError, match="GridRegion.*dynamic.*extent"):
-        preflight_cta(dynamic)
+
+@pytest.mark.parametrize(
+    "mutator, pattern",
+    [
+        (lambda fn: replace(fn, target=None), "explicit CudaTarget"),
+        (lambda fn: replace(fn, topologies=()), "exactly one CTA"),
+        (lambda fn: replace(fn, topologies=(Topology("cta", None),)), "static CTA"),
+        (lambda fn: replace(fn, target=CpuTarget()), "explicit CudaTarget"),
+    ],
+)
+def test_planning_entry_rejects_invalid_root(mutator, pattern: str) -> None:
+    invalid = mutator(deepseek_v4_flash_moe)
+    with pytest.raises(ValueError, match=pattern):
+        build_planning_problem(Module("m", (invalid,), invalid.name), invalid)
 
 
-def test_cuda_target_has_no_registered_cta_service() -> None:
-    assert CudaTarget()._services == ()
+def test_root_must_be_a_module_member() -> None:
+    with pytest.raises(ValueError, match="not a member"):
+        build_planning_problem(deepseek_v4_flash_module, Function.build(
+            name="other", params=(), body=None, return_type=deepseek_v4_flash_moe.return_type
+        ))
+
+
+def test_public_schedule_surface_does_not_export_private_problem_types() -> None:
+    assert "PlanningProblem" not in schedule.__all__
+    assert not hasattr(schedule, "PlanningProblem")
