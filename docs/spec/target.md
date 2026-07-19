@@ -136,5 +136,17 @@ class CpuTarget(Target):
   boundary MAY resolve that omission to the default CUDA target for lowering,
   but scheduling lookup MUST NOT apply that fallback.
 - After target resolution, CUDA Functions in one compilation group MUST carry
-  equal architecture and device facts. A mismatch MUST fail before codegen
-  grouping.
+     equal architecture and device facts. A mismatch MUST fail before codegen
+     grouping.
+
+## 7. CTA preflight ownership
+
+CTA input validation is owned by the private CUDA target boundary. It reads
+the explicit root `CudaTarget`, its single static CTA topology, reachable
+helper boundaries, and nested HIR grid regions. It MUST use the target's fixed
+`H200SXM.sm_count` resource fact and MUST NOT infer a root CTA extent from
+the target.
+
+The CUDA target MUST remain free of a default CTA scheduling service. Target
+construction therefore does not expose a partially functional `solve`
+operation, and preflight does not change target state or attach services.

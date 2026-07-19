@@ -175,3 +175,26 @@ printed `repr`.
 These values are hard filters for later scheduling stages. They carry no
 preferences, candidate rows, costs, solver state, or CTA capability
 decisions, and they do not register a scheduling service on a `CudaTarget`.
+
+## 4. CTA input preflight
+
+CTA input preflight is a private validation boundary over a root HIR
+`Function` or a `Module` entry. The root MUST carry an explicit
+`CudaTarget` and exactly one `Topology("cta", n)` with a static integer
+`1 <= n <= device.sm_count`. A dynamic or missing CTA extent is invalid for
+this boundary.
+
+Other root topology declarations are retained on the HIR and are ignored by
+CTA preflight. They do not participate in CTA validation. A helper function
+with no target and no program topologies inherits the caller's effective
+target without mutating its source value. An explicit helper target MUST match
+that effective target, and a helper with program topologies is rejected as a
+kernel boundary. Recursive helper calls, TIR kernel calls, and dispatch
+prototypes are invalid HIR CTA inputs.
+
+Preflight recursively visits expression arguments and nested
+`GridRegionExpr` values. Region `start` MUST be non-negative, while
+`extent` and `step` MUST be positive static integers. Dynamic bounds fail
+with the owning function and root context. Successful preflight returns only
+immutable root CTA facts and the reachable HIR function set; it does not
+register or invoke a scheduling service.

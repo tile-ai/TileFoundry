@@ -20,6 +20,7 @@ from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.tensor.gather import Gather
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.topk import TopK
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.parser import parse_func_source
 from tilefoundry.schedule.constraints import (
     LayoutConstraint,
@@ -112,8 +113,26 @@ def test_deepseek_routed_path_is_ordinary_batched_dataflow() -> None:
     assert any(type(call.target).__name__ == "Reshape" for call in _calls(moe_experts_core))
     assert moe_topk.return_type.shape == (1, N_ACT, DIM)
     assert moe_experts_core.return_type.shape == (1, N_ACT, DIM)
-    assert any(isinstance(call.target, TopK) for call in _calls(moe_topk))
-    assert any(type(call.target).__name__ == "TupleGetItem" for call in _calls(moe_topk))
+    topk_call = next(call for call in _calls(moe_topk) if isinstance(call.target, TopK))
+    assert tuple(field.shape for field in topk_call.type.fields) == (
+        (1, N_ACT),
+        (1, N_ACT),
+    )
+    topk_elements = [
+        call
+        for call in _calls(moe_topk)
+        if isinstance(call.target, TupleGetItem) and call.args[0] is topk_call
+    ]
+    assert len(topk_elements) == 1
+    assert all(element.type.shape == (1, N_ACT) for element in topk_elements)
+    assert any(
+        isinstance(call.target, Gather) and call.type.shape == (1, N_ACT)
+        for call in _calls(moe_topk)
+    )
+    assert any(
+        isinstance(call.target, MatMul) and call.type.shape[:2] == (1, N_ACT)
+        for call in _calls(moe_experts_core)
+    )
     assert any(
         isinstance(call.target, Reduce) and call.target.axes == (1,)
         for call in _calls(deepseek_v4_flash_moe)
