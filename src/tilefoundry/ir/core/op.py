@@ -16,12 +16,21 @@ registry — ``resolve_op`` / ``resolve_stmt`` derive their lookups from
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
-from tilefoundry.ir.core.param_def import MISSING, ParamDef
+from tilefoundry.ir.core.param_def import ParamDef, _ParamKind, collect_param_defs
 from tilefoundry.ir.types.storage import resolve_storage
 
-_ParamKind = Literal["input", "attribute"]
+
+def _signature(cls: type) -> tuple[ParamDef, ...]:
+    """The ``ParamDef`` tuple for ``cls``: the attached ``OpSchema``'s
+    ``signature`` when ``@register_op`` has run, else a fresh reflection
+    walk (e.g. an unregistered test fixture subclassing ``Op`` directly).
+    """
+    schema = getattr(cls, "_op_schema", None)
+    if schema is not None:
+        return schema.signature
+    return collect_param_defs(cls)
 
 
 def _normalize_attr(name: str, value: Any) -> Any:
@@ -65,28 +74,19 @@ class Op:
         return super().__new__(cls)
 
     def __init__(self, **attrs: Any) -> None:
-        infos = type(self).params()
-        attr_infos = {p.name: p for p in infos if p.kind == "attribute"}
+        param_defs = _signature(type(self))
+        attr_defs = {pd.name: pd for pd in param_defs if pd.kind == "attribute"}
         for k, v in attrs.items():
-            if k not in attr_infos:
+            if k not in attr_defs:
                 raise TypeError(f"{type(self).__name__}: unknown attribute {k!r}")
             object.__setattr__(self, k, _normalize_attr(k, v))
-        # Apply class-level defaults for missing attribute params.
-        missing = set(attr_infos) - set(attrs)
+        # Apply ParamDef-level defaults for missing attribute params.
+        missing = set(attr_defs) - set(attrs)
         for m in list(missing):
-            cls_val = None
-            present = False
-            for klass in type(self).__mro__:
-                if m in klass.__dict__:
-                    cls_val = klass.__dict__[m]
-                    present = True
-                    break
-            if not present:
-                continue
-            if isinstance(cls_val, ParamDef):
-                if cls_val.default is not MISSING:
-                    object.__setattr__(self, m, _normalize_attr(m, cls_val.default))
-                    missing.discard(m)
+            pd = attr_defs[m]
+            if pd.has_default:
+                object.__setattr__(self, m, _normalize_attr(m, pd.default))
+                missing.discard(m)
         if missing:
             raise TypeError(
                 f"{type(self).__name__}: missing attribute(s) {sorted(missing)}"
@@ -103,36 +103,20 @@ class Op:
 
     @classmethod
     def params(cls) -> list[ParameterInfo]:
-        """Reflect ``ParamDef`` class-body descriptors into ``ParameterInfo``.
+        """``ParameterInfo`` projection of ``cls``'s ``ParamDef`` signature.
 
-        Walks MRO base→derived so subclass fields list **after** base
-        fields in declaration order. Same-name fields declared at a
-        more-derived class **override** the base entry in place
-        (preserving the base position in the resulting tuple) — this
-        matches the "derived override wins" contract used by all
-        downstream callers.
+        Uses the schema signature attached by ``@register_op`` when
+        present (`_signature`); otherwise reflects ``ParamDef``
+        class-body descriptors directly (base→derived MRO order,
+        derived redeclaration overrides in place).
         """
         cached = Op._params_cache.get(cls)
         if cached is not None:
             return cached
-        infos: list[ParameterInfo] = []
-        index: dict[str, int] = {}
-        for klass in reversed(cls.__mro__):
-            for attr_name, value in klass.__dict__.items():
-                if attr_name.startswith("_"):
-                    continue
-                if not isinstance(value, ParamDef):
-                    continue
-                pi = ParameterInfo(
-                    name=attr_name, kind=value.kind, type=value.annotation
-                )
-                if attr_name in index:
-                    # Derived class re-declared this field → override
-                    # the base entry at its existing position.
-                    infos[index[attr_name]] = pi
-                else:
-                    index[attr_name] = len(infos)
-                    infos.append(pi)
+        infos = [
+            ParameterInfo(name=pd.name, kind=pd.kind, type=pd.annotation)
+            for pd in _signature(cls)
+        ]
         Op._params_cache[cls] = infos
         return infos
 

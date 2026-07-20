@@ -6,9 +6,9 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
+from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
@@ -16,6 +16,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     shard_layout_local_shape,
 )
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.visitor_registry import register_typeinfer
 
 
 def _dim_mul(a, b):
@@ -28,17 +29,10 @@ def _dim_mul(a, b):
     return simplify_dim(DimMul, (a, b))
 
 def _c_order_strides(shape: tuple) -> tuple:
-    """C-order contiguous strides for *shape*. Used for both shared-
-    engine materialization (over canonical global shape) and the
-    non-Split fallback path of per-instance materialization (over
-    local shape). A dynamic axis yields a symbolic stride for the
-    axes above it; static inner strides stay plain ints."""
-    if not shape:
-        return ()
-    strides = [1]
-    for d in reversed(shape[1:]):
-        strides.insert(0, _dim_mul(strides[0], d))
-    return tuple(strides)
+    """C-order contiguous strides for *shape*. A dynamic axis yields a
+    symbolic stride for the axes above it via ``_dim_mul``; static inner
+    strides stay plain ints."""
+    return c_order_strides(shape, mul=_dim_mul)
 
 def _shared_engine_strides(sl: ShardLayout) -> tuple:
     """Shared-engine strides for *sl*.
@@ -69,9 +63,7 @@ def _per_instance_strides(sl: ShardLayout) -> tuple[int, ...]:
     for attr in sl.attrs:
         if isinstance(attr, Split):
             split_axes.add(int(attr.axis))
-    base = [1] * n
-    for i in range(n - 2, -1, -1):
-        base[i] = base[i + 1] * int(local_shape[i + 1])
+    base = c_order_strides(tuple(int(d) for d in local_shape))
     out = []
     for k in range(n):
         if k in split_axes:
@@ -157,7 +149,7 @@ class Reshard(Op):
 @register_typeinfer(Reshard)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
-        raise TypeError("Reshard: missing required input 'x'")
+        ctx.error(call, "missing required input 'x'")
     x_ty = ctx.type_of(call.args[0])
     op = call.target
     if op.storage is StorageKind.UMAT:

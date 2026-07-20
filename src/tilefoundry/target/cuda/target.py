@@ -62,7 +62,7 @@ class CudaTarget(Target):
         if name == "cta":
             return self.device.sm_count
         if name == "thread":
-            return self.architecture.max_threads_per_cta
+            return self.architecture.topology_limit("thread")
         raise ValueError(
             f"{self!r}: unsupported topology level {name!r}; "
             f"supported levels are {self.topology_levels}"

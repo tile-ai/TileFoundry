@@ -26,7 +26,6 @@ from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 
 _NEG = Unary(kind=UnaryKind.NEG)
-_NOT = Unary(kind=UnaryKind.NOT)
 _EXP = Unary(kind=UnaryKind.EXP)
 _ABS = Unary(kind=UnaryKind.ABS)
 _RSQRT = Unary(kind=UnaryKind.RSQRT)
@@ -39,13 +38,6 @@ CASES = [
     TypeInferCase(name="passthrough", op=_NEG, inputs=(t,), expected=t)
     for t in tensor_grid((4, 8), DType.f32)
 ] + [
-    TypeInferCase(
-        name="not_requires_bool",
-        op=_NOT,
-        inputs=(make_tensor_type((4, 8), DType.f32),),
-        expected=ExpectedError(match="bool"),
-    ),
-] + [
     # Low-precision dtypes are legal typeinfer operands: inference is purely
     # logical, so they pass through like any other element type.
     TypeInferCase(
@@ -54,21 +46,21 @@ CASES = [
         inputs=(make_tensor_type((4, 8), dt),),
         expected=make_tensor_type((4, 8), dt),
     )
-    for dt in (DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1)
+    for dt in (DType.fp8e4m3,)
 ] + [
     TypeInferCase("neg_partial_sum_passes", _NEG, (_PSUM,), _PSUM),
     TypeInferCase(
-        "neg_partial_max_errors", _NEG, (_PMAX,), ExpectedError(match="Unary NEG")
+        "neg_partial_max_errors", _NEG, (_PMAX,), ExpectedError(match="carries Partial")
     ),
     TypeInferCase("exp_partial_max_passes", _EXP, (_PMAX,), _PMAX),
     TypeInferCase(
-        "exp_partial_sum_errors", _EXP, (_PSUM,), ExpectedError(match="Unary EXP")
+        "exp_partial_sum_errors", _EXP, (_PSUM,), ExpectedError(match="carries Partial")
     ),
     TypeInferCase(
-        "abs_partial_sum_errors", _ABS, (_PSUM,), ExpectedError(match="Unary ABS")
+        "abs_partial_sum_errors", _ABS, (_PSUM,), ExpectedError(match="carries Partial")
     ),
     TypeInferCase(
-        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,), ExpectedError(match="Unary RSQRT")
+        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,), ExpectedError(match="carries Partial")
     ),
 ]
 

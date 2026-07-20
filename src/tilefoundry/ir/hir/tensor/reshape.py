@@ -8,7 +8,6 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -16,12 +15,23 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
 )
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 
 @register_op
 class Reshape(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     new_shape = ParamDef(kind="attribute", annotation=tuple)
+
+
+# GLOBAL-level: identity (each output element corresponds to a single input
+# element via a deterministic remap encoded in `new_shape`, not duplicated
+# in the relation at this level).
+register_access_relation(Reshape)(identity_relations(1))
 
 
 def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):

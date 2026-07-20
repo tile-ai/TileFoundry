@@ -23,10 +23,7 @@ def _tensor_type_getitem(args) -> TensorType:
     shape = args[0]
     dtype_val = args[1] if len(args) > 1 else DType.f32
     if isinstance(dtype_val, str):
-        member = getattr(DType, dtype_val, None)
-        if not isinstance(member, DType):
-            raise ValueError(f"DType: unknown value {dtype_val!r}")
-        dtype_val = member
+        dtype_val = DType.from_name(dtype_val)
     if not isinstance(shape, tuple):
         shape = (shape,)
     layout = args[2] if len(args) > 2 else None

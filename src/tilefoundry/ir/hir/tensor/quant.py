@@ -21,13 +21,13 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
+from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -41,23 +41,16 @@ class Quant(Op):
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
-        raise TypeError("Quant: x must be at least rank-1")
-    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
-        if reduction is not None:
-            raise TypeError(
-                f"Quant: Partial input on x is unsound: x carries Partial({reduction}) "
-                f"on mesh axis {axis}; "
-                "per-group normalization does not commute. Insert reshard(x, "
-                "Broadcast) before this consumer"
-            )
+        ctx.error(call, "x must be at least rank-1")
+    # Per-group normalization does not commute with a partial (per-shard)
+    # reduction.
+    reject_partials(ctx, call, "x", x_ty.layout)
     last = x_ty.shape[-1]
     group = call.target.group
     # Static divisibility check when last dim is a Python int.
     if isinstance(last, int):
         if last % group != 0:
-            raise TypeError(
-                f"Quant: last dim {last} not divisible by group={group}"
-            )
+            ctx.error(call, f"last dim {last} not divisible by group={group}")
         scale_last = last // group
     else:
         # Symbolic last dim: leave it to downstream verify; produce same Expr.

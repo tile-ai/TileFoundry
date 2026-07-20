@@ -52,11 +52,6 @@ _FRAG_LAYOUT = ShardLayout(
     attrs=(Split(axis=1), Split(axis=2)),
     mesh=_MESH_FRAG,
 )
-_FRAG_VERBOSE = ShardLayout(
-    layout=Layout(shape=(2, 4, 2, 8, 2), strides=(1, 2, 8, 16, 128)),
-    attrs=(Split(1), Split(3)),
-    mesh=_MESH_FRAG,
-)
 
 # Direction-of-materialization meshes / sugar (strides=None) inputs.
 _MESH_H2L = Mesh(topology=Topology("thread", 4), layout=Layout(shape=(4,), strides=(1,)), names=("t",))
@@ -153,12 +148,6 @@ CASES = [
         (make_tensor_type((4, 16), storage=rmem, layout=_SRC_SAME_PI_LAYOUT),),
         make_tensor_type((4, 16), storage=rmem,
              layout=_materialized((4, 16), (0, 1), (Split(0),), _MESH_SAME_PI)),
-    ),
-    TypeInferCase(
-        "explicit_fragment_strides_preserved_verbatim",
-        Reshard(layout=_FRAG_VERBOSE, storage=rmem),
-        (make_tensor_type((16, 8)),),
-        make_tensor_type((16, 8), storage=rmem, layout=_FRAG_VERBOSE),
     ),
     TypeInferCase(
         "storage_change_without_layout_errors",

@@ -26,7 +26,7 @@ from tilefoundry.codegen.cuda.tir.prim_function import (
     _parse_shape_param_name,
 )
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
-from tilefoundry.ir.core import Call, Constant, Var
+from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
@@ -43,6 +43,7 @@ from tilefoundry.ir.types.dim import (
     DimMul,
     DimSub,
 )
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
 
 # Memory-space → required DLPack device type for a host ABI tensor argument.
@@ -55,26 +56,13 @@ _STORAGE_DEVICE_TYPE = {
 _LAUNCH_ABI_DECL = ["int", "int", "int", "int", "int", "int", "int", "void*"]
 
 
-def _is_static_int(value) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return True
-    return isinstance(value, Constant) and isinstance(value.value, int) and not isinstance(
-        value.value, bool
-    )
-
-
-def _static_value(value) -> int:
-    return value if isinstance(value, int) else int(value.value)
-
-
 def _static_smem(value) -> int:
     """Resolve ``dynamic_smem`` to a static int. Host index-expr codegen
     covers grid/block extents only; a dynamic shared-memory size expression
     is not supported."""
-    if _is_static_int(value):
-        return _static_value(value)
+    sv = static_dim_value(value)
+    if sv is not None:
+        return sv
     raise ValueError(
         "emit_host_module: dynamic_smem must be a static int/Constant; a "
         f"dynamic shared-memory size expression is not supported, got "
@@ -100,8 +88,9 @@ def _emit_host_int_expr(expr) -> str:
     ``ShapeOf`` (the forwarded tensor's ``shape()`` access), or a
     dim-arithmetic ``Call`` over those. Any unsupported node raises — there
     is no silent zero/default."""
-    if _is_static_int(expr):
-        return str(_static_value(expr))
+    sv = static_dim_value(expr)
+    if sv is not None:
+        return str(sv)
     if isinstance(expr, ShapeOf):
         return f"{expr.param.name}.shape()[{expr.axis}]"
     if isinstance(expr, Call):
@@ -313,8 +302,9 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
     # constructed). A ``ShapeOf`` lowers to the forwarded tensor's runtime
     # ``shape()`` access; the wrapper parameter carries that tensor's name.
     def _extent(c) -> str:
-        if _is_static_int(c):
-            return str(_static_value(c))
+        cv = static_dim_value(c)
+        if cv is not None:
+            return str(cv)
         return f"static_cast<int>({_emit_host_int_expr(c)})"
 
     grid = tuple(_extent(c) for c in grid_exprs)
@@ -482,11 +472,11 @@ def _require_uniform_case_args(case_calls, module) -> None:
 
 def _reject_unsupported_config(cfg) -> None:
     if cfg.cluster is not None:
-        raise ValueError("emit_host_module: launch `cluster` is not supported yet")
+        raise NotImplementedError("emit_host_module: launch `cluster` is not supported yet")
     if cfg.stream is not None:
-        raise ValueError("emit_host_module: launch `stream` is not supported yet")
+        raise NotImplementedError("emit_host_module: launch `stream` is not supported yet")
     if cfg.attrs.entries:
-        raise ValueError("emit_host_module: launch `attrs` are not supported yet")
+        raise NotImplementedError("emit_host_module: launch `attrs` are not supported yet")
 
 
 def _derive_launch_config(body):

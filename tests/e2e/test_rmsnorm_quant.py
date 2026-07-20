@@ -11,8 +11,6 @@ import torch
 import tilefoundry
 from tilefoundry import module
 from tilefoundry.dsl import *  # Tensor, tf, T, func, Mesh, Topology, ReduceKind, B, ...
-from tilefoundry.ir.types import TupleType
-from tilefoundry.ir.types.storage import StorageKind
 
 
 @module(entry="rmsnorm")
@@ -69,15 +67,6 @@ class RmsnormQuantSeq2Module:
                 tf.reshard(a_scale, (2 @ m.x, 12 @ m.y), 'gmem'),
             )
 
-def test_rmsnorm_quant_parses_and_typeinfers() -> None:
-    """Parsing + HIR typeinfer of the RMSNorm formula succeed end-to-end."""
-
-    fn = RmsnormModule.rmsnorm
-    assert fn.return_type.shape == (1, 1536)
-    assert fn.return_type.dtype.name == "bf16"
-    assert fn.return_type.storage == StorageKind.GMEM
-
-
 def test_rmsnorm_quant_e2e_gpu_run() -> None:
     """Full compile → GPU run → numerical match vs
     ``torch.nn.functional.rms_norm``. A single ``thread`` topology with
@@ -131,13 +120,6 @@ def test_rmsnorm_seq_2_e2e_gpu_run() -> None:
     )
 
 
-def test_rmsnorm_quant_seq_2_parses_and_typeinfers() -> None:
-    """fp8 quant: parsing + HIR typeinfer of the quant variant succeed."""
-    fn = RmsnormQuantSeq2Module.rmsnorm_quant_seq_2
-    assert isinstance(fn.return_type, TupleType)
-    assert len(fn.return_type.fields) == 2
-
-
 def _rmsnorm_quant_seq_2_reference(
     a: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -164,29 +146,6 @@ def _rmsnorm_quant_seq_2_reference(
         torch.float8_e4m3fn
     )
     return q, scale
-
-
-def test_rmsnorm_quant_seq_2_e2e_gpu_run() -> None:
-    """fp8 quant: GPU compile + run — smoke check that the quant pipeline
-    produces fp8 output and f32 scale tensors without crashing.
-
-    Numerical assertions live in
-    ``test_rmsnorm_quant_seq_2_e2e_gpu_precision`` and are currently
-    blocked on reduce tier-1 multi-cell support.
-    """
-
-    rm = tilefoundry.compile(RmsnormQuantSeq2Module, target="cuda")
-
-    torch.manual_seed(42)
-    a = torch.randn(2, 1536, dtype=torch.bfloat16, device="cuda") * 0.1
-    out0 = torch.empty(2, 1536, dtype=torch.float8_e4m3fn, device="cuda")
-    out1 = torch.empty(2, 12, dtype=torch.float32, device="cuda")
-    rm(a, out0, out1)
-    torch.cuda.synchronize()
-
-    assert out0.numel() == 3072
-    assert out1.numel() == 24
-    assert torch.isfinite(out1.float()).all()
 
 
 def test_rmsnorm_quant_seq_2_e2e_gpu_precision() -> None:

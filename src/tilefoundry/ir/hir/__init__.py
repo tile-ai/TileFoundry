@@ -15,7 +15,4 @@ def _auto_import(pkg_name: str) -> None:
 
 _auto_import("tilefoundry.ir.hir")
 
-# Retrofit GLOBAL access_relation handlers onto existing primitives.
-from tilefoundry.visitor_registry import access_relation_primitives  # noqa: E402, F401
-
 __all__ = ["Function", "GridRegionExpr"]

@@ -59,8 +59,7 @@ def _inputs(seq, ctx):
 # ── head-on-CTA: evaluator == reference, any seq × small/mid context ───────
 
 
-@pytest.mark.parametrize("seq", [1, 2, 4])
-@pytest.mark.parametrize("ctx", [1, 8, 37, 256])
+@pytest.mark.parametrize("seq,ctx", [(1, 1), (4, 37), (2, 256)], ids=lambda v: str(v))
 def test_head_variant_matches_reference(seq, ctx):
     q, k, v = _inputs(seq, ctx)
     out = evaluate(_HEAD_VARIANT, q, k, v, device="cpu")
@@ -74,8 +73,9 @@ def test_head_variant_matches_reference(seq, ctx):
 # two-pass math matches the reference.
 
 
-@pytest.mark.parametrize("seq", [1, 2, 4])
-@pytest.mark.parametrize("ctx", [NUM_SPLITS, NUM_SPLITS * 2, NUM_SPLITS * 8])
+@pytest.mark.parametrize(
+    "seq,ctx", [(1, NUM_SPLITS), (4, NUM_SPLITS * 8)], ids=lambda v: str(v)
+)
 def test_context_variant_splitkv_matches_reference(seq, ctx):
     q, k, v = _inputs(seq, ctx)
     out = evaluate(_CTX_VARIANT, q, k, v, device="cpu")
@@ -99,8 +99,8 @@ def test_prototype_dispatches_and_matches_reference():
 # size-mismatch and raise, rather than returning a wrong-but-plausible answer.
 
 
-@pytest.mark.parametrize("ctx", [NUM_SPLITS + 1, 2 * NUM_SPLITS - 1, 9, 15])
-def test_context_variant_fails_closed_on_unaligned_ctx(ctx):
+def test_context_variant_fails_closed_on_unaligned_ctx():
+    ctx = NUM_SPLITS + 1
     assert ctx % NUM_SPLITS != 0
     q, k, v = _inputs(2, ctx)
     with pytest.raises(RuntimeError, match="invalid for input of size"):

@@ -4,7 +4,7 @@ import ast
 import dataclasses
 from typing import Any
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
+from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -12,12 +12,11 @@ from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
-    DimMax,
-    DimMin,
     DimMod,
     DimMul,
     DimSub,
     DimVar,
+    is_dim_expr,
     simplify_dim,
 )
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
@@ -34,12 +33,17 @@ from tilefoundry.schedule.constraints import (
 from tilefoundry.schedule.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.target import Target, resolve_target
 
-from .base import BaseExprVisitor, _constant_from_py, _warn_if_ir_object, extract_ast
+from .base import (
+    BaseExprVisitor,
+    _build_params,
+    _collect_closure,
+    _resolve_tensor_type,
+    extract_ast,
+)
 from .range_slice import RangeSlice
-from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar, try_parse_sugar_tensor_type
+from .static_eval import eval_static
+from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar
 from .symtab import LexicalEnv
-
-_DIM_OP_TYPES = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
 
 # Python AST binary ops → dim ops, for resolving loop bounds (tile/range
 # extent / step / start) that mix DimVars with ints, e.g. ``C // NUM_SPLITS``.
@@ -50,27 +54,6 @@ _AST_DIM_OPS = {
     ast.FloorDiv: DimFloorDiv,
     ast.Mod: DimMod,
 }
-
-
-def _is_dim_expr(v) -> bool:
-    """A legal ``tile(...)`` extent / step: a static ``int``, a ``DimVar``, or a
-    dim ``Expr`` built only from the ``dim`` ops over int / DimVar leaves.
-
-    Rejects arbitrary ``Expr`` (e.g. a tensor-op ``Call``) so a malformed
-    extent cannot reach IR."""
-    if isinstance(v, bool):
-        return False
-    if isinstance(v, int):
-        return True
-    if isinstance(v, DimVar):
-        return True
-    if isinstance(v, Constant):
-        return isinstance(v.value, int) and not isinstance(v.value, bool)
-    if isinstance(v, Call):
-        return isinstance(v.target, _DIM_OP_TYPES) and all(
-            _is_dim_expr(a) for a in v.args
-        )
-    return False
 
 
 def parse_func(fn, *, topologies=(), specializations=(), target=None, extra_closure=None) -> Function:
@@ -89,6 +72,51 @@ def parse_func(fn, *, topologies=(), specializations=(), target=None, extra_clos
         source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
     )
 
+def _find_func_def(stmts: list[ast.stmt]) -> ast.FunctionDef | None:
+    """Return the first ``@func``-decorated ``FunctionDef`` in *stmts*, else
+    ``None``. Shared by ``parse_func_source`` (a flat module body) and
+    ``_parse_module_source_tree`` (module body + the ``@module`` class body,
+    pre-flattened by the caller)."""
+    for stmt in stmts:
+        if isinstance(stmt, ast.FunctionDef):
+            for dec in stmt.decorator_list:
+                if _is_func_decorator(dec):
+                    return stmt
+    return None
+
+
+# Source statements folded into the ``exec``-built prelude namespace: the
+# union of what ``parse_func_source`` and ``_parse_module_source_tree``
+# each accepted independently (Assign / AnnAssign / Expr), so a module-level
+# constant round-trips identically through either source entry point.
+_SOURCE_PRELUDE_STMTS = (ast.Assign, ast.AnnAssign, ast.Expr)
+
+
+def _build_source_closure(stmts: list[ast.stmt]) -> dict[str, Any]:
+    """Build a source-level prelude namespace from *stmts* (module body, or
+    module body + ``@module`` class body): every ``import`` / assignment /
+    bare-expression statement is rendered back to source and ``exec``'d;
+    ``FunctionDef`` / ``ClassDef`` are skipped (they are handled separately
+    by :func:`_find_func_def` / the module-class walk)."""
+    closure: dict[str, Any] = {}
+    prelude_lines: list[str] = []
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                name = alias.asname or alias.name
+                prelude_lines.append(f"import {alias.name} as {name}")
+        elif isinstance(stmt, ast.ImportFrom):
+            names = ", ".join(a.name + (f" as {a.asname}" if a.asname else "")
+                              for a in stmt.names)
+            prelude_lines.append(f"from {stmt.module or ''} import {names}")
+        elif isinstance(stmt, _SOURCE_PRELUDE_STMTS):
+            prelude_lines.append(ast.unparse(stmt))
+    exec("\n".join(prelude_lines), closure)
+    return closure
+
+
 def parse_func_source(src: str) -> Function:
     """Parse @func-decorated function from Python source string.
 
@@ -99,38 +127,10 @@ def parse_func_source(src: str) -> Function:
     resolution rather than arbitrary Python object capture.
     """
     tree = ast.parse(src)
-    # Find the FunctionDef decorated with @func or @func(...)
-    func_node = None
-    for stmt in tree.body:
-        if isinstance(stmt, ast.FunctionDef):
-            for dec in stmt.decorator_list:
-                if _is_func_decorator(dec):
-                    func_node = stmt
-                    break
-        if func_node:
-            break
+    func_node = _find_func_def(tree.body)
     if func_node is None:
         raise ValueError("no @func-decorated function found in source")
-
-    # Build closure from source-level imports and assignments
-    closure: dict[str, Any] = {}
-    # Collect all top-level statements that are NOT @func definitions
-    prelude_lines = []
-    for stmt in tree.body:
-        if isinstance(stmt, ast.FunctionDef):
-            continue  # skip function defs
-        if isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                name = alias.asname or alias.name
-                prelude_lines.append(f"import {alias.name} as {name}")
-        elif isinstance(stmt, ast.ImportFrom):
-            names = ", ".join(a.name + (f" as {a.asname}" if a.asname else "")
-                              for a in stmt.names)
-            prelude_lines.append(f"from {stmt.module or ''} import {names}")
-        elif isinstance(stmt, (ast.Assign, ast.Expr)):
-            # Module-level variable assignments (e.g. sl = ShardLayout(...))
-            prelude_lines.append(ast.unparse(stmt))
-    exec("\n".join(prelude_lines), closure)
+    closure = _build_source_closure(tree.body)
 
     # Extract topologies from decorator AST
     parsed_topologies = _extract_topologies_from_decorator(func_node)
@@ -153,7 +153,9 @@ def _parse_func_node(
     source_filename: str = "<string>",
 ) -> Function:
     env = LexicalEnv()
-    params = _build_params(node, closure)
+    params = _build_params(
+        node, closure, _resolve_tensor_type, decorator_name="@tilefoundry.func"
+    )
     for p in params:
         env.define(p.name, p)
     # Build topology namespace: {name → Topology} for string-name resolution
@@ -248,44 +250,20 @@ def _extract_topologies_from_decorator(node: ast.FunctionDef) -> list["Topology"
     return result
 
 
+_DECORATOR_STATIC_NODES = (
+    ast.Constant, ast.Name, ast.Attribute, ast.Tuple, ast.List, ast.Call,
+)
+
+
 def _eval_decorator_static(node: ast.AST, closure: dict[str, Any]):
-    """Evaluate the static expression subset used by decorator kwargs."""
-    if isinstance(node, ast.Constant):
-        return node.value
-    if isinstance(node, ast.Name):
-        try:
-            return closure[node.id]
-        except KeyError as exc:
-            raise VerifyError(
-                f"undefined name in decorator argument: {node.id!r}"
-            ) from exc
-    if isinstance(node, ast.Attribute):
-        owner = _eval_decorator_static(node.value, closure)
-        try:
-            return getattr(owner, node.attr)
-        except AttributeError as exc:
-            raise VerifyError(
-                f"unknown decorator attribute {node.attr!r} on "
-                f"{type(owner).__name__}"
-            ) from exc
-    if isinstance(node, ast.Tuple):
-        return tuple(_eval_decorator_static(item, closure) for item in node.elts)
-    if isinstance(node, ast.List):
-        return [_eval_decorator_static(item, closure) for item in node.elts]
-    if isinstance(node, ast.Call):
-        if any(keyword.arg is None for keyword in node.keywords):
-            raise VerifyError("decorator arguments do not accept **kwargs")
-        fn = _eval_decorator_static(node.func, closure)
-        args = tuple(_eval_decorator_static(arg, closure) for arg in node.args)
-        kwargs = {
-            keyword.arg: _eval_decorator_static(keyword.value, closure)
-            for keyword in node.keywords
-        }
-        return fn(*args, **kwargs)
-    raise VerifyError(
-        f"unsupported decorator argument {type(node).__name__}; "
-        "expected a static target value"
-    )
+    """Evaluate the static expression subset used by decorator kwargs.
+
+    Thin policy wrapper over :func:`eval_static`: no lexical env exists yet
+    at decorator-parse time (only the function's closure), and only the
+    literal / name / attribute / call node shapes a decorator argument may
+    take are allowed.
+    """
+    return eval_static(node, closure=closure, allowed_nodes=_DECORATOR_STATIC_NODES)
 
 
 def _extract_target_from_decorator(
@@ -329,44 +307,27 @@ def _parse_topology_item(node: ast.AST) -> "Topology | None":
                         return Topology(name=name.value, size=size_val)
     return None
 
+_TOPOLOGY_STATIC_NODES = (ast.Constant, ast.BinOp, ast.UnaryOp)
+
+
 def _eval_topology_expr(node: ast.AST) -> int | None:
     """Safely evaluate a compile-time expression for topology size.
 
-    Handles integer literals, binary arithmetic, and unary minus.
-    Returns None for expressions that cannot be statically evaluated.
+    Thin policy wrapper over :func:`eval_static`, restricted to integer
+    literals, binary arithmetic, and unary minus, with ``div="floor"`` —
+    topology sizes are always integral, unlike the true-division default
+    used for general attribute kwargs (:meth:`BaseExprVisitor._eval_static`).
+    Returns ``None`` (rather than raising) for anything that cannot be
+    statically resolved, e.g. a variable reference (handled by the runtime
+    decorator kwarg path instead) or division by zero.
     """
-    if isinstance(node, ast.Constant):
-        if isinstance(node.value, int):
-            return node.value
+    try:
+        value = eval_static(
+            node, closure={}, allowed_nodes=_TOPOLOGY_STATIC_NODES, div="floor"
+        )
+    except (VerifyError, ZeroDivisionError):
         return None
-    if isinstance(node, ast.BinOp):
-        left = _eval_topology_expr(node.left)
-        right = _eval_topology_expr(node.right)
-        if left is None or right is None:
-            return None
-        if isinstance(node.op, ast.Mult):
-            return left * right
-        if isinstance(node.op, ast.Add):
-            return left + right
-        if isinstance(node.op, ast.Sub):
-            return left - right
-        if isinstance(node.op, ast.Div):
-            if right == 0:
-                return None
-            # Floor div for topology sizes
-            return left // right
-        if isinstance(node.op, ast.FloorDiv):
-            if right == 0:
-                return None
-            return left // right
-        return None
-    if isinstance(node, ast.UnaryOp):
-        if isinstance(node.op, ast.USub):
-            val = _eval_topology_expr(node.operand)
-            if val is not None:
-                return -val
-        return None
-    return None
+    return value if isinstance(value, int) else None
 
 
 def _constraint_value(node: ast.AST):
@@ -469,74 +430,6 @@ def _is_func_decorator(dec: ast.AST) -> bool:
         return _is_func_decorator(dec.func)
     return False
 
-def _collect_closure(fn, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    closure: dict[str, Any] = {}
-    if extra:
-        closure.update(extra)
-    if fn.__globals__ is not None:
-        closure.update(fn.__globals__)
-    if fn.__closure__ is not None:
-        for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
-            try:
-                closure[name] = cell.cell_contents
-            except ValueError:
-                pass
-    return closure
-
-def _annotation_head_name(node: ast.AST) -> str | None:
-    """Return the subscript base identifier (``Tensor`` / ``ConstTensor``),
-    resolving through an attribute path such as ``dsl.ConstTensor``."""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
-
-
-def _is_const_tensor_annotation(node: ast.AST) -> bool:
-    """``ConstTensor[...]`` marks a parameter ``is_const=True``; ``Tensor[...]``
-    and every other annotation form leave it ``False``."""
-    return (
-        isinstance(node, ast.Subscript)
-        and _annotation_head_name(node.value) == "ConstTensor"
-    )
-
-
-def _build_params(node: ast.FunctionDef, closure: dict[str, Any]) -> tuple[Var, ...]:
-    out: list[Var] = []
-    for a in node.args.args:
-        if a.annotation is None:
-            raise VerifyError(f"@tilefoundry.func param {a.arg!r} must be annotated")
-        ann_type = _resolve_tensor_type(a.annotation, closure)
-        is_const = _is_const_tensor_annotation(a.annotation)
-        out.append(Var(type=ann_type, name=a.arg, is_const=is_const))
-    return tuple(out)
-
-def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
-    """Resolve a tensor type annotation.
-
-    Supports two forms:
-
-    1. **Sugar**: ``Tensor[(M,K), bf16, ((32 @ gpu.cluster, K), {gpu.warp @ P("sum")}), "smem"]``
-       — compact layout sugar, parsed directly from the AST without ``eval()``.
-    2. **Verbose**: ``Tensor[(M,K), bf16, ShardLayout(...), "smem"]``
-       — evaluated via ``eval()`` in *closure*.
-    """
-    # Try sugar path first (handles @ mesh.axis bindings)
-    result = try_parse_sugar_tensor_type(node, closure)
-    if result is not None:
-        return result
-
-    # Fallback: statically eval the whole annotation in the closure.
-    try:
-        code = compile(ast.Expression(body=node), "<ann>", "eval")
-        val = eval(code, closure)  # noqa: S307 — controlled internal eval
-    except Exception as exc:
-        raise VerifyError(f"failed to resolve type annotation: {exc}")
-    if isinstance(val, TensorType):
-        return val
-    raise VerifyError(f"annotation did not resolve to TensorType, got {type(val).__name__}")
-
 def _is_pass_body(stmts: list[ast.stmt]) -> bool:
     """A dispatch-prototype body is exactly ``pass``. A ``pass`` mixed with any
     other statement is rejected (it is not a partial body form)."""
@@ -629,35 +522,11 @@ class _HirBodyVisitor(BaseExprVisitor):
                 self.env.define(tgt, rhs)
                 return self._visit_chain(stmts, idx + 1, require_return)
             if isinstance(target, ast.Tuple):
-                # tuple unpack: `a, b = call(...)`
-                # Parser detects ast.Tuple targets, requires RHS type is TupleType,
-                # and synthesizes TupleGetItem(rhs, index=i) bindings for each name.
-                rhs = self.expr(node.value)
-                if not isinstance(rhs.type, TupleType):
-                    raise VerifyError(
-                        f"hir: tuple unpack requires RHS of TupleType, "
-                        f"got {type(rhs.type).__name__}"
-                    )
-                names: list[str] = []
-                for elt in target.elts:
-                    if not isinstance(elt, ast.Name):
-                        raise VerifyError(
-                            "hir: tuple unpack targets must all be plain names"
-                        )
-                    names.append(elt.id)
-                if len(names) != len(rhs.type.fields):
-                    raise VerifyError(
-                        f"hir: tuple unpack arity mismatch — RHS has "
-                        f"{len(rhs.type.fields)} fields, LHS binds {len(names)} names"
-                    )
-                # Parent Call default loc = DSL callable name
-                # (no single LHS to fall back on); user-explicit loc is
-                # preserved by call_to_op_call.
-                rhs = self._maybe_autofill_loc_default(rhs)
-                for i, nm in enumerate(names):
-                    item = self._build_call(TupleGetItem(index=i), (rhs,))
-                    item = self._maybe_autofill_loc(item, nm)
-                    self.env.define(nm, item)
+                # tuple unpack: `a, b = call(...)` — requires RHS type
+                # TupleType, synthesizes a TupleGetItem(rhs, index=i)
+                # binding per name (see `_visit_tuple_assign`, shared with
+                # the tile-body Assign path).
+                self._visit_tuple_assign(target, node.value)
                 return self._visit_chain(stmts, idx + 1, require_return)
             raise VerifyError("hir: only single-target Name or Tuple assignments supported in V1")
         if isinstance(node, ast.AnnAssign):
@@ -936,7 +805,7 @@ class _HirBodyVisitor(BaseExprVisitor):
                 raise VerifyError(
                     f"tile() takes 1 or 2 arguments (extent[, step]), got {len(loop_args)}"
                 )
-        if not (_is_dim_expr(start) and _is_dim_expr(extent) and _is_dim_expr(step)):
+        if not (is_dim_expr(start) and is_dim_expr(extent) and is_dim_expr(step)):
             raise VerifyError(
                 f"{loop_kind}(): start / extent / step must be a dim expression "
                 f"(int / DimVar / dim-op Expr), got start={start!r}, "
@@ -1275,22 +1144,6 @@ class _HirBodyVisitor(BaseExprVisitor):
         pos_kw = {k.arg: _eval_mesh_arg(k.value) for k in node.keywords}
         return mesh_fn(*pos_args, **pos_kw)
 
-    def visit_Call(self, node: ast.Call) -> Expr:
-        return self.call_to_op_call(node)
-
-    def visit_Name(self, node: ast.Name) -> Expr:
-        val = self.env.lookup(node.id)
-        if val is None:
-            val = self.closure.get(node.id)
-        if val is None:
-            raise VerifyError(f"undefined name {node.id!r}")
-        if isinstance(val, Expr):
-            return val
-        if isinstance(val, (int, float, bool)):
-            return _constant_from_py(val)
-        _warn_if_ir_object(val, node.id)
-        raise VerifyError(f"name {node.id!r} resolved to non-Expr Python value {type(val).__name__}")
-
 def _is_module_decorator(dec: ast.AST) -> bool:
     """True for ``@module``, ``@tf.module``, or ``@module(entry=...)`` — the
     bare name/attribute form or the entry-carrying call form."""
@@ -1347,43 +1200,14 @@ def _parse_module_source_tree(tree: ast.Module) -> Function:
     if module_cls is None:
         raise ValueError("no @module-decorated class found in source")
 
-    # Build closure from module-level and class-level non-@func statements
-    closure: dict[str, Any] = {}
-    prelude_lines: list[str] = []
-    func_node: ast.FunctionDef | None = None
-
-    # Collect module-level prelude (imports) and class-level statements
+    # Module-level prelude (imports / constants) plus class-level statements
+    # (the class body is a pure function container per parser.md §2.7, so
+    # its non-@func members are prelude constants, not nested definitions).
     all_statements = list(tree.body) + list(module_cls.body)
-
-    def _collect_prelude(stmts):
-        nonlocal func_node
-        for stmt in stmts:
-            if isinstance(stmt, ast.ClassDef):
-                continue  # skip the module class itself
-            if isinstance(stmt, ast.FunctionDef):
-                for dec in stmt.decorator_list:
-                    if _is_func_decorator(dec):
-                        func_node = stmt
-                        return  # stop collecting after finding @func
-            elif isinstance(stmt, ast.Import):
-                for alias in stmt.names:
-                    name = alias.asname or alias.name
-                    prelude_lines.append(f"import {alias.name} as {name}")
-            elif isinstance(stmt, ast.ImportFrom):
-                names = ", ".join(
-                    a.name + (f" as {a.asname}" if a.asname else "")
-                    for a in stmt.names
-                )
-                prelude_lines.append(f"from {stmt.module or ''} import {names}")
-            elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-                prelude_lines.append(ast.unparse(stmt))
-
-    _collect_prelude(all_statements)
-
+    func_node = _find_func_def(all_statements)
     if func_node is None:
         raise ValueError("no @func-decorated method found in module class")
-
-    exec("\n".join(prelude_lines), closure)
+    closure = _build_source_closure(all_statements)
 
     parsed_topologies = _extract_topologies_from_decorator(func_node)
     parsed_target = _extract_target_from_decorator(func_node, closure)

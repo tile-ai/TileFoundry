@@ -15,6 +15,7 @@ import pkgutil
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.tir.stmts import LetStmt, MeshScope, Sequential
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.runtime.module import ParamABI
 
@@ -81,10 +82,9 @@ def _param_abi(var) -> ParamABI:
     assert isinstance(ty, TensorType), f"PrimFunction param {var.name!r} must be TensorType"
 
     def _abi_dim(s):
-        if hasattr(s, "value"):
-            return s.value
-        if isinstance(s, int):
-            return s
+        static = static_dim_value(s)
+        if static is not None:
+            return static
         # Dynamic dim (e.g. DimVar) — host wrapper resolves the real
         # extent from the runtime tensor; the ABI shape entry stays
         # symbolic so the launcher can detect "this axis is runtime".

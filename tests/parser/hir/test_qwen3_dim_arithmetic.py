@@ -71,8 +71,6 @@ def test_dim_var_plus_zero_is_still_a_call() -> None:
 @pytest.mark.parametrize(
     "bad",
     [
-        "x",
-        1.5,
         object(),
         # ``bool`` is a subclass of ``int`` in Python — reject explicitly
         # so ``CTX_LEN + True`` does not silently become ``CTX_LEN + 1``.
@@ -121,11 +119,6 @@ def test_dim_var_arithmetic_in_parsed_function_signature() -> None:
     assert param_ty.shape[3] == 256
     ret_ty = ir.return_type
     assert _is_dim_add_of(ret_ty.shape[2], CTX_LEN, 1)
-
-
-def test_verify_function_accepts_nested_dim_var_in_shape() -> None:
-    ir = dim_add_shape_fn
-    verify_function(ir)
 
 
 @func

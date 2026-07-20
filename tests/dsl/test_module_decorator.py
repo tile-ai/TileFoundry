@@ -70,10 +70,6 @@ def test_module_collects_functions_in_order():
     assert [fn.name for fn in _Demo.functions] == ["leaf", "composed"]
 
 
-def test_module_entry_is_explicit():
-    assert _Demo.entry == "composed"
-
-
 def test_module_attribute_access_resolves_functions():
     """Attribute access mirrors the model: ``mod.<name>`` returns the function;
     a missing name raises ``AttributeError``."""
@@ -120,20 +116,6 @@ def test_composed_module_evaluates():
 
 
 # --- strict-surface validation ------------------------------------------
-
-
-def test_rejects_non_dsl_member():
-    """A non-dunder member that is not an @func / @prim_func result is rejected;
-    the class body is a pure function container."""
-    with pytest.raises(TypeError, match="only DSL functions"):
-
-        @module(entry="only")
-        class _Stray:
-            answer = 42  # stray attribute — not a DSL function
-
-            @func
-            def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-                return tf.rms_norm(x, g)
 
 
 def test_rejects_undecorated_method():

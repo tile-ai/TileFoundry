@@ -19,6 +19,7 @@ from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import TensorType, TupleType, Type, make_shard_tensor_type
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
     Broadcast,
     Layout,
@@ -27,6 +28,7 @@ from tilefoundry.ir.types.shard import (
     ShardLayout,
     Split,
     Topology,
+    try_c_order_strides,
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule.constraints import (
@@ -165,25 +167,8 @@ def _tensor_leaves(type: Type, path: tuple[int, ...] = ()) -> tuple[tuple[tuple[
     return ()
 
 
-def _static_int(value: object) -> int | None:
-    if isinstance(value, Constant):
-        value = value.value
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
-
-
 def _ceil_div(a: int, b: int) -> int:
     return (a + b - 1) // b
-
-
-def _c_order(shape: tuple) -> tuple | None:
-    if not all(isinstance(dim, int) and not isinstance(dim, bool) for dim in shape):
-        return None
-    strides = [1] * len(shape)
-    for index in range(len(shape) - 2, -1, -1):
-        strides[index] = strides[index + 1] * shape[index + 1]
-    return tuple(strides)
 
 
 def _mesh(count: int) -> Mesh:
@@ -390,7 +375,7 @@ class _Planner:
                     dtype=base.dtype,
                     storage=base.storage,
                     layout=ShardLayout(
-                        layout=Layout(shape=base.shape, strides=_c_order(base.shape)),
+                        layout=Layout(shape=base.shape, strides=try_c_order_strides(base.shape)),
                         attrs=(Broadcast(),),
                         mesh=mesh,
                     ),
@@ -581,9 +566,9 @@ class _Planner:
         function_path: tuple[int, ...],
         env: Mapping[int, tuple[int, ...]],
     ) -> tuple[int, ...]:
-        start = _static_int(region.start)
-        stop = _static_int(region.extent)
-        step = _static_int(region.step)
+        start = static_dim_value(region.start)
+        stop = static_dim_value(region.extent)
+        step = static_dim_value(region.step)
         context = f"GridRegion at {region.loc or getattr(function, 'loc', None) or '<unknown>'}"
         if start is None or stop is None or step is None:
             raise ValueError(f"P2: {context} requires static start, stop, and step")
@@ -1039,7 +1024,7 @@ def _validate_entry(module: Module, root: Function) -> tuple[CudaTarget, Topolog
     cta = tuple(topology for topology in root.topologies if topology.name == "cta")
     if len(cta) != 1:
         raise ValueError(f"P2: root {root.name!r} requires exactly one CTA topology")
-    count = _static_int(cta[0].size)
+    count = static_dim_value(cta[0].size)
     if count is None or not 1 <= count <= root.target.device.sm_count:
         raise ValueError(f"P2: root {root.name!r} requires a static CTA extent within device capacity")
     return root.target, Topology("cta", count)

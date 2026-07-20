@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .int_tuple import IntTuple, flatten, product
 from .layout import ComposedLayout, Layout, LayoutBase
+from .layout_algebra import c_order_strides, prefix_product, try_c_order_strides
 from .mesh import Mesh, MeshAxis, Topology
 from .shard_layout import (
     B,
@@ -21,6 +22,8 @@ from .utils import make_mesh
 __all__ = [
     # int tuple
     "IntTuple", "flatten", "product",
+    # stride algebra
+    "c_order_strides", "try_c_order_strides", "prefix_product",
     # layout
     "LayoutBase", "Layout", "ComposedLayout",
     # mesh

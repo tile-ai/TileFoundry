@@ -26,6 +26,22 @@ _CUDA_CPP: dict[str, str] = {
 }
 
 
+def topology_scope_str(name: str) -> str:
+    """Map a topology level name to its C++ ``tilefoundry::TopologyScope``
+    enumerator. Loud on an unknown level rather than silently defaulting."""
+    scopes = {
+        "cta": "tilefoundry::TopologyScope::cta",
+        "warp": "tilefoundry::TopologyScope::warp",
+        "thread": "tilefoundry::TopologyScope::thread",
+    }
+    try:
+        return scopes[name]
+    except KeyError:
+        raise ValueError(
+            f"unknown topology level {name!r}; expected one of {sorted(scopes)}"
+        ) from None
+
+
 def lookup(node_type: type):
     return codegen_cuda_registry.lookup(node_type)
 

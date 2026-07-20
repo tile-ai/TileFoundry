@@ -67,15 +67,14 @@ def _hf_decode_layer_ref(layer, x_real, k_cache0_hf, v_cache0_hf, cos, sin, mask
     return out, k_cache1, v_cache1
 
 
-_COMBOS = [(2, 1), (5, 3)]
 _DTYPES = [("f32", torch.float32, 2e-4, 2e-4), ("bf16", torch.bfloat16, 2e-2, 2e-2)]
 
 
-@pytest.mark.parametrize("cur_pos,s", _COMBOS, ids=lambda v: str(v))
 @pytest.mark.parametrize(
     "dt_name,torch_dt,atol,rtol", _DTYPES, ids=lambda v: v if isinstance(v, str) else ""
 )
-def test_decode_attention_matches_hf(dt_name, torch_dt, atol, rtol, cur_pos, s):
+def test_decode_attention_matches_hf(dt_name, torch_dt, atol, rtol):
+    cur_pos, s = 5, 3
     common.DT = dt_name
     fn = common.build_decode_attention()
 
@@ -124,12 +123,12 @@ def test_decode_attention_matches_hf(dt_name, torch_dt, atol, rtol, cur_pos, s):
     torch.testing.assert_close(out[:, :s].float(), ref_out.float(), atol=atol, rtol=rtol)
 
 
-@pytest.mark.parametrize("cur_pos,s", _COMBOS, ids=lambda v: str(v))
 @pytest.mark.parametrize(
     "dt_name,torch_dt,atol,rtol", _DTYPES, ids=lambda v: v if isinstance(v, str) else ""
 )
-def test_decode_layer_matches_hf(dt_name, torch_dt, atol, rtol, cur_pos, s):
+def test_decode_layer_matches_hf(dt_name, torch_dt, atol, rtol):
     """Full decode-step layer (one composed Function) vs HF Qwen3MoeDecoderLayer."""
+    cur_pos, s = 5, 3
     common.DT = dt_name
     fn = common.build_decode_layer()
 

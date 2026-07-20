@@ -18,7 +18,7 @@ from typing import Union
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16 as HirMmaSM80_16x8x16
 from tilefoundry.ir.hir.cuda.nn.mma import Wgmma_SM90_64x128x16 as HirWgmma_SM90
 from tilefoundry.ir.hir.function import Function as HirFunction
@@ -76,7 +76,7 @@ from tilefoundry.ir.types import (
     TupleType,
     callable_type_for_prim_function,
 )
-from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
+from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout as _Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -126,12 +126,9 @@ def _is_full_layout(layout) -> bool:
     # ``cosize == size`` for a contiguous embedding. A dynamic dim only appears
     # as the outermost axis, so it never enters a stride product; the inner
     # extents that build the strides must be static for the check to hold.
-    expected = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        nxt = shape[i + 1]
-        if not isinstance(nxt, int) or not isinstance(expected[i + 1], int):
-            return False
-        expected[i] = expected[i + 1] * nxt
+    if not all(isinstance(d, int) and not isinstance(d, bool) for d in shape[1:]):
+        return False
+    expected = c_order_strides(tuple(shape))  # never reads shape[0]
     return all(
         isinstance(strides[i], int) and strides[i] == expected[i]
         for i in range(len(shape))
@@ -702,11 +699,7 @@ class _Lowerer:
         # patterns like ``add(acc, mma(a, b))`` are emitted as a
         # separate Binary stmt later in the pipeline.
         zero_const = Constant(
-            value=0.0,
-            type=TensorType(
-                shape=(), dtype=target.dtype_acc,
-                layout=EMPTY_LAYOUT, storage=None,
-            ),
+            value=0.0, type=TensorType.meta_scalar(target.dtype_acc),
         )
         self._items.append(_eval_call(Fill(), (r, zero_const)))
         # TirMma operand order is (acc, lhs, rhs); the lowered path leaves
@@ -935,10 +928,8 @@ class _Lowerer:
         # Row-slice view of the cache at runtime ``cur`` along axis 1; keep rank
         # 4 (axis-1 extent 1) so the Copy shape check matches ``new``.
         view_shape = (new_shape[0], 1, *cache_shape[2:])
-        cstr = [1] * len(cache_shape)
-        for i in range(len(cache_shape) - 2, -1, -1):
-            cstr[i] = cstr[i + 1] * int(cache_shape[i + 1])
-        view_layout = _Layout(shape=view_shape, strides=tuple(cstr))
+        cstr = c_order_strides(tuple(int(d) for d in cache_shape))
+        view_layout = _Layout(shape=view_shape, strides=cstr)
         tv_type = TensorType(
             shape=view_shape,
             dtype=cache.type.dtype,
@@ -1194,7 +1185,7 @@ class _Lowerer:
                 f"dispatch is supported in v0"
             )
         dim_name = first_pat.dim_var
-        loc = _locate_dim_var_in_params(first_variant.params, dim_name)
+        loc = locate_dim_var(first_variant.params, dim_name)
         if loc is None:
             raise TypeError(
                 f"HIR Call to {callee_hir.name!r}: dispatch DimVar "
@@ -1390,23 +1381,6 @@ def _find_user_param_index(
         f"trailing scalar references user param {base_name!r} that is "
         f"not in the callee user-param list"
     )
-
-
-def _locate_dim_var_in_params(
-    params: tuple[Var, ...], dim_var_name: str
-) -> tuple[int, int] | None:
-    """First (param_index, axis) where a named DimVar appears in params.
-
-    Canonical scan order is (param_index ascending, axis ascending).
-    """
-    for i, p in enumerate(params):
-        shape = getattr(p.type, "shape", None)
-        if shape is None:
-            continue
-        for axis, dim in enumerate(shape):
-            if getattr(dim, "name", None) == dim_var_name:
-                return (i, axis)
-    return None
 
 
 def _fold_items_to_sequential(items: list[_Item]) -> Sequential:
@@ -1640,7 +1614,7 @@ def _build_dispatch_entry(
             f"supported in v0"
         )
     dim_name = pat0.dim_var
-    loc = _locate_dim_var_in_params(template.params, dim_name)
+    loc = locate_dim_var(template.params, dim_name)
     if loc is None:
         raise TypeError(
             f"dispatch group {template.name!r}: dispatch DimVar "

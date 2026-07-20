@@ -8,11 +8,6 @@ from tilefoundry.visitor_registry.registries import AnalysisRegistry
 eval_registry: AnalysisRegistry = AnalysisRegistry("eval")
 
 
-def register_eval(op_cls: type):
+def register_eval(op_cls: type) -> Callable[[Callable], Callable]:
     """Register *fn* as the evaluator for ``op_cls``."""
-
-    def decorator(fn: Callable) -> Callable:
-        eval_registry.register(op_cls, fn)
-        return fn
-
-    return decorator
+    return eval_registry.decorator()(op_cls)

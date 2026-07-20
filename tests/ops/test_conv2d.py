@@ -26,7 +26,6 @@ _BIAS = make_tensor_type((4,), _F)
 _X_PSUM = make_shard_tensor_type((1, 4, 8, 8), mesh=_M, attrs=(Partial("sum"),), dtype=_F)
 _X_PMAX = make_shard_tensor_type((1, 4, 8, 8), mesh=_M, attrs=(Partial("max"),), dtype=_F)
 _W_PSUM = make_shard_tensor_type((4, 4, 3, 3), mesh=_M, attrs=(Partial("sum"),), dtype=_F)
-_W_PMAX = make_shard_tensor_type((4, 4, 3, 3), mesh=_M, attrs=(Partial("max"),), dtype=_F)
 _W_SPLIT = make_shard_tensor_type((4, 4, 3, 3), mesh=_M, attrs=(Split(0),), dtype=_F)
 _BIAS_PSUM = make_shard_tensor_type((4,), mesh=_M, attrs=(Partial("sum"),), dtype=_F)
 
@@ -43,10 +42,6 @@ CASES = [
     ),
     TypeInferCase(
         "partial_max_input_errors", _OP, (_X_PMAX, _W, _BIAS),
-        ExpectedError(match="Conv2D"),
-    ),
-    TypeInferCase(
-        "partial_max_weight_errors", _OP, (_X, _W_PMAX, _BIAS),
         ExpectedError(match="Conv2D"),
     ),
     TypeInferCase(

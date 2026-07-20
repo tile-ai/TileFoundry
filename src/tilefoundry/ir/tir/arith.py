@@ -17,8 +17,8 @@ from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer, register_verify_stmt
 from tilefoundry.ir.types import UnitType
+from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 __all__ = ["BinaryKind", "Binary", "UnaryKind", "Unary"]
 

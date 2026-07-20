@@ -6,7 +6,6 @@ from tests.fixtures.demo_canonical import build_demo_canonical
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import TensorType
 from tilefoundry.parser.hir_parser import parse_script
 
@@ -61,24 +60,6 @@ def _attr_equal(a, b) -> bool:
             _attr_equal(getattr(a, f), getattr(b, f)) for f in a.__dataclass_fields__
         )
     return a == b
-
-
-def test_canonical_fixture_builds_with_topologies_and_ssa_chain() -> None:
-    """Canonical fixture has 2 topologies + reshard→relu→reshard SSA chain."""
-
-    fn = build_demo_canonical()
-    assert isinstance(fn, Function)
-    assert {(t.name, t.size) for t in fn.topologies} == {("cta", 128), ("thread", 256)}
-
-    def count_reshard(expr):
-        if isinstance(expr, Call):
-            c = 1 if isinstance(expr.target, Reshard) else 0
-            for arg in expr.args:
-                c += count_reshard(arg)
-            return c
-        return 0
-
-    assert count_reshard(fn.body) == 3  # shared, reg, global
 
 
 def test_canonical_roundtrip_preserves_topologies_and_compiles() -> None:

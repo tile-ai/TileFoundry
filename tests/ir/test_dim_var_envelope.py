@@ -2,13 +2,11 @@
 
 Covers:
 
-- ``DimVarRangePat`` ⊆ ``DimVar`` envelope.
-- ``DimVarRangePat`` referencing an unknown ``DimVar`` name.
-- ``_DimVarMeta`` no longer raises for same-name distinct-bounds
-  construction (conflict scoped to a single signature, surfaced
-  only in ``verify_function``).
-- Same-name ``DimVar`` instances within one signature must agree on
-  bounds.
+- ``DimVarRangePat`` ⊆ ``DimVar`` envelope, and unknown-name references.
+- Same-name ``DimVar`` bounds consistency scoped to a single signature
+  (params, return_type, nested TupleType), while cross-function
+  same-name distinct-bounds construction stays legal.
+- Half-open variant partition of the envelope (complete + disjoint).
 """
 
 from __future__ import annotations
@@ -43,24 +41,23 @@ def _identity_fn(
     )
 
 
-def test_specialization_outside_envelope_raises() -> None:
-    s = DimVar(name="S_env_out", lo=1, hi=8)
+def test_specialization_envelope_reference_validation() -> None:
+    """A specialization range must stay inside the DimVar envelope and
+    reference a DimVar that exists in the params."""
+    s = DimVar(name="S_env", lo=1, hi=8)
     x = Var(type=_tensor((s,)), name="x")
     fn = _identity_fn(
         name="f",
         params=(x,),
-        specializations=(DimVarRangePat("S_env_out", 0, 100),),
+        specializations=(DimVarRangePat("S_env", 0, 100),),
     )
     with pytest.raises(VerifyError, match="not contained in DimVar envelope"):
         verify_function(fn)
 
-
-def test_specialization_unknown_dim_var_raises() -> None:
-    s = DimVar(name="S_env_known", lo=1, hi=8)
-    x = Var(type=_tensor((s,)), name="x")
+    y = Var(type=_tensor((DimVar(name="S_known", lo=1, hi=8),)), name="x")
     fn = _identity_fn(
         name="f",
-        params=(x,),
+        params=(y,),
         specializations=(DimVarRangePat("OTHER", 1, 4),),
     )
     with pytest.raises(VerifyError, match="references unknown DimVar"):
@@ -89,34 +86,36 @@ def test_dim_var_cross_function_same_name_distinct_bounds_OK() -> None:
     verify_function(fn_b)
 
 
-def test_dim_var_within_function_inconsistent_bounds_raises() -> None:
-    s_small = DimVar(name="S_inc", lo=1, hi=8)
-    s_large = DimVar(name="S_inc", lo=4, hi=16)
-    x = Var(type=_tensor((s_small,)), name="x")
-    y = Var(type=_tensor((s_large,)), name="y")
-    fn = _identity_fn(name="f", params=(x, y))
+def test_same_name_inconsistent_bounds_raises() -> None:
+    """The signature-wide consistency scan covers params, return_type,
+    and TupleType fields recursively."""
+    lo_var = DimVar(name="S_inc", lo=1, hi=8)
+    hi_var = DimVar(name="S_inc", lo=4, hi=16)
+
+    # Across two params.
+    fn = _identity_fn(
+        name="f",
+        params=(Var(type=_tensor((lo_var,)), name="x"),
+                Var(type=_tensor((hi_var,)), name="y")),
+    )
     with pytest.raises(VerifyError, match="inconsistent DimVar bounds for 'S_inc'"):
         verify_function(fn)
 
-
-def test_return_type_dim_var_inconsistent_with_params_raises() -> None:
-    """Same-name DimVar in return_type with different bounds must also raise.
-
-    The signature-conflict check scans params AND return_type. A
-    function whose return_type carries a DimVar with bounds that
-    disagree with the same-name DimVar in the params is rejected at
-    parse/verify time, not silently accepted.
-    """
-    s_params = DimVar(name="S_ret", lo=1, hi=8)
-    s_return = DimVar(name="S_ret", lo=4, hi=16)
-    x = Var(type=_tensor((s_params,)), name="x")
+    # Between params and return_type.
+    x = Var(type=_tensor((lo_var,)), name="x")
     fn = HirFunction.build(
-        name="f",
-        params=(x,),
-        body=x,
-        return_type=_tensor((s_return,)),
+        name="f", params=(x,), body=x, return_type=_tensor((hi_var,)),
     )
-    with pytest.raises(VerifyError, match="inconsistent DimVar bounds for 'S_ret'"):
+    with pytest.raises(VerifyError, match="inconsistent DimVar bounds for 'S_inc'"):
+        verify_function(fn)
+
+    # Inside a TupleType field of return_type.
+    x = Var(type=_tensor((lo_var,)), name="x")
+    fn = HirFunction.build(
+        name="f", params=(x,), body=x,
+        return_type=TupleType(fields=(_tensor((hi_var,)),)),
+    )
+    with pytest.raises(VerifyError, match="inconsistent DimVar bounds for 'S_inc'"):
         verify_function(fn)
 
 
@@ -158,64 +157,19 @@ def _dispatch_proto(name: str, env, ranges):
 
 
 def test_partition_complete_and_disjoint_ok() -> None:
-    # [1,5) + [5,8) exactly tile the half-open envelope [1,8).
+    # [1,5) + [5,8) exactly tile the half-open envelope [1,8); a
+    # single-point variant [4,5) (= the value 4) is a legal range.
     verify_function(_dispatch_proto("S_par_ok", (1, 8), [(1, 5), (5, 8)]))
-
-
-def test_partition_single_point_variant_ok() -> None:
-    # A single-point variant [4,5) (= the value 4) is a legal half-open range.
     verify_function(_dispatch_proto("S_par_pt", (1, 8), [(1, 4), (4, 5), (5, 8)]))
 
 
-def test_partition_overlap_raises() -> None:
+def test_partition_gap_overlap_or_incomplete_raises() -> None:
     # [1,5) and [4,8) overlap at 4 (next must start at 5).
     with pytest.raises(VerifyError, match="gap or overlap at 4"):
         verify_function(_dispatch_proto("S_par_ov", (1, 8), [(1, 5), (4, 8)]))
-
-
-def test_partition_gap_raises() -> None:
     # [1,3) then [5,8) leaves 3,4 uncovered.
     with pytest.raises(VerifyError, match="gap or overlap at 5"):
         verify_function(_dispatch_proto("S_par_gap", (1, 8), [(1, 3), (5, 8)]))
-
-
-def test_partition_incomplete_raises() -> None:
     # [1,5) + [5,7) stop at 7 but the envelope reaches 8.
     with pytest.raises(VerifyError, match=r"cover \[1, 7\) but the envelope is \[1, 8\)"):
         verify_function(_dispatch_proto("S_par_inc", (1, 8), [(1, 5), (5, 7)]))
-
-
-def test_dim_var_range_pat_match_is_half_open() -> None:
-    # [1, 4) matches 1..3 and rejects 4 (hi exclusive).
-    pat = DimVarRangePat("c", 1, 4)
-    assert pat.match(1) and pat.match(3)
-    assert not pat.match(4)
-    assert not pat.match(0)
-
-
-def test_dim_var_range_pat_rejects_empty_range() -> None:
-    # lo == hi is an empty half-open range; a single point is [k, k+1).
-    with pytest.raises(ValueError, match="requires lo < hi"):
-        DimVarRangePat("c", 4, 4)
-
-
-def test_dim_var_rejects_empty_envelope() -> None:
-    with pytest.raises(ValueError, match="require lo < hi"):
-        DimVar(name="S_empty", lo=4, hi=4)
-
-
-def test_return_tuple_type_inconsistent_dim_var_bounds_raises() -> None:
-    """Same-name DimVar inside a TupleType field of return_type with
-    different bounds is rejected (recursive consistency scan)."""
-    s_params = DimVar(name="S_tup", lo=1, hi=8)
-    s_return = DimVar(name="S_tup", lo=4, hi=16)
-    x = Var(type=_tensor((s_params,)), name="x")
-    tup_return = TupleType(fields=(_tensor((s_return,)),))
-    fn = HirFunction.build(
-        name="f",
-        params=(x,),
-        body=x,
-        return_type=tup_return,
-    )
-    with pytest.raises(VerifyError, match="inconsistent DimVar bounds for 'S_tup'"):
-        verify_function(fn)

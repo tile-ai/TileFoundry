@@ -26,6 +26,19 @@ class AnalysisRegistry(Generic[Key]):
     def has(self, cls: Key) -> bool:
         return cls in self._map
 
+    def decorator(self) -> Callable[[type], Callable[[Callable], Callable]]:
+        """``@registry.decorator()`` factory: ``register_X = registry.decorator()``
+        gives the conventional ``register_X(cls)`` decorator for this registry."""
+
+        def register_for(cls: type) -> Callable[[Callable], Callable]:
+            def decorator(fn: Callable) -> Callable:
+                self.register(cls, fn)
+                return fn
+
+            return decorator
+
+        return register_for
+
 
 # Canonical per-analysis registries. Every instance is module-level so the
 # @register_* decorators attach at import time.
@@ -40,52 +53,12 @@ cost_evaluator_registry: AnalysisRegistry = AnalysisRegistry("cost_evaluator")
 hir_lowering_registry: AnalysisRegistry = AnalysisRegistry("hir_lowering")
 
 
-def register_typeinfer(op_cls: type):
-    def decorator(fn: Callable) -> Callable:
-        typeinfer_registry.register(op_cls, fn)
-        return fn
-
-    return decorator
-
-
-def register_verify_stmt(stmt_cls: type):
-    def decorator(fn: Callable) -> Callable:
-        verify_stmt_registry.register(stmt_cls, fn)
-        return fn
-
-    return decorator
-
-
-def register_codegen_cuda(cls: type):
-    def decorator(fn: Callable) -> Callable:
-        codegen_cuda_registry.register(cls, fn)
-        return fn
-
-    return decorator
-
-
-def register_codegen_cpu(cls: type):
-    def decorator(fn: Callable) -> Callable:
-        codegen_cpu_registry.register(cls, fn)
-        return fn
-
-    return decorator
-
-
-def register_cost_evaluator(op_cls: type):
-    def decorator(fn: Callable) -> Callable:
-        cost_evaluator_registry.register(op_cls, fn)
-        return fn
-
-    return decorator
-
-
-def register_hir_lowering(op_cls: type):
-    def decorator(fn: Callable) -> Callable:
-        hir_lowering_registry.register(op_cls, fn)
-        return fn
-
-    return decorator
+register_typeinfer = typeinfer_registry.decorator()
+register_verify_stmt = verify_stmt_registry.decorator()
+register_codegen_cuda = codegen_cuda_registry.decorator()
+register_codegen_cpu = codegen_cpu_registry.decorator()
+register_cost_evaluator = cost_evaluator_registry.decorator()
+register_hir_lowering = hir_lowering_registry.decorator()
 
 
 __all__ = [

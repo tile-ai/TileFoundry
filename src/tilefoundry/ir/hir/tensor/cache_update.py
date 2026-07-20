@@ -15,10 +15,9 @@ from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
+from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
+from tilefoundry.visitor_registry import register_typeinfer
 
 # Data-dependent write region (``cur_pos`` / ``s`` are runtime values), so no
 # affine access relation is registered — the boundaries are opaque.
@@ -49,54 +48,24 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     s_ty = ctx.type_of(call.args[2])
     new_ty = ctx.type_of(call.args[3])
     if len(cache_ty.shape) != 4 or len(new_ty.shape) != 4:
-        raise TypeError("CacheUpdate: cache and new must be rank-4 [B, len, kv_heads, head_dim]")
+        ctx.error(call, "cache and new must be rank-4 [B, len, kv_heads, head_dim]")
     if cache_ty.dtype != new_ty.dtype:
-        raise TypeError(f"CacheUpdate: cache/new dtype mismatch {cache_ty.dtype} vs {new_ty.dtype}")
-    cache_partials = tuple(
-        (axis, reduction)
-        for axis, reduction in enumerate(partial_reductions_by_axis(cache_ty.layout))
-        if reduction is not None
-    )
-    new_partials = tuple(
-        (axis, reduction)
-        for axis, reduction in enumerate(partial_reductions_by_axis(new_ty.layout))
-        if reduction is not None
-    )
-    if cache_partials:
-        if not (
-            isinstance(cache_ty.layout, ShardLayout)
-            and isinstance(new_ty.layout, ShardLayout)
-            and new_ty.layout.mesh == cache_ty.layout.mesh
-            and new_ty.layout.attrs == cache_ty.layout.attrs
-        ):
-            axis, reduction = cache_partials[0]
-            raise TypeError(
-                f"CacheUpdate: cache carries a Partial({reduction}) on mesh axis "
-                f"{axis}; new must carry the identical per-mesh-axis state. "
-                "Insert Reshard(new, Broadcast) or match the cache before "
-                "this consumer"
-            )
-    elif new_partials:
-        axis, reduction = new_partials[0]
-        raise TypeError(
-            f"CacheUpdate: new carries Partial({reduction}) on mesh axis "
-            f"{axis}, but cache is complete; insert reshard(new, Broadcast) "
-            "before this consumer"
-        )
+        ctx.error(call, f"cache/new dtype mismatch {cache_ty.dtype} vs {new_ty.dtype}")
+    require_matching_partial_state(ctx, call, cache_ty, new_ty, "cache", "new")
     for ax, label in ((0, "B"), (2, "kv_heads"), (3, "head_dim")):
         if cache_ty.shape[ax] != new_ty.shape[ax]:
-            raise TypeError(
-                f"CacheUpdate: cache/new {label} mismatch: "
-                f"{cache_ty.shape[ax]} vs {new_ty.shape[ax]}"
+            ctx.error(
+                call,
+                f"cache/new {label} mismatch: {cache_ty.shape[ax]} vs {new_ty.shape[ax]}",
             )
     for t, name in ((cur_ty, "cur_pos"), (s_ty, "s")):
         if t.dtype != DType.i32:
-            raise TypeError(f"CacheUpdate: {name} must be an i32 scalar, got dtype {t.dtype}")
+            ctx.error(call, f"{name} must be an i32 scalar, got dtype {t.dtype}")
         if not _is_scalar(t.shape):
-            raise TypeError(f"CacheUpdate: {name} must be a scalar, got shape {t.shape}")
+            ctx.error(call, f"{name} must be a scalar, got shape {t.shape}")
     cap, s_cap = cache_ty.shape[1], new_ty.shape[1]
     if isinstance(cap, int) and isinstance(s_cap, int) and s_cap > cap:
-        raise TypeError(f"CacheUpdate: S_CAP {s_cap} exceeds cache capacity {cap}")
+        ctx.error(call, f"S_CAP {s_cap} exceeds cache capacity {cap}")
     return cache_ty
 
 

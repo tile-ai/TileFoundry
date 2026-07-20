@@ -15,9 +15,11 @@ from __future__ import annotations
 import ast
 from typing import Any, Callable
 
+from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh, MeshAxis
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -29,12 +31,14 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
+from .static_eval import eval_static
 
-class LayoutSugarError(ValueError):
+
+class LayoutSugarError(VerifyError):
     """A layout-sugar node was recognized structurally but is malformed
     (e.g. a dynamic ``DimVar`` / ``bool`` static extent).
 
-    It subclasses ``ValueError`` so existing ``except ValueError`` handlers
+    It subclasses ``VerifyError`` (itself a ``ValueError``) so both
     still catch it, but callers that speculatively try sugar parsing (and fall
     back to generic static evaluation on a plain ``ValueError``) MUST let this
     propagate so the real diagnostic is not masked by a downstream error.
@@ -100,32 +104,37 @@ def _has_sugar(node: ast.AST) -> bool:
     return found
 
 
+_EVAL_AST_NODES_NO_CLOSURE = (ast.Constant, ast.Tuple, ast.UnaryOp)
+_EVAL_AST_NODES_WITH_CLOSURE = (*_EVAL_AST_NODES_NO_CLOSURE, ast.Name, ast.Attribute)
+
+
 def _eval_ast(node: ast.AST, closure: dict[str, Any] | None = None) -> Any:
     """Evaluate a Python literal AST node (int, str, tuple of literals).
 
     Also accepts ``DimVar("S", lo, hi)`` inline ``Call`` nodes and
     closure-resolved ``Name`` references to ``DimVar`` instances.
+
+    Thin policy wrapper over :func:`eval_static`: layout-sugar callers
+    expect ``ValueError`` (the shared evaluator's ``VerifyError`` is
+    translated here), and ``Name`` / ``Attribute`` resolution only applies
+    when a *closure* is supplied at all. The inline ``DimVar(...)``
+    constructor is a bespoke case — it is recognized by name rather than
+    resolved as a general closure callee.
     """
-    if isinstance(node, ast.Constant):
-        return node.value
-    if isinstance(node, ast.Tuple):
-        return tuple(_eval_ast(e, closure) for e in node.elts)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        return -_eval_ast(node.operand, closure)
-    if closure is not None:
-        if isinstance(node, ast.Name):
-            val = closure.get(node.id)
-            if val is not None:
-                return val
-        elif isinstance(node, ast.Attribute):
-            obj = _eval_ast(node.value, closure)
-            return getattr(obj, node.attr)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "DimVar":
-            from tilefoundry.ir.types.dim import DimVar  # noqa: PLC0415
-            pos = [_eval_ast(a, closure) for a in node.args]
-            kw = {k.arg: _eval_ast(k.value, closure) for k in node.keywords}
-            return DimVar(*pos, **kw)
-    raise ValueError(f"cannot evaluate static value from {ast.dump(node)}")
+    if (
+        closure is not None
+        and isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "DimVar"
+    ):
+        pos = [_eval_ast(a, closure) for a in node.args]
+        kw = {k.arg: _eval_ast(k.value, closure) for k in node.keywords}
+        return DimVar(*pos, **kw)
+    allowed = _EVAL_AST_NODES_WITH_CLOSURE if closure is not None else _EVAL_AST_NODES_NO_CLOSURE
+    try:
+        return eval_static(node, closure=closure or {}, allowed_nodes=allowed)
+    except VerifyError as exc:
+        raise VerifyError(str(exc)) from exc
 
 
 def _is_shape_dim(v: Any) -> bool:
@@ -142,29 +151,23 @@ def _name_of(node: ast.AST) -> str:
     """Extract bare Name id from an AST node."""
     if isinstance(node, ast.Name):
         return node.id
-    raise ValueError(f"expected Name, got {ast.dump(node)}")
+    raise VerifyError(f"expected Name, got {ast.dump(node)}")
 
 
 def _auto_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
     """C-order contiguous strides: ``(d0, d1, d2)`` → ``(d1*d2, d2, 1)``."""
-    if not shape:
-        return ()
-    strides = [1]
-    for d in reversed(shape[1:]):
-        strides.insert(0, strides[0] * d)
-    return tuple(strides)
+    return c_order_strides(shape)
 
 
 def _resolve_dtype_ast(node: ast.AST, closure: dict[str, Any]) -> DType | None:
     """Resolve a dtype from an AST node (bare name, string, or DType.attr)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        member = getattr(DType, node.value, None)
-        return member if isinstance(member, DType) else None
+        return DType._members().get(node.value)
     if isinstance(node, ast.Name):
         val = closure.get(node.id)
         if isinstance(val, DType):
             return val
-        return getattr(DType, node.id, None)
+        return DType._members().get(node.id)
     if isinstance(node, ast.Attribute):
         try:
             val = _eval_ast(node, closure)
@@ -183,9 +186,9 @@ def _resolve_mesh(name: str, mesh_by_name: dict[str, Mesh]) -> Mesh:
     mesh = mesh_by_name.get(name)
     if mesh is None:
         available = list(mesh_by_name.keys())
-        raise ValueError(f"undefined mesh {name!r}; available: {available}")
+        raise VerifyError(f"undefined mesh {name!r}; available: {available}")
     if not isinstance(mesh, Mesh):
-        raise ValueError(f"{name!r} is not a Mesh, got {type(mesh).__name__}")
+        raise VerifyError(f"{name!r} is not a Mesh, got {type(mesh).__name__}")
     return mesh
 
 
@@ -208,7 +211,7 @@ def _resolve_mesh_axis(mesh: Mesh, axis_name: str) -> MeshAxis:
     if axis_name == "z":
         return mesh.z
     available = list(mesh.names) if mesh.names else ["x", "y", "z"][: len(mesh.axes)]
-    raise ValueError(
+    raise VerifyError(
         f"mesh has no axis named {axis_name!r}; available: {available}"
     )
 
@@ -251,16 +254,16 @@ def _parse_layout_literal(
         shape = (node.value,)
         strides = None
     else:
-        raise ValueError(f"expected tuple layout literal, got {ast.dump(node)}")
+        raise VerifyError(f"expected tuple layout literal, got {ast.dump(node)}")
 
     if not all(isinstance(d, int) for d in shape):
-        raise ValueError(f"layout shape must be all ints, got {shape}")
+        raise VerifyError(f"layout shape must be all ints, got {shape}")
 
     if strides is not None:
         if not isinstance(strides, tuple):
-            raise ValueError(f"strides must be a tuple, got {strides!r}")
+            raise VerifyError(f"strides must be a tuple, got {strides!r}")
         if len(strides) != len(shape):
-            raise ValueError(
+            raise VerifyError(
                 f"strides rank {len(strides)} != layout shape rank {len(shape)}"
             )
 
@@ -283,7 +286,7 @@ def _extract_dim_int(node: ast.AST, *, closure: dict[str, Any] | None = None) ->
         try:
             val = _eval_ast(dim_node, closure)
         except ValueError:
-            raise ValueError(f"expected int dim, got {ast.dump(node)}") from None
+            raise VerifyError(f"expected int dim, got {ast.dump(node)}") from None
     if isinstance(val, bool) or not isinstance(val, int):
         raise LayoutSugarError(f"layout dim must be a static int, got {val!r}")
     return val
@@ -377,18 +380,18 @@ def parse_shard_layout_sugar(
         if resolved_mesh is None:
             resolved_mesh = mesh
         elif id(mesh) != id(resolved_mesh):
-            raise ValueError("all layout dims must reference the same mesh")
+            raise VerifyError("all layout dims must reference the same mesh")
     for mesh, _mi, _r in value_states:
         if resolved_mesh is None:
             resolved_mesh = mesh
         elif id(mesh) != id(resolved_mesh):
-            raise ValueError("value-state mesh must match the layout mesh")
+            raise VerifyError("value-state mesh must match the layout mesh")
 
     if resolved_mesh is None:
         if default_mesh is not None:
             resolved_mesh = default_mesh
         else:
-            raise ValueError(
+            raise VerifyError(
                 "all-Broadcast ShardLayout sugar requires a mesh from "
                 "context; use verbose ShardLayout(...) to disambiguate"
             )
@@ -402,9 +405,9 @@ def parse_shard_layout_sugar(
         layout_axis = len(shape) - 1
         if kind == "split":
             if m_axis is None or m_axis >= mesh_rank:
-                raise ValueError(f"layout dim {layout_axis}: invalid mesh axis {m_axis}")
+                raise VerifyError(f"layout dim {layout_axis}: invalid mesh axis {m_axis}")
             if not isinstance(attrs_list[m_axis], Broadcast):
-                raise ValueError(
+                raise VerifyError(
                     f"mesh axis {m_axis} already bound; "
                     "one layout dim per mesh axis (§8.4)"
                 )
@@ -412,9 +415,9 @@ def parse_shard_layout_sugar(
 
     for _mesh, m_axis, reduction in value_states:
         if m_axis >= mesh_rank:
-            raise ValueError(f"value-state: invalid mesh axis {m_axis}")
+            raise VerifyError(f"value-state: invalid mesh axis {m_axis}")
         if not isinstance(attrs_list[m_axis], Broadcast):
-            raise ValueError(f"mesh axis {m_axis} already bound")
+            raise VerifyError(f"mesh axis {m_axis} already bound")
         attrs_list[m_axis] = Partial(reduction or "sum")
 
     # Sugar (`strides is None`) leaves the layout strides un-materialized;
@@ -444,7 +447,7 @@ def _split_layout_outer(
     if _is_constant(node) or _is_matmul(node):
         return node, None, None
     if not isinstance(node, ast.Tuple):
-        raise ValueError(f"expected tuple layout, got {ast.dump(node)}")
+        raise VerifyError(f"expected tuple layout, got {ast.dump(node)}")
     # Outer form: the first element is itself the axis-tuple. (A bare axis-spec
     # is a Constant / BinOp, never a Tuple, so this is unambiguous.)
     if node.elts and isinstance(node.elts[0], ast.Tuple):
@@ -454,17 +457,17 @@ def _split_layout_outer(
         for elt in node.elts[1:]:
             if value_set is not None:
                 # The value-state set MUST be the final outer item.
-                raise ValueError(
+                raise VerifyError(
                     "layout sugar: the value-state set must be the last outer item"
                 )
             if isinstance(elt, ast.Set):
                 value_set = elt
             elif isinstance(elt, ast.Tuple):
                 if strides is not None:
-                    raise ValueError("layout sugar: at most one stride tuple")
+                    raise VerifyError("layout sugar: at most one stride tuple")
                 strides = _eval_ast(elt)
             else:
-                raise ValueError(
+                raise VerifyError(
                     f"layout sugar outer item must be a stride tuple or value-state "
                     f"set, got {ast.dump(elt)}"
                 )
@@ -479,7 +482,7 @@ def _parse_value_state(
     """Parse a ``{mesh.axis @ P("reduction"), ...}`` value-state set into a list
     of ``(mesh, mesh_axis_index, reduction)``. Element order carries no meaning."""
     if not isinstance(node, ast.Set):
-        raise ValueError(f"value-state must be a set literal, got {ast.dump(node)}")
+        raise VerifyError(f"value-state must be a set literal, got {ast.dump(node)}")
     out: list[tuple[Mesh, int, str]] = []
     for elt in node.elts:
         if not (
@@ -488,19 +491,19 @@ def _parse_value_state(
             and isinstance(elt.right.func, ast.Name)
             and elt.right.func.id == "P"
         ):
-            raise ValueError(
+            raise VerifyError(
                 'value-state entry must be `mesh.axis @ P("reduction")`, got '
                 f"{ast.dump(elt)}"
             )
         if len(elt.right.args) != 1:
-            raise ValueError(
+            raise VerifyError(
                 'value-state P(...) requires exactly one reduction argument, '
                 'e.g. `mesh.axis @ P("sum")`'
             )
         mesh_name, axis_name = _parse_axis_ref(elt.left)
         mesh = mesh_resolver(mesh_name)
         if mesh is None:
-            raise ValueError(f"undefined mesh {mesh_name!r}")
+            raise VerifyError(f"undefined mesh {mesh_name!r}")
         axis = _resolve_mesh_axis(mesh, axis_name)
         reduction = _eval_ast(elt.right.args[0])
         out.append((mesh, axis.index, reduction))
@@ -519,7 +522,7 @@ def _get_dim_nodes(node: ast.AST) -> list[ast.AST]:
         return list(node.elts)
     if _is_constant(node) or _is_matmul(node):
         return [node]
-    raise ValueError(f"expected tuple layout, got {ast.dump(node)}")
+    raise VerifyError(f"expected tuple layout, got {ast.dump(node)}")
 
 
 # Type alias for a single parsed layout item.
@@ -553,7 +556,7 @@ def _parse_layout_item(
         rhs = node.right
         dim = None if _is_placeholder(node.left) else _eval_ast(node.left, closure)
         if dim is None:
-            raise ValueError(
+            raise VerifyError(
                 "layout placeholder `_` is not valid in the axis tuple; "
                 'value states go in the `{mesh.axis @ P("reduction")}` set'
             )
@@ -575,7 +578,7 @@ def _parse_layout_item(
             mesh_name, axis_name = _parse_axis_ref(rhs)
             mesh = mesh_resolver(mesh_name)
             if mesh is None:
-                raise ValueError(f"undefined mesh {mesh_name!r}")
+                raise VerifyError(f"undefined mesh {mesh_name!r}")
             axis = _resolve_mesh_axis(mesh, axis_name)
             if not canonicalize:
                 return [(dim, mesh, axis.index, "split", None)]
@@ -588,10 +591,10 @@ def _parse_layout_item(
         if isinstance(rhs, ast.Name):
             mesh = mesh_resolver(rhs.id)
             if mesh is None:
-                raise ValueError(f"undefined mesh {rhs.id!r}")
+                raise VerifyError(f"undefined mesh {rhs.id!r}")
             axes = mesh.axes
             if len(axes) != 1:
-                raise ValueError(
+                raise VerifyError(
                     f"``int @ {rhs.id}`` shorthand requires a single-axis mesh "
                     f"(found {len(axes)} axes); write ``{rhs.id}.<axis>`` explicitly"
                 )
@@ -611,7 +614,7 @@ def _parse_layout_item(
         if _is_shape_dim(dim):
             return [(dim, None, None, "broadcast", None)]
 
-    raise ValueError(f"unexpected layout dim AST: {ast.dump(node)}")
+    raise VerifyError(f"unexpected layout dim AST: {ast.dump(node)}")
 
 
 def _canonicalize_single_axis(
@@ -629,7 +632,7 @@ def _canonicalize_single_axis(
     """
     extent = axis.size
     if dim % extent != 0:
-        raise ValueError(
+        raise VerifyError(
             f"dim {dim} not divisible by mesh extent {extent} on axis "
             f"{axis.index}; cannot canonicalize ``{dim} @ m.<axis>``"
         )
@@ -663,7 +666,7 @@ def _expand_multi_axis_sugar(
         mesh, axis = _resolve_axis_node(ax_node, mesh_resolver)
         extent = axis.size
         if remaining % extent != 0:
-            raise ValueError(
+            raise VerifyError(
                 f"dim {dim} not divisible by mesh extent {extent} "
                 f"at axis position {i}; remaining={remaining}"
             )
@@ -690,22 +693,22 @@ def _resolve_axis_node(
         mesh_name, axis_name = _parse_axis_ref(node)
         mesh = mesh_resolver(mesh_name)
         if mesh is None:
-            raise ValueError(f"undefined mesh {mesh_name!r}")
+            raise VerifyError(f"undefined mesh {mesh_name!r}")
         axis = _resolve_mesh_axis(mesh, axis_name)
         return (mesh, axis)
     if isinstance(node, ast.Name):
         mesh = mesh_resolver(node.id)
         if mesh is None:
-            raise ValueError(f"undefined mesh {node.id!r}")
+            raise VerifyError(f"undefined mesh {node.id!r}")
         axes = mesh.axes
         if len(axes) != 1:
-            raise ValueError(
+            raise VerifyError(
                 f"``int @ (..., {node.id}, ...)`` shorthand requires a "
                 f"single-axis mesh (found {len(axes)} axes); "
                 f"write ``{node.id}.<axis>`` explicitly"
             )
         return (mesh, axes[0])
-    raise ValueError(f"expected mesh.axis, got {ast.dump(node)}")
+    raise VerifyError(f"expected mesh.axis, got {ast.dump(node)}")
 
 
 def _parse_axis_ref(node: ast.AST) -> tuple[str, str]:
@@ -718,24 +721,7 @@ def _parse_axis_ref(node: ast.AST) -> tuple[str, str]:
         mesh_name = _name_of(node.value)
         axis_name = node.attr
         return (mesh_name, axis_name)
-    raise ValueError(f"expected mesh.axis (e.g. gpu.cluster), got {ast.dump(node)}")
-
-
-# ── legacy parse_sugar_layout alias (internal compat) ─────────────────────
-
-
-def parse_sugar_layout(
-    node: ast.AST,
-    mesh_by_name: dict[str, Mesh],
-) -> tuple[tuple[int, ...], tuple[int, ...], Mesh, tuple[ShardAttr, ...]]:
-    """Legacy alias for ``parse_shard_layout_sugar`` that returns a raw
-    (shape, strides, mesh, attrs) tuple.
-
-    Prefer ``parse_shard_layout_sugar(node, mesh_by_name.get)`` over this
-    function.  Kept for backward compatibility.
-    """
-    sl = parse_shard_layout_sugar(node, mesh_by_name.get)
-    return (sl.layout.shape, sl.layout.strides, sl.mesh, tuple(sl.attrs))
+    raise VerifyError(f"expected mesh.axis (e.g. gpu.cluster), got {ast.dump(node)}")
 
 
 # ── top-level Tensor annotation parser ─────────────────────────────────────

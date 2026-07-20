@@ -44,11 +44,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, overload
 
-from tilefoundry.ir.core.op_registry import _register_alias_schema, _register_schema
-from tilefoundry.ir.core.op_schema import OpEffect, OpSchema
-from tilefoundry.ir.core.param_def import ParamDef
-
-_VALID_DIALECTS: tuple[str, ...] = ("tf", "T")
+from tilefoundry.ir.core.op_registry import _VALID_DIALECTS, _register_schema
+from tilefoundry.ir.core.op_schema import OpSchema
+from tilefoundry.ir.core.param_def import ParamDef, collect_param_defs
 
 
 def _derive_dialect_and_category(module: str) -> tuple[str | None, str | None]:
@@ -71,43 +69,6 @@ def _derive_dialect_and_category(module: str) -> tuple[str | None, str | None]:
     if seg == "tir":
         return "T", parts[3]
     return None, None
-
-
-def _collect_param_defs(cls: type) -> tuple[ParamDef, ...]:
-    """Collect ParamDef descriptors from class body in definition order.
-
-    Walks MRO from base→derived so subclass fields appear after base
-    fields; within each class body, Python 3.7+ ``__dict__`` preserves
-    insertion order.
-    """
-    seen: dict[str, ParamDef] = {}
-    # MRO is leaf→root; reverse to walk root→leaf so leaf overrides win.
-    for klass in reversed(cls.__mro__):
-        for attr_name, value in klass.__dict__.items():
-            if isinstance(value, ParamDef):
-                seen[attr_name] = value
-    return tuple(seen.values())
-
-
-def _collect_effects(signature: tuple[ParamDef, ...]) -> tuple[OpEffect, ...]:
-    """Build OpSchema.effects from non-None ``ParamDef.effect`` annotations.
-
-    Returns an empty tuple when ``ParamDef`` does not expose an
-    ``effect`` field — every op is then treated as pure unless the
-    ParamDef.effect attribute is present.
-    """
-    effects: list[OpEffect] = []
-    for idx, pd in enumerate(signature):
-        kind = getattr(pd, "effect", None)
-        if kind is None:
-            continue
-        if kind not in ("read", "write", "alloc", "free"):
-            raise ValueError(
-                f"ParamDef.effect must be one of read/write/alloc/free, "
-                f"got {kind!r}"
-            )
-        effects.append(OpEffect(kind=kind, param_index=idx))
-    return tuple(effects)
 
 
 def _validate_args(
@@ -164,8 +125,7 @@ def _build_schema(
     final_dialect, final_category, final_name = _validate_args(
         cls, dialect, category, name
     )
-    signature = _collect_param_defs(cls)
-    effects = _collect_effects(signature)
+    signature = collect_param_defs(cls)
     return OpSchema(
         name=final_name,
         dialect=final_dialect,
@@ -173,7 +133,6 @@ def _build_schema(
         signature=signature,
         builder=cls,  # A1.b lock: v1 default builder = cls
         op_class=cls,
-        effects=effects,
     )
 
 
@@ -211,18 +170,10 @@ def register_op(
         schema = _build_schema(
             target_cls, dialect=dialect, category=category, name=name
         )
-        # Attach schema to class for later reflection (e.g. callable_params,
-        # parser dispatch). Underscore prefix = internal.
+        # Attach schema to class for later reflection (parser dispatch,
+        # Op.params()). Underscore prefix = internal.
         setattr(target_cls, "_op_schema", schema)
         _register_schema(schema)
-        # Mirror name / category onto the class as ClassVars so reflection
-        # paths (``__repr__``, error messages, etc.) keep a stable identifier
-        # even though the metaclass auto-register that used to rely on them
-        # has been removed. Only set when the class did not declare them.
-        if "name" not in target_cls.__dict__:
-            setattr(target_cls, "name", schema.name)
-        if "category" not in target_cls.__dict__:
-            setattr(target_cls, "category", schema.category)
         return target_cls
 
     if cls is not None:
@@ -305,9 +256,8 @@ def register_alias(
             signature=sig,
             builder=builder_fn,
             op_class=None,  # alias has no IR class of its own
-            effects=(),
         )
-        _register_alias_schema(schema)
+        _register_schema(schema, prepend=True)
         # Stash the schema on the builder for tests / introspection.
         setattr(builder_fn, "_op_schema", schema)
         return builder_fn
@@ -319,6 +269,5 @@ __all__ = [
     "register_op",
     "register_alias",
     "_build_schema",
-    "_collect_param_defs",
     "_derive_dialect_and_category",
 ]

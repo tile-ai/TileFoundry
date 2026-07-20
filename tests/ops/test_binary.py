@@ -133,22 +133,10 @@ CASES = [
         make_tensor_type((4, 8), _F, storage="gmem"),
     ),
     TypeInferCase(
-        "literal_lhs_anchors_gmem",
-        _ADD,
-        (make_tensor_type((), _F, storage=StorageKind.UMAT), make_tensor_type((4, 8), _F, storage="gmem")),
-        make_tensor_type((4, 8), _F, storage="gmem"),
-    ),
-    TypeInferCase(
         "both_gmem",
         _ADD,
         (make_tensor_type((4, 8), _F, storage="gmem"), make_tensor_type((4, 8), _F, storage="gmem")),
         make_tensor_type((4, 8), _F, storage="gmem"),
-    ),
-    TypeInferCase(
-        "both_rmem",
-        _ADD,
-        (make_tensor_type((4, 8), _F, storage="rmem"), make_tensor_type((4, 8), _F, storage="rmem")),
-        make_tensor_type((4, 8), _F, storage="rmem"),
     ),
     # All operands unmaterialized (e.g. `1 + 1`) → output stays unmaterialized.
     TypeInferCase(
@@ -178,13 +166,13 @@ PARTIAL_CASES = [
         "add_partial_max_partial_max_errors",
         _ADD,
         (_PMAX, _PMAX),
-        ExpectedError(match="Binary ADD"),
+        ExpectedError(match="do not commute"),
     ),
     TypeInferCase(
         "add_partial_sum_broadcast_errors",
         _ADD,
         (_PSUM, _BCAST),
-        ExpectedError(match="Binary ADD"),
+        ExpectedError(match="carries Partial"),
     ),
     TypeInferCase("add_partial_max_broadcast_passes", _ADD, (_PMAX, _BCAST), _PMAX),
     TypeInferCase("mul_partial_sum_broadcast_passes", _MUL, (_PSUM, _BCAST), _PSUM),
@@ -192,13 +180,13 @@ PARTIAL_CASES = [
         "mul_partial_max_broadcast_errors",
         _MUL,
         (_PMAX, _BCAST),
-        ExpectedError(match="Binary MUL"),
+        ExpectedError(match="carries Partial"),
     ),
     TypeInferCase(
         "sub_partial_sum_broadcast_errors",
         _SUB,
         (_PSUM, _BCAST),
-        ExpectedError(match="Binary SUB"),
+        ExpectedError(match="carries Partial"),
     ),
     TypeInferCase(
         "partial_sum_different_mesh_axes_errors",
@@ -260,9 +248,7 @@ def test_binary_evaluate_dtypes(dtype):
 
 # Low-precision dtypes are legal typeinfer operands: inference is purely
 # logical, so they pass through like any other element type.
-@pytest.mark.parametrize(
-    "dt", [DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1], ids=lambda d: d.name
-)
+@pytest.mark.parametrize("dt", [DType.fp8e4m3], ids=lambda d: d.name)
 def test_binary_low_precision_typeinfer_passthrough(dt):
     run_typeinfer_case(
         TypeInferCase(

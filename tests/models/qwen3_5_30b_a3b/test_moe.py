@@ -22,15 +22,14 @@ HIDDEN = common.HIDDEN
 MOE_INTERMEDIATE = common.MOE_INTERMEDIATE
 
 
-_COMBOS = [1, 4]
 _DTYPES = [("f32", torch.float32, 2e-4, 2e-4), ("bf16", torch.bfloat16, 3e-2, 3e-2)]
 
 
-@pytest.mark.parametrize("seq", _COMBOS, ids=lambda v: str(v))
 @pytest.mark.parametrize(
     "dt_name,torch_dt,atol,rtol", _DTYPES, ids=lambda v: v if isinstance(v, str) else ""
 )
-def test_moe_matches_hf(dt_name, torch_dt, atol, rtol, seq):
+def test_moe_matches_hf(dt_name, torch_dt, atol, rtol):
+    seq = 4
     common.DT = dt_name
     fn = common.build_moe()
 

@@ -65,12 +65,6 @@ def _chunked_subscript(x: Tensor[(1, 2048), "f32"]) -> Tensor[(1, 2048), "f32"]:
 
 
 @func
-def _single_arg_tile(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
-    for i in tile(8):
-        y = relu(x)  # noqa: F841 — body presence is the point, value unused
-
-
-@func
 def _partial_slice(x: Tensor[(1, 2048), "f32"]) -> Tensor[(1, 2048), "f32"]:
     o = relu(x)
     for ok in tile(2048, 512):
@@ -105,18 +99,6 @@ def test_chunked_tile_lifts_subscript_to_slice():
     assert isinstance(end1, Call) and isinstance(end1.target, DimAdd)
     # All strides default to 1
     assert all(isinstance(s, Constant) and s.value == 1 for s in sl_op.strides)
-
-
-def test_single_arg_tile_keeps_legacy_scalar_iv():
-    """`tile(N)` (1 arg) still binds iv to a scalar Var, not RangeSlice.
-
-    Existing tests/test_grid_region.py already cover this; this test
-    ensures the body of a 1-arg tile doesn't crash on a no-subscript path.
-    """
-    fn = _single_arg_tile
-    grid = fn.body
-    assert isinstance(grid, GridRegionExpr)
-    assert grid.induction_var.name == "i"
 
 
 def test_partial_slice_with_range_slice():

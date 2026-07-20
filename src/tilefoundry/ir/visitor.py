@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -215,6 +215,30 @@ class ExprVisitor(Generic[T]):
         return None  # type: ignore[return-value]
 
 
+def _dispatch(obj: Any, node: Any, generic: Callable[[Any], Any]) -> Any:
+    """`visit_<type(node).__name__>` dispatch, falling back to `generic`.
+
+    Shared by every `visit` / `visit_expr` entry point in this module —
+    only the fallback (a `generic_visit`-shaped bound method) differs
+    per caller.
+    """
+    method = getattr(obj, f"visit_{type(node).__name__}", None)
+    if method is not None:
+        return method(node)
+    return generic(node)
+
+
+def _generic_expr_rewrite(expr: Expr, visit_fn: Callable[[Expr], Expr]) -> Expr:
+    """Rebuild `expr` from `visit_fn`-rewritten children, preserving
+    identity when no child changed. Shared by `ExprMutator.generic_visit`
+    and `StmtExprMutator._expr_generic_visit`."""
+    children = _expr_children(expr)
+    new_children = tuple(visit_fn(c) for c in children)
+    if all(nc is oc for nc, oc in zip(new_children, children)):
+        return expr
+    return _rebuild_expr(expr, new_children)
+
+
 class ExprMutator:
     """Expr → Expr rewrite with identity preservation.
 
@@ -224,17 +248,10 @@ class ExprMutator:
     """
 
     def visit(self, expr: Expr) -> Expr:
-        method = getattr(self, f"visit_{type(expr).__name__}", None)
-        if method is not None:
-            return method(expr)
-        return self.generic_visit(expr)
+        return _dispatch(self, expr, self.generic_visit)
 
     def generic_visit(self, expr: Expr) -> Expr:
-        children = _expr_children(expr)
-        new_children = tuple(self.visit(c) for c in children)
-        if all(nc is oc for nc, oc in zip(new_children, children)):
-            return expr
-        return _rebuild_expr(expr, new_children)
+        return _generic_expr_rewrite(expr, self.visit)
 
 
 # ir.hir.function imports ExprMutator (for its elaboration mutator) at
@@ -299,17 +316,10 @@ class StmtExprMutator(StmtMutator):
         return self.visit(stmt)
 
     def visit_expr(self, expr: Expr) -> Expr:
-        method = getattr(self, f"visit_{type(expr).__name__}", None)
-        if method is not None:
-            return method(expr)
-        return self._expr_generic_visit(expr)
+        return _dispatch(self, expr, self._expr_generic_visit)
 
     def _expr_generic_visit(self, expr: Expr) -> Expr:
-        children = _expr_children(expr)
-        new_children = tuple(self.visit_expr(c) for c in children)
-        if all(nc is oc for nc, oc in zip(new_children, children)):
-            return expr
-        return _rebuild_expr(expr, new_children)
+        return _generic_expr_rewrite(expr, self.visit_expr)
 
     def generic_visit(self, stmt: Stmt) -> Stmt:  # type: ignore[override]
         # First rewrite child Stmts (StmtMutator identity rule).

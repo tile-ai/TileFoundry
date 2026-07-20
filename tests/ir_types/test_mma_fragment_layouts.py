@@ -14,7 +14,7 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN, make_atom
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import ShardLayout, Split
+from tilefoundry.ir.types.shard import ShardLayout, Split, product
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
@@ -26,25 +26,6 @@ C_FRAG_SHARD = _ATOM.C
 
 
 # ── Construction smoke ───────────────────────────────────────────────────
-
-
-def test_a_fragment_layout_constructs():
-    assert isinstance(A_FRAG_SHARD, ShardLayout)
-    assert A_FRAG_SHARD.layout.shape == (2, 4, 2, 8, 2)
-    # 32 threads × 8 elements per thread = 256 = 16 * 16 (M*K)
-    assert _product(A_FRAG_SHARD.layout.shape) == 16 * 16
-
-
-def test_b_fragment_layout_constructs():
-    assert B_FRAG_SHARD.layout.shape == (8, 2, 4, 2)
-    # 32 × 4 = 128 = 16 * 8 (K*N)
-    assert _product(B_FRAG_SHARD.layout.shape) == 16 * 8
-
-
-def test_c_fragment_layout_constructs():
-    assert C_FRAG_SHARD.layout.shape == (2, 4, 8, 2)
-    # 32 × 4 = 128 = 16 * 8 (M*N)
-    assert _product(C_FRAG_SHARD.layout.shape) == 16 * 8
 
 
 # ── Per-thread element count matches PTX mma fragment width ──────────────
@@ -85,10 +66,7 @@ def test_reshard_typeinfer_accepts_a_fragment():
 
 
 def _product(shape: tuple[int, ...]) -> int:
-    p = 1
-    for s in shape:
-        p *= int(s)
-    return p
+    return product(tuple(int(s) for s in shape))
 
 
 def _per_thread_size(sl: ShardLayout) -> int:

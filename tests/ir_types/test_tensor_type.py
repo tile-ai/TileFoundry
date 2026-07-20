@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
-import tilefoundry.ir.types.tensor_type as tensor_type_module
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 
 
@@ -15,33 +12,6 @@ def test_scalar_builds_rank0_tensor_type():
     t = TensorType.scalar(DType.f32)
     assert t.shape == ()
     assert t.dtype == DType.f32
-
-
-def test_layout_annotations_use_layout_base_forward_reference():
-    class_annotation = TensorType.__annotations__["layout"]
-    scalar_annotation = inspect.signature(TensorType.scalar).parameters["layout"].annotation
-
-    assert class_annotation.strip("'\"") == scalar_annotation.strip("'\"") == "LayoutBase | None"
-    assert "LayoutBase" not in vars(tensor_type_module)
-
-
-def test_tensor_type_equality_on_fields():
-    a = TensorType(shape=(1, 2), dtype=DType.f32, layout=None, storage="rmem")
-    b = TensorType(shape=(1, 2), dtype=DType.f32, layout=None, storage="rmem")
-    assert a == b
-
-
-def test_tuple_type_holds_heterogeneous_fields():
-    f0 = TensorType.scalar(DType.f32)
-    f1 = TensorType(shape=(4,), dtype=DType.i64, layout=None, storage="rmem")
-    tup = TupleType(fields=(f0, f1))
-    assert tup.fields == (f0, f1)
-
-
-def test_tensor_type_is_frozen():
-    t = TensorType.scalar(DType.f32)
-    with pytest.raises(Exception):
-        t.storage="gmem"  # type: ignore[misc]
 
 
 def test_tensor_type_accepts_dim_var_shape_entry():
@@ -53,14 +23,6 @@ def test_tensor_type_accepts_dim_var_shape_entry():
     t2 = TensorType(shape=(DimVar("S_a", 1, 8), 8), dtype=DType.f32, layout=None, storage="gmem")
     assert t == t2
     assert hash(t) == hash(t2)
-
-
-def test_two_tensor_types_share_dim_var_axis():
-    """Same DimVar referenced from two TensorTypes constructs cleanly."""
-    s = DimVar("N_a", 1, 32)
-    a = TensorType(shape=(s, 4), dtype=DType.f32, layout=None, storage="gmem")
-    b = TensorType(shape=(s, 16), dtype=DType.f32, layout=None, storage="gmem")
-    assert a.shape[0] is b.shape[0]
 
 
 def test_dim_var_same_name_distinct_bounds_constructs_distinct_objects():

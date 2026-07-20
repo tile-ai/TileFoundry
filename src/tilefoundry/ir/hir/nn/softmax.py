@@ -8,26 +8,27 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
+from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 
 @register_op
 class SoftMax(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
+
+
+# GLOBAL-level: identity (the per-axis reduction is internal to the op).
+register_access_relation(SoftMax)(identity_relations(1))
 @register_typeinfer(SoftMax)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
-        if reduction is not None:
-            ctx.error(
-                call,
-                f"SoftMax: x carries Partial({reduction}) on mesh axis {axis}, "
-                "which does not commute; insert reshard(x, Broadcast) before "
-                "this consumer",
-            )
+    reject_partials(ctx, call, "x", x_ty.layout)
     return x_ty
 
 

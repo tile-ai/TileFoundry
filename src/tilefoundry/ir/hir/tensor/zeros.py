@@ -13,9 +13,9 @@ from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.visitor_registry import register_typeinfer
 
 
 @register_op

@@ -204,6 +204,10 @@ The canonical descriptors are:
   - The table above is the complete built-in set. The type system MUST NOT
     expose custom registration or Enum-style `.value`, `__members__`, indexing,
     or iteration surfaces.
+  - `DType.from_name(name)` is the single string → descriptor resolution
+    surface. It MUST reject an unknown name and name the valid set in the
+    diagnostic; every string-accepting surface (annotations, sugar, `Tensor[...]`)
+    MUST resolve through it.
   - Descriptor equality and hashing MUST use the complete descriptor fields.
   - `DType` is independent of `layout` and `storage`.
   - `fp8e4m3` is the canonical fp8 spelling; no alternate fp8 spelling (e.g.
@@ -227,7 +231,10 @@ field declaration: `ShapeDim = int | DimVar | Expr`):
   bounded dynamic dims; and
 - a `core_ir.dim.*` `Expr` (e.g. `DimAdd` / `DimMul`) for derived
   dim expressions, returning a rank-0 integer `Expr` of dtype
-  `i64` and `storage=None`.
+  `i64` and `storage=None`. This rank-0 meta-scalar type
+  (`shape=()`, `layout=EMPTY_LAYOUT`, `storage=None`) has exactly one
+  constructor, `TensorType.meta_scalar(dtype)`; construction sites MUST NOT
+  restate the field tuple, so structural type equality holds across layers.
 
 The family covers:
 

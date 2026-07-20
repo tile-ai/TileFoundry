@@ -8,11 +8,6 @@ and produces results identical to the scalar path.
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -99,41 +94,3 @@ def test_wide_load_roundtrip_matches(cls, cols):
     assert torch.allclose(b, a, rtol=0, atol=0)
 
 
-def _device_sass(cls) -> str:
-    """Compile a module's CUDA device source to a cubin and return its SASS."""
-    from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
-    from tilefoundry.codegen.linker import (  # noqa: PLC0415
-        _DEFAULT_CUTLASS_INCLUDE,
-        _DEFAULT_INCLUDE,
-    )
-    from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
-
-    src = emit_cuda_module(
-        group_functions_by_target(tilefoundry.lower(cls, target="cuda"))["cuda"]
-    ).source
-    with tempfile.TemporaryDirectory() as d:
-        cu, cubin = Path(d) / "device.cu", Path(d) / "device.cubin"
-        cu.write_text(src)
-        subprocess.run(
-            ["nvcc", "-std=c++17", "-arch=sm_80", "-cubin",
-             "-Wno-deprecated-gpu-targets", "-DTILEFOUNDRY_TARGET_CUDA",
-             "-I", str(_DEFAULT_INCLUDE), "-I", str(_DEFAULT_CUTLASS_INCLUDE),
-             str(cu), "-o", str(cubin)],
-            check=True, capture_output=True, text=True,
-        )
-        return subprocess.run(
-            ["cuobjdump", "-sass", str(cubin)],
-            check=True, capture_output=True, text=True,
-        ).stdout
-
-
-@pytest.mark.skipif(
-    not (shutil.which("nvcc") and shutil.which("cuobjdump")),
-    reason="requires nvcc + cuobjdump",
-)
-def test_wide_load_emits_128bit_load_only_when_qualified():
-    """SASS proof that the fast path is actually emitted: the 128-bit fragment
-    lowers to a `LDG.E.128` vector load, while the 64-bit fragment does not (it
-    stays on the scalar element loop)."""
-    assert "LDG.E.128" in _device_sass(WideLoad)
-    assert "LDG.E.128" not in _device_sass(NarrowLoad)

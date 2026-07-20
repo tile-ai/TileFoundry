@@ -22,7 +22,6 @@ from tilefoundry.ir.core.op_registry import (
     _schemas_by_dialect_name,
     get_op_by_name,
     get_schemas,
-    get_tf_by_category_name,
 )
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
@@ -58,9 +57,8 @@ def test_register_custom_hir_op(_isolated_registry) -> None:
     assert s.category == "custom"
     assert s.name == "custom_addsq"
 
-    # Class-keyed view helpers reflect the new schema.
+    # Class-keyed view reflects the new schema.
     assert get_op_by_name("custom_addsq") is CustomAddSq
-    assert get_tf_by_category_name("custom", "custom_addsq") is CustomAddSq
 
 
 def test_parser_can_resolve_custom_op(_isolated_registry) -> None:

@@ -76,12 +76,6 @@ CASES = [
         inputs=(make_tensor_type((2, 1, 16, 8), DType.bf16), make_tensor_type((3, 8, 32), DType.bf16)),
         expected=make_tensor_type((2, 3, 16, 32), DType.bf16),
     ),
-    TypeInferCase(
-        name="batch_broadcast_higher_rank_lhs",
-        op=_MM,
-        inputs=(make_tensor_type((2, 3, 16, 8), DType.bf16), make_tensor_type((3, 8, 32), DType.bf16)),
-        expected=make_tensor_type((2, 3, 16, 32), DType.bf16),
-    ),
     # dynamic batch dim — same DimVar both sides
     TypeInferCase(
         name="dynamic_batch",

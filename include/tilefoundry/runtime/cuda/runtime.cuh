@@ -51,14 +51,12 @@ CUTE_HOST_DEVICE size_t program_id<TopologyScope::thread>() noexcept {
 #endif
 }
 
-template <> CUTE_HOST_DEVICE size_t program_id<TopologyScope::warp>() noexcept {
-#if defined(__CUDA_ARCH__)
-    return size_t(threadIdx.x) + size_t(threadIdx.y) * size_t(blockDim.x) +
-           size_t(threadIdx.z) * size_t(blockDim.x) * size_t(blockDim.y);
-#else
-    return 0;
-#endif
-}
+// No program_id<TopologyScope::warp> specialization: codegen only admits
+// ("cta", "thread") program topology levels (target/cuda/target.py
+// topology_levels()), so this is never instantiated. The TopologyScope::warp
+// enumerator itself stays (spec runtime.md §2.1's fixed enumeration); a real
+// warp-scoped program_id (thread id >> 5) belongs with whichever milestone
+// wires warp-scoped meshes, together with a test.
 
 template <TopologyScope T> constexpr auto program_shape() noexcept;
 
@@ -75,8 +73,8 @@ namespace ops {
 #include "tensor_view/ops_detail.cuh"
 #include "ops/sync.cuh"
 #include "ops/fill.cuh"
-#include "ops/copy.cuh"
 #include "ops/unary.cuh"
+#include "ops/copy.cuh"
 #include "ops/binary.cuh"
 #include "ops/reduce.cuh"
 #include "ops/cast.cuh"

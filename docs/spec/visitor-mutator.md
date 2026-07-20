@@ -13,9 +13,7 @@ flowchart TB
     StmtMutator["<b>StmtMutator</b>"]
     StmtExprMutator["<b>StmtExprMutator</b><br/>Stmt + embedded Expr rewrite"]
 
-    StmtMutator -. "MRO" .-> ExprMutator
     StmtExprMutator --> StmtMutator
-    StmtExprMutator --> ExprMutator
 ```
 
 ## 1. Role
@@ -174,9 +172,9 @@ fields embedded in Stmts. This is the most common combination
 (every lowering / simplification / structural rewrite needs it).
 
 ```python
-class StmtExprMutator(StmtMutator, ExprMutator):      # rewrite Stmts and the Exprs embedded in their Expr-typed fields
+class StmtExprMutator(StmtMutator):                   # rewrite Stmts, and the Exprs embedded in their Expr-typed fields
     def visit_stmt(self, stmt: Stmt) -> Stmt: ...     # rewrite the Stmt tree via StmtMutator
-    def visit_expr(self, expr: Expr) -> Expr: ...     # rewrite embedded value Exprs via ExprMutator
+    def visit_expr(self, expr: Expr) -> Expr: ...     # rewrite embedded value Exprs; shares ExprMutator's rewrite helper
     def generic_visit(self, stmt: Stmt) -> Stmt: ...  # StmtMutator recurse, then rewrite each Stmt's Expr fields
 ```
 

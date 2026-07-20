@@ -5,9 +5,9 @@ from tilefoundry.ir.core.expr import Constant
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
+from tilefoundry.visitor_registry import register_typeinfer
 
 
 @register_op(name="shape_of")
@@ -17,7 +17,7 @@ class ShapeOf(Op):
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     rank_expr = Constant(
-        type=TensorType.scalar(DType.i64), value=len(x_ty.shape)
+        type=TensorType.meta_scalar(), value=len(x_ty.shape)
     )
     return TensorType(
         shape=(rank_expr,), dtype=DType.i64, layout=EMPTY_LAYOUT, storage=None

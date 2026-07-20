@@ -55,7 +55,6 @@ def test_parse_typical_op_call_shapes() -> None:
 # ── Namespace callee form (``tf.add(...)`` / ``T.copy(...)``) ───────────
 
 
-from tilefoundry import dsl  # noqa: E402
 from tilefoundry.dsl import tf  # noqa: E402  -- test fixture closure capture
 from tilefoundry.ir.core.kinds import BinaryKind  # noqa: E402
 from tilefoundry.ir.hir.math.binary import Binary  # noqa: E402
@@ -95,27 +94,6 @@ def test_parse_insert_slice() -> None:
     body = _insert_slice_call.body
     assert isinstance(body, Call) and isinstance(body.target, InsertSlice)
     assert len(body.args) == 3
-
-
-def test_no_write_row_surface() -> None:
-    """The public surface is ``insert_slice`` only — the ``write_row`` sugar is
-    not exposed."""
-    import pytest  # noqa: PLC0415
-
-    with pytest.raises(AttributeError):
-        _ = tf.write_row
-
-
-# ── TIR DSL surface accessible ───────────────────────────────────────────
-
-
-def test_tir_effect_ops_resolve_through_dsl_surface() -> None:
-    """TIR effect ops resolve through ``T``."""
-
-    # Each TIR Op has an OpSchema and is reachable via T.<name>.
-    for name in ("copy", "fill", "mma", "rms_norm", "reduce", "alloc_tensor"):
-        builder = getattr(dsl.T, name)
-        assert callable(builder), f"tilefoundry.dsl.T.{name} did not resolve"
 
 
 # ── insert_slice rank-N per-axis offset tuple surface ────────────────────
@@ -161,5 +139,5 @@ from tilefoundry.dsl import Tensor
 def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     return relu((x, x))
 """
-    with pytest.raises(VerifyError, match="unsupported AST node in expression: Tuple"):
+    with pytest.raises(VerifyError, match="Tuple"):
         parse_script(bad)

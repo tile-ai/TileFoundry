@@ -6,8 +6,8 @@ namespace unary_impl {
 
 template <class Op> struct Unary {
     template <class TIn, class TOut>
-    CUTE_HOST_DEVICE void operator()(TIn const &src, TOut &dst, int N,
-                                     Op op = {}) const {
+    __device__ void operator()(TIn const &src, TOut &dst, int N,
+                               Op op = {}) const {
         auto s = detail::to_local(src);
         auto &&d = detail::to_local(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;

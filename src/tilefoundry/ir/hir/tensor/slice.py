@@ -7,9 +7,14 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
+from tilefoundry.ir.types.shape_helpers import i64_const
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 
 @register_op
@@ -31,8 +36,15 @@ class Slice(Op):
                 )
         super().__init__(**attrs)
 
+
+# GLOBAL-level: identity (each output element corresponds to a single input
+# element via a deterministic remap encoded in begin/end/strides, not
+# duplicated in the relation at this level).
+register_access_relation(Slice)(identity_relations(1))
+
+
 def _i64(value: int) -> Constant:
-    return Constant(type=TensorType.scalar(DType.i64), value=value)
+    return i64_const(value)
 
 def _slice_dim(begin: Expr, end: Expr, stride: Expr) -> Expr:
     """`(end - begin + stride - 1) // stride` — ceil-div — to correctly handle

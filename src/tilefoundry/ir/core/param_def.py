@@ -117,4 +117,28 @@ class ParamDef:
         """True iff a call-site default is configured."""
         return self.default is not MISSING
 
-__all__ = ["ParamDef", "MISSING", "_MissingType"]
+
+def collect_param_defs(cls: type) -> tuple["ParamDef", ...]:
+    """Reflect ``ParamDef`` class-body descriptors off ``cls`` in MRO order.
+
+    Walks base→derived so subclass fields come after base fields in
+    declaration order. A field redeclared at a more-derived class
+    overrides the base entry in place (the base's position in the
+    result is preserved). Attribute names starting with ``_`` are
+    skipped (private / internal, not part of the callable signature).
+    """
+    seen: dict[str, ParamDef] = {}
+    order: list[str] = []
+    for klass in reversed(cls.__mro__):
+        for attr_name, value in klass.__dict__.items():
+            if attr_name.startswith("_"):
+                continue
+            if not isinstance(value, ParamDef):
+                continue
+            if attr_name not in seen:
+                order.append(attr_name)
+            seen[attr_name] = value
+    return tuple(seen[name] for name in order)
+
+
+__all__ = ["ParamDef", "MISSING", "_MissingType", "collect_param_defs"]

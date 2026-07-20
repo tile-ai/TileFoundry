@@ -100,13 +100,8 @@ def test_demo_lowers_to_prim_function():
     ]
     assert flat == expected
 
-
-def test_lowered_copy_storage_chain():
-    pf = _run()
+    # Copy destination storage chain, in order: shared → reg → out (gmem).
     inner_body = pf.body[0].body[0].body  # cta -> thread -> Sequential
-
-    # Walk LetStmt chain to collect Copy calls in order. Copy is
-    # an Op invoked as Evaluate(Copy, (source, destination)).
     copies = []
 
     def walk(seq):
@@ -118,7 +113,6 @@ def test_lowered_copy_storage_chain():
 
     walk(inner_body)
     storages = [c.args[1].type.storage for c in copies]
-    # Output scatter: Copy writes to TensorView(out, shard_layout), storage=GMEM
     assert storages == [StorageKind.SMEM, StorageKind.RMEM, StorageKind.GMEM]
     # The function-end Copy writes via a shard view of the out param,
     # not directly to the out Var (plain→shard scatter).

@@ -48,7 +48,6 @@ def test_build_schema_explicit_args_and_validation() -> None:
     assert schema.name == "add"
     assert schema.dialect == "tf"
     assert len(schema.signature) == 2
-    assert schema.is_pure
 
     # default name = cls.__name__.lower() (simple, NOT snake_case)
     class ScaledGemm(_DummyBase):

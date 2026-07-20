@@ -5,7 +5,7 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Any, Union
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
+from tilefoundry.ir.core import Call, Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.launch import LaunchAttrs, launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -24,45 +24,23 @@ from tilefoundry.ir.tir.stmts import (
 from tilefoundry.ir.tir.symbol_ref import symbol_call
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMax,
-    DimMin,
-    DimMod,
-    DimMul,
-    DimSub,
     DimVar,
+    is_dim_expr,
 )
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.visitor import StmtVisitor
 from tilefoundry.target import CudaTarget, default_target
 
-from .base import BaseExprVisitor, _i64, extract_ast
-from .dispatch import resolve_stmt
+from .base import (
+    BaseExprVisitor,
+    _build_params,
+    _collect_closure,
+    _i64,
+    _resolve_tensor_type,
+    extract_ast,
+)
+from .dispatch import resolve_callable
 from .symtab import LexicalEnv
-
-# Ops that may appear in a launch grid / block dim-arithmetic expression.
-_DIM_EXTENT_OPS = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
-
-
-def _is_dim_extent(val) -> bool:
-    """True for a compile-time launch extent: an ``int``, a ``DimVar``, an
-    integer ``Constant``, or a dim-arithmetic ``Call`` whose operands are
-    themselves dim extents. Rejects ``bool``, tensor-valued ``Var`` / ``Call``,
-    and everything else."""
-    if isinstance(val, bool):
-        return False
-    if isinstance(val, int):
-        return True
-    if isinstance(val, DimVar):
-        return True
-    if isinstance(val, Constant):
-        return isinstance(val.value, int) and not isinstance(val.value, bool)
-    if isinstance(val, Call):
-        return isinstance(val.target, _DIM_EXTENT_OPS) and all(
-            _is_dim_extent(arg) for arg in val.args
-        )
-    return False
 
 
 @dataclass(frozen=True)
@@ -168,7 +146,9 @@ def parse_prim_func(fn, *, target=None, extra_closure=None) -> PrimFunction:
     node = extract_ast(fn)
     closure = _collect_closure(fn, extra_closure)
     env = LexicalEnv()
-    params = _build_params(node, closure)
+    params = _build_params(
+        node, closure, _resolve_tensor_type, decorator_name="@tilefoundry.prim_func"
+    )
     for p in params:
         env.define(p.name, p)
     visitor = _TirBodyVisitor(env, closure)
@@ -183,38 +163,6 @@ def parse_prim_func(fn, *, target=None, extra_closure=None) -> PrimFunction:
         params = (*params, *_shape_scalar_params(params, collector.names))
     kwargs = {} if target is None else {"target": target}
     return PrimFunction(name=node.name, params=params, body=body, **kwargs)
-
-
-def _collect_closure(fn, extra_closure=None) -> dict[str, Any]:
-    closure: dict[str, Any] = {}
-    # ``extra_closure`` (sibling IR functions from a ``@module`` class body)
-    # sits below the function's own globals/freevars so it cannot shadow them.
-    if extra_closure:
-        closure.update(extra_closure)
-    if fn.__globals__ is not None:
-        closure.update(fn.__globals__)
-    if fn.__closure__ is not None:
-        for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
-            try:
-                closure[name] = cell.cell_contents
-            except ValueError:
-                pass
-    return closure
-
-
-def _build_params(node: ast.FunctionDef, closure: dict[str, Any]) -> tuple[Var, ...]:
-    out: list[Var] = []
-    for a in node.args.args:
-        if a.annotation is None:
-            raise VerifyError(f"@tilefoundry.prim_func param {a.arg!r} must be annotated")
-        code = compile(ast.Expression(body=a.annotation), "<ann>", "eval")
-        val = eval(code, closure)  # noqa: S307
-        if not isinstance(val, TensorType):
-            raise VerifyError(
-                f"param {a.arg!r}: annotation did not resolve to TensorType, got {type(val).__name__}"
-            )
-        out.append(Var(type=val, name=a.arg))
-    return tuple(out)
 
 
 def _is_none(node: ast.AST) -> bool:
@@ -289,14 +237,24 @@ class _TirBodyVisitor(BaseExprVisitor):
         raise VerifyError(f"tir: unsupported statement {type(node).__name__}")
 
     def _call_as_top_level_stmt(self, node: ast.Call) -> Stmt:
-        # Name-only special forms: launch, Stmt classes / intrinsics, and
-        # sibling ``@prim_func`` callees.
+        # Name-only special forms: launch, Stmt intrinsics, and sibling
+        # ``@prim_func`` callees.
         if isinstance(node.func, ast.Name):
             name = node.func.id
             if name == "launch":
                 return self._launch_as_stmt(node)
-            stmt_cls = resolve_stmt(name)
-            if stmt_cls is not None:
+            # A genuine (non-schema) Stmt intrinsic — dispatch.resolve_callable
+            # resolves it by name (honouring the trailing-underscore
+            # effect-form selector, parser.md §1.3/§4.6), and it is built by
+            # binding its dataclass fields directly (no OpSchema/ParamDef).
+            # A schema-based effect Op (``copy`` / ``mma`` / ...) shares the
+            # same resolver but has no dataclass fields of its own — it falls
+            # through to ``call_to_op_call`` below instead.
+            try:
+                _kind, stmt_cls = resolve_callable(name, "tir")
+            except VerifyError:
+                stmt_cls = None
+            if stmt_cls is not None and getattr(stmt_cls, "_op_schema", None) is None:
                 kwargs = {k.arg: self._eval_static(k.value) for k in node.keywords}
                 pos = [self.expr(a) for a in node.args]
                 field_names = [f.name for f in dataclasses.fields(stmt_cls) if f.name != "loc"]
@@ -313,9 +271,10 @@ class _TirBodyVisitor(BaseExprVisitor):
                     raise VerifyError(f"tir: call to {name!r} does not support kwargs")
                 args = tuple(self.expr(a) for a in node.args)
                 return symbol_call(callee_ir, args)
-        # Effect-form op statement — bare ``copy(...)`` or namespaced
-        # ``T.copy(...)`` / ``T.mma(...)``. The op call is unit-typed; wrap it in
-        # ``Evaluate``. A value op (non-unit) at Stmt position is an error.
+        # Effect-form op statement — bare ``copy(...)`` / ``copy_(...)`` or
+        # namespaced ``T.copy(...)`` / ``T.mma(...)``. The op call is
+        # unit-typed; wrap it in ``Evaluate``. A value op (non-unit) at Stmt
+        # position is an error.
         expr = self.call_to_op_call(node)
         if isinstance(expr, Call) and isinstance(expr.type, UnitType):
             return Evaluate(callable=expr.target, args=expr.args)
@@ -441,7 +400,7 @@ class _TirBodyVisitor(BaseExprVisitor):
         a constant), a ``DimVar``, or a dim-arithmetic ``Expr``; reject anything
         else loudly (extents are shape arithmetic, not arbitrary values)."""
         val = self._eval_static(node)
-        if not _is_dim_extent(val):
+        if not is_dim_expr(val):
             raise VerifyError(
                 f"tir: launch grid/block extent must be an int, DimVar, or dim "
                 f"expression, got {type(val).__name__}"
@@ -529,9 +488,6 @@ class _TirBodyVisitor(BaseExprVisitor):
                     f"`Split` axes need the 2-axis (4,8) warp, not a flat (32,))"
                 )
         return val
-
-    def visit_Call(self, node: ast.Call) -> Expr:
-        return self.call_to_op_call(node)
 
 
 __all__ = ["parse_prim_func"]

@@ -4,11 +4,11 @@
 
 namespace mma_detail {
 
-CUTE_HOST_DEVICE uint32_t pack_bf16x2(uint16_t lo, uint16_t hi) {
+__device__ uint32_t pack_bf16x2(uint16_t lo, uint16_t hi) {
     return (uint32_t(hi) << 16) | uint32_t(lo);
 }
 
-template <class T> CUTE_HOST_DEVICE uint16_t as_u16(T const &x) {
+template <class T> __device__ uint16_t as_u16(T const &x) {
     uint16_t out;
     __builtin_memcpy(&out, &x, sizeof(uint16_t));
     return out;

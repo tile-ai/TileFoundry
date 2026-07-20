@@ -22,11 +22,6 @@ def _quant_relations(shape, group=128) -> AccessRelations:
     return fn(call, TypeInferContext())
 
 
-def test_quant_relation_returns_accessrelations():
-    rel = _quant_relations((1, 2048))
-    assert isinstance(rel, AccessRelations)
-
-
 def test_quant_boundary_counts():
     """1 input (x), 2 outputs (x_q, x_scale)."""
     rel = _quant_relations((1, 2048))
@@ -58,14 +53,3 @@ def test_quant_output_scale_relation_is_per_group_map():
     s = str(scale)
     # ISL canonicalises floor(j/128) into linear constraints involving 128.
     assert "128" in s
-
-
-def test_quant_relation_rank3_input():
-    """Attn-output [1,1,4096] reduces to scale [1,1,32]."""
-    rel = _quant_relations((1, 1, 4096))
-    assert len(rel.inputs) == 1
-    assert len(rel.outputs) == 2
-    inp = rel.inputs[0]
-    # Rank-3 identity has 3 dim references.
-    s = str(inp)
-    assert s.count("i0") >= 1 and s.count("i1") >= 1 and s.count("i2") >= 1

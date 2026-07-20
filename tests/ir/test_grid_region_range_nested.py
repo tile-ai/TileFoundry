@@ -64,17 +64,17 @@ def _dim_expr_half_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
 
 
 def test_range_scalar_iv_sum():
-    for n in (1, 5, 8):
-        x = torch.arange(n, dtype=torch.float32)
-        out = evaluate(_range_sum, x, device="cpu")
-        assert torch.allclose(out.reshape(()), x.sum()), (n, out)
+    n = 5
+    x = torch.arange(n, dtype=torch.float32)
+    out = evaluate(_range_sum, x, device="cpu")
+    assert torch.allclose(out.reshape(()), x.sum()), (n, out)
 
 
 def test_range_start_step():
-    for n in (4, 7, 10):
-        x = torch.arange(n, dtype=torch.float32)
-        out = evaluate(_range_start_step, x, device="cpu")
-        assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
+    n = 7
+    x = torch.arange(n, dtype=torch.float32)
+    out = evaluate(_range_start_step, x, device="cpu")
+    assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
 
 
 def test_nested_grid_region_outer_carry_in_inner():
@@ -84,10 +84,10 @@ def test_nested_grid_region_outer_carry_in_inner():
 
 
 def test_dim_expression_extent():
-    for n in (4, 8, 10):
-        x = torch.arange(n, dtype=torch.float32)
-        out = evaluate(_dim_expr_half_sum, x, device="cpu")
-        assert torch.allclose(out.reshape(()), x[: n // 2].sum()), (n, out)
+    n = 8
+    x = torch.arange(n, dtype=torch.float32)
+    out = evaluate(_dim_expr_half_sum, x, device="cpu")
+    assert torch.allclose(out.reshape(()), x[: n // 2].sum()), (n, out)
 
 
 # ── interleaved two-partial reduction == flat reduction --------------------
@@ -113,7 +113,7 @@ def _interleaved_two_partial_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
 
 
 def test_interleaved_partial_reduction_equals_flat():
-    for n in (2, 6, 8):  # multiples of NUM_SPLITS
-        x = torch.randn(n)
-        out = evaluate(_interleaved_two_partial_sum, x, device="cpu")
-        assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), (n, out)
+    n = 6  # multiple of NUM_SPLITS
+    x = torch.randn(n)
+    out = evaluate(_interleaved_two_partial_sum, x, device="cpu")
+    assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), (n, out)

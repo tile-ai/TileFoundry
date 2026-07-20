@@ -65,6 +65,16 @@ class TensorType:
     ) -> "TensorType":
         return TensorType(shape=(), dtype=dtype, layout=layout, storage=storage)
 
+    @staticmethod
+    def meta_scalar(dtype: DType = DType.i64) -> "TensorType":
+        """Canonical rank-0 shape/meta scalar (``layout=EMPTY_LAYOUT``,
+        ``storage=None`` — a non-memory-resident compile-time value).
+        Every shape-element / dim-arithmetic type must use this single
+        form so structural type equality holds across construction sites.
+        """
+        from .shard.layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
+        return TensorType(shape=(), dtype=dtype, layout=EMPTY_LAYOUT, storage=None)
+
 
 @dataclass(frozen=True)
 class TupleType:

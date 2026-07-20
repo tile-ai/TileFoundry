@@ -18,15 +18,17 @@ struct relu_op {
 struct square_op {
     template <class T> __device__ T operator()(T x) const { return x * x; }
 };
+// Identity tag: forwards its argument unchanged. ``Unary<identity_op>`` is
+// therefore a plain per-element map — the shared skeleton ``ops::cast`` and
+// ``ops::copy_n`` route through (cast.cuh, copy.cuh); the output-side
+// ``static_cast`` in ``unary_impl::Unary`` performs the actual conversion.
+struct identity_op {
+    template <class T> __device__ T operator()(T x) const { return x; }
+};
 
 #include "unary/unary_impl.h"
 
 template <class Op, class TIn, class TOut>
-CUTE_HOST_DEVICE void unary(TIn const &src, TOut &dst, int N, Op op = {}) {
+__device__ void unary(TIn const &src, TOut &dst, int N, Op op = {}) {
     unary_impl::Unary<Op>{}(src, dst, N, op);
-}
-
-template <class TIn, class TOut>
-CUTE_HOST_DEVICE void relu(TIn const &src, TOut &dst) {
-    unary(src, dst, int(cute::size(detail::to_local(src))), relu_op{});
 }

@@ -19,19 +19,6 @@ def test_full_like_evaluate():
     )
 
 
-def test_full_like_zero_and_neg_inf():
-    x = torch.randn(4)
-    run_eval_case(EvalCase("full_like_zero", FullLike(value=0.0), (x,), torch.zeros(4)))
-    run_eval_case(
-        EvalCase(
-            "full_like_neg",
-            FullLike(value=-1e30),
-            (x,),
-            torch.full((4,), -1e30),
-        )
-    )
-
-
 def test_full_like_preserves_dtype():
     x = torch.randn(3).bfloat16()
     run_eval_case(

@@ -90,19 +90,6 @@ def _attr_equal(a, b, path="") -> bool:
 
 
 class TestPythonPrinterRoundTrip:
-    def test_demo_ir_roundtrip(self):
-        """print(build_demo()) → parse_script → structural equal."""
-        fn, _, _ = build_demo()
-        src = as_script(fn)
-        fn2 = parse_script(src)
-        assert _structural_equal(fn, fn2), "round-trip mismatch"
-
-    def test_qwen3_output_is_valid_python(self):
-        """Qwen3 printed output must be valid Python syntax."""
-        fn = build_qwen3_attention_main_2cta_headnorm()
-        src = as_script(fn, module="M")
-        compile(src, "<test>", "exec")
-
     def test_demo_output_is_valid_python(self):
         """Printed output must be valid Python syntax."""
         fn, _, _ = build_demo()

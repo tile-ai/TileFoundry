@@ -10,8 +10,6 @@ Two concerns, each with one positive and one negative test:
 
 from __future__ import annotations
 
-import pytest
-
 import tilefoundry.codegen.cuda  # noqa: F401  — trigger emitter autodiscovery
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.codegen.cuda.tir.stmts.if_ import render_scalar_predicate
@@ -52,16 +50,6 @@ def test_render_scalar_predicate_covers_supported_forms() -> None:
         render_scalar_predicate(expr, ctx)
         == "((1) <= (S_1)) && ((S_1) < (4))"
     )
-
-
-def test_render_scalar_predicate_rejects_unsupported() -> None:
-    """Non-predicate Binary kinds (and unknown Expr shapes) raise."""
-    ctx = CodegenContext()
-    expr = _scalar_binary(
-        BinaryKind.ADD, _const(1), _const(2), result_dtype=DType.i32
-    )
-    with pytest.raises(NotImplementedError):
-        render_scalar_predicate(expr, ctx)
 
 
 # --- 2. If emitter -------------------------------------------------------

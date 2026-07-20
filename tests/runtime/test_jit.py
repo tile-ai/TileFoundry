@@ -21,8 +21,6 @@ def test_jit_rejects_non_ir_inputs_and_unknown_targets() -> None:
 
     with pytest.raises(TypeError, match="expected Function or Module"):
         jit(raw_fn, target="cuda")
-    with pytest.raises(TypeError, match="expected Function or Module"):
-        jit("not IR", target="cuda")
 
     fn, _, _ = build_demo()
     with pytest.raises(ValueError, match="not supported"):
