@@ -36,6 +36,11 @@ def test_service_lookup_contract() -> None:
     with pytest.raises(ValueError, match="exactly one service"):
         target.service(Schedule, "cta")
 
+    cuda = CudaTarget()
+    assert cuda.service(Schedule, "cta").stage == "cta"
+    custom = CudaTarget(architecture=SM90(name="sm_90_custom"))
+    assert custom.service(Schedule, "cta").stage == "cta"
+
     assert CudaTarget() == CudaTarget()
     assert hash(CudaTarget()) == hash(CudaTarget())
 

@@ -71,7 +71,7 @@ class Schedule(Protocol):
         self,
         module: "Module",
         root: "Function",
-        options: ScheduleOptions,
+        options: ScheduleOptions | None = None,
     ) -> ScheduleResult: ...
 
 __all__ = [
