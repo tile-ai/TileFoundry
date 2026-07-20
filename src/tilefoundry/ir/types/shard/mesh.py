@@ -44,19 +44,11 @@ class Mesh:
       axes; the layout shape's product must equal the domain size.
     - ``names`` labels each layout axis.
 
-    For backward compatibility ``Mesh.topology`` remains the *primary*
-    (first) Topology — callers that read ``mesh.topology.name`` /
-    ``.size`` for kernel-launch / codegen-config purposes keep working.
-    The full Topology tuple is exposed via :attr:`topologies` for
-    the multi-topology case.
-
-    Argument coercions accepted in ``__post_init__``:
-
-    - ``topology``: a single ``Topology`` (legacy) or a list / tuple
-      of them (multi-topology). The first becomes ``Mesh.topology``,
-      the full sequence becomes ``Mesh.topologies``.
-    - ``layout``: a ``Layout`` (verbose) or a tuple of ints
-      (shorthand — auto-build row-major-strided ``Layout``).
+    ``Mesh.topology`` is the primary (first) Topology; the full tuple is
+    ``topologies``. ``__post_init__`` normalizes ``topologies`` to a
+    non-empty ``tuple[Topology, ...]`` (a single Topology or a non-empty
+    tuple accepted; a raw string rejected) and coerces a ``(s0, s1, ...)``
+    layout shorthand to a C-order ``Layout`` — see ``docs/spec/shard.md`` §5.
 
     ``layout`` is a plain ``Layout`` for an un-sliced mesh. A constant slice
     (``m[1:3, :]``, used by ``T.sync``) replaces ``layout`` with a
@@ -73,16 +65,30 @@ class Mesh:
     topologies: tuple[Topology, ...] = ()
 
     def __post_init__(self) -> None:
-        # Coerce ``topology`` (list / tuple of Topology accepted at
-        # construction time) into the primary + the full tuple.
+        # Normalize ``topology`` (list / tuple of Topology accepted at
+        # construction time) into the primary + the full, non-empty tuple.
         topo = self.topology
+        if isinstance(topo, str):
+            raise TypeError(
+                f"Mesh.topology must be a Topology (or a non-empty tuple of "
+                f"them), got a raw string {topo!r}; resolve it to a Topology "
+                f"first (e.g. via make_mesh)"
+            )
         if isinstance(topo, (list, tuple)):
+            if not topo:
+                raise ValueError("Mesh.topology tuple must be non-empty")
             primary = topo[0]
             full = tuple(topo)
             object.__setattr__(self, "topology", primary)
             object.__setattr__(self, "topologies", full)
-        elif isinstance(topo, Topology) and not self.topologies:
-            object.__setattr__(self, "topologies", (topo,))
+        elif isinstance(topo, Topology):
+            if not self.topologies:
+                object.__setattr__(self, "topologies", (topo,))
+        else:
+            raise TypeError(
+                f"Mesh.topology must be a Topology or a tuple of Topology, "
+                f"got {type(topo).__name__}"
+            )
 
         # Coerce raw ``(s0, s1, ...)`` layout into a ``Layout`` with
         # C-order strides.
@@ -98,6 +104,16 @@ class Mesh:
             object.__setattr__(
                 self, "layout", Layout(shape=ly, strides=c_order_strides(ly))
             )
+
+    def topology_domain(self) -> "int | None":
+        """Total device-domain extent = product of every ``Topology`` in
+        ``topologies``; ``None`` if any extent is dynamic (launch-provided)."""
+        domain = 1
+        for t in self.topologies:
+            if not isinstance(t.size, int):
+                return None
+            domain *= t.size
+        return domain
 
 
     @property

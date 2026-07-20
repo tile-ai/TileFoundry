@@ -127,18 +127,6 @@ class Participation:
     lane_mask: int      # __syncwarp mask (only meaningful when single_warp)
 
 
-def _topology_domain(mesh: Mesh) -> "int | None":
-    """Block thread count = product of the mesh's topology extents. ``None`` if
-    any topology extent is dynamic (launch-provided)."""
-    topos = mesh.topologies or (mesh.topology,)
-    domain = 1
-    for t in topos:
-        if not isinstance(t.size, int):
-            return None
-        domain *= t.size
-    return domain
-
-
 def _participant_layout(mesh: Mesh) -> "tuple[Layout, int]":
     """The (outer layout, offset) describing which threads participate.
 
@@ -159,7 +147,7 @@ def participation(mesh: Mesh) -> Participation:
 
     Raises ``VerifyError`` for a malformed mesh (dynamic extent) or an
     unsupported slice (non-contiguous / overlapping)."""
-    domain = _topology_domain(mesh)
+    domain = mesh.topology_domain()
     if domain is None:
         raise VerifyError(
             "T.sync: a mesh with a dynamic topology extent cannot be classified; "
@@ -211,8 +199,8 @@ def participation(mesh: Mesh) -> Participation:
 def classify(mesh: Mesh) -> SyncBarrier:
     """Pick the hardware barrier for ``mesh``. Raises ``VerifyError`` for a
     cross-warp subset that is not warp-aligned."""
-    topos = mesh.topologies or (mesh.topology,)
-    if topos and all(getattr(t, "name", None) == "cta" for t in topos):
+    topos = mesh.topologies
+    if all(t.name == "cta" for t in topos):
         # A cta-scope mesh maps to the grid-wide barrier; only the full mesh
         # (no cta slice) has a supported barrier.
         if isinstance(mesh.layout, ComposedLayout):

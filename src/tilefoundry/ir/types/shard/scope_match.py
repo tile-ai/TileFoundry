@@ -10,26 +10,14 @@ def _as_layout(mesh: Mesh) -> Layout:
     return Layout(shape=tuple(mesh.layout.shape), strides=tuple(mesh.layout.strides))
 
 
-def _topology_domain(mesh: Mesh) -> "int | None":
-    """Total thread count = product of the mesh's topology extents; ``None`` if
-    any extent is dynamic (launch-provided)."""
-    topos = mesh.topologies or (mesh.topology,)
-    domain = 1
-    for t in topos:
-        if not isinstance(t.size, int):
-            return None
-        domain *= t.size
-    return domain
-
-
 def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     """True iff ``current`` provides the thread participation ``required`` needs."""
     # Same program topology level — a `cta` scope is never a `thread`/warp scope.
     if current.topology.name != required.topology.name:
         return False
 
-    cur_domain = _topology_domain(current)
-    req_domain = _topology_domain(required)
+    cur_domain = current.topology_domain()
+    req_domain = required.topology_domain()
     if cur_domain is None or req_domain is None:
         return False
 

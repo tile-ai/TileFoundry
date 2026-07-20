@@ -17,8 +17,7 @@ def _validate_topology(mesh) -> None:
     supports; finer levels (e.g. warp) belong in the mesh layout, not as a
     program topology level. Defense-in-depth alongside the declared-topology
     check at lowering entry."""
-    topos = getattr(mesh, "topologies", None) or (mesh.topology,)
-    validate_cuda_topology_levels(t.name for t in topos)
+    validate_cuda_topology_levels(t.name for t in mesh.topologies)
 
 
 

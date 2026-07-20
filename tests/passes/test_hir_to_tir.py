@@ -19,18 +19,27 @@ from tilefoundry.dsl import (
     func,
     tf,
 )
-from tilefoundry.ir.core import Call
+from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
 from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, MeshScope, Return, Sequential
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
+from tilefoundry.ir.types.shard.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.passes.transforms import HirToTirPass
+from tilefoundry.passes.transforms.hir_to_tir import (
+    _collect_hir_callee_names,
+    _derive_meshes_from_body,
+)
 
 
 def _run() -> PrimFunction:
@@ -253,3 +262,59 @@ def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
     assert len(reduce_call.args) == 2, (
         f"intra-warp reduce should have 2 args (src, dst), got {len(reduce_call.args)}"
     )
+
+
+# ── ExprVisitor-based HIR walks reach every child (docs/spec/visitor-mutator.md §1)
+
+
+def test_derive_meshes_from_body_finds_mesh_referenced_only_inside_grid_region() -> None:
+    """A mesh referenced only inside a ``GridRegionExpr`` body must still be
+    derived. A hand-rolled Tuple/Call-only walk silently skips
+    ``GridRegionExpr`` and misses it."""
+    mesh = Mesh(topology=Topology("cta", 4), layout=(4,))
+    sl = SL(layout=Layout(shape=(4,), strides=(1,)), attrs=(Split(0),), mesh=mesh)
+    body_ty = TensorType(shape=(4,), dtype=DType.f32, layout=sl, storage=StorageKind.GMEM)
+    body_call = Call(type=body_ty, target=HirReLU(), args=())
+    iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")
+    region = GridRegionExpr(
+        type=body_ty,
+        induction_var=iv,
+        carried_args=(),
+        init_args=(),
+        body=body_call,
+        yield_values=(),
+        extent=4,
+        step=1,
+    )
+
+    cta_mesh, thread_mesh = _derive_meshes_from_body(region)
+
+    assert cta_mesh is mesh
+    assert thread_mesh is None
+
+
+def test_collect_hir_callee_names_finds_callee_reachable_only_via_yield() -> None:
+    """A callee reachable only through ``GridRegionExpr.yield_values`` must
+    be collected. A walk that only descends into ``body`` misses it, which
+    would drop an inter-group dependency edge in dispatch-group ordering."""
+    scalar_ty = TensorType.scalar(dtype=DType.f32)
+    callee = HirFunction.build(
+        name="callee_fn",
+        params=(),
+        body=Constant(value=0.0, type=scalar_ty),
+        return_type=scalar_ty,
+    )
+    call_to_callee = Call(type=scalar_ty, target=callee, args=())
+    iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")
+    region = GridRegionExpr(
+        type=scalar_ty,
+        induction_var=iv,
+        carried_args=(),
+        init_args=(),
+        body=Constant(value=0.0, type=scalar_ty),
+        yield_values=(call_to_callee,),
+        extent=1,
+        step=1,
+    )
+
+    assert _collect_hir_callee_names(region) == {"callee_fn"}

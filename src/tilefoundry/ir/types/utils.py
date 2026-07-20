@@ -5,7 +5,7 @@ from typing import Optional
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
-from .shard import ComposedLayout, Layout, Mesh, ShardLayout, Split, c_order_strides
+from .shard import ComposedLayout, Layout, Mesh, ShardLayout, Split, canonical_shard_layout
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -31,60 +31,16 @@ def make_shard_tensor_type(
     """Build the canonical sharded ``TensorType`` (``docs/spec/shard.md``
     §7.1.1) from a logical description: ``shape`` is the logical tensor
     shape, ``attrs`` is one entry per mesh axis (``Split(logical_axis)`` /
-    ``Broadcast()`` / ``Partial(reduction)``).
-
-    Each logical axis split by one or more mesh axes is factored, in mesh-axis
-    order, into one position per splitting mesh axis (sized to that axis's
-    extent) plus a residual position (``logical_size // Π(extents)``, omitted
-    when 1, an error when the division is not exact) — the internal ``Layout``
-    this produces has every ``Split``-bound position sized exactly to its mesh
-    extent, which is the §7.1.1 canonical form. ``Split`` attrs are remapped
-    from the logical axis to that position. ``mesh=None`` / ``attrs=()``
-    yields a plain (unsharded) ``TensorType``.
+    ``Broadcast()`` / ``Partial(reduction)``). ``mesh=None`` / ``attrs=()``
+    yields a plain (unsharded) ``TensorType``; otherwise the layout is built
+    by the shared :func:`canonical_shard_layout` (also used by
+    ``derive_output_shard_layout``'s synthesis fallback, so the two
+    producers of a §7.1.1 layout always agree).
     """
     shape = tuple(shape)
     if mesh is None or not attrs:
         return TensorType(shape=shape, dtype=dtype, layout=None, storage=storage)
-
-    mesh_shape = mesh.layout.shape
-    bindings: dict[int, list[int]] = {}
-    for mesh_axis, attr in enumerate(attrs):
-        if isinstance(attr, Split):
-            bindings.setdefault(attr.axis, []).append(mesh_axis)
-
-    layout_shape: list[int] = []
-    factor_position: dict[int, int] = {}
-    for logical_axis, axis_size in enumerate(shape):
-        splitting_mesh_axes = bindings.get(logical_axis, [])
-        if not splitting_mesh_axes:
-            layout_shape.append(axis_size)
-            continue
-        extent_product = 1
-        for mesh_axis in splitting_mesh_axes:
-            extent = mesh_shape[mesh_axis]
-            factor_position[mesh_axis] = len(layout_shape)
-            layout_shape.append(extent)
-            extent_product *= extent
-        if axis_size % extent_product != 0:
-            raise ValueError(
-                f"make_shard_tensor_type: logical axis {logical_axis} size "
-                f"{axis_size} is not divisible by mesh extent product "
-                f"{extent_product}"
-            )
-        residual = axis_size // extent_product
-        if residual != 1:
-            layout_shape.append(residual)
-
-    remapped_attrs = tuple(
-        Split(factor_position[mesh_axis]) if isinstance(attr, Split) else attr
-        for mesh_axis, attr in enumerate(attrs)
-    )
-    layout_shape = tuple(layout_shape)
-    layout = ShardLayout(
-        layout=Layout(shape=layout_shape, strides=c_order_strides(layout_shape)),
-        attrs=remapped_attrs,
-        mesh=mesh,
-    )
+    layout = canonical_shard_layout(shape, mesh, attrs)
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 

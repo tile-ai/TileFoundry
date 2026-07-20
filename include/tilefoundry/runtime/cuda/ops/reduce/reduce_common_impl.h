@@ -1,4 +1,5 @@
-// reduce common impl — shared helpers, dispatch trait, and layout detector.
+// reduce common impl — shared per-tag traits, per-thread fold, cell
+// decomposition, and the sharded-reduce dispatch trait / layout detector.
 //
 // Included in-context from ``ops/reduce.cuh`` (which is itself included inside
 // ``namespace tilefoundry::ops`` from runtime.cuh). This header therefore does
@@ -14,44 +15,125 @@ namespace reduce_impl {
 struct no_workspace_t {};
 inline constexpr no_workspace_t no_workspace{};
 
-// Per-thread local fold: max absolute value over N elements.
-template <class SrcT>
-__device__ float local_fold_maxabs(SrcT const &src, int N) {
-    float best = 0.f;
-    for (int i = 0; i < N; ++i) {
-        best = fmaxf(best, fabsf(static_cast<float>(src(i))));
+// ── Per-tag combine semantics ──────────────────────────────────────
+// One trait per Op tag, shared by every reduce tier (plain, intra-warp,
+// intra-cta, cross-warp). ``init`` seeds the fold; ``elem(x)`` maps a raw
+// source element into the fold domain (identity for sum/mean, ``|x|`` for
+// absmax); ``combine(a, b)`` merges two fold-domain values (``+`` for
+// sum/mean, ``fmaxf`` for absmax — both have ``init`` as their identity
+// element over this domain, since absmax's domain is always non-negative);
+// ``finalize(acc, count)`` produces the per-cell result (mean divides by the
+// reduced element count; sum/absmax pass the accumulator through unchanged).
+template <class Op> struct reduce_traits;
+
+template <> struct reduce_traits<sum_op> {
+    static constexpr float init = 0.f;
+    __device__ static float elem(float x) { return x; }
+    __device__ static float combine(float a, float b) { return a + b; }
+    __device__ static float finalize(float acc, float /*count*/) { return acc; }
+};
+
+template <> struct reduce_traits<mean_op> {
+    static constexpr float init = 0.f;
+    __device__ static float elem(float x) { return x; }
+    __device__ static float combine(float a, float b) { return a + b; }
+    __device__ static float finalize(float acc, float count) {
+        return acc / count;
     }
-    return best;
+};
+
+template <> struct reduce_traits<absmax_op> {
+    static constexpr float init = 0.f;
+    __device__ static float elem(float x) { return fabsf(x); }
+    __device__ static float combine(float a, float b) { return fmaxf(a, b); }
+    __device__ static float finalize(float acc, float /*count*/) { return acc; }
+};
+
+template <class Op>
+inline constexpr bool is_supported_reduce_op_v =
+    std::is_same_v<Op, sum_op> || std::is_same_v<Op, mean_op> ||
+    std::is_same_v<Op, absmax_op>;
+
+// Per-thread cell decomposition, shared by every reduce tier: the per-thread
+// cute tensor has ``size(s)`` source elements feeding ``size(d)`` destination
+// cells; the source is treated as ``n_cells`` contiguous chunks of ``step``
+// elements, each chunk reducing to one output cell (``n_cells == 1`` when
+// ``d`` is a single scalar cell, e.g. dst rank 0/1).
+struct cell_decomp_t {
+    int n_src;
+    int n_dst;
+    int n_cells;
+    int step;
+};
+
+template <class SrcT, class DstT>
+__device__ cell_decomp_t cell_decomp(SrcT const &s, DstT const &d) {
+    const int n_src = static_cast<int>(cute::size(s));
+    const int n_dst = static_cast<int>(cute::size(d));
+    const int n_cells = (n_dst == 0) ? 1 : n_dst;
+    const int step = n_src / n_cells;
+    return {n_src, n_dst, n_cells, step};
 }
 
-// Per-thread local fold of a contiguous tensor of size N into a single
-// scalar accumulator (sum / max / min, etc.). Returns the
-// f32-promoted accumulator so MEAN's final divide stays in f32.
-template <class SrcT> __device__ float local_fold_sum(SrcT const &src, int N) {
-    float acc = 0.f;
-    for (int i = 0; i < N; ++i) {
-        acc += static_cast<float>(src(i));
+// Rank-aware per-thread local fold: folds the ``step`` source elements of
+// logical cell ``j`` (out of ``cell_decomp``'s ``n_cells``) into a single
+// scalar accumulator via ``reduce_traits<Op>``.
+//
+// ``step == cute::size(s)`` is the single-cell / whole-tensor contract (Plain
+// with a scalar dst, and IntraCta — whose per-thread tensor has no dedicated
+// cell axis at all): it flattens across cute's *entire* multi-mode domain via
+// single-index addressing (``s(k)``), which stays correct however many cute
+// axes the per-thread layout carries — including residual axes introduced by
+// single-axis sugar factorisation (spec shard §7.1.2) — because ``s(k)``
+// always visits every coordinate of ``s`` exactly once regardless of its mode
+// structure.
+//
+// Otherwise (``n_cells > 1``, e.g. IntraWarp / CrossWarp, where each thread
+// owns several distinct output cells), cell-aligned 2-D access (``s(j, k)``)
+// keeps cell ``j`` on its own row of the per-thread cute layout, regardless
+// of cute's col-major linearisation: a linear ``s(j*step+k)`` over the full
+// tensor mis-aligns here because it reinterprets the (cells, step) mode pair
+// as one flat dimension in the wrong order. The single-axis path (rank-1
+// ``s``) uses ``s(j*step+k)`` directly in both cases — unambiguous, since
+// there is only one mode to address.
+template <class Op, class SrcT>
+__device__ float local_fold(SrcT const &s, int j, int step) {
+    using traits = reduce_traits<Op>;
+    float acc = traits::init;
+    constexpr int s_rank = decltype(cute::rank(s))::value;
+    if constexpr (s_rank > 1) {
+        if (step == static_cast<int>(cute::size(s))) {
+            for (int k = 0; k < step; ++k) {
+                acc = traits::combine(acc,
+                                      traits::elem(static_cast<float>(s(k))));
+            }
+        } else {
+            for (int k = 0; k < step; ++k) {
+                acc = traits::combine(
+                    acc, traits::elem(static_cast<float>(s(j, k))));
+            }
+        }
+    } else {
+        const int base = j * step;
+        for (int k = 0; k < step; ++k) {
+            acc = traits::combine(
+                acc, traits::elem(static_cast<float>(s(base + k))));
+        }
     }
     return acc;
 }
 
-// Intra-warp butterfly sum reduction (32 lanes → broadcast sum).
-__device__ inline float warp_sum_butterfly(float val) {
+// Intra-warp butterfly reduction (32 lanes → broadcast combine), using
+// ``Op``'s combine (``+`` for sum/mean, ``fmaxf`` for absmax).
+template <class Op> __device__ float warp_butterfly(float val) {
     for (int delta = 16; delta > 0; delta >>= 1) {
-        val += __shfl_xor_sync(0xFFFFFFFFu, val, delta);
+        val = reduce_traits<Op>::combine(
+            val, __shfl_xor_sync(0xFFFFFFFFu, val, delta));
     }
     return val;
 }
 
-// Intra-warp butterfly max reduction (32 lanes → broadcast max).
-__device__ inline float warp_max_butterfly(float val) {
-    for (int delta = 16; delta > 0; delta >>= 1) {
-        val = fmaxf(val, __shfl_xor_sync(0xFFFFFFFFu, val, delta));
-    }
-    return val;
-}
-
-// Cross-warp sum reduction via a shared-memory workspace.
+// Cross-warp SUM aggregation via a shared-memory workspace.
 //
 // ``workspace`` is sized to ``total_warps`` (all non-thread mesh
 // positions).  ``warps_per_group`` (≤ total_warps) controls grouping:
@@ -92,7 +174,7 @@ struct reduce_dispatch_info {
 // Derive, from the (src, dst) operand ShardLayouts, the active reduction level
 // and its ``warps_per_group``. Pure compile-time so the caller can select the
 // tier with ``if constexpr`` — otherwise the untaken tier still instantiates
-// and, e.g., ``CrossWarp<mean_op>`` would trip its SUM/MAX-only guard.
+// and, e.g., ``CrossWarp<mean_op>`` would trip its supported-op guard.
 // Requires a static mesh layout (the reduce mesh is a thread-scoped static
 // mesh); a reduced axis on a non-thread mesh scope yields the cross-warp tier.
 template <class SrcSL, class DstSL>
