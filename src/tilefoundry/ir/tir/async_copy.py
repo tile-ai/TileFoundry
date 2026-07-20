@@ -13,8 +13,8 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 @register_op(dialect="T", category="async", name="copy_async")
 class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
-    source = ParamDef(kind="input", pattern=Tensor)
-    destination = ParamDef(kind="input", pattern=Tensor)
+    src = ParamDef(kind="input", pattern=Tensor)
+    dst = ParamDef(kind="input", pattern=Tensor)
 
 
 @register_typeinfer(CopyAsync)

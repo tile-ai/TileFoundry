@@ -482,11 +482,11 @@ def _require_uniform_case_args(case_calls, module) -> None:
 
 def _reject_unsupported_config(cfg) -> None:
     if cfg.cluster is not None:
-        raise ValueError("emit_host_module: launch `cluster` is not supported yet")
+        raise NotImplementedError("emit_host_module: launch `cluster` is not supported yet")
     if cfg.stream is not None:
-        raise ValueError("emit_host_module: launch `stream` is not supported yet")
+        raise NotImplementedError("emit_host_module: launch `stream` is not supported yet")
     if cfg.attrs.entries:
-        raise ValueError("emit_host_module: launch `attrs` are not supported yet")
+        raise NotImplementedError("emit_host_module: launch `attrs` are not supported yet")
 
 
 def _derive_launch_config(body):
