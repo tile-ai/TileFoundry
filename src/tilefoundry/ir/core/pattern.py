@@ -130,6 +130,24 @@ class DimVarRangePat(Pattern):
         return self.lo <= subject < self.hi
 
 
+def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:
+    """First ``(param_index, axis)`` where a ``DimVar`` named *name* appears in
+    *params*' shapes.
+
+    Canonical scan order is ``(param_index ascending, axis ascending)`` — the
+    single dispatch-subject rule shared by HIR→TIR lowering and the reference
+    evaluator's variant selection.
+    """
+    for i, p in enumerate(params):
+        shape = getattr(p.type, "shape", None)
+        if shape is None:
+            continue
+        for axis, dim in enumerate(shape):
+            if getattr(dim, "name", None) == name:
+                return (i, axis)
+    return None
+
+
 # --- Convenience singletons / aliases ------------------------------------
 
 #: Singleton matching any rank-0 (scalar) tensor.
@@ -147,4 +165,5 @@ __all__ = [
     "DimVarRangePat",
     "Scalar",
     "Tensor",
+    "locate_dim_var",
 ]

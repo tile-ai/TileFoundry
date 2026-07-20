@@ -18,7 +18,7 @@ from typing import Union
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16 as HirMmaSM80_16x8x16
 from tilefoundry.ir.hir.cuda.nn.mma import Wgmma_SM90_64x128x16 as HirWgmma_SM90
 from tilefoundry.ir.hir.function import Function as HirFunction
@@ -1185,7 +1185,7 @@ class _Lowerer:
                 f"dispatch is supported in v0"
             )
         dim_name = first_pat.dim_var
-        loc = _locate_dim_var_in_params(first_variant.params, dim_name)
+        loc = locate_dim_var(first_variant.params, dim_name)
         if loc is None:
             raise TypeError(
                 f"HIR Call to {callee_hir.name!r}: dispatch DimVar "
@@ -1381,23 +1381,6 @@ def _find_user_param_index(
         f"trailing scalar references user param {base_name!r} that is "
         f"not in the callee user-param list"
     )
-
-
-def _locate_dim_var_in_params(
-    params: tuple[Var, ...], dim_var_name: str
-) -> tuple[int, int] | None:
-    """First (param_index, axis) where a named DimVar appears in params.
-
-    Canonical scan order is (param_index ascending, axis ascending).
-    """
-    for i, p in enumerate(params):
-        shape = getattr(p.type, "shape", None)
-        if shape is None:
-            continue
-        for axis, dim in enumerate(shape):
-            if getattr(dim, "name", None) == dim_var_name:
-                return (i, axis)
-    return None
 
 
 def _fold_items_to_sequential(items: list[_Item]) -> Sequential:
@@ -1631,7 +1614,7 @@ def _build_dispatch_entry(
             f"supported in v0"
         )
     dim_name = pat0.dim_var
-    loc = _locate_dim_var_in_params(template.params, dim_name)
+    loc = locate_dim_var(template.params, dim_name)
     if loc is None:
         raise TypeError(
             f"dispatch group {template.name!r}: dispatch DimVar "

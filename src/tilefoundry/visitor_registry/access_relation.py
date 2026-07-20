@@ -133,12 +133,7 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     return ``isl.multi_aff`` / ``isl.map`` for affine-expressible boundaries
     or ``OPAQUE`` for boundaries that cannot be modelled at the queried level.
     """
-
-    def decorator(fn: Callable) -> Callable:
-        access_relation_registry.register(op_cls, fn)
-        return fn
-
-    return decorator
+    return access_relation_registry.decorator()(op_cls)
 
 
 def _identity(rank: int) -> "isl.multi_aff":
@@ -177,12 +172,7 @@ def register_type_relation(op_cls: type) -> Callable[[Callable], Callable]:
     It reads only ``input_types`` and the op's attributes — never the Call's own
     output type — so it can run before the output type exists.
     """
-
-    def decorator(fn: Callable) -> Callable:
-        type_relation_registry.register(op_cls, fn)
-        return fn
-
-    return decorator
+    return type_relation_registry.decorator()(op_cls)
 
 
 def build_relation(call, input_types, ctx) -> "AccessRelationResult | None":
