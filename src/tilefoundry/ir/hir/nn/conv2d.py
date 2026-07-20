@@ -5,12 +5,11 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -22,64 +21,6 @@ class Conv2D(Op):
     padding = ParamDef(kind="attribute", annotation=tuple)
     dilation = ParamDef(kind="attribute", annotation=tuple)
     groups = ParamDef(kind="attribute", annotation=int)
-
-
-def _is_replicated_at(layout, axis: int) -> bool:
-    if not isinstance(layout, ShardLayout) or axis >= len(layout.attrs):
-        return True
-    return isinstance(layout.attrs[axis], Broadcast)
-
-
-def _check_partial_commutes(call, ctx, operands) -> None:
-    reductions = {
-        name: partial_reductions_by_axis(ty.layout) for name, ty in operands
-    }
-    for name, states in tuple(reductions.items())[1:]:
-        for axis, reduction in enumerate(states):
-            if reduction is not None:
-                ctx.error(
-                    call,
-                    f"Conv2D: {name} carries Partial({reduction}) on mesh axis "
-                    f"{axis}; the output layout follows input and cannot "
-                    f"preserve this secondary state. Use Reshard({name}, "
-                    "Broadcast) before this consumer",
-                )
-    for axis in range(max((len(states) for states in reductions.values()), default=0)):
-        partials = [
-            (name, states[axis])
-            for name, states in reductions.items()
-            if axis < len(states) and states[axis] is not None
-        ]
-        for name, reduction in partials:
-            if reduction != "sum":
-                ctx.error(
-                    call,
-                    f"Conv2D: {name} carries Partial({reduction}) on mesh axis "
-                    f"{axis}, but Conv2D commutes with sum only; insert "
-                    f"reshard({name}, Broadcast) before this consumer",
-                )
-            for other_name, other_ty in operands:
-                if other_name == name:
-                    continue
-                if not _is_replicated_at(other_ty.layout, axis):
-                    ctx.error(
-                        call,
-                        f"Conv2D: {name} carries Partial({reduction}) on mesh "
-                        f"axis {axis}, but {other_name} is not Broadcast/replicated "
-                        f"on that axis; insert reshard({other_name}, Broadcast) "
-                        "before this consumer",
-                    )
-        if len(partials) > 1:
-            names = ", ".join(name for name, _ in partials)
-            reductions_text = ", ".join(
-                f"{name}=Partial({reduction})" for name, reduction in partials
-            )
-            ctx.error(
-                call,
-                f"Conv2D: multiple value-carrying Partials on mesh axis {axis} "
-                f"({reductions_text}) from {names} do not commute; insert "
-                "Reshard to Broadcast before this consumer",
-            )
 
 
 def _i64(value: int) -> Constant:
@@ -127,10 +68,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     kH, kW = static_dim_value(w.shape[2]), static_dim_value(w.shape[3])
     if kH is None or kW is None:
         ctx.error(call, "Conv2D kernel spatial dims (H, W) must be static")
-    _check_partial_commutes(
-        call,
-        ctx,
-        (("input", x), ("weight", w), ("bias", bias)),
+    # Conv2D is linear in the input for weight/bias held fixed: the output
+    # layout follows only `input`, so a Partial on weight or bias cannot be
+    # preserved.
+    check_multilinear_partials(
+        ctx, call, (("input", x), ("weight", w), ("bias", bias)), anchor="input",
     )
     N = x.shape[0]
     C_out = w.shape[0]

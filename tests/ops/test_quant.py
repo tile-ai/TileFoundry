@@ -42,19 +42,19 @@ CASES = [
         "indivisible_last_dim",
         Quant(),
         (make_tensor_type((1, 100), _BF),),
-        ExpectedError(match="not divisible by group", exc=TypeError),
+        ExpectedError(match="not divisible by group"),
     ),
     TypeInferCase(
         "rank0",
         Quant(),
         (make_tensor_type((), _BF),),
-        ExpectedError(match="at least rank-1", exc=TypeError),
+        ExpectedError(match="at least rank-1"),
     ),
     TypeInferCase(
         "partial_input_rejected",
         Quant(),
         (make_shard_tensor_type((1, 2048), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
-        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
+        ExpectedError(match="x carries Partial"),
     ),
 ]
 

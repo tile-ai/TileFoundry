@@ -141,6 +141,35 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     return decorator
 
 
+def _identity(rank: int) -> "isl.multi_aff":
+    if rank == 0:
+        return isl.multi_aff("{ [] -> [] }")
+    dims = ", ".join(f"i{i}" for i in range(rank))
+    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
+
+
+def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
+    """Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
+    inputs and single output are all elementwise identity.
+
+    Each input contributes its own-rank identity; the output uses its own
+    rank. A structural (non-tensor) input arg — e.g. ``TupleGetItem``'s tuple
+    operand — has no shape of its own, so it borrows the output's rank.
+    """
+
+    def _handler(call, ctx) -> AccessRelations:
+        out_rank = len(ctx.type_of(call).shape)
+
+        def _rank_of(arg) -> int:
+            ty = ctx.type_of(arg)
+            return len(ty.shape) if hasattr(ty, "shape") else out_rank
+
+        inputs = tuple(_identity(_rank_of(call.args[i])) for i in range(n_inputs))
+        return AccessRelations(inputs=inputs, outputs=(_identity(out_rank),))
+
+    return _handler
+
+
 def register_type_relation(op_cls: type) -> Callable[[Callable], Callable]:
     """Decorator to register a forward type-relation builder.
 
@@ -175,5 +204,6 @@ __all__ = [
     "type_relation_registry",
     "register_access_relation",
     "register_type_relation",
+    "identity_relations",
     "build_relation",
 ]

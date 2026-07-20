@@ -11,6 +11,10 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 
 @register_op
@@ -31,6 +35,13 @@ class Slice(Op):
                     for v in attrs[key]
                 )
         super().__init__(**attrs)
+
+
+# GLOBAL-level: identity (each output element corresponds to a single input
+# element via a deterministic remap encoded in begin/end/strides, not
+# duplicated in the relation at this level).
+register_access_relation(Slice)(identity_relations(1))
+
 
 def _i64(value: int) -> Constant:
     return i64_const(value)

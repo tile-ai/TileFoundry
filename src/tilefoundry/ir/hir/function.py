@@ -7,18 +7,11 @@ from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.types import CallableType, TensorType, Type, callable_type_for
+from tilefoundry.ir.types import TensorType, Type, callable_type_for
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.contexts import TypeInferContext
-
-
-def _callable_type_for(params: tuple[Var, ...], return_type: Type) -> CallableType:
-    """Project ``Function.params`` + ``return_type`` into the IR-level
-    ``CallableType``.
-    """
-    return callable_type_for(params, return_type)
 
 
 @dataclass(frozen=True)
@@ -57,7 +50,7 @@ class Function(Expr):
             specializations=tuple(specializations),
             variants=tuple(variants),
             target=target,
-            type=_callable_type_for(params, return_type),
+            type=callable_type_for(params, return_type),
             loc=loc,
         )
 
@@ -306,7 +299,6 @@ def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
 
 __all__ = [
     "Function",
-    "_callable_type_for",
     "canonical_specialization_signature",
     "elaborate",
 ]

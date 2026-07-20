@@ -22,6 +22,7 @@ from tests.ops.typeinfer_utils import (
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
+from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
@@ -135,7 +136,7 @@ CASES = [
         "rank_mismatch_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((2, 4), _F), make_tensor_type((), _I)),
-        ExpectedError("update rank .* must equal dst rank", exc=TypeError),
+        ExpectedError("update rank .* must equal dst rank"),
     ),
     # A bare scalar offset applies only to a rank-1 dst; a multi-D dst needs a
     # per-axis offset tuple.
@@ -143,14 +144,14 @@ CASES = [
         "nd_scalar_offset_rejected",
         _OP,
         (make_tensor_type((4, 8), _F), make_tensor_type((1, 8), _F), make_tensor_type((), _I)),
-        ExpectedError("per-axis offset tuple", exc=TypeError),
+        ExpectedError("per-axis offset tuple"),
     ),
     # A rank-1 vector offset is not a rank-0 scalar start for the 1-D case.
     TypeInferCase(
         "offsets_vector_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((2,), _I)),
-        ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
+        ExpectedError("offsets must be a rank-0 scalar start"),
     ),
     # A one-element ``(1,)`` offset is the legacy spelling and is rejected —
     # the canonical 1-D offset is a rank-0 scalar.
@@ -158,35 +159,35 @@ CASES = [
         "offsets_one_vector_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((1,), _I)),
-        ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
+        ExpectedError("offsets must be a rank-0 scalar start"),
     ),
     # A total-size-one multi-dim ``(1, 1)`` offset is also rejected.
     TypeInferCase(
         "offsets_multi_one_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((1, 1), _I)),
-        ExpectedError("offsets must be a rank-0 scalar start", exc=TypeError),
+        ExpectedError("offsets must be a rank-0 scalar start"),
     ),
     # offsets must be an integer scalar.
     TypeInferCase(
         "offsets_dtype_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((), _F)),
-        ExpectedError("offsets must be an integer scalar", exc=TypeError),
+        ExpectedError("offsets must be an integer scalar"),
     ),
     # dst / update dtype must match.
     TypeInferCase(
         "dtype_mismatch_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((3,), DType.bf16), make_tensor_type((), _I)),
-        ExpectedError("dst/update dtype mismatch", exc=TypeError),
+        ExpectedError("dst/update dtype mismatch"),
     ),
     # A statically over-long update is rejected.
     TypeInferCase(
         "static_overlong_update_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((10,), _F), make_tensor_type((), _I)),
-        ExpectedError("exceeds dst extent", exc=TypeError),
+        ExpectedError("exceeds dst extent"),
     ),
     TypeInferCase(
         "partial_dst_matching_update_ok",
@@ -206,7 +207,7 @@ CASES = [
             make_tensor_type((3,), _F),
             make_tensor_type((), _I),
         ),
-        ExpectedError("dst carries a Partial", exc=TypeError),
+        ExpectedError("dst carries a Partial"),
     ),
     TypeInferCase(
         "complete_dst_partial_update_rejected",
@@ -216,7 +217,7 @@ CASES = [
             make_shard_tensor_type((3,), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
             make_tensor_type((), _I),
         ),
-        ExpectedError("update carries Partial", exc=TypeError),
+        ExpectedError("update carries Partial"),
     ),
 ]
 
@@ -240,7 +241,7 @@ def test_insert_slice_rankn_tuple_returns_dst_type():
 def test_insert_slice_rankn_static_oob_names_axis():
     """An all-literal offset that puts the window past dst on one axis is
     rejected at typeinfer, and the error names the offending axis."""
-    with pytest.raises(TypeError, match="axis 1"):
+    with pytest.raises(VerifyError, match="axis 1"):
         _infer_insert(
             make_tensor_type((1, 16512, 512), _F),
             make_tensor_type((1, 1, 512), _F),
@@ -249,7 +250,7 @@ def test_insert_slice_rankn_static_oob_names_axis():
 
 
 def test_insert_slice_rankn_negative_literal_rejected():
-    with pytest.raises(TypeError, match="axis 1"):
+    with pytest.raises(VerifyError, match="axis 1"):
         _infer_insert(
             make_tensor_type((1, 16512, 512), _F),
             make_tensor_type((1, 1, 512), _F),
@@ -267,7 +268,7 @@ def test_insert_slice_rankn_runtime_member_deferred():
 
 
 def test_insert_slice_tuple_len_must_equal_rank():
-    with pytest.raises(TypeError, match="tuple length"):
+    with pytest.raises(VerifyError, match="tuple length"):
         _infer_insert(
             make_tensor_type((1, 16512, 512), _F), make_tensor_type((1, 1, 512), _F), _offsets(_lit(0), _lit(0))
         )

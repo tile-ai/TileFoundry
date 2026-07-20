@@ -12,13 +12,13 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op
@@ -29,21 +29,15 @@ class ArgMax(Op):
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
-        raise TypeError("ArgMax: x must be at least rank-1")
+        ctx.error(call, "x must be at least rank-1")
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:
         axis += rank
     if axis < 0 or axis >= rank:
-        raise TypeError(f"ArgMax: axis {call.target.axis} out of range for rank {rank}")
-    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
-        if reduction is not None:
-            raise TypeError(
-                f"ArgMax: Partial input on x is unsound: x carries Partial({reduction}) "
-                f"on mesh axis {axis}; "
-                "the winning index is not recoverable. Insert reshard(x, "
-                "Broadcast) before this consumer"
-            )
+        ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
+    # The winning index is not recoverable from a partial (per-shard) reduction.
+    reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
     return TensorType(
         shape=out_shape,

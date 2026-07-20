@@ -76,7 +76,7 @@ TYPEINFER_CASES = [
             make_tensor_type((1,), DType.i32),
             make_tensor_type((1, 8, 4, 8), DType.bf16),
         ),
-        ExpectedError(match="exceeds cache capacity", exc=TypeError),
+        ExpectedError(match="exceeds cache capacity"),
     ),
     TypeInferCase(
         "cur_pos_not_i32",
@@ -87,7 +87,7 @@ TYPEINFER_CASES = [
             make_tensor_type((1,), DType.i32),
             make_tensor_type((1, 4, 4, 8), DType.bf16),
         ),
-        ExpectedError(match="cur_pos must be an i32 scalar", exc=TypeError),
+        ExpectedError(match="cur_pos must be an i32 scalar"),
     ),
     TypeInferCase(
         "kv_heads_mismatch",
@@ -98,7 +98,7 @@ TYPEINFER_CASES = [
             make_tensor_type((1,), DType.i32),
             make_tensor_type((1, 4, 2, 8), DType.bf16),
         ),
-        ExpectedError(match="kv_heads mismatch", exc=TypeError),
+        ExpectedError(match="kv_heads mismatch"),
     ),
     TypeInferCase(
         "cur_pos_not_scalar",
@@ -109,7 +109,7 @@ TYPEINFER_CASES = [
             make_tensor_type((1,), DType.i32),
             make_tensor_type((1, 4, 4, 8), DType.bf16),
         ),
-        ExpectedError(match="must be a scalar", exc=TypeError),
+        ExpectedError(match="must be a scalar"),
     ),
     TypeInferCase(
         "partial_cache_matching_new_ok",
@@ -139,7 +139,7 @@ TYPEINFER_CASES = [
             make_tensor_type((1,), DType.i32),
             make_tensor_type((1, 4, 4, 8), DType.bf16),
         ),
-        ExpectedError(match="cache carries a Partial", exc=TypeError),
+        ExpectedError(match="cache carries a Partial"),
     ),
     TypeInferCase(
         "complete_cache_partial_new_rejected",
@@ -152,7 +152,7 @@ TYPEINFER_CASES = [
                 (1, 4, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
             ),
         ),
-        ExpectedError(match="new carries Partial", exc=TypeError),
+        ExpectedError(match="new carries Partial"),
     ),
 ]
 

@@ -15,6 +15,7 @@ back to ``x.dtype`` on output.
 
 from __future__ import annotations
 
+import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -23,9 +24,17 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
+from tilefoundry.visitor_registry.access_relation import AccessRelations, register_access_relation
+
+
+def _identity(rank: int) -> "isl.multi_aff":
+    if rank == 0:
+        return isl.multi_aff("{ [] -> [] }")
+    dims = ", ".join(f"i{i}" for i in range(rank))
+    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
 
 
 @register_op(name="rms_norm")
@@ -39,26 +48,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     w_ty = ctx.type_of(call.args[1])
 
     if len(x_ty.shape) < 1:
-        raise TypeError(
-            f"RMSNorm: x must be rank ≥ 1, got shape {x_ty.shape}"
-        )
+        ctx.error(call, f"x must be rank ≥ 1, got shape {x_ty.shape}")
     if len(w_ty.shape) != 1:
-        raise TypeError(
-            f"RMSNorm: weight must be rank-1, got shape {w_ty.shape}"
-        )
+        ctx.error(call, f"weight must be rank-1, got shape {w_ty.shape}")
     if x_ty.shape[-1] != w_ty.shape[0]:
-        raise TypeError(
-            f"RMSNorm: x last dim {x_ty.shape[-1]} != weight dim {w_ty.shape[0]}"
-        )
+        ctx.error(call, f"x last dim {x_ty.shape[-1]} != weight dim {w_ty.shape[0]}")
+    # rms_norm normalizes across an axis (non-monotonic); no reduction commutes.
     for arg, ty in (("x", x_ty), ("weight", w_ty)):
-        for axis, reduction in enumerate(partial_reductions_by_axis(ty.layout)):
-            if reduction is not None:
-                raise TypeError(
-                    f"RMSNorm: Partial input on {arg} is unsound: {arg} carries "
-                    f"Partial({reduction}) on mesh "
-                    f"axis {axis}, which does not commute; insert reshard({arg}, "
-                    "Broadcast) before this consumer"
-                )
+        reject_partials(ctx, call, arg, ty.layout)
 
     # Output preserves x's full shape (batch dims flow verbatim,
     # including DimVar / dim-arithmetic entries) and x's dtype. The
@@ -66,6 +63,19 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     # bf16 input); the internal f32 accumulate cast-back is op
     # semantics, not a type constraint.
     return x_ty
+
+
+@register_access_relation(RMSNorm)
+def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
+    """GLOBAL level: x identity, weight identity (broadcast along last dim
+    treated as identity at GLOBAL black-box; reduction is internal to the
+    op)."""
+    x_ty = ctx.type_of(call.args[0])
+    rank = len(x_ty.shape)
+    return AccessRelations(
+        inputs=(_identity(rank), _identity(1)),
+        outputs=(_identity(rank),),
+    )
 
 
 @register_eval(RMSNorm)

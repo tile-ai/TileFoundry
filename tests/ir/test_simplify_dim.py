@@ -7,8 +7,8 @@ from tests.parser.hir.test_demo_proj_qkv import proj_qkv_with_mma
 from tilefoundry.ir.core import TypeInferContext
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.core.kinds import UnaryKind
+from tilefoundry.ir.hir._helpers import broadcast_shapes
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.math._helpers import _broadcast, _shapes_equal
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import DType, TensorType
@@ -225,8 +225,8 @@ def test_slice_output_broadcasts_against_param_int_shape() -> None:
     ))
     param = TensorType(shape=(1, 4, 32, 128), dtype=DType.bf16, layout=None, storage="gmem")
     assert sliced.shape == param.shape == (1, 4, 32, 128)
-    assert _shapes_equal(sliced.shape, param.shape)
-    assert _broadcast(sliced.shape, param.shape) == (1, 4, 32, 128)
+    assert sliced.shape == param.shape  # inlined former `_shapes_equal`
+    assert broadcast_shapes(sliced.shape, param.shape) == (1, 4, 32, 128)
 
 
 def test_unary_propagates_dim_var_in_shape() -> None:

@@ -149,7 +149,7 @@ class Reshard(Op):
 @register_typeinfer(Reshard)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
-        raise TypeError("Reshard: missing required input 'x'")
+        ctx.error(call, "missing required input 'x'")
     x_ty = ctx.type_of(call.args[0])
     op = call.target
     if op.storage is StorageKind.UMAT:

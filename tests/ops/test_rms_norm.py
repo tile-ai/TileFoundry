@@ -98,19 +98,19 @@ CASES = [
         "rank0_x_rejected",
         _RMS,
         (TensorType.scalar(DType.bf16), make_tensor_type((2048,), DType.f32)),
-        ExpectedError(match="x must be rank ≥ 1", exc=TypeError),
+        ExpectedError(match="x must be rank ≥ 1"),
     ),
     TypeInferCase(
         "rank2_weight_rejected",
         _RMS,
         (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1, 2048), DType.f32)),
-        ExpectedError(match="weight must be rank-1", exc=TypeError),
+        ExpectedError(match="weight must be rank-1"),
     ),
     TypeInferCase(
         "last_dim_mismatch_rejected",
         _RMS,
         (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1024,), DType.f32)),
-        ExpectedError(match="last dim", exc=TypeError),
+        ExpectedError(match="last dim"),
     ),
     # rms_norm normalizes across an axis (non-monotonic); no reduction commutes.
     TypeInferCase(
@@ -122,7 +122,7 @@ CASES = [
             ),
             make_tensor_type((2048,), DType.f32),
         ),
-        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
+        ExpectedError(match="x carries Partial"),
     ),
     TypeInferCase(
         "partial_weight_rejected",
@@ -133,7 +133,7 @@ CASES = [
                 (2048,), DType.f32, mesh=_PARTIAL_MESH, attrs=(Partial("sum"),)
             ),
         ),
-        ExpectedError(match="Partial input on weight is unsound", exc=TypeError),
+        ExpectedError(match="weight carries Partial"),
     ),
 ]
 

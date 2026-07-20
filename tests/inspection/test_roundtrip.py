@@ -277,7 +277,7 @@ class TestRoundTrip:
             parse_script(src)
 
     def test_missing_input_errors(self):
-        """reshard() — missing required input x and layout, TypeError."""
+        """reshard() — missing required input x and layout, VerifyError."""
         src = (
             "from __future__ import annotations\n"
             "from tilefoundry import func\n"
@@ -288,7 +288,7 @@ class TestRoundTrip:
             "    b = reshard()\n"
             "    return b\n"
         )
-        with pytest.raises((TypeError,)):
+        with pytest.raises(VerifyError):
             parse_script(src)
 
 

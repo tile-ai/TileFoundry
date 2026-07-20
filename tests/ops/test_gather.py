@@ -63,7 +63,7 @@ TYPEINFER_CASES = [
         "axis_out_of_range",
         Gather(axis=5),
         (make_tensor_type((2, 3, 4), DType.f32), make_tensor_type((2,), DType.i32)),
-        ExpectedError(match="out of range", exc=TypeError),
+        ExpectedError(match="out of range"),
     ),
 ]
 
@@ -259,14 +259,14 @@ BATCHED_TYPEINFER_CASES = [
         "batch_dims_exceeds_axis_rejected",
         Gather(axis=0, batch_dims=1),
         (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((6,), DType.i32)),
-        ExpectedError(match="batch_dims", exc=TypeError),
+        ExpectedError(match="batch_dims"),
     ),
     # batch dims must match between x and index.
     TypeInferCase(
         "batch_dims_prefix_mismatch_rejected",
         Gather(axis=1, batch_dims=1),
         (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((5, 2), DType.i32)),
-        ExpectedError(match="batch", exc=TypeError),
+        ExpectedError(match="batch"),
     ),
     # index must be an integer tensor (spec "integer index tensor") — reject
     # a float index rather than silently truncating it in eval; both batched
@@ -275,13 +275,13 @@ BATCHED_TYPEINFER_CASES = [
         "float_index_rejected_non_batched",
         Gather(axis=1),
         (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((2,), DType.f32)),
-        ExpectedError(match="integer", exc=TypeError),
+        ExpectedError(match="integer"),
     ),
     TypeInferCase(
         "float_index_rejected_batched",
         Gather(axis=1, batch_dims=1),
         (make_tensor_type((2, 3, 4), DType.f32), make_tensor_type((2, 5), DType.f32)),
-        ExpectedError(match="integer", exc=TypeError),
+        ExpectedError(match="integer"),
     ),
     # A batched gather over a sharded operand is not yet supported: fail-closed
     # with a named error (the batch_dims attribute stays a stable interface for

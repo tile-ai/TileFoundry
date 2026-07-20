@@ -14,6 +14,8 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
+    identity_relations,
+    register_access_relation,
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
@@ -24,6 +26,10 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class Cast(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     dtype = ParamDef(kind="attribute", annotation=DType)
+
+
+# GLOBAL-level: only the dtype changes; input/output are elementwise identity.
+register_access_relation(Cast)(identity_relations(1))
 
 
 @register_type_relation(Cast)

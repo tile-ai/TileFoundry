@@ -11,6 +11,7 @@ from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
@@ -20,10 +21,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
-from tilefoundry.visitor_registry.shard_propagate import (
-    derive_output_shard_layout,
-    partial_reductions_by_axis,
-)
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 __all__ = ["ReduceKind", "Reduce"]
 
@@ -65,23 +63,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     kind = call.target.kind
     # x's Partial state is a pending cross-device combine on a mesh axis,
     # independent of the tensor axes reduced by this operation.
-    for axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
-        if reduction is None:
-            continue
-        allowed = (
-            reduction == "sum"
-            if kind in (ReduceKind.SUM, ReduceKind.MEAN)
-            else reduction == "max"
-            if kind is ReduceKind.MAX
-            else False
-        )
-        if not allowed:
-            ctx.error(
-                call,
-                f"Reduce {kind.name}: x carries Partial({reduction}) on mesh "
-                f"axis {axis}, which does not commute; insert reshard(x, "
-                "Broadcast) before this consumer",
-            )
+    commutes_with = (
+        frozenset({"sum"})
+        if kind in (ReduceKind.SUM, ReduceKind.MEAN)
+        else frozenset({"max"})
+        if kind is ReduceKind.MAX
+        else frozenset()
+    )
+    reject_partials(ctx, call, "x", x_ty.layout, commutes_with=commutes_with)
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)
     reduced = _reduced_axes(call, rank)

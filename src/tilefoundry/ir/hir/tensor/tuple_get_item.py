@@ -7,6 +7,10 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 
 @register_op(name="tuple_get_item")
@@ -19,6 +23,11 @@ class TupleGetItem(Op):
     """
     tuple_value = ParamDef(kind="input", pattern=Tensor)
     index = ParamDef(kind="attribute", annotation=int)
+
+
+# GLOBAL-level: structural extractor, identity over the extracted field's
+# own rank (`tuple_value` is a TupleType with no shape of its own).
+register_access_relation(TupleGetItem)(identity_relations(1))
 @register_typeinfer(TupleGetItem)
 def _(call: "Call", ctx: "TypeInferContext"):
     tup_ty = ctx.type_of(call.args[0])

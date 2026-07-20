@@ -48,13 +48,13 @@ CASES = [
         "odd_head_dim",
         RoPE(),
         _rope_inputs((1, 32, 127), (1, 4, 127)),
-        ExpectedError(match="head_dim 127 must be even", exc=TypeError),
+        ExpectedError(match="head_dim 127 must be even"),
     ),
     TypeInferCase(
         "mismatched_head_dims",
         RoPE(),
         _rope_inputs((1, 32, 128), (1, 4, 64)),
-        ExpectedError(match="!= k head_dim", exc=TypeError),
+        ExpectedError(match="!= k head_dim"),
     ),
     TypeInferCase(
         "partial_sum_q_passes",
@@ -91,7 +91,7 @@ CASES = [
             (1, 32, 128), (1, 4, 128),
             q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("max"),), dtype=_BF),
         ),
-        ExpectedError(match="RoPE", exc=TypeError),
+        ExpectedError(match="RoPE"),
     ),
     TypeInferCase(
         "partial_sum_cos_errors",
@@ -100,7 +100,7 @@ CASES = [
             (1, 32, 128), (1, 4, 128),
             cos=make_shard_tensor_type((4096, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
         ),
-        ExpectedError(match="cos_cache carries Partial.*mesh axis 0", exc=TypeError),
+        ExpectedError(match="cos_cache carries Partial.*mesh axis 0"),
     ),
     TypeInferCase(
         "partial_sum_pos_errors",
@@ -109,7 +109,7 @@ CASES = [
             (1, 32, 128), (1, 4, 128),
             pos=make_shard_tensor_type((1,), mesh=_M, attrs=(Partial("sum"),), dtype=DType.i32),
         ),
-        ExpectedError(match="pos_ids carries Partial.*mesh axis 0", exc=TypeError),
+        ExpectedError(match="pos_ids carries Partial.*mesh axis 0"),
     ),
 ]
 

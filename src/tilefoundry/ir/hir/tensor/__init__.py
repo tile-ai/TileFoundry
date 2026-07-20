@@ -6,8 +6,10 @@ from .cast import Cast
 from .concat import Concat
 from .full_like import FullLike
 from .gather import Gather
+from .insert_slice import InsertSlice
 from .quant import Quant
 from .rank import Rank
+from .reduce import Reduce
 from .repeat_interleave import RepeatInterleave
 from .reshape import Reshape
 from .shape_of import ShapeOf
@@ -17,6 +19,7 @@ from .stack import Stack
 from .topk import TopK
 from .transpose import Transpose
 from .tuple_get_item import TupleGetItem
+from .zeros import Zeros
 
 __all__ = [
     "ArgMax",
@@ -25,8 +28,10 @@ __all__ = [
     "Concat",
     "FullLike",
     "Gather",
+    "InsertSlice",
     "Quant",
     "Rank",
+    "Reduce",
     "RepeatInterleave",
     "Reshape",
     "ShapeOf",
@@ -36,4 +41,5 @@ __all__ = [
     "TopK",
     "Transpose",
     "TupleGetItem",
+    "Zeros",
 ]

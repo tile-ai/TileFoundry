@@ -58,17 +58,17 @@ CASES = [
 ] + [
     TypeInferCase("neg_partial_sum_passes", _NEG, (_PSUM,), _PSUM),
     TypeInferCase(
-        "neg_partial_max_errors", _NEG, (_PMAX,), ExpectedError(match="Unary NEG")
+        "neg_partial_max_errors", _NEG, (_PMAX,), ExpectedError(match="carries Partial")
     ),
     TypeInferCase("exp_partial_max_passes", _EXP, (_PMAX,), _PMAX),
     TypeInferCase(
-        "exp_partial_sum_errors", _EXP, (_PSUM,), ExpectedError(match="Unary EXP")
+        "exp_partial_sum_errors", _EXP, (_PSUM,), ExpectedError(match="carries Partial")
     ),
     TypeInferCase(
-        "abs_partial_sum_errors", _ABS, (_PSUM,), ExpectedError(match="Unary ABS")
+        "abs_partial_sum_errors", _ABS, (_PSUM,), ExpectedError(match="carries Partial")
     ),
     TypeInferCase(
-        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,), ExpectedError(match="Unary RSQRT")
+        "rsqrt_partial_max_errors", _RSQRT, (_PMAX,), ExpectedError(match="carries Partial")
     ),
 ]
 

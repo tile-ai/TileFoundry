@@ -19,22 +19,21 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
+from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    AccessRelations,
     build_relation,
+    register_access_relation,
     register_type_relation,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import shape_from_relation
-from tilefoundry.visitor_registry.shard_propagate import (
-    derive_output_shard_layout,
-    partial_reductions_by_axis,
-)
-
-from ._helpers import _broadcast, _is_one, _merge_layout, resolve_anchor_storage
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 _COMPARE_KINDS = {
     BinaryKind.EQ, BinaryKind.NE,
@@ -44,7 +43,7 @@ _COMPARE_KINDS = {
 _LOGICAL_KINDS = {BinaryKind.AND, BinaryKind.OR}
 _INT_ONLY_KINDS = {BinaryKind.FLOOR_DIV, BinaryKind.MOD}
 
-@register_op(dialect="tf", category="math")
+@register_op
 class Binary(Op):
     """Value-form pointwise binary operation."""
     lhs = ParamDef(kind="input", pattern=Tensor)
@@ -63,7 +62,7 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     shard engine treats those positions as broadcasts.
     """
     lhs, rhs = input_types
-    out_shape = _broadcast(lhs.shape, rhs.shape)
+    out_shape = broadcast_shapes(lhs.shape, rhs.shape)
     r = len(out_shape)
     domain, param_map = to_domain(out_shape)
     in_dims = [f"d{i}" for i in range(r)]
@@ -72,7 +71,7 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
         pad = r - len(in_shape)
         return [
             "0"
-            if (_is_one(in_shape[i]) and not _is_one(out_shape[pad + i]))
+            if (is_one(in_shape[i]) and not is_one(out_shape[pad + i]))
             else f"d{pad + i}"
             for i in range(len(in_shape))
         ]
@@ -85,96 +84,35 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
-def _state_at(layout, axis: int):
-    if not isinstance(layout, ShardLayout) or axis >= len(layout.attrs):
-        return None
-    return layout.attrs[axis]
+def _merge_layout(a: object, b: object) -> object:
+    """Merge two non-sharded operand layouts. Equal layouts or one ``None``
+    pass through. Two fully-replicated (all-``Broadcast``) ``ShardLayout``s are
+    mesh-agnostic (the data is replicated everywhere) so the first is kept.
+    Any other genuine mismatch raises — there is no silent lhs pick; a real
+    shard mismatch is propagated through the shard engine, not merged here."""
+    if a == b:
+        return a
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if (
+        isinstance(a, ShardLayout)
+        and isinstance(b, ShardLayout)
+        and all(isinstance(x, Broadcast) for x in a.attrs)
+        and all(isinstance(x, Broadcast) for x in b.attrs)
+    ):
+        return a
+    raise ValueError(f"incompatible operand layouts {a!r} vs {b!r}")
 
 
-def _is_replicated_at(layout, axis: int) -> bool:
-    state = _state_at(layout, axis)
-    return state is None or isinstance(state, Broadcast)
-
-
-def _check_partial_commutes(
-    call: "Call", ctx: "TypeInferContext", op, la, lb
-) -> None:
-    """Check Binary Partial states independently on each mesh axis."""
-    lhs_r = partial_reductions_by_axis(la)
-    rhs_r = partial_reductions_by_axis(lb)
-    lhs_axes = tuple(i for i, reduction in enumerate(lhs_r) if reduction is not None)
-    rhs_axes = tuple(i for i, reduction in enumerate(rhs_r) if reduction is not None)
-    if lhs_axes and rhs_axes and lhs_axes != rhs_axes:
-        axis = next(
-            axis
-            for axis in range(max(len(lhs_r), len(rhs_r)))
-            if (lhs_r[axis] if axis < len(lhs_r) else None)
-            != (rhs_r[axis] if axis < len(rhs_r) else None)
-        )
-        lhs_reduction = lhs_r[axis] if axis < len(lhs_r) else None
-        rhs_reduction = rhs_r[axis] if axis < len(rhs_r) else None
-        ctx.error(
-            call,
-            f"Binary {op.kind.name}: Partial axis mismatch on mesh axis {axis} "
-            f"(lhs reduction={lhs_reduction!r}, rhs reduction={rhs_reduction!r}); "
-            "Reshard the Partial input to Broadcast before this consumer",
-        )
-
-    for axis in range(max(len(lhs_r), len(rhs_r))):
-        lhs_reduction = lhs_r[axis] if axis < len(lhs_r) else None
-        rhs_reduction = rhs_r[axis] if axis < len(rhs_r) else None
-        if lhs_reduction is None and rhs_reduction is None:
-            continue
-        if lhs_reduction is not None and rhs_reduction is not None:
-            if op.kind is BinaryKind.ADD and (
-                lhs_reduction == rhs_reduction == "sum"
-            ):
-                continue
-            ctx.error(
-                call,
-                f"Binary {op.kind.name}: lhs carries Partial({lhs_reduction}) "
-                f"and rhs carries Partial({rhs_reduction}) on mesh axis {axis}; "
-                "two value-carrying Partials do not commute here. Reshard "
-                "lhs or rhs to Broadcast before this consumer",
-            )
-        if lhs_reduction is not None:
-            if not _is_replicated_at(lb, axis):
-                ctx.error(
-                    call,
-                    f"Binary {op.kind.name}: lhs carries Partial({lhs_reduction}) "
-                    f"on mesh axis {axis}, but rhs is not Broadcast/replicated "
-                    "on that axis. Reshard rhs to Broadcast before this consumer",
-                )
-            allowed = (
-                op.kind is BinaryKind.ADD
-                and lhs_reduction in ("max", "min")
-            ) or (op.kind is BinaryKind.MUL and lhs_reduction == "sum")
-            if not allowed:
-                ctx.error(
-                    call,
-                    f"Binary {op.kind.name}: lhs Partial({lhs_reduction}) on "
-                    f"mesh axis {axis} is not proven to commute; Reshard lhs "
-                    "to Broadcast before this consumer",
-                )
-        if rhs_reduction is not None:
-            if not _is_replicated_at(la, axis):
-                ctx.error(
-                    call,
-                    f"Binary {op.kind.name}: rhs carries Partial({rhs_reduction}) "
-                    f"on mesh axis {axis}, but lhs is not Broadcast/replicated "
-                    "on that axis. Reshard lhs to Broadcast before this consumer",
-                )
-            allowed = (
-                op.kind is BinaryKind.ADD
-                and rhs_reduction in ("max", "min")
-            ) or (op.kind is BinaryKind.MUL and rhs_reduction == "sum")
-            if not allowed:
-                ctx.error(
-                    call,
-                    f"Binary {op.kind.name}: rhs Partial({rhs_reduction}) on "
-                    f"mesh axis {axis} is not proven to commute; Reshard rhs "
-                    "to Broadcast before this consumer",
-                )
+@register_access_relation(Binary)
+def _elementwise_binary(call: "Call", ctx) -> AccessRelations:
+    out_ty = ctx.type_of(call)
+    rank = len(out_ty.shape)
+    dims = ", ".join(f"i{i}" for i in range(rank))
+    ident = isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}") if rank else isl.multi_aff("{ [] -> [] }")
+    return AccessRelations(inputs=(ident, ident), outputs=(ident,))
 
 
 @register_typeinfer(Binary)
@@ -198,7 +136,21 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else lhs_ty.dtype
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
-    _check_partial_commutes(call, ctx, op, la, lb)
+    # ADD is additive in both operands at once (two Partial(sum) operands
+    # combine to a valid Partial(sum) of the sum) and commutes with a single
+    # monotone Partial(max/min) when the other operand is replicated; MUL
+    # commutes with a single Partial(sum) when the other operand is
+    # replicated (distributive). Any other kind commutes with neither.
+    if op.kind is BinaryKind.ADD:
+        allowed_reduction, commutes_jointly = frozenset({"max", "min"}), frozenset({"sum"})
+    elif op.kind is BinaryKind.MUL:
+        allowed_reduction, commutes_jointly = frozenset({"sum"}), frozenset()
+    else:
+        allowed_reduction, commutes_jointly = frozenset(), frozenset()
+    check_multilinear_partials(
+        ctx, call, (("lhs", lhs_ty), ("rhs", rhs_ty)),
+        allowed_reduction=allowed_reduction, commutes_jointly=commutes_jointly,
+    )
     try:
         # Shape and shard share the relation as the single source: the forward
         # relation builds the broadcast domain, the output shape is read back
