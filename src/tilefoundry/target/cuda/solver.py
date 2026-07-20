@@ -16,6 +16,7 @@ from tilefoundry.ir.types import TensorType, Type
 from tilefoundry.ir.types.shard import ComposedLayout, ShardLayout
 from tilefoundry.schedule import ScheduleOptions
 
+from .allocation import _allocation_groups
 from .cost import tensor_bytes
 from .debug import write_debug_dumps
 from .planner import (
@@ -50,6 +51,7 @@ class _CpModelState:
     model: cp_model.CpModel
     pick_candidates: dict[int, cp_model.IntVar]
     pick_buckets: dict[int, cp_model.IntVar]
+    terminal_buckets: dict[int, cp_model.IntVar]
     starts: dict[int, cp_model.IntVar]
     ends: dict[int, cp_model.IntVar]
     ready: dict[int, cp_model.IntVar]
@@ -135,7 +137,7 @@ def _source_value_ids(problem: PlanningProblem) -> tuple[int, ...]:
     return tuple(
         value_id
         for value_id, value in problem.values.items()
-        if value.producer_site_id is None and value.function_path == ()
+        if value.role == "normal" and value.producer_site_id is None and value.function_path == ()
     )
 
 
@@ -196,16 +198,33 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
             [pick_buckets[bucket_id] for bucket_id in requirement.bucket_ids],
             f"requirement buckets for value {requirement.value_id}",
         )
+    terminal_buckets: dict[int, cp_model.IntVar] = {}
     for value_id, value in problem.values.items():
         if value.is_final_output:
-            _add_exactly_one(
-                model,
-                [pick_buckets[bucket_id] for bucket_id in _buckets_for_value(problem, value_id)],
-                f"function result buckets for value {value_id}",
+            value_bucket_ids = _buckets_for_value(problem, value_id)
+            reshard_output_buckets = tuple(
+                bucket_id
+                for bucket_id in value_bucket_ids
+                if any(_is_reshard(problem.candidates[candidate_id])
+                       for candidate_id in problem.buckets[bucket_id].candidate_ids)
             )
+            if not reshard_output_buckets:
+                _add_exactly_one(
+                    model,
+                    [pick_buckets[bucket_id] for bucket_id in value_bucket_ids],
+                    f"function result buckets for value {value_id}",
+                )
+                continue
+            terminal_literals = []
+            for bucket_id in value_bucket_ids:
+                terminal = model.NewBoolVar(f"terminal_root_bucket_{bucket_id}")
+                terminal_buckets[bucket_id] = terminal
+                model.AddImplication(terminal, pick_buckets[bucket_id])
+                terminal_literals.append(terminal)
+            _add_exactly_one(model, terminal_literals, f"function result buckets for value {value_id}")
 
     for bucket_id, bucket in problem.buckets.items():
-        if bucket.is_source:
+        if bucket.is_source or problem.values[bucket.value_id].role != "normal":
             continue
         producers = [pick_candidates[candidate_id] for candidate_id in bucket.candidate_ids]
         model.Add(sum(producers) == pick_buckets[bucket_id])
@@ -214,24 +233,29 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
         for bucket_id in (*candidate.input_bucket_ids, *candidate.output_bucket_ids):
             model.AddImplication(present, pick_buckets[bucket_id])
 
+    demand_literals_by_bucket: dict[int, list[cp_model.IntVar]] = {}
+    for output_bucket, terminal in terminal_buckets.items():
+        demand_literals_by_bucket.setdefault(output_bucket, []).append(terminal)
+    for other_candidate_id, other_candidate in problem.candidates.items():
+        for input_bucket in other_candidate.input_bucket_ids:
+            demand_literals_by_bucket.setdefault(input_bucket, []).append(
+                pick_candidates[other_candidate_id]
+            )
+    for requirement in problem.requirements:
+        for bucket_id in requirement.bucket_ids:
+            demand_literals_by_bucket.setdefault(bucket_id, []).append(pick_buckets[bucket_id])
+
     for candidate_id, candidate in problem.candidates.items():
-        if not _is_reshard(candidate):
+        if not _is_reshard(candidate) or candidate.site_id is not None:
             continue
         output_bucket = candidate.output_bucket_ids[0]
-        demand_literals: list[cp_model.IntVar] = []
-        if problem.buckets[output_bucket].value_id in problem.root_value_ids:
-            demand_literals.append(pick_buckets[output_bucket])
-        demand_literals.extend(
-            pick_buckets[other_candidate.input_bucket_ids[input_index]]
-            for other_candidate_id, other_candidate in problem.candidates.items()
-            for input_index, input_bucket in enumerate(other_candidate.input_bucket_ids)
-            if input_bucket == output_bucket and other_candidate_id != candidate_id
-        )
-        for requirement in problem.requirements:
-            if output_bucket in requirement.bucket_ids:
-                demand_literals.append(pick_buckets[output_bucket])
+        demand_literals = tuple(dict.fromkeys(demand_literals_by_bucket.get(output_bucket, ())))
         if demand_literals:
-            model.AddBoolOr([pick_candidates[candidate_id].Not(), *demand_literals])
+            demand = model.NewBoolVar(f"reshard_demand_{output_bucket}")
+            for literal in demand_literals:
+                model.AddImplication(literal, demand)
+            model.AddBoolOr([demand.Not(), *demand_literals])
+            model.AddImplication(pick_candidates[candidate_id], demand)
         else:
             model.Add(pick_candidates[candidate_id] == 0)
 
@@ -464,6 +488,7 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
         model=model,
         pick_candidates=pick_candidates,
         pick_buckets=pick_buckets,
+        terminal_buckets=terminal_buckets,
         starts=starts,
         ends=ends,
         ready=ready,
@@ -483,45 +508,9 @@ def _add_capacity_resource(
     makespan: cp_model.IntVar,
     horizon: int,
 ) -> None:
-    parent = list(range(len(problem.buckets)))
-
-    def find(value: int) -> int:
-        while parent[value] != value:
-            parent[value] = parent[parent[value]]
-            value = parent[value]
-        return value
-
-    def union(left: int, right: int) -> None:
-        left_root, right_root = find(left), find(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
-    for candidate in problem.candidates.values():
-        if not _is_view(candidate) or not candidate.input_bucket_ids:
-            continue
-        for output_bucket in candidate.output_bucket_ids:
-            union(output_bucket, candidate.input_bucket_ids[0])
-    for region in problem.regions.values():
-        for carry in region.carry_infos:
-            carry_values = (
-                carry.init_value_id,
-                carry.carried_value_id,
-                carry.yield_value_id,
-                carry.result_value_id,
-            )
-            for left_value, right_value in zip(carry_values, carry_values[1:]):
-                left_buckets = _buckets_by_type(problem, left_value)
-                right_buckets = _buckets_by_type(problem, right_value)
-                for type_id in left_buckets.keys() & right_buckets.keys():
-                    union(left_buckets[type_id], right_buckets[type_id])
-
-    groups: dict[int, list[int]] = {}
-    for bucket_id in problem.buckets:
-        groups.setdefault(find(bucket_id), []).append(bucket_id)
-
     intervals: list[cp_model.IntervalVar] = []
     demands: list[int] = []
-    for group_id, bucket_ids in sorted(groups.items()):
+    for group_id, bucket_ids in _allocation_groups(problem):
         selected = [pick_buckets[bucket_id] for bucket_id in bucket_ids]
         active = model.NewBoolVar(f"allocation_active_{group_id}")
         for literal in selected:
@@ -549,6 +538,11 @@ def _add_capacity_resource(
                 model.Add(final_end == makespan).OnlyEnforceIf(pick_buckets[bucket_id])
                 model.Add(final_end == 0).OnlyEnforceIf(pick_buckets[bucket_id].Not())
                 end_terms.append(final_end)
+            if problem.values[value_id].is_const:
+                constant_end = model.NewIntVar(0, horizon, f"constant_end_{bucket_id}")
+                model.Add(constant_end == makespan).OnlyEnforceIf(pick_buckets[bucket_id])
+                model.Add(constant_end == 0).OnlyEnforceIf(pick_buckets[bucket_id].Not())
+                end_terms.append(constant_end)
         if not start_terms:
             start_terms.append(model.NewConstant(0))
         if not end_terms:
@@ -651,7 +645,6 @@ def solve_planning_problem(problem: PlanningProblem, options: ScheduleOptions) -
         solver.parameters.max_time_in_seconds = options.timeout_seconds
         solver.parameters.num_search_workers = options.workers
         solver.parameters.random_seed = options.random_seed
-        solver.parameters.cp_model_probing_level = 0
         status = solver.Solve(state.model)
         if status == cp_model.INFEASIBLE:
             raise ValueError(

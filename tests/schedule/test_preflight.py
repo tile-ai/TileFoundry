@@ -47,12 +47,25 @@ def test_real_fixtures_build_finite_problems() -> None:
         type(candidate.op).__name__ == "Reshard" and candidate.site_id is None
         for candidate in qwen.candidates.values()
     )
+    assert all(
+        candidate.topology_count == 0
+        for candidate in qwen.candidates.values()
+        if type(candidate.op).__name__ == "Reshard"
+    )
     assert set(qwen.candidate_enclosing_regions) == set(qwen.candidates)
     region = next(iter(qwen.regions.values()))
     assert region.parent_region_id is None
     assert len(region.carry_infos) == 3
     assert all(
         qwen.value_availability_regions[carry.result_value_id] is None
+        for carry in region.carry_infos
+    )
+    assert all(
+        carry.init_value_id != carry.carried_value_id
+        and carry.yield_value_id != carry.result_value_id
+        and qwen.value_availability_regions[carry.init_value_id] is None
+        and qwen.value_availability_regions[carry.carried_value_id] == 0
+        and qwen.value_availability_regions[carry.yield_value_id] == 0
         for carry in region.carry_infos
     )
 
@@ -111,5 +124,4 @@ def test_root_must_be_a_module_member() -> None:
         build_planning_problem(deepseek_v4_flash_module, Function.build(
             name="other", params=(), body=None, return_type=deepseek_v4_flash_moe.return_type
         ))
-
 

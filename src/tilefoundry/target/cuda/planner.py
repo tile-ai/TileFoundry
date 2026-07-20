@@ -48,6 +48,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisito
 from . import cost as _cost  # noqa: F401
 
 PlacementRelation = Literal["SAME_INTERVAL", "CONTAINED"]
+ValueRole = Literal["normal", "carry", "yield", "result"]
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class ValueInfo:
     producer_site_id: int | None = None
     function_path: tuple[int, ...] = ()
     is_final_output: bool = False
+    role: ValueRole = "normal"
 
 
 @dataclass(frozen=True)
@@ -407,6 +409,7 @@ class _Planner:
         *,
         is_const: bool = False,
         producer_site_id: int | None = None,
+        role: ValueRole = "normal",
     ) -> int:
         if not _type_storage_ok(type):
             loc = getattr(source, "loc", None) or getattr(self.root, "loc", None) or "<unknown>"
@@ -422,6 +425,7 @@ class _Planner:
             is_const=is_const,
             producer_site_id=producer_site_id,
             function_path=function_path,
+            role=role,
         )
         self.values[value_id] = info
         self.value_availability_regions[value_id] = (
@@ -444,9 +448,12 @@ class _Planner:
                     type_id=type_id,
                     candidate_ids=(),
                     fixed_offset=None,
-                    is_source=self.values[value_id].producer_site_id is None,
+                    is_source=(
+                        self.values[value_id].role == "normal"
+                        and self.values[value_id].producer_site_id is None
+                    ),
                 )
-                if self.values[value_id].producer_site_id is None:
+                if self.buckets[bucket_id].is_source:
                     source_bucket_ids.append(bucket_id)
             if source_bucket_ids:
                 self.values[value_id] = replace(
@@ -593,11 +600,24 @@ class _Planner:
             for value in region.init_args
         )
         init_refs = tuple(ref for refs in init_ref_groups for ref in refs)
-        phi_env = dict(env)
-        for phi, refs in zip(region.carried_args, init_ref_groups):
-            phi_env[id(phi)] = refs
         self._active_regions.append(region_id)
         try:
+            carried_ref_groups = tuple(
+                tuple(
+                    self._new_value(
+                        phi,
+                        type,
+                        path,
+                        function_path + (region_id,),
+                        role="carry",
+                    )
+                    for path, type in _tensor_leaves(phi.type)
+                )
+                for phi in region.carried_args
+            )
+            phi_env = dict(env)
+            for phi, refs in zip(region.carried_args, carried_ref_groups):
+                phi_env[id(phi)] = refs
             body_refs = self._process_expr(region.body, function, function_path + (region_id,), phi_env)
             yield_ref_groups = tuple(
                 self._process_expr(value, function, function_path + (region_id,), phi_env)
@@ -606,14 +626,42 @@ class _Planner:
             yield_refs = tuple(ref for refs in yield_ref_groups for ref in refs)
         finally:
             self._active_regions.pop()
-        result_refs = yield_refs if region.carried_args else body_refs
         parent_region_id = info.parent_region_id
+        for ref in yield_refs:
+            if self.values[ref].role == "normal":
+                self.values[ref] = replace(self.values[ref], role="yield")
+        if region.carried_args:
+            result_refs = tuple(
+                self._new_value(
+                    self.values[yield_ref].source,
+                    next(
+                        type
+                        for type in self.value_types[yield_ref]
+                        if isinstance(type, TensorType)
+                    ),
+                    self.values[yield_ref].leaf_path,
+                    function_path,
+                    role="result",
+                )
+                for yield_ref in yield_refs
+            )
+        else:
+            result_refs = body_refs
         for ref in result_refs:
             self.value_availability_regions[ref] = parent_region_id
         carry_infos = tuple(
-            RegionCarryInfo(init_value_id=init_ref, carried_value_id=init_ref,
-                            yield_value_id=yield_ref, result_value_id=yield_ref)
-            for init_ref, yield_ref in zip(init_refs, yield_refs)
+            RegionCarryInfo(
+                init_value_id=init_ref,
+                carried_value_id=carried_ref,
+                yield_value_id=yield_ref,
+                result_value_id=result_ref,
+            )
+            for init_ref, carried_ref, yield_ref, result_ref in zip(
+                init_refs,
+                (ref for refs in carried_ref_groups for ref in refs),
+                yield_refs,
+                result_refs,
+            )
         )
         self.regions[region_id] = replace(
             self.regions[region_id],
@@ -746,7 +794,7 @@ class _Planner:
     ) -> int:
         tensor_outputs = tuple(type for type in output_types if isinstance(type, TensorType))
         mesh, count = self._active_mesh_for_outputs(tensor_outputs)
-        if reshard:
+        if isinstance(call.target, Reshard):
             count = 0
         duration, total_bytes, demand, moved = self._target_facts(call, cost, mesh, count)
         aliases = tuple(
@@ -946,6 +994,8 @@ class _Planner:
         if value_id in seen:
             return True
         seen.add(value_id)
+        if self.values[value_id].role != "normal":
+            return True
         bucket_ids = tuple(
             bucket_id for (candidate_value, _), bucket_id in self._bucket_by_value_type.items()
             if candidate_value == value_id

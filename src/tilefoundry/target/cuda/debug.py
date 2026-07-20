@@ -8,6 +8,7 @@ from pathlib import Path
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import TensorType
 
+from .allocation import _allocation_groups
 from .cost import tensor_bytes
 from .planner import PlanningProblem
 from .projection import project_physical_fusion
@@ -30,6 +31,7 @@ def _problem_payload(problem: PlanningProblem) -> dict:
                 "leaf_path": list(value.leaf_path),
                 "is_const": value.is_const,
                 "is_final_output": value.is_final_output,
+                "role": value.role,
                 "producer_site_id": value.producer_site_id,
                 "availability_region": problem.value_availability_regions.get(value_id),
                 "type_labels": [
@@ -113,36 +115,47 @@ def _solution_payload(problem: PlanningProblem, solution: "PlanningSolution") ->
     interval_map = dict(solution.candidate_intervals_ns)
     selected_buckets = set(solution.selected_bucket_ids)
     allocations = []
-    for bucket_id in sorted(selected_buckets):
-        bucket = problem.buckets[bucket_id]
-        value = problem.values[bucket.value_id]
-        producer_ids = [
-            candidate_id for candidate_id in selected
-            if bucket_id in problem.candidates[candidate_id].output_bucket_ids
-        ]
-        consumer_ends = [
-            interval_map[candidate_id].end_ns
-            for candidate_id in selected
-            if bucket_id in problem.candidates[candidate_id].input_bucket_ids
-            and candidate_id in interval_map
-        ]
-        producer_ends = [
-            interval_map[candidate_id].end_ns for candidate_id in producer_ids
-            if candidate_id in interval_map
-        ]
+    offset_map = dict(solution.bucket_offsets)
+    for group_id, group_bucket_ids in _allocation_groups(problem):
+        selected_group_bucket_ids = tuple(
+            bucket_id for bucket_id in group_bucket_ids if bucket_id in selected_buckets
+        )
+        if not selected_group_bucket_ids:
+            continue
+        start_terms = []
+        end_terms = []
+        for bucket_id in selected_group_bucket_ids:
+            bucket = problem.buckets[bucket_id]
+            value = problem.values[bucket.value_id]
+            if value.producer_site_id is None or value.is_const:
+                start_terms.append(0)
+            for candidate_id in selected:
+                if candidate_id not in interval_map:
+                    continue
+                candidate = problem.candidates[candidate_id]
+                if bucket_id in candidate.output_bucket_ids:
+                    start_terms.append(interval_map[candidate_id].start_ns)
+                    end_terms.append(interval_map[candidate_id].end_ns)
+                if bucket_id in candidate.input_bucket_ids:
+                    end_terms.append(interval_map[candidate_id].end_ns)
+            if value.is_final_output or value.is_const:
+                end_terms.append(solution.makespan_ns)
+        type_values = [problem.types[problem.buckets[bucket_id].type_id]
+                       for bucket_id in selected_group_bucket_ids]
+        byte_counts = [tensor_bytes(type_value) for type_value in type_values
+                       if isinstance(type_value, TensorType)]
         allocations.append({
-            "bucket_id": bucket_id,
-            "bytes": tensor_bytes(problem.types[bucket.type_id])
-            if isinstance(problem.types[bucket.type_id], TensorType) else 0,
-            "start_ns": 0 if problem.values[bucket.value_id].producer_site_id is None else min(
-                (interval_map[candidate_id].start_ns for candidate_id in producer_ids
-                 if candidate_id in interval_map), default=0
-            ),
-            "end_ns": solution.makespan_ns if value.is_final_output else max(
-                producer_ends + consumer_ends, default=0
-            ),
-            "offset": dict(solution.bucket_offsets)[bucket_id],
-            "is_const": value.is_const,
+            "group_id": group_id,
+            "bucket_ids": list(selected_group_bucket_ids),
+            "bytes": max(byte_counts, default=0),
+            "start_ns": min(start_terms, default=0),
+            "end_ns": max(end_terms, default=0),
+            "offsets": [
+                {"bucket_id": bucket_id, "offset": offset_map[bucket_id]}
+                for bucket_id in selected_group_bucket_ids
+            ],
+            "is_const": any(problem.values[problem.buckets[bucket_id].value_id].is_const
+                            for bucket_id in selected_group_bucket_ids),
         })
     return {
         "program": {

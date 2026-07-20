@@ -57,6 +57,8 @@ def project_physical_fusion(
     ):
         if dependency.parent_candidate_id not in selected_candidates:
             continue
+        if isinstance(problem.candidates[dependency.parent_candidate_id].op, Reshard):
+            continue
         if dependency.child_bucket_id not in selected_buckets or dependency.placement_relation is None:
             continue
         producer = _selected_producer(problem, selected_candidates, dependency.child_bucket_id)
