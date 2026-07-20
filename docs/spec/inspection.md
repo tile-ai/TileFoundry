@@ -38,10 +38,13 @@ IR.
 
 ### 2.2 Module printer
 
-`module_to_python(fn: hir.Function, module_name: str = "M") -> str` —
-wraps the function in `@module(entry="<fn>") class Name:`. Shared `Mesh` /
-`Topology` definitions are emitted at module level (before the class) so the
-class body stays a pure function container; sugar annotations are preserved.
+`as_script(module: hir.Module)` and
+`module_to_python(fn: hir.Function, module_name: str = "M") -> str` — wrap one
+or more HIR Functions in `@module(entry="<fn>") class Name:`. Module input
+emits all HIR Functions, preserving shared `Mesh` / `Topology` definitions at
+module level (before the class) so the class body stays a pure function
+container; sugar annotations are preserved. Mixed HIR/TIR Modules are
+rejected by the Python HIR printer.
 
 ### 2.3 DSL text forms
 

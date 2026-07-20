@@ -13,9 +13,8 @@ selects an exact stage and invokes the returned service directly:
 
 ```python
 # example
-options = ScheduleOptions()
 service = root.target.service(Schedule, stage)
-result = service.solve(module, root, options)
+result = service.solve(module, root)
 ```
 
 - constraints:
@@ -24,7 +23,9 @@ result = service.solve(module, root, options)
     infer a stage from layouts, topology, or constraints.
   - The service MUST come from `root.target`; a call MUST NOT override the
     root Function's Target.
-  - `root` MUST be one of `module.functions`.
+  - `root` MUST be `module.entry_function()` for the CTA service.
+  - A service MAY accept `options=None`; this MUST mean a fresh default
+    `ScheduleOptions()` value for that invocation.
 
 ## 2. Public structures
 
@@ -144,7 +145,7 @@ class Schedule(Protocol):
         self,
         module: Module,
         root: Function,
-        options: ScheduleOptions,
+        options: ScheduleOptions | None = None,
     ) -> ScheduleResult: ...
 ```
 

@@ -15,6 +15,7 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.layout_algebra import prefix_product
 from tilefoundry.ir.types.shard.shard_layout import (
+    Broadcast,
     Partial,
     ShardLayout,
     Split,
@@ -140,8 +141,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     b = _check_batch_dims(
         call.target.batch_dims, axis, tuple(x_ty.shape), tuple(idx_ty.shape), ctx, call
     )
-    if b > 0 and (
-        isinstance(x_ty.layout, ShardLayout) or isinstance(idx_ty.layout, ShardLayout)
+    if b > 0 and any(
+        isinstance(layout, ShardLayout)
+        and not all(isinstance(attr, Broadcast) for attr in layout.attrs)
+        for layout in (x_ty.layout, idx_ty.layout)
     ):
         # batch_dims stays a stable interface for a future sharded/collective
         # implementation; the batched path over a sharded operand is not landed.

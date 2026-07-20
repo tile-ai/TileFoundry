@@ -559,7 +559,7 @@ class Gather(Op):
   - `batch_dims` MUST satisfy `0 <= batch_dims <= min(axis, rank(index))`, and the leading `batch_dims` dims of `x` and `index` MUST be equal.
   - Element rule: `out[c.., i.., t..] = x[c.., index[b.., i..], t..]`, where the first `batch_dims` of the `axis` leading dims also index `index`.
   - `batch_dims=0` (default) inserts the full `index` shape at `axis`; a leading-dimension shape coincidence MUST NOT implicitly enable batching — batching is selected only by an explicit positive `batch_dims`.
-  - `batch_dims > 0` is defined for type inference and evaluation over unsharded operands; a `ShardLayout` operand and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed.
+  - `batch_dims > 0` is defined for type inference and evaluation over unsharded or fully replicated (`Broadcast`) operands; value-carrying `ShardLayout` operands and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed.
   - `Gather` produces a new tensor: for a `ShardLayout` operand, the internal `Layout` is always natural contiguous over the output shape; it MUST NOT be inherited from the input.
   - Only the shard `attrs` migrate, per mesh axis. `Broadcast` and `Partial` carry through unchanged — gather is a linear row selection (`gather(Σᵢ xᵢ) == Σᵢ gather(xᵢ)`).
   - A `Split` targeting the gathered axis produces `Partial(sum)` on that mesh axis (each device already holds the true value at the rows it owns and a zero row elsewhere, so summing the per-device partials across the mesh axis reconstructs the true gather).
