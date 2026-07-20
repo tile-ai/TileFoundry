@@ -6,10 +6,9 @@ import enum
 import inspect
 import logging
 import textwrap
-from typing import Any, Literal
+from typing import Any, Callable
 
-from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, TypeInferContext, VerifyError
-from tilefoundry.ir.core.op_registry import _first_schema
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, TypeInferContext, Var, VerifyError
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.function import elaborate
@@ -18,23 +17,30 @@ from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.visitor_registry import typeinfer_registry
 
 from .dispatch import (
+    Token,
     _binary_kind_for_ast_op,
     _unary_kind_for_ast_op,
+    resolve_callable,
     resolve_op,
+    resolve_schema,
     resolve_stmt,
 )
 from .range_slice import RangeSlice
+from .static_eval import eval_static
 from .sugar import (
     LayoutSugarError,
     _is_tuple_sugar,
     parse_layout_sugar,
     parse_shard_layout_sugar,
+    try_parse_sugar_tensor_type,
 )
 from .symtab import LexicalEnv
 
@@ -68,9 +74,6 @@ def _warn_if_ir_object(val: Any, name: str) -> None:
         )
 
 
-Token = Literal["hir", "tir"]
-
-
 def extract_ast(fn) -> ast.FunctionDef:
     src = textwrap.dedent(inspect.getsource(fn))
     mod = ast.parse(src)
@@ -82,8 +85,98 @@ def extract_ast(fn) -> ast.FunctionDef:
     raise VerifyError("cannot locate FunctionDef in source")
 
 
+def _collect_closure(fn, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Collect a live Python function's name-resolution namespace.
+
+    Shared by ``parse_func`` (HIR) and ``parse_prim_func`` (TIR): ``extra``
+    (sibling ``@func`` / ``@prim_func`` bindings from a ``@module`` class
+    body's definition frame) sits below the function's own globals /
+    freevars so it cannot shadow them.
+    """
+    closure: dict[str, Any] = {}
+    if extra:
+        closure.update(extra)
+    if fn.__globals__ is not None:
+        closure.update(fn.__globals__)
+    if fn.__closure__ is not None:
+        for name, cell in zip(fn.__code__.co_freevars, fn.__closure__):
+            try:
+                closure[name] = cell.cell_contents
+            except ValueError:
+                pass
+    return closure
+
+
+def _annotation_head_name(node: ast.AST) -> str | None:
+    """Return the subscript base identifier (``Tensor`` / ``ConstTensor``),
+    resolving through an attribute path such as ``dsl.ConstTensor``."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _is_const_tensor_annotation(node: ast.AST) -> bool:
+    """``ConstTensor[...]`` marks a parameter ``is_const=True``; ``Tensor[...]``
+    and every other annotation form leave it ``False``."""
+    return (
+        isinstance(node, ast.Subscript)
+        and _annotation_head_name(node.value) == "ConstTensor"
+    )
+
+
+def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
+    """Resolve a tensor type annotation. Shared by ``@func`` and
+    ``@prim_func`` param / return annotations (parser.md §1.4) so a layout-
+    sugar ``Tensor[...]`` annotation resolves identically in both dialects.
+
+    Supports two forms:
+
+    1. **Sugar**: ``Tensor[(M,K), bf16, ((32 @ gpu.cluster, K), {gpu.warp @ P("sum")}), "smem"]``
+       — compact layout sugar, parsed directly from the AST without ``eval()``.
+    2. **Verbose**: ``Tensor[(M,K), bf16, ShardLayout(...), "smem"]``
+       — evaluated via ``eval()`` in *closure*.
+    """
+    result = try_parse_sugar_tensor_type(node, closure)
+    if result is not None:
+        return result
+    try:
+        code = compile(ast.Expression(body=node), "<ann>", "eval")
+        val = eval(code, closure)  # noqa: S307 — controlled internal eval
+    except Exception as exc:
+        raise VerifyError(f"failed to resolve type annotation: {exc}")
+    if isinstance(val, TensorType):
+        return val
+    raise VerifyError(f"annotation did not resolve to TensorType, got {type(val).__name__}")
+
+
+def _build_params(
+    node: ast.FunctionDef,
+    closure: dict[str, Any],
+    resolve_annotation: Callable[[ast.AST, dict[str, Any]], TensorType],
+    *,
+    decorator_name: str,
+) -> tuple[Var, ...]:
+    """Build ``Var`` parameters from a function's AST arg annotations.
+
+    Shared by ``parse_func`` (HIR) and ``parse_prim_func`` (TIR); both pass
+    :func:`_resolve_tensor_type` as *resolve_annotation* so a ``Tensor[...]``
+    layout-sugar annotation works identically on ``@func`` and ``@prim_func``
+    params.
+    """
+    out: list[Var] = []
+    for a in node.args.args:
+        if a.annotation is None:
+            raise VerifyError(f"{decorator_name} param {a.arg!r} must be annotated")
+        ann_type = resolve_annotation(a.annotation, closure)
+        is_const = _is_const_tensor_annotation(a.annotation)
+        out.append(Var(type=ann_type, name=a.arg, is_const=is_const))
+    return tuple(out)
+
+
 def _i64(value: int) -> Constant:
-    return Constant(type=TensorType.scalar(DType.i64), value=value)
+    return i64_const(value)
 
 
 def _constant_from_py(value: Any) -> Constant:
@@ -347,6 +440,9 @@ class BaseExprVisitor:
         operand = self.expr(node.operand)
         return self._build_call(self._make_unary(kind), (operand,))
 
+    def visit_Call(self, node: ast.Call) -> Expr:
+        return self.call_to_op_call(node)
+
     # Generic call -------------------------------------------------------------------
 
     def _resolve_call_target(self, func: ast.AST):
@@ -359,23 +455,34 @@ class BaseExprVisitor:
         Two callee forms are accepted:
 
         - ``ast.Name``: bare ``add(...)`` — looked up against the
-          parser's lexical environment + the function's closure. The
+          parser's lexical environment + the function's closure first. The
           bound value must carry an ``_op_schema`` attribute (set by
           ``@register_op`` on Op classes and by ``@register_alias``
           on alias builder functions, both of which
-          ``tilefoundry.dsl.tf.<name>`` returns).
+          ``tilefoundry.dsl.tf.<name>`` returns). When the closure path
+          misses, ``dispatch.resolve_callable`` is consulted (parser.md
+          §3.2/§3.3) — dialect-strict registry dispatch honouring the
+          TIR-only trailing-underscore effect-form selector (§1.3/§4.6).
         - ``ast.Attribute(value=ast.Name(<ns>))``: ``tf.add(...)``
           / ``T.copy(...)``. The leading Name resolves to the
           ``tilefoundry.dsl.tf`` / ``T`` namespace module (matched by
           identity); the attribute name is then dispatched against
-          the matching dialect's OpSchema registry, alias-aware.
+          the matching dialect's OpSchema registry via
+          ``dispatch.resolve_schema``, alias-aware.
         """
 
         if isinstance(func, ast.Name):
             val = self.env.lookup(func.id)
             if val is None:
                 val = self.closure.get(func.id)
-            return self._schema_from_value(val)
+            schema = self._schema_from_value(val)
+            if schema is not None:
+                return schema
+            try:
+                _kind, cls = resolve_callable(func.id, self.token)
+            except VerifyError:
+                return None
+            return getattr(cls, "_op_schema", None)
         if (
             isinstance(func, ast.Attribute)
             and isinstance(func.value, ast.Name)
@@ -391,9 +498,9 @@ class BaseExprVisitor:
             # would re-enter this module at import time.
             import tilefoundry.dsl as _dsl  # noqa: PLC0415
             if ns is _dsl.tf:
-                return _first_schema("tf", func.attr)
+                return resolve_schema(func.attr, "tf")
             if ns is _dsl.T:
-                return _first_schema("T", func.attr)
+                return resolve_schema(func.attr, "T")
         return None
 
     def _resolve_function_target(self, func: ast.AST):
@@ -487,11 +594,6 @@ class BaseExprVisitor:
         if isinstance(schema, OpSchema):
             return schema
         return None
-
-    @staticmethod
-    def _is_op_class(cls: type) -> bool:
-        """Best-effort check: *cls* is a concrete ``Op`` subclass."""
-        return isinstance(cls, type) and issubclass(cls, Op) and cls is not Op
 
     def call_to_op_call(self, node: ast.Call) -> Expr:
         """Resolve ``foo(...)`` to a ``Call`` on an hir Op.
@@ -671,7 +773,7 @@ class BaseExprVisitor:
         # Construct with a placeholder; the registry reads (call.target, args)
         # and doesn't need call.type, so we can fix it post-hoc via dataclasses.replace.
         placeholder = Call(type=TensorType.scalar(DType.f32), target=op_inst, args=args)
-        fn = __import__("tilefoundry.ir.core.registry", fromlist=["typeinfer_registry"]).typeinfer_registry.lookup(type(op_inst))
+        fn = typeinfer_registry.lookup(type(op_inst))
         if fn is None:
             raise VerifyError(f"no typeinfer registered for {type(op_inst).__name__}")
         computed = fn(placeholder, self._ctx)
@@ -744,17 +846,10 @@ class BaseExprVisitor:
                     f"valid values are {valid}"
                 ) from None
         if isinstance(value, str) and annotation is DType:
-            member = getattr(DType, value, None)
-            if not isinstance(member, DType):
-                valid = ", ".join(
-                    repr(name)
-                    for name, candidate in vars(DType).items()
-                    if isinstance(candidate, DType)
-                )
-                raise VerifyError(
-                    f"DType: unknown value {value!r}; valid values are {valid}"
-                )
-            return member
+            try:
+                return DType.from_name(value)
+            except ValueError as exc:
+                raise VerifyError(str(exc)) from None
         return value
 
     def _lookup_param_annotation(
@@ -800,84 +895,22 @@ class BaseExprVisitor:
         """
         return getattr(owner, attr)
 
-    def _eval_static_index(self, node: ast.AST):
-        """Lower a subscript index AST into a Python index value.
-
-        ``ast.Slice`` → ``slice``; a tuple of indices → a tuple of lowered
-        elements (slices stay slices); anything else is a static scalar
-        (evaluated via :meth:`_eval_static`)."""
-        if isinstance(node, ast.Slice):
-            lo = None if node.lower is None else self._eval_static(node.lower)
-            hi = None if node.upper is None else self._eval_static(node.upper)
-            step = None if node.step is None else self._eval_static(node.step)
-            return slice(lo, hi, step)
-        if isinstance(node, ast.Tuple):
-            return tuple(self._eval_static_index(e) for e in node.elts)
-        return self._eval_static(node)
-
     def _eval_static(self, node: ast.AST):
         """Evaluate an AST node statically for attribute kwargs (axis=1,
-        new_shape=(M,K), layout=ShardLayout(...), etc.)."""
-        if isinstance(node, ast.Constant):
-            return node.value
-        if isinstance(node, ast.Tuple):
-            return tuple(self._eval_static(e) for e in node.elts)
-        if isinstance(node, ast.List):
-            return [self._eval_static(e) for e in node.elts]
-        if isinstance(node, ast.Name):
-            v = self.env.lookup(node.id)
-            from_closure = False
-            if v is None:
-                v = self.closure.get(node.id)
-                from_closure = True
-            if v is None:
-                raise VerifyError(f"undefined name in attribute kwarg: {node.id!r}")
-            if from_closure:
-                _warn_if_ir_object(v, node.id)
-            return v
-        if isinstance(node, ast.Attribute):
-            owner = self._eval_static(node.value)
-            return self._resolve_static_attribute(owner, node.attr)
-        if isinstance(node, ast.Subscript):
-            # Constant subscript on a static object (e.g. a ``Mesh`` slice
-            # ``m[1:3, :]`` for ``T.sync``). Lower the slice AST to a Python
-            # index and defer to the object's ``__getitem__``.
-            owner = self._eval_static(node.value)
-            return owner[self._eval_static_index(node.slice)]
-        if isinstance(node, ast.Call):
-            # Allow constructor calls for ShardLayout / Mesh / etc. (static)
-            fn = self._eval_static(node.func)
-            args = tuple(self._eval_static(a) for a in node.args)
-            kw = {k.arg: self._eval_static(k.value) for k in node.keywords}
-            return fn(*args, **kw)
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            return -self._eval_static(node.operand)
-        if isinstance(node, ast.BinOp):
-            # Compile-time numeric arithmetic on constants and closure ints
-            # (e.g. ``end=(1, Q_PROJ + KV_PROJ)``). Only numeric Python values
-            # are allowed; this is *not* a tensor BinOp dispatcher.
-            left = self._eval_static(node.left)
-            right = self._eval_static(node.right)
-            if not (isinstance(left, (int, float)) and isinstance(right, (int, float))):
-                raise VerifyError(
-                    f"static BinOp requires numeric operands, got "
-                    f"{type(left).__name__} / {type(right).__name__}"
-                )
-            opname = type(node.op).__name__
-            if opname == "Add":
-                return left + right
-            if opname == "Sub":
-                return left - right
-            if opname == "Mult":
-                return left * right
-            if opname == "FloorDiv":
-                return left // right
-            if opname == "Div":
-                return left / right
-            if opname == "Mod":
-                return left % right
-            raise VerifyError(f"static BinOp {opname} not supported")
-        raise VerifyError(f"cannot statically evaluate AST node {type(node).__name__}")
+        new_shape=(M,K), layout=ShardLayout(...), etc.).
+
+        Thin policy wrapper over :func:`eval_static` (parser/static_eval.py):
+        the full node set, ``Name`` resolution through the lexical env before
+        the closure, closure-captured-IR-object warnings, and true division
+        for ``ast.Div``.
+        """
+        return eval_static(
+            node,
+            closure=self.closure,
+            lookup=self.env.lookup,
+            attr_resolver=self._resolve_static_attribute,
+            on_closure_name=_warn_if_ir_object,
+        )
 
 
 __all__ = ["BaseExprVisitor", "extract_ast", "Token"]

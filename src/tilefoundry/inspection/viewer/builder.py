@@ -7,18 +7,22 @@ from typing import Any
 import graphviz
 
 from tilefoundry.inspection.python_printer import (
+    _DIM_FUNC_OPS,
+    _DIM_INFIX_OPS,
+    _collect_meshes,
     _mesh_name_map,
+    _op_display_name,
     _shard_layout_str,
     _shard_layout_surface_str,
     _tensor_annotation,
+    shape_entry_str,
     shard_compact_inline,
 )
 from tilefoundry.ir.core import Tuple as HirTuple
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType
@@ -67,38 +71,13 @@ def _collect_view_meshes(root) -> dict[int, "Mesh"]:
     return type, every node's result type, and ``Reshard`` layout attrs.
 
     The viewer renders shard sugar on intermediate node result types too, so it
-    needs a wider mesh-name map than the printer's param/return/Reshard scan.
+    needs a wider mesh-name map than the printer's param/return/Reshard scan:
+    built on the shared ``python_printer._collect_meshes`` with
+    ``include_node_types=True``.
     """
-
     meshes: dict[int, Mesh] = {}
-
-    def _add(layout) -> None:
-        if isinstance(layout, ShardLayout):
-            meshes.setdefault(id(layout.mesh), layout.mesh)
-
-    def _walk_type(ty) -> None:
-        if isinstance(ty, TensorType):
-            _add(ty.layout)
-        elif isinstance(ty, TupleType):
-            for f in ty.fields:
-                _walk_type(f)
-
-    def _walk_expr(expr) -> None:
-        _walk_type(getattr(expr, "type", None))
-        if isinstance(expr, Call):
-            if isinstance(expr.target, Reshard):
-                _add(expr.target.layout)
-            for arg in expr.args:
-                _walk_expr(arg)
-        elif isinstance(expr, HirTuple):
-            for el in expr.elements:
-                _walk_expr(el)
-
     for _label, fn in _renderable_functions(root):
-        for p in fn.params:
-            _walk_type(p.type)
-        _walk_type(fn.return_type)
-        _walk_expr(fn.body)
+        meshes.update(_collect_meshes(fn, include_node_types=True))
     return meshes
 
 
@@ -135,14 +114,6 @@ class DetailIndex:
 
     def get(self, visual_id: str) -> DetailRef | None:
         return self.entries.get(visual_id)
-
-
-def _op_name(target) -> str:
-    cls = type(target).__name__
-    for suffix in ("Op", "Expr", "Stmt"):
-        if cls.endswith(suffix) and cls != suffix:
-            cls = cls[: -len(suffix)]
-    return cls
 
 
 _CONST_DTYPE_SUFFIX: dict[str, str] = {
@@ -240,9 +211,12 @@ def _op_attributes(
 
 
 def _format_dim(dim) -> list[Span]:
-    """Render a shape dim as inline spans. ``DimVar`` gets a colored
-    ``<FONT>`` wrap; arithmetic (``DimAdd`` / ``DimSub`` / ``DimMul``)
-    recurses; bare ``int`` stays plain.
+    """Render a shape dim as inline spans, driven by the same
+    ``python_printer._DIM_INFIX_OPS`` / ``_DIM_FUNC_OPS`` tables that
+    ``shape_entry_str`` uses — so a compact graph label renders
+    ``DimFloorDiv`` / ``DimMod`` / ``min`` / ``max`` exactly like the
+    canonical §2.3 text instead of a raw ``Call`` repr. ``DimVar`` gets a
+    colored ``<FONT>`` wrap; bare ``int`` stays plain.
 
     Every ``DimVar`` renders in the same ``DIMVAR_COLOR`` — the colour
     marks the *token class* (this is a dynamic dim), not the specific
@@ -254,13 +228,22 @@ def _format_dim(dim) -> list[Span]:
         return [Span(text=str(dim.value))]
     if isinstance(dim, Call):
         tgt = dim.target
-        if isinstance(tgt, (DimAdd, DimSub, DimMul)):
-            op = {DimAdd: " + ", DimSub: " - ", DimMul: " * "}[type(tgt)]
-            spans = list(_format_dim(dim.args[0]))
-            spans.append(Span(text=op))
-            spans.extend(_format_dim(dim.args[1]))
-            return spans
-    return [Span(text=str(dim))]
+        for op_cls, sym in _DIM_INFIX_OPS.items():
+            if isinstance(tgt, op_cls):
+                spans = list(_format_dim(dim.args[0]))
+                spans.append(Span(text=f" {sym} "))
+                spans.extend(_format_dim(dim.args[1]))
+                return spans
+        for op_cls, fname in _DIM_FUNC_OPS.items():
+            if isinstance(tgt, op_cls):
+                spans = [Span(text=f"{fname}(")]
+                for i, a in enumerate(dim.args):
+                    if i:
+                        spans.append(Span(text=", "))
+                    spans.extend(_format_dim(a))
+                spans.append(Span(text=")"))
+                return spans
+    return [Span(text=shape_entry_str(dim))]
 
 
 def _shard_inline(ty: TensorType, mesh_name_map: dict[int, str] | None):
@@ -387,7 +370,7 @@ def format_detail(
             name = tgt.name
             pnames = [p.name for p in tgt.params]
         else:
-            name = _op_name(tgt)
+            name = _op_display_name(tgt)
             try:
                 pnames = [p.name for p in type(tgt).params() if p.kind == "input"]
             except (AttributeError, TypeError):
@@ -788,7 +771,7 @@ class ViewerBuilder:
         local = f"c{local_counter[0]}"
         local_counter[0] += 1
         vid = self._visual_id(call_path, local)
-        op_label = _op_name(call.target)
+        op_label = _op_display_name(call.target)
         self.index.add(vid, DetailRef(hir_expr=call, kind=op_label, call_path=call_path))
 
         tbl = Table(cellpadding=6, bgcolor=PAPER, color=HAIR)
@@ -863,7 +846,7 @@ class ViewerBuilder:
         # a multi-output producer, so its edge originates from that
         # producer's specific output slot.
         tuple_index = (
-            call.target.index if _op_name(call.target) == "TupleGetItem" else None
+            call.target.index if _op_display_name(call.target) == "TupleGetItem" else None
         )
         for i, arg in enumerate(call.args):
             src = self._walk_expr(

@@ -4,21 +4,9 @@
 
 namespace copy_impl {
 
-struct CopyN {
-    template <class TSrc, class TDst>
-    CUTE_HOST_DEVICE void operator()(TSrc const &src, TDst &dst, int N) const {
-        auto s = detail::to_local(src);
-        auto &&d = detail::to_local(dst);
-        using value_type = cute::remove_cvref_t<decltype(d(0))>;
-        for (int i = 0; i < N; ++i) {
-            d(i) = static_cast<value_type>(s(i));
-        }
-    }
-};
-
 struct CopyAsync {
     template <class TSrc, class TDst>
-    CUTE_HOST_DEVICE void operator()(TSrc const &src, TDst &dst) const {
+    __device__ void operator()(TSrc const &src, TDst &dst) const {
         auto s = detail::to_local(src);
         auto &&d = detail::to_local(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;

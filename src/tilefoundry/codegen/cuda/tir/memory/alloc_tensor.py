@@ -11,24 +11,17 @@ storage (``gmem`` / ``smem`` / ``rmem``, or ``storage=None``) keeps the plain
 """
 from __future__ import annotations
 
-from functools import reduce
-from operator import mul
-
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.stmts import LetStmt
-from tilefoundry.ir.types.shape_helpers import shape_upper_bound, upper_bound
+from tilefoundry.ir.types.shape_helpers import (
+    shape_numel_upper_bound,
+    shape_upper_bound,
+    upper_bound,
+)
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
 from tilefoundry.ir.types.storage import StorageKind
-
-
-def _total(shape) -> int:
-    # Dynamic dims (``DimVar``) collapse to their envelope upper bound
-    # so the static compile-time element count fits any runtime shape.
-    if not shape:
-        return 1
-    return reduce(mul, (upper_bound(s) for s in shape), 1)
 
 
 def _emit_plain_alloc(
@@ -47,7 +40,7 @@ def _emit_plain_alloc(
             f"AllocTensor for {name!r} has no memory space (storage=None); a "
             f"memory-resident tensor must carry a concrete StorageKind"
         )
-    total = _total(local_shape)
+    total = shape_numel_upper_bound(local_shape)
     if len(local_shape) > 1:
         shape_args = ", ".join(
             f"cute::Int<{upper_bound(s)}>" for s in local_shape
@@ -94,7 +87,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
         # reads this only to derive the per-thread offset; the actual
         # element access goes through the engine + ShardLayout
         # strides.
-        global_total = _total(shape_upper_bound(var.type.shape))
+        global_total = shape_numel_upper_bound(shape_upper_bound(var.type.shape))
         global_layout = (
             f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
         )

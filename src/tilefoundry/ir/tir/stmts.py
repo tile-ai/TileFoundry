@@ -21,7 +21,7 @@ from tilefoundry.ir.types.shard.mesh import Mesh
 
 @dataclass(frozen=True)
 class Sequential(Stmt):
-    """tir 的 stmt-list 包装 — 把 tuple[Stmt, ...] 包成单个 Stmt。
+    """TIR stmt-list wrapper: wraps a ``tuple[Stmt, ...]`` as one ``Stmt``.
 
     """
     body: tuple[Stmt, ...]
@@ -38,7 +38,7 @@ class Sequential(Stmt):
 
 @dataclass(frozen=True)
 class LetStmt(Stmt):
-    """TIR 唯一的 value binding 节点。
+    """TIR's single value-binding node.
 
     """
     var: Var

@@ -469,6 +469,18 @@ public entry or its observable result. The
 codegen side is
 [codegen §3](./codegen.md#3-runtime-owned-op-dispatch).
 
+Elementwise ops (`cast`, `copy_n`, `clamp`, `unary` — including `relu`, which
+has no dedicated `ops::relu` entry) route through the shared
+`unary_impl::Unary<Op>` skeleton parameterised by a functor tag (e.g.
+`relu_op`, `identity_op`, `clamp_op`); codegen always calls the family's one
+public entry with the tag as an argument.
+
+**Annotation convention.** `ops::*` public entries, their internal impl
+functors, and op tags MUST be annotated `__device__` (their bodies are
+device-only). `CUTE_HOST_DEVICE` MUST be reserved for tensor-view / layout
+helpers genuinely capable of host compilation (e.g. `local()`,
+`make_shard_tensor`, `tilefoundry::copy`).
+
 ### 3.1 `cute::copy`
 
 ```cpp

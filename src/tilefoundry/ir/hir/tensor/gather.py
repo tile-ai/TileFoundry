@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -10,7 +11,6 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.layout_algebra import prefix_product
@@ -20,6 +20,19 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
     split_target_axes,
 )
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    OPAQUE,
+    AccessRelations,
+    register_access_relation,
+)
+
+
+def _identity(rank: int) -> "isl.multi_aff":
+    if rank == 0:
+        return isl.multi_aff("{ [] -> [] }")
+    dims = ", ".join(f"i{i}" for i in range(rank))
+    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
 
 
 @register_op
@@ -32,14 +45,19 @@ class Gather(Op):
     batch_dims = ParamDef(kind="attribute", annotation=int, default=0)
 
 
-def _norm_axis(axis: int, rank: int) -> int:
+def _norm_axis(axis: int, rank: int, ctx=None, call=None) -> int:
     a = axis + rank if axis < 0 else axis
     if a < 0 or a >= rank:
-        raise TypeError(f"Gather: axis {axis} out of range for rank {rank}")
+        msg = f"axis {axis} out of range for rank {rank}"
+        if ctx is not None:
+            ctx.error(call, msg)
+        raise ValueError(f"Gather: {msg}")
     return a
 
 
-def _check_batch_dims(batch_dims: int, axis: int, x_shape: tuple, idx_shape: tuple) -> int:
+def _check_batch_dims(
+    batch_dims: int, axis: int, x_shape: tuple, idx_shape: tuple, ctx, call
+) -> int:
     """Validate ``batch_dims`` against the normalized ``axis`` (TF semantics).
 
     Valid range is ``0 <= batch_dims <= min(axis, rank(index))``; the leading
@@ -47,17 +65,16 @@ def _check_batch_dims(batch_dims: int, axis: int, x_shape: tuple, idx_shape: tup
     """
     b = batch_dims
     if b < 0:
-        raise TypeError(f"Gather: batch_dims {b} must be non-negative")
+        ctx.error(call, f"batch_dims {b} must be non-negative")
     if b > axis:
-        raise TypeError(f"Gather: batch_dims {b} must be <= axis {axis}")
+        ctx.error(call, f"batch_dims {b} must be <= axis {axis}")
     if b > len(idx_shape):
-        raise TypeError(
-            f"Gather: batch_dims {b} must be <= index rank {len(idx_shape)}"
-        )
+        ctx.error(call, f"batch_dims {b} must be <= index rank {len(idx_shape)}")
     if tuple(x_shape[:b]) != tuple(idx_shape[:b]):
-        raise TypeError(
-            f"Gather: batch dims {tuple(x_shape[:b])} of x must match index "
-            f"{tuple(idx_shape[:b])}"
+        ctx.error(
+            call,
+            f"batch dims {tuple(x_shape[:b])} of x must match index "
+            f"{tuple(idx_shape[:b])}",
         )
     return b
 
@@ -118,11 +135,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     idx_ty = ctx.type_of(call.args[1])
     if idx_ty.dtype not in (DType.i32, DType.i64):
-        raise TypeError(
-            f"Gather: index must be an integer tensor (i32/i64), got {idx_ty.dtype}"
-        )
-    axis = _norm_axis(call.target.axis, len(x_ty.shape))
-    b = _check_batch_dims(call.target.batch_dims, axis, tuple(x_ty.shape), tuple(idx_ty.shape))
+        ctx.error(call, f"index must be an integer tensor (i32/i64), got {idx_ty.dtype}")
+    axis = _norm_axis(call.target.axis, len(x_ty.shape), ctx, call)
+    b = _check_batch_dims(
+        call.target.batch_dims, axis, tuple(x_ty.shape), tuple(idx_ty.shape), ctx, call
+    )
     if b > 0 and (
         isinstance(x_ty.layout, ShardLayout) or isinstance(idx_ty.layout, ShardLayout)
     ):
@@ -138,6 +155,19 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_layout = _gather_shard_layout(call, ctx, x_ty, axis, tuple(idx_ty.shape), tuple(new_shape))
     return TensorType(
         shape=tuple(new_shape), dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
+    )
+
+
+@register_access_relation(Gather)
+def _gather_access_relation(call: "Call", ctx) -> AccessRelations:
+    """GLOBAL level: Gather pulls per-index slices; access pattern is
+    data-dependent on the indices arg -> input data is OPAQUE; indices
+    identity; output identity."""
+    idx_rank = len(ctx.type_of(call.args[1]).shape)
+    out_rank = len(ctx.type_of(call).shape)
+    return AccessRelations(
+        inputs=(OPAQUE, _identity(idx_rank)),
+        outputs=(_identity(out_rank),),
     )
 
 

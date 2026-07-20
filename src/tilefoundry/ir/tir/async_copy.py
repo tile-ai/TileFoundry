@@ -5,16 +5,16 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer, register_verify_stmt
 from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 
 @register_op(dialect="T", category="async", name="copy_async")
 class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
-    source = ParamDef(kind="input", pattern=Tensor)
-    destination = ParamDef(kind="input", pattern=Tensor)
+    src = ParamDef(kind="input", pattern=Tensor)
+    dst = ParamDef(kind="input", pattern=Tensor)
 
 
 @register_typeinfer(CopyAsync)

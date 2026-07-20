@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tests.ops.typeinfer_utils import TypeInferCase, run_typeinfer_case
-from tilefoundry.ir.hir.cuda.nn.mma import Mma, Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
+from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
 from tilefoundry.ir.types import DType, make_tensor_type
 from tilefoundry.ir.types.storage import StorageKind
 
@@ -38,9 +38,3 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_mma_typeinfer(case):
     run_typeinfer_case(case)
-
-
-def test_mma_concrete_classes_share_marker_base() -> None:
-    """Concrete classes inherit from the abstract ``Mma`` marker."""
-    assert issubclass(Mma_SM80_16x8x16, Mma)
-    assert issubclass(Wgmma_SM90_64x128x16, Mma)

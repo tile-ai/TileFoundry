@@ -5,7 +5,7 @@
 #include "rmsnorm/rmsnorm_impl.h"
 
 template <class TIn, class TOut, class TW>
-CUTE_HOST_DEVICE void rmsnorm(TIn const &src, TOut &dst, TW const &weight,
-                              int M, int K, float eps) {
+__device__ void rmsnorm(TIn const &src, TOut &dst, TW const &weight, int M,
+                        int K, float eps) {
     rmsnorm_impl::RmsNorm{}(src, dst, weight, M, K, eps);
 }

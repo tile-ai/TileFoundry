@@ -17,7 +17,6 @@ from typing import Any, NoReturn, Union
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import Call, Expr
 from tilefoundry.ir.core.stmt import Stmt
-from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.tensor_type import DType, TensorType, Type
 from tilefoundry.ir.types.utils import local_type_of
 
@@ -31,7 +30,7 @@ def _constant_type(value: object) -> TensorType:
         dtype = DType.f32
     else:
         raise VerifyError(f"Constant: unsupported value type {type(value).__name__}")
-    return TensorType(shape=(), dtype=dtype, layout=EMPTY_LAYOUT, storage=None)
+    return TensorType.meta_scalar(dtype)
 
 
 @dataclass

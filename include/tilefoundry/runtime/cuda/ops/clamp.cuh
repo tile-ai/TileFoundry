@@ -12,10 +12,12 @@ struct clamp_op {
     }
 };
 
-#include "clamp/clamp_impl.h"
-
+// Routed through the shared ``unary_impl::Unary`` skeleton (unary.cuh):
+// ``clamp_op`` carries its ``(min_val, max_val)`` bounds as functor state,
+// which ``Unary``'s existing single-argument functor call (``op(s(i))``)
+// already supports — no generalisation of ``Unary`` was needed.
 template <class TIn, class TOut>
-CUTE_HOST_DEVICE void clamp(TIn const &src, TOut &dst, int N, float min_val,
-                            float max_val) {
-    clamp_impl::Clamp{}(src, dst, N, min_val, max_val);
+__device__ void clamp(TIn const &src, TOut &dst, int N, float min_val,
+                      float max_val) {
+    unary_impl::Unary<clamp_op>{}(src, dst, N, clamp_op{min_val, max_val});
 }

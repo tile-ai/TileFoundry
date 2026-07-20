@@ -1,7 +1,8 @@
 """Minimal HTTP server for the HIR viewer.
 
 No server-side ``dot`` — graphs are laid out and rendered in the browser
-by ``@hpcc-js/wasm`` + ``d3-graphviz``. This server only:
+by ``@hpcc-js/wasm`` (``d3`` handles pan/zoom only, no data-join). This
+server only:
 
 * ``GET /``                      → the first-party ``static/index.html``
 * ``GET /static/<name>``         → a first-party static file, else a

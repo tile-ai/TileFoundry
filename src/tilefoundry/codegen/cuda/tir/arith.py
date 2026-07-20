@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from functools import reduce
-from operator import mul as _op_mul
-
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
 from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind
 from tilefoundry.ir.types.shape_helpers import (
+    shape_numel_upper_bound,
     shape_runtime_total,
     shape_upper_bound,
-    upper_bound,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
 
@@ -29,12 +26,6 @@ _UNARY_TAG = {
 }
 
 
-def _total(shape) -> int:
-    if not shape:
-        return 1
-    # Dynamic dims size to envelope upper bound; runtime extent is
-    # plumbed via the dispatch ``<param>_shape_<axis>`` scalar.
-    return reduce(_op_mul, (upper_bound(s) for s in shape), 1)
 
 
 def _materialised_shape(ty) -> tuple:
@@ -94,7 +85,7 @@ def _emit_binary(call, ctx: CodegenContext) -> None:
     l_shape = _materialised_shape(lhs.type)
     r_shape = _materialised_shape(rhs.type)
 
-    if not r_shape or _total(r_shape) == 1:
+    if not r_shape or shape_numel_upper_bound(r_shape) == 1:
         N = _runtime_total(lhs.type, ctx)
         ctx.emit(f"tilefoundry::ops::binary_bcast_scalar({lhs_n}, {rhs_n}, {dst_n}, {N}, {op_tag}{{}});")
     elif len(l_shape) == 2 and len(r_shape) == 2 and r_shape[-1] == 1 and l_shape[0] == r_shape[0]:
@@ -104,14 +95,14 @@ def _emit_binary(call, ctx: CodegenContext) -> None:
         M, K = int(l_shape[0]), int(l_shape[1])
         ctx.emit(f"tilefoundry::ops::binary_bcast_row({lhs_n}, {rhs_n}, {dst_n}, {M}, {K}, {op_tag}{{}});")
     elif (
-        _total(l_shape) % _total(r_shape) == 0
-        and _total(l_shape) > _total(r_shape)
+        shape_numel_upper_bound(l_shape) % shape_numel_upper_bound(r_shape) == 0
+        and shape_numel_upper_bound(l_shape) > shape_numel_upper_bound(r_shape)
     ):
         # Multi-cell broadcast: lhs is ``n_dst`` cells of ``step`` lanes,
         # rhs is a per-cell scalar (e.g. ``(1,3,4) op (1,3,1)`` after the
         # reduce keepdim path).
-        n_dst = _total(r_shape)
-        step = _total(l_shape) // n_dst
+        n_dst = shape_numel_upper_bound(r_shape)
+        step = shape_numel_upper_bound(l_shape) // n_dst
         ctx.emit(
             f"tilefoundry::ops::binary_cell_bcast({lhs_n}, {rhs_n}, {dst_n}, "
             f"{n_dst}, {step}, {op_tag}{{}});"

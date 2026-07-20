@@ -133,12 +133,36 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     return ``isl.multi_aff`` / ``isl.map`` for affine-expressible boundaries
     or ``OPAQUE`` for boundaries that cannot be modelled at the queried level.
     """
+    return access_relation_registry.decorator()(op_cls)
 
-    def decorator(fn: Callable) -> Callable:
-        access_relation_registry.register(op_cls, fn)
-        return fn
 
-    return decorator
+def _identity(rank: int) -> "isl.multi_aff":
+    if rank == 0:
+        return isl.multi_aff("{ [] -> [] }")
+    dims = ", ".join(f"i{i}" for i in range(rank))
+    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
+
+
+def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
+    """Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
+    inputs and single output are all elementwise identity.
+
+    Each input contributes its own-rank identity; the output uses its own
+    rank. A structural (non-tensor) input arg — e.g. ``TupleGetItem``'s tuple
+    operand — has no shape of its own, so it borrows the output's rank.
+    """
+
+    def _handler(call, ctx) -> AccessRelations:
+        out_rank = len(ctx.type_of(call).shape)
+
+        def _rank_of(arg) -> int:
+            ty = ctx.type_of(arg)
+            return len(ty.shape) if hasattr(ty, "shape") else out_rank
+
+        inputs = tuple(_identity(_rank_of(call.args[i])) for i in range(n_inputs))
+        return AccessRelations(inputs=inputs, outputs=(_identity(out_rank),))
+
+    return _handler
 
 
 def register_type_relation(op_cls: type) -> Callable[[Callable], Callable]:
@@ -148,12 +172,7 @@ def register_type_relation(op_cls: type) -> Callable[[Callable], Callable]:
     It reads only ``input_types`` and the op's attributes — never the Call's own
     output type — so it can run before the output type exists.
     """
-
-    def decorator(fn: Callable) -> Callable:
-        type_relation_registry.register(op_cls, fn)
-        return fn
-
-    return decorator
+    return type_relation_registry.decorator()(op_cls)
 
 
 def build_relation(call, input_types, ctx) -> "AccessRelationResult | None":
@@ -175,5 +194,6 @@ __all__ = [
     "type_relation_registry",
     "register_access_relation",
     "register_type_relation",
+    "identity_relations",
     "build_relation",
 ]

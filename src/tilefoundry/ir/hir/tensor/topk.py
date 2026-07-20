@@ -16,14 +16,15 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
+from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.shard import Layout
+from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
     layout_axis_to_tensor_axis,
 )
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
@@ -32,11 +33,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
-from tilefoundry.visitor_registry.shard_propagate import (
-    _c_order,
-    derive_output_shard_layout,
-    partial_reductions_by_axis,
-)
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
 @register_op
@@ -59,7 +56,7 @@ def _canonical_shard(sl: "ShardLayout", out_shape) -> "ShardLayout":
     when the shape is non-static; ``attrs`` and ``mesh`` pass through.
     """
     out_shape = tuple(out_shape)
-    strides = _c_order(out_shape) or tuple(1 for _ in out_shape)
+    strides = try_c_order_strides(out_shape) or tuple(1 for _ in out_shape)
     return ShardLayout(
         layout=Layout(shape=out_shape, strides=strides),
         attrs=sl.attrs,
@@ -71,35 +68,28 @@ def _canonical_shard(sl: "ShardLayout", out_shape) -> "ShardLayout":
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
-        raise TypeError("TopK: x must be at least rank-1")
+        ctx.error(call, "x must be at least rank-1")
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:
         axis += rank
     if axis < 0 or axis >= rank:
-        raise TypeError(f"TopK: axis {call.target.axis} out of range for rank {rank}")
+        ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
     if call.target.k < 0:
-        raise TypeError(f"TopK: k must be non-negative, got {call.target.k}")
+        ctx.error(call, f"k must be non-negative, got {call.target.k}")
     axis_len = x_ty.shape[axis]
     if isinstance(axis_len, int) and call.target.k > axis_len:
-        raise TypeError(
-            f"TopK: k={call.target.k} exceeds axis {axis} length {axis_len}"
-        )
+        ctx.error(call, f"k={call.target.k} exceeds axis {axis} length {axis_len}")
     if isinstance(x_ty.layout, ShardLayout):
         la2ta = layout_axis_to_tensor_axis(x_ty.layout.layout.shape, x_ty.shape)
         if any(
             isinstance(a, Split) and la2ta[a.axis] == axis
             for a in x_ty.layout.attrs
         ):
-            raise TypeError(f"TopK: selected axis {axis} must not be Split-sharded")
-    for mesh_axis, reduction in enumerate(partial_reductions_by_axis(x_ty.layout)):
-        if reduction is not None:
-            raise TypeError(
-                f"TopK: Partial input on x is unsound: x carries Partial({reduction}) "
-                f"on mesh axis {mesh_axis}; "
-                "the selected index is not recoverable. Insert reshard(x, "
-                "Broadcast) before this consumer"
-            )
+            ctx.error(call, f"selected axis {axis} must not be Split-sharded")
+    # The selected index is not recoverable from a partial (per-shard)
+    # reduction.
+    reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = list(x_ty.shape)
     out_shape[axis] = call.target.k
     out_shape = tuple(out_shape)

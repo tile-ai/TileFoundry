@@ -18,9 +18,9 @@ execution scopes; a non-injective layout raises ``NotProjectable``.
 """
 from __future__ import annotations
 
-from math import prod
 from typing import Optional, Union
 
+from .int_tuple import flatten, product
 from .layout import ComposedLayout, Layout
 
 
@@ -29,8 +29,7 @@ class NotProjectable(ValueError):
 
 
 def _shape(layout: Layout) -> tuple[int, ...]:
-    s = layout.shape
-    return s if isinstance(s, tuple) else (s,)
+    return flatten(layout.shape)
 
 
 def _stride(layout: Layout) -> tuple[int, ...]:
@@ -49,8 +48,34 @@ def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(out)
 
 
+def c_order_strides(shape: tuple, *, mul=None) -> tuple:
+    """Row-major (C-order) contiguous strides: ``strides[-1] == 1``,
+    ``strides[i] == strides[i+1] * shape[i+1]``.
+
+    The single home for this computation. *mul* defaults to ``int``
+    multiplication; pass a dim-expression fold (e.g. wrapping
+    ``simplify_dim(DimMul, ...)``) for shapes with symbolic entries.
+    """
+    if not shape:
+        return ()
+    if mul is None:
+        mul = lambda a, b: a * b  # noqa: E731
+    strides = [1] * len(shape)
+    for i in range(len(shape) - 2, -1, -1):
+        strides[i] = mul(strides[i + 1], shape[i + 1])
+    return tuple(strides)
+
+
+def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
+    """``c_order_strides`` when every entry is a static non-bool ``int``,
+    else ``None`` (symbolic / dynamic shapes have no static strides)."""
+    if not all(isinstance(s, int) and not isinstance(s, bool) for s in shape):
+        return None
+    return c_order_strides(shape)
+
+
 def size(layout: Layout) -> int:
-    return prod(_shape(layout))
+    return product(layout.shape)
 
 
 def apply(layout: Layout, coord: int) -> int:

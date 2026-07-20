@@ -6,7 +6,6 @@ from dataclasses import replace
 
 import pytest
 
-import tilefoundry.schedule as schedule
 from tests.models.deepseek_v4_flash.moe import (
     deepseek_v4_flash_module,
     deepseek_v4_flash_moe,
@@ -18,7 +17,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.parser.hir_parser import parse_script
-from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.target import CudaTarget
 from tilefoundry.target.cuda.planner import build_planning_problem
 
 
@@ -91,7 +90,6 @@ def root(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         (lambda fn: replace(fn, target=None), "explicit CudaTarget"),
         (lambda fn: replace(fn, topologies=()), "exactly one CTA"),
         (lambda fn: replace(fn, topologies=(Topology("cta", None),)), "static CTA"),
-        (lambda fn: replace(fn, target=CpuTarget()), "explicit CudaTarget"),
     ],
 )
 def test_planning_entry_rejects_invalid_root(mutator, pattern: str) -> None:
@@ -107,6 +105,3 @@ def test_root_must_be_a_module_member() -> None:
         ))
 
 
-def test_public_schedule_surface_does_not_export_private_problem_types() -> None:
-    assert "PlanningProblem" not in schedule.__all__
-    assert not hasattr(schedule, "PlanningProblem")

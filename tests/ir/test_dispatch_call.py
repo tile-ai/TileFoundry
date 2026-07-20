@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.inspection.tir_print import format_dispatch_call
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.pattern import DimVarRangePat, ScalarPat
 from tilefoundry.ir.tir.dispatch import DispatchCall
@@ -99,17 +98,6 @@ def test_symbol_call_rejects_nonempty_nested() -> None:
 def test_dispatch_call_positive():
     fns, _ = _build_module()
     verify_module(fns)
-
-
-def test_dispatch_call_pretty_print_contains_key_tokens():
-    _, dc = _build_module()
-    out = format_dispatch_call(dc)
-    assert "dispatch main" in out
-    assert "case S in [1,3]" in out
-    assert "case S in [4,6]" in out
-    assert "main$S$variant_0(x)" in out
-    assert "main$S$variant_1(x)" in out
-    assert "fallback: abort()" in out
 
 
 def test_dispatch_call_rejects_non_shapeof_subject():

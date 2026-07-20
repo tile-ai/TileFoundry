@@ -6,9 +6,8 @@ namespace rmsnorm_impl {
 
 struct RmsNorm {
     template <class TIn, class TOut, class TW>
-    CUTE_HOST_DEVICE void operator()(TIn const &src, TOut &dst,
-                                     TW const &weight, int M, int K,
-                                     float eps) const {
+    __device__ void operator()(TIn const &src, TOut &dst, TW const &weight,
+                               int M, int K, float eps) const {
         using value_type = cute::remove_cvref_t<decltype(dst(0))>;
         for (int m = 0; m < M; ++m) {
             float sum_sq = 0.0f;

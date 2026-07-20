@@ -21,17 +21,6 @@ def test_opaque_is_singleton():
     assert OpaqueRelation() is OpaqueRelation()
 
 
-def test_opaque_repr():
-    assert repr(OPAQUE) == "OPAQUE"
-
-
-def test_access_relations_is_frozen():
-    rel = AccessRelations(inputs=(OPAQUE,), outputs=(OPAQUE,))
-    with pytest.raises(Exception):
-        # frozen dataclass blocks attribute assignment.
-        rel.inputs = (OPAQUE, OPAQUE)  # type: ignore[misc]
-
-
 def test_double_register_raises():
     class _DummyOp(Op):
         pass

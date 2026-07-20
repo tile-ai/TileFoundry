@@ -28,9 +28,10 @@ def _auto_import(pkg_name: str) -> None:
         importlib.import_module(modname)
 
 
-_auto_import("tilefoundry.ir.tir.memory")
-_auto_import("tilefoundry.ir.tir.nn")
-_auto_import("tilefoundry.ir.tir.cuda")
+# Recursive walk so every submodule (including root-level arith / clamp /
+# reduce) is imported for its registration side effects, per
+# docs/spec/visitor-registry.md.
+_auto_import("tilefoundry.ir.tir")
 
 __all__ = [
     "PrimFunction",

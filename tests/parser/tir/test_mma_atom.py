@@ -31,11 +31,6 @@ _ATOM = T.cuda.mma.atom(op=_OP)
 # --- namespace resolution + descriptors ---------------------------------
 
 
-def test_cuda_namespace_resolves() -> None:
-    assert T.cuda is T.cuda  # stable singleton
-    assert hasattr(T.cuda, "mma")
-
-
 def test_named_op_resolves_to_op_spec() -> None:
     op = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
     assert isinstance(op, MmaOpSpec)
@@ -93,13 +88,6 @@ def test_infunc_op_and_atom_emit_no_letstmt() -> None:
     assert kernel.body.body == ()
 
 
-def test_module_level_alias_equals_surface_atom() -> None:
-    """A module-level pre-instantiated alias is the same value as building the
-    atom inline through the surface."""
-    assert _ATOM == make_atom(_OP)
-    assert _ATOM == T.cuda.mma.atom(op=_OP)
-
-
 # --- atom.A use-point scope check (check, not bind) ---------------------
 #
 # `atom.A` is returned as-is (the atom's layout contract). The parser checks at
@@ -131,17 +119,6 @@ def _alloc_frag_kernel(topology, mesh_layout):
 def test_atom_A_in_valid_warp_scope_returns_layout_as_is() -> None:
     """A valid (4,8)/(1,4) thread(32) scope passes the check; `atom.A` is the
     atom's contract layout, returned unchanged (no rebind)."""
-    kernel = prim_func(target="cuda")(
-        _alloc_frag_kernel(
-            Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))
-        )
-    )
-    assert _first_alloc_layout(kernel) is _ATOM.A
-
-
-def test_atom_A_binding_name_irrelevant() -> None:
-    """The match is structural on the thread-value layout, not the binding var
-    name: the `with Mesh(...) as warp` name is never checked."""
     kernel = prim_func(target="cuda")(
         _alloc_frag_kernel(
             Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))

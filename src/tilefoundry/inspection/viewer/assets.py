@@ -1,9 +1,9 @@
 """First-run vendoring of the viewer's browser-side JS assets.
 
 The viewer renders graphs client-side via ``@hpcc-js/wasm`` (full
-Graphviz WASM) + ``d3-graphviz``; there is **no** server-side ``dot``.
-Those JS files are large (~1.2 MB total) and must never live in the
-repo. Instead they are downloaded once to a user cache directory, pinned
+Graphviz WASM layout) + ``d3`` (pan/zoom only, no data-join); there is
+**no** server-side ``dot``. Those JS files are large and must never live in
+the repo. Instead they are downloaded once to a user cache directory, pinned
 to exact versions and verified against a baked-in SHA256 manifest.
 
 Supply-chain pinning: every hash below was computed
@@ -48,35 +48,11 @@ _ASSET_MANIFEST: tuple[AssetEntry, ...] = (
         source="@hpcc-js/wasm 2.33.8 (Graphviz WASM, embedded binary)",
     ),
     AssetEntry(
-        name="d3-graphviz.min.js",
-        url="https://unpkg.com/d3-graphviz@5.6.0/build/d3-graphviz.min.js",
-        sha256="9c1ecd146ca7f2ff57c849cee4398f58cee7a7a8c7d79c24b817bbaf4dd4e05c",
-        license="BSD-3-Clause",
-        source="d3-graphviz 5.6.0",
-    ),
-    AssetEntry(
         name="d3.min.js",
         url="https://unpkg.com/d3@7.9.0/dist/d3.min.js",
         sha256="f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539",
         license="BSD-3-Clause",
-        source="d3 7.9.0 (d3-graphviz does not bundle d3)",
-    ),
-    AssetEntry(
-        name="jquery.min.js",
-        url="https://unpkg.com/jquery@3.7.1/dist/jquery.min.js",
-        sha256="fc9a93dd241f6b045cbff0481cf4e1901becd0e12fb45166a8f17f95823f0b1a",
-        license="MIT",
-        source="jQuery 3.7.1",
-    ),
-    AssetEntry(
-        name="jquery.graphviz.svg.js",
-        url=(
-            "https://raw.githubusercontent.com/tintinweb/vscode-interactive-graphviz/"
-            "1074d8c264b05c9460aeacf1027fc5c61e43ac29/content/graphvizSvg/jquery.graphviz.svg.js"
-        ),
-        sha256="854509b10a9ab2e95342d206bb7a3ebf26b253cbbfb5e53ec21decd42710ab58",
-        license="MIT",
-        source="Mountainstorm jquery.graphviz.svg, vendored in vscode-interactive-graphviz v0.3.5",
+        source="d3 7.9.0 (pan/zoom only)",
     ),
 )
 

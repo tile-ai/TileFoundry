@@ -4,6 +4,6 @@
 
 #include "fill/fill_impl.h"
 
-template <class TOut> CUTE_HOST_DEVICE void fill(TOut &dst, float val, int N) {
+template <class TOut> __device__ void fill(TOut &dst, float val, int N) {
     fill_impl::Fill{}(dst, val, N);
 }

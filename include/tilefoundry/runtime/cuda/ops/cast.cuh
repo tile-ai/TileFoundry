@@ -2,9 +2,10 @@
 // namespace tilefoundry::ops.
 #pragma once
 
-#include "cast/cast_impl.h"
-
+// ``cast`` is a plain per-element static_cast — routed through the shared
+// ``unary_impl::Unary`` skeleton via the ``identity_op`` tag (unary.cuh);
+// the output-side cast in ``Unary::operator()`` performs the conversion.
 template <class TIn, class TOut>
-CUTE_HOST_DEVICE void cast(TIn const &src, TOut &dst, int N) {
-    cast_impl::Cast{}(src, dst, N);
+__device__ void cast(TIn const &src, TOut &dst, int N) {
+    unary_impl::Unary<identity_op>{}(src, dst, N);
 }

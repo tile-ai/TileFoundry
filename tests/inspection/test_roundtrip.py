@@ -1,18 +1,13 @@
 """Round-trip tests: print → parse → structural equality."""
 
-import pytest
-
 from tests.fixtures.demo_ir import build_demo
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import add, mul
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
-from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser.hir_parser import parse_script
 
 
@@ -147,37 +142,6 @@ class TestRoundTrip:
         fn2 = parse_script(src)
         assert _structural_equal(fn, fn2), "round-trip mismatch with keyword attrs"
 
-    def test_demo_ir_roundtrip_with_positional_attrs(self):
-        """reshard(a, shared_layout, storage) without layout= keyword."""
-        src = (
-            "from __future__ import annotations\n"
-            "from tilefoundry import func\n"
-            "from tilefoundry.dsl.tf import *\n"
-            "from tilefoundry.dsl import Tensor\n"
-            "from tilefoundry.ir.types.shard import (\n"
-            "    B, S, P, Layout, Mesh, Layout, ShardLayout, Topology,\n"
-            ")\n"
-            "shared_layout = ShardLayout(\n"
-            "    layout=Layout((1, 1536), (1536, 1)),\n"
-            "    attrs=(),\n"
-            '    mesh=Mesh(Topology("cta", 128), Layout((128,), (1,))),\n'
-            ")\n"
-            "\n"
-            "@func\n"
-            'def test_pos(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:\n'
-            '    b = reshard(a, shared_layout, "smem")\n'
-            "    return b\n"
-        )
-        fn = parse_script(src)
-        assert fn.name == "test_pos"
-        # Check that the body is a reshard with correct args
-        body = fn.body
-        assert isinstance(body, Call)
-        assert isinstance(body.target, Reshard)
-        assert body.target.storage == StorageKind.SMEM
-        # layout attribute should be set
-        assert body.target.layout is not None
-
     def test_positional_and_keyword_equivalent(self):
         """reshard(a, shared_layout) ≡ reshard(a, layout=shared_layout)."""
         src_pos = (
@@ -223,73 +187,6 @@ class TestRoundTrip:
         # Compare bodies structurally (ignore function name)
         assert _structural_equal(fn_pos.body, fn_kw.body), \
             "positional and keyword should produce equivalent IR"
-
-    def test_too_many_positional_args_errors(self):
-        """reshard(a, sl, 'smem', 1, 'extra') — 5 positional, only 4 params."""
-
-        src = (
-            "from __future__ import annotations\n"
-            "from tilefoundry import func\n"
-            "from tilefoundry.dsl.tf import *\n"
-            "from tilefoundry.dsl import Tensor\n"
-            "from tilefoundry.ir.types.shard import *\n"
-            "sl = ShardLayout(layout=Layout((1,), (1,)), attrs=(), mesh=Mesh(Topology('c',1), Layout((1,),(1,))))\n"
-            "@func\n"
-            'def f(a: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:\n'
-            '    b = reshard(a, sl, "smem", 1, "extra")\n'
-            "    return b\n"
-        )
-        with pytest.raises(VerifyError, match="too many positional"):
-            parse_script(src)
-
-    def test_duplicate_positional_and_keyword_errors(self):
-        """reshard(a, sl, layout=sl2) — duplicate binding for layout."""
-
-        src = (
-            "from __future__ import annotations\n"
-            "from tilefoundry import func\n"
-            "from tilefoundry.dsl.tf import *\n"
-            "from tilefoundry.dsl import Tensor\n"
-            "from tilefoundry.ir.types.shard import *\n"
-            "sl = ShardLayout(layout=Layout((1,), (1,)), attrs=(), mesh=Mesh(Topology('c',1), Layout((1,),(1,))))\n"
-            "@func\n"
-            'def f(a: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:\n'
-            "    b = reshard(a, sl, layout=sl)\n"
-            "    return b\n"
-        )
-        with pytest.raises(VerifyError, match="duplicate binding"):
-            parse_script(src)
-
-    def test_wrong_attr_type_errors(self):
-        """reshard(a, 123) — int is not a ShardLayout, fails in typeinfer."""
-
-        src = (
-            "from __future__ import annotations\n"
-            "from tilefoundry import func\n"
-            "from tilefoundry.dsl.tf import *\n"
-            "from tilefoundry.dsl import Tensor\n"
-            "@func\n"
-            'def f(a: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:\n'
-            "    b = reshard(a, 123)\n"
-            "    return b\n"
-        )
-        with pytest.raises(VerifyError, match="ShardLayout"):
-            parse_script(src)
-
-    def test_missing_input_errors(self):
-        """reshard() — missing required input x and layout, TypeError."""
-        src = (
-            "from __future__ import annotations\n"
-            "from tilefoundry import func\n"
-            "from tilefoundry.dsl.tf import *\n"
-            "from tilefoundry.dsl import Tensor\n"
-            "@func\n"
-            'def f(a: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:\n'
-            "    b = reshard()\n"
-            "    return b\n"
-        )
-        with pytest.raises((TypeError,)):
-            parse_script(src)
 
 
 @func

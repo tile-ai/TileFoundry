@@ -3,7 +3,11 @@ constexpr Mesh type alias (spec 010 §5)."""
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import (
+    CodegenContext,
+    register_codegen_cuda,
+    topology_scope_str,
+)
 from tilefoundry.ir.tir.stmts import MeshScope
 from tilefoundry.target import validate_cuda_topology_levels
 
@@ -17,23 +21,6 @@ def _validate_topology(mesh) -> None:
     validate_cuda_topology_levels(t.name for t in topos)
 
 
-_TOPOLOGY_SCOPES = {
-    "cta": "tilefoundry::TopologyScope::cta",
-    "warp": "tilefoundry::TopologyScope::warp",
-    "thread": "tilefoundry::TopologyScope::thread",
-}
-
-
-def _topology_scope(name: str) -> str:
-    # Loud on an unknown level rather than silently defaulting to cta, so a
-    # missed topology validation cannot quietly miscompile.
-    try:
-        return _TOPOLOGY_SCOPES[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown topology level {name!r}; expected one of "
-            f"{sorted(_TOPOLOGY_SCOPES)}"
-        ) from None
 
 
 def _mesh_type(mesh) -> str:
@@ -42,7 +29,7 @@ def _mesh_type(mesh) -> str:
     stride_types = ", ".join(f"cute::Int<{s}>" for s in mesh.layout.strides)
     return (
         f"tilefoundry::Mesh<"
-        f"tilefoundry::Topology<{_topology_scope(topo.name)}, {topo.size}>, "
+        f"tilefoundry::Topology<{topology_scope_str(topo.name)}, {topo.size}>, "
         f"cute::Layout<cute::Shape<{shape_types}>, cute::Stride<{stride_types}>>>"
     )
 

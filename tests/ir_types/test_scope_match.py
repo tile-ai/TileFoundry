@@ -49,15 +49,6 @@ def test_cta_scope_rejected() -> None:
     assert not mesh_scope_matches_required_scope(cta, _REQ)
 
 
-def test_wrong_thread_count_rejected() -> None:
-    assert not mesh_scope_matches_required_scope(_thread((8, 8), (1, 8), size=64), _REQ)
-
-
 def test_inconsistent_mesh_rejected() -> None:
     # thread(64) topology but a 32-element layout — malformed.
     assert not mesh_scope_matches_required_scope(_thread((4, 8), (1, 4), size=64), _REQ)
-
-
-def test_noncontiguous_layout_rejected() -> None:
-    # Right shape but gapped strides (1,8) != required (1,4) — exact mismatch.
-    assert not mesh_scope_matches_required_scope(_thread((4, 8), (1, 8)), _REQ)

@@ -1,4 +1,4 @@
-# Vendored browser JS (graphviz.umd.js, d3*, jquery*) is downloaded to the
+# Vendored browser JS (graphviz.umd.js, d3.min.js) is downloaded to the
 # user cache at runtime and verified by SHA256 — see viewer/assets.py. It
 # must NEVER enter the repo. Ignore everything here except the first-party
 # page assets, so a stray vendor file can't be accidentally committed.

@@ -69,9 +69,7 @@ def _annotation_type(pd: ParamDef) -> tuple[str, str]:
         return "Any", ""
     if ann is DType:
         members = ", ".join(
-            repr(candidate.name)
-            for candidate in vars(DType).values()
-            if isinstance(candidate, DType)
+            repr(name) for name in DType._members()
         )
         name = ann.__name__
         base = f"Literal[{members}] | {name}"

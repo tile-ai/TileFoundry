@@ -4,6 +4,7 @@ from .conv2d import Conv2D
 from .layer_norm import LayerNorm
 from .matmul import MatMul
 from .relu import ReLU
+from .rms_norm import RMSNorm
 from .rope import RoPE
 from .sigmoid import Sigmoid
 from .softmax import SoftMax
@@ -14,6 +15,7 @@ __all__ = [
     "LayerNorm",
     "MatMul",
     "ReLU",
+    "RMSNorm",
     "RoPE",
     "Sigmoid",
     "SoftMax",

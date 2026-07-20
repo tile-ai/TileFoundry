@@ -9,11 +9,10 @@ from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
+from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
-
-from ..math._helpers import resolve_anchor_storage
+from tilefoundry.visitor_registry import register_typeinfer
 
 
 @register_op

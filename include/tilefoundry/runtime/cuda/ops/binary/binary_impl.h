@@ -6,8 +6,8 @@ namespace binary_impl {
 
 template <class Op> struct Binary {
     template <class TL, class TR, class TOut>
-    CUTE_HOST_DEVICE void operator()(TL const &lhs, TR const &rhs, TOut &dst,
-                                     int N, Op op = {}) const {
+    __device__ void operator()(TL const &lhs, TR const &rhs, TOut &dst, int N,
+                               Op op = {}) const {
         auto l = detail::to_local(lhs);
         auto r = detail::to_local(rhs);
         auto &&d = detail::to_local(dst);
@@ -21,8 +21,8 @@ template <class Op> struct Binary {
 
 template <class Op> struct BinaryCellBcast {
     template <class TL, class TR, class TOut>
-    CUTE_HOST_DEVICE void operator()(TL const &lhs, TR const &rhs, TOut &dst,
-                                     int n_dst, int step, Op op = {}) const {
+    __device__ void operator()(TL const &lhs, TR const &rhs, TOut &dst,
+                               int n_dst, int step, Op op = {}) const {
         auto l = detail::to_local(lhs);
         auto r = detail::to_local(rhs);
         auto &&d = detail::to_local(dst);
@@ -49,8 +49,8 @@ template <class Op> struct BinaryCellBcast {
 
 template <class Op> struct BinaryBcastCol {
     template <class TL, class TR, class TOut>
-    CUTE_HOST_DEVICE void operator()(TL const &lhs, TR const &rhs, TOut &dst,
-                                     int M, int K, Op op = {}) const {
+    __device__ void operator()(TL const &lhs, TR const &rhs, TOut &dst, int M,
+                               int K, Op op = {}) const {
         using value_type = cute::remove_cvref_t<decltype(dst(0))>;
         for (int m = 0; m < M; ++m) {
             auto scale = static_cast<value_type>(rhs(m, 0));
@@ -64,8 +64,8 @@ template <class Op> struct BinaryBcastCol {
 
 template <class Op> struct BinaryBcastRow {
     template <class TL, class TR, class TOut>
-    CUTE_HOST_DEVICE void operator()(TL const &lhs, TR const &rhs, TOut &dst,
-                                     int M, int K, Op op = {}) const {
+    __device__ void operator()(TL const &lhs, TR const &rhs, TOut &dst, int M,
+                               int K, Op op = {}) const {
         using value_type = cute::remove_cvref_t<decltype(dst(0))>;
         for (int m = 0; m < M; ++m) {
             for (int k = 0; k < K; ++k) {
@@ -79,8 +79,8 @@ template <class Op> struct BinaryBcastRow {
 
 template <class Op> struct BinaryBcastScalar {
     template <class TS, class TV, class TOut>
-    CUTE_HOST_DEVICE void operator()(TS const &src, TV const &scalar, TOut &dst,
-                                     int N, Op op = {}) const {
+    __device__ void operator()(TS const &src, TV const &scalar, TOut &dst,
+                               int N, Op op = {}) const {
         auto s = detail::to_local(src);
         auto sc = detail::to_local(scalar);
         auto &&d = detail::to_local(dst);

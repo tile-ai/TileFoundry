@@ -7,11 +7,10 @@ from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar, Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
+from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
+from tilefoundry.visitor_registry import register_typeinfer
 
 
 @register_op(name="insert_slice")
@@ -24,36 +23,32 @@ class InsertSlice(Op):
     offsets = ParamDef(kind="input", pattern=Scalar)
 
 
-def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx) -> None:
+def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
     """Per-axis window checks: the update extent must fit, and a *literal*
     (``Constant``) offset must place an in-bounds, non-negative window. A
     runtime offset is deferred to the eval bounds guard."""
     off_ty = ctx.type_of(off_expr)
     if off_ty.shape != ():
-        raise TypeError(
-            f"insert_slice: offset for axis {ax} must be a rank-0 scalar, got "
-            f"shape {off_ty.shape}"
+        ctx.error(
+            call,
+            f"offset for axis {ax} must be a rank-0 scalar, got shape {off_ty.shape}",
         )
     if off_ty.dtype not in (DType.i32, DType.i64):
-        raise TypeError(
-            f"insert_slice: offset for axis {ax} must be an integer scalar, got "
-            f"{off_ty.dtype}"
+        ctx.error(
+            call,
+            f"offset for axis {ax} must be an integer scalar, got {off_ty.dtype}",
         )
     d, u = static_dim_value(dst_ext), static_dim_value(upd_ext)
     if d is not None and u is not None and u > d:
-        raise TypeError(
-            f"insert_slice: update extent {u} exceeds dst extent {d} on axis {ax}"
-        )
+        ctx.error(call, f"update extent {u} exceeds dst extent {d} on axis {ax}")
     if isinstance(off_expr, Constant):
         o = int(off_expr.value)
         if o < 0:
-            raise TypeError(
-                f"insert_slice: offset {o} on axis {ax} must be non-negative"
-            )
+            ctx.error(call, f"offset {o} on axis {ax} must be non-negative")
         if d is not None and u is not None and o + u > d:
-            raise TypeError(
-                f"insert_slice: window [{o}, {o + u}) out of bounds on axis {ax} "
-                f"(dst extent {d})"
+            ctx.error(
+                call,
+                f"window [{o}, {o + u}) out of bounds on axis {ax} (dst extent {d})",
             )
 
 
@@ -64,71 +59,37 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     off_expr = call.args[2]
     rank = len(dst_ty.shape)
     if len(upd_ty.shape) != rank:
-        raise TypeError(
-            f"insert_slice: update rank {len(upd_ty.shape)} must equal dst rank {rank}"
-        )
+        ctx.error(call, f"update rank {len(upd_ty.shape)} must equal dst rank {rank}")
     if dst_ty.dtype != upd_ty.dtype:
-        raise TypeError(
-            f"insert_slice: dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}"
-        )
-    dst_partials = tuple(
-        (axis, reduction)
-        for axis, reduction in enumerate(partial_reductions_by_axis(dst_ty.layout))
-        if reduction is not None
-    )
-    update_partials = tuple(
-        (axis, reduction)
-        for axis, reduction in enumerate(partial_reductions_by_axis(upd_ty.layout))
-        if reduction is not None
-    )
-    if dst_partials:
-        if not (
-            isinstance(dst_ty.layout, ShardLayout)
-            and isinstance(upd_ty.layout, ShardLayout)
-            and upd_ty.layout.mesh == dst_ty.layout.mesh
-            and upd_ty.layout.attrs == dst_ty.layout.attrs
-        ):
-            axis, reduction = dst_partials[0]
-            raise TypeError(
-                f"insert_slice: dst carries a Partial({reduction}) on mesh axis "
-                f"{axis}; update must carry the identical per-mesh-axis state. "
-                "Insert Reshard(update, Broadcast) or match dst before this "
-                "consumer"
-            )
-    elif update_partials:
-        axis, reduction = update_partials[0]
-        raise TypeError(
-            f"insert_slice: update carries Partial({reduction}) on mesh axis "
-            f"{axis}, but dst is complete; insert reshard(update, Broadcast) "
-            "before this consumer"
-        )
+        ctx.error(call, f"dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}")
+    require_matching_partial_state(ctx, call, dst_ty, upd_ty, "dst", "update")
     if isinstance(off_expr, Tuple):
         # rank-N: one rank-0 scalar offset per axis.
         if len(off_expr.elements) != rank:
-            raise TypeError(
-                f"insert_slice: offsets tuple length {len(off_expr.elements)} must "
-                f"equal dst rank {rank}"
+            ctx.error(
+                call,
+                f"offsets tuple length {len(off_expr.elements)} must equal dst rank {rank}",
             )
         for ax, off_el in enumerate(off_expr.elements):
-            _check_axis(ax, dst_ty.shape[ax], upd_ty.shape[ax], off_el, ctx)
+            _check_axis(ax, dst_ty.shape[ax], upd_ty.shape[ax], off_el, ctx, call)
     else:
         # 1-D compatibility: a bare rank-0 scalar start applies only to rank-1.
         off_ty = ctx.type_of(off_expr)
         if len(off_ty.shape) != 0:
-            raise TypeError(
-                f"insert_slice: offsets must be a rank-0 scalar start or a per-axis "
-                f"tuple, got shape {off_ty.shape}"
+            ctx.error(
+                call,
+                f"offsets must be a rank-0 scalar start or a per-axis tuple, got "
+                f"shape {off_ty.shape}",
             )
         if off_ty.dtype not in (DType.i32, DType.i64):
-            raise TypeError(
-                f"insert_slice: offsets must be an integer scalar, got {off_ty.dtype}"
-            )
+            ctx.error(call, f"offsets must be an integer scalar, got {off_ty.dtype}")
         if rank != 1:
-            raise TypeError(
-                f"insert_slice: a bare scalar offset applies only to a rank-1 dst; a "
-                f"rank-{rank} dst needs a per-axis offset tuple"
+            ctx.error(
+                call,
+                f"a bare scalar offset applies only to a rank-1 dst; a rank-{rank} "
+                "dst needs a per-axis offset tuple",
             )
-        _check_axis(0, dst_ty.shape[0], upd_ty.shape[0], off_expr, ctx)
+        _check_axis(0, dst_ty.shape[0], upd_ty.shape[0], off_expr, ctx, call)
     return dst_ty
 
 

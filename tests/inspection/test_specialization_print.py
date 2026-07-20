@@ -56,3 +56,23 @@ def test_normal_function_omits_specialize() -> None:
     assert ".specialize(" not in src
     assert "DimVarRangePat" not in src
     assert "    pass" not in src
+
+
+def test_module_mode_prototype_shares_header_with_standalone() -> None:
+    """The ``@module``-wrapped form of a dispatch prototype must emit the same
+    ``DimVarRangePat`` import as the standalone form (previous test) — module
+    and standalone output share one header emitter, so a construct requiring
+    an extra import in one mode requires it in both.
+
+    Per §2.7 a dispatch prototype's rendering is display-only and must not be
+    used as a ``parse_script`` validation artifact, so — like the standalone
+    ``test_prototype_prints_pass_base_and_specialize_blocks`` above — this
+    checks emitted text + syntax validity rather than a parse round-trip.
+    """
+    src = as_script(_prototype(), module="M")
+    assert "@module" in src and "class M:" in src
+    assert "from tilefoundry.ir.core.pattern import DimVarRangePat" in src
+    assert "    pass" in src
+    assert '@main.specialize(DimVarRangePat("S", 1, 3))' in src
+    assert '@main.specialize(DimVarRangePat("S", 4, 7))' in src
+    compile(src, "<test>", "exec")

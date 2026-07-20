@@ -19,6 +19,7 @@ from tilefoundry.evaluator.value import (
     to_torch_dtype,
 )
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
+from tilefoundry.ir.core.pattern import locate_dim_var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.dim import DimVar
@@ -190,18 +191,6 @@ def _unwrap(value: Value) -> Any:
     return value
 
 
-def _locate_dispatch_dim(params, dim_var_name: str):
-    """First ``(param_index, axis)`` where the named DimVar appears in params."""
-    for i, p in enumerate(params):
-        shape = getattr(p.type, "shape", None)
-        if shape is None:
-            continue
-        for axis, dim in enumerate(shape):
-            if getattr(dim, "name", None) == dim_var_name:
-                return i, axis
-    return None
-
-
 def _select_variant(callee: Function, arg_values) -> Function:
     """Pick the variant whose ``DimVarRangePat`` matches the runtime arg shapes.
 
@@ -211,7 +200,7 @@ def _select_variant(callee: Function, arg_values) -> Function:
     matches = []
     for v in callee.variants:
         pat = v.specializations[0]
-        loc = _locate_dispatch_dim(callee.params, pat.dim_var)
+        loc = locate_dim_var(callee.params, pat.dim_var)
         if loc is None:
             continue
         pi, axis = loc

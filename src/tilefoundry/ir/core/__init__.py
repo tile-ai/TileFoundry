@@ -6,14 +6,10 @@ from .errors import VerifyError
 from .expr import Call, Constant, Expr, Tuple, Var
 from .metadata import IRMetadata, get_metadata, remove_metadata, replace_metadata
 from .op import Op, ParameterInfo
-from .registry import (
+from tilefoundry.visitor_registry.registries import (
     AnalysisRegistry,
     cost_evaluator_registry,
-    lower_cpu_registry,
-    lower_cuda_registry,
     register_cost_evaluator,
-    register_lower_cpu,
-    register_lower_cuda,
     register_typeinfer,
     register_verify_stmt,
     typeinfer_registry,
@@ -31,9 +27,7 @@ __all__ = [
     # registry
     "AnalysisRegistry",
     "typeinfer_registry", "verify_stmt_registry", "cost_evaluator_registry",
-    "lower_cuda_registry", "lower_cpu_registry",
     "register_typeinfer", "register_verify_stmt", "register_cost_evaluator",
-    "register_lower_cuda", "register_lower_cpu",
     # context
     "TypeInferContext",
     # error

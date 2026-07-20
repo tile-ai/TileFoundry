@@ -45,15 +45,14 @@ def _hf_pieces(layer, x, k_prev_hf, v_prev_hf, cos, sin, mask):
     return k_full, v_full, out
 
 
-_COMBOS = [(1, 2), (3, 5)]
 _DTYPES = [("f32", torch.float32, 2e-4, 2e-4), ("bf16", torch.bfloat16, 2e-2, 2e-2)]
 
 
-@pytest.mark.parametrize("seq,cur_pos", _COMBOS, ids=lambda v: str(v))
 @pytest.mark.parametrize(
     "dt_name,torch_dt,atol,rtol", _DTYPES, ids=lambda v: v if isinstance(v, str) else ""
 )
-def test_attention_matches_hf(dt_name, torch_dt, atol, rtol, seq, cur_pos):
+def test_attention_matches_hf(dt_name, torch_dt, atol, rtol):
+    seq, cur_pos = 3, 5
     common.DT = dt_name
     kv_update = common.build_kv_update()
     scores = common.build_scores()

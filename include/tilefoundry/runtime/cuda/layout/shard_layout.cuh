@@ -35,9 +35,3 @@ template <class Reduction> struct P {
 };
 struct Dynamic {};
 } // namespace shard
-
-// Legacy aliases in tilefoundry:: for backward compat during migration.
-using shard::B;
-using shard::Dynamic;
-using shard::P;
-using shard::S;

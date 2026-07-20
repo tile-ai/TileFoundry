@@ -3,8 +3,9 @@
 ``Viewer(root).serve()`` ensures the vendored browser JS is cached
 (downloading once on a cold cache), starts a small HTTP server that
 serves the page + the per-request DOT, and returns the bound port.
-Rendering happens entirely client-side (``@hpcc-js/wasm`` +
-``d3-graphviz``); there is no server-side ``dot``.
+Rendering happens entirely client-side (``@hpcc-js/wasm`` layout +
+``innerHTML``, with ``d3`` for pan/zoom only); there is no server-side
+``dot``.
 """
 from __future__ import annotations
 

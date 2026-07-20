@@ -67,27 +67,19 @@ def _dim_binop(op_cls, a, b):
     or ``Expr`` operands. Anything else returns ``NotImplemented`` so
     Python falls through to the normal ``TypeError`` for unsupported
     operand types, preserving the ``ShapeDim = int | DimVar | Expr``
-    contract and preventing malformed IR.
+    contract and preventing malformed IR. Operand canonicalisation
+    (int → ``Constant``) happens once, inside ``simplify_dim``.
     """
-    from .tensor_type import DType, TensorType  # avoid import cycle  # noqa: PLC0415
-    ti64 = TensorType.scalar(DType.i64)
-
-    def _coerce(v):
+    def _ok(v):
         # ``bool`` is a subclass of ``int`` — reject explicitly so
         # ``CTX_LEN + True`` does not silently become ``CTX_LEN + 1``.
         if isinstance(v, bool):
-            return NotImplemented
-        if isinstance(v, int):
-            return Constant(type=ti64, value=v)
-        if isinstance(v, (DimVar, Expr)):
-            return v
-        return NotImplemented
+            return False
+        return isinstance(v, (int, DimVar, Expr))
 
-    ca = _coerce(a)
-    cb = _coerce(b)
-    if ca is NotImplemented or cb is NotImplemented:
+    if not (_ok(a) and _ok(b)):
         return NotImplemented
-    return simplify_dim(op_cls, (ca, cb))
+    return simplify_dim(op_cls, (a, b))
 
 
 class DimAdd(Op):
@@ -151,9 +143,9 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
     ``Call`` is preserved so a later verify pass can flag the
     error. No algebraic identity folding (``x + 0`` etc.).
     """
-    from .tensor_type import DType, TensorType  # avoid import cycle  # noqa: PLC0415
+    from .tensor_type import TensorType  # avoid import cycle  # noqa: PLC0415
 
-    ti64 = TensorType.scalar(DType.i64)
+    ti64 = TensorType.meta_scalar()
 
     # Canonicalise raw ``int`` entries (common in ``TensorType.shape``
     # static dims) to ``Constant(i64, value)`` so the produced ``Call``
@@ -202,6 +194,32 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
     return Call(type=ti64, target=op_cls(), args=canon_args)
 
 
+_DIM_OP_TYPES = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
+
+
+def is_dim_expr(value) -> bool:
+    """True iff *value* is a valid static-or-symbolic dim expression:
+    a non-bool ``int``, a ``DimVar``, an ``int``-valued ``Constant``, or a
+    ``Call`` over the dim-arithmetic ops whose args all satisfy this.
+
+    This module owns the dim-op set, so a new dim op is added beside its
+    own membership here.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, DimVar):
+        return True
+    if isinstance(value, Constant):
+        return isinstance(value.value, int) and not isinstance(value.value, bool)
+    if isinstance(value, Call):
+        return isinstance(value.target, _DIM_OP_TYPES) and all(
+            is_dim_expr(a) for a in value.args
+        )
+    return False
+
+
 def ceildiv(a, b) -> Expr:
     """Ceiling division ``(a + b - 1) // b`` as a dim expression.
 
@@ -225,5 +243,6 @@ __all__ = [
     "DimMin",
     "DimMax",
     "simplify_dim",
+    "is_dim_expr",
     "ceildiv",
 ]

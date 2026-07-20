@@ -23,13 +23,13 @@ CASES = [
         "axis_out_of_range",
         ArgMax(axis=3),
         (make_tensor_type((4,), DType.f32),),
-        ExpectedError(match="out of range", exc=TypeError),
+        ExpectedError(match="out of range"),
     ),
     TypeInferCase(
         "partial_input_rejected",
         ArgMax(),
         (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
-        ExpectedError(match="Partial input on x is unsound", exc=TypeError),
+        ExpectedError(match="x carries Partial"),
     ),
 ]
 

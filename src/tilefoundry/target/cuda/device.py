@@ -32,16 +32,6 @@ class H200SXM(Device):
         """Return the fixed dense compute-throughput map."""
         return dict(self._dense_flops)
 
-    @property
-    def compute_flops_per_second(self) -> dict[DType, int]:
-        """Alias for the dense compute-throughput map."""
-        return self.dense_flops_per_second
-
-    @property
-    def peak_flops_per_second(self) -> dict[DType, int]:
-        """Alias for the dense compute-throughput map."""
-        return self.dense_flops_per_second
-
     def peak_for(self, dtype: DType) -> int:
         """Return dense device throughput for a compute ``dtype``."""
         try:

@@ -7,12 +7,12 @@ from enum import Enum
 from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer, register_verify_stmt
 from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.layout_algebra import apply as _apply
 from tilefoundry.ir.types.shard.layout_algebra import size as _size
 from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 # A warp is 32 lanes — the granularity of ``__syncwarp`` / ``bar.sync`` counts.
 _WARP_SIZE = 32

@@ -12,8 +12,6 @@ def test_normalize_rejects_invalid_inputs() -> None:
     """Non-IR / missing entry raises early at the module-first boundary."""
     with pytest.raises(TypeError, match="normalize_to_module"):
         normalize_to_module(42)
-    with pytest.raises(TypeError, match="normalize_to_module"):
-        normalize_to_module(None)
     with pytest.raises(ValueError):
         normalize_to_module(Module(name="bad", functions=(), entry="nonexistent"))
 

@@ -102,9 +102,10 @@ class VerifyVisitor(StmtVisitor[None]):
         ctx: VerifyContext,
         registry: AnalysisRegistry = verify_stmt_registry,
     ) -> None:
-        # 默认路径:registry 参数不传,用模块级 verify_stmt_registry。
-        # 显式传 registry 是高级扩展点(比如 sandbox 测试、分组 dispatch),
-        # 日常 verify pass 不需要动它。
+        # Default path: no registry argument, use the module-level
+        # verify_stmt_registry. Passing an explicit registry is an advanced
+        # extension point (e.g. sandbox tests, grouped dispatch); the everyday
+        # verify pass never needs it.
         self.ctx = ctx
         self.registry = registry
 

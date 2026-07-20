@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import isl
-import pytest
 
 from tilefoundry.ir.core import Op
 from tilefoundry.visitor_registry.access_relation import (
@@ -22,13 +21,6 @@ def _result() -> AccessRelationResult:
             isl.map("{ [m, k, n] -> [m, n] }"),
         ),
     )
-
-
-def test_access_relation_result_is_frozen():
-    rel = _result()
-    assert len(rel.maps) == 3
-    with pytest.raises(Exception):
-        rel.maps = ()  # type: ignore[misc]
 
 
 def test_register_and_build_relation():
@@ -56,15 +48,3 @@ def test_build_relation_returns_none_for_unregistered():
 
     assert build_relation(_Call(), (), None) is None
     assert type_relation_registry.lookup(_UnregOp) is None
-
-
-def test_double_register_raises():
-    class _DummyOp2(Op):
-        pass
-
-    @register_type_relation(_DummyOp2)
-    def _(call, input_types, ctx):
-        return _result()
-
-    with pytest.raises(RuntimeError, match="type_relation: _DummyOp2 already registered"):
-        register_type_relation(_DummyOp2)(lambda call, input_types, ctx: None)

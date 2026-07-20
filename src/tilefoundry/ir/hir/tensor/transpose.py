@@ -9,12 +9,14 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     build_relation,
+    identity_relations,
+    register_access_relation,
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
@@ -25,6 +27,11 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class Transpose(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     perm = ParamDef(kind="attribute", annotation=tuple)
+
+
+# GLOBAL-level: identity (the exact permutation is encoded in `perm`, not
+# duplicated in the relation at this level).
+register_access_relation(Transpose)(identity_relations(1))
 
 
 @register_type_relation(Transpose)

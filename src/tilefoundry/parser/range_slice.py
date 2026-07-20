@@ -23,12 +23,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from tilefoundry.ir.core.expr import Constant, Expr, Var
-from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimMul, simplify_dim
+from tilefoundry.ir.types.shape_helpers import i64_const
 
 
 def _i64(value: int) -> Constant:
-    return Constant(type=TensorType.scalar(DType.i64), value=value)
+    return i64_const(value)
 
 
 def _to_i64_expr(value: Any) -> Expr:

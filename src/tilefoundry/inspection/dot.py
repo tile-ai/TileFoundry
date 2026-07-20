@@ -2,15 +2,14 @@
 
 Walks a ``hir.Function`` expression tree and produces a Graphviz DOT
 string. Each ``Var`` / ``Call`` / ``Constant`` gets a numbered node.
-``ShardLayout`` annotations on ``TensorType.layout`` are rendered as
-per-mesh-axis labels with axis names, attrs, and mesh shape.
+Type / shard-layout labels reuse the canonical §2.3 renderers from
+``python_printer`` (the same core the viewer uses) so a DOT label agrees
+with the printer / viewer instead of drifting on its own.
 
 Example label::
 
     q_proj
-    shape=(1,4096), dtype=bf16
-    mesh=(cluster,cta,warp,lane):(64,2,8,32)
-    cluster:B, cta:S(1), warp:P(sum), lane:P(sum)
+    Tensor[(1, 4096), "bf16"]
 """
 
 from __future__ import annotations
@@ -20,55 +19,16 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
+
+from .python_printer import _collect_meshes, _mesh_name_map, _op_display_name, _tensor_annotation
 
 
-def _shard_label(layout, mesh_axis_names=("cluster", "cta", "warp", "lane")) -> str:
-    """Render ShardLayout as a multi-line label: mesh axes + attrs."""
-    if not isinstance(layout, ShardLayout):
-        return ""
-    parts = []  # noqa: F841
-    # Per-axis attrs
-    attr_parts = []
-    for i, attr in enumerate(layout.attrs):
-        name = mesh_axis_names[i] if i < len(mesh_axis_names) else f"ax{i}"
-        if isinstance(attr, Broadcast):
-            attr_parts.append(f"{name}:B")
-        elif isinstance(attr, Split):
-            attr_parts.append(f"{name}:S({attr.axis})")
-        elif isinstance(attr, Partial):
-            attr_parts.append(f"{name}:P({attr.reduction})")
-        else:
-            attr_parts.append(f"{name}:?")
-    # Mesh shape
-    mesh_shape = layout.mesh.layout.shape if hasattr(layout.mesh, 'layout') else ()
-    mesh_names = ", ".join(mesh_axis_names[:len(mesh_shape)])
-    return (
-        f"mesh=({mesh_names}):{mesh_shape}",
-        ", ".join(attr_parts),
-    )
-
-
-def _type_label(ty, mesh_axis_names) -> list[str]:
-    """Type info lines for a node label."""
-    if isinstance(ty, TensorType):
-        shape = str(ty.shape).replace(" ", "")
-        dtype = ty.dtype.name if hasattr(ty.dtype, 'name') else str(ty.dtype)
-        lines = [f"shape=({shape}), dtype={dtype}"]
-        if isinstance(ty.layout, ShardLayout):
-            mesh_line, attr_line = _shard_label(ty.layout, mesh_axis_names)
-            lines.append(mesh_line)
-            lines.append(attr_line)
-        return lines
-    return [str(ty)]
-
-
-def _op_name(target) -> str:
-    cls = type(target).__name__
-    for suffix in ("Op", "Expr", "Stmt"):
-        if cls.endswith(suffix) and cls != suffix:
-            cls = cls[:-len(suffix)]
-    return cls
+def _type_lines(ty, mesh_name_map: dict[int, str]) -> list[str]:
+    """Type-annotation lines for a node label: the shared canonical
+    ``Tensor[...]`` text (§2.3), split on newline for the verbose multi-line
+    ``ShardLayout(...)`` fallback."""
+    text = _tensor_annotation(ty, mesh_name_map=mesh_name_map) if isinstance(ty, TensorType) else str(ty)
+    return text.split("\n")
 
 
 def _escape_dot(s: str) -> str:
@@ -76,17 +36,16 @@ def _escape_dot(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def hir_function_to_dot(fn: HirFunction,
-                        mesh_axis_names=("cluster", "cta", "warp", "lane")) -> str:
+def hir_function_to_dot(fn: HirFunction) -> str:
     """Convert a hir.Function to a DOT digraph string.
 
     Args:
         fn: The HIR function to visualize.
-        mesh_axis_names: Names for mesh axes in display order.
 
     Returns:
         A Graphviz DOT format string.
     """
+    mesh_map = _mesh_name_map(_collect_meshes(fn, include_node_types=True))
     lines = [f"digraph {fn.name} {{", '  rankdir=TB;',
              '  node [shape=box, style=filled, fillcolor="#f0f0f0"];',
              '  edge [fontsize=10, fontcolor="#555555"];', '']
@@ -128,40 +87,36 @@ def hir_function_to_dot(fn: HirFunction,
             if is_new:
                 _emit_node(nid, [
                     f"Var: {expr.name}",
-                    *_type_label(expr.type, mesh_axis_names),
+                    *_type_lines(expr.type, mesh_map),
                 ], fill=VAR_FILL)
         elif isinstance(expr, Constant):
             if is_new:
                 val = f"{expr.value:.6g}" if isinstance(expr.value, float) else str(expr.value)
                 _emit_node(nid, [
                     f"Const: {val}",
-                    *_type_label(expr.type, mesh_axis_names),
+                    *_type_lines(expr.type, mesh_map),
                 ], fill=CONST_FILL)
         elif isinstance(expr, Call):
             target = expr.target
             if isinstance(target, Reshard):
                 if is_new:
-                    header = expr.loc if expr.loc else "Reshard"
-                    if expr.loc:
-                        header = f"{expr.loc}\\nReshard"
+                    header = f"{expr.loc}\\nReshard" if expr.loc else "Reshard"
                     _emit_node(nid, [
                         header,
-                        *_type_label(expr.type, mesh_axis_names),
+                        *_type_lines(expr.type, mesh_map),
                     ], fill=SHARDING_FILL)
                     for arg in expr.args:
                         walk(arg)
                         _emit_edge(_id(arg), nid)
                 return
 
-            op_label = _op_name(target)
+            op_label = _op_display_name(target)
             # Use loc as human-readable name when available
-            header = expr.loc if expr.loc else op_label
-            if expr.loc:
-                header = f"{expr.loc}\\n{op_label}"
+            header = f"{expr.loc}\\n{op_label}" if expr.loc else op_label
             if is_new:
                 _emit_node(nid, [
                     header,
-                    *_type_label(expr.type, mesh_axis_names),
+                    *_type_lines(expr.type, mesh_map),
                 ], fill=CALL_FILL)
                 for i, arg in enumerate(expr.args):
                     walk(arg)
@@ -193,12 +148,7 @@ def hir_function_to_dot(fn: HirFunction,
     return "\n".join(lines) + "\n"
 
 
-def module_entry_to_dot(module: Module,
-                        mesh_axis_names=("cluster", "cta", "warp", "lane")) -> str:
+def module_entry_to_dot(module: Module) -> str:
     """Convert a Module's entry function to DOT."""
     fn = module.entry_function()
-    return hir_function_to_dot(fn, mesh_axis_names)
-
-
-# Legacy alias
-to_dot = hir_function_to_dot
+    return hir_function_to_dot(fn)

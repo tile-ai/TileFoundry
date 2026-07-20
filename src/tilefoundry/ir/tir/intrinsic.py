@@ -4,8 +4,8 @@ import inspect
 from dataclasses import make_dataclass
 
 from tilefoundry.ir.core import Expr, VerifyError
-from tilefoundry.ir.core.registry import register_verify_stmt
 from tilefoundry.ir.tir.stmt import Stmt
+from tilefoundry.visitor_registry import register_verify_stmt
 
 # DSL-surface name → Stmt subclass. Parser reads this to dispatch user
 # intrinsic calls inside @prim_func bodies.

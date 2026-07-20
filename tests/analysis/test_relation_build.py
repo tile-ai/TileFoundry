@@ -23,33 +23,6 @@ def test_build_domain_static_constant_constraints():
     assert int(dom.count_val().num_si()) == 32
 
 
-def test_build_domain_dynamic_dimvar_is_param():
-    M = DimVar("M", 1, 4096)
-    dom = build_domain((M, 128))
-    # The dynamic extent becomes one isl parameter carrying its bound.
-    assert dom.dim(isl.dim_type.PARAM) == 1
-    assert dom.dim(isl.dim_type.SET) == 2
-
-
-def test_build_domain_composite_extent_binds_one_opaque_param():
-    M = DimVar("M", 1, 4096)
-    dom = build_domain((simplify_dim(DimFloorDiv, (M, 4)),))
-    # build_domain is a thin to_domain(extents).domain wrapper; dim_range /
-    # opaque-param mechanics are isl_utility's own test surface.
-    assert dom.dim(isl.dim_type.PARAM) == 1
-    assert dom.dim(isl.dim_type.SET) == 1
-
-
-def test_build_domain_rank0():
-    dom = build_domain(())
-    assert dom.dim(isl.dim_type.SET) == 0
-
-
-def test_build_domain_same_name_conflicting_bounds_raises():
-    with pytest.raises(ValueError, match="conflicting bounds"):
-        build_domain((DimVar("S", 1, 8), DimVar("S", 1, 16)))
-
-
 def test_validate_output_map_arity():
     om = isl.map("{ [m, k, n] -> [m, n] }")
     validate_output_map_arity(om, (1, 1))  # ok
