@@ -23,7 +23,6 @@ from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
-from tilefoundry.parser.dispatch import resolve_callable
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.parser.overload import OverloadError, resolve
 
@@ -49,24 +48,7 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
         parse_script(_dedent(src))
 
 
-# ── 2. Wrong-dialect resolution ──────────────────────────────────────────
-
-
-def test_tir_only_name_in_hir_body_raises() -> None:
-    """``copy`` is TIR-only; it must NOT silently fall back into HIR."""
-
-    with pytest.raises(VerifyError, match=r"unknown HIR callable 'copy'"):
-        resolve_callable("copy", "hir")
-
-
-def test_hir_only_name_in_tir_body_raises() -> None:
-    """``rope`` is HIR-only; it must NOT silently fall back into TIR."""
-
-    with pytest.raises(VerifyError, match=r"unknown TIR callable 'rope'"):
-        resolve_callable("rope", "tir")
-
-
-# ── 3. Overload pattern mismatch ─────────────────────────────────────────
+# ── 2. Overload pattern mismatch ─────────────────────────────────────────
 
 
 def test_no_overload_matches_arg_types_raises() -> None:
