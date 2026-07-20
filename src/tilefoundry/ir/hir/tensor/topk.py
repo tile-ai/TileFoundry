@@ -18,7 +18,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.shard import Layout
+from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
@@ -33,7 +33,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
 from tilefoundry.visitor_registry.shard_propagate import (
-    _c_order,
     derive_output_shard_layout,
     partial_reductions_by_axis,
 )
@@ -59,7 +58,7 @@ def _canonical_shard(sl: "ShardLayout", out_shape) -> "ShardLayout":
     when the shape is non-static; ``attrs`` and ``mesh`` pass through.
     """
     out_shape = tuple(out_shape)
-    strides = _c_order(out_shape) or tuple(1 for _ in out_shape)
+    strides = try_c_order_strides(out_shape) or tuple(1 for _ in out_shape)
     return ShardLayout(
         layout=Layout(shape=out_shape, strides=strides),
         attrs=sl.attrs,

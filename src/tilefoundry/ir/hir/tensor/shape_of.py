@@ -17,7 +17,7 @@ class ShapeOf(Op):
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     rank_expr = Constant(
-        type=TensorType.scalar(DType.i64), value=len(x_ty.shape)
+        type=TensorType.meta_scalar(), value=len(x_ty.shape)
     )
     return TensorType(
         shape=(rank_expr,), dtype=DType.i64, layout=EMPTY_LAYOUT, storage=None

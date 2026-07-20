@@ -4,7 +4,7 @@ import ast
 import dataclasses
 from typing import Any
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
+from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -12,12 +12,11 @@ from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
-    DimMax,
-    DimMin,
     DimMod,
     DimMul,
     DimSub,
     DimVar,
+    is_dim_expr,
     simplify_dim,
 )
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
@@ -39,8 +38,6 @@ from .range_slice import RangeSlice
 from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar, try_parse_sugar_tensor_type
 from .symtab import LexicalEnv
 
-_DIM_OP_TYPES = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
-
 # Python AST binary ops → dim ops, for resolving loop bounds (tile/range
 # extent / step / start) that mix DimVars with ints, e.g. ``C // NUM_SPLITS``.
 _AST_DIM_OPS = {
@@ -50,27 +47,6 @@ _AST_DIM_OPS = {
     ast.FloorDiv: DimFloorDiv,
     ast.Mod: DimMod,
 }
-
-
-def _is_dim_expr(v) -> bool:
-    """A legal ``tile(...)`` extent / step: a static ``int``, a ``DimVar``, or a
-    dim ``Expr`` built only from the ``dim`` ops over int / DimVar leaves.
-
-    Rejects arbitrary ``Expr`` (e.g. a tensor-op ``Call``) so a malformed
-    extent cannot reach IR."""
-    if isinstance(v, bool):
-        return False
-    if isinstance(v, int):
-        return True
-    if isinstance(v, DimVar):
-        return True
-    if isinstance(v, Constant):
-        return isinstance(v.value, int) and not isinstance(v.value, bool)
-    if isinstance(v, Call):
-        return isinstance(v.target, _DIM_OP_TYPES) and all(
-            _is_dim_expr(a) for a in v.args
-        )
-    return False
 
 
 def parse_func(fn, *, topologies=(), specializations=(), target=None, extra_closure=None) -> Function:
@@ -936,7 +912,7 @@ class _HirBodyVisitor(BaseExprVisitor):
                 raise VerifyError(
                     f"tile() takes 1 or 2 arguments (extent[, step]), got {len(loop_args)}"
                 )
-        if not (_is_dim_expr(start) and _is_dim_expr(extent) and _is_dim_expr(step)):
+        if not (is_dim_expr(start) and is_dim_expr(extent) and is_dim_expr(step)):
             raise VerifyError(
                 f"{loop_kind}(): start / extent / step must be a dim expression "
                 f"(int / DimVar / dim-op Expr), got start={start!r}, "

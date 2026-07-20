@@ -10,6 +10,28 @@ class DType:
     name: str
     bit_width: int
 
+    @classmethod
+    def _members(cls) -> dict[str, "DType"]:
+        """Descriptor singletons keyed by surface name (internal — the
+        spec closes the Enum-style iteration surface; ``from_name`` is
+        the one public resolution entry)."""
+        return {v.name: v for v in vars(cls).values() if isinstance(v, DType)}
+
+    @classmethod
+    def from_name(cls, name: str) -> "DType":
+        """Resolve a surface dtype string to its descriptor.
+
+        The single string resolution surface: an unknown string is
+        rejected with the valid names in the message.
+        """
+        members = cls._members()
+        member = members.get(name)
+        if member is None:
+            raise ValueError(
+                f"DType: unknown value {name!r}; valid: {sorted(members)}"
+            )
+        return member
+
 
 @dataclass(frozen=True)
 class FloatDType(DType):

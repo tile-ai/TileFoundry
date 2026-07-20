@@ -5,7 +5,7 @@ from typing import Optional
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
-from .shard import ComposedLayout, Layout, Mesh, ShardLayout, Split
+from .shard import ComposedLayout, Layout, Mesh, ShardLayout, Split, c_order_strides
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -19,11 +19,6 @@ def make_tensor_type(
     return TensorType(shape=tuple(shape), dtype=dtype, layout=layout, storage=storage)
 
 
-def _layout_c_order_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
-    return tuple(strides)
 
 
 def make_shard_tensor_type(
@@ -86,7 +81,7 @@ def make_shard_tensor_type(
     )
     layout_shape = tuple(layout_shape)
     layout = ShardLayout(
-        layout=Layout(shape=layout_shape, strides=_layout_c_order_strides(layout_shape)),
+        layout=Layout(shape=layout_shape, strides=c_order_strides(layout_shape)),
         attrs=remapped_attrs,
         mesh=mesh,
     )

@@ -14,7 +14,7 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN, make_atom
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import ShardLayout, Split
+from tilefoundry.ir.types.shard import ShardLayout, Split, product
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
@@ -85,10 +85,7 @@ def test_reshard_typeinfer_accepts_a_fragment():
 
 
 def _product(shape: tuple[int, ...]) -> int:
-    p = 1
-    for s in shape:
-        p *= int(s)
-    return p
+    return product(tuple(int(s) for s in shape))
 
 
 def _per_thread_size(sl: ShardLayout) -> int:

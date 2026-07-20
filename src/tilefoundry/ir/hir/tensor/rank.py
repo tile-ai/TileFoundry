@@ -5,8 +5,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
+from tilefoundry.ir.types import TensorType
 
 
 @register_op
@@ -14,4 +13,4 @@ class Rank(Op):
     x = ParamDef(kind="input", pattern=Tensor)
 @register_typeinfer(Rank)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return TensorType(shape=(), dtype=DType.i64, layout=EMPTY_LAYOUT, storage=None)
+    return TensorType.meta_scalar()

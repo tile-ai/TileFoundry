@@ -44,23 +44,23 @@ def static_dim_value(dim):
     return None
 
 
-def is_static_dim(dim) -> bool:
-    """True iff ``dim`` is a compile-time-known integer dim (``int`` or integer
-    ``Constant``). Mirrors :func:`static_dim_value` (which to use when the value
-    is needed)."""
-    return static_dim_value(dim) is not None
+def i64_const(value: int) -> "Constant":
+    """The canonical i64 shape-scalar ``Constant`` (meta-scalar typed)."""
+    from tilefoundry.ir.core.expr import Constant  # noqa: PLC0415 - cycle guard
+
+    from .tensor_type import TensorType  # noqa: PLC0415 - cycle guard
+    return Constant(type=TensorType.meta_scalar(), value=int(value))
 
 
 def upper_bound(dim) -> int:
     """Return a concrete int upper-bound element count for ``dim``."""
-    if isinstance(dim, int) and not isinstance(dim, bool):
-        return dim
     if isinstance(dim, DimVar):
         # Half-open envelope ``[lo, hi)``: ``hi`` is exclusive, so the maximum
         # runtime value (the element count a static buffer must hold) is hi-1.
         return int(dim.hi) - 1
-    if hasattr(dim, "value"):
-        return int(dim.value)
+    static = static_dim_value(dim)
+    if static is not None:
+        return static
     return int(dim)
 
 
@@ -111,7 +111,7 @@ def shape_runtime_total(shape, dim_var_expr: dict[str, str]) -> object:
 
 __all__ = [
     "static_dim_value",
-    "is_static_dim",
+    "i64_const",
     "upper_bound",
     "shape_upper_bound",
     "shape_has_dim_var",

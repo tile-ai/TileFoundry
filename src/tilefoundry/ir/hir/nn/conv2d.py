@@ -6,9 +6,9 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.core.registry import register_typeinfer
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
@@ -83,7 +83,7 @@ def _check_partial_commutes(call, ctx, operands) -> None:
 
 
 def _i64(value: int) -> Constant:
-    return Constant(type=TensorType.scalar(DType.i64), value=value)
+    return i64_const(value)
 
 def _as_expr(v):
     if isinstance(v, Expr):

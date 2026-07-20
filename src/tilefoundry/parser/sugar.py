@@ -18,6 +18,7 @@ from typing import Any, Callable
 from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh, MeshAxis
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -147,24 +148,18 @@ def _name_of(node: ast.AST) -> str:
 
 def _auto_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
     """C-order contiguous strides: ``(d0, d1, d2)`` → ``(d1*d2, d2, 1)``."""
-    if not shape:
-        return ()
-    strides = [1]
-    for d in reversed(shape[1:]):
-        strides.insert(0, strides[0] * d)
-    return tuple(strides)
+    return c_order_strides(shape)
 
 
 def _resolve_dtype_ast(node: ast.AST, closure: dict[str, Any]) -> DType | None:
     """Resolve a dtype from an AST node (bare name, string, or DType.attr)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        member = getattr(DType, node.value, None)
-        return member if isinstance(member, DType) else None
+        return DType._members().get(node.value)
     if isinstance(node, ast.Name):
         val = closure.get(node.id)
         if isinstance(val, DType):
             return val
-        return getattr(DType, node.id, None)
+        return DType._members().get(node.id)
     if isinstance(node, ast.Attribute):
         try:
             val = _eval_ast(node, closure)

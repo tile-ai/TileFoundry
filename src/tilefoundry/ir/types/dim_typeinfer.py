@@ -12,12 +12,11 @@ from .dim import (
     DimSub,
     DimVar,
 )
-from .shard.layout import EMPTY_LAYOUT
-from .tensor_type import DType, TensorType
+from .tensor_type import TensorType
 
 
 def _meta_i64() -> TensorType:
-    return TensorType(shape=(), dtype=DType.i64, layout=EMPTY_LAYOUT, storage=None)
+    return TensorType.meta_scalar()
 
 
 for _cls in (DimConst, DimVar, DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax):

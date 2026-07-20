@@ -5,7 +5,7 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Any, Union
 
-from tilefoundry.ir.core import Call, Constant, Expr, Var, VerifyError
+from tilefoundry.ir.core import Call, Expr, Var, VerifyError
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.launch import LaunchAttrs, launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -24,14 +24,8 @@ from tilefoundry.ir.tir.stmts import (
 from tilefoundry.ir.tir.symbol_ref import symbol_call
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMax,
-    DimMin,
-    DimMod,
-    DimMul,
-    DimSub,
     DimVar,
+    is_dim_expr,
 )
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.visitor import StmtVisitor
@@ -40,29 +34,6 @@ from tilefoundry.target import CudaTarget, default_target
 from .base import BaseExprVisitor, _i64, extract_ast
 from .dispatch import resolve_stmt
 from .symtab import LexicalEnv
-
-# Ops that may appear in a launch grid / block dim-arithmetic expression.
-_DIM_EXTENT_OPS = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
-
-
-def _is_dim_extent(val) -> bool:
-    """True for a compile-time launch extent: an ``int``, a ``DimVar``, an
-    integer ``Constant``, or a dim-arithmetic ``Call`` whose operands are
-    themselves dim extents. Rejects ``bool``, tensor-valued ``Var`` / ``Call``,
-    and everything else."""
-    if isinstance(val, bool):
-        return False
-    if isinstance(val, int):
-        return True
-    if isinstance(val, DimVar):
-        return True
-    if isinstance(val, Constant):
-        return isinstance(val.value, int) and not isinstance(val.value, bool)
-    if isinstance(val, Call):
-        return isinstance(val.target, _DIM_EXTENT_OPS) and all(
-            _is_dim_extent(arg) for arg in val.args
-        )
-    return False
 
 
 @dataclass(frozen=True)
@@ -441,7 +412,7 @@ class _TirBodyVisitor(BaseExprVisitor):
         a constant), a ``DimVar``, or a dim-arithmetic ``Expr``; reject anything
         else loudly (extents are shape arithmetic, not arbitrary values)."""
         val = self._eval_static(node)
-        if not _is_dim_extent(val):
+        if not is_dim_expr(val):
             raise VerifyError(
                 f"tir: launch grid/block extent must be an int, DimVar, or dim "
                 f"expression, got {type(val).__name__}"

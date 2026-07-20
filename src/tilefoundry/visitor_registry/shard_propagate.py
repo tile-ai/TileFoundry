@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.ir.types.shard import Layout, ShardLayout
+from tilefoundry.ir.types.shard import Layout, ShardLayout, try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Partial,
@@ -79,16 +79,6 @@ def _involved_domain_dims(m: "isl.map") -> "set[int]":
             if int(aff.get_coefficient_val(isl.dim_type.IN, j).num_si()) != 0:
                 dims.add(j)
     return dims
-
-
-def _c_order(shape: tuple) -> "tuple | None":
-    """C-order contiguous strides for an all-int *shape*, else ``None``."""
-    if not all(isinstance(d, int) and not isinstance(d, bool) for d in shape):
-        return None
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = strides[i + 1] * int(shape[i + 1])
-    return tuple(strides)
 
 
 def _carrier_layout(
@@ -161,7 +151,7 @@ def _carrier_layout(
     if fresh_strides:
         # Fresh output buffer (e.g. Reduce): C-order strides over the new shape,
         # size-1 positions zeroed; never reads the input strides.
-        c = _c_order(tuple(new_shape)) or tuple(1 for _ in new_shape)
+        c = try_c_order_strides(tuple(new_shape)) or tuple(1 for _ in new_shape)
         new_strides = [
             0 if (isinstance(sz, int) and sz == 1) else cc
             for sz, cc in zip(new_shape, c)
@@ -376,7 +366,7 @@ def derive_output_shard_layout(
             pos += 1
 
     return ShardLayout(
-        layout=Layout(shape=tuple(layout_shape), strides=_c_order(tuple(layout_shape))),
+        layout=Layout(shape=tuple(layout_shape), strides=try_c_order_strides(tuple(layout_shape))),
         attrs=tuple(out_attrs),
         mesh=mesh,
     )

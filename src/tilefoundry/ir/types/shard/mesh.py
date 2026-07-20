@@ -94,12 +94,9 @@ class Mesh:
                     "shorthand tuple with a non-integer (dynamic) extent cannot "
                     "auto-derive C-order strides; pass an explicit Layout"
                 )
-            shape = ly
-            strides: list[int] = [1] * len(shape)
-            for i in range(len(shape) - 2, -1, -1):
-                strides[i] = strides[i + 1] * shape[i + 1]
+            from .layout_algebra import c_order_strides  # noqa: PLC0415 - cycle guard
             object.__setattr__(
-                self, "layout", Layout(shape=shape, strides=tuple(strides))
+                self, "layout", Layout(shape=ly, strides=c_order_strides(ly))
             )
 
 

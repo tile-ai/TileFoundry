@@ -18,6 +18,7 @@ from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
@@ -83,7 +84,7 @@ def extract_ast(fn) -> ast.FunctionDef:
 
 
 def _i64(value: int) -> Constant:
-    return Constant(type=TensorType.scalar(DType.i64), value=value)
+    return i64_const(value)
 
 
 def _constant_from_py(value: Any) -> Constant:
@@ -744,17 +745,10 @@ class BaseExprVisitor:
                     f"valid values are {valid}"
                 ) from None
         if isinstance(value, str) and annotation is DType:
-            member = getattr(DType, value, None)
-            if not isinstance(member, DType):
-                valid = ", ".join(
-                    repr(name)
-                    for name, candidate in vars(DType).items()
-                    if isinstance(candidate, DType)
-                )
-                raise VerifyError(
-                    f"DType: unknown value {value!r}; valid values are {valid}"
-                )
-            return member
+            try:
+                return DType.from_name(value)
+            except ValueError as exc:
+                raise VerifyError(str(exc)) from None
         return value
 
     def _lookup_param_annotation(

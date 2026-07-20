@@ -61,7 +61,7 @@ def test_simplify_dim_folds_all_constant_args(op_cls, a, b, expected) -> None:
         f"{op_cls.__name__}: expected Constant, got {type(result).__name__}"
     )
     assert result.value == expected
-    assert result.type == TensorType.scalar(DType.i64)
+    assert result.type == TensorType.meta_scalar()
 
 
 @pytest.mark.parametrize("op_cls", [DimAdd, DimFloorDiv])

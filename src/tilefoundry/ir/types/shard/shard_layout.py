@@ -122,12 +122,13 @@ def layout_axis_to_tensor_axis(
         layout pos 2 (size 32) -> tensor axis 1 (running 192)
         layout pos 3 (size 8)  -> tensor axis 1 (running 1536)
     """
+    from ..shape_helpers import static_dim_value  # noqa: PLC0415 - cycle guard
+
     result: list[int] = []
     layout_idx = 0
     for t_axis, t_dim in enumerate(tensor_shape):
-        try:
-            t_dim_int = int(t_dim.value) if hasattr(t_dim, "value") else int(t_dim)
-        except (TypeError, ValueError):
+        t_dim_int = static_dim_value(t_dim)
+        if t_dim_int is None:
             # Symbolic dim — attach all remaining layout positions here and stop.
             while layout_idx < len(layout_shape):
                 result.append(t_axis)
@@ -140,11 +141,8 @@ def layout_axis_to_tensor_axis(
             continue
         running = 1
         while layout_idx < len(layout_shape) and running < t_dim_int:
-            try:
-                sh = int(layout_shape[layout_idx])
-            except (TypeError, ValueError):
-                sh = 1
-            running *= sh
+            sh = static_dim_value(layout_shape[layout_idx])
+            running *= 1 if sh is None else sh
             result.append(t_axis)
             layout_idx += 1
     while layout_idx < len(layout_shape):

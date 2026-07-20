@@ -31,6 +31,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
+from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -165,10 +166,8 @@ def _shard_layout_surface_str(
         dim_str += ","
     axis_tuple = f"({dim_str})"
 
-    c_strides = [1]
-    for dd in reversed(layout.shape[1:]):
-        c_strides.insert(0, c_strides[0] * dd)
-    explicit = layout.strides is not None and layout.strides != tuple(c_strides)
+    c_strides = c_order_strides(layout.shape)
+    explicit = layout.strides is not None and layout.strides != c_strides
     stride_str = _shape_tuple(layout.strides) if explicit else None
     value_set = "{" + ", ".join(partials) + "}" if partials else None
 

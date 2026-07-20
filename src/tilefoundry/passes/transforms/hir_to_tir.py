@@ -76,7 +76,7 @@ from tilefoundry.ir.types import (
     TupleType,
     callable_type_for_prim_function,
 )
-from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
+from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout as _Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -126,12 +126,9 @@ def _is_full_layout(layout) -> bool:
     # ``cosize == size`` for a contiguous embedding. A dynamic dim only appears
     # as the outermost axis, so it never enters a stride product; the inner
     # extents that build the strides must be static for the check to hold.
-    expected = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        nxt = shape[i + 1]
-        if not isinstance(nxt, int) or not isinstance(expected[i + 1], int):
-            return False
-        expected[i] = expected[i + 1] * nxt
+    if not all(isinstance(d, int) and not isinstance(d, bool) for d in shape[1:]):
+        return False
+    expected = c_order_strides(tuple(shape))  # never reads shape[0]
     return all(
         isinstance(strides[i], int) and strides[i] == expected[i]
         for i in range(len(shape))
@@ -702,11 +699,7 @@ class _Lowerer:
         # patterns like ``add(acc, mma(a, b))`` are emitted as a
         # separate Binary stmt later in the pipeline.
         zero_const = Constant(
-            value=0.0,
-            type=TensorType(
-                shape=(), dtype=target.dtype_acc,
-                layout=EMPTY_LAYOUT, storage=None,
-            ),
+            value=0.0, type=TensorType.meta_scalar(target.dtype_acc),
         )
         self._items.append(_eval_call(Fill(), (r, zero_const)))
         # TirMma operand order is (acc, lhs, rhs); the lowered path leaves
@@ -935,10 +928,8 @@ class _Lowerer:
         # Row-slice view of the cache at runtime ``cur`` along axis 1; keep rank
         # 4 (axis-1 extent 1) so the Copy shape check matches ``new``.
         view_shape = (new_shape[0], 1, *cache_shape[2:])
-        cstr = [1] * len(cache_shape)
-        for i in range(len(cache_shape) - 2, -1, -1):
-            cstr[i] = cstr[i + 1] * int(cache_shape[i + 1])
-        view_layout = _Layout(shape=view_shape, strides=tuple(cstr))
+        cstr = c_order_strides(tuple(int(d) for d in cache_shape))
+        view_layout = _Layout(shape=view_shape, strides=cstr)
         tv_type = TensorType(
             shape=view_shape,
             dtype=cache.type.dtype,
