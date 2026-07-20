@@ -48,6 +48,14 @@ def test_real_fixtures_build_finite_problems() -> None:
         type(candidate.op).__name__ == "Reshard" and candidate.site_id is None
         for candidate in qwen.candidates.values()
     )
+    assert set(qwen.candidate_enclosing_regions) == set(qwen.candidates)
+    region = next(iter(qwen.regions.values()))
+    assert region.parent_region_id is None
+    assert len(region.carry_infos) == 3
+    assert all(
+        qwen.value_availability_regions[carry.result_value_id] is None
+        for carry in region.carry_infos
+    )
 
 
 def test_repeated_helper_calls_get_distinct_function_instances() -> None:

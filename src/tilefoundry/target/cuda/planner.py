@@ -111,6 +111,16 @@ class RegionInfo:
     operation_site_ids: tuple[int, ...]
     init_use_ids: tuple[int, ...]
     backedge_use_ids: tuple[int, ...]
+    carry_infos: tuple["RegionCarryInfo", ...] = ()
+    result_value_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class RegionCarryInfo:
+    init_value_id: int
+    carried_value_id: int
+    yield_value_id: int
+    result_value_id: int
 
 
 @dataclass(frozen=True)
@@ -127,6 +137,8 @@ class PlanningProblem:
     requirements: tuple[BucketRequirement, ...]
     root_value_ids: tuple[int, ...]
     regions: Mapping[int, RegionInfo]
+    candidate_enclosing_regions: Mapping[int, int | None] = MappingProxyType({})
+    value_availability_regions: Mapping[int, int | None] = MappingProxyType({})
     site_order: tuple[int, ...] = ()
     function_instances: tuple[tuple[tuple[int, ...], Function], ...] = ()
     diagnostics: tuple[str, ...] = ()
@@ -266,6 +278,9 @@ class _Planner:
         self.requirement_annotations: list[tuple[tuple[int, ...], Expr, ScheduleConstraintMetadata]] = []
         self.requirements: list[BucketRequirement] = []
         self.regions: dict[int, RegionInfo] = {}
+        self.candidate_enclosing_regions: dict[int, int | None] = {}
+        self.value_availability_regions: dict[int, int | None] = {}
+        self.site_enclosing_regions: dict[int, int | None] = {}
         self.sites: list[_Site] = []
         self.site_order: list[int] = []
         self.function_instances: list[tuple[tuple[int, ...], Function]] = []
@@ -424,6 +439,9 @@ class _Planner:
             function_path=function_path,
         )
         self.values[value_id] = info
+        self.value_availability_regions[value_id] = (
+            self._active_regions[-1] if self._active_regions else None
+        )
         self.value_types[value_id] = self._legal_types(type)
         return value_id
 
@@ -543,6 +561,9 @@ class _Planner:
         site = _Site(site_id, expr, function_path, arg_refs, output_refs)
         self.sites.append(site)
         self.site_order.append(site_id)
+        self.site_enclosing_regions[site_id] = (
+            self._active_regions[-1] if self._active_regions else None
+        )
         if self._active_regions:
             region_id = self._active_regions[-1]
             info = self.regions[region_id]
@@ -582,24 +603,39 @@ class _Planner:
             backedge_use_ids=tuple(self._new_use() for _ in region.yield_values),
         )
         self.regions[region_id] = info
-        init_refs = tuple(
+        init_ref_groups = tuple(
             self._process_expr(value, function, function_path, env)
             for value in region.init_args
         )
+        init_refs = tuple(ref for refs in init_ref_groups for ref in refs)
         phi_env = dict(env)
-        for phi, refs in zip(region.carried_args, init_refs):
+        for phi, refs in zip(region.carried_args, init_ref_groups):
             phi_env[id(phi)] = refs
         self._active_regions.append(region_id)
         try:
             body_refs = self._process_expr(region.body, function, function_path + (region_id,), phi_env)
-            yield_refs = tuple(
-                ref
+            yield_ref_groups = tuple(
+                self._process_expr(value, function, function_path + (region_id,), phi_env)
                 for value in region.yield_values
-                for ref in self._process_expr(value, function, function_path + (region_id,), phi_env)
             )
+            yield_refs = tuple(ref for refs in yield_ref_groups for ref in refs)
         finally:
             self._active_regions.pop()
-        return yield_refs if region.carried_args else body_refs
+        result_refs = yield_refs if region.carried_args else body_refs
+        parent_region_id = info.parent_region_id
+        for ref in result_refs:
+            self.value_availability_regions[ref] = parent_region_id
+        carry_infos = tuple(
+            RegionCarryInfo(init_value_id=init_ref, carried_value_id=init_ref,
+                            yield_value_id=yield_ref, result_value_id=yield_ref)
+            for init_ref, yield_ref in zip(init_refs, yield_refs)
+        )
+        self.regions[region_id] = replace(
+            self.regions[region_id],
+            carry_infos=carry_infos,
+            result_value_ids=result_refs,
+        )
+        return result_refs
 
     def _new_use(self) -> int:
         value = self._next_use
@@ -752,6 +788,13 @@ class _Planner:
         candidate_id = self._next_candidate
         self._next_candidate += 1
         self.candidates[candidate_id] = candidate
+        if site_id is None:
+            value_id = self.buckets[output_bucket_ids[0]].value_id
+            self.candidate_enclosing_regions[candidate_id] = (
+                self.value_availability_regions.get(value_id)
+            )
+        else:
+            self.candidate_enclosing_regions[candidate_id] = self.site_enclosing_regions.get(site_id)
         for bucket_id in output_bucket_ids:
             self._bucket_candidates[bucket_id].append(candidate_id)
         for input_index, bucket_id in enumerate(input_bucket_ids):
@@ -963,6 +1006,8 @@ class _Planner:
             requirements=tuple(self.requirements),
             root_value_ids=tuple(root_refs),
             regions=MappingProxyType(dict(self.regions)),
+            candidate_enclosing_regions=MappingProxyType(dict(self.candidate_enclosing_regions)),
+            value_availability_regions=MappingProxyType(dict(self.value_availability_regions)),
             site_order=tuple(self.site_order),
             function_instances=tuple(self.function_instances),
             diagnostics=(
@@ -1012,6 +1057,7 @@ __all__ = [
     "CandidateDependency",
     "OpCandidate",
     "PlanningProblem",
+    "RegionCarryInfo",
     "RegionInfo",
     "ValueInfo",
     "build_planning_problem",
