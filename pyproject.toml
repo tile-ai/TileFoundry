@@ -15,6 +15,7 @@ dependencies = [
     "torch>=2.7",  # DType.f8e8m0 -> torch.float8_e8m0fnu, added in torch 2.7
     "graphviz>=0.20",
     "transformers>=4.57",
+    "ortools>=9.15",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

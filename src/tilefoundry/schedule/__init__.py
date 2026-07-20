@@ -28,12 +28,9 @@ class ScheduleReport:
     status: Literal["OPTIMAL", "FEASIBLE_NOT_PROVEN"]
     objective_name: Literal["makespan"]
     unit: Literal["ns"]
-    baseline: int
     selected: int
-    solver_phase: Literal["makespan", "reshard_bytes", "resource_area"]
-    proven_objectives: tuple[str, ...]
-    best_bound: int | None
-    gap: float | None
+    best_bound: int
+    gap: float
 
     def to_json(self) -> str:
         """Render the complete summary as sorted-key JSON."""
@@ -48,10 +45,7 @@ class ScheduleReport:
             ("status", self.status),
             ("objective_name", self.objective_name),
             ("unit", self.unit),
-            ("baseline", self.baseline),
             ("selected", self.selected),
-            ("solver_phase", self.solver_phase),
-            ("proven_objectives", ", ".join(self.proven_objectives)),
             ("best_bound", self.best_bound),
             ("gap", self.gap),
         )
