@@ -16,6 +16,7 @@ from .shard_layout import (
     ShardAttr,
     ShardLayout,
     Split,
+    canonical_shard_layout,
 )
 from .utils import make_mesh
 
@@ -30,5 +31,5 @@ __all__ = [
     "Topology", "MeshAxis", "Mesh", "make_mesh",
     # shard
     "ShardAttr", "Split", "Partial", "Broadcast", "Dynamic", "ShardLayout",
-    "S", "P", "B",
+    "S", "P", "B", "canonical_shard_layout",
 ]

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .layout import LayoutBase
+from .layout import Layout, LayoutBase
+from .layout_algebra import try_c_order_strides
 from .mesh import Mesh
 
 
@@ -53,6 +54,105 @@ class ShardLayout(LayoutBase):
     @property
     def shape(self) -> tuple:
         return self.layout.shape
+
+
+def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
+    """Build the canonical ``ShardLayout`` (``docs/spec/shard.md`` §7.1.1)
+    binding ``attrs`` (one entry per mesh axis; each ``Split`` names a
+    ``logical_shape`` axis) to ``mesh``.
+
+    Every logical axis split by one or more mesh axes is factored, in
+    mesh-axis order, into one position per splitting mesh axis (sized to
+    that axis's extent) plus a residual position
+    (``logical_size // Π(extents)``, omitted when 1, an error when the
+    division is not exact) — every ``Split``-bound position in the
+    resulting ``Layout`` ends up sized exactly to its mesh extent
+    (``G[k] == mesh.shape[a]``), the §7.1.1 canonical form, *even when a
+    single mesh axis splits the axis*. A single mesh-axis split is instead
+    kept whole (one Split-bound position, no residual) when it cannot be
+    factored into a static extent + residual: either the mesh extent is
+    launch-provided (``mesh.shape[a] is None``, only a ``cta`` topology, its
+    runtime count unknown at compile time) or the logical axis size is itself
+    dynamic (the residual ``size // extent`` would be symbolic) — each shard
+    then owns one runtime-determined 1/extent slice. (A dynamic logical axis
+    split by *several* mesh axes cannot be represented and is an error.)
+    ``Split`` attrs are remapped from the logical axis to that
+    position; ``Broadcast`` / ``Partial`` / ``Dynamic`` pass through
+    unchanged. Strides are freshly built C-order (``None`` when the
+    resulting shape is dynamic).
+
+    This is the single canonicalizer for a §7.1.1 layout: both
+    ``make_shard_tensor_type`` (a from-scratch sharding) and
+    ``derive_output_shard_layout``'s synthesis fallback (a propagated one)
+    call it, so a layout built by either for the same logical sharding
+    always compares structurally equal.
+    """
+    mesh_shape = mesh.layout.shape
+    bindings: dict[int, list[int]] = {}
+    for mesh_axis, attr in enumerate(attrs):
+        if isinstance(attr, Split):
+            bindings.setdefault(attr.axis, []).append(mesh_axis)
+
+    layout_shape: list = []
+    factor_position: dict[int, int] = {}
+    for logical_axis, axis_size in enumerate(logical_shape):
+        splitting_mesh_axes = bindings.get(logical_axis, [])
+        if not splitting_mesh_axes:
+            layout_shape.append(axis_size)
+            continue
+        # A single mesh-axis split keeps the whole logical axis as one
+        # Split-bound position when it cannot be factored into a static extent
+        # + residual: either the mesh extent is launch-provided (dynamic,
+        # ``None``) or the logical axis size is itself dynamic (the residual
+        # ``size // extent`` would be symbolic). Each shard then owns a
+        # runtime-determined 1/extent slice. This matches the pre-canonicalizer
+        # single-split synthesis in ``derive_output_shard_layout`` (a dynamic
+        # axis split by *several* mesh axes still errors, below).
+        axis_static = isinstance(axis_size, int) and not isinstance(axis_size, bool)
+        if len(splitting_mesh_axes) == 1 and (
+            mesh_shape[splitting_mesh_axes[0]] is None or not axis_static
+        ):
+            factor_position[splitting_mesh_axes[0]] = len(layout_shape)
+            layout_shape.append(axis_size)
+            continue
+        extent_product = 1
+        for mesh_axis in splitting_mesh_axes:
+            extent = mesh_shape[mesh_axis]
+            if not (isinstance(extent, int) and not isinstance(extent, bool)):
+                raise ValueError(
+                    f"canonical_shard_layout: mesh axis {mesh_axis} has a "
+                    f"dynamic extent {extent!r}; cannot factorize logical "
+                    f"axis {logical_axis}"
+                )
+            factor_position[mesh_axis] = len(layout_shape)
+            layout_shape.append(extent)
+            extent_product *= extent
+        if not axis_static:
+            raise ValueError(
+                f"canonical_shard_layout: logical axis {logical_axis} size "
+                f"{axis_size!r} is dynamic; cannot factorize across multiple "
+                f"mesh axes"
+            )
+        if axis_size % extent_product != 0:
+            raise ValueError(
+                f"canonical_shard_layout: logical axis {logical_axis} size "
+                f"{axis_size} is not divisible by mesh extent product "
+                f"{extent_product}"
+            )
+        residual = axis_size // extent_product
+        if residual != 1:
+            layout_shape.append(residual)
+
+    remapped_attrs = tuple(
+        Split(factor_position[mesh_axis]) if isinstance(attr, Split) else attr
+        for mesh_axis, attr in enumerate(attrs)
+    )
+    layout_shape = tuple(layout_shape)
+    return ShardLayout(
+        layout=Layout(shape=layout_shape, strides=try_c_order_strides(layout_shape)),
+        attrs=remapped_attrs,
+        mesh=mesh,
+    )
 
 
 def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
@@ -168,6 +268,7 @@ __all__ = [
     "P",
     "B",
     "ShardLayout",
+    "canonical_shard_layout",
     "shard_layout_local_shape",
     "layout_axis_to_tensor_axis",
     "split_target_axes",

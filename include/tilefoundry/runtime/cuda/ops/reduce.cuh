@@ -5,32 +5,17 @@
 // therefore does NOT open ``namespace tilefoundry`` / ``ops`` and pulls in no
 // system headers — cute/std and the surrounding names (``detail::to_local``,
 // ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope. The op
-// tags below must precede the impl-header includes because the tier impl
-// classes switch on them.
+// tags below must precede the impl-header includes because
+// ``reduce_impl::reduce_traits<Op>`` specializes on them.
 #pragma once
 
-struct mean_op {
-    template <class T> __device__ T operator()(T sum, T count) const {
-        return sum / count;
-    }
-};
-struct sum_op {
-    template <class T> __device__ T operator()(T sum, T) const { return sum; }
-};
-// Max-reduction tag. Consumed as a compile-time ``Op`` type by the sharded
-// reduce templates (their ``if constexpr`` / ``static_assert`` branches switch
-// on it); the reduce entry points support the SUM and MAX combines.
-struct rmax_op {
-    template <class T> __device__ T operator()(T acc, T) const { return acc; }
-};
-struct absmax_op {
-    template <class T> __device__ T operator()(T cur, T candidate) const {
-        return fabsf(static_cast<float>(candidate)) >
-                       fabsf(static_cast<float>(cur))
-                   ? candidate
-                   : cur;
-    }
-};
+// Reduce combine-kind tags — pure compile-time markers. Semantics (init
+// value, elem/combine/finalize) live in one place per tag,
+// ``reduce_impl::reduce_traits<Op>`` (reduce/reduce_common_impl.h), consumed
+// uniformly by all four reduce tiers below.
+struct mean_op {};
+struct sum_op {};
+struct absmax_op {};
 
 // ── Sharded reduce ───────────────────────────────
 // Per-tier reduce building blocks; the public ``reduce`` entry below selects a

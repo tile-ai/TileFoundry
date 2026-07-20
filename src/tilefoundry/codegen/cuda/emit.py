@@ -127,11 +127,9 @@ def _derive_launch_config(
         nonlocal cta_dynamic
         g = 1
         b = 1
-        for t in mesh.topologies or (mesh.topology,):
-            if t is None:
-                continue
-            tname = t.name if hasattr(t, "name") else str(t)
-            size = getattr(t, "size", 1)
+        for t in mesh.topologies:
+            tname = t.name
+            size = t.size
             if not isinstance(size, int):
                 if tname == "cta":
                     # Launch-provided (dynamic) CTA extent: the grid is supplied

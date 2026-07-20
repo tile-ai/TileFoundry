@@ -13,14 +13,8 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import (
-    For,
-    If,
-    LetStmt,
-    MeshScope,
-    Sequential,
-    While,
-)
+from tilefoundry.ir.tir.stmts import LetStmt
+from tilefoundry.ir.visitor import StmtVisitor
 from tilefoundry.passes.pass_base import PrimFuncPass
 
 
@@ -53,51 +47,40 @@ class Placement:
     offset: int = 0
 
 
-class LifetimeCollector:
+class LifetimeCollector(StmtVisitor):
     """Walk a ``PrimFunction`` body and collect every ``LetStmt`` that binds
     a ``Call(AllocTensor, ...)`` together with its lifetime range.
 
-    MVP impl emits a flat list in pre-order. Subclasses can override
-    ``collect`` to do real liveness analysis (use-def dataflow). The hook
-    boundary is intentionally narrow so swapping it does not ripple into
-    the pass.
+    Traversal completeness (``For`` / ``While`` / ``If`` / ``MeshScope`` /
+    ``DispatchCall`` descent, including its ``case_calls`` / ``fallback``
+    arms) is owned by ``StmtVisitor``'s ``_stmt_children`` table, not by
+    this class. MVP impl emits a flat list in pre-order. Subclasses can
+    override ``collect`` to do real liveness analysis (use-def dataflow).
+    The hook boundary is intentionally narrow so swapping it does not
+    ripple into the pass.
     """
 
     def collect(self, fn: PrimFunction) -> tuple[BufferEntry, ...]:
-        entries: list[BufferEntry] = []
-        counter = [0]
+        self._entries: list[BufferEntry] = []
+        self._point = 0
+        self.visit(fn.body)
+        return tuple(self._entries)
 
-        def emit_entry(var: Var, alloc: AllocTensor, point: int) -> None:
-            entries.append(
+    def visit(self, stmt) -> None:
+        self._point += 1
+        point = self._point
+        if (
+            isinstance(stmt, LetStmt)
+            and isinstance(stmt.value, Call)
+            and isinstance(stmt.value.target, AllocTensor)
+        ):
+            self._entries.append(
                 BufferEntry(
-                    var=var, alloc=alloc, defined_at=point, last_use_at=point
+                    var=stmt.var, alloc=stmt.value.target,
+                    defined_at=point, last_use_at=point,
                 )
             )
-
-        def walk(stmt) -> None:
-            counter[0] += 1
-            point = counter[0]
-            if isinstance(stmt, LetStmt):
-                if isinstance(stmt.value, Call) and isinstance(
-                    stmt.value.target, AllocTensor
-                ):
-                    emit_entry(stmt.var, stmt.value.target, point)
-                walk(stmt.body)
-                return
-            if isinstance(stmt, Sequential):
-                for s in stmt.body:
-                    walk(s)
-                return
-            if isinstance(stmt, (For, While, MeshScope)):
-                walk(stmt.body)
-                return
-            if isinstance(stmt, If):
-                walk(stmt.then_body)
-                walk(stmt.else_body)
-                return
-
-        walk(fn.body)
-        return tuple(entries)
+        return super().visit(stmt)
 
 
 class BufferScheduler:
