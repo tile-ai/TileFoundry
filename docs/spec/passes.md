@@ -240,6 +240,22 @@ chain (§4): each HIR op registers its lowering handler keyed by op class
 lowering, so the pass core depends on the registry contract, not on importing
 target-specific op classes.
 
+A handler is a free function `handler(ctx, target, expr) -> Var`, where
+`ctx` is the lowering context and `target` is the dispatched `Op`
+instance. A handler SHOULD interact with `ctx` only through its public ABI:
+
+- `ctx.lower(expr) -> Var` — recursively lower a nested sub-expression;
+- `ctx.fresh(type, hint) -> Var` — a fresh Var name (no binding emitted);
+- `ctx.alloc(type, hint) -> Var` — a fresh Var bound to a new `AllocTensor`;
+- `ctx.emit(stmt)` — append a raw Stmt to the pending lowered sequence;
+- `ctx.emit_bind(var, value)` — append a let-binding `var = value`.
+
+A target-owned op's handler MUST use only this public ABI — it has no
+standing to reach into pass-internal state. A core op whose lowering
+depends on pass-internal cooperation (dispatch-group resolution, the
+reshard cross-CTA sync fence, tuple-carry field lookup) MAY call other
+`_Lowerer` methods directly; this is the exception, not the norm.
+
 #### Mesh structure derivation
 
 `HirToTirPass` MUST NOT fabricate mesh structure. `cta_mesh` and
