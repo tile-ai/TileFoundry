@@ -6,6 +6,7 @@ from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cu
 from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind
 from tilefoundry.ir.types.shape_helpers import (
     shape_numel_upper_bound,
+    shape_runtime_total,
     shape_upper_bound,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
