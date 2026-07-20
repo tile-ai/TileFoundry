@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ..core.registry import register_typeinfer
+from tilefoundry.visitor_registry import register_typeinfer
+
 from .dim import (
     DimAdd,
     DimConst,

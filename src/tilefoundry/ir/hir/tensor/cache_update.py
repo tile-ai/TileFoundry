@@ -15,9 +15,9 @@ from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 # Data-dependent write region (``cur_pos`` / ``s`` are runtime values), so no

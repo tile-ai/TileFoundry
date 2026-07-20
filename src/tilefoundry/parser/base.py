@@ -23,6 +23,7 @@ from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.visitor_registry import typeinfer_registry
 
 from .dispatch import (
     _binary_kind_for_ast_op,
@@ -672,7 +673,7 @@ class BaseExprVisitor:
         # Construct with a placeholder; the registry reads (call.target, args)
         # and doesn't need call.type, so we can fix it post-hoc via dataclasses.replace.
         placeholder = Call(type=TensorType.scalar(DType.f32), target=op_inst, args=args)
-        fn = __import__("tilefoundry.ir.core.registry", fromlist=["typeinfer_registry"]).typeinfer_registry.lookup(type(op_inst))
+        fn = typeinfer_registry.lookup(type(op_inst))
         if fn is None:
             raise VerifyError(f"no typeinfer registered for {type(op_inst).__name__}")
         computed = fn(placeholder, self._ctx)

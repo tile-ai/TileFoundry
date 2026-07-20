@@ -5,11 +5,11 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 

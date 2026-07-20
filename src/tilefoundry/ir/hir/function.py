@@ -6,11 +6,11 @@ from dataclasses import dataclass, field
 from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
-from tilefoundry.ir.core.registry import register_typeinfer
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import CallableType, TensorType, Type, callable_type_for
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.target import Target
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 

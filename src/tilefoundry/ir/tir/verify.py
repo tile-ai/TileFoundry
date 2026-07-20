@@ -6,7 +6,6 @@ from typing import Iterable
 from tilefoundry.ir.core import Expr, TypeInferContext, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.core.registry import verify_stmt_registry
 from tilefoundry.ir.hir.function import (
     Function as HirFunction,
 )
@@ -29,6 +28,7 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry import verify_stmt_registry
 
 from .dispatch import DispatchCall
 from .launch import Launch

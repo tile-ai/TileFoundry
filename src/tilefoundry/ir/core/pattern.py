@@ -139,17 +139,8 @@ Scalar: ScalarPat = ScalarPat()
 Tensor: TensorPat = TensorPat()
 
 
-# --- Back-compat alias ---------------------------------------------------
-
-#: Deprecated alias for :class:`Pattern`. Kept for one release cycle so
-#: existing imports continue to work; new code should import
-#: :class:`Pattern` directly.
-TypePattern = Pattern
-
-
 __all__ = [
     "Pattern",
-    "TypePattern",  # back-compat alias; remove next cycle
     "ScalarPat",
     "TensorPat",
     "AndPat",

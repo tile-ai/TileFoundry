@@ -1,44 +1,35 @@
 """OpSchema registry: the ``(dialect, name) -> [OpSchema]`` index every callable Op registers into."""
 from __future__ import annotations
 
-from typing import Iterable, Literal
+from typing import Iterable
 
-Dialect = Literal["tf", "T"]
+_VALID_DIALECTS: tuple[str, ...] = ("tf", "T")
 
 # ``(dialect, name) -> list[OpSchema]`` — sole canonical index.
 _schemas_by_dialect_name: "dict[tuple[str, str], list[OpSchema]]" = {}
 
 # --- Schema registration -------------------------------------------------
 
-def _register_schema(schema: "OpSchema") -> None:
-    """Append an OpSchema to the list-per-name overload registry.
+def _register_schema(schema: "OpSchema", *, prepend: bool = False) -> None:
+    """Add an OpSchema to the list-per-name overload registry.
 
-    Called by ``@register_op``. Multiple schemas may share the same
+    Called by ``@register_op`` (append) and ``@register_alias``
+    (``prepend=True``). Multiple schemas may share the same
     ``(dialect, name)`` for overloading; resolution picks the first
     whose ParamDef patterns match the args (F3 first-match lock).
+    Aliases prepend so that schema-aware first-match resolution picks
+    the alias over a legacy real-Op schema of the same name, while
+    ``op_class``-keyed lookups transparently skip the alias entry.
     Idempotent on the same schema instance.
     """
     key = (schema.dialect, schema.name)
     bucket = _schemas_by_dialect_name.setdefault(key, [])
     if schema in bucket:
         return
-    bucket.append(schema)
-
-def _register_alias_schema(schema: "OpSchema") -> None:
-    """Prepend an alias OpSchema (no ``op_class``) to the registry.
-
-    DSL surface alias: a surface name (e.g. ``add``) may
-    have both a legacy real-Op schema (e.g. the old ``Add`` class) and
-    a new alias schema whose builder routes into ``Binary(kind=ADD)``.
-    Aliases prepend so that schema-aware first-match resolution picks
-    the alias over the legacy class while ``op_class``-keyed lookups
-    transparently skip the alias entry.
-    """
-    key = (schema.dialect, schema.name)
-    bucket = _schemas_by_dialect_name.setdefault(key, [])
-    if schema in bucket:
-        return
-    bucket.insert(0, schema)
+    if prepend:
+        bucket.insert(0, schema)
+    else:
+        bucket.append(schema)
 
 # --- Schema queries ------------------------------------------------------
 
@@ -108,51 +99,10 @@ def get_stmt_by_name(name: str) -> type | None:
     """
     return _first_op_class("T", name)
 
-def get_tf_by_category_name(category: str, name: str) -> type | None:
-    """Return the HIR Op for ``(category, name)``, or None.
-
-    Skips alias schemas (``op_class is None``) — callers want a
-    concrete class.
-    """
-    bucket = _schemas_by_dialect_name.get(("tf", name))
-    if not bucket:
-        return None
-    for s in bucket:
-        if s.category == category and s.op_class is not None:
-            return s.op_class
-    return None
-
-def get_t_by_category_name(category: str, name: str) -> type | None:
-    """Return the TIR Op for ``(category, name)``, or None.
-
-    Skips alias schemas (``op_class is None``).
-    """
-    bucket = _schemas_by_dialect_name.get(("T", name))
-    if not bucket:
-        return None
-    for s in bucket:
-        if s.category == category and s.op_class is not None:
-            return s.op_class
-    return None
-
-def iter_tf_categories() -> Iterable[str]:
-    """All HIR Op categories (sorted, unique)."""
-    return sorted({s.category for s in iter_schemas() if s.dialect == "tf"})
-
-def iter_t_categories() -> Iterable[str]:
-    """All TIR Op categories (sorted, unique)."""
-    return sorted({s.category for s in iter_schemas() if s.dialect == "T"})
-
 __all__ = [
-    "Dialect",
     "get_op_by_name",
     "get_stmt_by_name",
-    "get_tf_by_category_name",
-    "get_t_by_category_name",
-    "iter_tf_categories",
-    "iter_t_categories",
     "_register_schema",
-    "_register_alias_schema",
     "_first_schema",
     "get_schemas",
     "iter_schemas",
