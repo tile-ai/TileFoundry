@@ -362,23 +362,6 @@ def _tensor_annotation(
     return base
 
 
-# Mapping from HIR Op class names to Python DSL function names.
-# Matches the dispatch tables in tilefoundry.parser.dispatch.
-_OP_NAME_MAP: dict[str, str] = {
-    "MatMul": "matmul",
-    "Transpose": "transpose",
-    "RMSNorm": "rms_norm",
-    "ReLU": "relu",
-    "Add": "add",
-    "Mul": "mul",
-    "Cast": "cast",
-    "Reduce": "reduce",
-    "Reshard": "reshard",
-    "AllReduce": "all_reduce",
-    "Reshape": "reshape",
-}
-
-
 def _op_name(target) -> str:
     """Python DSL function name for an Op.
 
@@ -391,9 +374,7 @@ def _op_name(target) -> str:
     2. ``target._op_schema.name`` — set by ``@register_op``; this is
        the canonical DSL name and works for ops with non-trivial class
        names (e.g. ``Mma_SM80_16x8x16`` → ``mma_sm80_16x8x16``).
-    3. ``_OP_NAME_MAP`` lookup for legacy callers without
-       ``_op_schema`` (kept for backward compat with hand-built fixtures).
-    4. CamelCase → snake_case fallback.
+    3. CamelCase → snake_case fallback.
     """
     if isinstance(target, HirFunction):
         return target.name
@@ -404,8 +385,6 @@ def _op_name(target) -> str:
     if schema is not None:
         return schema.name
     cls_name = type(target).__name__
-    if cls_name in _OP_NAME_MAP:
-        return _OP_NAME_MAP[cls_name]
     s1 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name)
     name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s1).lower()
     for suffix in ("_op", "_expr", "_stmt"):
