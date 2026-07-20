@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 from typing import Any, Callable
 
+from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -29,6 +30,8 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
 )
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+
+from .static_eval import eval_static
 
 
 class LayoutSugarError(ValueError):
@@ -101,32 +104,37 @@ def _has_sugar(node: ast.AST) -> bool:
     return found
 
 
+_EVAL_AST_NODES_NO_CLOSURE = (ast.Constant, ast.Tuple, ast.UnaryOp)
+_EVAL_AST_NODES_WITH_CLOSURE = (*_EVAL_AST_NODES_NO_CLOSURE, ast.Name, ast.Attribute)
+
+
 def _eval_ast(node: ast.AST, closure: dict[str, Any] | None = None) -> Any:
     """Evaluate a Python literal AST node (int, str, tuple of literals).
 
     Also accepts ``DimVar("S", lo, hi)`` inline ``Call`` nodes and
     closure-resolved ``Name`` references to ``DimVar`` instances.
+
+    Thin policy wrapper over :func:`eval_static`: layout-sugar callers
+    expect ``ValueError`` (the shared evaluator's ``VerifyError`` is
+    translated here), and ``Name`` / ``Attribute`` resolution only applies
+    when a *closure* is supplied at all. The inline ``DimVar(...)``
+    constructor is a bespoke case — it is recognized by name rather than
+    resolved as a general closure callee.
     """
-    if isinstance(node, ast.Constant):
-        return node.value
-    if isinstance(node, ast.Tuple):
-        return tuple(_eval_ast(e, closure) for e in node.elts)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        return -_eval_ast(node.operand, closure)
-    if closure is not None:
-        if isinstance(node, ast.Name):
-            val = closure.get(node.id)
-            if val is not None:
-                return val
-        elif isinstance(node, ast.Attribute):
-            obj = _eval_ast(node.value, closure)
-            return getattr(obj, node.attr)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "DimVar":
-            from tilefoundry.ir.types.dim import DimVar  # noqa: PLC0415
-            pos = [_eval_ast(a, closure) for a in node.args]
-            kw = {k.arg: _eval_ast(k.value, closure) for k in node.keywords}
-            return DimVar(*pos, **kw)
-    raise ValueError(f"cannot evaluate static value from {ast.dump(node)}")
+    if (
+        closure is not None
+        and isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "DimVar"
+    ):
+        pos = [_eval_ast(a, closure) for a in node.args]
+        kw = {k.arg: _eval_ast(k.value, closure) for k in node.keywords}
+        return DimVar(*pos, **kw)
+    allowed = _EVAL_AST_NODES_WITH_CLOSURE if closure is not None else _EVAL_AST_NODES_NO_CLOSURE
+    try:
+        return eval_static(node, closure=closure or {}, allowed_nodes=allowed)
+    except VerifyError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _is_shape_dim(v: Any) -> bool:
@@ -714,23 +722,6 @@ def _parse_axis_ref(node: ast.AST) -> tuple[str, str]:
         axis_name = node.attr
         return (mesh_name, axis_name)
     raise ValueError(f"expected mesh.axis (e.g. gpu.cluster), got {ast.dump(node)}")
-
-
-# ── legacy parse_sugar_layout alias (internal compat) ─────────────────────
-
-
-def parse_sugar_layout(
-    node: ast.AST,
-    mesh_by_name: dict[str, Mesh],
-) -> tuple[tuple[int, ...], tuple[int, ...], Mesh, tuple[ShardAttr, ...]]:
-    """Legacy alias for ``parse_shard_layout_sugar`` that returns a raw
-    (shape, strides, mesh, attrs) tuple.
-
-    Prefer ``parse_shard_layout_sugar(node, mesh_by_name.get)`` over this
-    function.  Kept for backward compatibility.
-    """
-    sl = parse_shard_layout_sugar(node, mesh_by_name.get)
-    return (sl.layout.shape, sl.layout.strides, sl.mesh, tuple(sl.attrs))
 
 
 # ── top-level Tensor annotation parser ─────────────────────────────────────

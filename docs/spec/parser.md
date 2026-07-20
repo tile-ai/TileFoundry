@@ -136,12 +136,14 @@ op-name             ::= identifier
 A bare-name callee MUST resolve to an `_op_schema`-bearing surface
 value (an `Op` class for real-Op schemas, or an alias builder
 function carrying `_op_schema` for surface-alias schemas) through
-the function's closure (typically established by an `import-form`).
-The namespace-callee form resolves on the namespace package
-directly (§2). When `op-name` is registered with multiple schemas
-("overloads"), the parser uses first-match dispatch (§4.3). The
-trailing-underscore selector is gated to the TIR token; using it in
-HIR is a verify error.
+the function's closure (typically established by an `import-form`) or,
+failing that, through `dispatch.resolve_callable` (§3.2/§3.3) — the
+path a trailing-underscore `op-name` always takes, since nothing binds
+a literal `foo_` name in the closure. The namespace-callee form
+resolves on the namespace package directly (§2). When `op-name` is
+registered with multiple schemas ("overloads"), the parser uses
+first-match dispatch (§4.3). The trailing-underscore selector is
+gated to the TIR token; using it in HIR is a verify error.
 
 ### 1.4 `Tensor[...]` and `ConstTensor[...]` annotations
 
@@ -606,6 +608,7 @@ class LexicalEnv:
 # tilefoundry/parser/dispatch.py
 def resolve_op    (name) -> type | None: ...
 def resolve_stmt  (name) -> type | None: ...
+def resolve_schema(name, dialect: str = "tf") -> OpSchema | None: ...
 def resolve_callable(name, token: Literal["hir", "tir"]) -> tuple[str, type]: ...
 ```
 
@@ -625,7 +628,7 @@ classDiagram
     class _HirBodyVisitor
     class _TirBodyVisitor
     class LexicalEnv
-    class dispatch          { resolve_op; resolve_stmt; resolve_callable }
+    class dispatch          { resolve_op; resolve_stmt; resolve_schema; resolve_callable }
 
     parse_func ..> _HirBodyVisitor : drives
     parse_module_source ..> parse_func : per @func
@@ -672,8 +675,14 @@ aliasing). Frame push / pop matches the Python-source scope
 (`with Mesh(...)`, `for i in tile(...)`).
 
 `dispatch.resolve_callable(name, token)` performs strict
-per-dialect Op resolution against `op_registry`; the body visitors
-delegate `ast.Name` callee lookup to it after the closure path.
+per-dialect Op resolution against `op_registry`; both body visitors'
+`ast.Name` callee resolution (`BaseExprVisitor._resolve_call_target`,
+shared by HIR and TIR) delegates to it once the closure path misses, and
+the TIR top-level-statement dispatch (`_call_as_top_level_stmt`) delegates
+to it for a bare-name effect Stmt / intrinsic before falling back to
+`call_to_op_call`. It never resolves an arbitrary Python name — only a
+name already cataloged as an Op / Stmt / intrinsic under the body's own
+dialect — so an undefined name still raises *unknown Op name*.
 
 There is no parser-side intermediate IR; function bodies translate
 directly into `core_ir` nodes plus dialect-specific subclasses.
@@ -687,12 +696,16 @@ binds a Python name to an `Expr` object. Subsequent uses of that name
 reuse the same `Expr`, which is how HIR's SSA-as-DAG sharing falls
 out for free.
 
-### 3.2 Closure-only callee resolution
+### 3.2 Closure-then-registry callee resolution
 
 Bare-name callees resolve through the lexical env + the function's
-closure only. The parser does **not** fall back to a global Op
-registry for `ast.Name` callees; without a star-import or explicit
-import the bare name raises *unknown Op name*.
+closure first — the common case, covering every name reached via a
+star-import or an explicit `tf.<name>` / `T.<name>` binding. When that
+misses, resolution falls through to `dispatch.resolve_callable(name,
+token)` (§3.3): dialect-strict dispatch against the Op / Stmt / intrinsic
+catalogue, not an arbitrary-name lookup, so a name that is neither bound
+in the closure nor cataloged under the body's own dialect still raises
+*unknown Op name*.
 
 The closure binding for a name from `tilefoundry.dsl.tf` /
 `tilefoundry.dsl.T` is whatever its module `__getattr__` returns:
@@ -706,9 +719,9 @@ The closure binding for a name from `tilefoundry.dsl.tf` /
 Both forms expose `_op_schema`, so the parser's
 `_resolve_call_target` returns an `OpSchema` uniformly. Namespace-
 attribute callees (`tf.add` / `T.copy`) skip the closure binding and
-go directly through `_first_schema(dialect, attr)`, which honours
-alias prepend order — an alias schema (if any) wins over a legacy
-real-Op schema sharing the same name.
+go directly through `dispatch.resolve_schema(name, dialect)`, which
+honours alias prepend order — an alias schema (if any) wins over a
+legacy real-Op schema sharing the same name.
 
 ### 3.3 OpSchema and overload resolution
 
