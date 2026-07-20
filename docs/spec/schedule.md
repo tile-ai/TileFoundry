@@ -191,39 +191,3 @@ equality, hashing, or the printed `repr`.
 These values are hard filters for later scheduling stages. They carry no
 preferences, candidate rows, costs, solver state, or CTA capability
 decisions, and they do not register a scheduling service on a `CudaTarget`.
-
-## 4. Private parallel-planning construction
-
-The CTA parallel planner has one private construction boundary:
-
-```python
-def build_planning_problem(module: Module, root: Function) -> PlanningProblem: ...
-```
-
-- constraints:
-  - `root` MUST be one of `module.functions`, carry an explicit `CudaTarget`,
-    and declare exactly one static `Topology("cta", n)` with
-    `1 <= n <= root.target.device.sm_count`.
-  - Construction MUST read typed HIR directly and MUST use object identity for
-    site, value, use, function-instance, and region traversal.
-  - Each ordinary helper call MUST receive a distinct function-instance path;
-    helper parameters MUST alias caller Values and MUST NOT create source
-    buckets.
-  - `Tuple` containers and `TupleGetItem` projections MUST remain structural.
-    Tensor leaves receive distinct ValueIds, while a projection resolves to an
-    existing leaf Value and creates no operation candidate.
-  - Static `GridRegionExpr` bodies MUST be represented once per region. The
-    planner MUST record `ceil_div(extent - start, step)` and reject dynamic,
-    empty, or non-positive domains with source context.
-  - The private `PlanningProblem` MUST contain candidate buckets, unified
-    `OpCandidate` records, candidate dependencies, complete where requirements,
-    fixed target-derived cost facts, and region facts. It MUST NOT contain
-    solver variables, selected candidates, rewritten HIR, or a public report.
-  - Scheduled tensor buckets MUST use `StorageKind.GMEM`; an authored type or
-    hard constraint requiring another storage kind MUST fail at this boundary.
-  - A complete `where(layout=..., mesh=..., storage=...)` annotation MUST match
-    one concrete `(Value, Type)` bucket conjunctively. `_` is the only layout
-    wildcard. A sliced Mesh constraint MAY set the bucket's fixed offset.
-  - Direct dependencies MUST carry `SAME_INTERVAL` or `CONTAINED` placement
-    relations. Missing legal operation candidates, evaluator registrations,
-    matching requirements, or root-connected paths MUST fail with source context.
