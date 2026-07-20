@@ -265,6 +265,20 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
         bucket_id: model.NewIntVar(0, horizon, f"ready_{bucket_id}")
         for bucket_id in sorted(problem.buckets)
     }
+    merged_geometry_sites = {
+        site_id
+        for site_id in problem.site_order
+        if all(
+            problem.candidates[candidate_id].duration_ns > 0
+            and not _is_reshard(problem.candidates[candidate_id])
+            for candidate_id in problem.authored_candidates[site_id]
+        )
+    }
+    merged_geometry_candidates = {
+        candidate_id
+        for site_id in merged_geometry_sites
+        for candidate_id in problem.authored_candidates[site_id]
+    }
     positive_intervals: dict[int, cp_model.IntervalVar] = {}
     for candidate_id, candidate in problem.candidates.items():
         if candidate.duration_ns <= 0:
@@ -276,10 +290,12 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
         end = model.NewIntVar(0, horizon, f"end_{candidate_id}")
         starts[candidate_id] = start
         ends[candidate_id] = end
-        interval = model.NewOptionalIntervalVar(
-            start, duration, end, pick_candidates[candidate_id], f"execution_{candidate_id}"
-        )
-        positive_intervals[candidate_id] = interval
+        if candidate_id not in merged_geometry_candidates:
+            positive_intervals[candidate_id] = model.NewOptionalIntervalVar(
+                start, duration, end, pick_candidates[candidate_id], f"execution_{candidate_id}"
+            )
+        else:
+            model.Add(end == start + duration).OnlyEnforceIf(pick_candidates[candidate_id])
         model.Add(start == horizon).OnlyEnforceIf(pick_candidates[candidate_id].Not())
         model.Add(end == 0).OnlyEnforceIf(pick_candidates[candidate_id].Not())
         for input_bucket in candidate.input_bucket_ids:
@@ -398,8 +414,55 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
 
     topology_intervals: list[cp_model.IntervalVar] = []
     time_intervals: list[cp_model.IntervalVar] = []
+    for site_id in sorted(merged_geometry_sites):
+        site_start = model.NewIntVar(0, horizon, f"site_start_{site_id}")
+        site_end = model.NewIntVar(0, horizon, f"site_end_{site_id}")
+        site_duration = model.NewIntVar(0, horizon, f"site_duration_{site_id}")
+        site_offset = model.NewIntVar(0, problem.topology.size, f"site_offset_{site_id}")
+        site_count = model.NewIntVar(1, problem.topology.size, f"site_count_{site_id}")
+        site_offset_end = model.NewIntVar(0, problem.topology.size, f"site_offset_end_{site_id}")
+        model.Add(site_offset_end == site_offset + site_count)
+        for candidate_id in problem.authored_candidates[site_id]:
+            candidate = problem.candidates[candidate_id]
+            present = pick_candidates[candidate_id]
+            model.Add(site_start == starts[candidate_id]).OnlyEnforceIf(present)
+            model.Add(site_end == ends[candidate_id]).OnlyEnforceIf(present)
+            model.Add(site_duration == ends[candidate_id] - starts[candidate_id]).OnlyEnforceIf(present)
+            model.Add(site_offset == offsets[candidate.output_bucket_ids[0]]).OnlyEnforceIf(present)
+            model.Add(site_count == candidate.topology_count).OnlyEnforceIf(present)
+            output_offsets = [offsets[bucket_id] for bucket_id in candidate.output_bucket_ids]
+            for output_offset in output_offsets[1:]:
+                model.Add(output_offset == output_offsets[0]).OnlyEnforceIf(present)
+            for dependency in (
+                item for item in problem.dependencies
+                if item.parent_candidate_id == candidate_id
+            ):
+                input_offset = offsets[dependency.child_bucket_id]
+                output_offset = output_offsets[0]
+                if dependency.placement_relation == "SAME_INTERVAL":
+                    model.Add(input_offset == output_offset).OnlyEnforceIf(present)
+                elif dependency.placement_relation == "CONTAINED":
+                    input_count = _tensor_mesh_count(
+                        problem.types[problem.buckets[dependency.child_bucket_id].type_id]
+                    )
+                    model.Add(input_offset <= output_offset).OnlyEnforceIf(present)
+                    model.Add(
+                        output_offset + candidate.topology_count <= input_offset + input_count
+                    ).OnlyEnforceIf(present)
+        time_intervals.append(
+            model.NewIntervalVar(site_start, site_duration, site_end, f"site_execution_{site_id}")
+        )
+        topology_intervals.append(
+            model.NewIntervalVar(
+                site_offset, site_count, site_offset_end, f"site_topology_{site_id}"
+            )
+        )
     for candidate_id, candidate in problem.candidates.items():
-        if candidate_id not in starts or _is_reshard(candidate):
+        if (
+            candidate_id not in starts
+            or _is_reshard(candidate)
+            or candidate_id in merged_geometry_candidates
+        ):
             continue
         output_offsets = [offsets[bucket_id] for bucket_id in candidate.output_bucket_ids]
         for output_offset in output_offsets[1:]:
@@ -466,16 +529,52 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
     bandwidth_intervals: list[cp_model.IntervalVar] = []
     bandwidth_demands: list[int] = []
     device = problem.root.target.device
-    for candidate_id, candidate in problem.candidates.items():
-        if candidate_id not in starts or candidate.hbm_demand_bytes_per_ns <= 0:
-            continue
-        bandwidth_intervals.append(positive_intervals[candidate_id])
-        demand = (
-            math.ceil(device.hbm_bandwidth_bytes_per_second / 1_000_000_000)
-            if _is_reshard(candidate)
-            else candidate.hbm_demand_bytes_per_ns
+
+    def add_bandwidth_group(candidate_ids: list[int], demand: int, label: str) -> None:
+        literals = [pick_candidates[candidate_id] for candidate_id in candidate_ids]
+        if len(literals) == 1:
+            active = literals[0]
+        else:
+            active = model.NewBoolVar(f"bandwidth_active_{label}")
+            for literal in literals:
+                model.AddImplication(literal, active)
+            model.AddBoolOr([active.Not(), *literals])
+        start = model.NewIntVar(0, horizon, f"bandwidth_start_{label}")
+        end = model.NewIntVar(0, horizon, f"bandwidth_end_{label}")
+        duration = model.NewIntVar(0, horizon, f"bandwidth_duration_{label}")
+        for candidate_id in candidate_ids:
+            model.Add(start == starts[candidate_id]).OnlyEnforceIf(pick_candidates[candidate_id])
+            model.Add(end == ends[candidate_id]).OnlyEnforceIf(pick_candidates[candidate_id])
+            model.Add(
+                duration == ends[candidate_id] - starts[candidate_id]
+            ).OnlyEnforceIf(pick_candidates[candidate_id])
+        bandwidth_intervals.append(
+            model.NewOptionalIntervalVar(start, duration, end, active, f"bandwidth_{label}")
         )
         bandwidth_demands.append(demand)
+
+    for site_id in problem.site_order:
+        groups: dict[int, list[int]] = {}
+        for candidate_id in problem.authored_candidates[site_id]:
+            candidate = problem.candidates[candidate_id]
+            if candidate_id not in starts or candidate.hbm_demand_bytes_per_ns <= 0:
+                continue
+            demand = (
+                math.ceil(device.hbm_bandwidth_bytes_per_second / 1_000_000_000)
+                if _is_reshard(candidate)
+                else candidate.hbm_demand_bytes_per_ns
+            )
+            groups.setdefault(demand, []).append(candidate_id)
+        for demand, candidate_ids in sorted(groups.items()):
+            add_bandwidth_group(candidate_ids, demand, f"site_{site_id}_demand_{demand}")
+
+    for candidate_id, candidate in problem.candidates.items():
+        if candidate.site_id is not None or candidate_id not in starts:
+            continue
+        if candidate.hbm_demand_bytes_per_ns <= 0:
+            continue
+        demand = math.ceil(device.hbm_bandwidth_bytes_per_second / 1_000_000_000)
+        add_bandwidth_group([candidate_id], demand, f"candidate_{candidate_id}")
     if bandwidth_intervals:
         model.AddCumulative(
             bandwidth_intervals,
@@ -549,18 +648,13 @@ def _add_capacity_resource(
             end_terms.append(model.NewConstant(0))
         minimum_start = model.NewIntVar(0, horizon, f"allocation_min_start_{group_id}")
         maximum_end = model.NewIntVar(0, horizon, f"allocation_max_end_{group_id}")
+        allocation_size = model.NewIntVar(0, horizon, f"allocation_size_{group_id}")
         model.AddMinEquality(minimum_start, start_terms)
         model.AddMaxEquality(maximum_end, end_terms)
-        allocation_start = model.NewIntVar(0, horizon, f"allocation_start_{group_id}")
-        allocation_end = model.NewIntVar(0, horizon, f"allocation_end_{group_id}")
-        allocation_size = model.NewIntVar(0, horizon, f"allocation_size_{group_id}")
-        model.Add(allocation_start == minimum_start).OnlyEnforceIf(active)
-        model.Add(allocation_end == maximum_end).OnlyEnforceIf(active)
-        model.Add(allocation_size == allocation_end - allocation_start)
-        model.Add(allocation_start == 0).OnlyEnforceIf(active.Not())
-        model.Add(allocation_end == 0).OnlyEnforceIf(active.Not())
+        model.Add(allocation_size == maximum_end - minimum_start).OnlyEnforceIf(active)
+        model.Add(allocation_size == 0).OnlyEnforceIf(active.Not())
         interval = model.NewOptionalIntervalVar(
-            allocation_start, allocation_size, allocation_end, active,
+            minimum_start, allocation_size, maximum_end, active,
             f"allocation_{group_id}",
         )
         intervals.append(interval)
