@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import enum
 import re
+from collections.abc import Iterator
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
@@ -42,6 +43,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
 )
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import _expr_children
 from tilefoundry.schedule.constraints import (
     LayoutConstraint,
     MeshConstraint,
@@ -110,6 +112,46 @@ def shape_entry_str(entry: object) -> str:
     return repr(entry)
 
 
+def _classify_shard_attrs(
+    sl: ShardLayout, mesh_name: str
+) -> tuple[dict[int, list[str]], list[str]] | None:
+    """Classify ``sl.attrs`` into ``(splits, partials)``.
+
+    ``splits`` maps each ``Split``'s **layout** axis to the ordered
+    ``mesh.axis`` refs bound there (more than one entry when nested mesh axes
+    split the same layout axis); ``partials`` is the ordered ``mesh.axis @
+    P("reduction")`` suffix for every ``Partial``. ``Broadcast`` is omitted.
+
+    Returns ``None`` — caller falls back to the verbose ``ShardLayout(...)``
+    form — when the attr count doesn't match the mesh rank, a ``Split``
+    targets an out-of-range layout axis, or an attr is none of ``Split`` /
+    ``Partial`` / ``Broadcast``.
+
+    Shared by ``_shard_layout_surface_str`` (keeps the layout-axis keying)
+    and ``shard_compact_inline`` (remaps onto tensor axis via
+    ``layout_axis_to_tensor_axis``).
+    """
+    layout = sl.layout
+    if not isinstance(layout, Layout) or len(sl.attrs) != len(sl.mesh.axes):
+        return None
+    layout_rank = len(layout.shape)
+    names = sl.mesh.names if hasattr(sl.mesh, "names") and sl.mesh.names else ()
+    splits: dict[int, list[str]] = {}
+    partials: list[str] = []
+    for mesh_axis_idx, attr in enumerate(sl.attrs):
+        axis_name = names[mesh_axis_idx] if mesh_axis_idx < len(names) else f"ax{mesh_axis_idx}"
+        axis_ref = f"{mesh_name}.{axis_name}"
+        if isinstance(attr, Split):
+            if attr.axis >= layout_rank:
+                return None
+            splits.setdefault(attr.axis, []).append(axis_ref)
+        elif isinstance(attr, Partial):
+            partials.append(f'{axis_ref} @ P("{attr.reduction or "sum"}")')
+        elif not isinstance(attr, Broadcast):
+            return None
+    return splits, partials
+
+
 def _shard_layout_surface_str(
     sl: ShardLayout,
     mesh_name: str = "gpu",
@@ -130,36 +172,18 @@ def _shard_layout_surface_str(
     layout = sl.layout
     if not isinstance(layout, Layout):
         return None
-    names = sl.mesh.names if hasattr(sl.mesh, "names") and sl.mesh.names else ()
-    mesh_rank = len(sl.mesh.axes)
-    layout_rank = len(layout.shape)
-    if len(sl.attrs) != mesh_rank:
+    classified = _classify_shard_attrs(sl, mesh_name)
+    if classified is None:
         return None
-
-    dim_descs: list[tuple[int, list[str]]] = [(d, []) for d in layout.shape]
-    partials: list[str] = []
-    has_binding = False
-    for mesh_axis_idx, attr in enumerate(sl.attrs):
-        axis_name = names[mesh_axis_idx] if mesh_axis_idx < len(names) else f"ax{mesh_axis_idx}"
-        axis_ref = f"{mesh_name}.{axis_name}"
-        if isinstance(attr, Split):
-            k = attr.axis
-            if k >= layout_rank:
-                return None
-            dim_descs[k][1].append(f"@ {axis_ref}")
-            has_binding = True
-        elif isinstance(attr, Partial):
-            partials.append(f'{axis_ref} @ P("{attr.reduction or "sum"}")')
-            has_binding = True
-        elif not isinstance(attr, Broadcast):
-            return None
+    splits, partials = classified
 
     # All-Broadcast in a multi-mesh context is ambiguous → verbose fallback.
-    if not has_binding and not mesh_unique:
+    if not splits and not partials and not mesh_unique:
         return None
 
     dims = [
-        f"{d} {' '.join(b)}" if b else str(d) for d, b in dim_descs
+        f"{d} {' '.join(f'@ {r}' for r in splits[i])}" if i in splits else str(d)
+        for i, d in enumerate(layout.shape)
     ]
     dim_str = ", ".join(dims)
     if len(dims) == 1:
@@ -196,32 +220,25 @@ def shard_compact_inline(
     axis split across more than one layout position, an out-of-range or unknown
     attr, or a rank mismatch), in which case the caller falls back to canonical.
 
-    Shares the ``Split`` / ``Partial`` / ``Broadcast`` classification and the
-    mesh-name map with the canonical ``_shard_layout_surface_str``.
+    Shares the ``Split`` / ``Partial`` / ``Broadcast`` classification with the
+    canonical ``_shard_layout_surface_str`` via ``_classify_shard_attrs``.
     """
     layout = sl.layout
     if not isinstance(layout, Layout):
         return None
-    if len(sl.attrs) != len(sl.mesh.axes):
+    classified = _classify_shard_attrs(sl, mesh_name)
+    if classified is None:
         return None
-    names = sl.mesh.names if hasattr(sl.mesh, "names") and sl.mesh.names else ()
+    splits, partials = classified
     la2ta = layout_axis_to_tensor_axis(layout.shape, tensor_shape)
     split_ref: dict[int, str] = {}
-    partials: list[str] = []
-    for mesh_axis_idx, attr in enumerate(sl.attrs):
-        axis_name = names[mesh_axis_idx] if mesh_axis_idx < len(names) else f"ax{mesh_axis_idx}"
-        axis_ref = f"{mesh_name}.{axis_name}"
-        if isinstance(attr, Split):
-            if attr.axis >= len(la2ta):
-                return None
-            t_axis = la2ta[attr.axis]
-            if t_axis in split_ref:
-                return None  # tensor axis split across multiple layout positions
-            split_ref[t_axis] = axis_ref
-        elif isinstance(attr, Partial):
-            partials.append(f'{axis_ref} @ P("{attr.reduction or "sum"}")')
-        elif not isinstance(attr, Broadcast):
-            return None
+    for layout_axis, refs in splits.items():
+        if len(refs) != 1:
+            return None  # same layout axis split by more than one mesh axis
+        t_axis = la2ta[layout_axis]
+        if t_axis in split_ref:
+            return None  # tensor axis split across multiple layout positions
+        split_ref[t_axis] = refs[0]
     return split_ref, partials
 
 
@@ -436,6 +453,19 @@ def _build_kinded_alias_maps():
 _BINARY_KIND_TO_ALIAS, _UNARY_KIND_TO_ALIAS = _build_kinded_alias_maps()
 
 
+def _op_display_name(target) -> str:
+    """Display-only op name for DOT / viewer graph labels: the target's class
+    name with a trailing ``Op`` / ``Expr`` / ``Stmt`` suffix stripped
+    (``MatMul``, ``TupleGetItem``, ...). Distinct from ``_op_name``, which
+    renders the round-trippable DSL callable name — this one is shared by
+    ``dot.py`` and ``viewer/builder.py`` for human-facing labels only."""
+    cls = type(target).__name__
+    for suffix in ("Op", "Expr", "Stmt"):
+        if cls.endswith(suffix) and cls != suffix:
+            cls = cls[: -len(suffix)]
+    return cls
+
+
 def _sanitize_name(name: str) -> str:
     """Make a Python-safe identifier from a loc string."""
     safe = re.sub(r"[^a-zA-Z0-9_]", "_", name)
@@ -512,31 +542,57 @@ def _constraint_line(expr: Expr, indent: str, name: str) -> str | None:
     return f"{indent}{name}: {_where_str(metadata)}"
 
 
-def _collect_meshes(fn: HirFunction) -> dict[int, Mesh]:
-    """Collect unique Mesh objects from all ShardLayouts in *fn*."""
+def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr]:
+    """Post-order traversal of *root* and its descendants via
+    ``tilefoundry.ir.visitor._expr_children`` (which, unlike the hand-rolled
+    walkers this replaces, descends into ``GridRegionExpr``). Each node is
+    yielded exactly once by object identity; *seen* lets callers share dedup
+    state across repeated calls (e.g. one per function param)."""
+    if root is None:
+        return
+    if seen is None:
+        seen = set()
+    key = id(root)
+    if key in seen:
+        return
+    seen.add(key)
+    for child in _expr_children(root):
+        yield from iter_exprs(child, seen)
+    yield root
+
+
+def _collect_meshes(fn: HirFunction, *, include_node_types: bool = False) -> dict[int, Mesh]:
+    """Collect unique Mesh objects referenced anywhere in *fn* — params,
+    return type, and every ``Reshard`` layout in the body.
+
+    With ``include_node_types=True`` (the viewer's wider scan, via
+    ``viewer.builder._collect_view_meshes``) every node's own result type is
+    also walked, since the viewer renders shard sugar on intermediate types
+    too, not just params/return.
+    """
     meshes: dict[int, Mesh] = {}
 
-    def _add_layout(layout):
+    def _add_layout(layout) -> None:
         if isinstance(layout, ShardLayout):
             meshes.setdefault(id(layout.mesh), layout.mesh)
 
+    def _add_type(ty) -> None:
+        if isinstance(ty, TensorType):
+            _add_layout(ty.layout)
+        elif isinstance(ty, TupleType):
+            for f in ty.fields:
+                _add_type(f)
+
     for p in fn.params:
-        if isinstance(p.type, TensorType):
-            _add_layout(p.type.layout)
-    if isinstance(fn.return_type, TensorType):
-        _add_layout(fn.return_type.layout)
+        _add_type(p.type)
+    _add_type(fn.return_type)
 
-    def _walk(expr: Expr):
-        if isinstance(expr, Call):
-            if isinstance(expr.target, Reshard):
-                _add_layout(expr.target.layout)
-            for arg in expr.args:
-                _walk(arg)
-        elif isinstance(expr, Tuple):
-            for el in expr.elements:
-                _walk(el)
+    for expr in iter_exprs(fn.body):
+        if include_node_types:
+            _add_type(getattr(expr, "type", None))
+        if isinstance(expr, Call) and isinstance(expr.target, Reshard):
+            _add_layout(expr.target.layout)
 
-    _walk(fn.body)
     return meshes
 
 
@@ -567,38 +623,16 @@ def _emit_def(
     own SSA name scope, so a base and its variants do not share names."""
     lines: list[str] = []
 
-    # Collect all SSA values and assign names
+    # Collect all SSA values and assign names.
     _counter = [0]
     _names: dict[int, str] = {}
+
+    # Topological sort: post-order from body, via the shared iter_exprs
+    # generator (one _seen set shared across body + params).
     _seen: set[int] = set()
-
-    # Topological sort: post-order from body
-    _order: list[Expr] = []
-
-    def _topo(expr: Expr):
-        if expr is None:
-            return
-        key = id(expr)
-        if key in _seen:
-            return
-        _seen.add(key)
-        if isinstance(expr, Call):
-            for arg in expr.args:
-                _topo(arg)
-        elif isinstance(expr, Tuple):
-            for el in expr.elements:
-                _topo(el)
-        elif isinstance(expr, GridRegionExpr):
-            for init in expr.init_args:
-                _topo(init)
-            _topo(expr.body)
-            for value in expr.yield_values:
-                _topo(value)
-        _order.append(expr)
-
-    _topo(fn.body)
+    _order: list[Expr] = list(iter_exprs(fn.body, _seen))
     for p in fn.params:
-        _topo(p)
+        _order.extend(iter_exprs(p, _seen))
 
     # Collect op names first (must be before _assign_name references them)
     _op_names_set: set[str] = set()
@@ -607,36 +641,10 @@ def _emit_def(
             _op_names_set.add(_op_name(expr.target))
 
     _forced_names: dict[int, str] = {}
+    # Reuse iter_exprs' dedup-set parameter as the "reachable ids" accumulator
+    # for each grid region's internal / init subtrees.
     _grid_internal_ids: set[int] = set()
     _grid_init_ids: set[int] = set()
-
-    def _mark_grid_internal(expr: Expr) -> None:
-        if id(expr) in _grid_internal_ids:
-            return
-        _grid_internal_ids.add(id(expr))
-        if isinstance(expr, Call):
-            for arg in expr.args:
-                _mark_grid_internal(arg)
-        elif isinstance(expr, Tuple):
-            for element in expr.elements:
-                _mark_grid_internal(element)
-        elif isinstance(expr, GridRegionExpr):
-            for init in expr.init_args:
-                _mark_grid_internal(init)
-            _mark_grid_internal(expr.body)
-            for value in expr.yield_values:
-                _mark_grid_internal(value)
-
-    def _mark_grid_init(expr: Expr) -> None:
-        if id(expr) in _grid_init_ids:
-            return
-        _grid_init_ids.add(id(expr))
-        if isinstance(expr, Call):
-            for arg in expr.args:
-                _mark_grid_init(arg)
-        elif isinstance(expr, Tuple):
-            for element in expr.elements:
-                _mark_grid_init(element)
 
     for expr in _order:
         if not isinstance(expr, GridRegionExpr):
@@ -647,11 +655,14 @@ def _emit_def(
             _forced_names[id(carry)] = _sanitize_name(carry.name)
             _forced_names[id(init)] = _sanitize_name(carry.name)
             _forced_names[id(value)] = _sanitize_name(carry.name)
-        _mark_grid_internal(expr.body)
+        for _ in iter_exprs(expr.body, _grid_internal_ids):
+            pass
         for value in expr.yield_values:
-            _mark_grid_internal(value)
+            for _ in iter_exprs(value, _grid_internal_ids):
+                pass
         for init in expr.init_args:
-            _mark_grid_init(init)
+            for _ in iter_exprs(init, _grid_init_ids):
+                pass
     _grid_internal_ids.difference_update(_grid_init_ids)
 
     def _assign_name(expr: Expr) -> str:
@@ -749,51 +760,62 @@ def _emit_def(
 
     printed: set[int] = {id(param) for param in fn.params}
 
-    def _emit_inline_call(expr: Call, level: str) -> None:
-        name = _names[id(expr)]
+    def _format_call(expr: Call, indent_here: str) -> str:
+        """Render a Call's RHS expression text: the ``reshard(...)`` /
+        ``<HirFunction>(...)`` special forms, else ``op_name(args, attr=val,
+        ...)``. Shared by the inline (tile-loop body) emitter and the
+        top-level emit loop so an attribute-rendering rule (``ShardLayout``,
+        ``DType``, ...) only needs one edit."""
         target = expr.target
         args_str = ", ".join(_arg_ref(arg) for arg in expr.args)
         if isinstance(target, Reshard):
             layout_kw = ""
             if target.layout is not None:
                 layout_kw = ", layout=" + _shard_layout_str(
-                    target.layout, indent=level + "    "
+                    target.layout, indent=indent_here + "    "
                 )
             storage = (
                 f", storage={target.storage.name.lower()}"
                 if target.storage is not None
                 else ""
             )
-            call_str = f"reshard({args_str}{layout_kw}{storage})"
-        elif isinstance(target, HirFunction):
-            call_str = f"{target.name}({args_str})"
-        else:
-            alias_name = _kinded_alias_name(target)
-            suppress_attrs = {"kind"} if alias_name is not None else set()
-            attr_strs = []
-            for param in type(target).params():
-                if param.kind != "attribute":
-                    continue
-                value = getattr(target, param.name, None)
-                if value is None or param.name in suppress_attrs or param.name == "layout":
-                    continue
-                if isinstance(value, str):
-                    attr_strs.append(f'{param.name}="{value}"')
-                elif isinstance(value, DType):
-                    attr_strs.append(f'{param.name}="{value.name}"')
-                elif isinstance(value, enum.Enum) and isinstance(value.value, str):
-                    attr_strs.append(f'{param.name}="{value.value}"')
-                elif isinstance(value, float):
-                    attr_strs.append(f"{param.name}={value!r}")
-                elif isinstance(value, tuple):
-                    attr_strs.append(f"{param.name}={value}")
-                else:
-                    attr_strs.append(f"{param.name}={value}")
-            call_str = f"{_op_name(target)}({args_str}"
-            if attr_strs:
-                call_str += ", " + ", ".join(attr_strs)
-            call_str += ")"
-        lines.append(f"{level}{name} = {call_str}")
+            return f"reshard({args_str}{layout_kw}{storage})"
+        if isinstance(target, HirFunction):
+            return f"{target.name}({args_str})"
+
+        alias_name = _kinded_alias_name(target)
+        suppress_attrs = {"kind"} if alias_name is not None else set()
+        attr_strs = []
+        for param in type(target).params():
+            if param.kind != "attribute":
+                continue
+            value = getattr(target, param.name, None)
+            if value is None or param.name in suppress_attrs or param.name == "layout":
+                continue
+            if isinstance(value, str):
+                attr_strs.append(f'{param.name}="{value}"')
+            elif isinstance(value, DType):
+                attr_strs.append(f'{param.name}="{value.name}"')
+            elif isinstance(value, enum.Enum) and isinstance(value.value, str):
+                attr_strs.append(f'{param.name}="{value.value}"')
+            elif isinstance(value, float):
+                attr_strs.append(f"{param.name}={value!r}")
+            elif isinstance(value, ShardLayout):
+                sl_str = _shard_layout_str(value, indent=indent_here + "        ")
+                attr_strs.append(f"{param.name}={sl_str}")
+            elif isinstance(value, tuple):
+                attr_strs.append(f"{param.name}={value}")
+            else:
+                attr_strs.append(f"{param.name}={value}")
+        call_str = f"{_op_name(target)}({args_str}"
+        if attr_strs:
+            call_str += ", " + ", ".join(attr_strs)
+        call_str += ")"
+        return call_str
+
+    def _emit_inline_call(expr: Call, level: str) -> None:
+        name = _names[id(expr)]
+        lines.append(f"{level}{name} = {_format_call(expr, level)}")
         printed.add(id(expr))
 
     def _emit_expr(expr: Expr, level: str) -> None:
@@ -882,93 +904,8 @@ def _emit_def(
             continue
         if isinstance(expr, Call):
             name = _names[id(expr)]
-            target = expr.target
-
-            if isinstance(target, Reshard):
-                # reshard(x, layout=..., storage=...) — kwargs only;
-                # ``new_shape`` has been removed.
-                src_name = _names[id(expr.args[0])]
-                sl = target.layout
-                if sl is None:
-                    layout_kw = ""
-                else:
-                    sl_str = _shard_layout_str(sl, indent=indent + "    ")
-                    layout_kw = f", layout={sl_str}"
-                storage = (
-                    f", storage={target.storage.name.lower()}"
-                    if target.storage is not None else ""
-                )
-                loc = f'  # loc="{name}"' if expr.loc else ""
-                lines.append(
-                    f"{indent}{name} = reshard({src_name}{layout_kw}{storage}){loc}"
-                )
-            else:
-                # Generic op: op_name(arg1, arg2, ..., attr=val)
-                op_name_str = _op_name(target)
-                arg_names = [_arg_ref(a) for a in expr.args]
-                args_str = ", ".join(arg_names)
-
-                if isinstance(target, HirFunction):
-                    call_str = f"{op_name_str}({args_str})"
-                    loc = f'  # loc="{name}"' if expr.loc else ""
-                    lines.append(f"{indent}{name} = {call_str}{loc}")
-                    line = _constraint_line(expr, indent, name)
-                    if line is not None:
-                        lines.append(line)
-                    printed.add(id(expr))
-                    continue
-
-                # Extract keyword attributes from the op.
-                # When the target prints as a kinded alias name
-                # (``add`` / ``neg`` / ...), the alias *fixes* the
-                # ``kind`` attribute — we must skip it from the kwarg
-                # dump, otherwise the regenerated source would end up
-                # as ``add(a, b, kind=BinaryKind.ADD)`` which fails to
-                # re-parse against the alias schema (and pulls
-                # ``BinaryKind`` into the closure unnecessarily).
-                _alias_name = _kinded_alias_name(target)
-                _suppress_attrs = (
-                    {"kind"} if _alias_name is not None else set()
-                )
-                attrs = {}
-                for pi in type(target).params():
-                    if pi.kind == "attribute":
-                        val = getattr(target, pi.name, None)
-                        if (
-                            val is not None
-                            and pi.name not in ("layout",)
-                            and pi.name not in _suppress_attrs
-                        ):
-                            attrs[pi.name] = val
-
-                attr_strs = []
-                for k, v in attrs.items():
-                    if isinstance(v, str):
-                        attr_strs.append(f'{k}="{v}"')
-                    elif isinstance(v, DType):
-                        attr_strs.append(f'{k}="{v.name}"')
-                    elif isinstance(v, enum.Enum) and isinstance(v.value, str):
-                        # String-valued enum attributes print in their DSL form.
-                        attr_strs.append(f'{k}="{v.value}"')
-                    elif isinstance(v, float):
-                        attr_strs.append(f"{k}={v!r}")
-                    elif isinstance(v, ShardLayout):
-                        sl_str = _shard_layout_str(v, indent=indent + "        ")
-                        attr_strs.append(f"{k}={sl_str}")
-                    elif isinstance(v, tuple):
-                        attr_strs.append(f"{k}={v}")
-                    elif v is None:
-                        pass  # skip None attrs
-                    else:
-                        attr_strs.append(f"{k}={v}")
-
-                call_str = f"{op_name_str}({args_str}"
-                if attr_strs:
-                    call_str += ", " + ", ".join(attr_strs)
-                call_str += ")"
-
-                loc = f'  # loc="{name}"' if expr.loc else ""
-                lines.append(f"{indent}{name} = {call_str}{loc}")
+            loc = f'  # loc="{name}"' if expr.loc else ""
+            lines.append(f"{indent}{name} = {_format_call(expr, indent)}{loc}")
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
@@ -1021,27 +958,32 @@ def _target_str(target: Target) -> str:
     raise TypeError(f"unsupported target for Python printing: {type(target).__name__}")
 
 
-def hir_function_to_python(fn: HirFunction) -> str:
-    """Convert a HIR Function to canonical Python DSL source.
-
-    A normal function prints as a single ``@func``. A dispatch prototype
-    (``variants != ()``) prints as a ``pass``-bodied ``@func`` base followed by
-    one ``@<name>.specialize(pattern)`` block per variant. When the function
-    uses meshes with named axes, compact sugar form is emitted; otherwise the
-    verbose ``ShardLayout(...)`` form is used.
-    """
-    lines: list[str] = []
-    indent = "    "
-
-    # Collect meshes across the base and any variants, build the name map.
-    meshes: dict = {}
+def _collect_all_meshes(fn: HirFunction) -> dict[int, Mesh]:
+    """Meshes referenced by *fn* and every specialization variant — the
+    printer's mesh-name map must stay stable across the base prototype and
+    each ``.specialize`` block."""
+    meshes: dict[int, Mesh] = {}
     for f in (fn, *fn.variants):
         meshes.update(_collect_meshes(f))
-    mesh_map = _mesh_name_map(meshes)
+    return meshes
 
-    # Header — imports
-    lines.append("from __future__ import annotations")
-    lines.append("")
+
+def _emit_header(
+    fn: HirFunction,
+    meshes: dict[int, Mesh],
+    mesh_map: dict[int, str],
+    indent: str,
+    *,
+    for_module: bool = False,
+) -> list[str]:
+    """Import header + mesh-prelude shared by ``hir_function_to_python`` and
+    ``_module_to_python`` — the only source for the imports/mesh-defs a
+    dispatch prototype needs (the conditional ``DimVarRangePat`` import for
+    ``fn.variants``, the ``ConstTensor``/``Tensor`` selection), so standalone
+    and module-wrapped output cannot drift out of sync."""
+    lines: list[str] = ["from __future__ import annotations", ""]
+    if for_module:
+        lines.append("from tilefoundry.module import module")
     lines.append("from tilefoundry import func")
     if fn.target is not None:
         lines.append("from tilefoundry.target import CpuTarget, CudaTarget")
@@ -1057,24 +999,29 @@ def hir_function_to_python(fn: HirFunction) -> str:
         lines.append("from tilefoundry.ir.core.pattern import DimVarRangePat")
     lines.append("")
 
-    # Emit mesh definitions when sugar is viable (mesh has named axes)
-    _has_sugar_mesh = any(m.names for m in meshes.values())
-    if _has_sugar_mesh:
+    # Mesh definitions, emitted only when sugar is viable (mesh has named axes).
+    if any(m.names for m in meshes.values()):
         for mid, mesh in meshes.items():
             name = mesh_map[mid]
             topo = mesh.topology
-            ml = mesh.layout
             names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
             lines.append(
                 f"{name} = Mesh("
                 f'Topology("{topo.name}", {topo.size}), '
-                f"{_layout_str(ml)}, "
+                f"{_layout_str(mesh.layout)}, "
                 f"names={names_repr}"
                 f")"
             )
         lines.append("")
+    return lines
 
-    # Base @func decorator (with topologies if any), then the def block.
+
+def _emit_decorated_defs(fn: HirFunction, mesh_map: dict[int, str], indent: str) -> list[str]:
+    """Base ``@func`` decorator + ``def`` block, followed by one
+    ``@<name>.specialize(pattern)`` block per variant (§2.6). Shared by
+    standalone and module-wrapped output so a dispatch prototype prints
+    identically in both."""
+    lines: list[str] = []
     decorator_kwargs = []
     if fn.target is not None:
         decorator_kwargs.append(f"target={_target_str(fn.target)}")
@@ -1094,7 +1041,23 @@ def hir_function_to_python(fn: HirFunction) -> str:
             f"@{fn.name}.specialize({_pattern_ctor(variant.specializations[0])})"
         )
         lines.extend(_emit_def(variant, "_", mesh_map, indent))
+    return lines
 
+
+def hir_function_to_python(fn: HirFunction) -> str:
+    """Convert a HIR Function to canonical Python DSL source.
+
+    A normal function prints as a single ``@func``. A dispatch prototype
+    (``variants != ()``) prints as a ``pass``-bodied ``@func`` base followed by
+    one ``@<name>.specialize(pattern)`` block per variant. When the function
+    uses meshes with named axes, compact sugar form is emitted; otherwise the
+    verbose ``ShardLayout(...)`` form is used.
+    """
+    indent = "    "
+    meshes = _collect_all_meshes(fn)
+    mesh_map = _mesh_name_map(meshes)
+    lines = _emit_header(fn, meshes, mesh_map, indent)
+    lines.extend(_emit_decorated_defs(fn, mesh_map, indent))
     return "\n".join(lines) + "\n"
 
 
@@ -1126,91 +1089,22 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
 
 
 def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:
-    """Internal: ``@module``-wrapped Python DSL source."""
-    lines: list[str] = []
+    """Internal: ``@module``-wrapped Python DSL source. Composes the shared
+    header (imports + mesh prelude, before the class) with a
+    ``@module(entry=...)`` wrapper and the shared decorator/def emitter
+    indented into the class body — the same building blocks
+    ``hir_function_to_python`` uses, so the two modes cannot drift."""
     indent4 = "    "
-    indent8 = "        "  # noqa: F841
-
-    # Collect meshes
-    meshes = _collect_meshes(fn)
+    meshes = _collect_all_meshes(fn)
     mesh_map = _mesh_name_map(meshes)
-    _has_sugar_mesh = any(m.names for m in meshes.values())
 
-    # Build the function body using the same logic as hir_function_to_python
-    # but indented for class body
-    func_source = hir_function_to_python(fn)
-    func_lines = func_source.rstrip("\n").split("\n")
-
-    # Imports
-    lines.append("from __future__ import annotations")
-    lines.append("")
-    lines.append("from tilefoundry.module import module")
-    lines.append("from tilefoundry import func")
-    if fn.target is not None:
-        lines.append("from tilefoundry.target import CpuTarget, CudaTarget")
-        if isinstance(fn.target, CudaTarget) and fn.target.architecture != SM90():
-            lines.append("from tilefoundry.ir.types import DType")
-    lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
-    lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
-    lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
-    lines.append("from tilefoundry.ir.types.shard import (")
-    lines.append(f"{indent4}B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,")
-    lines.append(")")
-    lines.append("")
-
-    # Shared mesh definitions live at module level (before the class), so the
-    # @module class body stays a pure function container and the @func bodies
-    # still resolve the meshes via globals.
-    if _has_sugar_mesh:
-        for mid, mesh in meshes.items():
-            name = mesh_map[mid]
-            topo = mesh.topology
-            ml = mesh.layout
-            names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
-            lines.append(
-                f"{name} = Mesh("
-                f'Topology("{topo.name}", {topo.size}), '
-                f"{_layout_str(ml)}, "
-                f"names={names_repr}"
-                f")"
-            )
-        lines.append("")
+    lines = _emit_header(fn, meshes, mesh_map, indent4, for_module=True)
 
     # @module class header — entry names this function (explicit, required).
     lines.append(f'@module(entry="{fn.name}")')
     lines.append(f"class {module_name}:")
 
-    # Function body (indented into class)
-    # Skip standalone imports/header lines from func_source, use module-level ones
-    in_func = False
-    for fl in func_lines:
-        # Skip standalone imports and mesh defs (they're in the module header)
-        if fl.startswith("from __future__"):
-            continue
-        if fl.startswith("from tilefoundry import func"):
-            continue
-        if fl.startswith("from tilefoundry.target import"):
-            continue
-        if fl.startswith("from tilefoundry.ir.types import DType"):
-            continue
-        if fl.startswith("from tilefoundry.ir.types import"):
-            continue
-        if fl.startswith("from tilefoundry.ir.types.shard import"):
-            continue
-        if fl.startswith("    B, S, P, Layout"):
-            continue
-        if fl == ")":
-            continue
-        if not in_func and fl == "":
-            continue
-        # Skip standalone mesh definitions (they're in the class body)
-        if not in_func and " = Mesh(" in fl:
-            continue
-        if fl.startswith("@func"):
-            in_func = True
-            # Preserve @func(topologies=...) when present
-            lines.append(f"{indent4}{fl}")
-        elif in_func:
-            lines.append(f"{indent4}{fl}")
+    body = _emit_decorated_defs(fn, mesh_map, indent4)
+    lines.extend(f"{indent4}{ln}" if ln else ln for ln in body)
 
     return "\n".join(lines) + "\n"

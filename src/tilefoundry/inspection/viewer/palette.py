@@ -62,11 +62,6 @@ EXPRKIND_COLORS: dict[str, str] = {
 }
 
 
-def dimvar_color() -> str:
-    """The single DimVar token-class colour (same for every dim var)."""
-    return DIMVAR_COLOR
-
-
 def depth_fill(depth: int) -> str:
     """Low-saturation cluster fill for a region nesting depth."""
     return DEPTH_FILLS[depth % len(DEPTH_FILLS)]
@@ -130,6 +125,6 @@ __all__ = [
     "INK", "MUTED", "PAPER", "BG", "HAIR",
     "DIMVAR_COLOR", "DEPTH_FILLS", "DEPTH_BORDERS",
     "STORAGE_CLASSES", "STORAGE_POOL", "EXPRKIND_COLORS",
-    "dimvar_color", "storage_color", "exprkind_color",
+    "storage_color", "exprkind_color",
     "depth_fill", "depth_border", "palette_pools",
 ]

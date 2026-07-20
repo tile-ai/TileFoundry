@@ -92,18 +92,10 @@ class Cell:
         if self.spans:
             body = "".join(s.to_html() for s in self.spans)
         else:
-            body = _html_escape(self.text)
-            if self.bold:
-                body = f"<B>{body}</B>"
-            if self.color or self.font_face or self.font_size is not None:
-                font_attrs = []
-                if self.color:
-                    font_attrs.append(f'COLOR="{self.color}"')
-                if self.font_face:
-                    font_attrs.append(f'FACE="{self.font_face}"')
-                if self.font_size is not None:
-                    font_attrs.append(f'POINT-SIZE="{self.font_size}"')
-                body = f"<FONT {' '.join(font_attrs)}>{body}</FONT>"
+            body = Span(
+                text=self.text, color=self.color, face=self.font_face,
+                size=self.font_size, bold=self.bold,
+            ).to_html()
 
         return f"<TD {' '.join(attrs)}>{body}</TD>"
 
@@ -111,10 +103,6 @@ class Cell:
 @dataclass
 class Row:
     cells: list[Cell] = field(default_factory=list)
-
-    def add(self, *cells: Cell) -> Row:
-        self.cells.extend(cells)
-        return self
 
     def to_html(self) -> str:
         return "<TR>" + "".join(c.to_html() for c in self.cells) + "</TR>"
@@ -129,10 +117,6 @@ class Table:
     cellpadding: int = 4
     bgcolor: str | None = None
     color: str | None = None
-
-    def add(self, *rows: Row) -> Table:
-        self.rows.extend(rows)
-        return self
 
     def add_row(self, *cells: Cell) -> Row:
         row = Row(cells=list(cells))
