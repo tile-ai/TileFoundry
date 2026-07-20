@@ -7,7 +7,7 @@ from __future__ import annotations
 import isl
 import pytest
 
-from tilefoundry.ir.types import make_tensor_type
+from tilefoundry.ir.types import make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult
@@ -115,6 +115,46 @@ def test_two_mesh_axes_on_same_output_axis_factorize():
     assert out.layout.shape == (2, 2, 8)
     assert out.attrs == (Split(0), Split(1))
     assert out.mesh is _GPU2
+
+
+# ── canonical-layout agreement (shard.md §7.1.1) ─────────────────────────────
+# make_shard_tensor_type (a from-scratch sharding) and derive_output_shard_layout
+# (a propagated one) both build a §7.1.1 layout through the shared
+# canonical_shard_layout; for the same logical sharding they MUST compare equal.
+
+
+def test_single_split_per_axis_matches_canonical_from_scratch():
+    # lhs splits axis 0 on mesh axis a only, rhs splits axis 1 on mesh axis b
+    # only -> neither operand alone realises the other's Split, so the carry
+    # branch fails for both and the output is synthesised. Each mesh extent
+    # (2) does not equal its axis size (8), so each axis factors into an
+    # extent position + a residual position (8 / 2 = 4) -- the
+    # single-mesh-axis-split canonical form (shard.md §7.1.1).
+    lhs_t = make_tensor_type((8, 8), layout=_shard2((8, 8), Split(0), Broadcast()))
+    rhs_t = make_tensor_type((8, 8), layout=_shard2((8, 8), Broadcast(), Split(1)))
+    ident = isl.map("{ [m, n] -> [m, n] }")
+    rel = AccessRelationResult(domain=build_domain((8, 8)), maps=(ident, ident, ident))
+    out = derive_output_shard_layout((lhs_t, rhs_t), rel, (8, 8))
+    expected = make_shard_tensor_type((8, 8), mesh=_GPU2, attrs=(Split(0), Split(1)))
+    assert out == expected.layout
+
+
+def test_multi_split_same_axis_matches_canonical_from_scratch():
+    # Both mesh axes bind logical axis 0 (make_shard_tensor_type's own
+    # attrs, one Split per mesh axis, both naming axis 0).
+    lhs_t = make_tensor_type((4, 8), layout=_shard2((4, 8), Split(0), Broadcast()))
+    rhs_t = make_tensor_type((4, 8), layout=_shard2((4, 8), Broadcast(), Split(0)))
+    out = derive_output_shard_layout((lhs_t, rhs_t), _elementwise_relation(), (4, 8))
+    expected = make_shard_tensor_type((4, 8), mesh=_GPU2, attrs=(Split(0), Split(0)))
+    assert out == expected.layout
+
+
+def test_partial_sharding_matches_canonical_from_scratch():
+    ident = isl.map("{ [m, n] -> [m, n] }")
+    rel = AccessRelationResult(domain=build_domain((4, 8)), maps=(ident, ident))
+    x_t = make_shard_tensor_type((4, 8), mesh=_GPU2, attrs=(Partial("sum"), Broadcast()))
+    out = derive_output_shard_layout((x_t,), rel, (4, 8))
+    assert out == x_t.layout
 
 
 def test_carry_candidates_disagree_falls_through_to_synthesis():

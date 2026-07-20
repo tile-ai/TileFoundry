@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.ir.types.shard import Layout, ShardLayout, try_c_order_strides
+from tilefoundry.ir.types.shard import (
+    Layout,
+    ShardLayout,
+    canonical_shard_layout,
+    try_c_order_strides,
+)
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Partial,
@@ -312,64 +317,17 @@ def derive_output_shard_layout(
     if carriers and all(c == carriers[0] for c in carriers):
         return carriers[0]
 
-    # Otherwise synthesise the output layout from the per-mesh-axis
-    # bindings (combining partial shards from several inputs). An output
-    # logical tensor axis split by a single mesh axis stays a single layout
-    # position (flat); one split by several mesh axes factorizes into a layout
-    # sub-position per mesh extent (each bound by one mesh axis, per shard.md
-    # §6) plus a remainder, so the multi-mesh-axis split is representable.
-    # Only `Split` binds an output layout axis; a `Partial` is a mesh-axis value
-    # state with no layout axis, so it is carried through directly.
-    bindings: dict[int, list] = {}
-    for p, a in enumerate(attrs):
-        if isinstance(a, Split):
-            bindings.setdefault(a.axis, []).append((p, a))
-
-    layout_shape: list = []
-    out_attrs: list = [Broadcast() for _ in range(mesh_rank)]
-    for p, a in enumerate(attrs):
-        if isinstance(a, Partial):
-            out_attrs[p] = Partial(a.reduction)
-    pos = 0
-    for ax, size in enumerate(output_shape):
-        binds = bindings.get(ax, [])
-        if len(binds) <= 1:
-            layout_shape.append(size)
-            if binds:
-                p, a = binds[0]
-                out_attrs[p] = Split(pos)
-            pos += 1
-            continue
-        if not (isinstance(size, int) and not isinstance(size, bool)):
-            raise ValueError(
-                f"cannot factorize dynamic output axis {ax} across multiple mesh axes"
-            )
-        prod = 1
-        for p, a in binds:
-            ext = mesh.layout.shape[p]
-            if not (isinstance(ext, int) and not isinstance(ext, bool)):
-                raise ValueError(
-                    f"cannot factorize output axis {ax}: dynamic mesh extent on "
-                    f"mesh axis {p}"
-                )
-            layout_shape.append(ext)
-            out_attrs[p] = Split(pos)
-            prod *= ext
-            pos += 1
-        if size % prod != 0:
-            raise ValueError(
-                f"output axis {ax} size {size} not divisible by mesh extents {prod}"
-            )
-        rem = size // prod
-        if rem != 1:
-            layout_shape.append(rem)
-            pos += 1
-
-    return ShardLayout(
-        layout=Layout(shape=tuple(layout_shape), strides=try_c_order_strides(tuple(layout_shape))),
-        attrs=tuple(out_attrs),
-        mesh=mesh,
-    )
+    # Otherwise synthesise the output layout from the per-mesh-axis bindings
+    # (combining partial shards from several inputs) via the same
+    # canonicalizer make_shard_tensor_type uses (docs/spec/shard.md §7.1.1):
+    # an output axis split by one mesh axis is factored into an extent-sized
+    # position (+ residual) exactly like a from-scratch sharding, and one
+    # split by several mesh axes factorizes into one sub-position per mesh
+    # extent (per shard.md §6) plus a remainder — so a carried-through layout
+    # and a synthesised one for the same logical sharding always compare
+    # equal. `Split.axis` in `attrs` still names an *output tensor* axis here
+    # (canonical_shard_layout's expected input), not yet a layout position.
+    return canonical_shard_layout(output_shape, mesh, tuple(attrs))
 
 
 __all__ = ["derive_output_shard_layout", "partial_reductions_by_axis"]

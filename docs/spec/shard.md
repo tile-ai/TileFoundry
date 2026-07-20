@@ -194,12 +194,15 @@ references the composition's stable `shape` / `domain_rank` contract.
 ```python
 class Topology:                            # device-domain description
     name: str
-    num_devices: int
+    num_devices: int | None                # `None` only for a launch-provided (dynamic) `cta` extent
 
 class Mesh:                                # the parallel device domain
-    topology: Topology
+    topology: Topology                     # primary (first) Topology
+    topologies: tuple[Topology, ...]       # full Topology sequence; normalized non-empty, `topologies[0] is topology`
     layout: Layout | ComposedLayout        # a plain `Layout` (un-sliced) or a `ComposedLayout` (a constant `m[...]` slice)
     names: tuple[str, ...] | None = None
+
+    def topology_domain(self) -> int | None: ...  # product of `topologies[i].num_devices`; `None` if any is dynamic
 
 class MeshAxis:                            # single-axis object via `mesh.x` / `mesh.axes[i]`
     mesh: Mesh
@@ -213,7 +216,8 @@ class MeshAxis:                            # single-axis object via `mesh.x` / `
 
 Field meanings:
 
-- `topology` — device-domain description (`name` + `num_devices`)
+- `topology` — the primary (first) device-domain description (`name` +
+  `num_devices`)
 - `layout` — the mesh's own shape / strides (a `Layout`); a constant slice
   (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
   (tir.md §1.5)
@@ -224,6 +228,20 @@ Field meanings:
 
 `Mesh` describes the parallel device domain; it is not a tensor layout
 object.
+
+`Mesh` MAY carry more than one `Topology` (e.g. `warp(4) × thread(32)`); the
+full sequence is `topologies`, and `topology` is always its first entry.
+
+- constraints:
+  - `topologies` MUST normalize to a non-empty `tuple[Topology, ...]`; a
+    single `Topology` normalizes to a one-element `topologies` and a raw
+    string MUST be rejected (a caller resolving a surface topology name,
+    e.g. the parser's topology namespace or `make_mesh`, MUST convert it to
+    a `Topology` first) — a consumer MAY read `mesh.topologies` /
+    `mesh.topology` directly, with no fallback or duck-typing.
+  - `Mesh.topology_domain() -> int | None` is the product of every
+    `topologies[i].size`; it is `None` when any entry is a launch-provided
+    (dynamic) extent.
 
 ---
 
