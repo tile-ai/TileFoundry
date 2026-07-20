@@ -21,11 +21,8 @@ host-side dispatch is the simplest legal lowering.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import reduce
-from operator import mul
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
-from tilefoundry.codegen.cuda.templates import render
+from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -41,21 +38,8 @@ from tilefoundry.ir.tir.shape import (
 from tilefoundry.ir.tir.stmts import Return, Sequential
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shape_helpers import upper_bound
+from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-
-
-def _total(shape) -> int:
-    if not shape:
-        return 1
-    # ``upper_bound`` reduces a ``DimVar`` axis to its maximum runtime value
-    # (``hi - 1``, since the envelope ``[lo, hi)`` is half-open) so the
-    # kernel-param cute layout stays large enough for any runtime shape that
-    # flows through the dispatch.
-    # The actual runtime extent is plumbed via the separate
-    # ``<param>_shape_<axis>`` kernel scalars produced by the dispatch
-    # lowering.
-    return reduce(mul, (upper_bound(s) for s in shape), 1)
 
 
 def _internal_wrapper_symbol(kernel_name: str) -> str:
@@ -297,7 +281,7 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
     )
     param_wrappers = []
     for p in buffer_params:
-        total = _total(p.type.shape)
+        total = shape_numel_upper_bound(p.type.shape)
         sl = getattr(p.type, "layout", None)
         if isinstance(sl, ShardLayout):
             param_wrappers.append(
@@ -329,26 +313,3 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
     )
 
 
-@register_codegen_cuda(PrimFunction)
-def _emit(node: PrimFunction, ctx: CodegenContext) -> None:
-    f = _compute_kernel_fields(node, ctx)
-    text = render(
-        "kernel.cu.j2",
-        kernel_name=f.kernel_name,
-        internal_wrapper_name=f.internal_wrapper_name,
-        kernel_params_sig=f.kernel_params_sig,
-        wrapper_params_sig=f.wrapper_params_sig,
-        launch_args=f.launch_args,
-        param_wrappers=f.param_wrappers,
-        wrapper_locals=f.wrapper_locals,
-        kernel_body=f.kernel_body,
-        grid_x=f.grid[0],
-        grid_y=f.grid[1],
-        grid_z=f.grid[2],
-        block_x=f.block[0],
-        block_y=f.block[1],
-        block_z=f.block[2],
-        entry_host_only=f.entry_host_only,
-    )
-    for line in text.rstrip("\n").split("\n"):
-        ctx._lines.append(line)

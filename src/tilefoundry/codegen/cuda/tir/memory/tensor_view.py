@@ -7,12 +7,16 @@ from __future__ import annotations
 from functools import reduce
 from operator import mul
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import (
+    CodegenContext,
+    register_codegen_cuda,
+    topology_scope_str,
+)
 from tilefoundry.ir.core import Constant
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shape_helpers import upper_bound
+from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound, upper_bound
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Dynamic,
@@ -21,14 +25,6 @@ from tilefoundry.ir.types.shard.shard_layout import (
     shard_layout_local_shape,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
-
-
-def _total(shape) -> int:
-    if not shape:
-        return 1
-    # Dynamic dims size to envelope upper bound; runtime extent is
-    # plumbed via separate ``<param>_shape_<axis>`` scalars.
-    return reduce(mul, (upper_bound(s) for s in shape), 1)
 
 
 def _render_layout(shape, strides) -> str:
@@ -51,7 +47,7 @@ def _render_mesh_type(mesh, ctx=None) -> str:
             return entry[0]  # alias name
         # try structural fallback: compare inline type string
         topo = mesh.topology
-        scope = _scope_for(topo.name)
+        scope = topology_scope_str(topo.name)
         ml = mesh.layout
         shape_args = ", ".join(f"cute::Int<{s}>" for s in ml.shape)
         stride_args = ", ".join(f"cute::Int<{s}>" for s in ml.strides)
@@ -64,7 +60,7 @@ def _render_mesh_type(mesh, ctx=None) -> str:
             if type_str == inline:
                 return alias_name
     topo = mesh.topology
-    scope = _scope_for(topo.name)
+    scope = topology_scope_str(topo.name)
     ml = mesh.layout
     shape_args = ", ".join(f"cute::Int<{s}>" for s in ml.shape)
     stride_args = ", ".join(f"cute::Int<{s}>" for s in ml.strides)
@@ -103,22 +99,6 @@ def _render_shard_layout_type(sl: SL, ctx=None) -> str:
     )
 
 
-_TOPOLOGY_SCOPE = {
-    "cta": "tilefoundry::TopologyScope::cta",
-    "warp": "tilefoundry::TopologyScope::warp",
-    "thread": "tilefoundry::TopologyScope::thread",
-}
-
-
-def _scope_for(name: str) -> str:
-    # Loud on an unknown level rather than silently defaulting to cta.
-    try:
-        return _TOPOLOGY_SCOPE[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown topology level {name!r}; expected one of "
-            f"{sorted(_TOPOLOGY_SCOPE)}"
-        ) from None
 
 
 def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
@@ -201,7 +181,7 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
     ml_shape = ", ".join(_mesh_dim(d) for d in ml.shape)
     ml_stride = ", ".join(_static_dim(s, "mesh layout stride") for s in ml.strides)
 
-    scope = _scope_for(topo.name)
+    scope = topology_scope_str(topo.name)
     # A launch-provided CTA extent has no compile-time size; the value carries
     # the real extent, so the Topology type parameter is an inert placeholder.
     topo_size = topo.size if isinstance(topo.size, int) else 0
@@ -349,7 +329,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
         if ctx.is_kernel_param(memory_var):
             # Kernel param: memory is a Cute gmem tensor, wrap directly.
             tensor_ref = f"{mem_name}_tensor"
-            global_total = _total(memory_var.type.shape)
+            global_total = shape_numel_upper_bound(memory_var.type.shape)
             global_layout = (
                 f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
             )
@@ -376,7 +356,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
                 f"auto {var_name}_tensor = cute::make_tensor("
                 f"{mem_name}, {tensor_layout});"
             )
-            target_total = _total(let.var.type.shape)
+            target_total = shape_numel_upper_bound(let.var.type.shape)
             target_global = (
                 f"cute::make_layout(cute::Shape<cute::Int<{target_total}>>{{}})"
             )

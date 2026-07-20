@@ -64,6 +64,15 @@ def upper_bound(dim) -> int:
     return int(dim)
 
 
+def shape_numel_upper_bound(shape) -> int:
+    """Product of per-dim upper bounds: the static element count a buffer or
+    layout must hold across every runtime shape in the dispatch envelope."""
+    n = 1
+    for s in shape:
+        n *= upper_bound(s)
+    return n
+
+
 def shape_upper_bound(shape) -> tuple[int, ...]:
     """Map ``upper_bound`` over every entry of *shape*."""
     return tuple(upper_bound(s) for s in shape)
@@ -113,6 +122,7 @@ __all__ = [
     "static_dim_value",
     "i64_const",
     "upper_bound",
+    "shape_numel_upper_bound",
     "shape_upper_bound",
     "shape_has_dim_var",
     "shape_runtime_total",
