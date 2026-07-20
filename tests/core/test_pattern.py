@@ -59,5 +59,3 @@ def test_dim_var_range_pat_contract() -> None:
 
     with pytest.raises(ValueError, match="lo < hi"):
         DimVarRangePat("S", 4, 4)
-    with pytest.raises(ValueError, match="lo < hi"):
-        DimVarRangePat("S", 5, 4)

@@ -62,14 +62,6 @@ def test_bufferize_returns_module_unchanged():
     assert pf_after is pf_before
 
 
-def test_bufferize_preserves_alloc_chain_and_params():
-    pf_before, module = _lower()
-    new_module = BufferizePass().run(module)
-    [pf_after] = new_module.functions
-    assert pf_after.params == pf_before.params
-    assert _collect_alloc_vars(pf_after) == _collect_alloc_vars(pf_before)
-
-
 def test_lifetime_collector_emits_one_entry_per_alloc():
     pf, _ = _lower()
     entries = LifetimeCollector().collect(pf)

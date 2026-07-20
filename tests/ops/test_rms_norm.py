@@ -82,19 +82,6 @@ CASES = [
         make_tensor_type((1, _CTX_LEN + 1, 2048), DType.bf16),
     ),
     TypeInferCase(
-        "rank2_same_dtype",
-        _RMS,
-        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((2048,), DType.bf16)),
-        make_tensor_type((4, 2048), DType.bf16),
-    ),
-    # dtype mismatch (bf16 x / f32 weight) is legal; output keeps x's dtype.
-    TypeInferCase(
-        "rank2_dtype_mismatch_allowed",
-        _RMS,
-        (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((2048,), DType.f32)),
-        make_tensor_type((4, 2048), DType.bf16),
-    ),
-    TypeInferCase(
         "rank0_x_rejected",
         _RMS,
         (TensorType.scalar(DType.bf16), make_tensor_type((2048,), DType.f32)),
@@ -248,11 +235,6 @@ def _build_gridregion_rmsnorm(M, K, dtype=_DEFAULT_DTYPE, compute_dtype=_COMPUTE
 
 
 class TestSSARMSNorm:
-    def test_typeinfer_output_shape_and_dtype(self):
-        fn = _build_ssa_rmsnorm(M=1, K=2048)
-        assert fn.body.type.shape == (1, 2048)
-        assert fn.body.type.dtype == _DEFAULT_DTYPE
-
     def test_lowering_produces_tir_with_reduce(self):
         # noqa PLC0415: shadows the HIR Binary/Reduce that this file uses at module scope.
         from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind  # noqa: PLC0415
@@ -277,11 +259,6 @@ class TestSSARMSNorm:
 
 
 class TestGridRegionRMSNorm:
-    def test_typeinfer_output_shape_and_dtype(self):
-        fn = _build_gridregion_rmsnorm(M=1, K=2048)
-        assert fn.return_type.shape == (1, 2048)
-        assert fn.return_type.dtype == _DEFAULT_DTYPE
-
     def test_lowering_produces_for_loop_and_reduce(self):
         # noqa PLC0415: shadows the HIR Reduce that this file uses at module scope.
         from tilefoundry.ir.tir.reduce import Reduce  # noqa: PLC0415

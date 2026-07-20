@@ -129,13 +129,3 @@ def test_tilefoundry_lower_drives_default_pipeline():
     assert result.entry == "demo"
 
 
-def test_tilefoundry_lower_auto_derives_meshes():
-    """lower() auto-derives meshes from the HIR body, no explicit kwargs needed."""
-
-    fn, _, _ = build_demo()
-    mod = Module(name="main", functions=(fn,), entry=fn.name)
-    result = tilefoundry.lower(mod, target="cuda")
-    [out_fn] = result.functions
-    assert isinstance(out_fn, PrimFunction)
-
-

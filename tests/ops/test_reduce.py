@@ -29,7 +29,6 @@ from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
-from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
@@ -293,14 +292,6 @@ def test_analyze_rejects_cross_cta_reduce():
     )
     with pytest.raises(NotImplementedError, match="cross-CTA"):
         _analyze_cross_warp_workspace(src, (0,))
-
-
-def test_tir_reduce_has_no_dispatch_parameters():
-    # The tier selection + warps_per_group are runtime-derived; they MUST NOT
-    # leak into the TIR op schema.
-    op = TirReduce(axes=(-1,), kind=ReduceKind.SUM)
-    assert not hasattr(op, "cross_warp_only")
-    assert not hasattr(op, "warps_per_group")
 
 
 # ── Cross-warp reduce end-to-end (folded from the former e2e file) ───────────

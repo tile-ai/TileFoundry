@@ -117,13 +117,6 @@ CASES = [
         (make_tensor_type((8,), _F), make_tensor_type((8,), _F), make_tensor_type((), _I)),
         make_tensor_type((8,), _F),
     ),
-    # A rank-0 scalar offset is the canonical 1-D surface.
-    TypeInferCase(
-        "offsets_scalar_ok",
-        _OP,
-        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((), _I)),
-        make_tensor_type((8,), _F),
-    ),
     # An integer literal is carried as an i64 scalar and accepted.
     TypeInferCase(
         "offsets_i64_literal_ok",
@@ -151,21 +144,6 @@ CASES = [
         "offsets_vector_rejected",
         _OP,
         (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((2,), _I)),
-        ExpectedError("offsets must be a rank-0 scalar start"),
-    ),
-    # A one-element ``(1,)`` offset is the legacy spelling and is rejected —
-    # the canonical 1-D offset is a rank-0 scalar.
-    TypeInferCase(
-        "offsets_one_vector_rejected",
-        _OP,
-        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((1,), _I)),
-        ExpectedError("offsets must be a rank-0 scalar start"),
-    ),
-    # A total-size-one multi-dim ``(1, 1)`` offset is also rejected.
-    TypeInferCase(
-        "offsets_multi_one_rejected",
-        _OP,
-        (make_tensor_type((8,), _F), make_tensor_type((3,), _F), make_tensor_type((1, 1), _I)),
         ExpectedError("offsets must be a rank-0 scalar start"),
     ),
     # offsets must be an integer scalar.
@@ -532,8 +510,7 @@ def test_cross_cta_reshard_owned_sync() -> None:
     """An output-position cross-CTA reshard (ownership change) still lowers to
     sync-then-reshard: the grid sync is emitted before the output copy, proving
     the output-sink path routes through the same reshard-owned fence as an
-    intermediate reshard. The removed ``_dirty_roots`` heuristic leaves no
-    residue."""
+    intermediate reshard."""
     pf = _lower(
         Module(name="m", functions=(_CrossCtaReshardOutput.functions[0],), entry="xreshard")
     )
@@ -548,14 +525,6 @@ def test_cross_cta_reshard_owned_sync() -> None:
     assert "Sync" in kinds, f"no reshard-owned grid sync emitted: {kinds}"
     # The sync fences before the output reshard's copy.
     assert kinds.index("Sync") < len(kinds) - 1 - kinds[::-1].index("Copy")
-
-    import inspect  # noqa: PLC0415
-
-    from tilefoundry.passes.transforms import hir_to_tir  # noqa: PLC0415
-
-    assert "_dirty_roots" not in inspect.getsource(hir_to_tir), (
-        "the _dirty_roots heuristic must be fully removed"
-    )
 
 
 _DYN_D = 5

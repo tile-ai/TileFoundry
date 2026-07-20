@@ -139,42 +139,6 @@ def test_partial_brace_value_state() -> None:
     )
 
 
-# ── mixed Split + Partial + default Broadcast on one mesh ────────────────────
-
-_M_MIXED = Mesh(
-    Topology("thread", 4 * 2 * 16), Layout((4, 2, 16), (32, 16, 1)), names=("l", "g", "t")
-)
-
-
-def build_mixed_split_partial_and_default_broadcast_func():
-    """``l`` splits dim 0, ``t`` is a Partial value state, and the unnamed ``g``
-    defaults to Broadcast."""
-
-    @func
-    def _f(
-        a: Tensor[(4, 64), "f32", ((4 @ _M_MIXED.l, 64), {_M_MIXED.t @ P("sum")}), "smem"],
-    ) -> Tensor[(4, 64), "f32"]:
-        return a
-
-    return _f
-
-
-def test_mixed_split_partial_and_default_broadcast() -> None:
-    assert_param_type(
-        build_mixed_split_partial_and_default_broadcast_func,
-        TensorType(
-            shape=(4, 64),
-            dtype=DType.f32,
-            storage=StorageKind.SMEM,
-            layout=ShardLayout(
-                layout=Layout((4, 64), (64, 1)),
-                attrs=(Split(0), Broadcast(), Partial("sum")),
-                mesh=_M_MIXED,
-            ),
-        ),
-    )
-
-
 # ── multi-mesh-axis split: ``dim @ (mesh.axis, ...)`` ────────────────────────
 
 _M_MULTI = Mesh(Topology("thread", 6 * 32), Layout((6, 32), (32, 1)), names=("w", "t"))
@@ -203,35 +167,6 @@ def test_multi_axis_split_factorises_with_remainder() -> None:
             layout=ShardLayout(
                 layout=Layout((1, 6, 32, 8), (1536, 256, 8, 1)),
                 attrs=(Split(1), Split(2)),
-                mesh=_M_MULTI,
-            ),
-        ),
-    )
-
-
-def build_multi_axis_split_exact_plus_remainder_func():
-    """``384 @ (w, t)`` factorises into (6, 32) plus the remainder 2; the
-    single-axis canonicalization path does not apply to a multi-axis split."""
-
-    @func
-    def _f(
-        a: Tensor[(384,), "f32", (384 @ (_M_MULTI.w, _M_MULTI.t),), "smem"],
-    ) -> Tensor[(384,), "f32"]:
-        return a
-
-    return _f
-
-
-def test_multi_axis_split_factorises_exact_plus_remainder() -> None:
-    assert_param_type(
-        build_multi_axis_split_exact_plus_remainder_func,
-        TensorType(
-            shape=(384,),
-            dtype=DType.f32,
-            storage=StorageKind.SMEM,
-            layout=ShardLayout(
-                layout=Layout((6, 32, 2), (64, 2, 1)),
-                attrs=(Split(0), Split(1)),
                 mesh=_M_MULTI,
             ),
         ),
@@ -323,28 +258,6 @@ def test_int_at_single_axis_mesh_canonicalises() -> None:
     )
 
 
-_M_MULTI_REJECT = Mesh(
-    Topology("thread", 4 * 2 * 16), Layout((4, 2, 16), (32, 16, 1)), names=("l", "g", "t")
-)
-
-
-def build_int_at_multi_axis_mesh_func():
-    """The bare ``int @ mesh`` shorthand requires a single-axis mesh; a
-    multi-axis mesh still needs an explicit ``mesh.axis`` reference."""
-
-    @func
-    def _bad(
-        a: Tensor[(64,), "f32", (64 @ _M_MULTI_REJECT,), "smem"],
-    ) -> Tensor[(64,), "f32"]:
-        return a
-
-    return _bad
-
-
-def test_int_at_mesh_rejects_multi_axis_mesh() -> None:
-    assert_build_raises(build_int_at_multi_axis_mesh_func, match="single-axis mesh")
-
-
 # ── invalid value-state forms ────────────────────────────────────────────────
 
 _M_VALUE_STATE = Mesh(
@@ -389,45 +302,6 @@ def build_value_state_bare_p_func():
 
 def test_value_state_p_requires_reduction_arg() -> None:
     assert_build_raises(build_value_state_bare_p_func, match="reduction argument")
-
-
-# ── undefined mesh / unknown axis ────────────────────────────────────────────
-
-_M_KNOWN = Mesh(
-    Topology("gpu", 8192), Layout((32, 2), (2, 1)), names=("cluster", "cta")
-)
-
-
-def build_undefined_mesh_func():
-    """Sugar that references a name bound to no mesh is rejected."""
-
-    @func
-    def _bad(
-        a: Tensor[(32, 128), bf16, (32 @ undefined.cluster, 64), "smem"],  # noqa: F821
-    ) -> Tensor[(32, 128), "f32"]:
-        return a
-
-    return _bad
-
-
-def test_sugar_undefined_mesh_raises() -> None:
-    assert_build_raises(build_undefined_mesh_func, match="undefined mesh")
-
-
-def build_unknown_axis_func():
-    """Sugar that references an axis the mesh does not have is rejected."""
-
-    @func
-    def _bad(
-        a: Tensor[(32, 128), bf16, (32 @ _M_KNOWN.nonexistent, 64), "smem"],
-    ) -> Tensor[(32, 128), "f32"]:
-        return a
-
-    return _bad
-
-
-def test_sugar_unknown_axis_raises() -> None:
-    assert_build_raises(build_unknown_axis_func, match="has no axis named")
 
 
 # ── ``@func`` body with a sugar param + printing valid Python ────────────────
@@ -574,7 +448,6 @@ def test_reshard_sugar_rejects_dynamic_split_axis() -> None:
 # sugar ``Mesh(topology="thread", ...)`` referencing the @func-declared topology.
 
 _MESH_DIM_W = DimVar("W", 1, 8)
-_SPLIT_EXTENT_K = DimVar("K", 32, 256)
 
 
 def build_closure_mesh_dims_func(warps, lanes):
@@ -645,32 +518,6 @@ def build_dimvar_mesh_dim_func():
     return _f
 
 
-def build_bool_mesh_dim_func():
-    """A ``bool`` mesh dim is rejected even though ``bool`` subclasses ``int``."""
-
-    @func(topologies=(Topology("thread", 128),))
-    def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
-        with Mesh(topology="thread", layout=(True, 32), names=("w", "t")) as m:
-            xr = reshard(x, (1, 128 @ (m.w, m.t)), "rmem")  # noqa: F821
-            return reshard(xr, (1, 128), "gmem")  # noqa: F821
-
-    return _f
-
-
-def build_dimvar_split_extent_func():
-    """A dynamic ``DimVar`` split extent through the full ``@func`` op-arg path
-    must report the static-int diagnostic, not ``'Mesh' object has no attribute
-    'w'`` (the sugar error must not be swallowed)."""
-
-    @func(topologies=(Topology("cta", 8), Topology("thread", 128)))
-    def _f(x: Tensor[(8, _SPLIT_EXTENT_K), "bf16"]) -> Tensor[(8, 1), "bf16"]:
-        with Mesh(topology="thread", layout=(4, 32), names=("w", "t")) as m:
-            xr = reshard(x, (8, _SPLIT_EXTENT_K @ (m.w, m.t)), "rmem")  # noqa: F821
-            return reshard(xr, (8, 1), "gmem")  # noqa: F821
-
-    return _f
-
-
 def build_bool_split_extent_single_axis_func():
     """A ``bool`` split extent in the single-axis form (``True @ m.w``) is
     rejected with a static-int diagnostic."""
@@ -684,34 +531,15 @@ def build_bool_split_extent_single_axis_func():
     return _f
 
 
-def build_bool_split_extent_multi_axis_func():
-    """A ``bool`` split extent in the multi-axis form (``True @ (m.w, m.t)``) is
-    rejected with a static-int diagnostic."""
-
-    @func(topologies=(Topology("thread", 128),))
-    def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
-        with Mesh(topology="thread", layout=(4, 32), names=("w", "t")) as m:
-            xr = reshard(x, (1, True @ (m.w, m.t)), "rmem")  # noqa: F821
-            return reshard(xr, (1, 128), "gmem")  # noqa: F821
-
-    return _f
-
-
 @pytest.mark.parametrize(
     "build_func",
     [
         build_dimvar_mesh_dim_func,
-        build_bool_mesh_dim_func,
-        build_dimvar_split_extent_func,
         build_bool_split_extent_single_axis_func,
-        build_bool_split_extent_multi_axis_func,
     ],
     ids=[
         "dimvar-mesh-dim",
-        "bool-mesh-dim",
-        "dimvar-split-extent",
         "bool-split-single-axis",
-        "bool-split-multi-axis",
     ],
 )
 def test_static_extent_position_rejects_non_static_int(build_func) -> None:

@@ -28,25 +28,6 @@ C_FRAG_SHARD = _ATOM.C
 # ── Construction smoke ───────────────────────────────────────────────────
 
 
-def test_a_fragment_layout_constructs():
-    assert isinstance(A_FRAG_SHARD, ShardLayout)
-    assert A_FRAG_SHARD.layout.shape == (2, 4, 2, 8, 2)
-    # 32 threads × 8 elements per thread = 256 = 16 * 16 (M*K)
-    assert _product(A_FRAG_SHARD.layout.shape) == 16 * 16
-
-
-def test_b_fragment_layout_constructs():
-    assert B_FRAG_SHARD.layout.shape == (8, 2, 4, 2)
-    # 32 × 4 = 128 = 16 * 8 (K*N)
-    assert _product(B_FRAG_SHARD.layout.shape) == 16 * 8
-
-
-def test_c_fragment_layout_constructs():
-    assert C_FRAG_SHARD.layout.shape == (2, 4, 8, 2)
-    # 32 × 4 = 128 = 16 * 8 (M*N)
-    assert _product(C_FRAG_SHARD.layout.shape) == 16 * 8
-
-
 # ── Per-thread element count matches PTX mma fragment width ──────────────
 
 

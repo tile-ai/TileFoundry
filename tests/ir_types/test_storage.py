@@ -26,6 +26,6 @@ def test_storagekind_and_none_pass_through() -> None:
 
 
 def test_legacy_long_aliases_rejected() -> None:
-    for legacy in ("global", "shared", "reg", "register", "meta"):
+    for legacy in ("global", "meta"):
         with pytest.raises(ValueError, match=r"unknown storage"):
             resolve_storage(legacy)

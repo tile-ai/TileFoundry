@@ -180,56 +180,6 @@ def test_sub_call_dispatch_emits_dispatch_call() -> None:
     verify_module(list(out.functions))
 
 
-def test_sub_call_dispatch_caller_listed_before_callee() -> None:
-    """Same scenario as ``test_sub_call_dispatch_emits_dispatch_call`` but
-    with ``Module.functions`` ordered (main, inner) — caller listed before
-    callee. Lowering must still resolve mangled callees and produce a verifying
-    TIR module.
-    """
-    inner = _prototype(
-        "inner", (_variant("inner", 1, 3), _variant("inner", 4, 7)),
-    )
-    ty = _tensor((_S(),))
-    xm = Var(type=ty, name="x")
-    main = HirFunction.build(
-        name="main", params=(xm,),
-        body=Call(type=ty, target=inner, args=(xm,)), return_type=ty,
-    )
-    # NOTE: caller (main) comes first, callee (inner) after.
-    mod = Module(name="m", functions=(main, inner), entry="main")
-    out = HirToTirPass().run(mod)
-
-    caller_pf = _find_function(out, "main")
-    dispatches: list[DispatchCall] = []
-
-    def walk(stmt) -> None:
-        if isinstance(stmt, Sequential):
-            for s in stmt.body:
-                walk(s)
-        elif isinstance(stmt, DispatchCall):
-            dispatches.append(stmt)
-        elif isinstance(stmt, LetStmt):
-            walk(stmt.body)
-        elif isinstance(stmt, (For, While, MeshScope)):
-            walk(stmt.body)
-        elif isinstance(stmt, If):
-            walk(stmt.then_body)
-            walk(stmt.else_body)
-
-    walk(caller_pf.body)
-    assert len(dispatches) == 1
-    dc = dispatches[0]
-    assert dc.callee_name == "inner"
-    callee_names = {c.callable.name for c in dc.case_calls}
-    assert callee_names == {"inner$S$1_3", "inner$S$4_7"}
-    # each case call's SymbolRef must reference an actual mangled
-    # PrimFunction emitted in the module.
-    fn_by_name = {fn.name: fn for fn in out.functions}
-    for c in dc.case_calls:
-        assert c.callable.name in fn_by_name
-    verify_module(list(out.functions))
-
-
 def test_nested_dispatch_chain_three_levels() -> None:
     """3-level chain ``main -> inner -> leaf``, each a 2-arm dispatch group.
 

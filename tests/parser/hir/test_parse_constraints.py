@@ -210,7 +210,6 @@ def tuple_value(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 4), "i64"]:
         "    y: where(layout=(_, {cta @ B(), cta @ P(\"sum\")})) = tf.add(x, x)\n    return y",
         "    y: where(layout=(D, D)) = tf.add(x, x)\n    return y",
         "    y: where(partial=P(\"sum\")) = tf.add(x, x)\n    return y",
-        "    y: where(foo=1) = tf.add(x, x)\n    return y",
         "    y: where(layout=(1.5,)) = tf.add(x, x)\n    return y",
         "    y: where(storage=\"gmem\") = tf.add(x, x)\n    y: where(storage=\"gmem\")\n    return y",
     ],

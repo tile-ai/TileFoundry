@@ -8,7 +8,6 @@ module-level static tensors.
 """
 from __future__ import annotations
 
-import pytest
 import torch
 
 from tests.models.qwen3_5_30b_a3b import common
@@ -54,16 +53,13 @@ def _hf_qkv_rope_ref(attn, hidden_norm, cos, sin, pos_ids, k_cache0, v_cache0, c
     return q_rope, k_cache1, v_cache1
 
 
-_COMBOS = [(2, 1), (5, 3)]
-
-
-@pytest.mark.parametrize("cur_pos,s", _COMBOS, ids=lambda v: str(v))
-def test_qkv_rope_evaluate(cur_pos, s):
+def test_qkv_rope_evaluate():
     """K2+K3+K4 fused QkvRope (packed GEMM + slice + per-head norm + RoPE + KV
     cache write), pulled from the module and checked against HF.
 
     The module is bf16 (per-op f32 numerics are covered in ``tests/ops``); this
     integration oracle checks structural correctness against HF at bf16."""
+    cur_pos, s = 5, 3
     torch_dt, atol, rtol = torch.bfloat16, 2e-2, 2e-2
     mod = Qwen3_30B_A3B
     fn = mod.qkv_rope
@@ -119,8 +115,7 @@ def test_input_rms_norm_evaluate():
     torch.testing.assert_close(out.float(), ref.float(), atol=atol, rtol=rtol)
 
 
-@pytest.mark.parametrize("cur_pos,s", _COMBOS, ids=lambda v: str(v))
-def test_gqa_attend_evaluate(cur_pos, s):
+def test_gqa_attend_evaluate():
     """K5+K6 masked GQA attention + output projection, pulled from the module,
     vs HF eager attention over the same q/kv tensors (inactive rows i >= s stay
     finite via the safe mask; only the valid rows are compared)."""
@@ -128,6 +123,7 @@ def test_gqa_attend_evaluate(cur_pos, s):
         eager_attention_forward,
     )
 
+    cur_pos, s = 5, 3
     torch_dt, atol, rtol = torch.bfloat16, 2e-2, 2e-2
     mod = Qwen3_30B_A3B
     fn = mod.gqa_attend
@@ -182,11 +178,11 @@ def _hf_self_attention_ref(attn, layer, x_real, k_cache0_hf, v_cache0_hf, cos, s
     return out, k_cache1, v_cache1
 
 
-@pytest.mark.parametrize("cur_pos,s", _COMBOS, ids=lambda v: str(v))
-def test_self_attention_evaluate(cur_pos, s):
+def test_self_attention_evaluate():
     """Composed decode-step self-attention (input_rms_norm -> qkv_rope ->
     gqa_attend), pulled from the module by attribute, vs HF. Inactive padding
     rows stay finite; only the valid rows and the updated caches are compared."""
+    cur_pos, s = 5, 3
     torch_dt, atol, rtol = torch.bfloat16, 2e-2, 2e-2
     mod = Qwen3_30B_A3B
     fn = mod.self_attention

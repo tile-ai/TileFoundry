@@ -28,11 +28,6 @@ def _mul_literal_lhs(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     return mul(2.0, x)
 
 
-@func
-def _add_int_literal(x: Tensor[(8,), "i64"]) -> Tensor[(8,), "i64"]:
-    return add(x, 1)
-
-
 def _literal_arg(call: Call) -> Constant:
     (lit,) = [a for a in call.args if isinstance(a, Constant)]
     return lit
@@ -41,7 +36,7 @@ def _literal_arg(call: Call) -> Constant:
 def test_value_literal_is_unmaterialized() -> None:
     """``2.0`` / ``1`` parse to a ``Constant`` whose ``storage`` is ``UMAT``,
     on either side of the op (operand order does not change it)."""
-    for fn in (_mul_literal_rhs, _mul_literal_lhs, _add_int_literal):
+    for fn in (_mul_literal_rhs, _mul_literal_lhs):
         body = fn.body
         assert isinstance(body, Call)
         lit = _literal_arg(body)

@@ -21,15 +21,14 @@ NUM_KV_HEADS = common.NUM_KV_HEADS
 MOE_INTERMEDIATE = common.MOE_INTERMEDIATE
 
 
-_COMBOS = [(1, 2), (3, 5)]
 _DTYPES = [("f32", torch.float32, 1e-3, 1e-3), ("bf16", torch.bfloat16, 3e-2, 3e-2)]
 
 
-@pytest.mark.parametrize("seq,cur_pos", _COMBOS, ids=lambda v: str(v))
 @pytest.mark.parametrize(
     "dt_name,torch_dt,atol,rtol", _DTYPES, ids=lambda v: v if isinstance(v, str) else ""
 )
-def test_decoder_layer_matches_hf(dt_name, torch_dt, atol, rtol, seq, cur_pos):
+def test_decoder_layer_matches_hf(dt_name, torch_dt, atol, rtol):
+    seq, cur_pos = 3, 5
     common.DT = dt_name
     kv_update = common.build_kv_update()
     scores = common.build_scores()

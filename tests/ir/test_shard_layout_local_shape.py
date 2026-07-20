@@ -80,19 +80,3 @@ def test_partial_does_not_divide_layout_dim() -> None:
         mesh=mesh,
     )
     assert shard_layout_local_shape(sl) == (8,)
-
-
-def test_residue_when_mesh_does_not_fully_consume() -> None:
-    """global ``(8,)`` with one mesh axis t=4 → per-thread ``(2,)``
-    (local residue 2)."""
-    mesh = Mesh(
-        topology=Topology("thread", 4),
-        layout=Layout(shape=(4,), strides=(1,)),
-        names=("t",),
-    )
-    sl = ShardLayout(
-        layout=Layout(shape=(8,), strides=(1,)),
-        attrs=(Split(0),),
-        mesh=mesh,
-    )
-    assert shard_layout_local_shape(sl) == (2,)

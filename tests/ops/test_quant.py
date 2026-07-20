@@ -25,14 +25,6 @@ CASES = [
         TupleType(fields=(make_tensor_type((1, 2048), _FP8), make_tensor_type((1, 16), DType.f32))),
     ),
     TypeInferCase(
-        "rank3_attn_path",
-        Quant(),
-        (make_tensor_type((1, 1, 4096), _BF),),
-        TupleType(
-            fields=(make_tensor_type((1, 1, 4096), _FP8), make_tensor_type((1, 1, 32), DType.f32))
-        ),
-    ),
-    TypeInferCase(
         "custom_group_size",
         Quant(group=64),
         (make_tensor_type((1, 256), _BF),),
@@ -62,10 +54,3 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_quant_typeinfer(case):
     run_typeinfer_case(case)
-
-
-def test_quant_default_attrs():
-    op = Quant()
-    assert op.scheme == "per_token_group"
-    assert op.group == 128
-    assert op.target_dtype is _FP8

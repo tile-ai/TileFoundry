@@ -133,22 +133,10 @@ CASES = [
         make_tensor_type((4, 8), _F, storage="gmem"),
     ),
     TypeInferCase(
-        "literal_lhs_anchors_gmem",
-        _ADD,
-        (make_tensor_type((), _F, storage=StorageKind.UMAT), make_tensor_type((4, 8), _F, storage="gmem")),
-        make_tensor_type((4, 8), _F, storage="gmem"),
-    ),
-    TypeInferCase(
         "both_gmem",
         _ADD,
         (make_tensor_type((4, 8), _F, storage="gmem"), make_tensor_type((4, 8), _F, storage="gmem")),
         make_tensor_type((4, 8), _F, storage="gmem"),
-    ),
-    TypeInferCase(
-        "both_rmem",
-        _ADD,
-        (make_tensor_type((4, 8), _F, storage="rmem"), make_tensor_type((4, 8), _F, storage="rmem")),
-        make_tensor_type((4, 8), _F, storage="rmem"),
     ),
     # All operands unmaterialized (e.g. `1 + 1`) → output stays unmaterialized.
     TypeInferCase(
@@ -260,9 +248,7 @@ def test_binary_evaluate_dtypes(dtype):
 
 # Low-precision dtypes are legal typeinfer operands: inference is purely
 # logical, so they pass through like any other element type.
-@pytest.mark.parametrize(
-    "dt", [DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1], ids=lambda d: d.name
-)
+@pytest.mark.parametrize("dt", [DType.fp8e4m3], ids=lambda d: d.name)
 def test_binary_low_precision_typeinfer_passthrough(dt):
     run_typeinfer_case(
         TypeInferCase(

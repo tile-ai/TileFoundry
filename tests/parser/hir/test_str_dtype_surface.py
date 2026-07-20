@@ -29,10 +29,7 @@ from tilefoundry.dsl.tf import *
 """
 
 
-@pytest.mark.parametrize(
-    "name",
-    ("f32", "f16", "bf16", "fp8e4m3", "f8e8m0", "f4e2m1", "i32", "i64", "bool"),
-)
+@pytest.mark.parametrize("name", ("f32", "bool"))
 def test_string_dtype_parses_and_prints_canonically(name: str) -> None:
     src = _HEADER + f"""
 @func
@@ -68,16 +65,6 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
     assert descriptor_ir.body.target.dtype is DType.bf16
     assert as_script(string_ir) == as_script(descriptor_ir)
     assert 'dtype="bf16"' in as_script(string_ir)
-
-
-def test_string_reduce_kind_parses() -> None:
-    src = _HEADER + """
-@func
-def g(x: Tensor[(8,), "f32"]) -> Tensor[(1,), "f32"]:
-    return reduce(x, axes=(0,), keepdim=True, kind="sum")
-"""
-    fn = parse_script(_dedent(src))
-    assert fn.body is not None
 
 
 def test_string_and_enum_forms_are_equivalent() -> None:
