@@ -25,10 +25,7 @@ def _report() -> ScheduleReport:
         status="OPTIMAL",
         objective_name="makespan",
         unit="ns",
-        baseline=120,
         selected=80,
-        solver_phase="resource_area",
-        proven_objectives=("makespan", "reshard_bytes", "resource_area"),
         best_bound=80,
         gap=0.0,
     )
@@ -89,14 +86,11 @@ def test_schedule_report_and_result_are_immutable_values() -> None:
 
 def test_report_json_contains_only_the_public_summary_fields() -> None:
     expected = {
-        "baseline": 120,
         "best_bound": 80,
         "gap": 0.0,
         "objective_name": "makespan",
-        "proven_objectives": ["makespan", "reshard_bytes", "resource_area"],
         "root": "root",
         "selected": 80,
-        "solver_phase": "resource_area",
         "stage": "cta",
         "status": "OPTIMAL",
         "target": "fake",
@@ -120,10 +114,7 @@ def test_report_markdown_is_stable() -> None:
             "| status | OPTIMAL |",
             "| objective_name | makespan |",
             "| unit | ns |",
-            "| baseline | 120 |",
             "| selected | 80 |",
-            "| solver_phase | resource_area |",
-            "| proven_objectives | makespan, reshard_bytes, resource_area |",
             "| best_bound | 80 |",
             "| gap | 0.0 |",
         )

@@ -48,6 +48,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisito
 from . import cost as _cost  # noqa: F401
 
 PlacementRelation = Literal["SAME_INTERVAL", "CONTAINED"]
+ValueRole = Literal["normal", "carry", "yield", "result"]
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class ValueInfo:
     producer_site_id: int | None = None
     function_path: tuple[int, ...] = ()
     is_final_output: bool = False
+    role: ValueRole = "normal"
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,16 @@ class RegionInfo:
     operation_site_ids: tuple[int, ...]
     init_use_ids: tuple[int, ...]
     backedge_use_ids: tuple[int, ...]
+    carry_infos: tuple["RegionCarryInfo", ...] = ()
+    result_value_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class RegionCarryInfo:
+    init_value_id: int
+    carried_value_id: int
+    yield_value_id: int
+    result_value_id: int
 
 
 @dataclass(frozen=True)
@@ -129,6 +141,8 @@ class PlanningProblem:
     requirements: tuple[BucketRequirement, ...]
     root_value_ids: tuple[int, ...]
     regions: Mapping[int, RegionInfo]
+    candidate_enclosing_regions: Mapping[int, int | None] = MappingProxyType({})
+    value_availability_regions: Mapping[int, int | None] = MappingProxyType({})
     site_order: tuple[int, ...] = ()
     function_instances: tuple[tuple[tuple[int, ...], Function], ...] = ()
     diagnostics: tuple[str, ...] = ()
@@ -251,6 +265,9 @@ class _Planner:
         self.requirement_annotations: list[tuple[tuple[int, ...], Expr, ScheduleConstraintMetadata]] = []
         self.requirements: list[BucketRequirement] = []
         self.regions: dict[int, RegionInfo] = {}
+        self.candidate_enclosing_regions: dict[int, int | None] = {}
+        self.value_availability_regions: dict[int, int | None] = {}
+        self.site_enclosing_regions: dict[int, int | None] = {}
         self.sites: list[_Site] = []
         self.site_order: list[int] = []
         self.function_instances: list[tuple[tuple[int, ...], Function]] = []
@@ -392,6 +409,7 @@ class _Planner:
         *,
         is_const: bool = False,
         producer_site_id: int | None = None,
+        role: ValueRole = "normal",
     ) -> int:
         if not _type_storage_ok(type):
             loc = getattr(source, "loc", None) or getattr(self.root, "loc", None) or "<unknown>"
@@ -407,8 +425,12 @@ class _Planner:
             is_const=is_const,
             producer_site_id=producer_site_id,
             function_path=function_path,
+            role=role,
         )
         self.values[value_id] = info
+        self.value_availability_regions[value_id] = (
+            self._active_regions[-1] if self._active_regions else None
+        )
         self.value_types[value_id] = self._legal_types(type)
         return value_id
 
@@ -426,9 +448,12 @@ class _Planner:
                     type_id=type_id,
                     candidate_ids=(),
                     fixed_offset=None,
-                    is_source=self.values[value_id].producer_site_id is None,
+                    is_source=(
+                        self.values[value_id].role == "normal"
+                        and self.values[value_id].producer_site_id is None
+                    ),
                 )
-                if self.values[value_id].producer_site_id is None:
+                if self.buckets[bucket_id].is_source:
                     source_bucket_ids.append(bucket_id)
             if source_bucket_ids:
                 self.values[value_id] = replace(
@@ -528,6 +553,9 @@ class _Planner:
         site = _Site(site_id, expr, function_path, arg_refs, output_refs)
         self.sites.append(site)
         self.site_order.append(site_id)
+        self.site_enclosing_regions[site_id] = (
+            self._active_regions[-1] if self._active_regions else None
+        )
         if self._active_regions:
             region_id = self._active_regions[-1]
             info = self.regions[region_id]
@@ -567,24 +595,80 @@ class _Planner:
             backedge_use_ids=tuple(self._new_use() for _ in region.yield_values),
         )
         self.regions[region_id] = info
-        init_refs = tuple(
+        init_ref_groups = tuple(
             self._process_expr(value, function, function_path, env)
             for value in region.init_args
         )
-        phi_env = dict(env)
-        for phi, refs in zip(region.carried_args, init_refs):
-            phi_env[id(phi)] = refs
+        init_refs = tuple(ref for refs in init_ref_groups for ref in refs)
         self._active_regions.append(region_id)
         try:
-            body_refs = self._process_expr(region.body, function, function_path + (region_id,), phi_env)
-            yield_refs = tuple(
-                ref
-                for value in region.yield_values
-                for ref in self._process_expr(value, function, function_path + (region_id,), phi_env)
+            carried_ref_groups = tuple(
+                tuple(
+                    self._new_value(
+                        phi,
+                        type,
+                        path,
+                        function_path + (region_id,),
+                        role="carry",
+                    )
+                    for path, type in _tensor_leaves(phi.type)
+                )
+                for phi in region.carried_args
             )
+            phi_env = dict(env)
+            for phi, refs in zip(region.carried_args, carried_ref_groups):
+                phi_env[id(phi)] = refs
+            body_refs = self._process_expr(region.body, function, function_path + (region_id,), phi_env)
+            yield_ref_groups = tuple(
+                self._process_expr(value, function, function_path + (region_id,), phi_env)
+                for value in region.yield_values
+            )
+            yield_refs = tuple(ref for refs in yield_ref_groups for ref in refs)
         finally:
             self._active_regions.pop()
-        return yield_refs if region.carried_args else body_refs
+        parent_region_id = info.parent_region_id
+        for ref in yield_refs:
+            if self.values[ref].role == "normal":
+                self.values[ref] = replace(self.values[ref], role="yield")
+        if region.carried_args:
+            result_refs = tuple(
+                self._new_value(
+                    self.values[yield_ref].source,
+                    next(
+                        type
+                        for type in self.value_types[yield_ref]
+                        if isinstance(type, TensorType)
+                    ),
+                    self.values[yield_ref].leaf_path,
+                    function_path,
+                    role="result",
+                )
+                for yield_ref in yield_refs
+            )
+        else:
+            result_refs = body_refs
+        for ref in result_refs:
+            self.value_availability_regions[ref] = parent_region_id
+        carry_infos = tuple(
+            RegionCarryInfo(
+                init_value_id=init_ref,
+                carried_value_id=carried_ref,
+                yield_value_id=yield_ref,
+                result_value_id=result_ref,
+            )
+            for init_ref, carried_ref, yield_ref, result_ref in zip(
+                init_refs,
+                (ref for refs in carried_ref_groups for ref in refs),
+                yield_refs,
+                result_refs,
+            )
+        )
+        self.regions[region_id] = replace(
+            self.regions[region_id],
+            carry_infos=carry_infos,
+            result_value_ids=result_refs,
+        )
+        return result_refs
 
     def _new_use(self) -> int:
         value = self._next_use
@@ -710,7 +794,7 @@ class _Planner:
     ) -> int:
         tensor_outputs = tuple(type for type in output_types if isinstance(type, TensorType))
         mesh, count = self._active_mesh_for_outputs(tensor_outputs)
-        if reshard:
+        if isinstance(call.target, Reshard):
             count = 0
         duration, total_bytes, demand, moved = self._target_facts(call, cost, mesh, count)
         aliases = tuple(
@@ -737,6 +821,13 @@ class _Planner:
         candidate_id = self._next_candidate
         self._next_candidate += 1
         self.candidates[candidate_id] = candidate
+        if site_id is None:
+            value_id = self.buckets[output_bucket_ids[0]].value_id
+            self.candidate_enclosing_regions[candidate_id] = (
+                self.value_availability_regions.get(value_id)
+            )
+        else:
+            self.candidate_enclosing_regions[candidate_id] = self.site_enclosing_regions.get(site_id)
         for bucket_id in output_bucket_ids:
             self._bucket_candidates[bucket_id].append(candidate_id)
         for input_index, bucket_id in enumerate(input_bucket_ids):
@@ -903,6 +994,8 @@ class _Planner:
         if value_id in seen:
             return True
         seen.add(value_id)
+        if self.values[value_id].role != "normal":
+            return True
         bucket_ids = tuple(
             bucket_id for (candidate_value, _), bucket_id in self._bucket_by_value_type.items()
             if candidate_value == value_id
@@ -948,6 +1041,8 @@ class _Planner:
             requirements=tuple(self.requirements),
             root_value_ids=tuple(root_refs),
             regions=MappingProxyType(dict(self.regions)),
+            candidate_enclosing_regions=MappingProxyType(dict(self.candidate_enclosing_regions)),
+            value_availability_regions=MappingProxyType(dict(self.value_availability_regions)),
             site_order=tuple(self.site_order),
             function_instances=tuple(self.function_instances),
             diagnostics=(
@@ -997,6 +1092,7 @@ __all__ = [
     "CandidateDependency",
     "OpCandidate",
     "PlanningProblem",
+    "RegionCarryInfo",
     "RegionInfo",
     "ValueInfo",
     "build_planning_problem",

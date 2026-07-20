@@ -78,9 +78,9 @@ class ScheduleResult:
 
 ### 2.3 `ScheduleReport`
 
-`ScheduleReport` is the stable cross-stage summary. Stage-private operation
-rows, use decisions, candidate costs, and solver-native models are not report
-fields.
+`ScheduleReport` is the stable cross-stage makespan summary. Stage-private
+operation rows, use decisions, candidate costs, and solver-native models are
+not report fields.
 
 ```python
 class ScheduleReport:
@@ -93,12 +93,9 @@ class ScheduleReport:
         status: attribute; Public solution status.
         objective_name: attribute; Primary objective name.
         unit: attribute; Unit of the primary objective and bound.
-        baseline: attribute; Deterministic legal baseline value.
         selected: attribute; Selected primary-objective value.
-        solver_phase: attribute; First unproven objective phase, or final phase.
-        proven_objectives: attribute; Objective phases proven optimal in solve order.
-        best_bound: attribute; Bound for solver_phase, or None when unavailable.
-        gap: attribute; Relative optimality gap for solver_phase, or None.
+        best_bound: attribute; Integer lower bound for the makespan objective.
+        gap: attribute; Relative optimality gap for the makespan objective.
     """
 
     root: str
@@ -107,12 +104,9 @@ class ScheduleReport:
     status: Literal["OPTIMAL", "FEASIBLE_NOT_PROVEN"]
     objective_name: Literal["makespan"]
     unit: Literal["ns"]
-    baseline: int
     selected: int
-    solver_phase: Literal["makespan", "reshard_bytes", "resource_area"]
-    proven_objectives: tuple[str, ...]
-    best_bound: int | None
-    gap: float | None
+    best_bound: int
+    gap: float
 
     def to_json(self) -> str: ...
 
@@ -121,11 +115,16 @@ class ScheduleReport:
 
 - constraints:
   - The structure MUST be immutable.
-  - `baseline` and `selected` MUST always describe `objective_name`, regardless
-    of the value of `solver_phase`.
-  - `best_bound` and `gap` MUST describe `solver_phase`.
+  - `selected`, `best_bound`, and `gap` MUST describe the one `makespan`
+    objective in `ns`.
+  - A feasible incumbent MUST be reportable even when optimality is unproven.
   - JSON and Markdown rendering MUST contain every public field and MUST NOT
     expose stage-private solve state.
+  - When the report summarizes a CTA execution blueprint, its selected value
+    describes the modeled plan and MUST NOT be interpreted as a guarantee that
+    current lowering preserves the planned intervals, reserves physical SM
+    shares, promotes values to SRAM or registers, or proves runtime performance
+    or out-of-memory safety.
 
 ### 2.4 `Schedule`
 
