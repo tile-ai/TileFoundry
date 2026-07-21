@@ -137,6 +137,10 @@ class CudaTarget(Target):
     target. Warp/lane/warpgroup structure belongs in thread mesh layouts.
   - `topology_limit("cta")` MUST equal `device.sm_count` and
     `topology_limit("thread")` MUST equal `architecture.max_threads_per_cta`.
+  - Each `CudaTarget` instance MUST bind exactly one private
+    `(Schedule, "cta")` service, including instances constructed with custom
+    `Device` or `Architecture` values. The concrete service implementation is
+    not part of the public `schedule` package.
   - Static declared topology extents MUST be positive integers within their
     target resource limits. `Topology("cta", None)` MUST remain valid for the
     handwritten dynamic-launch compile path.

@@ -13,6 +13,7 @@ from collections.abc import Iterator
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -1040,8 +1041,8 @@ def hir_function_to_python(fn: HirFunction) -> str:
     return "\n".join(lines) + "\n"
 
 
-def as_script(fn: HirFunction, *, module: str | None = None) -> str:
-    """Convert a HIR Function to Python DSL source.
+def as_script(fn: HirFunction | Module, *, module: str | None = None) -> str:
+    """Convert a HIR Function or Module to Python DSL source.
 
     Without *module*: standalone ``@func`` output.
 
@@ -1050,13 +1051,15 @@ def as_script(fn: HirFunction, *, module: str | None = None) -> str:
     function container) and sugar annotations.
 
     Args:
-        fn: The HIR function.
+        fn: The HIR function or module.
         module: Optional module class name.  When set, the output is
             wrapped in ``@module(entry="<fn>") class <name>:``.
 
     Returns:
         Python source string.
     """
+    if isinstance(fn, Module):
+        return _module_to_python(fn, module)
     if module is not None:
         return _module_to_python(fn, module)
     return hir_function_to_python(fn)
@@ -1067,23 +1070,45 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
     return as_script(fn, module=module_name)
 
 
-def _module_to_python(fn: HirFunction, module_name: str = "M") -> str:
-    """Internal: ``@module``-wrapped Python DSL source. Composes the shared
-    header (imports + mesh prelude, before the class) with a
-    ``@module(entry=...)`` wrapper and the shared decorator/def emitter
-    indented into the class body — the same building blocks
-    ``hir_function_to_python`` uses, so the two modes cannot drift."""
+def _module_to_python(
+    fn_or_module: HirFunction | Module, module_name: str | None = None
+) -> str:
+    """Render a function or every HIR function in a Module wrapper."""
+    if isinstance(fn_or_module, Module):
+        entry = fn_or_module.entry_function()
+        if not isinstance(entry, HirFunction):
+            raise TypeError("HIR Module printer requires a HIR entry Function")
+        functions = tuple(fn for fn in fn_or_module.functions if isinstance(fn, HirFunction))
+        if len(functions) != len(fn_or_module.functions):
+            raise TypeError("HIR Module printer does not serialize mixed HIR/TIR Modules")
+        module_name = fn_or_module.name if module_name is None else module_name
+    else:
+        entry = fn_or_module
+        functions = (entry,)
+        module_name = "M" if module_name is None else module_name
     indent4 = "    "
-    meshes = _collect_all_meshes(fn)
+    meshes: dict[int, Mesh] = {}
+    for fn in functions:
+        meshes.update(_collect_all_meshes(fn))
     mesh_map = _mesh_name_map(meshes)
 
-    lines = _emit_header(fn, meshes, mesh_map, indent4, for_module=True)
+    lines = _emit_header(entry, meshes, mesh_map, indent4, for_module=True)
+    tensor_names = "ConstTensor, Tensor" if any(
+        param.is_const for fn in functions for param in fn.params
+    ) else "Tensor"
+    lines = [
+        f"from tilefoundry.dsl import {tensor_names}" if line.startswith("from tilefoundry.dsl import Tensor") else line
+        for line in lines
+    ]
 
-    # @module class header — entry names this function (explicit, required).
-    lines.append(f'@module(entry="{fn.name}")')
+    lines.append(f'@module(entry="{entry.name}")')
     lines.append(f"class {module_name}:")
 
-    body = _emit_decorated_defs(fn, mesh_map, indent4)
-    lines.extend(f"{indent4}{ln}" if ln else ln for ln in body)
+    ordered_functions = tuple(fn for fn in functions if fn is not entry) + (entry,)
+    for index, fn in enumerate(ordered_functions):
+        if index:
+            lines.append("")
+        body = _emit_decorated_defs(fn, mesh_map, indent4)
+        lines.extend(f"{indent4}{ln}" if ln else ln for ln in body)
 
     return "\n".join(lines) + "\n"
