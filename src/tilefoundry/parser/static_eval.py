@@ -31,18 +31,19 @@ def _default_attr_resolver(owner: Any, attr: str) -> Any:
 
 
 def _apply_binop(op: ast.operator, left: Any, right: Any, *, div: DivMode) -> Any:
-    if isinstance(op, ast.Add):
-        return left + right
-    if isinstance(op, ast.Sub):
-        return left - right
-    if isinstance(op, ast.Mult):
-        return left * right
-    if isinstance(op, ast.FloorDiv):
-        return left // right
-    if isinstance(op, ast.Div):
-        return left // right if div == "floor" else left / right
-    if isinstance(op, ast.Mod):
-        return left % right
+    match op:
+        case ast.Add():
+            return left + right
+        case ast.Sub():
+            return left - right
+        case ast.Mult():
+            return left * right
+        case ast.FloorDiv():
+            return left // right
+        case ast.Div():
+            return left // right if div == "floor" else left / right
+        case ast.Mod():
+            return left % right
     raise VerifyError(f"static BinOp {type(op).__name__} not supported")
 
 
@@ -103,52 +104,49 @@ def eval_static(
             on_closure_name=on_closure_name,
         )
 
-    if isinstance(node, ast.Constant) and ast.Constant in allowed_nodes:
-        return node.value
-    if isinstance(node, ast.Tuple) and ast.Tuple in allowed_nodes:
-        return tuple(ev(e) for e in node.elts)
-    if isinstance(node, ast.List) and ast.List in allowed_nodes:
-        return [ev(e) for e in node.elts]
-    if isinstance(node, ast.Name) and ast.Name in allowed_nodes:
-        value = None if lookup is None else lookup(node.id)
-        from_closure = False
-        if value is None:
-            value = closure.get(node.id)
-            from_closure = True
-        if value is None:
-            raise VerifyError(f"undefined name {node.id!r}")
-        if from_closure and on_closure_name is not None:
-            on_closure_name(value, node.id)
-        return value
-    if isinstance(node, ast.Attribute) and ast.Attribute in allowed_nodes:
-        owner = ev(node.value)
-        resolver = attr_resolver or _default_attr_resolver
-        return resolver(owner, node.attr)
-    if isinstance(node, ast.Subscript) and ast.Subscript in allowed_nodes:
-        owner = ev(node.value)
-        return owner[_eval_index(node.slice, ev)]
-    if isinstance(node, ast.Call) and ast.Call in allowed_nodes:
-        if any(kw.arg is None for kw in node.keywords):
-            raise VerifyError("static call does not accept **kwargs")
-        fn = ev(node.func)
-        args = tuple(ev(a) for a in node.args)
-        kwargs = {kw.arg: ev(kw.value) for kw in node.keywords}
-        return fn(*args, **kwargs)
-    if (
-        isinstance(node, ast.UnaryOp)
-        and isinstance(node.op, ast.USub)
-        and ast.UnaryOp in allowed_nodes
-    ):
-        return -ev(node.operand)
-    if isinstance(node, ast.BinOp) and ast.BinOp in allowed_nodes:
-        left = ev(node.left)
-        right = ev(node.right)
-        if not (isinstance(left, (int, float)) and isinstance(right, (int, float))):
-            raise VerifyError(
-                f"static BinOp requires numeric operands, got "
-                f"{type(left).__name__} / {type(right).__name__}"
-            )
-        return _apply_binop(node.op, left, right, div=div)
+    match node:
+        case ast.Constant(value=value) if ast.Constant in allowed_nodes:
+            return value
+        case ast.Tuple(elts=elts) if ast.Tuple in allowed_nodes:
+            return tuple(ev(e) for e in elts)
+        case ast.List(elts=elts) if ast.List in allowed_nodes:
+            return [ev(e) for e in elts]
+        case ast.Name(id=name) if ast.Name in allowed_nodes:
+            value = None if lookup is None else lookup(name)
+            from_closure = False
+            if value is None:
+                value = closure.get(name)
+                from_closure = True
+            if value is None:
+                raise VerifyError(f"undefined name {name!r}")
+            if from_closure and on_closure_name is not None:
+                on_closure_name(value, name)
+            return value
+        case ast.Attribute(value=value, attr=attr) if ast.Attribute in allowed_nodes:
+            owner = ev(value)
+            resolver = attr_resolver or _default_attr_resolver
+            return resolver(owner, attr)
+        case ast.Subscript(value=value, slice=slice_) if ast.Subscript in allowed_nodes:
+            owner = ev(value)
+            return owner[_eval_index(slice_, ev)]
+        case ast.Call(func=func, args=args, keywords=keywords) if ast.Call in allowed_nodes:
+            if any(kw.arg is None for kw in keywords):
+                raise VerifyError("static call does not accept **kwargs")
+            fn = ev(func)
+            values = tuple(ev(a) for a in args)
+            kwargs = {kw.arg: ev(kw.value) for kw in keywords}
+            return fn(*values, **kwargs)
+        case ast.UnaryOp(op=ast.USub(), operand=operand) if ast.UnaryOp in allowed_nodes:
+            return -ev(operand)
+        case ast.BinOp(left=left_node, op=op, right=right_node) if ast.BinOp in allowed_nodes:
+            left = ev(left_node)
+            right = ev(right_node)
+            if not (isinstance(left, (int, float)) and isinstance(right, (int, float))):
+                raise VerifyError(
+                    f"static BinOp requires numeric operands, got "
+                    f"{type(left).__name__} / {type(right).__name__}"
+                )
+            return _apply_binop(op, left, right, div=div)
     raise VerifyError(f"cannot statically evaluate AST node {type(node).__name__}")
 
 

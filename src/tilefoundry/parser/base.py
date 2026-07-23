@@ -8,7 +8,19 @@ import logging
 import textwrap
 from typing import Any, Callable
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, TypeInferContext, Var, VerifyError
+from tilefoundry.ir.core import (
+    BindingMetadata,
+    Call,
+    Constant,
+    Expr,
+    SourceSpanMetadata,
+    Tuple,
+    TypeInferContext,
+    Var,
+    VerifyError,
+    get_metadata,
+    replace_metadata,
+)
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.function import elaborate
@@ -75,8 +87,10 @@ def _warn_if_ir_object(val: Any, name: str) -> None:
 
 
 def extract_ast(fn) -> ast.FunctionDef:
-    src = textwrap.dedent(inspect.getsource(fn))
+    source_lines, start_line = inspect.getsourcelines(fn)
+    src = textwrap.dedent("".join(source_lines))
     mod = ast.parse(src)
+    ast.increment_lineno(mod, start_line - 1)
     # decorator may wrap but we parse the source including decorator; pick
     # the first FunctionDef found.
     for node in ast.walk(mod):
@@ -203,15 +217,18 @@ class BaseExprVisitor:
         # parse time (callers need accurate types for subsequent Assign Var
         # construction / tir verify / etc.).
         self._ctx = TypeInferContext()
-        # Track which Call nodes were assigned a loc explicitly via
+        # Track which Call nodes were assigned a binding explicitly via
         # a user-supplied ``loc=...`` kwarg. The Assign handler suppresses
         # LHS-name auto-fill for those Calls (explicit value wins).
-        self._explicit_loc_call_ids: set[int] = set()
+        self._explicit_binding_call_ids: set[int] = set()
         # DSL callable name used to instantiate each Call. Provides a
-        # readable default loc for tuple-unpack parents (`rope` → "rope") when
+        # readable default binding for tuple-unpack parents (`rope` → "rope") when
         # the user did not supply ``loc=...`` and there is no single LHS name
         # to fall back on.
         self._call_dsl_names: dict[int, str] = {}
+        self._active_source_node: ast.AST | None = None
+        self._active_binding_hint: str | None = None
+        self.source_filename = "<string>"
 
     def _tuple_expr_expr(self, node: ast.Tuple):
         """Build a ``Tuple`` from an AST tuple literal."""
@@ -244,12 +261,58 @@ class BaseExprVisitor:
         method = getattr(self, f"visit_{type(node).__name__}", None)
         if method is None:
             raise VerifyError(f"unsupported AST node in expression: {type(node).__name__}")
-        return method(node)
+        previous = self._active_source_node
+        self._active_source_node = node
+        try:
+            return method(node)
+        finally:
+            self._active_source_node = previous
+
+    def expr_with_binding(self, node: ast.AST, name: str) -> Expr:
+        """Parse one RHS while making its authored LHS available to errors."""
+        previous = self._active_binding_hint
+        self._active_binding_hint = name
+        try:
+            return self.expr(node)
+        finally:
+            self._active_binding_hint = previous
+
+    def _source_span(self) -> SourceSpanMetadata | None:
+        node = self._active_source_node
+        if node is None or not hasattr(node, "lineno"):
+            return None
+        return SourceSpanMetadata(
+            file=self.source_filename,
+            line=node.lineno,
+            # Python AST columns are zero-based; diagnostics are one-based.
+            column=node.col_offset + 1,
+            end_line=getattr(node, "end_lineno", None),
+            end_column=(
+                getattr(node, "end_col_offset", None) + 1
+                if getattr(node, "end_col_offset", None) is not None
+                else None
+            ),
+        )
+
+    def _source_metadata(self) -> tuple:
+        metadata = []
+        span = self._source_span()
+        if span is not None:
+            metadata.append(span)
+        if self._active_binding_hint is not None:
+            metadata.append(BindingMetadata(self._active_binding_hint))
+        return tuple(metadata)
+
+    @staticmethod
+    def _with_binding(expr: Expr, name: str) -> Expr:
+        return replace_metadata(expr, BindingMetadata(name))
 
     # Constants ----------------------------------------------------------------------
 
     def visit_Constant(self, node: ast.Constant) -> Expr:
-        return _constant_from_py(node.value)
+        value = _constant_from_py(node.value)
+        span = self._source_span()
+        return replace_metadata(value, span) if span is not None else value
 
     # Names --------------------------------------------------------------------------
 
@@ -531,7 +594,7 @@ class BaseExprVisitor:
         ``Call`` is built, so ``Call.target`` is the actual per-call-site
         instance (needed for the viewer/printer to read correctly-propagated
         types off ``call.target.body``), not just ``Call.type``.
-        ``loc=`` keyword is accepted and threaded onto ``Call.loc``;
+        ``loc=`` is accepted as explicit binding-label syntax.
         every other keyword is rejected because hir Function calls are
         positional-only at the IR level.
         """
@@ -557,23 +620,23 @@ class BaseExprVisitor:
                 f"declares {expected} parameter(s), call passed {got}"
             )
         input_args = tuple(self.expr(a) for a in node.args)
-        # The real Call is built from `instance` below, so it doesn't exist
-        # yet at this point; a surrogate carrying the same loc an explicit
-        # `loc=` keyword would produce lets an arity/bind error report
-        # `at <loc>` instead of the callee's (always-None) own `.loc`.
         call_for_errors = Call(
             type=callee.return_type, target=callee, args=input_args,
-            loc=explicit_loc if explicit_loc_given else None,
+            metadata=self._source_metadata(),
         )
+        if explicit_loc_given:
+            call_for_errors = replace_metadata(
+                call_for_errors, BindingMetadata(explicit_loc)
+            )
         instance = elaborate(
             callee, tuple(a.type for a in input_args), self._ctx,
             call=call_for_errors,
         )
         call = self._build_call(instance, input_args)
         if explicit_loc_given:
-            call = dataclasses.replace(call, loc=explicit_loc)
-            self._explicit_loc_call_ids.add(id(call))
-        # Default loc fallback uses the surface name.
+            call = replace_metadata(call, BindingMetadata(explicit_loc))
+            self._explicit_binding_call_ids.add(id(call))
+        # Default binding fallback uses the surface name.
         self._call_dsl_names[id(call)] = name
         return call
 
@@ -688,8 +751,7 @@ class BaseExprVisitor:
                         attr_name, arg, schema=schema
                     )
 
-        # Extract user-supplied ``loc=`` kwarg (not an Op attr; lives
-        # on Call). Skipped from attr binding; passed through to _build_call.
+        # Extract user-supplied ``loc=`` binding label (not an Op attr).
         explicit_loc: str | None = None
         explicit_loc_given = False
 
@@ -714,11 +776,10 @@ class BaseExprVisitor:
         op_inst = self._build_op_instance(schema, attr_kwargs)
         call = self._build_call(op_inst, tuple(input_args))
         if explicit_loc_given:
-            call = dataclasses.replace(call, loc=explicit_loc)
-            self._explicit_loc_call_ids.add(id(call))
-        # Stash DSL callable name as a default-loc fallback for downstream
-        # auto-fill (e.g. tuple-unpack parent default).  Must be after any
-        # ``dataclasses.replace`` so we record the final Call's id. Use
+            call = replace_metadata(call, BindingMetadata(explicit_loc))
+            self._explicit_binding_call_ids.add(id(call))
+        # Stash the DSL callable name as a default binding fallback for
+        # tuple-unpack parents. Use
         # the schema's canonical name so loc tags stay terse regardless
         # of Name vs Attribute callee form.
         self._call_dsl_names[id(call)] = schema.name
@@ -734,45 +795,45 @@ class BaseExprVisitor:
         """
         return schema.builder(**attr_kwargs)
 
-    # Call.loc auto-fill helpers ---------------------------------
+    # Binding metadata auto-fill helpers --------------------------
 
-    def _maybe_autofill_loc(self, expr: Expr, name: str) -> Expr:
-        """Set ``Call.loc`` to *name* when *expr* is a Call without an
-        explicit loc (explicit user-supplied ``loc=`` is preserved).
+    def _maybe_autofill_binding(self, expr: Expr, name: str) -> Expr:
+        """Set a Call binding label to *name* unless ``loc=`` was explicit.
 
         Returns *expr* unchanged when it is not a Call or already has an
-        explicit loc.
+        explicit binding.
         """
         if not isinstance(expr, Call):
             return expr
-        if id(expr) in self._explicit_loc_call_ids:
+        if id(expr) in self._explicit_binding_call_ids:
             return expr
-        if expr.loc is not None and expr.loc != self._call_dsl_names.get(id(expr)):
-            # Already auto-filled with a non-default tag; keep it.
-            return expr
-        return dataclasses.replace(expr, loc=name)
+        return self._with_binding(expr, name)
 
-    def _maybe_autofill_loc_default(self, expr: Expr) -> Expr:
-        """Set ``Call.loc`` to the DSL callable name (default) when the
+    def _maybe_autofill_binding_default(self, expr: Expr) -> Expr:
+        """Set the Call binding label to the DSL callable name (default) when the
         user did not supply ``loc=`` explicitly. Used for tuple-unpack
         parents where there is no single LHS variable name to inherit.
         """
         if not isinstance(expr, Call):
             return expr
-        if id(expr) in self._explicit_loc_call_ids:
+        if id(expr) in self._explicit_binding_call_ids:
             return expr
         dsl_name = self._call_dsl_names.get(id(expr))
         if dsl_name is None:
             return expr
-        if expr.loc == dsl_name:
+        binding = get_metadata(expr, BindingMetadata)
+        if binding is not None and binding.name == dsl_name:
             return expr
-        return dataclasses.replace(expr, loc=dsl_name)
+        return self._with_binding(expr, dsl_name)
 
     def _build_call(self, op_inst, args: tuple[Expr, ...]) -> Call:
         """Build a Call with type eagerly populated via the typeinfer registry."""
         # Construct with a placeholder; the registry reads (call.target, args)
         # and doesn't need call.type, so we can fix it post-hoc via dataclasses.replace.
-        placeholder = Call(type=TensorType.scalar(DType.f32), target=op_inst, args=args)
+        placeholder = Call(
+            type=TensorType.scalar(DType.f32), target=op_inst, args=args,
+            metadata=self._source_metadata(),
+        )
         fn = typeinfer_registry.lookup(type(op_inst))
         if fn is None:
             raise VerifyError(f"no typeinfer registered for {type(op_inst).__name__}")

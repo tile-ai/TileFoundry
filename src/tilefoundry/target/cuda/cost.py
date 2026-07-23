@@ -7,6 +7,7 @@ import math
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.math.clamp import Clamp
 from tilefoundry.ir.hir.math.softplus import Softplus
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
@@ -21,11 +22,13 @@ from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.gather import Gather
+from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.transpose import Transpose
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType, Type
 from tilefoundry.visitor_registry import register_cost_evaluator
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
@@ -125,6 +128,11 @@ def _unary(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
 
 
+@register_cost_evaluator(Clamp)
+def _clamp(call: Call, ctx: CostContext) -> Cost:
+    return _elementwise(call, ctx)
+
+
 @register_cost_evaluator(Sigmoid)
 def _sigmoid(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
@@ -185,6 +193,21 @@ def _argmax(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(Cast)
 def _cast(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
+
+
+@register_cost_evaluator(Quant)
+def _quant(call: Call, ctx: CostContext) -> Cost:
+    inputs = _input_types(call, ctx)
+    output = _output_type(call, ctx)
+    source = inputs[0]
+    if not isinstance(source, TensorType):
+        raise ValueError("Quant cost requires a tensor input")
+    return Cost({DType.f32: 4 * _numel(source)}, _traffic(inputs, output))
+
+
+@register_cost_evaluator(TupleGetItem)
+def _tuple_get_item(call: Call, ctx: CostContext) -> Cost:
+    return Cost({}, 0)
 
 
 @register_cost_evaluator(FullLike)

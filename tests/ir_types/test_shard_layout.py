@@ -9,11 +9,20 @@ from tilefoundry.ir.types.shard import (
     ComposedLayout,
     Layout,
     LayoutBase,
+    Mesh,
     ShardLayout,
     Topology,
     make_mesh,
 )
 from tilefoundry.ir.types.shard import layout_algebra as la
+
+
+def test_mesh_named_axis_matches_the_parser_surface():
+    mesh = Mesh(Topology("cta", 4), (4,), names=("block",))
+
+    assert mesh.block.mesh is mesh
+    assert mesh.block.index == 0
+    assert mesh.block.size == 4
 
 
 def test_layout_base_contract_preserves_nested_shard_domain():

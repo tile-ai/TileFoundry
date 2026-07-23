@@ -7,7 +7,17 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Literal, Mapping
 
-from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var, VerifyError
+from tilefoundry.ir.core import (
+    Call,
+    Constant,
+    Expr,
+    Op,
+    Tuple,
+    Var,
+    VerifyError,
+    diagnostic_location,
+    source_metadata,
+)
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -49,6 +59,10 @@ from . import cost as _cost  # noqa: F401
 
 PlacementRelation = Literal["SAME_INTERVAL", "CONTAINED"]
 ValueRole = Literal["normal", "carry", "yield", "result"]
+
+
+def _expr_location(expr: Expr) -> str:
+    return diagnostic_location(expr) or getattr(expr, "name", None) or "<unknown>"
 
 
 @dataclass(frozen=True)
@@ -357,7 +371,7 @@ class _Planner:
     def _legal_types(self, base: TensorType) -> tuple[Type, ...]:
         if not _type_storage_ok(base):
             raise ValueError(
-                f"P2: tensor at {getattr(self.root, 'loc', None) or '<unknown>'} "
+                f"P2: tensor at {_expr_location(self.root)} "
                 f"requires unsupported storage {base.storage!r}; CTA planning supports GMEM only"
             )
         result: list[TensorType] = [base]
@@ -412,7 +426,7 @@ class _Planner:
         role: ValueRole = "normal",
     ) -> int:
         if not _type_storage_ok(type):
-            loc = getattr(source, "loc", None) or getattr(self.root, "loc", None) or "<unknown>"
+            loc = diagnostic_location(source) or _expr_location(self.root)
             raise ValueError(
                 f"P2: tensor storage {type.storage!r} at {loc} is unsupported; "
                 "scheduled tensor values must reside in GMEM"
@@ -531,14 +545,17 @@ class _Planner:
         if isinstance(target, (PrimFunction, Launch, SymbolRef)):
             raise ValueError(
                 f"P2: kernel boundary {type(target).__name__} at "
-                f"{expr.loc or '<unknown>'} is not a CTA planning operation"
+                f"{_expr_location(expr)} is not a CTA planning operation"
             )
         if isinstance(target, TupleGetItem):
             source_refs = arg_refs[0] if arg_refs else ()
             fields = _tensor_leaves(expr.args[0].type)
             index = target.index
             if index < 0 or index >= len(fields):
-                raise ValueError(f"P2: TupleGetItem index {index} is out of range at {expr.loc or '<unknown>'}")
+                raise ValueError(
+                    f"P2: TupleGetItem index {index} is out of range at "
+                    f"{_expr_location(expr)}"
+                )
             start = sum(len(_tensor_leaves(field)) for field in expr.args[0].type.fields[:index])  # type: ignore[union-attr]
             refs = source_refs[start:start + len(_tensor_leaves(expr.args[0].type.fields[index]))]  # type: ignore[union-attr]
             self._expr_values[key] = refs
@@ -576,7 +593,7 @@ class _Planner:
         start = static_dim_value(region.start)
         stop = static_dim_value(region.extent)
         step = static_dim_value(region.step)
-        context = f"GridRegion at {region.loc or getattr(function, 'loc', None) or '<unknown>'}"
+        context = f"GridRegion at {diagnostic_location(region) or _expr_location(function)}"
         if start is None or stop is None or step is None:
             raise ValueError(f"P2: {context} requires static start, stop, and step")
         if start < 0 or step <= 0:
@@ -686,23 +703,23 @@ class _Planner:
         if function.body is None:
             raise ValueError(
                 f"P2: helper function {function.name!r} has no body at "
-                f"{parent_call.loc if parent_call else function.loc or '<unknown>'}"
+                f"{_expr_location(parent_call or function)}"
             )
         if id(function) in self._active_functions:
             raise ValueError(
                 f"P2: recursive helper call to {function.name!r} at "
-                f"{parent_call.loc if parent_call else '<unknown>'}"
+                f"{_expr_location(parent_call or function)}"
             )
         if function is not self.root:
             if function.target is not None and function.target != self.target:
                 raise ValueError(
                     f"P2: helper {function.name!r} Target conflicts at "
-                    f"{parent_call.loc if parent_call else '<unknown>'}"
+                    f"{_expr_location(parent_call or function)}"
                 )
             if function.topologies:
                 raise ValueError(
                     f"P2: helper {function.name!r} declares program topologies at "
-                    f"{parent_call.loc if parent_call else '<unknown>'}"
+                    f"{_expr_location(parent_call or function)}"
                 )
         self._active_functions.add(id(function))
         self.function_instances.append((function_path, function))
@@ -881,7 +898,7 @@ class _Planner:
             except (TypeError, ValueError) as exc:
                 raise ValueError(
                     f"P2: cost evaluation for {type(site.call.target).__name__} at "
-                    f"{site.call.loc or '<unknown>'} failed: {exc}"
+                    f"{_expr_location(site.call)} failed: {exc}"
                 ) from exc
             key = (
                 input_bucket_ids,
@@ -907,7 +924,7 @@ class _Planner:
         if not found:
             raise ValueError(
                 f"P2: operation {type(site.call.target).__name__} at "
-                f"{site.call.loc or '<unknown>'} has no legal candidates"
+                f"{_expr_location(site.call)} has no legal candidates"
             )
         self.authored_candidates[site.site_id] = tuple(found)
 
@@ -932,8 +949,18 @@ class _Planner:
                         continue
                     op = Reshard(layout=target.layout, storage=StorageKind.GMEM)
                     source_expr = self.values[value_id].source
-                    source_var = Var(type=source, name="reshard_source", loc=getattr(source_expr, "loc", None))
-                    call = Call(type=target, target=op, args=(source_var,), loc=getattr(source_expr, "loc", None))
+                    metadata = source_metadata(source_expr)
+                    source_var = Var(
+                        type=source,
+                        name="reshard_source",
+                        metadata=metadata,
+                    )
+                    call = Call(
+                        type=target,
+                        target=op,
+                        args=(source_var,),
+                        metadata=metadata,
+                    )
                     cost_ctx = CostContext(
                         module=self.module,
                         selected_types={id(source_var): source},
@@ -944,7 +971,7 @@ class _Planner:
                     except (TypeError, ValueError) as exc:
                         raise ValueError(
                             f"P2: cost evaluation for synthesized Reshard at "
-                            f"{getattr(source_expr, 'loc', None) or '<unknown>'} failed: {exc}"
+                            f"{_expr_location(source_expr)} failed: {exc}"
                         ) from exc
                     self._add_candidate(
                         None,
@@ -986,7 +1013,7 @@ class _Planner:
             if not matching:
                 raise ValueError(
                     f"P2: no candidate bucket satisfies where constraint at "
-                    f"{getattr(source, 'loc', None) or '<unknown>'}"
+                    f"{_expr_location(source)}"
                 )
             self.requirements.append(BucketRequirement(value_id, matching, source, metadata))
 

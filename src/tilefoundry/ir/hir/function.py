@@ -38,7 +38,6 @@ class Function(Expr):
         specializations: tuple[Pattern, ...] = (),
         variants: tuple["Function", ...] = (),
         target: Target | None = None,
-        loc: str | None = None,
     ) -> "Function":
         """Construct a Function with the canonical CallableType."""
         return cls(
@@ -51,7 +50,6 @@ class Function(Expr):
             variants=tuple(variants),
             target=target,
             type=callable_type_for(params, return_type),
-            loc=loc,
         )
 
     def add_variant(self, variant: "Function") -> None:
@@ -118,8 +116,8 @@ def _bind_param_type(
     the bound type is the argument's own full type (including any
     ``ShardLayout``), once its logical shape/dtype match. Any other
     parameter type is an explicit contract: the argument MUST match it
-    exactly (hir.md §1.1). ``call``, when given, anchors a bind error's
-    location instead of the callee's own (always ``None``) ``.loc``.
+    exactly (hir.md §1.1). ``call``, when given, anchors a bind error at the
+    call site's binding/span metadata instead of the callee declaration.
     """
     error_node = call if call is not None else callee
     p = param.type

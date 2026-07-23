@@ -4,7 +4,7 @@ How to bring up a dev/test loop for TileFoundry, and how we work on it.
 
 ## 1. Env
 
-Use a dedicated **`tilefoundry-dev`** conda env (Python ≥ 3.11 + torch
+Use a dedicated **`tilefoundry-dev`** conda env (Python ≥ 3.12 + torch
 built against your local CUDA). Cloning an existing torch+CUDA env
 is easiest. Do not install tilefoundry into `base`.
 

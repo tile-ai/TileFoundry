@@ -84,110 +84,100 @@ def _check_param_homogeneity(fn: PrimFunction) -> None:
 
 
 def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
-    if isinstance(stmt, Sequential):
-        for s in stmt.body:
-            _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids)
-        return
-
-    if isinstance(stmt, LetStmt):
-        # §6.2.1: var must be a fresh Var — reject binding the same Var
-        # object twice anywhere in the tir tree (outer param / prior let /
-        # enclosing For / MeshScope).
-        if id(stmt.var) in bound_var_ids:
-            raise VerifyError(
-                f"LetStmt binding {stmt.var.name!r}: §6.2.1 var must be a "
-                f"fresh Var; this Var is already bound in an outer scope"
-            )
-        # §6.2.1: var.type == type_of(value).
-        value_ty = ctx.type_of(stmt.value)
-        if stmt.var.type != value_ty:
-            raise VerifyError(
-                f"LetStmt binding {stmt.var.name!r}: var.type {stmt.var.type} "
-                f"!= value.type {value_ty}"
-            )
-        # §6.2.2: `Call(AllocTensor, ...)` may only appear directly as
-        # `LetStmt.value`. Nested inside other Exprs is illegal.
-        _reject_nested_alloc_tensor(stmt.value, at_letstmt_value=True)
-        _check_embedded_sharding(stmt.value, scope, fn)
-        # §6.2.1 requires fresh Var identity across the whole function —
-        # NOT merely within the current lexical scope. Once seen, never
-        # remove; sibling LetStmts rebinding the same Var object must also
-        # fail.
-        bound_var_ids.add(id(stmt.var))
-        _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
-        return
-
-    if isinstance(stmt, For):
-        _check_rank0_int(ctx, stmt, stmt.start, "For.start")
-        _check_rank0_int(ctx, stmt, stmt.stop, "For.stop")
-        _check_rank0_int(ctx, stmt, stmt.step, "For.step")
-        if isinstance(stmt.step, Constant) and stmt.step.value == 0:
-            raise VerifyError("For.step must not be 0 (§8.8)")
-        iv_ty = stmt.induction_var.type
-        if not (isinstance(iv_ty, TensorType) and iv_ty.shape == () and iv_ty.dtype in (DType.i32, DType.i64)):
-            raise VerifyError("For.induction_var must be rank-0 integer (§8.8)")
-        _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
-        return
-
-    if isinstance(stmt, While):
-        _check_rank0_bool(ctx, stmt, stmt.cond)
-        _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
-        return
-
-    if isinstance(stmt, If):
-        _check_rank0_bool(ctx, stmt, stmt.cond)
-        _walk_stmt(stmt.then_body, ctx, scope, fn, module_fn_map, bound_var_ids)
-        _walk_stmt(stmt.else_body, ctx, scope, fn, module_fn_map, bound_var_ids)
-        return
-
-    if isinstance(stmt, MeshScope):
-        scope.append(stmt.mesh)
-        _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
-        scope.pop()
-        return
-
-    if isinstance(stmt, Return):
-        return
-
-    if isinstance(stmt, Abort):
-        return
-
-    if isinstance(stmt, DispatchCall):
-        _verify_dispatch_call(stmt, fn, module_fn_map, ctx)
-        return
-
-    if isinstance(stmt, Evaluate):
-        if isinstance(stmt.callable, Launch):
-            # Host launch: resolve the SymbolRef callee at module level and
-            # check it (needs module context, like a DispatchCall).
-            _verify_launch(stmt, fn, module_fn_map, ctx)
-        elif isinstance(stmt.callable, SymbolRef):
-            # Function-symbol invocation: resolve the callee at module level
-            # and check the call against it.
-            _verify_symbol_call(stmt, fn, module_fn_map, ctx)
-        else:
-            # Effect-ful Op invocation in Stmt position: dispatch verify on the
-            # Op class (registered via ``register_verify_stmt(SomeOp)``). The
-            # handler ABI is Call-based, so feed it a Call built from the Op
-            # and its args.
-            op = stmt.callable
-            op_cls = type(op)
-            fn_verify = verify_stmt_registry.lookup(op_cls)
-            if fn_verify is None:
+    match stmt:
+        case Sequential():
+            for s in stmt.body:
+                _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids)
+            return
+        case LetStmt():
+            # §6.2.1: var must be a fresh Var — reject binding the same Var
+            # object twice anywhere in the tir tree (outer param / prior let /
+            # enclosing For / MeshScope).
+            if id(stmt.var) in bound_var_ids:
                 raise VerifyError(
-                    f"no verify_stmt registered for Op {op_cls.__name__}"
+                    f"LetStmt binding {stmt.var.name!r}: §6.2.1 var must be a "
+                    f"fresh Var; this Var is already bound in an outer scope"
                 )
-            # Expose the enclosing MeshScope stack to the registered handler so a
-            # mesh-scoped op (Mma atom-scope, Sync) can verify against it; the
-            # generic walk no longer special-cases any op class here.
-            ctx.mesh_scope = tuple(scope)
-            call = Call(type=UnitType(), target=op, args=stmt.args)
-            fn_verify(call, ctx)
-        # Reject nested AllocTensor / check embedded sharding inside each arg.
-        for arg in stmt.args:
-            _reject_nested_alloc_tensor(arg, at_letstmt_value=False)
-            _check_embedded_sharding(arg, scope, fn)
-        return
+            # §6.2.1: var.type == type_of(value).
+            value_ty = ctx.type_of(stmt.value)
+            if stmt.var.type != value_ty:
+                raise VerifyError(
+                    f"LetStmt binding {stmt.var.name!r}: var.type {stmt.var.type} "
+                    f"!= value.type {value_ty}"
+                )
+            # §6.2.2: `Call(AllocTensor, ...)` may only appear directly as
+            # `LetStmt.value`. Nested inside other Exprs is illegal.
+            _reject_nested_alloc_tensor(stmt.value, at_letstmt_value=True)
+            _check_embedded_sharding(stmt.value, scope, fn)
+            # §6.2.1 requires fresh Var identity across the whole function —
+            # NOT merely within the current lexical scope. Once seen, never
+            # remove; sibling LetStmts rebinding the same Var object must also
+            # fail.
+            bound_var_ids.add(id(stmt.var))
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            return
+        case For():
+            _check_rank0_int(ctx, stmt, stmt.start, "For.start")
+            _check_rank0_int(ctx, stmt, stmt.stop, "For.stop")
+            _check_rank0_int(ctx, stmt, stmt.step, "For.step")
+            if isinstance(stmt.step, Constant) and stmt.step.value == 0:
+                raise VerifyError("For.step must not be 0 (§8.8)")
+            iv_ty = stmt.induction_var.type
+            if not (isinstance(iv_ty, TensorType) and iv_ty.shape == () and iv_ty.dtype in (DType.i32, DType.i64)):
+                raise VerifyError("For.induction_var must be rank-0 integer (§8.8)")
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            return
+        case While():
+            _check_rank0_bool(ctx, stmt, stmt.cond)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            return
+        case If():
+            _check_rank0_bool(ctx, stmt, stmt.cond)
+            _walk_stmt(stmt.then_body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            _walk_stmt(stmt.else_body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            return
+        case MeshScope():
+            scope.append(stmt.mesh)
+            _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
+            scope.pop()
+            return
+        case Return() | Abort():
+            return
+        case DispatchCall():
+            _verify_dispatch_call(stmt, fn, module_fn_map, ctx)
+            return
+        case Evaluate():
+            if isinstance(stmt.callable, Launch):
+                # Host launch: resolve the SymbolRef callee at module level and
+                # check it (needs module context, like a DispatchCall).
+                _verify_launch(stmt, fn, module_fn_map, ctx)
+            elif isinstance(stmt.callable, SymbolRef):
+                # Function-symbol invocation: resolve the callee at module level
+                # and check the call against it.
+                _verify_symbol_call(stmt, fn, module_fn_map, ctx)
+            else:
+                # Effect-ful Op invocation in Stmt position: dispatch verify on the
+                # Op class (registered via ``register_verify_stmt(SomeOp)``). The
+                # handler ABI is Call-based, so feed it a Call built from the Op
+                # and its args.
+                op = stmt.callable
+                op_cls = type(op)
+                fn_verify = verify_stmt_registry.lookup(op_cls)
+                if fn_verify is None:
+                    raise VerifyError(
+                        f"no verify_stmt registered for Op {op_cls.__name__}"
+                    )
+                # Expose the enclosing MeshScope stack to the registered handler so a
+                # mesh-scoped op (Mma atom-scope, Sync) can verify against it; the
+                # generic walk no longer special-cases any op class here.
+                ctx.mesh_scope = tuple(scope)
+                call = Call(type=UnitType(), target=op, args=stmt.args)
+                fn_verify(call, ctx)
+            # Reject nested AllocTensor / check embedded sharding inside each arg.
+            for arg in stmt.args:
+                _reject_nested_alloc_tensor(arg, at_letstmt_value=False)
+                _check_embedded_sharding(arg, scope, fn)
+            return
 
     fn_verify = verify_stmt_registry.lookup(type(stmt))
     if fn_verify is None:

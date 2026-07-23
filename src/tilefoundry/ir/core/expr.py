@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.metadata import IRMetadata
+from tilefoundry.ir.core.metadata import IRMetadata, diagnostic_location
 from tilefoundry.ir.core.op import Op
 
 from ..types.tensor_type import Type
@@ -14,11 +14,10 @@ class Expr:
     """Typed SSA value. Base of all expression nodes (hir + tir-embedded).
 
     `type` is the Expr's result type (TensorType for single-output, TupleType
-    for multi-output); `source` is optional debug info. Both kw-only so
-    subclasses can declare positional fields without default-order clashes.
+    for multi-output). It is kw-only so subclasses can declare positional
+    fields without default-order clashes.
     """
     type: Type = field(kw_only=True)
-    loc: str | None = field(default=None, kw_only=True)
     metadata: tuple[IRMetadata, ...] = field(
         default_factory=tuple,
         kw_only=True,
@@ -31,14 +30,16 @@ class Expr:
         seen: set[type[IRMetadata]] = set()
         for value in self.metadata:
             if not isinstance(value, IRMetadata):
-                where = f"\n  at {self.loc}" if self.loc else ""
+                location = diagnostic_location(self)
+                where = f"\n  at {location}" if location else ""
                 raise VerifyError(
                     f"{type(self).__name__} metadata entries must be IRMetadata, "
                     f"got {type(value).__name__}{where}"
                 )
             value_cls = type(value)
             if value_cls in seen:
-                where = f"\n  at {self.loc}" if self.loc else ""
+                location = diagnostic_location(self)
+                where = f"\n  at {location}" if location else ""
                 raise VerifyError(
                     f"{type(self).__name__} has duplicate {value_cls.__name__} "
                     f"metadata{where}"
@@ -74,5 +75,3 @@ class Tuple(Expr):
     offsets).
     """
     elements: tuple[Expr, ...]
-
-

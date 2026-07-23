@@ -97,17 +97,30 @@ entries — so name resolution is always single-valued.
 ```python
 class IRMetadata:
     def format_comment(self) -> str | None: ...
+
+class BindingMetadata(IRMetadata):
+    name: str
+
+class SourceSpanMetadata(IRMetadata):
+    file: str
+    line: int
+    column: int
+    end_line: int | None = None
+    end_column: int | None = None
 ```
 
 - constraints:
   - the immutable base of every typed annotation stored on an `Expr`;
     `format_comment()` returns `None` unless a concrete metadata class provides
     a printable comment.
+  - `BindingMetadata` is the authored SSA label. The parser maps explicit DSL
+    `loc=` syntax and inferred assignment names to this metadata; there is no
+    parallel `Expr.loc` field.
+  - `SourceSpanMetadata` records the parser source range before type inference.
 
 ```python
 class Expr:
     type: Type
-    loc: str | None = None
     metadata: tuple[IRMetadata, ...] = ()
 ```
 
@@ -116,13 +129,17 @@ class Expr:
     introduced per Op (value-producing Ops appear as `Call` nodes).
   - `metadata` contains only `IRMetadata` values and contains at most one value
     of each exact concrete metadata class; invalid entries or duplicate classes
-    raise `VerifyError`, including `loc` when it is available.
+    raise `VerifyError`, including `SourceSpanMetadata` or `BindingMetadata`
+    context when it is available.
   - `metadata` MUST NOT participate in expression equality, hashing, or repr.
 
 ```python
 def get_metadata(expr: "Expr", cls: type[T]) -> T | None: ...
 def replace_metadata(expr: "Expr", value: IRMetadata) -> "Expr": ...
 def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
+def binding_name(expr: "Expr") -> str | None: ...
+def diagnostic_location(expr: "Expr") -> str | None: ...
+def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
 ```
 
 - constraints:
@@ -134,6 +151,10 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
     whose class is absent is appended.
   - `remove_metadata` returns a copy without the matching value; when the class
     is absent it returns the input expression unchanged.
+  - `binding_name` returns the authored SSA label. `diagnostic_location`
+    prefers a source span and falls back to that label. `source_metadata`
+    copies only binding/span metadata when a compiler pass synthesizes a
+    replacement expression.
 
 `Expr` always carries a `type`. The runtime class of `Expr.type` is
 one of `TensorType` / `TupleType` / `UnitType`

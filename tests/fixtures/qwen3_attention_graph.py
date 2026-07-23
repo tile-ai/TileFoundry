@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.core import BindingMetadata, Call, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
@@ -44,6 +44,10 @@ def Add() -> Binary:
     """Local helper constructing ``Binary(kind=ADD)`` — there is no
     per-name ``Add`` Op class; kinded math ops are built via helpers."""
     return Binary(kind=BinaryKind.ADD)
+
+
+def _binding(name: str) -> tuple[BindingMetadata]:
+    return (BindingMetadata(name),)
 from tilefoundry.ir.core import Op, register_typeinfer  # noqa: E402
 from tilefoundry.ir.core.param_def import ParamDef  # noqa: E402
 from tilefoundry.ir.core.pattern import Tensor  # noqa: E402
@@ -173,19 +177,19 @@ def build_qwen3_attention_main_2cta_headnorm():
     rms_out = Call(
         type=_sharded((1, HIDDEN), *B4, mesh=_M_1x1),
         target=RMSNorm(eps=EPS), args=(hidden, rms_w),
-        loc="input_rmsnorm",
+        metadata=_binding("input_rmsnorm"),
     )
 
     # ── q_proj: matmul(rms_out, transpose(q_weight)) ───────────────
     q_weight_t = Call(
         type=_sharded((HIDDEN, Q_PROJ_DIM), B(), S(1), B(), B(), mesh=_M_1x128),
         target=Transpose(perm=(1, 0)), args=(q_weight,),
-        loc="transpose_q_weight",
+        metadata=_binding("transpose_q_weight"),
     )
     q = Call(
         type=_sharded((1, Q_PROJ_DIM), B(), S(1), SP, SP, mesh=_M_1x128),
         target=MatMul(), args=(rms_out, q_weight_t),
-        loc="q_proj",
+        metadata=_binding("q_proj"),
     )
     # ── reshape (1,4096) → (32,128) then reshard to mesh (32,2) ─
     # The CTA-split projection layout cannot survive the reshape onto the head
@@ -195,19 +199,19 @@ def build_qwen3_attention_main_2cta_headnorm():
     q_replicated = Call(
         type=_sharded((1, Q_PROJ_DIM), *B4, mesh=_M_1x128),
         target=Reshard(layout=_sl(*B4, (1, Q_PROJ_DIM), _M_1x128)),
-        args=(q,), loc="gather_q_for_reshape",
+        args=(q,), metadata=_binding("gather_q_for_reshape"),
     )
     q_reshaped_logical = Call(
         type=TensorType(shape=(NUM_Q_HEADS, HEAD_DIM), dtype=DType.f32,
                         layout=None, storage=StorageKind.GMEM),
         target=Reshape(new_shape=(NUM_Q_HEADS, HEAD_DIM)),
-        args=(q_replicated,), loc="reshape_q_to_heads",
+        args=(q_replicated,), metadata=_binding("reshape_q_to_heads"),
     )
     q_reshaped = Call(
         type=_sharded((NUM_Q_HEADS, HEAD_DIM),
                        S(0), S(1), B(), B(), mesh=_M_32x2),
         target=Reshard(layout=_sl(S(0), S(1), B(), B(), (NUM_Q_HEADS, HEAD_DIM), _M_32x2)),
-        args=(q_reshaped_logical,), loc="reshard_q_to_heads",
+        args=(q_reshaped_logical,), metadata=_binding("reshard_q_to_heads"),
     )
     # ── q_norm: cluster:S(0) splits 32 heads, cta:S(1) splits D=128 ─
     # 32 clusters × 2 CTA = 64 CTAs used; warp/lane partial for reduction
@@ -215,19 +219,19 @@ def build_qwen3_attention_main_2cta_headnorm():
         type=_sharded((NUM_Q_HEADS, HEAD_DIM),
                        S(0), S(1), SP, SP, mesh=_M_32x2),
         target=RMSNorm(eps=EPS), args=(q_reshaped, q_norm_w),
-        loc="q_norm",
+        metadata=_binding("q_norm"),
     )
 
     # ── k_proj: matmul(rms_out, transpose(k_weight)) ───────────────
     k_weight_t = Call(
         type=_sharded((HIDDEN, KV_PROJ_DIM), B(), S(1), B(), B(), mesh=_M_1x128),
         target=Transpose(perm=(1, 0)), args=(k_weight,),
-        loc="transpose_k_weight",
+        metadata=_binding("transpose_k_weight"),
     )
     k = Call(
         type=_sharded((1, KV_PROJ_DIM), B(), S(1), SP, SP, mesh=_M_1x128),
         target=MatMul(), args=(rms_out, k_weight_t),
-        loc="k_proj",
+        metadata=_binding("k_proj"),
     )
     # ── reshape (1,512) → (4,128) then reshard to mesh (4,2) ────
     # Gather the CTA-split projection to a replicated layout before the reshape
@@ -236,38 +240,38 @@ def build_qwen3_attention_main_2cta_headnorm():
     k_replicated = Call(
         type=_sharded((1, KV_PROJ_DIM), *B4, mesh=_M_1x128),
         target=Reshard(layout=_sl(*B4, (1, KV_PROJ_DIM), _M_1x128)),
-        args=(k,), loc="gather_k_for_reshape",
+        args=(k,), metadata=_binding("gather_k_for_reshape"),
     )
     k_reshaped_logical = Call(
         type=TensorType(shape=(NUM_KV_HEADS, HEAD_DIM), dtype=DType.f32,
                         layout=None, storage=StorageKind.GMEM),
         target=Reshape(new_shape=(NUM_KV_HEADS, HEAD_DIM)),
-        args=(k_replicated,), loc="reshape_k_to_heads",
+        args=(k_replicated,), metadata=_binding("reshape_k_to_heads"),
     )
     k_reshaped = Call(
         type=_sharded((NUM_KV_HEADS, HEAD_DIM),
                        S(0), S(1), B(), B(), mesh=_M_4x2),
         target=Reshard(layout=_sl(S(0), S(1), B(), B(), (NUM_KV_HEADS, HEAD_DIM), _M_4x2)),
-        args=(k_reshaped_logical,), loc="reshard_k_to_heads",
+        args=(k_reshaped_logical,), metadata=_binding("reshard_k_to_heads"),
     )
     # ── k_norm: cluster:S(0) splits 4 heads, cta:S(1) splits D=128 ─
     k_normed = Call(
         type=_sharded((NUM_KV_HEADS, HEAD_DIM),
                        S(0), S(1), SP, SP, mesh=_M_4x2),
         target=RMSNorm(eps=EPS), args=(k_reshaped, k_norm_w),
-        loc="k_norm",
+        metadata=_binding("k_norm"),
     )
 
     # ── v_proj: matmul(rms_out, transpose(v_weight)) ───────────────
     v_weight_t = Call(
         type=_sharded((HIDDEN, KV_PROJ_DIM), B(), S(1), B(), B(), mesh=_M_1x128),
         target=Transpose(perm=(1, 0)), args=(v_weight,),
-        loc="transpose_v_weight",
+        metadata=_binding("transpose_v_weight"),
     )
     v = Call(
         type=_sharded((1, KV_PROJ_DIM), B(), S(1), SP, SP, mesh=_M_1x128),
         target=MatMul(), args=(rms_out, v_weight_t),
-        loc="v_proj",
+        metadata=_binding("v_proj"),
     )
 
     # ── ordinary attention ─────────────────────────────────────────
@@ -279,7 +283,7 @@ def build_qwen3_attention_main_2cta_headnorm():
         target=Reshard(
             layout=_sl(*B4, (NUM_Q_HEADS, HEAD_DIM), _M_32x2)
         ),
-        args=(q_normed,), loc="reshard_q_complete",
+        args=(q_normed,), metadata=_binding("reshard_q_complete"),
     )
     q_attn = Call(
         type=TensorType(
@@ -289,7 +293,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Reshape(new_shape=(NUM_Q_HEADS, 1, HEAD_DIM)),
-        args=(q_complete,), loc="reshape_q_for_attention",
+        args=(q_complete,), metadata=_binding("reshape_q_for_attention"),
     )
 
     k_complete = Call(
@@ -297,7 +301,7 @@ def build_qwen3_attention_main_2cta_headnorm():
         target=Reshard(
             layout=_sl(*B4, (NUM_KV_HEADS, HEAD_DIM), _M_4x2)
         ),
-        args=(k_normed,), loc="reshard_k_complete",
+        args=(k_normed,), metadata=_binding("reshard_k_complete"),
     )
     k_heads = Call(
         type=TensorType(
@@ -307,7 +311,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Reshape(new_shape=(NUM_KV_HEADS, HEAD_DIM)),
-        args=(k_complete,), loc="reshape_k_for_attention",
+        args=(k_complete,), metadata=_binding("reshape_k_for_attention"),
     )
     k_gathered = Call(
         type=TensorType(
@@ -317,7 +321,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Gather(axis=0), args=(k_heads, kv_head_map),
-        loc="gather_kv_heads_k",
+        metadata=_binding("gather_kv_heads_k"),
     )
     k_attn = Call(
         type=TensorType(
@@ -327,7 +331,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Reshape(new_shape=(NUM_Q_HEADS, 1, HEAD_DIM)),
-        args=(k_gathered,), loc="reshape_k_for_scores",
+        args=(k_gathered,), metadata=_binding("reshape_k_for_scores"),
     )
 
     v_complete = Call(
@@ -335,7 +339,7 @@ def build_qwen3_attention_main_2cta_headnorm():
         target=Reshard(
             layout=_sl(*B4, (1, KV_PROJ_DIM), _M_1x128)
         ),
-        args=(v,), loc="reshard_v_complete",
+        args=(v,), metadata=_binding("reshard_v_complete"),
     )
     v_heads = Call(
         type=TensorType(
@@ -345,7 +349,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Reshape(new_shape=(NUM_KV_HEADS, HEAD_DIM)),
-        args=(v_complete,), loc="reshape_v_for_attention",
+        args=(v_complete,), metadata=_binding("reshape_v_for_attention"),
     )
     v_gathered = Call(
         type=TensorType(
@@ -355,7 +359,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Gather(axis=0), args=(v_heads, kv_head_map),
-        loc="gather_kv_heads_v",
+        metadata=_binding("gather_kv_heads_v"),
     )
     v_attn = Call(
         type=TensorType(
@@ -365,7 +369,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Reshape(new_shape=(NUM_Q_HEADS, 1, HEAD_DIM)),
-        args=(v_gathered,), loc="reshape_v_for_attention",
+        args=(v_gathered,), metadata=_binding("reshape_v_for_attention"),
     )
     k_transposed = Call(
         type=TensorType(
@@ -375,7 +379,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Transpose(perm=(0, 2, 1)), args=(k_attn,),
-        loc="transpose_k_for_scores",
+        metadata=_binding("transpose_k_for_scores"),
     )
     scores = Call(
         type=TensorType(
@@ -384,15 +388,15 @@ def build_qwen3_attention_main_2cta_headnorm():
             layout=None,
             storage=StorageKind.GMEM,
         ),
-        target=MatMul(), args=(q_attn, k_transposed), loc="attention_scores",
+        target=MatMul(), args=(q_attn, k_transposed), metadata=_binding("attention_scores"),
     )
     probs = Call(
         type=scores.type,
-        target=SoftMax(axis=-1), args=(scores,), loc="attention_probs",
+        target=SoftMax(axis=-1), args=(scores,), metadata=_binding("attention_probs"),
     )
     out_heads = Call(
         type=v_attn.type,
-        target=MatMul(), args=(probs, v_attn), loc="attention_out",
+        target=MatMul(), args=(probs, v_attn), metadata=_binding("attention_out"),
     )
     attn = Call(
         type=TensorType(
@@ -402,7 +406,7 @@ def build_qwen3_attention_main_2cta_headnorm():
             storage=StorageKind.GMEM,
         ),
         target=Reshape(new_shape=(1, Q_PROJ_DIM)),
-        args=(out_heads,), loc="reshape_attention_out",
+        args=(out_heads,), metadata=_binding("reshape_attention_out"),
     )
 
     # ── o_proj: matmul(reshard(attn), transpose(o_weight)) → P(sum) ─
@@ -412,31 +416,31 @@ def build_qwen3_attention_main_2cta_headnorm():
     attn_proj = Call(
         type=_sharded((1, Q_PROJ_DIM), B(), S(1), B(), B(), mesh=_M_1x128),
         target=Reshard(layout=_sl(B(), S(1), B(), B(), (1, Q_PROJ_DIM), _M_1x128)),
-        args=(attn,), loc="reshard_attn_to_proj",
+        args=(attn,), metadata=_binding("reshard_attn_to_proj"),
     )
     o_weight_t = Call(
         type=_sharded((Q_PROJ_DIM, HIDDEN), B(), S(0), B(), B(), mesh=_M_1x128),
         target=Transpose(perm=(1, 0)), args=(o_weight,),
-        loc="transpose_o_weight",
+        metadata=_binding("transpose_o_weight"),
     )
     o_partial = Call(
         type=_sharded((1, HIDDEN), B(), SP, B(), B(), mesh=_M_1x128),
         target=MatMul(), args=(attn_proj, o_weight_t),
-        loc="o_proj",
+        metadata=_binding("o_proj"),
     )
 
     # ── all_reduce boxing: P(sum) → B ──────────────────────────
     o_b_ty = _sharded((1, HIDDEN), *B4, mesh=_M_1x128)
     o_b = Call(
         type=o_b_ty, target=AllReduce(dst_layout=o_b_ty.layout),
-        args=(o_partial,), loc="all_reduce",
+        args=(o_partial,), metadata=_binding("all_reduce"),
     )
 
     # ── residual_add ──────────────────────────────────────────────
     residual = Call(
         type=_sharded((1, HIDDEN), *B4, mesh=_M_1x128),
         target=Add(), args=(hidden, o_b),
-        loc="residual_add",
+        metadata=_binding("residual_add"),
     )
 
     return Function.build(

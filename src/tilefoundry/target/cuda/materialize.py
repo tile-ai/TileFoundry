@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, source_metadata
 from tilefoundry.ir.core.metadata import remove_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -390,7 +390,7 @@ class _Materializer:
                             type=field_type,
                             target=TupleGetItem(index=index),
                             args=(value,),
-                            loc=getattr(value, "loc", None),
+                            metadata=source_metadata(value),
                         )
                     )
                 elements.append(self._materialize_result(field, field_ids, context))
@@ -414,7 +414,7 @@ class _Materializer:
                     type=expected,
                     target=Reshard(layout=expected.layout, storage=expected.storage),
                     args=(value,),
-                    loc=getattr(value, "loc", None),
+                    metadata=source_metadata(value),
                 )
             )
             if converted.type == expected:
@@ -447,7 +447,7 @@ class _Materializer:
             type=expected,
             target=Reshard(layout=expected.layout, storage=expected.storage),
             args=(value,),
-            loc=getattr(value, "loc", None),
+            metadata=source_metadata(value),
         )
         return self._infer(call)
 
@@ -486,7 +486,7 @@ class _Materializer:
                     type=target,
                     target=Reshard(layout=target.layout, storage=target.storage),
                     args=(source,),
-                    loc=getattr(source, "loc", None),
+                    metadata=source_metadata(source),
                 )
                 result = self._infer(call)
             else:
@@ -530,7 +530,7 @@ class _Materializer:
                     type=field_type,
                     target=TupleGetItem(index=index),
                     args=(current,),
-                    loc=getattr(current, "loc", None),
+                    metadata=source_metadata(current),
                 )
             )
         return current
@@ -613,7 +613,7 @@ class _Materializer:
                 type=replace(value.type, layout=target_layout),
                 target=Reshard(layout=target_layout, storage=value.type.storage),
                 args=(value,),
-                loc=getattr(value, "loc", None),
+                metadata=source_metadata(value),
             )
         )
         self.broadcast_exprs[key] = result
@@ -751,7 +751,6 @@ class _Materializer:
             type=expr.type,
             target=self._materialized_op(candidate),
             args=args,
-            loc=expr.loc,
             metadata=_clean_metadata(expr),
         )
         try:
@@ -823,7 +822,6 @@ class _Materializer:
             topologies=source.topologies,
             specializations=source.specializations,
             target=source.target,
-            loc=source.loc,
         )
         result = replace(result, metadata=tuple(
             value for value in source.metadata if type(value) is not ScheduleConstraintMetadata
@@ -854,7 +852,6 @@ class _Materializer:
             topologies=source.topologies,
             specializations=source.specializations,
             target=source.target,
-            loc=source.loc,
         )
         clone = replace(clone, metadata=tuple(
             value for value in source.metadata if type(value) is not ScheduleConstraintMetadata

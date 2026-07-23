@@ -1,14 +1,11 @@
-"""Canonical home for AnalysisRegistry + per-analysis registry instances.
+"""Canonical home for AnalysisRegistry + per-analysis registry instances."""
 
-"""
 from __future__ import annotations
 
-from typing import Callable, Generic, TypeVar
-
-Key = TypeVar("Key")
+from typing import Callable
 
 
-class AnalysisRegistry(Generic[Key]):
+class AnalysisRegistry[Key]:
     """Class → handler map. Double registration raises; lookup miss returns None."""
 
     def __init__(self, name: str) -> None:

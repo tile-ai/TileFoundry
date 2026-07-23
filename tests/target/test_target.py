@@ -48,12 +48,24 @@ def test_service_lookup_contract() -> None:
 def test_static_topologies_use_target_resource_facts() -> None:
     target = CudaTarget()
     target.validate_program_topology(Topology("cta", 132))
+    target.validate_program_topology(Topology("cta", 310_000))
     target.validate_program_topology(Topology("thread", 1024))
     target.validate_program_topology(Topology("cta", None))
-    with pytest.raises(ValueError, match="1 <= extent <= 132"):
-        target.validate_program_topology(Topology("cta", 133))
+    with pytest.raises(ValueError, match="must be positive"):
+        target.validate_program_topology(Topology("cta", 0))
     with pytest.raises(ValueError, match="1 <= extent <= 1024"):
         target.validate_program_topology(Topology("thread", 1025))
+
+
+def test_h200_grid_and_parallelism_facts_are_separate() -> None:
+    device = H200SXM()
+
+    assert device.sm_count == 132
+    assert device.max_resident_ctas_per_sm == 32
+    assert device.compiler_policy_max_parallel_ctas == 132
+    assert device.shared_memory_per_sm_bytes == 228 * 1024
+    assert device.shared_memory_per_cta_bytes == 227 * 1024
+    assert device.registers_per_sm_32bit == 65_536
 
 
 def test_group_functions_by_target_fact_matching() -> None:

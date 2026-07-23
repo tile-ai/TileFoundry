@@ -1,0 +1,102 @@
+[target]
+name = "h200_sxm_sm90"
+device = "H200 SXM"
+architecture = "SM90"
+
+[facts.sm_count]
+value = 132
+unit = "SM"
+provenance = "direct"
+conditions = "H200 SXM"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+
+[facts.hbm_capacity]
+value = 141
+unit = "GB"
+provenance = "direct"
+conditions = "decimal GB, H200 SXM"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+
+[facts.hbm_bandwidth]
+value = 4.8
+unit = "TB/s"
+provenance = "direct"
+conditions = "peak HBM3e bandwidth, H200 SXM"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+
+[facts.fp8_dense_tensor_core_peak]
+value = 1979
+unit = "TFLOP/s"
+provenance = "derived"
+conditions = "dense peak; 3958 TFLOP/s sparse FP8 peak divided by two"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+
+[facts.fp16_bf16_dense_tensor_core_peak]
+value = 989.5
+unit = "TFLOP/s"
+provenance = "derived"
+conditions = "dense peak; 1979 TFLOP/s sparse FP16/BF16 peak divided by two"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+
+[facts.max_threads_per_cta]
+value = 1024
+unit = "threads"
+provenance = "direct"
+conditions = "SM90 CUDA programming limit"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+
+[facts.max_resident_ctas_per_sm]
+value = 32
+unit = "CTA/SM"
+provenance = "direct"
+conditions = "hardware maximum; resource usage can lower occupancy"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+
+[facts.shared_memory_per_sm]
+value = 228
+unit = "KiB"
+provenance = "direct"
+conditions = "maximum shared-memory capacity per SM; unified L1/shared-memory configuration"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+
+[facts.shared_memory_per_cta]
+value = 227
+unit = "KiB"
+provenance = "direct"
+conditions = "maximum dynamic shared-memory allocation per CTA"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+
+[facts.registers_per_sm]
+value = 65536
+unit = "32-bit registers"
+provenance = "direct"
+conditions = "SM90 maximum register-file capacity per SM"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+
+[facts.compiler_policy_max_parallel_ctas]
+value = 132
+unit = "CTA"
+provenance = "derived"
+conditions = "one CTA per SM policy for the initial fixed-wave planner"
+source = "tilefoundry policy"
+
+[facts.l2_bandwidth]
+value = "unavailable"
+unit = ""
+provenance = "unavailable"
+conditions = "No official static bandwidth used for roofline."
+source = ""
+
+[facts.smem_bandwidth]
+value = "unavailable"
+unit = ""
+provenance = "unavailable"
+conditions = "No official static bandwidth used for roofline."
+source = ""
+
+[facts.rmem_bandwidth]
+value = "unavailable"
+unit = ""
+provenance = "unavailable"
+conditions = "No official static bandwidth used for roofline."
+source = ""

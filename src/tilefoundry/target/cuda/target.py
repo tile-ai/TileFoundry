@@ -61,10 +61,15 @@ class CudaTarget(Target):
         """Return program topology levels admitted by CUDA compilation."""
         return ("cta", "thread")
 
-    def topology_limit(self, name: str) -> int:
-        """Return the concrete resource limit for a program topology."""
+    def topology_limit(self, name: str) -> int | None:
+        """Return a per-CTA topology limit, if one exists.
+
+        The CUDA grid is a launch shape, not an SM allocation.  Its static
+        extent is therefore deliberately unbounded here; fixed-wave analysis
+        applies ``compiler_policy_max_parallel_ctas`` separately.
+        """
         if name == "cta":
-            return self.device.sm_count
+            return None
         if name == "thread":
             return self.architecture.topology_limit("thread")
         raise ValueError(
@@ -87,7 +92,12 @@ class CudaTarget(Target):
                 f"static integer extent, got {topology.size!r}"
             )
         limit = self.topology_limit(topology.name)
-        if not 1 <= topology.size <= limit:
+        if topology.size < 1:
+            raise ValueError(
+                f"{self!r}: topology {topology.name!r} extent {topology.size} "
+                "must be positive"
+            )
+        if limit is not None and topology.size > limit:
             raise ValueError(
                 f"{self!r}: topology {topology.name!r} extent {topology.size} "
                 f"must satisfy 1 <= extent <= {limit}"

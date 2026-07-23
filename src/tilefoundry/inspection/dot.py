@@ -14,7 +14,7 @@ Example label::
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, Constant, Var
+from tilefoundry.ir.core import Call, Constant, Var, binding_name
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -83,51 +83,53 @@ def hir_function_to_dot(fn: HirFunction) -> str:
         if is_new:
             _emitted.add(key)
 
-        if isinstance(expr, Var):
-            if is_new:
-                _emit_node(nid, [
-                    f"Var: {expr.name}",
-                    *_type_lines(expr.type, mesh_map),
-                ], fill=VAR_FILL)
-        elif isinstance(expr, Constant):
-            if is_new:
-                val = f"{expr.value:.6g}" if isinstance(expr.value, float) else str(expr.value)
-                _emit_node(nid, [
-                    f"Const: {val}",
-                    *_type_lines(expr.type, mesh_map),
-                ], fill=CONST_FILL)
-        elif isinstance(expr, Call):
-            target = expr.target
-            if isinstance(target, Reshard):
+        match expr:
+            case Var():
                 if is_new:
-                    header = f"{expr.loc}\\nReshard" if expr.loc else "Reshard"
+                    _emit_node(nid, [
+                        f"Var: {expr.name}",
+                        *_type_lines(expr.type, mesh_map),
+                    ], fill=VAR_FILL)
+            case Constant():
+                if is_new:
+                    val = f"{expr.value:.6g}" if isinstance(expr.value, float) else str(expr.value)
+                    _emit_node(nid, [
+                        f"Const: {val}",
+                        *_type_lines(expr.type, mesh_map),
+                    ], fill=CONST_FILL)
+            case Call():
+                target = expr.target
+                if isinstance(target, Reshard):
+                    if is_new:
+                        name = binding_name(expr)
+                        header = f"{name}\\nReshard" if name else "Reshard"
+                        _emit_node(nid, [
+                            header,
+                            *_type_lines(expr.type, mesh_map),
+                        ], fill=SHARDING_FILL)
+                        for arg in expr.args:
+                            walk(arg)
+                            _emit_edge(_id(arg), nid)
+                    return
+
+                op_label = _op_display_name(target)
+                name = binding_name(expr)
+                header = f"{name}\\n{op_label}" if name else op_label
+                if is_new:
                     _emit_node(nid, [
                         header,
                         *_type_lines(expr.type, mesh_map),
-                    ], fill=SHARDING_FILL)
+                    ], fill=CALL_FILL)
+                    for i, arg in enumerate(expr.args):
+                        walk(arg)
+                        edge_label = f"arg[{i}]" if len(expr.args) > 1 else ""
+                        _emit_edge(_id(arg), nid, edge_label)
+                else:
                     for arg in expr.args:
                         walk(arg)
-                        _emit_edge(_id(arg), nid)
-                return
-
-            op_label = _op_display_name(target)
-            # Use loc as human-readable name when available
-            header = f"{expr.loc}\\n{op_label}" if expr.loc else op_label
-            if is_new:
-                _emit_node(nid, [
-                    header,
-                    *_type_lines(expr.type, mesh_map),
-                ], fill=CALL_FILL)
-                for i, arg in enumerate(expr.args):
-                    walk(arg)
-                    edge_label = f"arg[{i}]" if len(expr.args) > 1 else ""
-                    _emit_edge(_id(arg), nid, edge_label)
-            else:
-                for arg in expr.args:
-                    walk(arg)
-        else:
-            if is_new:
-                _emit_node(nid, [type(expr).__name__], fill="#ffffff")
+            case _:
+                if is_new:
+                    _emit_node(nid, [type(expr).__name__], fill="#ffffff")
 
     walk(fn.body)
     for p in fn.params:

@@ -141,6 +141,13 @@ class Mesh:
                 return MeshAxis(mesh=self, index=i, size=self.layout.shape[i])
         return None
 
+    def __getattr__(self, name: str) -> MeshAxis:
+        """Expose declared axis names with the same surface the parser accepts."""
+        axis = self.axis_named(name)
+        if axis is not None:
+            return axis
+        raise AttributeError(f"Mesh has no axis named {name!r}")
+
     def __getitem__(self, key) -> "Mesh":
         """Slice this mesh into a constant sub-mesh (used by ``T.sync(m[...])``).
 
