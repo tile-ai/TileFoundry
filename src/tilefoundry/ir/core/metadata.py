@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TypeVar
-
-T = TypeVar("T", bound="IRMetadata")
 
 
 @dataclass(frozen=True)
@@ -15,9 +12,53 @@ class IRMetadata:
         return None
 
 
-def get_metadata(expr: "Expr", cls: type[T]) -> T | None:
+@dataclass(frozen=True)
+class BindingMetadata(IRMetadata):
+    """The authored SSA binding name for an expression."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class SourceSpanMetadata(IRMetadata):
+    """Source location for a parser-authored expression."""
+
+    file: str
+    line: int
+    column: int
+    end_line: int | None = None
+    end_column: int | None = None
+
+    def format_comment(self) -> str:
+        return f"source={self.file}:{self.line}:{self.column}"
+
+
+def get_metadata[T: IRMetadata](expr: "Expr", cls: type[T]) -> T | None:
     """Return the metadata whose concrete class is ``cls``, if present."""
     return next((value for value in expr.metadata if type(value) is cls), None)
+
+
+def binding_name(expr: "Expr") -> str | None:
+    """Return the authored SSA binding name attached to ``expr``."""
+    binding = get_metadata(expr, BindingMetadata)
+    return binding.name if binding is not None else None
+
+
+def diagnostic_location(expr: "Expr") -> str | None:
+    """Return the most precise source identity available for diagnostics."""
+    span = get_metadata(expr, SourceSpanMetadata)
+    if span is not None:
+        return f"{span.file}:{span.line}:{span.column}"
+    return binding_name(expr)
+
+
+def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]:
+    """Copy only authored binding/span metadata from ``expr``."""
+    return tuple(
+        value
+        for value in expr.metadata
+        if type(value) in {BindingMetadata, SourceSpanMetadata}
+    )
 
 
 def replace_metadata(expr: "Expr", value: IRMetadata) -> "Expr":
@@ -44,4 +85,14 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr":
     return replace(expr, metadata=updated)
 
 
-__all__ = ["IRMetadata", "get_metadata", "remove_metadata", "replace_metadata"]
+__all__ = [
+    "IRMetadata",
+    "BindingMetadata",
+    "SourceSpanMetadata",
+    "binding_name",
+    "diagnostic_location",
+    "get_metadata",
+    "remove_metadata",
+    "replace_metadata",
+    "source_metadata",
+]

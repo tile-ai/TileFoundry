@@ -17,12 +17,17 @@ _H200_DENSE_FLOPS = (
 
 @dataclass(frozen=True)
 class H200SXM(Device):
-    """One H200 SXM device with fixed hard resource limits."""
+    """One H200 SXM device with fixed hardware facts and planner policy."""
 
     name: str = field(default="h200_sxm", init=False)
     sm_count: int = field(default=132, init=False)
+    max_resident_ctas_per_sm: int = field(default=32, init=False)
+    compiler_policy_max_parallel_ctas: int = field(default=132, init=False)
     hbm_capacity_bytes: int = field(default=141_000_000_000, init=False)
     hbm_bandwidth_bytes_per_second: int = field(default=4_800_000_000_000, init=False)
+    shared_memory_per_sm_bytes: int = field(default=228 * 1024, init=False)
+    shared_memory_per_cta_bytes: int = field(default=227 * 1024, init=False)
+    registers_per_sm_32bit: int = field(default=65_536, init=False)
     _dense_flops: tuple[tuple[DType, int], ...] = field(
         default=_H200_DENSE_FLOPS, init=False, repr=False
     )

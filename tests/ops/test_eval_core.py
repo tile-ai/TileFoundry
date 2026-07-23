@@ -19,6 +19,8 @@ from tilefoundry.evaluator import (
     from_layout_view,
 )
 from tilefoundry.evaluator.registry import eval_registry
+from tilefoundry.ir.core import Var
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, TensorType
 
@@ -81,6 +83,22 @@ def _caller(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32
 def test_function_call_binds_callee_params():
     a, b = torch.randn(4), torch.randn(4)
     assert torch.allclose(evaluate(_caller, a, b, device=_DEV), (a + b) * b)
+
+
+def test_structurally_equal_params_keep_distinct_ssa_bindings():
+    tensor_type = TensorType((1,), DType.f32, layout=None, storage="gmem")
+    first = Var(name="same", type=tensor_type)
+    second = Var(name="same", type=tensor_type)
+    function = Function.build(
+        name="same_named_params",
+        params=(first, second),
+        body=first,
+        return_type=tensor_type,
+    )
+
+    result = evaluate(function, torch.tensor([1.0]), torch.tensor([2.0]), device=_DEV)
+
+    assert torch.equal(result, torch.tensor([1.0]))
 
 
 @func

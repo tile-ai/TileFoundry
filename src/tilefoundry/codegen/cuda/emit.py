@@ -169,25 +169,26 @@ def _derive_launch_config(
 
     def walk(stmt) -> None:
         nonlocal grid_x, block_x
-        if isinstance(stmt, MeshScope):
-            g, b = _topo_dims(stmt.mesh)
-            # Use max so nested MeshScopes (e.g. cta + thread sequence)
-            # land at the union footprint rather than overwriting.
-            grid_x = max(grid_x, g)
-            block_x = max(block_x, b)
-            walk(stmt.body)
-        elif isinstance(stmt, Sequential):
-            for s in stmt.body:
-                walk(s)
-        elif isinstance(stmt, LetStmt):
-            # Inspect the bound value's type — Reshard / sharded ops
-            # carry ``ShardLayout`` here even when no MeshScope is
-            # present (rmsnorm path).
-            if hasattr(stmt, "value"):
-                _walk_expr(stmt.value)
-            if hasattr(stmt, "var") and getattr(stmt.var, "type", None) is not None:
-                _harvest_from_layout(getattr(stmt.var.type, "layout", None))
-            walk(stmt.body)
+        match stmt:
+            case MeshScope():
+                g, b = _topo_dims(stmt.mesh)
+                # Use max so nested MeshScopes (e.g. cta + thread sequence)
+                # land at the union footprint rather than overwriting.
+                grid_x = max(grid_x, g)
+                block_x = max(block_x, b)
+                walk(stmt.body)
+            case Sequential():
+                for s in stmt.body:
+                    walk(s)
+            case LetStmt():
+                # Inspect the bound value's type — Reshard / sharded ops
+                # carry ``ShardLayout`` here even when no MeshScope is
+                # present (rmsnorm path).
+                if hasattr(stmt, "value"):
+                    _walk_expr(stmt.value)
+                if hasattr(stmt, "var") and getattr(stmt.var, "type", None) is not None:
+                    _harvest_from_layout(getattr(stmt.var.type, "layout", None))
+                walk(stmt.body)
 
     walk(body)
     grid = (None, 1, 1) if cta_dynamic else (grid_x, 1, 1)

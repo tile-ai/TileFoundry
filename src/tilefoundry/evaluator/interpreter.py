@@ -57,7 +57,7 @@ class Evaluator(ExprVisitor):
     """``ExprVisitor[Value]`` memoized on ``id(expr)`` within one scope."""
 
     def __init__(
-        self, env: dict[Var, Value], device: str,
+        self, env: dict[int, Value], device: str,
         dim_env: dict[str, int] | None = None,
     ) -> None:
         self.env = env
@@ -75,7 +75,7 @@ class Evaluator(ExprVisitor):
 
     def visit_Var(self, var: Var) -> Value:
         try:
-            return self.env[var]
+            return self.env[id(var)]
         except KeyError:
             raise EvalError(f"evaluator: unbound variable {var.name!r}") from None
 
@@ -115,7 +115,7 @@ class Evaluator(ExprVisitor):
         # A dispatch prototype (body is None) selects a variant by the runtime
         # argument shapes; its own None body is never evaluated.
         target = _select_variant(callee, args) if callee.variants else callee
-        sub_env = {param: arg for param, arg in zip(target.params, args)}
+        sub_env = {id(param): arg for param, arg in zip(target.params, args)}
         sub_dim_env = _bind_dim_vars(target.params, args)
         return Evaluator(sub_env, self.device, sub_dim_env).visit(target.body)
 
@@ -154,13 +154,13 @@ class Evaluator(ExprVisitor):
         def iter_env(i: int, carried) -> dict:
             env = {
                 **self.env,
-                iv: TensorValue(
+                id(iv): TensorValue(
                     data=torch.as_tensor(i, dtype=iv_dtype, device=self.device),
                     type=iv.type,
                 ),
             }
             for phi, value in zip(region.carried_args, carried):
-                env[phi] = value
+                env[id(phi)] = value
             return env
 
         if not region.carried_args:
@@ -246,7 +246,7 @@ def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = N
         # A dispatch prototype selects a variant by the input shapes; its own
         # None body is never evaluated.
         target = _select_variant(fn, values) if fn.variants else fn
-        env: dict[Var, Value] = dict(zip(target.params, values))
+        env = {id(param): value for param, value in zip(target.params, values)}
         dim_env = _bind_dim_vars(target.params, values)
         result = Evaluator(env, device, dim_env).visit(target.body)
     elif isinstance(fn_or_call, Call):

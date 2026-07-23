@@ -6,10 +6,12 @@ from math import prod
 from tests.fixtures.demo_ir import build_demo
 from tests.fixtures.qwen3_attention_graph import build_qwen3_attention_main_2cta_headnorm
 from tilefoundry.dump import DumpFlags, FileDumper, current_scope, dump
-from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, Constant, Var
+from tilefoundry.inspection import PythonPrintOptions, as_script
+from tilefoundry.ir.core import BindingMetadata, Call, Constant, Var
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.parser.hir_parser import parse_script
 
@@ -95,6 +97,52 @@ class TestPythonPrinterRoundTrip:
         fn, _, _ = build_demo()
         src = as_script(fn)
         compile(src, "<test>", "exec")
+
+    def test_inspection_types_are_opt_in_same_line_comments(self):
+        fn, _, _ = build_demo()
+        canonical = as_script(fn)
+        annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
+
+        assert canonical != annotated
+        assert "type=Tensor[" in annotated
+        assert all(
+            not line.lstrip().startswith("# type=")
+            for line in annotated.splitlines()
+        )
+
+    def test_binding_metadata_preserves_the_canonical_loc_comment(self):
+        tensor_type = TensorType.scalar(DType.f32)
+        source = Var(name="source", type=tensor_type)
+        result = Call(
+            target=Binary(kind=BinaryKind.ADD),
+            args=(source, source),
+            type=tensor_type,
+            metadata=(BindingMetadata("result"),),
+        )
+        function = Function.build(
+            name="binding_name",
+            params=(source,),
+            body=result,
+            return_type=tensor_type,
+        )
+
+        canonical = as_script(function)
+
+        assert "result = add(source, source)" in canonical
+        assert '# loc="result"' in canonical
+
+        unbound = Call(
+            target=Binary(kind=BinaryKind.ADD),
+            args=(source, source),
+            type=tensor_type,
+        )
+        unbound_function = Function.build(
+            name="generated_name",
+            params=(source,),
+            body=unbound,
+            return_type=tensor_type,
+        )
+        assert "# loc=" not in as_script(unbound_function)
 
 
 class TestModuleRoundTrip:

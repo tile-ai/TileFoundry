@@ -4,7 +4,7 @@ import ast
 import dataclasses
 from typing import Any
 
-from tilefoundry.ir.core import Expr, Var, VerifyError
+from tilefoundry.ir.core import BindingMetadata, Expr, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -513,11 +513,11 @@ class _HirBodyVisitor(BaseExprVisitor):
             target = node.targets[0]
             if isinstance(target, ast.Name):
                 tgt = target.id
-                rhs = self.expr(node.value)
-                # Auto-fill Call.loc from LHS variable name when the
+                rhs = self.expr_with_binding(node.value, tgt)
+                # Attach the authored binding name when the
                 # user did not supply ``loc=`` explicitly. Applies to any
                 # Call (op call, TupleGetItem from Subscript, etc.).
-                rhs = self._maybe_autofill_loc(rhs, tgt)
+                rhs = self._maybe_autofill_binding(rhs, tgt)
                 # Bind name → Expr directly; DAG sharing replaces LetExpr binding.
                 self.env.define(tgt, rhs)
                 return self._visit_chain(stmts, idx + 1, require_return)
@@ -562,8 +562,8 @@ class _HirBodyVisitor(BaseExprVisitor):
                     f"at {self.source_filename}:{node.lineno}:{node.col_offset}"
                 )
         else:
-            target = self._maybe_autofill_loc(
-                self.expr(node.value), node.target.id
+            target = self._maybe_autofill_binding(
+                self.expr_with_binding(node.value, node.target.id), node.target.id
             )
             self.env.define(node.target.id, target)
         self._record_annotated_assignment(node, target)
@@ -572,15 +572,19 @@ class _HirBodyVisitor(BaseExprVisitor):
     def _record_annotated_assignment(self, node: ast.AnnAssign, target: Expr) -> None:
         metadata = self._parse_where_annotation(node.annotation, node)
         if not isinstance(target.type, TensorType):
+            binding = get_metadata(target, BindingMetadata)
+            label = binding.name if binding is not None else self.source_filename
             raise VerifyError(
                 f"where annotation requires a tensor-valued Expr at "
-                f"{target.loc or self.source_filename}:{node.lineno}:{node.col_offset}"
+                f"{label}:{node.lineno}:{node.col_offset + 1}"
             )
         if id(target) in self.pending_constraints:
             previous = self.pending_constraints[id(target)].source_loc.describe()
             current = metadata.source_loc.describe()
+            binding = get_metadata(target, BindingMetadata)
+            label = binding.name if binding is not None else "<unnamed>"
             raise VerifyError(
-                f"duplicate where annotation for Expr {target.loc or '<unnamed>'!r} "
+                f"duplicate where annotation for Expr {label!r} "
                 f"at {current}; first annotation at {previous}"
             )
         self.pending_constraints[id(target)] = metadata
@@ -947,7 +951,7 @@ class _HirBodyVisitor(BaseExprVisitor):
                 target = stmt.targets[0]
                 if isinstance(target, ast.Name):
                     rhs = self.expr(stmt.value)
-                    rhs = self._maybe_autofill_loc(rhs, target.id)
+                    rhs = self._maybe_autofill_binding(rhs, target.id)
                     self.env.define(target.id, rhs)
                     last_expr = rhs
                     continue
@@ -972,12 +976,6 @@ class _HirBodyVisitor(BaseExprVisitor):
 
     def _visit_tuple_assign(self, target: ast.Tuple, value: ast.AST) -> Expr:
         """Tuple-unpack inside tile body (mirrors _visit_chain Tuple branch)."""
-        rhs = self.expr(value)
-        if not isinstance(rhs.type, TupleType):
-            raise VerifyError(
-                f"hir: tuple unpack requires RHS of TupleType, "
-                f"got {type(rhs.type).__name__}"
-            )
         names: list[str] = []
         for elt in target.elts:
             if not isinstance(elt, ast.Name):
@@ -985,16 +983,22 @@ class _HirBodyVisitor(BaseExprVisitor):
                     "hir: tuple unpack targets must all be plain names"
                 )
             names.append(elt.id)
+        rhs = self.expr_with_binding(value, ", ".join(names))
+        if not isinstance(rhs.type, TupleType):
+            raise VerifyError(
+                f"hir: tuple unpack requires RHS of TupleType, "
+                f"got {type(rhs.type).__name__}"
+            )
         if len(names) != len(rhs.type.fields):
             raise VerifyError(
                 f"hir: tuple unpack arity mismatch — RHS has "
                 f"{len(rhs.type.fields)} fields, LHS binds {len(names)} names"
             )
-        rhs = self._maybe_autofill_loc_default(rhs)
+        rhs = self._maybe_autofill_binding_default(rhs)
         last_item: Expr = rhs
         for i, nm in enumerate(names):
             item = self._build_call(TupleGetItem(index=i), (rhs,))
-            item = self._maybe_autofill_loc(item, nm)
+            item = self._maybe_autofill_binding(item, nm)
             self.env.define(nm, item)
             last_item = item
         return last_item

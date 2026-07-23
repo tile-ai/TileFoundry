@@ -16,6 +16,12 @@ from typing import Any, NoReturn, Union
 
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import Call, Expr
+from tilefoundry.ir.core.metadata import (
+    BindingMetadata,
+    SourceSpanMetadata,
+    binding_name,
+    get_metadata,
+)
 from tilefoundry.ir.core.stmt import Stmt
 from tilefoundry.ir.types.tensor_type import DType, TensorType, Type
 from tilefoundry.ir.types.utils import local_type_of
@@ -54,12 +60,13 @@ class TypeInferContext:
     """
 
     module: Any = None
-    cache: dict[Expr, Type] = field(default_factory=dict)
+    cache: dict[int, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
     elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
 
     def type_of(self, expr: Expr) -> Type:
-        cached = self.cache.get(expr)
+        key = id(expr)
+        cached = self.cache.get(key)
         if cached is not None:
             return cached
         # Local import: visitors.py imports TypeInferContext from this module,
@@ -67,7 +74,7 @@ class TypeInferContext:
         from .visitors import TypeInferVisitor  # noqa: PLC0415
 
         computed = TypeInferVisitor(self).visit(expr)
-        self.cache[expr] = computed
+        self.cache[key] = computed
         return computed
 
     def error(self, node: Union[Expr, Stmt], msg: str) -> NoReturn:
@@ -75,8 +82,17 @@ class TypeInferContext:
             name = type(node.target).__name__
         else:
             name = type(node).__name__
-        loc = getattr(node, "loc", None)
-        where = f"\n  at {loc}" if loc else ""
+        binding = get_metadata(node, BindingMetadata) if isinstance(node, Expr) else None
+        span = get_metadata(node, SourceSpanMetadata) if isinstance(node, Expr) else None
+        if span is not None:
+            label = f" variable {binding.name!r}" if binding is not None else ""
+            where = f"\n  at {span.file}:{span.line}:{span.column}{label}"
+        elif isinstance(node, Expr):
+            location = binding_name(node)
+            where = f"\n  at {location}" if location else ""
+        else:
+            loc = node.loc
+            where = f"\n  at {loc}" if loc else ""
         raise VerifyError(f"{name}: {msg}{where}")
 
 

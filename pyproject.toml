@@ -7,7 +7,7 @@ name = "tilefoundry"
 version = "0.1.0"
 description = "A tile-based, agentic platform for automatic high-performance program generation across hardware."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "isl-python>=0.1.8",
     "jinja2>=3.0",
@@ -20,10 +20,12 @@ dependencies = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
+
+[project.scripts]
+tilefoundry = "tilefoundry.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
@@ -35,6 +37,10 @@ where = ["src"]
 [tool.setuptools.package-data]
 "tilefoundry.codegen.cuda.templates" = ["*.j2"]
 "tilefoundry.codegen.cpu.templates" = ["*.j2"]
+"tilefoundry.target.hardware" = ["*.toml"]
+
+[tool.setuptools.data-files]
+"share/tilefoundry/spec" = ["docs/spec/*.md"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -43,7 +49,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 # Selected rule families:

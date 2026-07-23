@@ -23,6 +23,4 @@ needed at runtime either.
 
 from __future__ import annotations
 
-from typing import TypeAlias
-
-ShapeDim: TypeAlias = "int | DimVar | Expr"
+type ShapeDim = "int | DimVar | Expr"

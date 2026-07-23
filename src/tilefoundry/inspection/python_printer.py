@@ -10,8 +10,18 @@ from __future__ import annotations
 import enum
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core import (
+    Call,
+    Constant,
+    Expr,
+    IRMetadata,
+    Tuple,
+    Var,
+    binding_name,
+    get_metadata,
+)
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
@@ -70,6 +80,49 @@ _DIM_FUNC_OPS: dict[type, str] = {
     DimMin: "min",
     DimMax: "max",
 }
+
+
+@dataclass(frozen=True)
+class PythonPrintOptions:
+    """Optional non-canonical annotations for inspection output."""
+
+    show_types: bool = False
+    comment_metadata_types: tuple[type[IRMetadata], ...] = ()
+
+
+def _compact_type(ty: object) -> str:
+    """One physical-line, DSL-shaped type annotation for inspection output."""
+    if isinstance(ty, TensorType):
+        rendered = _tensor_annotation(ty)
+        return " ".join(rendered.split())
+    if isinstance(ty, TupleType):
+        return "Tuple[" + ", ".join(_compact_type(field) for field in ty.fields) + "]"
+    return repr(ty)
+
+
+def _comments(
+    expr: Expr,
+    options: PythonPrintOptions,
+    *,
+    include_binding: bool = False,
+    emitted_name: str | None = None,
+) -> str:
+    comments: list[str] = []
+    authored_name = binding_name(expr)
+    if include_binding and authored_name is not None:
+        label = emitted_name or authored_name
+        if label:
+            comments.append(f'loc="{label}"')
+    if options.show_types:
+        comments.append(f"type={_compact_type(expr.type)}")
+    for metadata_type in options.comment_metadata_types:
+        metadata = get_metadata(expr, metadata_type)
+        if metadata is None:
+            continue
+        comment = metadata.format_comment()
+        if comment is not None:
+            comments.append(comment)
+    return f"  # {'; '.join(comments)}" if comments else ""
 
 
 def shape_entry_str(entry: object) -> str:
@@ -596,7 +649,8 @@ def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
 
 
 def _emit_def(
-    fn: HirFunction, def_name: str, mesh_map: dict, indent: str
+    fn: HirFunction, def_name: str, mesh_map: dict, indent: str,
+    options: PythonPrintOptions,
 ) -> list[str]:
     """Render one function ``def`` block: signature + body (or ``pass`` for a
     prototype). The caller prepends the decorator line(s). Each call builds its
@@ -653,8 +707,8 @@ def _emit_def(
             name = _forced_names[key]
         elif isinstance(expr, Var):
             name = _sanitize_name(expr.name)
-        elif isinstance(expr, Call) and expr.loc:
-            name = _sanitize_name(expr.loc)
+        elif isinstance(expr, Call) and (authored_name := binding_name(expr)):
+            name = _sanitize_name(authored_name)
         else:
             name = f"v{_counter[0]}"
             _counter[0] += 1
@@ -795,7 +849,10 @@ def _emit_def(
 
     def _emit_inline_call(expr: Call, level: str) -> None:
         name = _names[id(expr)]
-        lines.append(f"{level}{name} = {_format_call(expr, level)}")
+        lines.append(
+            f"{level}{name} = {_format_call(expr, level)}"
+            f"{_comments(expr, options, emitted_name=name)}"
+        )
         printed.add(id(expr))
 
     def _emit_expr(expr: Expr, level: str) -> None:
@@ -806,7 +863,7 @@ def _emit_def(
             printed.add(key)
             return
         if isinstance(expr, Constant):
-            lines.append(f"{level}{_names[key]} = {repr(expr.value)}")
+            lines.append(f"{level}{_names[key]} = {repr(expr.value)}{_comments(expr, options)}")
             printed.add(key)
             return
         if isinstance(expr, Tuple):
@@ -847,7 +904,7 @@ def _emit_def(
             loop = f"tile({extent}, {step})"
         else:
             loop = f"range({start}, {extent}, {step})"
-        lines.append(f"{level}for {grid.induction_var.name} in {loop}:")
+        lines.append(f"{level}for {grid.induction_var.name} in {loop}:{_comments(grid, options)}")
         printed.add(key)
         inner = level + "    "
         _emit_expr(grid.body, inner)
@@ -870,7 +927,7 @@ def _emit_def(
             continue
         if isinstance(expr, Constant):
             name = _names[id(expr)]
-            lines.append(f"{indent}{name} = {repr(expr.value)}")
+            lines.append(f"{indent}{name} = {repr(expr.value)}{_comments(expr, options)}")
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
@@ -884,8 +941,10 @@ def _emit_def(
             continue
         if isinstance(expr, Call):
             name = _names[id(expr)]
-            loc = f'  # loc="{name}"' if expr.loc else ""
-            lines.append(f"{indent}{name} = {_format_call(expr, indent)}{loc}")
+            lines.append(
+                f"{indent}{name} = {_format_call(expr, indent)}"
+                f"{_comments(expr, options, include_binding=True, emitted_name=name)}"
+            )
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
@@ -996,7 +1055,9 @@ def _emit_header(
     return lines
 
 
-def _emit_decorated_defs(fn: HirFunction, mesh_map: dict[int, str], indent: str) -> list[str]:
+def _emit_decorated_defs(
+    fn: HirFunction, mesh_map: dict[int, str], indent: str, options: PythonPrintOptions,
+) -> list[str]:
     """Base ``@func`` decorator + ``def`` block, followed by one
     ``@<name>.specialize(pattern)`` block per variant (§2.6). Shared by
     standalone and module-wrapped output so a dispatch prototype prints
@@ -1012,7 +1073,7 @@ def _emit_decorated_defs(fn: HirFunction, mesh_map: dict[int, str], indent: str)
         lines.append(f"@func({', '.join(decorator_kwargs)})")
     else:
         lines.append("@func")
-    lines.extend(_emit_def(fn, fn.name, mesh_map, indent))
+    lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options))
 
     # Variant defs: each a `@<base>.specialize(pattern)` over a throwaway `def _`.
     for variant in fn.variants:
@@ -1020,11 +1081,13 @@ def _emit_decorated_defs(fn: HirFunction, mesh_map: dict[int, str], indent: str)
         lines.append(
             f"@{fn.name}.specialize({_pattern_ctor(variant.specializations[0])})"
         )
-        lines.extend(_emit_def(variant, "_", mesh_map, indent))
+        lines.extend(_emit_def(variant, "_", mesh_map, indent, options))
     return lines
 
 
-def hir_function_to_python(fn: HirFunction) -> str:
+def hir_function_to_python(
+    fn: HirFunction, *, options: PythonPrintOptions | None = None,
+) -> str:
     """Convert a HIR Function to canonical Python DSL source.
 
     A normal function prints as a single ``@func``. A dispatch prototype
@@ -1037,11 +1100,14 @@ def hir_function_to_python(fn: HirFunction) -> str:
     meshes = _collect_all_meshes(fn)
     mesh_map = _mesh_name_map(meshes)
     lines = _emit_header(fn, meshes, mesh_map, indent)
-    lines.extend(_emit_decorated_defs(fn, mesh_map, indent))
+    lines.extend(_emit_decorated_defs(fn, mesh_map, indent, options or PythonPrintOptions()))
     return "\n".join(lines) + "\n"
 
 
-def as_script(fn: HirFunction | Module, *, module: str | None = None) -> str:
+def as_script(
+    fn: HirFunction | Module, *, module: str | None = None,
+    options: PythonPrintOptions | None = None,
+) -> str:
     """Convert a HIR Function or Module to Python DSL source.
 
     Without *module*: standalone ``@func`` output.
@@ -1059,10 +1125,10 @@ def as_script(fn: HirFunction | Module, *, module: str | None = None) -> str:
         Python source string.
     """
     if isinstance(fn, Module):
-        return _module_to_python(fn, module)
+        return _module_to_python(fn, module, options=options)
     if module is not None:
-        return _module_to_python(fn, module)
-    return hir_function_to_python(fn)
+        return _module_to_python(fn, module, options=options)
+    return hir_function_to_python(fn, options=options)
 
 # backward-compat alias
 def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
@@ -1071,7 +1137,8 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
 
 
 def _module_to_python(
-    fn_or_module: HirFunction | Module, module_name: str | None = None
+    fn_or_module: HirFunction | Module, module_name: str | None = None,
+    *, options: PythonPrintOptions | None = None,
 ) -> str:
     """Render a function or every HIR function in a Module wrapper."""
     if isinstance(fn_or_module, Module):
@@ -1108,7 +1175,7 @@ def _module_to_python(
     for index, fn in enumerate(ordered_functions):
         if index:
             lines.append("")
-        body = _emit_decorated_defs(fn, mesh_map, indent4)
+        body = _emit_decorated_defs(fn, mesh_map, indent4, options or PythonPrintOptions())
         lines.extend(f"{indent4}{ln}" if ln else ln for ln in body)
 
     return "\n".join(lines) + "\n"

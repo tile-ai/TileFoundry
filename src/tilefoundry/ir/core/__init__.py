@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from .errors import VerifyError
 from .expr import Call, Constant, Expr, Tuple, Var
-from .metadata import IRMetadata, get_metadata, remove_metadata, replace_metadata
+from .metadata import (
+    BindingMetadata,
+    IRMetadata,
+    SourceSpanMetadata,
+    binding_name,
+    diagnostic_location,
+    get_metadata,
+    remove_metadata,
+    replace_metadata,
+    source_metadata,
+)
 from .op import Op, ParameterInfo
 from tilefoundry.visitor_registry.registries import (
     AnalysisRegistry,
@@ -21,7 +31,9 @@ __all__ = [
     # exprs
     "Expr", "Var", "Constant", "Call", "Tuple",
     # metadata
-    "IRMetadata", "get_metadata", "replace_metadata", "remove_metadata",
+    "IRMetadata", "BindingMetadata", "SourceSpanMetadata",
+    "binding_name", "diagnostic_location", "source_metadata",
+    "get_metadata", "replace_metadata", "remove_metadata",
     # op
     "Op", "ParameterInfo",
     # registry

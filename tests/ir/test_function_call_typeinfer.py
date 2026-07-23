@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from tests.ops.typeinfer_utils import infer_call
-from tilefoundry.ir.core import Call, Tuple, Var
+from tilefoundry.ir.core import BindingMetadata, Call, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
@@ -139,11 +139,15 @@ def test_function_call_preserves_partial_in_tuple_return():
     assert result.fields[0].layout.attrs == (Broadcast(), Partial("max"))
 
 
-def test_bind_error_reports_call_site_loc():
-    # A bind-mismatch VerifyError must report the *call's* loc, not the
-    # callee's own (always-None) .loc.
+def test_bind_error_reports_call_site_binding():
+    # A bind-mismatch VerifyError must report the call-site binding metadata.
     f = _add_callee(make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),)))
     arg = Var(type=make_tensor_type((4, 8), _F), name="x_arg")
-    call = Call(type=f.return_type, target=f, args=(arg,), loc="y")
+    call = Call(
+        type=f.return_type,
+        target=f,
+        args=(arg,),
+        metadata=(BindingMetadata("y"),),
+    )
     with pytest.raises(VerifyError, match="at y"):
         TypeInferVisitor(TypeInferContext()).visit(call)

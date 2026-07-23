@@ -5,7 +5,9 @@ from dataclasses import dataclass
 import pytest
 
 from tilefoundry.ir.core import (
+    BindingMetadata,
     IRMetadata,
+    SourceSpanMetadata,
     Var,
     VerifyError,
     get_metadata,
@@ -45,15 +47,34 @@ def test_metadata_does_not_change_expr_semantics_or_repr() -> None:
     assert "metadata" not in repr(annotated)
 
 
+def test_source_labels_do_not_change_expr_identity() -> None:
+    plain = Var(type=_type(), name="x")
+    located = Var(
+        type=_type(), name="x",
+        metadata=(
+            BindingMetadata("x"),
+            SourceSpanMetadata("model.py", 7, 3, 7, 9),
+        ),
+    )
+
+    assert located == plain
+    assert hash(located) == hash(plain)
+    assert get_metadata(located, BindingMetadata) == BindingMetadata("x")
+
+
 def test_expr_rejects_duplicate_concrete_metadata_class() -> None:
     with pytest.raises(VerifyError, match=r"duplicate _Label metadata") as exc_info:
         Var(
             type=_type(),
             name="x",
-            loc="model.py:7",
-            metadata=(_Label("first"), _Label("second")),
+            metadata=(
+                BindingMetadata("x"),
+                SourceSpanMetadata("model.py", 7, 3),
+                _Label("first"),
+                _Label("second"),
+            ),
         )
-    assert "at model.py:7" in str(exc_info.value)
+    assert "at model.py:7:3" in str(exc_info.value)
 
 
 def test_expr_rejects_untyped_metadata_entry() -> None:
