@@ -172,12 +172,12 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
         insert_default_host_entry,
     )
-    from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
-    from tilefoundry.runtime.module import (  # noqa: PLC0415
+    from tilefoundry.runtime.function import (  # noqa: PLC0415
         CallableType,
         KernelInfo,
         LaunchConfig,
     )
+    from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
 
     linked = insert_default_host_entry(mod)
     groups = group_functions_by_target(linked)

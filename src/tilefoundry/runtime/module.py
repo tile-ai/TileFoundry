@@ -1,167 +1,212 @@
-"""``RuntimeModule`` and supporting dataclasses.
+"""``RuntimeModule`` — a pure run container over already-assembled
+``RuntimeFunction`` implementations, nested child modules, and named
+weights/states.
 
-type returned by ``tilefoundry.build`` / ``tilefoundry.compile``. It is directly
-callable via ``rm(a)`` / ``rm(a, out)``.
+Two construction paths:
+- compiled: ``tilefoundry.build`` / ``compile`` / ``jit`` → codegen →
+  ``LinkedModule`` → ``runtime.loader.load_linked_module`` assembles a
+  single-function ``RuntimeModule`` with no ``resource`` / ``weights`` /
+  ``states``.
+- handwritten: direct construction — a ``RuntimeFunction`` wraps a plain
+  torch/triton callable, and a ``RuntimeResource``
+  (``tilefoundry.runtime.resource``) supplies weights/states by name.
 
-Internal handoff: codegen links a ``LinkedModule`` (shared library + host-visible
-ABI metadata); the runtime loader then constructs a ``RuntimeModule`` with
-``RuntimeFunction`` objects wrapping the loaded callables.
+No evaluator lives here: every ``functions`` entry must already be a
+concrete ``RuntimeFunction``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping as ABCMapping
+from typing import Any, Callable, Iterator, Mapping
 
-from tilefoundry.ir.types.storage import StorageKind
+import torch
 
-_lazy_dt_map: dict[str, object] | None = None
+from tilefoundry.evaluator.value import to_torch_dtype
+from tilefoundry.ir.types.tensor_type import TensorType
+from tilefoundry.runtime.function import CallableType, KernelInfo, LaunchConfig, RuntimeFunction
+from tilefoundry.runtime.resource import RuntimeResource
+from tilefoundry.target.base import Device
 
-
-def _torch_dtype(name: str) -> object:
-    global _lazy_dt_map
-    if _lazy_dt_map is None:
-        # noqa lazy: torch is an optional runtime dep — only required when
-        # auto-allocating output tensors.
-        import torch  # noqa: PLC0415
-        _lazy_dt_map = {
-            "f32": torch.float32,
-            "f16": torch.float16,
-            "bf16": torch.bfloat16,
-            "i32": torch.int32,
-            "i64": torch.int64,
-        }
-    if name not in _lazy_dt_map:
-        raise TypeError(f"RuntimeFunction: unsupported dtype {name!r}")
-    return _lazy_dt_map[name]
+__all__ = ["RuntimeModule"]
 
 
-@dataclass(frozen=True)
-class KernelInfo:
-    """ABI of a single ``__global__`` kernel in the generated source."""
-    name: str
-    param_names: tuple[str, ...]
+class _LazyMapping(ABCMapping):
+    """Read-only mapping whose key set is fixed upfront but whose values
+    are computed — and cached — only on first access."""
+
+    def __init__(self, keys: tuple[str, ...], factory: Callable[[str], Any]) -> None:
+        self._keys = keys
+        self._factory = factory
+        self._cache: dict[str, Any] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key not in self._cache:
+            if key not in self._keys:
+                raise KeyError(key)
+            self._cache[key] = self._factory(key)
+        return self._cache[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._keys)
+
+    def __len__(self) -> int:
+        return len(self._keys)
 
 
-@dataclass(frozen=True)
-class ParamABI:
-    """One parameter of the host-visible entry function."""
-    name: str
-    dtype: str
-    shape: tuple[int, ...]
-    storage: StorageKind | None
+def _torch_device_str(device: "Device | None") -> str:
+    """Map a ``Device`` to the torch device string used for state allocation.
 
-
-@dataclass(frozen=True)
-class CallableType:
-    """Host-visible ABI for a function entry.
-
-    ``params`` lists ALL parameters (inputs + outputs) in declaration order.
-    ``output_count`` is the trailing count of output parameters.
+    A device whose class lives under ``tilefoundry.target.cuda`` maps to
+    ``"cuda"``; every other concrete ``Device`` maps to ``"cpu"``. Only
+    called where a device is actually required (zero-filling a state with no
+    resource-provided initial value, or ``measure.bench``'s timing dispatch)
+    — ``None`` is otherwise a perfectly valid ``RuntimeModule`` field.
     """
-    name: str
-    params: tuple[ParamABI, ...]
-    output_count: int = 0
-
-    @property
-    def input_count(self) -> int:
-        return len(self.params) - self.output_count
-
-    @property
-    def input_params(self) -> tuple[ParamABI, ...]:
-        return self.params[:self.input_count]
-
-    @property
-    def output_params(self) -> tuple[ParamABI, ...]:
-        return self.params[self.input_count:]
+    if device is None:
+        raise ValueError("RuntimeModule: a device is required here, got None")
+    if type(device).__module__.startswith("tilefoundry.target.cuda"):
+        return "cuda"
+    return "cpu"
 
 
-@dataclass(frozen=True)
-class LaunchConfig:
-    """CUDA kernel launch config — (grid_dims, block_dims) as dim3-shaped 3-tuples."""
-    grid: tuple[int, int, int]
-    block: tuple[int, int, int]
+def _assemble_args(
+    fn_type: CallableType,
+    weights: Mapping[str, Any],
+    states: Mapping[str, Any],
+    acts: tuple[Any, ...],
+) -> list[Any]:
+    """Fill weights/states by name, then decide — from *how many* activation
+    arguments were given — how far into ``fn_type.params`` to assemble.
 
+    ``RuntimeModule`` only ever resolves weights/states by name; the
+    auto-alloc-vs-pre-alloc calling-convention decision stays with
+    ``RuntimeFunction`` (§1.2), so this stops at whichever of its two legal
+    boundaries *acts* exactly covers:
 
-@dataclass(frozen=True)
-class RuntimeFunction:
-    """Callable wrapper for a single compiled function.
+    - *acts* fills exactly the unresolved slots of
+      ``fn_type.params[:fn_type.input_count]`` (the input segment) →
+      assemble only that prefix and stop; ``RuntimeFunction`` then
+      auto-allocs the output(s) when ``output_count > 0``.
+    - *acts* fills exactly the unresolved slots across *every*
+      ``fn_type.params`` entry (input + output segments) → assemble the
+      full param list; ``RuntimeFunction`` then pre-allocs (uses the given
+      output(s)).
 
-    ``__call__(*args)`` supports two modes:
-    - auto-alloc: ``fn(a)`` — allocates outputs, calls entry, returns output(s)
-    - pre-alloc:  ``fn(a, out)`` — uses provided output tensor(s), returns output(s)
+    Any other activation count raises ``ValueError`` naming both legal
+    counts. (``output_count == 0`` collapses the two boundaries to the same
+    single count — the value-returning handwritten-``fn`` path is
+    unaffected.)
     """
-    type: CallableType
-    _entry: object  # tvm_ffi callable (internal)
-
-    @property
-    def signature(self) -> CallableType:
-        """Deprecated alias for ``type`` (kept for backward compat)."""
-        return self.type
-
-    def __call__(self, *args):
-        if len(args) == len(self.type.params):
-            return self._call_pre_alloc(*args)
-        elif len(args) == self.type.input_count:
-            return self._call_auto_alloc(*args)
+    input_count = fn_type.input_count
+    resolved: list[tuple[bool, Any]] = []
+    for p in fn_type.params:
+        if p.name in weights:
+            resolved.append((True, weights[p.name]))
+        elif p.name in states:
+            resolved.append((True, states[p.name]))
         else:
-            raise TypeError(
-                f"{self.type.name}: expected "
-                f"{self.type.input_count} inputs (auto-alloc) or "
-                f"{len(self.type.params)} inputs+outputs (pre-alloc), "
-                f"got {len(args)}"
-            )
+            resolved.append((False, None))
 
-    def _call_pre_alloc(self, *args):
-        self._entry(*args)
-        n_out = self.type.output_count
-        outputs = args[-n_out:]
-        return outputs[0] if n_out == 1 else outputs
+    n_in = sum(1 for bound, _ in resolved[:input_count] if not bound)
+    n_full = n_in + fn_type.output_count
+    n_acts = len(acts)
 
-    def _call_auto_alloc(self, *args):
-        # noqa lazy: torch is an optional runtime dep (see _torch_dtype).
-        import torch  # noqa: PLC0415
-        device = None
-        for a in args:
-            if isinstance(a, torch.Tensor):
-                device = a.device
-                break
-        if device is None:
-            raise TypeError(
-                f"{self.type.name}: cannot infer device for auto-alloc; "
-                f"no torch.Tensor in inputs"
-            )
-        outs = []
-        for p in self.type.output_params:
-            dtype = _torch_dtype(p.dtype)
-            outs.append(torch.empty(p.shape, dtype=dtype, device=device))
-        all_args = tuple(args) + tuple(outs)
-        self._entry(*all_args)
-        n_out = len(outs)
-        return outs[0] if n_out == 1 else tuple(outs)
+    if n_acts == n_in:
+        span = resolved[:input_count]
+    elif n_acts == n_full:
+        span = resolved
+    else:
+        raise ValueError(
+            f"RuntimeModule: {fn_type.name!r} expects {n_in} activation "
+            f"argument(s) (weights/states filled by name, output(s) "
+            f"auto-alloc'd) or {n_full} (output(s) pre-alloc'd), got {n_acts}"
+        )
+
+    acts_iter = iter(acts)
+    return [value if bound else next(acts_iter) for bound, value in span]
 
 
-@dataclass(frozen=True)
 class RuntimeModule:
-    """Result of ``tilefoundry.build(mod)`` / ``tilefoundry.compile(mod)``.
-
-    Directly callable via ``__call__`` — delegates to the default entry function.
+    """Live, callable wrapper over a set of ``RuntimeFunction``\\ s, nested
+    child ``RuntimeModule``\\ s, and named weights/states resolved from a
+    ``RuntimeResource``.
     """
-    source: str
-    kernels: tuple[KernelInfo, ...]
-    launch_config: LaunchConfig
-    functions: dict[str, RuntimeFunction]
-    entry: str  # name of the default entry in ``functions``
 
-    @property
-    def entry_function(self) -> RuntimeFunction:
-        return self.functions[self.entry]
+    def __init__(
+        self,
+        name: str,
+        entry: str,
+        functions: Mapping[str, RuntimeFunction],
+        *,
+        resource: RuntimeResource | None = None,
+        weight_names: tuple[str, ...] = (),
+        state_specs: Mapping[str, TensorType] | None = None,
+        modules: tuple["RuntimeModule", ...] = (),
+        device: Device | None = None,
+        source: str | None = None,
+        kernels: tuple[KernelInfo, ...] = (),
+        launch_config: LaunchConfig | None = None,
+    ) -> None:
+        self.name = name
+        self.entry = entry
+        self.functions: dict[str, RuntimeFunction] = dict(functions)
+        self.resource = resource
+        self.modules: tuple[RuntimeModule, ...] = tuple(modules)
+        self._modules_by_name = {m.name: m for m in self.modules}
+        self.source = source
+        self.kernels = tuple(kernels)
+        self.launch_config = launch_config
 
-    def __call__(self, *args):
-        return self.entry_function(*args)
+        def _load_weight(wname: str) -> torch.Tensor:
+            if resource is None:
+                raise ValueError(
+                    f"RuntimeModule {self.name!r}: no resource to load weight "
+                    f"{wname!r} from"
+                )
+            return resource.load(wname)
 
-    @property
-    def entry_callable(self) -> object:
-        """Deprecated: use ``rm(a)`` or ``rm(a, out)`` instead.
+        self.weights: Mapping[str, torch.Tensor] = _LazyMapping(tuple(weight_names), _load_weight)
 
-        Returns the raw tvm_ffi entry callable for legacy/internal use only.
-        """
-        return self.entry_function._entry
+        states: dict[str, torch.Tensor] = {}
+        for sname, ty in (state_specs or {}).items():
+            loaded = None
+            if resource is not None:
+                try:
+                    loaded = resource.load(sname)
+                except KeyError:
+                    loaded = None
+            if loaded is None:
+                loaded = torch.zeros(
+                    ty.shape, dtype=to_torch_dtype(ty.dtype), device=_torch_device_str(device)
+                )
+            states[sname] = loaded
+        self.states: dict[str, torch.Tensor] = states
+
+    def __getattr__(self, name: str):
+        # Only ever consulted for a name normal attribute lookup missed.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        fn = self.functions.get(name)
+        if fn is not None:
+            def bound(*acts: Any) -> Any:
+                args = _assemble_args(fn.type, self.weights, self.states, acts)
+                return fn(*args)
+            return bound
+        child = self._modules_by_name.get(name)
+        if child is not None:
+            return child
+        raise AttributeError(
+            f"RuntimeModule {self.name!r} has no function or child module {name!r}"
+        )
+
+    def __call__(self, *acts: Any) -> Any:
+        return getattr(self, self.entry)(*acts)
+
+    def walk(self) -> Iterator[tuple[tuple[str, ...], "RuntimeModule"]]:
+        """Yield ``(path, node)`` for this node and every nested node,
+        walked in parallel with the ``modules`` tree (``()`` for self, then
+        each child's path prefixed by its own name)."""
+        yield (), self
+        for child in self.modules:
+            for path, node in child.walk():
+                yield (child.name, *path), node

@@ -1,7 +1,8 @@
 """Runtime loader — turn a ``LinkedModule`` into a callable ``RuntimeModule``."""
 from __future__ import annotations
 
-from tilefoundry.runtime.module import RuntimeFunction, RuntimeModule
+from tilefoundry.runtime.function import RuntimeFunction
+from tilefoundry.runtime.module import RuntimeModule
 
 
 def load_linked_module(linked: "LinkedModule") -> RuntimeModule:
@@ -18,13 +19,14 @@ def load_linked_module(linked: "LinkedModule") -> RuntimeModule:
             f"symbol {linked.entry.name!r}"
         ) from e
     return RuntimeModule(
+        name=linked.entry.name,
+        entry=linked.entry.name,
+        functions={
+            linked.entry.name: RuntimeFunction(type=linked.entry, fn=entry_callable),
+        },
         source=linked.source,
         kernels=linked.kernels,
         launch_config=linked.launch_config,
-        functions={
-            linked.entry.name: RuntimeFunction(type=linked.entry, _entry=entry_callable),
-        },
-        entry=linked.entry.name,
     )
 
 
