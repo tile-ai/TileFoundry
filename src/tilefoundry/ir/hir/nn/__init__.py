@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .conv2d import Conv2D
+from .gelu import Gelu
 from .layer_norm import LayerNorm
 from .matmul import MatMul
 from .relu import ReLU
