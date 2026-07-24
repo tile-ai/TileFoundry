@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.runtime.module import CallableType, KernelInfo, LaunchConfig
+from tilefoundry.runtime.function import CallableType, KernelInfo, LaunchConfig
 
 _TILEFOUNDRY_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_INCLUDE = _TILEFOUNDRY_ROOT / "include"

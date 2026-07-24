@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import torch
+
+from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
@@ -20,3 +24,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     reject_partials(ctx, call, "x", x_ty.layout, commutes_with=_COMMUTES_WITH)
     return x_ty
+
+
+@register_eval(ReLU)
+def _eval_relu(ctx):
+    return TensorValue(data=torch.relu(ctx.args[0].data), type=ctx.result_type)

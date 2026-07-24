@@ -40,8 +40,11 @@ class Module:
     name: str                                               # the module name
     functions: tuple[hir.Function | tir.PrimFunction, ...]  # the heterogeneous hir.Function | tir.PrimFunction container
     entry: str                                              # name of the public entry function (a name present in functions)
+    modules: tuple["Module", ...]                           # nested child modules; namespace / addressing only, addressed by attribute path
     topologies: tuple[Topology, ...]                        # module-level program topology namespace
     metadata: dict[str, object]                             # target / option metadata, never semantic mesh bindings
+    weights: Mapping[str, TensorType]                       # declared weight tensor slots (shape/dtype only); resolved by the runtime layer at assembly
+    states: Mapping[str, TensorType]                        # declared state tensor slots (shape/dtype only); allocated by the runtime layer at assembly
 ```
 
 - constraints:

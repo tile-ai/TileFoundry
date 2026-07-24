@@ -27,7 +27,10 @@ class Unary(Op):
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
 
 # Monotone non-decreasing: commutes with max/min, not sum.
-_MONOTONE_INCREASING = frozenset({UnaryKind.EXP, UnaryKind.LOG, UnaryKind.RELU})
+_MONOTONE_INCREASING = frozenset({
+    UnaryKind.EXP, UnaryKind.LOG, UnaryKind.RELU,
+    UnaryKind.CEIL, UnaryKind.ROUND, UnaryKind.EXP2, UnaryKind.LOG2,
+})
 # Linear negation: commutes with sum, not max/min (reverses order).
 _LINEAR = frozenset({UnaryKind.NEG})
 
@@ -65,6 +68,12 @@ def _eval_unary(ctx):
         UnaryKind.RSQRT: torch.rsqrt,
         UnaryKind.EXP: torch.exp,
         UnaryKind.LOG: torch.log,
+        UnaryKind.CEIL: torch.ceil,
+        # Banker's rounding (round-half-to-even), matching torch.round's own
+        # semantics -- not "round half away from zero".
+        UnaryKind.ROUND: torch.round,
+        UnaryKind.EXP2: torch.exp2,
+        UnaryKind.LOG2: torch.log2,
     }
     return TensorValue(data=fns[ctx.op.kind](ctx.args[0].data), type=ctx.result_type)
 

@@ -140,7 +140,11 @@ def build(
     if target != "cuda":
         raise ValueError(f"tilefoundry.build: target {target!r} not supported yet")
 
-    workdir = os.path.join(tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_split")
+    # Keyed by pid so concurrent processes (e.g. pytest-xdist workers) building
+    # same-named entries never share a cmake/nvcc build directory.
+    workdir = os.path.join(
+        tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
+    )
     return _build_split_runtime_module(mod, workdir=workdir)
 
 
@@ -172,12 +176,12 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
         insert_default_host_entry,
     )
-    from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
-    from tilefoundry.runtime.module import (  # noqa: PLC0415
+    from tilefoundry.runtime.function import (  # noqa: PLC0415
         CallableType,
         KernelInfo,
         LaunchConfig,
     )
+    from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
 
     linked = insert_default_host_entry(mod)
     groups = group_functions_by_target(linked)

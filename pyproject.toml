@@ -29,7 +29,7 @@ tilefoundry = "tilefoundry.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
-dev = ["pre-commit>=3"]
+dev = ["pre-commit>=3", "pytest-xdist>=3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -43,6 +43,9 @@ where = ["src"]
 "share/tilefoundry/spec" = ["docs/spec/*.md"]
 
 [tool.pytest.ini_options]
+# Parallel runs are supported (pytest -n 8, dev extra pytest-xdist): conftest's
+# DumpScope isolates per xdist worker and the compile workdir is pid-keyed.
+# No addopts default — CI runs serial with the plain [test] extra.
 markers = [
     "no_dump: opt out of the autouse DumpScope for tests that emit excessive dump output",
 ]

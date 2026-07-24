@@ -14,40 +14,108 @@ snapshot.
 
 ### 1.1 `RuntimeModule`
 
+An ir `Module` (the semantic definition — @func bodies the evaluator runs) and
+a `RuntimeModule` (the runtime instance — kernel bodies) are **written
+separately but structurally identical**: same `name`, same child tree, same
+`entry`. They are twins, not one derived from the other; the correspondence is
+held by discipline plus a numerical gate (below), not by instantiation.
+
 ```python
 class RuntimeModule:
-    source: str                            # generated target source string, e.g. CUDA `.cu` text
-    kernels: dict[str, KernelInfo]         # kernel metadata keyed by generated kernel name
-    entry: str                             # name of the default entry function
-    launch_config: LaunchConfig            # launch metadata (grid / block dims)
-    functions: dict[str, RuntimeFunction]  # mapping of function name → RuntimeFunction callable
-    entry_function: RuntimeFunction        # functions[entry] — the default RuntimeFunction
-    def __call__(self, *args): ...         # delegates to entry_function(*args)
+    name: str                                    # mirrors the ir Module node name
+    entry: str | None                            # mirrors the ir Module entry (metadata)
+    modules: tuple["RuntimeModule", ...]         # children, registered explicitly in __init__
+    def __init__(self, name, entry=None, modules=()): ...
+    def forward(self, *args): ...                # subclass-written orchestration — forward IS the step
+    def __call__(self, *args): ...               # delegates to forward
+    def load(self, resource): ...                # weight/state resolution, recursive over children
 ```
 
 - constraints:
-  - `RuntimeModule` is the result object of `tilefoundry.build(mod)`,
-    `tilefoundry.compile(mod)`, and `tilefoundry.jit(fn_or_mod)`; it is directly
-    callable.
+  - authored like a `torch.nn.Module`: subclass it, build the child tree in
+    `__init__` (children registered explicitly via `modules=`), write the
+    composition in `forward`. Function bodies are `RuntimeFunction` attributes
+    called from `forward`.
+  - `load(resource)`: a subclass resolves its own tensors by name — typically
+    constructing its `RuntimeFunction` bodies with their (already-converted)
+    weights and loading/allocating its own state — then calls
+    `super().load(resource)`, which recurses into each child with
+    `resource.subtree(child.name)`. Weight prefixes follow module paths,
+    matching ir attribute addressing. Lifecycle:
+    construct (structure) → `load` (materialize) → call. A `RuntimeModule`
+    does **not** run `prepare`; it loads straight from the directory the
+    semantic side prepared (§1.1.2).
+  - correspondence contract: the twin `RuntimeModule` and the semantic
+    `Module` both have a `forward`, and on the same inputs the two must agree
+    — `measure.check` comparing them (§1.5), default gate cosine >= 0.999, is
+    that contract.
+  - the base class holds no weights, states, or resource, and never runs the
+    HIR evaluator.
+  - two origins: compiled — `tilefoundry.build` / `compile` / `jit` →
+    `LinkedModule` → the loader binds a single `CompiledFunction` (§1.1.2);
+    handwritten — a subclass as above, loading from a prepared checkpoint
+    directory via a `RuntimeResource` (§1.4).
 
 ### 1.1.1 `RuntimeFunction`
 
-Each compiled function is wrapped as a `RuntimeFunction`:
+`RuntimeFunction` is the **base class** for a node's function body; a body
+subclasses it and overrides `__call__`. A handwritten torch / triton / CUDA
+implementation takes whatever it needs (converted weights, caches) at
+construction and returns its value(s) directly.
 
 ```python
 class RuntimeFunction:
-    type: CallableType                # the calling convention — CallableType (params + input / output counts)
-    def __call__(self, *args): ...    # auto-alloc outputs when len(args) == type.input_count, else pre-alloc; see §1.2
+    type: CallableType                # the ABI (callable_type_of(ir_func))
+    def __init__(self, type): ...
+    def __call__(self, *acts): ...    # subclass overrides — launch, positional activations
+
+class CompiledFunction(RuntimeFunction):     # the compiled out-param entry (loader-bound)
+    def __init__(self, type, entry): ...     # `entry` = the loaded tvm_ffi callable
 ```
 
 - constraints:
-  - `__call__(*args)` auto-allocates outputs when `len(args) == type.input_count`,
-    otherwise uses the provided output tensors (pre-alloc); see §1.2.
+  - the base `__call__` raises; every usable body is a subclass. Agents may
+    write any subclass whose `__call__` runs (torch / triton / CUDA / …).
+  - `CompiledFunction` carries the out-param ABI (§1.2). It is the only body
+    the runtime loader produces.
+  - `CallableType` carries `params`, `input_count`, `output_count` — set by
+    codegen from lowered IR for a compiled entry, or by `callable_type_of(fn)`
+    for a HIR `Function` (one `ParamABI` per declared parameter, a static dim
+    as its `int` value and a dynamic dim as `-1`, `output_count=0`).
+    `ParamABI.dtype` is a `DType`.
 
-`CallableType` carries `params`, `input_count`, `output_count` — set by
-codegen from the lowered IR metadata.
+### 1.1.2 Weight converter and `prepare` / `forward`
 
-### 1.1.2 Internal Pipeline
+A module carries its weight converter as a **sibling @func named `convert`**
+(peer to the compute @func), declared in the ir `Module`'s `functions`. Its
+parameters are the raw-checkpoint names; its results are the module's declared
+`weights` (declaration order) in the canonical form the compute @func consumes.
+
+`prepare` and `forward` are **methods on the ir `Module`** — the same authoring
+surface as its `RuntimeModule` twin, which also has a `forward`:
+
+```python
+class Module:      # tilefoundry.ir.core.module
+    def prepare(self, raw: RuntimeResource, out_dir: str, *, device="cpu") -> None: ...
+    def forward(self, resource: RuntimeResource, *acts, device="cuda"): ...
+```
+
+- constraints:
+  - `Module.prepare` (semantic side, offline, once): walk the tree; for each
+    node run its `convert` @func (via the evaluator) over the raw weights it
+    declares, and write the results under the module's `weights` names to
+    `out_dir` (safetensors shard + `model.safetensors.index.json`, dot-prefixed
+    by module path). A node with no `convert` passes its declared `weights`
+    through unchanged; declared `states` present in `raw` pass through as
+    initial values. Plain directory — no content-hash cache / manifest. The
+    runtime twin never prepares; it loads this directory.
+  - `Module.forward`: evaluate the node's entry @func with weight/state params
+    filled by name from `resource` and activation params positionally — the
+    same-shaped forward as its `RuntimeModule` twin, run through the evaluator
+    instead of kernels. `check` compares the two forwards (§1.5). A multi-node
+    composition is chained by the caller, one `forward` per node.
+
+### 1.1.3 Internal Pipeline (compiled origin)
 
 ```
 Module (IR) → codegen: per-target LinkableModule… → LinkedModule (.so + metadata)
@@ -57,26 +125,27 @@ LinkedModule → load → RuntimeModule (fully-loaded, public, callable)
 `LinkedModule` is a codegen product
 ([codegen §4.3](./codegen.md#43-linkedmodule)); the loader that turns it into a
 `RuntimeModule` is owned here. The loader and `LinkedModule` are not public API;
-only `RuntimeModule` is.
+only `RuntimeModule` is. `load_linked_module` returns a `RuntimeModule` whose
+single function body is `CompiledFunction(type=linked.entry,
+entry=entry_callable)` and whose `forward` delegates to it; `name` / `entry` are
+`linked.entry.name`. The compiled path has no `resource` / `weights` / `states`
+(weights are ordinary entry arguments), so its `load` is the inherited no-op.
 
-Codegen owns producing the `LinkedModule` and its `source / kernels / entry /
-launch_config` metadata; this spec owns their runtime meaning and the load-time
-ABI constraints.
+### 1.2 Calling Convention (`CompiledFunction`)
 
-### 1.2 Calling Convention
-
-`RuntimeFunction.__call__(*args)` enforces:
+`CompiledFunction.__call__(*args)` uses the out-param ABI (`type.output_count`
+trailing params are outputs):
 
 - **Auto-alloc**: `len(args) == type.input_count` — allocates output tensors
-  from the first input's device/dtype, calls entry, returns result(s).
+  from the first input's device/dtype, calls the entry, returns result(s).
 - **Pre-alloc**: `len(args) == len(type.params)` — uses provided output tensors,
-  returns same output(s). All outputs must be provided; partial outputs raise
-  `TypeError`.
-- **Return**: single output → bare tensor; multiple outputs → `tuple` of tensors.
+  returns same output(s). All outputs must be provided; partial → `TypeError`.
+- **Return**: single output → bare tensor; multiple outputs → `tuple`.
 
-Auto-alloc is torch-only; non-torch inputs raise `TypeError`.
-Output metadata (dtype, shape) comes from `CallableType.output_params` (set by
-codegen from lowered IR, NOT guessed at runtime).
+Auto-alloc is torch-only; non-torch inputs raise `TypeError`. Output metadata
+(dtype, shape) comes from `CallableType.output_params` (set by codegen from
+lowered IR, NOT guessed at runtime). A handwritten body subclass (`output_count
+== 0`) has no out-param ABI — it just returns its value(s).
 
 ### 1.2 `jit()` API
 
@@ -168,6 +237,69 @@ the lowered TIR/codegen input.
 
 `launch_config` is metadata, not a runtime scheduler. It records the launch
 shape the generated kernel was compiled for.
+
+### 1.4 `RuntimeResource`
+
+```python
+class RuntimeResource(Protocol):
+    def load(self, name: str) -> torch.Tensor: ...
+    def subtree(self, prefix: str) -> "RuntimeResource": ...
+```
+
+- constraints:
+  - `load(name)` returns the tensor for *name*; raises `KeyError` if absent.
+  - `subtree(prefix)` returns a view scoped under `f"{prefix}."`, so a child
+    `RuntimeModule` addresses its own weights/states by their bare
+    (unprefixed) name — `RuntimeModule.__init__` never sees a dotted name.
+
+Two implementations:
+
+```python
+class DictResource:
+    def __init__(self, data: Mapping[str, torch.Tensor], prefix: str = "") -> None: ...
+
+class SafetensorsResource:
+    def __init__(self, ckpt_dir: str, prefix: str = "", device: str = "cuda") -> None: ...
+```
+
+- constraints:
+  - `DictResource` — in-memory / test double over a flat, dot-prefixed
+    `{"layer0.w": tensor, ...}` mapping; `subtree` only extends the prefix
+    each `load` name is joined onto.
+  - `SafetensorsResource` — reads a repacked safetensors checkpoint
+    directory (N shard files + `model.safetensors.index.json`'s
+    `weight_map`); `load` opens at most one shard handle per shard file
+    (mmap'd via `safetensors.safe_open`, shared across `subtree` views) and
+    reads only the requested tensor, placed on *device*.
+
+### 1.5 `check` / `bench`
+
+```python
+class Gate:                                     # pass/fail thresholds for check()
+    rel_l2_max: float = 1e-3
+    cosine_min: float = 0.999
+
+class Report:                                   # result of check() / bench()
+    metrics: Mapping[str, float]
+    passed: bool | None = None                  # None for bench() — no gate
+
+def check(candidate: Callable, reference: Callable, inputs: tuple, gate: Gate = Gate()) -> Report: ...
+def bench(fn: Callable, inputs: tuple, iters: int = 100, *, device: Device) -> Report: ...
+```
+
+- constraints:
+  - `check` runs `candidate(*inputs)` and `reference(*inputs)`, computes
+    `rel_l2` / cosine similarity between the two results, and sets
+    `passed = rel_l2 <= gate.rel_l2_max and cosine >= gate.cosine_min`.
+    `metrics = {"rel_l2": ..., "cosine": ...}`.
+  - `bench` times `fn(*inputs)` over `iters` calls after a few untimed
+    warmup calls. A `device` whose class lives under `tilefoundry.target.cuda`
+    times with `torch.cuda.Event`s (synchronized before/after); any other
+    `device` times with `time.perf_counter()`. `metrics = {"mean_ms": ...,
+    "iters": ...}`; `passed` is always `None`.
+  - neither helper is specific to `RuntimeModule`: *candidate* / *reference*
+    / *fn* may be a `RuntimeModule` bound method, a raw torch callable, or
+    an evaluator closure — anything callable on *inputs*.
 
 ## 2. C++ Runtime Surface
 

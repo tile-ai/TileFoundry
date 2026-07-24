@@ -17,7 +17,7 @@ from tilefoundry.ir.tir.stmts import LetStmt, MeshScope, Sequential
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.runtime.module import ParamABI
+from tilefoundry.runtime.function import ParamABI
 
 _log = logging.getLogger(__name__)
 _tir_path = os.path.dirname(__file__)
@@ -92,7 +92,7 @@ def _param_abi(var) -> ParamABI:
 
     return ParamABI(
         name=var.name,
-        dtype=ty.dtype.name,
+        dtype=ty.dtype,
         shape=tuple(_abi_dim(s) for s in ty.shape),
         storage=ty.storage,
     )
