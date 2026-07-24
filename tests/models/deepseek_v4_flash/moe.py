@@ -403,6 +403,21 @@ deepseek_v4_flash_module = Module(
     entry="deepseek_v4_flash_moe",
 )
 
+moe_hash_module = Module(
+    name="moe",
+    functions=(
+        pre_moe_rms_norm,
+        moe_experts_core,
+        moe_hash_gather,
+        combine_expert_outputs,
+        deepseek_v4_flash_moe_hash,
+        shared_fp8_dequant_w1,
+        shared_fp8_dequant_w2,
+        shared_expert,
+    ),
+    entry="deepseek_v4_flash_moe_hash",
+)
+
 
 __all__ = [
     "DIM",
@@ -418,6 +433,7 @@ __all__ = [
     "deepseek_v4_flash_module",
     "moe_experts_core",
     "moe_hash_gather",
+    "moe_hash_module",
     "moe_topk",
     "pre_moe_rms_norm",
     "shared_expert",

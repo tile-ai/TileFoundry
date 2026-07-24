@@ -11,7 +11,7 @@ import pytest
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.utils import make_tensor_type
 
 
 @func
@@ -29,10 +29,6 @@ def decoder_layer(x: Tensor[(2, 4), "f32"], w: Tensor[(4, 4), "f32"]) -> Tensor[
     return tf.add(q_proj(x, w), q_proj(x, w))
 
 
-def _tt(shape: tuple[int, ...]) -> TensorType:
-    return TensorType(shape=shape, dtype=DType.f32, layout=None, storage="gmem")
-
-
 def test_single_level_tree_and_addressing():
     attention = Module(name="attention", functions=(q_proj,), entry="q_proj")
     moe = Module(name="moe", functions=(k_proj,), entry="k_proj")
@@ -41,16 +37,16 @@ def test_single_level_tree_and_addressing():
         functions=(decoder_layer,),
         modules=(attention, moe),
         entry="decoder_layer",
-        weights={"w_head": _tt((4, 4))},
-        states={"kv": _tt((2, 4))},
+        weights={"w_head": make_tensor_type((4, 4))},
+        states={"kv": make_tensor_type((2, 4))},
     )
     assert root.attention is attention
     assert root.moe is moe
     assert root.decoder_layer is decoder_layer
     # entry resolution only ever considers this module's own functions
     assert root.entry_function() is decoder_layer
-    assert root.weights == {"w_head": _tt((4, 4))}
-    assert root.states == {"kv": _tt((2, 4))}
+    assert root.weights == {"w_head": make_tensor_type((4, 4))}
+    assert root.states == {"kv": make_tensor_type((2, 4))}
     with pytest.raises(AttributeError):
         root.not_a_thing
 
