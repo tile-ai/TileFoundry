@@ -49,6 +49,10 @@ class UnaryKind(enum.Enum):
     SQUARE = "square"
     EXP = "exp"
     LOG = "log"
+    CEIL = "ceil"
+    ROUND = "round"
+    EXP2 = "exp2"
+    LOG2 = "log2"
 
 
 class ReduceKind(enum.Enum):
