@@ -1,17 +1,21 @@
-"""GPU end-to-end for the nested ``RuntimeModule`` ABI: handwritten CUDA
-kernels assembled by hand (no build/compile/jit), with weights and a
-persistent state resolved by ``ParamABI`` name from a ``SafetensorsResource``.
+"""The authoring pattern end to end: a semantic module and its runtime twin,
+written separately but structurally identical, agreeing numerically.
 
-``TinyMlp`` (root) holds ``mlp_head`` + weight ``w_head``, and one child
-module ``proj`` (holds ``up_down`` + weights ``w_up``/``w_down`` + state
-``kv``). The candidate composition ``root_rm.mlp_head(root_rm.proj.up_down(x))``
-takes only the activation ``x`` positionally — weights auto-inject by name —
-and is checked against the same composition run through the plain HIR
-evaluator with the identical weight tensors passed positionally.
+1. Write the **semantic module** — compute @funcs plus a sibling ``convert``
+   @func (the weight converter, peer to the compute function) + weights/states
+   declarations.
+2. ``semantic.prepare(raw, dir)`` runs every ``convert`` once and writes the
+   canonical weights to a prepared directory.
+3. Write the **runtime module** — same names / same child tree; its function
+   bodies are handwritten CUDA ``RuntimeFunction`` subclasses. It does not
+   prepare; it ``load``s straight from the prepared directory.
+4. Both sides load the same directory and run; the runtime ``forward`` and the
+   semantic module's ``forward`` (via the evaluator) agree (``check``,
+   cosine >= 0.999).
+
+Needs nvcc + a GPU (like the rest of tests/e2e).
 """
 from __future__ import annotations
-
-import json
 
 import pytest
 import torch
@@ -19,10 +23,10 @@ from torch.utils.cpp_extension import load_inline
 
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
-from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.utils import make_tensor_type
 from tilefoundry.runtime import (
+    DictResource,
     RuntimeFunction,
     RuntimeModule,
     SafetensorsResource,
@@ -35,12 +39,7 @@ from tilefoundry.target.cuda import H200SXM
 _B, _D, _H, _V = 4, 64, 128, 32
 
 
-@func
-def mlp_head(
-    hidden: Tensor[(_B, _D), "f32"], w_head: Tensor[(_D, _V), "f32"]
-) -> Tensor[(_B, _V), "f32"]:
-    return tf.matmul(hidden, w_head)
-
+# ── 1. semantic module: compute @funcs + sibling convert @func ───────────────
 
 @func
 def up_down(
@@ -51,11 +50,47 @@ def up_down(
     return tf.matmul(tf.relu(tf.matmul(x, w_up)), w_down)
 
 
-def _tt(shape: tuple[int, ...]) -> TensorType:
-    return TensorType(shape=shape, dtype=DType.f32, layout=None, storage="gmem")
+@func
+def convert(
+    w_up: Tensor[(_H, _D), "f32"],
+    w_down: Tensor[(_H, _D), "f32"],
+):
+    # convert's params are the RAW checkpoint names; raw ``w_up`` is stored
+    # (H, D) and the canonical form ``up_down`` consumes is its transpose
+    # (D, H) — a layout convert, non-identity, so a passing ``check`` plus the
+    # transpose assertion proves the converter ran. ``w_down`` passes through.
+    return tf.transpose(w_up, perm=(1, 0)), w_down
 
 
-# ── Handwritten CUDA kernels (naive f32 matmul / matmul+relu) ────────────────
+@func
+def mlp_head(
+    hidden: Tensor[(_B, _D), "f32"],
+    w_head: Tensor[(_D, _V), "f32"],
+) -> Tensor[(_B, _V), "f32"]:
+    return tf.matmul(hidden, w_head)
+
+
+def _tt(shape: tuple[int, ...]):
+    return make_tensor_type(shape)
+
+
+proj_ir = Module(
+    name="proj",
+    functions=(up_down, convert),
+    entry="up_down",
+    weights={"w_up": _tt((_D, _H)), "w_down": _tt((_H, _D))},
+    states={"kv": _tt((_B, _D))},
+)
+tinymlp_ir = Module(
+    name="TinyMlp",
+    functions=(mlp_head,),
+    entry="mlp_head",
+    modules=(proj_ir,),
+    weights={"w_head": _tt((_D, _V))},
+)
+
+
+# ── 2. handwritten CUDA kernels + runtime module twin ────────────────────────
 
 _CUDA_DECLS = r"""
 torch::Tensor matmul(torch::Tensor x, torch::Tensor w);
@@ -115,117 +150,121 @@ _ext = load_inline(
 )
 
 
-def _up_down_impl(x, w_up, w_down):
-    return _ext.matmul(_ext.matmul_relu(x, w_up), w_down)
+class UpDownFn(RuntimeFunction):
+    """CUDA body for ir ``up_down`` — canonical weights taken at load time."""
+
+    def __init__(self, w_up: torch.Tensor, w_down: torch.Tensor) -> None:
+        super().__init__(callable_type_of(up_down))
+        self.w_up = w_up
+        self.w_down = w_down
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        return _ext.matmul(_ext.matmul_relu(x, self.w_up), self.w_down)
 
 
-def _mlp_head_impl(hidden, w_head):
-    return _ext.matmul(hidden, w_head)
+class MlpHeadFn(RuntimeFunction):
+    """CUDA body for ir ``mlp_head``."""
+
+    def __init__(self, w_head: torch.Tensor) -> None:
+        super().__init__(callable_type_of(mlp_head))
+        self.w_head = w_head
+
+    def __call__(self, hidden: torch.Tensor) -> torch.Tensor:
+        return _ext.matmul(hidden, self.w_head)
 
 
-# ── Fixture-ish assembly (fresh per test — cheap: no recompilation) ──────────
+class ProjRT(RuntimeModule):
+    def __init__(self) -> None:
+        super().__init__("proj", entry="up_down")
 
-def _build(tmp_path):
+    def load(self, resource) -> None:
+        self.up_down = UpDownFn(resource.load("w_up"), resource.load("w_down"))
+        self.kv = resource.load("kv")
+        super().load(resource)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.up_down(x)
+
+
+class TinyMlpRT(RuntimeModule):
+    def __init__(self) -> None:
+        self.proj = ProjRT()
+        super().__init__("TinyMlp", entry="mlp_head", modules=(self.proj,))
+
+    def load(self, resource) -> None:
+        self.mlp_head = MlpHeadFn(resource.load("w_head"))
+        super().load(resource)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.mlp_head(self.proj(x))
+
+
+# ── 3. raw weights → prepare → prepared directory ────────────────────────────
+
+def _raw_weights() -> dict[str, torch.Tensor]:
     torch.manual_seed(0)
-    w_head = torch.randn(_D, _V, dtype=torch.float32)
-    w_up = torch.randn(_D, _H, dtype=torch.float32)
-    w_down = torch.randn(_H, _D, dtype=torch.float32)
-    kv_init = torch.randn(_B, _D, dtype=torch.float32)
-
-    from safetensors.torch import save_file  # noqa: PLC0415 -- test-only dep
-
-    shard_a = tmp_path / "model-00001-of-00002.safetensors"
-    shard_b = tmp_path / "model-00002-of-00002.safetensors"
-    save_file({"w_head": w_head}, str(shard_a))
-    save_file({"proj.w_up": w_up, "proj.w_down": w_down, "proj.kv": kv_init}, str(shard_b))
-    index = {
-        "weight_map": {
-            "w_head": shard_a.name,
-            "proj.w_up": shard_b.name,
-            "proj.w_down": shard_b.name,
-            "proj.kv": shard_b.name,
-        }
+    return {
+        "w_head": torch.randn(_D, _V, dtype=torch.float32),
+        "proj.w_up": torch.randn(_H, _D, dtype=torch.float32),  # RAW (H, D)
+        "proj.w_down": torch.randn(_H, _D, dtype=torch.float32),
+        "proj.kv": torch.randn(_B, _D, dtype=torch.float32),
     }
-    (tmp_path / "model.safetensors.index.json").write_text(json.dumps(index))
-
-    child_ir = Module(
-        name="proj",
-        functions=(up_down,),
-        entry="up_down",
-        weights={"w_up": _tt((_D, _H)), "w_down": _tt((_H, _D))},
-        states={"kv": _tt((_B, _D))},
-    )
-    root_ir = Module(
-        name="TinyMlp",
-        functions=(mlp_head,),
-        entry="mlp_head",
-        modules=(child_ir,),
-        weights={"w_head": _tt((_D, _V))},
-    )
-
-    resource = SafetensorsResource(tmp_path, device="cuda")
-    child_rm = RuntimeModule(
-        name=child_ir.name,
-        entry=child_ir.entry,
-        functions={"up_down": RuntimeFunction(callable_type_of(up_down), _up_down_impl)},
-        resource=resource.subtree("proj"),
-        weight_names=tuple(child_ir.weights),
-        state_specs=child_ir.states,
-        device=H200SXM(),
-    )
-    root_rm = RuntimeModule(
-        name=root_ir.name,
-        entry=root_ir.entry,
-        functions={"mlp_head": RuntimeFunction(callable_type_of(mlp_head), _mlp_head_impl)},
-        resource=resource,
-        weight_names=tuple(root_ir.weights),
-        modules=(child_rm,),
-        device=H200SXM(),
-    )
-    return root_rm, w_head, w_up, w_down, kv_init
 
 
-def test_candidate_matches_evaluator_reference(tmp_path) -> None:
-    root_rm, w_head, w_up, w_down, _kv = _build(tmp_path)
+def _prepared(tmp_path) -> dict[str, torch.Tensor]:
+    raw = _raw_weights()
+    tinymlp_ir.prepare(DictResource(raw), str(tmp_path))
+    return raw
+
+
+# ── tests ────────────────────────────────────────────────────────────────────
+
+def test_prepare_runs_converter(tmp_path) -> None:
+    raw = _prepared(tmp_path)
+    proj = SafetensorsResource(str(tmp_path), device="cpu").subtree("proj")
+    # canonical w_up == transpose(raw w_up): the convert @func actually ran
+    assert torch.allclose(proj.load("w_up"), raw["proj.w_up"].t())
+    assert torch.allclose(proj.load("w_down"), raw["proj.w_down"])
+
+
+def test_runtime_twin_matches_reference(tmp_path) -> None:
+    _prepared(tmp_path)
+    rt = TinyMlpRT()
+    rt.load(SafetensorsResource(str(tmp_path), device="cuda"))
     x = torch.randn(_B, _D, dtype=torch.float32, device="cuda")
+    ref = SafetensorsResource(str(tmp_path), device="cuda")
 
-    def candidate(x):
-        return root_rm.mlp_head(root_rm.proj.up_down(x))
+    # structural mirror
+    assert rt.name == tinymlp_ir.name
+    assert rt.entry == tinymlp_ir.entry
+    assert [m.name for m in rt.modules] == [m.name for m in tinymlp_ir.modules]
 
-    def reference(x):
-        mid = evaluate(up_down, x, w_up, w_down, device="cuda")
-        return evaluate(mlp_head, mid, w_head, device="cuda")
+    # child node: runtime forward vs the semantic module's own forward (evaluator)
+    def proj_semantic(x):
+        return proj_ir.forward(ref.subtree("proj"), x)
 
-    report = check(candidate, reference, (x,))
-    assert report.passed is True
+    assert check(rt.proj, proj_semantic, (x,)).passed is True
 
+    # root (composite): chain the semantic forward per node, mirroring the twin
+    def root_semantic(x):
+        mid = proj_ir.forward(ref.subtree("proj"), x)
+        return tinymlp_ir.forward(ref, mid)
 
-def test_child_submodule_matches_evaluator_reference(tmp_path) -> None:
-    root_rm, _w_head, w_up, w_down, _kv = _build(tmp_path)
-    x = torch.randn(_B, _D, dtype=torch.float32, device="cuda")
-
-    def reference(x):
-        return evaluate(up_down, x, w_up, w_down, device="cuda")
-
-    report = check(root_rm.proj.up_down, reference, (x,))
-    assert report.passed is True
+    assert check(rt, root_semantic, (x,)).passed is True
 
 
-def test_state_from_resource_bench_and_missing_attr(tmp_path) -> None:
-    root_rm, _w_head, _w_up, _w_down, kv_init = _build(tmp_path)
+def test_state_from_prepared_dir_bench_and_missing_attr(tmp_path) -> None:
+    raw = _prepared(tmp_path)
+    rt = TinyMlpRT()
+    rt.load(SafetensorsResource(str(tmp_path), device="cuda"))
 
-    kv = root_rm.proj.states["kv"]
+    kv = rt.proj.kv
     assert kv.device.type == "cuda"
     assert kv.shape == (_B, _D)
-    assert torch.allclose(kv.cpu(), kv_init)
+    assert torch.allclose(kv.cpu(), raw["proj.kv"])
 
     x = torch.randn(_B, _D, dtype=torch.float32, device="cuda")
-
-    def candidate(x):
-        return root_rm.mlp_head(root_rm.proj.up_down(x))
-
-    report = bench(candidate, (x,), iters=10, device=H200SXM())
-    assert report.metrics["mean_ms"] > 0
+    assert bench(rt, (x,), iters=10, device=H200SXM()).metrics["mean_ms"] > 0
 
     with pytest.raises(AttributeError):
-        root_rm.no_such_fn
+        rt.no_such_fn

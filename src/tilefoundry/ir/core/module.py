@@ -9,10 +9,16 @@ sub-blocks) purely as a namespace / addressing device — a tree of modules is
 addressed by attribute path (``root.layer0.attention``); entry resolution and
 ``Call`` semantics are unaffected, and a child's functions are never folded
 into the parent's ``functions``. ``weights`` and ``states`` declare this
-module's own named tensor slots (shape/dtype only, no values); they are
-consumed by the runtime layer when a ``RuntimeModule`` is assembled
-(``tilefoundry.runtime``), and neither field participates in typeinfer,
-verify, or the evaluator.
+module's own named tensor slots (shape/dtype only, no values); they are the
+schema ``prepare`` / ``forward`` resolve against, and neither field
+participates in typeinfer or verify.
+
+A ``Module`` is directly runnable: ``forward`` evaluates the entry @func — the
+same-shaped forward as its runtime twin, run through the evaluator instead of
+kernels — and ``prepare`` runs each node's weight ``convert`` @func offline. The
+runtime twin (``tilefoundry.runtime.RuntimeModule``) is written separately but
+mirrors this structure, loads the directory ``prepare`` writes, and
+``runtime.check`` compares the two forwards.
 """
 from __future__ import annotations
 
@@ -125,6 +131,84 @@ class Module:
                 f"{len(matches)} functions; entry must be a unique callable"
             )
         return matches[0]
+
+    def forward(self, resource, *acts, device: str = "cuda"):
+        """Evaluate the entry @func with weight/state params filled by name from
+        *resource* and activation params supplied positionally — the
+        same-shaped forward as a ``runtime.RuntimeModule`` twin, run through the
+        evaluator instead of kernels (``runtime.check`` compares the two). A
+        multi-node composition is chained by the caller, one ``forward`` per
+        node, mirroring the runtime orchestration."""
+        from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
+
+        fn = self.lookup(self.entry)
+        args = []
+        activations = iter(acts)
+        for param in fn.params:
+            if param.name in self.weights or param.name in self.states:
+                args.append(resource.load(param.name))
+            else:
+                args.append(next(activations))
+        return evaluate(fn, *args, device=device)
+
+    def prepare(self, raw, out_dir: str, *, device: str = "cpu") -> None:
+        """Run every node's weight ``convert`` @func over *raw* and write the
+        converted (canonical) weights to *out_dir* (dot-prefixed by module
+        path).
+
+        A module carries its weight converter as a sibling @func named
+        ``convert`` (peer to the compute @func); its params are the raw
+        checkpoint names and its results are this module's declared ``weights``
+        (declaration order), in the canonical form the compute @func consumes.
+        A node with no ``convert`` passes its declared ``weights`` through
+        unchanged; declared ``states`` present in *raw* pass through as initial
+        values. Output is a plain safetensors directory (one shard +
+        ``model.safetensors.index.json``) — no content-hash cache / manifest.
+        """
+        flat: dict[str, object] = {}
+        self._prepare_into(raw, "", flat, device)
+
+        import json  # noqa: PLC0415 -- stdlib, only needed here
+        from pathlib import Path  # noqa: PLC0415
+
+        from safetensors.torch import save_file  # noqa: PLC0415 -- optional runtime dep
+
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        shard = "model-00001-of-00001.safetensors"
+        save_file(flat, str(out / shard))
+        (out / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {name: shard for name in flat}})
+        )
+
+    def _prepare_into(self, raw, prefix: str, flat: dict, device: str) -> None:
+        from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
+
+        convert = next((f for f in self.functions if f.name == "convert"), None)
+        weight_names = list(self.weights)
+        if convert is not None:
+            raw_args = [raw.load(p.name) for p in convert.params]
+            result = evaluate(convert, *raw_args, device=device)
+            values = list(result) if isinstance(result, tuple) else [result]
+            if len(values) != len(weight_names):
+                raise ValueError(
+                    f"Module {self.name!r}: 'convert' returned {len(values)} tensor(s) "
+                    f"but the module declares {len(weight_names)} weight(s) {weight_names}"
+                )
+            for name, value in zip(weight_names, values):
+                flat[prefix + name] = value.detach().contiguous().cpu()
+        else:
+            for name in weight_names:
+                flat[prefix + name] = raw.load(name).detach().contiguous().cpu()
+
+        for state_name in self.states:
+            try:
+                flat[prefix + state_name] = raw.load(state_name).detach().contiguous().cpu()
+            except KeyError:
+                pass  # no initial value in raw — the runtime allocates it
+
+        for child in self.modules:
+            child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
 
 
 __all__ = ["Module", "ModuleFunction"]

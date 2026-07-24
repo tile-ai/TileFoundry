@@ -1,34 +1,15 @@
 """ABI layer — ``CallableType`` / ``ParamABI`` / ``KernelInfo`` / ``LaunchConfig``,
-and ``RuntimeFunction``, the callable wrapper that binds an implementation
-(compiled out-param entry or a plain value-returning callable) to that ABI.
+``RuntimeFunction`` (the implementation base class), and ``CompiledFunction``
+(the compiled out-param entry implementation the loader binds).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
 
+from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
-
-_lazy_dt_map: dict[str, object] | None = None
-
-
-def _torch_dtype(name: str) -> object:
-    global _lazy_dt_map
-    if _lazy_dt_map is None:
-        # noqa lazy: torch is an optional runtime dep — only required when
-        # auto-allocating output tensors.
-        import torch  # noqa: PLC0415
-        _lazy_dt_map = {
-            "f32": torch.float32,
-            "f16": torch.float16,
-            "bf16": torch.bfloat16,
-            "i32": torch.int32,
-            "i64": torch.int64,
-        }
-    if name not in _lazy_dt_map:
-        raise TypeError(f"RuntimeFunction: unsupported dtype {name!r}")
-    return _lazy_dt_map[name]
 
 
 @dataclass(frozen=True)
@@ -40,9 +21,10 @@ class KernelInfo:
 
 @dataclass(frozen=True)
 class ParamABI:
-    """One parameter of the host-visible entry function."""
+    """One parameter of a host-visible entry: name, element type, shape
+    (a static dim is its ``int`` value, a dynamic dim is ``-1``), storage."""
     name: str
-    dtype: str
+    dtype: DType
     shape: tuple[int, ...]
     storage: StorageKind | None
 
@@ -78,50 +60,58 @@ class LaunchConfig:
     block: tuple[int, int, int]
 
 
-@dataclass(frozen=True)
 class RuntimeFunction:
-    """Callable wrapper for a single function implementation.
-
-    ``type.output_count`` selects the calling convention:
-    - ``== 0``: *fn* is a value-returning callable (a handwritten torch/triton
-      implementation) — ``__call__(*args)`` calls ``fn(*args)`` and returns
-      its result directly; no out-param ABI applies.
-    - ``> 0``: *fn* is a compiled out-param entry —
-      - auto-alloc: ``fn(a)`` — allocates outputs, calls entry, returns output(s)
-      - pre-alloc:  ``fn(a, out)`` — uses provided output tensor(s), returns output(s)
+    """Implementation base class: an ABI ``type`` plus a subclass-overridden
+    ``__call__``. A handwritten torch / triton / CUDA implementation subclasses
+    this, takes whatever it needs (weights, caches) at construction, and
+    returns its value(s) directly from ``__call__``.
     """
-    type: CallableType
-    fn: Callable
 
-    @property
-    def signature(self) -> CallableType:
-        """Deprecated alias for ``type`` (kept for backward compat)."""
-        return self.type
+    def __init__(self, type: CallableType) -> None:
+        self.type = type
 
     def __call__(self, *args):
-        if self.type.output_count == 0:
-            return self.fn(*args)
+        raise NotImplementedError(
+            f"RuntimeFunction {self.type.name!r}: subclass must implement __call__()"
+        )
+
+
+class CompiledFunction(RuntimeFunction):
+    """A compiled out-param entry (bound by the runtime loader).
+
+    ``type.output_count`` trailing params are outputs:
+    - auto-alloc: ``fn(a)`` — allocates outputs, calls the entry, returns them
+    - pre-alloc:  ``fn(a, out)`` — uses the provided output tensor(s)
+    """
+
+    def __init__(self, type: CallableType, entry: Callable) -> None:
+        super().__init__(type)
+        self.entry = entry
+
+    def __call__(self, *args):
         if len(args) == len(self.type.params):
             return self._call_pre_alloc(*args)
         elif len(args) == self.type.input_count:
             return self._call_auto_alloc(*args)
-        else:
-            raise TypeError(
-                f"{self.type.name}: expected "
-                f"{self.type.input_count} inputs (auto-alloc) or "
-                f"{len(self.type.params)} inputs+outputs (pre-alloc), "
-                f"got {len(args)}"
-            )
+        raise TypeError(
+            f"{self.type.name}: expected "
+            f"{self.type.input_count} inputs (auto-alloc) or "
+            f"{len(self.type.params)} inputs+outputs (pre-alloc), "
+            f"got {len(args)}"
+        )
 
     def _call_pre_alloc(self, *args):
-        self.fn(*args)
+        self.entry(*args)
         n_out = self.type.output_count
         outputs = args[-n_out:]
         return outputs[0] if n_out == 1 else outputs
 
     def _call_auto_alloc(self, *args):
-        # noqa lazy: torch is an optional runtime dep (see _torch_dtype).
+        # noqa lazy: torch is an optional runtime dep, needed only for alloc.
         import torch  # noqa: PLC0415
+
+        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
+
         device = None
         for a in args:
             if isinstance(a, torch.Tensor):
@@ -134,12 +124,9 @@ class RuntimeFunction:
             )
         outs = []
         for p in self.type.output_params:
-            dtype = _torch_dtype(p.dtype)
-            outs.append(torch.empty(p.shape, dtype=dtype, device=device))
-        all_args = tuple(args) + tuple(outs)
-        self.fn(*all_args)
-        n_out = len(outs)
-        return outs[0] if n_out == 1 else tuple(outs)
+            outs.append(torch.empty(p.shape, dtype=to_torch_dtype(p.dtype), device=device))
+        self.entry(*args, *outs)
+        return outs[0] if len(outs) == 1 else tuple(outs)
 
 
 def _abi_dim(dim) -> int:
@@ -149,15 +136,14 @@ def _abi_dim(dim) -> int:
 
 def callable_type_of(fn) -> CallableType:
     """Derive a ``CallableType`` for a HIR ``Function``: one ``ParamABI`` per
-    declared parameter (``output_count=0`` — a value-returning callable, per
-    the ``RuntimeFunction`` convention above), mirroring the dynamic-dim rule
-    ``codegen/cuda/emit.py::_param_abi`` uses for a lowered ``PrimFunction``
-    (a static dim stays its ``int`` value; a dynamic dim becomes ``-1``).
+    declared parameter, ``output_count=0`` (a value-returning implementation),
+    mirroring ``codegen/cuda/emit.py::_param_abi``'s dynamic-dim rule (a
+    static dim stays its ``int`` value; a dynamic dim becomes ``-1``).
     """
     params = tuple(
         ParamABI(
             name=var.name,
-            dtype=var.type.dtype.name,
+            dtype=var.type.dtype,
             shape=tuple(_abi_dim(s) for s in var.type.shape),
             storage=var.type.storage,
         )
@@ -168,6 +154,7 @@ def callable_type_of(fn) -> CallableType:
 
 __all__ = [
     "CallableType",
+    "CompiledFunction",
     "KernelInfo",
     "LaunchConfig",
     "ParamABI",

@@ -92,7 +92,7 @@ def _param_abi(var) -> ParamABI:
 
     return ParamABI(
         name=var.name,
-        dtype=ty.dtype.name,
+        dtype=ty.dtype,
         shape=tuple(_abi_dim(s) for s in ty.shape),
         storage=ty.storage,
     )

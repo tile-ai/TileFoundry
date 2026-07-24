@@ -1,17 +1,12 @@
-"""TileFoundry runtime layer — ``RuntimeModule`` container, ABI, checkpoint
-resource, and measurement helpers.
-
-Two construction paths for a ``RuntimeModule``:
-- compiled: ``tilefoundry.build`` / ``compile`` / ``jit`` → codegen →
-  ``LinkedModule`` → ``runtime.loader.load_linked_module``.
-- handwritten: direct construction — wrap a plain torch/triton callable in a
-  ``RuntimeFunction`` and assemble a ``RuntimeModule`` by hand, resolving
-  weights/states from a ``RuntimeResource`` (e.g. ``SafetensorsResource``).
+"""TileFoundry runtime layer — the ``RuntimeModule`` twin of an ir ``Module``,
+the ``RuntimeFunction`` implementation base, checkpoint ``RuntimeResource``s,
+and ``check`` / ``bench``. See docs/spec/runtime.md §1 for the contract.
 """
 from __future__ import annotations
 
 from .function import (
     CallableType,
+    CompiledFunction,
     KernelInfo,
     LaunchConfig,
     ParamABI,
@@ -24,6 +19,7 @@ from .resource import DictResource, RuntimeResource, SafetensorsResource
 
 __all__ = [
     "CallableType",
+    "CompiledFunction",
     "DictResource",
     "Gate",
     "KernelInfo",

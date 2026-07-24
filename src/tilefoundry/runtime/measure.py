@@ -12,8 +12,18 @@ from typing import Callable, Mapping
 
 import torch
 
-from tilefoundry.runtime.module import _torch_device_str
 from tilefoundry.target.base import Device
+
+
+def _torch_device_str(device: "Device | None") -> str:
+    """Map a ``Device`` to a torch device string for timing dispatch: a device
+    whose class lives under ``tilefoundry.target.cuda`` is ``"cuda"``, every
+    other concrete ``Device`` is ``"cpu"``."""
+    if device is None:
+        raise ValueError("bench: a device is required, got None")
+    if type(device).__module__.startswith("tilefoundry.target.cuda"):
+        return "cuda"
+    return "cpu"
 
 
 @dataclass(frozen=True)
