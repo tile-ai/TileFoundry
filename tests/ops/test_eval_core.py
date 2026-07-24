@@ -12,7 +12,6 @@ from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.evaluator import (
-    EvalError,
     TensorValue,
     as_layout_view,
     evaluate,
@@ -140,19 +139,6 @@ def _zeros_fn(x: Tensor[(2, 3), "f32"]) -> Tensor[(2, 3), "f32"]:
 def test_zeros():
     x = torch.randn(2, 3)
     assert torch.allclose(evaluate(_zeros_fn, x, device=_DEV), x)
-
-
-def test_unregistered_op_raises_naming_op():
-    @func
-    def uses_relu(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return relu(x)
-
-    try:
-        evaluate(uses_relu, torch.randn(4), device=_DEV)
-    except EvalError as e:
-        assert "ReLU" in str(e)
-    else:
-        raise AssertionError("expected EvalError for unregistered op")
 
 
 def test_layout_view_roundtrip():

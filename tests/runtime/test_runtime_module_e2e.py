@@ -20,7 +20,6 @@ from torch.utils.cpp_extension import load_inline
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.runtime import (
@@ -49,11 +48,7 @@ def up_down(
     w_up: Tensor[(_D, _H), "f32"],
     w_down: Tensor[(_H, _D), "f32"],
 ) -> Tensor[(_B, _D), "f32"]:
-    # `tf.unary(..., kind=UnaryKind.RELU)` rather than the dedicated `tf.relu`
-    # sugar: the evaluator has no `@register_eval` handler for the standalone
-    # `ReLU` op (ir/hir/nn/relu.py), only for `Unary(kind=UnaryKind.RELU)` —
-    # both lower to `torch.relu`, so this is the same computation.
-    return tf.matmul(tf.unary(tf.matmul(x, w_up), kind=UnaryKind.RELU), w_down)
+    return tf.matmul(tf.relu(tf.matmul(x, w_up)), w_down)
 
 
 def _tt(shape: tuple[int, ...]) -> TensorType:
