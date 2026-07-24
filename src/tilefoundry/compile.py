@@ -140,7 +140,11 @@ def build(
     if target != "cuda":
         raise ValueError(f"tilefoundry.build: target {target!r} not supported yet")
 
-    workdir = os.path.join(tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_split")
+    # Keyed by pid so concurrent processes (e.g. pytest-xdist workers) building
+    # same-named entries never share a cmake/nvcc build directory.
+    workdir = os.path.join(
+        tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
+    )
     return _build_split_runtime_module(mod, workdir=workdir)
 
 
