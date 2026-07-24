@@ -1,4 +1,13 @@
-"""Real-size DeepSeek V4 decode MoE HIR dataflow."""
+"""Real-size DeepSeek V4 decode MoE HIR dataflow.
+
+Two router variants share the same routed/shared-expert core
+(``moe_experts_core`` / ``shared_expert``): ``moe_topk`` (learned noaux_tc
+router, real layers >= config.json's ``num_hash_layers``) and
+``moe_hash_gather`` (hash router, real layers < ``num_hash_layers`` --
+model.py ``Gate.forward``'s ``self.hash`` branch: a per-token-id
+``tid2eid`` table lookup instead of a learned top-k selection). See each
+function's own docstring for the routing-math difference.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +23,10 @@ N_ACT = 6
 MOE_INTER = 2048
 ROUTE_SCALE = 1.5
 SWIGLU_LIMIT = 10.0
+# DeepSeek-V3-tokenizer-sized vocabulary (config.json vocab_size) — shared by
+# the hash router's ``tid2eid`` table below and by ``decode_step.py``'s
+# embed/lm_head (which import it from here instead of duplicating it).
+VOCAB = 129280
 
 
 @func
@@ -27,7 +40,7 @@ def pre_moe_rms_norm(
 @func
 def shared_fp8_dequant_w1(
     weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
-    scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f32"],
 ) -> Tensor[(MOE_INTER, DIM), "bf16"]:
     blocks = tf.reshape(
         tf.cast(weight, dtype="bf16"),
@@ -43,7 +56,7 @@ def shared_fp8_dequant_w1(
 @func
 def shared_fp8_dequant_w2(
     weight: ConstTensor[(DIM, MOE_INTER), "fp8e4m3"],
-    scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
+    scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f32"],
 ) -> Tensor[(DIM, MOE_INTER), "bf16"]:
     blocks = tf.reshape(
         tf.cast(weight, dtype="bf16"),
@@ -61,33 +74,40 @@ def moe_experts_core(
     x: Tensor[(1, 1, DIM), "bf16"],
     gweights: Tensor[(1, N_ACT), "f32"],
     eids: Tensor[(1, N_ACT), "i64"],
-    w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w1_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w3_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
-    w2_scale: ConstTensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
+    w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    w1_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    w3_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "fp8e4m3"],
+    w2_scale: ConstTensor[(N_ROUTED, DIM // 128, MOE_INTER // 128), "f32"],
 ) -> Tensor[(1, N_ACT, DIM), "bf16"]:
+    # Real checkpoint format (128x128 block scale, same convention as
+    # shared_fp8_dequant_w1/w2): the (1, N_ACT) expert-gather batch dims
+    # fold into the block-row axis before the per-block multiply (MOE_INTER
+    # and DIM are themselves exact multiples of 128, so no block ever
+    # crosses an expert boundary) — same rank-4 broadcast pattern as
+    # shared_fp8_dequant_w1/w2, just with N_ACT gathered experts instead of
+    # one fixed shared-expert weight.
     xt = tf.reshape(x, new_shape=(1, DIM))
     gathered_w1 = tf.cast(tf.gather(w1_weight, eids, axis=0), dtype="bf16")
     gathered_s1 = tf.cast(tf.gather(w1_scale, eids, axis=0), dtype="bf16")
     w1 = tf.reshape(
-        tf.reshape(gathered_w1, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 32))
-        * tf.reshape(gathered_s1, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 1)),
+        tf.reshape(gathered_w1, new_shape=(N_ACT * MOE_INTER // 128, 128, DIM // 128, 128))
+        * tf.reshape(gathered_s1, new_shape=(N_ACT * MOE_INTER // 128, 1, DIM // 128, 1)),
         new_shape=(1, N_ACT, MOE_INTER, DIM),
     )
     gathered_w3 = tf.cast(tf.gather(w3_weight, eids, axis=0), dtype="bf16")
     gathered_s3 = tf.cast(tf.gather(w3_scale, eids, axis=0), dtype="bf16")
     w3 = tf.reshape(
-        tf.reshape(gathered_w3, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 32))
-        * tf.reshape(gathered_s3, new_shape=(1, N_ACT, MOE_INTER, DIM // 32, 1)),
+        tf.reshape(gathered_w3, new_shape=(N_ACT * MOE_INTER // 128, 128, DIM // 128, 128))
+        * tf.reshape(gathered_s3, new_shape=(N_ACT * MOE_INTER // 128, 1, DIM // 128, 1)),
         new_shape=(1, N_ACT, MOE_INTER, DIM),
     )
     gathered_w2 = tf.cast(tf.gather(w2_weight, eids, axis=0), dtype="bf16")
     gathered_s2 = tf.cast(tf.gather(w2_scale, eids, axis=0), dtype="bf16")
     w2 = tf.reshape(
-        tf.reshape(gathered_w2, new_shape=(1, N_ACT, DIM, MOE_INTER // 32, 32))
-        * tf.reshape(gathered_s2, new_shape=(1, N_ACT, DIM, MOE_INTER // 32, 1)),
+        tf.reshape(gathered_w2, new_shape=(N_ACT * DIM // 128, 128, MOE_INTER // 128, 128))
+        * tf.reshape(gathered_s2, new_shape=(N_ACT * DIM // 128, 1, MOE_INTER // 128, 1)),
         new_shape=(1, N_ACT, DIM, MOE_INTER),
     )
 
@@ -126,12 +146,12 @@ def moe_topk(
     x: Tensor[(1, 1, DIM), "bf16"],
     gate_weight: ConstTensor[(N_ROUTED, DIM), "bf16"],
     gate_bias: ConstTensor[(N_ROUTED,), "f32"],
-    w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w1_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    w3_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
-    w2_scale: ConstTensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
+    w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    w1_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    w3_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "fp8e4m3"],
+    w2_scale: ConstTensor[(N_ROUTED, DIM // 128, MOE_INTER // 128), "f32"],
 ) -> Tensor[(1, N_ACT, DIM), "bf16"]:
     xt = tf.reshape(x, new_shape=(1, DIM))
     gate = tf.matmul(
@@ -163,14 +183,73 @@ def moe_topk(
 
 
 @func
+def moe_hash_gather(
+    x: Tensor[(1, 1, DIM), "bf16"],
+    gate_weight: ConstTensor[(N_ROUTED, DIM), "bf16"],
+    tid2eid: ConstTensor[(VOCAB, N_ACT), "i64"],
+    token_ids: Tensor[(1,), "i64"],
+    w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    w1_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    w3_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "fp8e4m3"],
+    w2_scale: ConstTensor[(N_ROUTED, DIM // 128, MOE_INTER // 128), "f32"],
+) -> Tensor[(1, N_ACT, DIM), "bf16"]:
+    # Hash routing (model.py Gate.forward, layer_id < config.json's
+    # num_hash_layers==3): expert ids are a per-token-id table lookup
+    # (tid2eid[input_ids]), not a learned top-k selection -- and (unlike the
+    # learned/noaux_tc router in moe_topk) there is no bias added before the
+    # gather: model.py's Gate.bias is None for a hash layer, so the gathered
+    # routing weights come straight off the un-biased score_func output
+    # ("original_scores" in model.py). score_func is config.json's
+    # "sqrtsoftplus" for both routers, same scores formula as moe_topk, and
+    # the post-gather normalize + route_scale tail is identical too (model.py
+    # applies both unconditionally whenever score_func != "softmax", hash or
+    # not) -- only the *selection* step (this function's ``tf.gather(tid2eid,
+    # token_ids, ...)`` vs moe_topk's ``tf.topk``) differs.
+    #
+    # Checkpoint quirk (confirmed empirically, see hf_weights.py): tid2eid is
+    # declared ``dtype=torch.int32`` in model.py but is actually stored
+    # **I64** on disk in this checkpoint -- loaded as i64 directly (no cast
+    # needed here), which also happens to be exactly the dtype
+    # moe_experts_core's own ``eids`` parameter requires.
+    xt = tf.reshape(x, new_shape=(1, DIM))
+    gate = tf.matmul(
+        tf.cast(xt, dtype="f32"),
+        tf.transpose(tf.cast(gate_weight, dtype="f32"), perm=(1, 0)),
+    )
+    softplus = tf.log(tf.exp(gate) + tf.full_like(gate, value=1.0))
+    scores = softplus * tf.rsqrt(softplus)
+    eids = tf.gather(tid2eid, token_ids, axis=0)
+    gweights = tf.gather(scores, eids, axis=1, batch_dims=1)
+    weight_sum = tf.reduce(
+        gweights, axes=(-1,), keepdim=True, kind=ReduceKind.SUM
+    )
+    gweights = (gweights / weight_sum) * tf.full_like(
+        gweights, value=ROUTE_SCALE
+    )
+    return moe_experts_core(
+        x,
+        gweights,
+        eids,
+        w1_weight,
+        w1_scale,
+        w3_weight,
+        w3_scale,
+        w2_weight,
+        w2_scale,
+    )
+
+
+@func
 def shared_expert(
     x: Tensor[(1, 1, DIM), "bf16"],
     w1_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
-    w1_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    w1_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f32"],
     w3_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
-    w3_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    w3_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f32"],
     w2_weight: ConstTensor[(DIM, MOE_INTER), "fp8e4m3"],
-    w2_scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
+    w2_scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f32"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     xt = tf.reshape(x, new_shape=(1, DIM))
     w1 = shared_fp8_dequant_w1(w1_weight, w1_scale)
@@ -206,24 +285,87 @@ def deepseek_v4_flash_moe(
     rms_weight: ConstTensor[(DIM,), "f32"],
     gate_weight: ConstTensor[(N_ROUTED, DIM), "bf16"],
     gate_bias: ConstTensor[(N_ROUTED,), "f32"],
-    routed_w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    routed_w1_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    routed_w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "f4e2m1"],
-    routed_w3_scale: ConstTensor[(N_ROUTED, MOE_INTER, DIM // 32), "f8e8m0"],
-    routed_w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "f4e2m1"],
-    routed_w2_scale: ConstTensor[(N_ROUTED, DIM, MOE_INTER // 32), "f8e8m0"],
+    routed_w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    routed_w1_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    routed_w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    routed_w3_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    routed_w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "fp8e4m3"],
+    routed_w2_scale: ConstTensor[(N_ROUTED, DIM // 128, MOE_INTER // 128), "f32"],
     shared_w1_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
-    shared_w1_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    shared_w1_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f32"],
     shared_w3_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
-    shared_w3_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f8e8m0"],
+    shared_w3_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f32"],
     shared_w2_weight: ConstTensor[(DIM, MOE_INTER), "fp8e4m3"],
-    shared_w2_scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f8e8m0"],
+    shared_w2_scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f32"],
 ) -> Tensor[(1, 1, DIM), "bf16"]:
     hidden = pre_moe_rms_norm(x, rms_weight)
     routed_experts: where(layout=(_, 6 @ cta, DIM)) = moe_topk(
         hidden,
         gate_weight,
         gate_bias,
+        routed_w1_weight,
+        routed_w1_scale,
+        routed_w3_weight,
+        routed_w3_scale,
+        routed_w2_weight,
+        routed_w2_scale,
+    )
+    routed_reduced = tf.reduce(
+        routed_experts,
+        axes=(1,),
+        keepdim=False,
+        kind=ReduceKind.SUM,
+    )
+    routed_value = tf.reshape(
+        tf.cast(routed_reduced, dtype="bf16"),
+        new_shape=(1, 1, DIM),
+    )
+    shared_value = shared_expert(
+        hidden,
+        shared_w1_weight,
+        shared_w1_scale,
+        shared_w3_weight,
+        shared_w3_scale,
+        shared_w2_weight,
+        shared_w2_scale,
+    )
+    combined: where(layout=((_, _, DIM), {cta @ B()})) = combine_expert_outputs(
+        routed_value,
+        shared_value,
+    )
+    return combined
+
+
+@func(target=CudaTarget(), topologies=(Topology("cta", 132),))
+def deepseek_v4_flash_moe_hash(
+    x: Tensor[(1, 1, DIM), "bf16"],
+    rms_weight: ConstTensor[(DIM,), "f32"],
+    gate_weight: ConstTensor[(N_ROUTED, DIM), "bf16"],
+    tid2eid: ConstTensor[(VOCAB, N_ACT), "i64"],
+    token_ids: Tensor[(1,), "i64"],
+    routed_w1_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    routed_w1_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    routed_w3_weight: ConstTensor[(N_ROUTED, MOE_INTER, DIM), "fp8e4m3"],
+    routed_w3_scale: ConstTensor[(N_ROUTED, MOE_INTER // 128, DIM // 128), "f32"],
+    routed_w2_weight: ConstTensor[(N_ROUTED, DIM, MOE_INTER), "fp8e4m3"],
+    routed_w2_scale: ConstTensor[(N_ROUTED, DIM // 128, MOE_INTER // 128), "f32"],
+    shared_w1_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
+    shared_w1_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f32"],
+    shared_w3_weight: ConstTensor[(MOE_INTER, DIM), "fp8e4m3"],
+    shared_w3_scale: ConstTensor[(MOE_INTER // 128, DIM // 128), "f32"],
+    shared_w2_weight: ConstTensor[(DIM, MOE_INTER), "fp8e4m3"],
+    shared_w2_scale: ConstTensor[(DIM // 128, MOE_INTER // 128), "f32"],
+) -> Tensor[(1, 1, DIM), "bf16"]:
+    # Hash-router twin of deepseek_v4_flash_moe (config.json's first
+    # num_hash_layers==3 real layers) -- identical reduce/combine tail,
+    # only the routed-expert selection call differs (moe_hash_gather vs
+    # moe_topk; see moe_hash_gather's docstring).
+    hidden = pre_moe_rms_norm(x, rms_weight)
+    routed_experts: where(layout=(_, 6 @ cta, DIM)) = moe_hash_gather(
+        hidden,
+        gate_weight,
+        tid2eid,
+        token_ids,
         routed_w1_weight,
         routed_w1_scale,
         routed_w3_weight,
@@ -273,6 +415,26 @@ deepseek_v4_flash_module = Module(
 )
 
 
+# Additive, standalone twin of deepseek_v4_flash_module for the hash router
+# (layers 0..2) -- kept separate rather than folded into
+# deepseek_v4_flash_module so the latter's existing structure/schedule
+# assertions (test_moe.py) are untouched.
+deepseek_v4_flash_hash_module = Module(
+    name="DeepSeekV4FlashMoeHash",
+    functions=(
+        shared_fp8_dequant_w1,
+        shared_fp8_dequant_w2,
+        pre_moe_rms_norm,
+        moe_experts_core,
+        moe_hash_gather,
+        shared_expert,
+        combine_expert_outputs,
+        deepseek_v4_flash_moe_hash,
+    ),
+    entry="deepseek_v4_flash_moe_hash",
+)
+
+
 __all__ = [
     "DIM",
     "MOE_INTER",
@@ -280,10 +442,14 @@ __all__ = [
     "N_ROUTED",
     "ROUTE_SCALE",
     "SWIGLU_LIMIT",
+    "VOCAB",
     "combine_expert_outputs",
+    "deepseek_v4_flash_hash_module",
     "deepseek_v4_flash_moe",
+    "deepseek_v4_flash_moe_hash",
     "deepseek_v4_flash_module",
     "moe_experts_core",
+    "moe_hash_gather",
     "moe_topk",
     "pre_moe_rms_norm",
     "shared_expert",

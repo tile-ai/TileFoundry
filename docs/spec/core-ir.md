@@ -42,6 +42,8 @@ class Module:
     entry: str                                              # name of the public entry function (a name present in functions)
     topologies: tuple[Topology, ...]                        # module-level program topology namespace
     metadata: dict[str, object]                             # target / option metadata, never semantic mesh bindings
+    weights: Mapping[str, TensorType]                       # declared weight tensor slots (shape/dtype only); resolved by a runtime layer
+    states: Mapping[str, TensorType]                        # declared state tensor slots (shape/dtype only); allocated by a runtime layer
 ```
 
 - constraints:

@@ -61,6 +61,17 @@ class DimVar(Op, metaclass=_DimVarMeta):
     def __radd__(self, other):
         return _dim_binop(DimAdd, other, self)
 
+    # Floor-division counterpart to __add__ above — lets a dynamic-k
+    # attribute (e.g. ``TopK.k``) be written as ``CTX_LEN // 4`` and have
+    # the entry land as a ``simplify_dim(DimFloorDiv, ...)`` ``Call`` (i.e.
+    # an ``Expr``, which is a valid ``ShapeDim``). Symmetric
+    # ``__rfloordiv__`` handles ``4 // CTX_LEN``.
+    def __floordiv__(self, other):
+        return _dim_binop(DimFloorDiv, self, other)
+
+    def __rfloordiv__(self, other):
+        return _dim_binop(DimFloorDiv, other, self)
+
 
 def _dim_binop(op_cls, a, b):
     """Build a dim-arithmetic Call from ``int`` (non-bool), ``DimVar``,
@@ -220,6 +231,34 @@ def is_dim_expr(value) -> bool:
     return False
 
 
+def dim_min(a, b) -> Expr:
+    """Symbolic ``min(a, b)`` dim expression — the ``min``/``max`` counterpart
+    to ``DimVar.__add__`` for forms with no natural infix operator. Same
+    ``int``/``DimVar``/``Expr`` operands as ``_dim_binop``, folding to a
+    ``Constant`` when both are static. Raises ``TypeError`` on any other
+    operand type (a plain function has no ``NotImplemented`` fallback like an
+    overloaded operator does).
+    """
+    result = _dim_binop(DimMin, a, b)
+    if result is NotImplemented:
+        raise TypeError(
+            f"dim_min: operands must be int, DimVar, or Expr, got "
+            f"{type(a).__name__} and {type(b).__name__}"
+        )
+    return result
+
+
+def dim_max(a, b) -> Expr:
+    """Symbolic ``max(a, b)`` dim expression; see ``dim_min``."""
+    result = _dim_binop(DimMax, a, b)
+    if result is NotImplemented:
+        raise TypeError(
+            f"dim_max: operands must be int, DimVar, or Expr, got "
+            f"{type(a).__name__} and {type(b).__name__}"
+        )
+    return result
+
+
 def ceildiv(a, b) -> Expr:
     """Ceiling division ``(a + b - 1) // b`` as a dim expression.
 
@@ -244,5 +283,7 @@ __all__ = [
     "DimMax",
     "simplify_dim",
     "is_dim_expr",
+    "dim_min",
+    "dim_max",
     "ceildiv",
 ]

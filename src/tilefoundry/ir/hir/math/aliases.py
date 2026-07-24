@@ -78,6 +78,10 @@ _UNARY_ALIASES: tuple[tuple[str, UnaryKind], ...] = (
     # to mul(x, x), so codegen / lowering can see the "this is a
     # square" intent explicitly.
     ("square", UnaryKind.SQUARE),
+    ("ceil", UnaryKind.CEIL),
+    ("round", UnaryKind.ROUND),
+    ("exp2", UnaryKind.EXP2),
+    ("log2", UnaryKind.LOG2),
 )
 
 

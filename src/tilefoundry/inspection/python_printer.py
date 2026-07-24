@@ -479,6 +479,8 @@ def _build_kinded_alias_maps():
         {
             UnaryKind.NEG: "neg", UnaryKind.ABS: "abs", UnaryKind.NOT: "logical_not",
             UnaryKind.EXP: "exp", UnaryKind.LOG: "log",
+            UnaryKind.CEIL: "ceil", UnaryKind.ROUND: "round",
+            UnaryKind.EXP2: "exp2", UnaryKind.LOG2: "log2",
         },
     )
 
