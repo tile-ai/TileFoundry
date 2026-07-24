@@ -4,15 +4,25 @@
 ``metadata`` holds lowering / target configuration (e.g. target).
 ``topologies`` carries the module-level topology declarations; these form the
 namespace against which ``with Mesh(topology="cta", ...)`` strings resolve.
+``modules`` nests child ``Module``s (e.g. a decoder layer's attention / MoE
+sub-blocks) purely as a namespace / addressing device — a tree of modules is
+addressed by attribute path (``root.layer0.attention``); entry resolution and
+``Call`` semantics are unaffected, and a child's functions are never folded
+into the parent's ``functions``. ``weights`` and ``states`` declare this
+module's own named tensor slots (shape/dtype only, no values); they are
+consumed by the runtime layer when a ``RuntimeModule`` is assembled
+(``tilefoundry.runtime``), and neither field participates in typeinfer,
+verify, or the evaluator.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Mapping, Union
 
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
+from tilefoundry.ir.types.tensor_type import TensorType
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
@@ -24,37 +34,62 @@ class Module:
     name: str
     functions: tuple[ModuleFunction, ...]
     entry: str
+    modules: tuple["Module", ...] = field(default_factory=tuple)
     topologies: tuple[Topology, ...] = field(default_factory=tuple)
     metadata: dict[str, object] = field(default_factory=dict)
+    weights: Mapping[str, TensorType] = field(default_factory=dict)
+    states: Mapping[str, TensorType] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Seal each function so authoring mutation (``add_variant`` /
         ``.specialize``) is forbidden once it belongs to a Module. Sealing is
         idempotent and only applies to functions that support it (hir
-        Functions); other entries are left untouched."""
+        Functions); other entries are left untouched. Child modules are
+        already fully constructed (and so already sealed their own functions)
+        by the time they are passed in here, so sealing does not recurse.
+
+        A function name and a child module name must be disjoint at this
+        module's own level — both are resolved through the same attribute /
+        addressing surface (``__getattr__``), so a name used by both would be
+        ambiguous."""
         for fn in self.functions:
             seal = getattr(fn, "seal", None)
             if callable(seal):
                 seal()
+        clash = sorted({fn.name for fn in self.functions} & {m.name for m in self.modules})
+        if clash:
+            raise ValueError(
+                f"Module {self.name!r}: name(s) {clash} used by both a "
+                f"function and a child module; names must be disjoint"
+            )
 
-    def __getattr__(self, name: str) -> ModuleFunction:
-        """Attribute access forwards to the function of that name, so a module
-        reads like the model it mirrors: ``decoder.self_attention``. Each name
+    def __getattr__(self, name: str) -> "ModuleFunction | Module":
+        """Attribute access forwards to the function or child module of that
+        name, so a module reads like the model it mirrors:
+        ``decoder.self_attention`` / ``decoder.layer0.attention``. Each name
         maps to at most one entry (specialization variants live on the
-        function's ``variants``, not as separate entries). Only fires for names
-        absent as real attributes; dunder/private names are never functions and
-        fall through to ``AttributeError``."""
+        function's ``variants``, not as separate entries). Only fires for
+        names absent as real attributes; dunder/private names are never
+        functions or modules and fall through to ``AttributeError``."""
         if name.startswith("_"):
             raise AttributeError(name)
         matches = tuple(fn for fn in self.functions if fn.name == name)
         if len(matches) == 1:
             return matches[0]
-        if not matches:
-            raise AttributeError(f"Module {self.name!r} has no function {name!r}")
-        raise AttributeError(
-            f"Module {self.name!r}: {name!r} resolves to {len(matches)} "
-            f"entries; one name must map to one function"
-        )
+        if len(matches) > 1:
+            raise AttributeError(
+                f"Module {self.name!r}: {name!r} resolves to {len(matches)} "
+                f"entries; one name must map to one function"
+            )
+        mod_matches = tuple(m for m in self.modules if m.name == name)
+        if len(mod_matches) == 1:
+            return mod_matches[0]
+        if len(mod_matches) > 1:
+            raise AttributeError(
+                f"Module {self.name!r}: {name!r} resolves to {len(mod_matches)} "
+                f"child modules; one name must map to one module"
+            )
+        raise AttributeError(f"Module {self.name!r} has no function or child module {name!r}")
 
     def function_named(self, name: str) -> tuple[ModuleFunction, ...]:
         """Return the functions whose name matches, in source order.
