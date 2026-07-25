@@ -1,10 +1,7 @@
-"""``RuntimeResource`` — checkpoint access surface a ``RuntimeModule`` needs:
-load one tensor (or a one-to-many group) by its own (unprefixed) name, and
-scope down to a child namespace. ``DictResource`` is an in-memory / test
-double; ``SafetensorsResource`` reads a repacked (N-shard + ``index.json``)
-safetensors checkpoint directory. Both take an optional ``alias`` table
-(canonical name -> raw name or tuple of raw names), resolved by the shared
-``_alias_lookup`` helper — see docs/spec/runtime.md §1.4.
+"""``RuntimeResource`` — checkpoint access surface: load a tensor (or group)
+by name, scope to a child namespace. ``DictResource`` is an in-memory/test
+double; ``SafetensorsResource`` reads a repacked safetensors checkpoint
+directory. See docs/spec/runtime.md §1.4.
 """
 from __future__ import annotations
 
@@ -12,18 +9,12 @@ from typing import Any, Mapping, Protocol, Union
 
 import torch
 
-# A canonical name maps to one raw name, or (one-to-many, e.g. per-expert
-# tensors) a tuple of raw names, in declared order.
+# One raw name, or (one-to-many, e.g. per-expert) a tuple in declared order.
 AliasValue = Union[str, "tuple[str, ...]"]
 AliasMap = Mapping[str, AliasValue]
 
 
 def _alias_lookup(alias: AliasMap, prefix: str, name: str) -> "AliasValue | None":
-    """Path-qualified alias entry (``f"{prefix}{name}"``), else a bare-name
-    entry, else ``None`` (no alias applies). A value renames one path segment
-    or leaf *within* the current scope; the caller joins it onto the
-    accumulated prefix, so one bare entry (``"gamma_kv": "kv_norm.weight"``)
-    serves every layer."""
     qualified = f"{prefix}{name}"
     if qualified in alias:
         return alias[qualified]
@@ -33,11 +24,6 @@ def _alias_lookup(alias: AliasMap, prefix: str, name: str) -> "AliasValue | None
 
 
 def _resolve_key(alias: AliasMap, prefix: str, name: str) -> AliasValue:
-    """Resolve a leaf tensor *name* to its raw key(s) for ``load`` /
-    ``load_group``, joined onto *prefix* whether or not an alias hit — a leaf
-    entry renames the leaf inside the current scope, exactly as a segment
-    entry renames one segment, so one entry serves every layer. An unaliased
-    name is the plain prefix-join."""
     hit = _alias_lookup(alias, prefix, name)
     if hit is None:
         return f"{prefix}{name}"
@@ -47,10 +33,6 @@ def _resolve_key(alias: AliasMap, prefix: str, name: str) -> AliasValue:
 
 
 def _resolve_segment(alias: AliasMap, prefix: str, seg: str) -> str:
-    """Resolve a ``subtree`` segment *seg*. The identity fallback is *seg*
-    itself, unqualified — like ``_resolve_key``'s hit, the caller (``subtree``)
-    prepends its own accumulated prefix uniformly, so a value here must never
-    itself carry ``prefix``."""
     hit = _alias_lookup(alias, prefix, seg)
     if hit is None:
         return seg
@@ -64,8 +46,6 @@ def _resolve_segment(alias: AliasMap, prefix: str, seg: str) -> str:
 
 
 def _reject_group(where: str, name: str, resolved: AliasValue) -> str:
-    """Guard a single-tensor call site (``load``) against a tuple-valued
-    (one-to-many) alias resolution."""
     if isinstance(resolved, tuple):
         raise TypeError(
             f"{where}: {name!r} resolves to a tuple-valued alias "
@@ -87,12 +67,10 @@ class RuntimeResource(Protocol):
 
 
 class DictResource:
-    """dict-backed ``RuntimeResource`` — test / in-memory fallback.
+    """dict-backed ``RuntimeResource`` — in-memory / test double.
 
-    *data* is a flat, dot-prefixed ``{"layer0.attention.w": tensor, ...}``
-    dict shared by every scoped view; ``subtree`` only extends the prefix
-    each ``load`` name is joined onto (through *alias*, carried down to
-    every child view).
+    *data* is a flat, dot-prefixed dict (``{"layer0.attention.w": tensor}``)
+    shared by every scoped view; ``subtree`` only extends the prefix.
     """
 
     def __init__(
@@ -136,12 +114,9 @@ class DictResource:
 class SafetensorsResource:
     """safetensors-directory-backed ``RuntimeResource``.
 
-    Mirrors the on-disk convention a repacked HF checkpoint uses (N shards +
-    ``model.safetensors.index.json``): each name is looked up in the index
-    for its shard file, and only that one tensor is read — via
-    ``safetensors.safe_open`` (mmap'd, lazy-per-tensor) — straight onto
-    *device*. One shard handle is opened at most once and reused across
-    names, including across ``subtree`` views.
+    Reads a repacked HF checkpoint (N shards + ``model.safetensors.index.json``)
+    via mmap'd ``safe_open``; one shard handle is opened at most once and
+    reused across ``subtree`` views.
     """
 
     def __init__(
@@ -157,7 +132,7 @@ class SafetensorsResource:
 
     def _index(self) -> dict[str, str]:
         if self._weight_map is None:
-            import json  # noqa: PLC0415 -- stdlib, cheap, only needed here
+            import json  # noqa: PLC0415
             from pathlib import Path  # noqa: PLC0415
 
             index_path = Path(self._ckpt_dir) / "model.safetensors.index.json"
@@ -168,7 +143,7 @@ class SafetensorsResource:
     def _read_one(self, raw_key: str) -> torch.Tensor:
         from pathlib import Path  # noqa: PLC0415
 
-        from safetensors import safe_open  # noqa: PLC0415 -- optional runtime dep
+        from safetensors import safe_open  # noqa: PLC0415
 
         shard = self._index()[raw_key]  # KeyError propagates the raw key
         handle = self._handles.get(shard)

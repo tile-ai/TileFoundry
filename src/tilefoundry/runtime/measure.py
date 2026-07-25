@@ -1,10 +1,7 @@
 """``check`` / ``bench`` — numerical-parity and latency measurement helpers
-over any two (or one) plain callables — a ``RuntimeModule`` bound method, a
-raw torch function, an evaluator closure, ... Neither helper depends on
-``RuntimeModule`` or the IR: both operate on whatever *inputs* the given
-callable(s) accept. ``check`` compares a bare tensor or an arbitrarily
-nested tuple of tensors (e.g. ``(logits, past_key_values)``).
-"""
+over any two (or one) plain callables (e.g. a ``RuntimeModule`` bound method,
+a raw torch function). ``check`` compares a bare tensor or an arbitrarily
+nested tuple of tensors."""
 from __future__ import annotations
 
 import time
@@ -17,9 +14,6 @@ from tilefoundry.target.base import Device
 
 
 def _torch_device_str(device: "Device | None") -> str:
-    """Map a ``Device`` to a torch device string for timing dispatch: a device
-    whose class lives under ``tilefoundry.target.cuda`` is ``"cuda"``, every
-    other concrete ``Device`` is ``"cpu"``."""
     if device is None:
         raise ValueError("bench: a device is required, got None")
     if type(device).__module__.startswith("tilefoundry.target.cuda"):
@@ -53,9 +47,8 @@ def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _flatten(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
-    """Flatten a tensor or arbitrarily nested tuple-of-tensors into
-    ``[(path, tensor), ...]``; the path list doubles as *x*'s structural
-    signature (order + nesting), used to compare candidate vs reference."""
+    """Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
+    the path list doubles as a structural signature for comparing outputs."""
     if isinstance(x, torch.Tensor):
         return [(path, x)]
     if isinstance(x, tuple):
@@ -100,9 +93,9 @@ def check(
 
 def bench(fn: Callable, inputs: tuple, iters: int = 100, *, device: Device) -> Report:
     """Mean per-call latency of *fn* over *iters* calls, after a few untimed
-    warmup calls. A ``device`` mapping to ``"cuda"`` (§ ``_torch_device_str``)
-    times with ``torch.cuda.Event``\\ s; any other device times with
-    ``time.perf_counter()``. ``passed`` is always ``None`` — no gate."""
+    warmup calls. A CUDA device times with ``torch.cuda.Event``\\ s; any other
+    device times with ``time.perf_counter()``. ``passed`` is always ``None`` —
+    no gate."""
     warmups = min(3, iters)
     if _torch_device_str(device) == "cuda":
         for _ in range(warmups):

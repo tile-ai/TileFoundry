@@ -1,14 +1,5 @@
-"""DeepSeek-V4-Flash dimensions, read from the model's own ``config.json``.
-
-The checked-in ``config.json`` is the real one (``DeepSeek-V4-Flash-FP8``), so
-every dimension below is the model's, not a transcription. ``transformers`` is
-deliberately not used: ``deepseek_v4`` only exists in 5.x while CI pins
-``transformers>=4.57``, and the checkpoint directory is not available in CI.
-
-``REAL`` is the shape the structural / schedule fixtures use. ``tiny()`` is the
-same model at a size an end-to-end numeric test can run; its dimensions are
-chosen to keep every divisibility the real code path relies on (see ``tiny``).
-"""
+"""DeepSeek-V4-Flash dimensions, parsed from the model's own ``config.json``;
+``REAL`` is the real checkpoint's shape, ``tiny()`` a small shape for end-to-end tests."""
 from __future__ import annotations
 
 import json
@@ -79,14 +70,9 @@ class DSV4Config:
 
     @classmethod
     def tiny(cls) -> "DSV4Config":
-        """The same model, small enough to run end to end.
-
-        Every dimension a shape rule divides is kept divisible: ``dim`` /
-        ``moe_inter`` / ``q_lora_rank`` / ``q_proj`` / ``wo_a_out`` stay
-        multiples of ``quant_block`` (so a block scale really is 2x2 rather
-        than degenerating to 1x1), and ``nope_dim`` (192) stays a multiple of
-        ``KV_QUANT_BLOCK`` (64). One layer, hash-routed like real layer 0.
-        """
+        """The same model, small enough to run end to end; every dimension
+        stays divisible by ``quant_block`` / ``KV_QUANT_BLOCK`` as the real
+        shape rules require."""
         return cls(
             dim=256,
             n_heads=2,

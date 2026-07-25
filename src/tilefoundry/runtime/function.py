@@ -1,6 +1,5 @@
 """ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the
-implementation base class). See docs/spec/runtime.md §1.1.1.
-"""
+implementation base class). See docs/spec/runtime.md §1.1.1."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,20 +9,16 @@ from tilefoundry.ir.types import TensorType
 
 @dataclass(frozen=True)
 class ParamABI:
-    """One parameter of a host-visible entry: its name and IR ``TensorType``
-    (dtype / shape / storage / layout come from ``type`` — a dynamic dim is
-    whatever ``type.shape`` already carries, e.g. a ``DimVar``; no sentinel)."""
+    """One parameter of a host-visible entry: its name and IR ``TensorType``."""
     name: str
     type: TensorType
 
 
 @dataclass(frozen=True)
 class EntryABI:
-    """Host-visible ABI for a function entry.
-
-    ``params`` lists ALL parameters (inputs + outputs) in declaration order.
-    ``output_count`` is the trailing count of output parameters.
-    """
+    """Host-visible ABI for a function entry. ``params`` lists ALL parameters
+    (inputs + outputs) in declaration order; ``output_count`` is the trailing
+    count of output parameters."""
     name: str
     params: tuple[ParamABI, ...]
     output_count: int = 0
@@ -43,10 +38,8 @@ class EntryABI:
 
 class RuntimeFunction:
     """Implementation base class: an ABI ``type`` plus a subclass-overridden
-    ``__call__``. A handwritten torch / triton / CUDA implementation subclasses
-    this, takes whatever it needs (weights, caches) at construction, and
-    returns its value(s) directly from ``__call__``.
-    """
+    ``__call__`` that takes whatever it needs (weights, caches) at
+    construction and returns its value(s) directly."""
 
     def __init__(self, type: EntryABI) -> None:
         self.type = type
@@ -59,10 +52,7 @@ class RuntimeFunction:
 
 def param_abi_of(var) -> ParamABI:
     """One ``ParamABI`` for a declared parameter ``Var``: its name and IR
-    ``TensorType``. Shared by ``codegen/cuda/emit.py``'s host-entry ABI
-    derivation and ``entry_abi_of`` below — the single derivation site for
-    both compiled and HIR-signature ABIs.
-    """
+    ``TensorType``."""
     ty = var.type
     assert isinstance(ty, TensorType), (
         f"param {var.name!r} must be TensorType, got {type(ty).__name__}"
@@ -72,9 +62,7 @@ def param_abi_of(var) -> ParamABI:
 
 def entry_abi_of(fn) -> EntryABI:
     """Derive an ``EntryABI`` for a HIR ``Function``: one ``ParamABI`` per
-    declared parameter (via ``param_abi_of``), ``output_count=0`` (a
-    value-returning implementation, not an out-param entry).
-    """
+    parameter, ``output_count=0`` (value-returning, not an out-param entry)."""
     params = tuple(param_abi_of(var) for var in fn.params)
     return EntryABI(name=fn.name, params=params, output_count=0)
 

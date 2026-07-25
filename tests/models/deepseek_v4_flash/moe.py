@@ -1,77 +1,23 @@
 """Real-size DeepSeek V4 decode MoE HIR dataflow.
 
-Two ``@module`` factories, matching this file's two real router variants
-(config.json: real layers ``0..num_hash_layers-1`` (``==3``) hash-route;
-every later layer uses the learned/``noaux_tc`` router). Each factory's inner
-class is a CapWords, HF-style *type* name (``DeepseekV4MoE``,
-``DeepseekV4NoauxTcMoE``) -- matching ``attention.py``'s
-``build_attention(config) -> class DeepseekV4Attention:`` shape. The node's
-actual name in a tree comes from whatever attribute a parent nests it under
-(``@module``'s own torch/HF semantics: ``self.moe = build_moe(config)``
-renames the child to ``"moe"`` the same way ``self.self_attn =
-DeepseekV4Attention(config)`` renames that one to ``"self_attn"``), which is
-what makes the checkpoint-alias entry (``"moe" -> "ffn"``) resolve once a
-decoder layer nests this under a ``moe`` attribute -- the class name itself
-is cosmetic, not load-bearing for addressing.
+Two ``@module`` factories, matching this file's two real router variants:
+``build_moe(config)`` (hash router, entry ``deepseek_v4_flash_moe_hash``,
+real layers ``0..num_hash_layers-1``) and ``build_moe_learned(config)``
+(learned/``noaux_tc`` router, entry ``deepseek_v4_flash_moe``, later real
+layers; used by ``tests/schedule/*``).
 
-- ``build_moe(config)`` -- the hash-router component (entry
-  ``deepseek_v4_flash_moe_hash``), plus a plain ``forward``. This is the
-  component ``causal_lm.py``'s decoder layer nests under its ``moe``
-  attribute.
-- ``build_moe_learned(config)`` -- the learned-router variant (entry
-  ``deepseek_v4_flash_moe``), used by ``tests/schedule/*``.
+Every shape is read directly off *config*, never a hardcoded literal, so the
+same factory builds the real-scale modules below (``REAL``) and a tiny,
+end-to-end-runnable one (``DSV4Config.tiny()``) for tests. The two
+``where(layout=...)`` annotations inside each entry ``@func`` are an
+exception: their shape positions parse only a literal or a bare ``Name``, no
+attribute access, so each factory also binds a plain local (``dim``,
+``n_act``) purely for those two spots.
 
-Pre-MoE norm asymmetry between the two factories (deliberate, not an
-oversight): the real checkpoint's per-layer ``ffn_norm.weight`` is a
-LAYER-level tensor (a sibling of ``ffn``, not one of its own tensors), so the
-textbook-/checkpoint-faithful arrangement is for the *layer* to normalize
-before calling the MoE component, not the component itself.
-``build_moe``'s ``deepseek_v4_flash_moe_hash`` follows that: it takes an
-already-normalized hidden state and has no pre-MoE norm of its own (see
-``causal_lm.py``, its only caller, which owns ``ffn_norm.weight`` under its
-own ``pre_moe_rms_norm``). ``build_moe_learned`` still runs its own internal
-``pre_moe_rms_norm`` against a component-local ``rms_weight`` that has no
-real checkpoint tensor backing it -- left as is, on purpose: that root is
-only ever built standalone for ``tests/schedule/*`` planning/scheduling
-fixtures (never nested under a real decoder layer), and ``test_moe.py``
-asserts on ``deepseek_v4_flash_moe.params[4]`` / ``params[8]`` *by index* --
-dropping a leading param there would both break those frozen assertions and
-reshape the planning problem itself. If ``build_moe_learned`` ever gets
-nested under a real layer the same way, drop its pre-norm too, matching
-``build_moe``.
-
-Every shape is read directly off *config* (``config.dim``, ``config.moe_inter``,
-``config.n_routed``, ``config.n_act``, ``config.vocab``, ``config.route_scale``,
-``config.swiglu_limit``, and ``config.blocks(extent)`` for a weight's
-``quant_block``-square block-scale grid) -- never a hardcoded literal -- so
-the same factory builds the real-scale modules below (``REAL``) and a tiny,
-end-to-end-runnable one (``DSV4Config.tiny()``) for tests. A ``@func``
-defined inside a factory closes over the factory's own ``config`` parameter
-directly in its annotations: ``_definition_namespace`` (``tilefoundry.
-script``) walks the enclosing lexical scopes outward -- the ``@module``
-class body first, then the factory's own locals (where ``config`` lives), then
-the module -- and merges them *below* the function's own globals/freevars,
-so this can only add names, never shadow one. This is the standard style for
-every model fixture now.
-
-The two ``where(layout=...)`` annotations inside each entry ``@func`` are the
-one exception: their shape positions parse only a literal or a bare ``Name``
--- no attribute access (see ``tilefoundry.parser.hir_parser.
-_resolve_layout_extent``) -- so each factory also binds a plain local
-(``dim = config.dim``, ``n_act = config.n_act``) purely for those two spots; the
-same outward-scope walk makes them visible there too.
-
-Weights are derived automatically from every ``ConstTensor`` param -- never
-declared twice, no ``weights=`` / ``states=`` anywhere
-(``tilefoundry.module``). The real checkpoint (``DeepSeek-V4-Flash-FP8``)
-quantizes every routed/shared expert weight fp8 e4m3 with a
-``quant_block``-square (128x128 at real scale) ``ue8m0`` (``f8e8m0``) block
-scale (config.json's ``quantization_config``); the routed experts' 256
-per-expert tensors are named by a one-to-many alias and ``prepare`` stacks
-them along a new leading axis before anything else happens, so that stacked
-form already counts as the weight's raw/canonical form -- only the *scale*
-tensors need a converter (a cast, F32 on disk -> ``f8e8m0``), registered with
-``<owner>.converter("<name>")``.
+Weights are derived automatically from every ``ConstTensor`` param. Routed
+expert weights are fp8 e4m3 with a ``quant_block``-square ``ue8m0``
+(``f8e8m0``) block scale; only the *scale* tensors need a converter (cast,
+F32 on disk -> ``f8e8m0``).
 """
 from __future__ import annotations
 
@@ -82,48 +28,28 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
-# Real-scale model constants (config.json, via DSV4Config) -- re-exported so
-# callers/tests that only need the numbers (not a built Module) keep working
-# unchanged. Fixed at REAL scale permanently: build_moe / build_moe_learned's
-# own @funcs read every shape off their *config* parameter directly (see the
-# module docstring), never off these, so calling either factory again later
-# (e.g. at DSV4Config.tiny()) never touches them.
+# Real-scale model constants, re-exported for callers that only need the
+# numbers, not a built Module.
 DIM = REAL.dim
 N_ROUTED = REAL.n_routed
 N_ACT = REAL.n_act
 MOE_INTER = REAL.moe_inter
 ROUTE_SCALE = REAL.route_scale
 SWIGLU_LIMIT = REAL.swiglu_limit
-# DeepSeek-V3-tokenizer-sized vocabulary (config.json vocab_size) -- used by
-# the hash router's ``tid2eid`` table below; re-exported at module level (like
-# the other constants above) for any external caller that wants the number
-# without a Module. ``causal_lm.py``'s own ``embed``/``lm_head`` read
-# ``config.vocab`` directly off their own ``config: DSV4Config`` parameter
-# instead (config-driven, like everything else there), rather than importing
-# this constant.
-VOCAB = REAL.vocab
+VOCAB = REAL.vocab  # used by the hash router's tid2eid table below
 
 
 def build_moe(config: DSV4Config) -> Module:
-    """The hash-router MoE component (real layers ``0..num_hash_layers-1``,
-    ``==3`` per config.json): entry ``deepseek_v4_flash_moe_hash``, plus a
-    plain ``forward`` -- the component the end-to-end test nests under a
-    decoder layer. Takes an already-normalized hidden state: the checkpoint's
-    ``ffn_norm.weight`` is a layer-level tensor (a sibling of ``ffn``, not
-    inside it), so the layer normalizes and this component has no pre-MoE
-    norm of its own (contrast ``build_moe_learned`` below)."""
+    """The hash-router MoE component (entry ``deepseek_v4_flash_moe_hash``,
+    plus a plain ``forward``). Takes an already-normalized hidden state: the
+    checkpoint's ``ffn_norm.weight`` is layer-level, so this component has no
+    pre-MoE norm of its own (contrast ``build_moe_learned`` below).
+    """
     dim = config.dim  # bare-Name locals for the two where(layout=...) spots
     n_act = config.n_act  # below only -- see the module docstring.
 
     @module(entry="deepseek_v4_flash_moe_hash")
     class DeepseekV4MoE:
-        # No internal pre-MoE RMSNorm here (unlike build_moe_learned below):
-        # the real checkpoint's per-layer `ffn_norm.weight` is a LAYER-level
-        # tensor (a sibling of `ffn`, not inside it, per config.json's
-        # checkpoint layout), so the layer owns that norm and this
-        # component's fused entry (deepseek_v4_flash_moe_hash, below) takes
-        # an already-normalized hidden state instead of normalizing its own
-        # (previously fabricated, checkpoint-less) copy -- see its docstring.
         @func
         def shared_fp8_dequant_w1(
             weight: Tensor[(config.moe_inter, config.dim), "fp8e4m3"],
@@ -310,31 +236,13 @@ def build_moe(config: DSV4Config) -> Module:
                 (config.n_routed, config.blocks(config.dim), config.blocks(config.moe_inter)), "f8e8m0"
             ],
         ) -> Tensor[(1, config.n_act, config.dim), "bf16"]:
-            # Hash routing (model.py Gate.forward, layer_id < config.json's
-            # num_hash_layers==3): expert ids are a per-token-id table
-            # lookup (tid2eid[input_ids]), not a learned top-k selection --
-            # and (unlike the learned/noaux_tc router in moe_topk) there is
-            # no bias added before the gather: model.py's Gate.bias is None
-            # for a hash layer, so the gathered routing weights come
-            # straight off the un-biased score_func output
-            # ("original_scores" in model.py). score_func is config.json's
-            # "sqrtsoftplus" for both routers, same scores formula as
-            # moe_topk, and the post-gather normalize + route_scale tail is
-            # identical too (model.py applies both unconditionally whenever
-            # score_func != "softmax", hash or not) -- only the *selection*
-            # step (this function's ``tf.gather(tid2eid, token_ids, ...)``
-            # vs moe_topk's ``tf.topk``) differs. Routed-expert weight/scale
-            # format (fp8 e4m3 + a quant_block-square ue8m0 block-scale grid
-            # per expert) is the same real checkpoint convention as
-            # moe_topk's, so moe_experts_core's dequant is shared unmodified
-            # between both routers.
+            # Hash routing: expert ids come from a per-token-id table lookup
+            # (tid2eid[token_ids]), not a learned top-k selection, and no bias
+            # is added before the gather.
             #
-            # Checkpoint quirk (confirmed empirically): tid2eid is declared
-            # ``dtype=torch.int32`` in model.py but is actually stored
-            # **I64** on disk in the real checkpoint -- loaded as i64
-            # directly (no cast needed here), which also happens to be
-            # exactly the dtype moe_experts_core's own ``eids`` parameter
-            # requires.
+            # tid2eid is stored i64 on disk despite being declared int32 in
+            # the reference model -- loaded as i64 directly, matching
+            # moe_experts_core's own eids parameter.
             xt = tf.reshape(x, new_shape=(1, config.dim))
             gate = tf.matmul(
                 tf.cast(xt, dtype="f32"),
@@ -454,22 +362,7 @@ def build_moe(config: DSV4Config) -> Module:
                 (config.blocks(config.dim), config.blocks(config.moe_inter)), "f8e8m0"
             ],
         ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            # Hash-router twin of deepseek_v4_flash_moe (config.json's
-            # first num_hash_layers==3 real layers) -- identical
-            # reduce/combine tail and identical weight/scale formats
-            # throughout; only the routed-expert selection call differs
-            # (moe_hash_gather vs moe_topk; see moe_hash_gather's
-            # docstring). deepseek_v4_flash_moe (moe_topk) covers real
-            # layers >= num_hash_layers==3; this one covers real layers
-            # 0..2.
-            #
-            # `hidden` arrives already normalized: the real checkpoint keeps
-            # `ffn_norm.weight` at the layer level (a sibling of `ffn`, not a
-            # tensor inside it), so the layer computes `ffn_norm(h)` itself
-            # and calls this component with the result -- there is no
-            # component-local pre-MoE norm here (contrast build_moe_learned,
-            # whose root is planning-only and keeps its own for now; see the
-            # module docstring's asymmetry note).
+            # `hidden` arrives already normalized; see build_moe's docstring.
             routed_experts: where(layout=(_, n_act @ cta, dim)) = moe_hash_gather(
                 hidden, gate_weight, tid2eid, token_ids,
                 w1_weight, w1_scale, w3_weight, w3_scale, w2_weight, w2_scale,
@@ -490,23 +383,17 @@ def build_moe(config: DSV4Config) -> Module:
             return combined
 
         def forward(self, hidden, token_ids):
-            """Hash-router MoE component, end to end (route/gather ->
-            experts -> shared expert -> combine, all inside the fused entry
-            @func above): weights are filled by name from ``self._bound``
-            (``Module.load``); only activations are parameters here.
-            ``hidden`` must already be normalized -- this component has no
-            pre-MoE norm of its own (the caller's `ffn_norm.weight` is a
-            layer-level checkpoint tensor; see the module docstring)."""
+            """Hash-router MoE, end to end. ``hidden`` must already be
+            normalized (see build_moe's docstring)."""
             return self.deepseek_v4_flash_moe_hash(hidden, token_ids)
 
     return DeepseekV4MoE
 
 
 def build_moe_learned(config: DSV4Config) -> Module:
-    """The learned/``noaux_tc``-router MoE component (real layers
-    ``>= num_hash_layers``, i.e. ``>= 3`` per config.json): entry
-    ``deepseek_v4_flash_moe``. Used by ``tests/schedule/*`` (structural /
-    scheduling fixtures only)."""
+    """The learned/``noaux_tc``-router MoE component (entry
+    ``deepseek_v4_flash_moe``). Used by ``tests/schedule/*``; keeps its own
+    ``pre_moe_rms_norm`` (contrast ``build_moe`` above)."""
     dim = config.dim  # bare-Name locals for the two where(layout=...) spots
     n_act = config.n_act  # below only -- see the module docstring.
 
@@ -854,29 +741,16 @@ _LAZY_FUNCTIONS = ("deepseek_v4_flash_moe", "moe_experts_core", "moe_topk")
 
 
 def __getattr__(name: str):
-    """Individual @funcs, re-exported for external imports (test_moe.py's
-    ``deepseek_v4_flash_moe`` / ``moe_experts_core`` / ``moe_topk``) by their
-    IR Function node (``lookup``, not attribute access -- ``Module.<name>``
-    now returns a *callable* that runs the function with weights auto-filled;
-    the tests need the node itself, for ``.params`` / ``.return_type`` /
-    ``.body`` / ``.target``).
+    """Lazily re-export the IR Function nodes for ``deepseek_v4_flash_moe`` /
+    ``moe_experts_core`` / ``moe_topk`` (test_moe.py needs the node itself,
+    for ``.params`` / ``.return_type`` / ``.body`` / ``.target``).
 
-    Resolved lazily (PEP 562 module ``__getattr__``, the same pattern
-    ``tilefoundry.dsl``'s ``tf`` / ``T`` op namespaces use) rather than bound
-    as a plain module attribute at import time: a real module-global of the
-    same bare name would sit *above* a factory's own class-body/factory-local
-    sibling lookup (``_definition_namespace`` merges its outward-scope walk
-    *below* the function's own globals/freevars, so it can only add names,
-    never shadow one), so binding it eagerly would make ``moe_topk``'s own
-    call to ``moe_experts_core(...)`` -- and ``deepseek_v4_flash_moe``'s own
-    call to ``moe_topk(...)`` -- resolve to this stale, already-exported
-    (real-scale) function instead of the fresh one *any later*
-    ``build_moe_learned(config)`` call (e.g. at ``DSV4Config.tiny()``) just
-    built, breaking that rebuild. Not applied to ``deepseek_v4_flash_module``
-    / ``moe_hash_module`` themselves (plain module attributes, nothing
-    internally calls a *Module* by a bare name) or to ``build_moe``'s own
-    entry (``deepseek_v4_flash_moe_hash``, not re-exported at all -- nothing
-    outside this file needs it by name; ``moe_hash_module`` is used whole).
+    Must stay lazy: binding these eagerly as plain module globals would make
+    them resolve ahead of a factory's own class-body/factory-local lookup, so
+    ``moe_topk``'s call to ``moe_experts_core(...)`` (and
+    ``deepseek_v4_flash_moe``'s call to ``moe_topk(...)``) would keep
+    resolving to this stale export instead of the fresh function a later
+    ``build_moe_learned(config)`` call (e.g. at ``DSV4Config.tiny()``) built.
     """
     if name in _LAZY_FUNCTIONS:
         return deepseek_v4_flash_module.lookup(name)

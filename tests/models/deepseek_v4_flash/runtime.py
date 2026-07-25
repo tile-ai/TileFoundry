@@ -1,49 +1,6 @@
-"""Runtime twin of the DeepSeek-V4-Flash causal-LM tree: same nodes, same
-entry names, same function/child names as ``causal_lm.py`` / ``attention.py``
-/ ``moe.py`` (verified one-to-one by ``@runtime_module`` at decoration time),
-with every ``@func`` leaf replaced by a hand-written torch (or, for
-``residual_add``, real CUDA) kernel body. Orchestration (``forward`` /
-``init_caches`` / ``prepare_inputs_for_generation``) is never rewritten here
--- it is the semantic module's own methods, reused verbatim through
-``self.<fn>`` / ``self.<child>`` resolving to this twin's kernels/children
-(``src/tilefoundry/runtime/decorator.py``'s ``_Twin.forward``).
-
-Four ``@runtime_module`` classes, one per semantic node:
-
-    DeepseekV4ForCausalLMRT   embed, final_rms_norm, lm_head        (+ layerN children)
-    └─ DeepseekV4DecoderLayerRT   pre_attn_rms_norm, pre_moe_rms_norm, residual_add
-       ├─ DeepseekV4AttentionRT      mla_kv_update, mla_attend
-       └─ DeepseekV4MoERT            shared_fp8_dequant_w1/w2, moe_experts_core,
-                                      moe_hash_gather, shared_expert,
-                                      combine_expert_outputs, deepseek_v4_flash_moe_hash
-
-``build_runtime_causal_lm(config, ir)`` is the one seam callers need: *ir* is
-the already-built semantic root (``causal_lm.build_causal_lm(config)``); its
-own nested tree (``ir.modules[0]``, that node's ``.attention`` / ``.moe``)
-supplies the per-node semantic ``sem`` each ``@runtime_module(sem)`` call
-below validates against, and ``ir.modules`` (however many layers *config*
-built) drives how many ``layerN`` child attributes the root class gets --
-so this works unchanged at ``DSV4Config.tiny()`` (1 layer) or ``REAL`` (43).
-
-Precision discipline (this is the actual gate: bf16 rel_l2 <= 1e-3 punishes a
-single mismatched upcast): every kernel below mirrors its ``@func``'s exact
-per-op dtype handling, copied from the evaluator handlers under
-``src/tilefoundry/ir/hir/{nn,tensor,math}/*.py``, not "mathematically
-equivalent" torch -- ``matmul`` stays in the operands' own dtype (no upcast)
-*except* ``moe_hash_gather``'s routing-gate matmul, which the semantic body
-itself upcasts to f32 before multiplying (mirrored here, not "corrected"
-away); ``rms_norm`` upcasts x and weight to f32 and uses eps=1e-6 (the DSL
-op's own default -- none of the semantic bodies override it, so this
-hardcodes the same default rather than threading ``config.rms_eps``, which
-would silently diverge from what the reference actually runs); ``softmax``
-reduces in f32 and casts back; the interleaved-pairs RoPE and the KV/expert
-fp8 block dequant upcast to f32 exactly where the semantic body's own
-``tf.cast(..., dtype="f32")`` calls do, and nowhere else.
-
-The KV cache write is functional, matching ``tf.cache_update``'s evaluator
-(``ir/hir/tensor/cache_update.py``: ``out = cache.clone(); out[:, cur_pos:cur_pos+s]
-= new[:, :s]; return out``) exactly: ``mla_kv_update`` never mutates its
-``kv_cache0`` argument, it returns a new tensor.
+"""Runtime twin of the DeepSeek-V4-Flash causal-LM tree: hand-written torch
+(or, for ``residual_add``, CUDA) kernels for every ``@func`` leaf. See
+``build_runtime_causal_lm``.
 """
 from __future__ import annotations
 
@@ -63,13 +20,9 @@ _F32 = torch.float32
 _FP8E4M3 = torch.float8_e4m3fn
 
 # ───────────────────────────── shared helpers ──────────────────────────────
-# Plain, undecorated functions -- not kernels themselves, called *from* kernel
-# bodies below (mirrors "Helpers must be plain undecorated methods").
 
 
 def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """``x * rsqrt(mean(x**2, -1, keepdim) + eps) * weight``, f32 internally,
-    cast back to x's dtype -- ``ir/hir/nn/rms_norm.py``'s evaluator, verbatim."""
     xf = x.float()
     wf = weight.float()
     ms = xf.pow(2).mean(dim=-1, keepdim=True)
@@ -78,9 +31,6 @@ def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch
 
 
 def _gather_axis0(x: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
-    """``tf.gather(x, indices, axis=0)`` (``batch_dims=0``): index_select the
-    flattened indices, reshape to ``indices.shape + x.shape[1:]`` --
-    ``ir/hir/tensor/gather.py``'s evaluator, non-batched branch."""
     idx = indices.reshape(-1).long()
     out = torch.index_select(x, 0, idx)
     return out.reshape(tuple(indices.shape) + tuple(x.shape[1:]))
@@ -89,11 +39,6 @@ def _gather_axis0(x: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
 def _block_dequant(
     weight_fp8: torch.Tensor, scale: torch.Tensor, quant_block: int, out_shape: tuple[int, int],
 ) -> torch.Tensor:
-    """Block dequant for a plain 2-D ``(rows, cols)`` weight: reshape into
-    ``(row_blocks, quant_block, col_blocks, quant_block)`` tiles, multiply by
-    the scale broadcast per tile, reshape back. Both operands cast to bf16
-    before the multiply (no f32 upcast) -- ``moe.py``'s
-    ``shared_fp8_dequant_w1`` / ``w2`` bodies, verbatim."""
     rows, cols = out_shape
     row_blocks, col_blocks = rows // quant_block, cols // quant_block
     blocks = weight_fp8.to(_BF16).reshape(row_blocks, quant_block, col_blocks, quant_block)
@@ -102,11 +47,6 @@ def _block_dequant(
 
 
 # ───────────────────────── CUDA kernel: residual_add ───────────────────────
-# The one real CUDA kernel (torch.utils.cpp_extension.load_inline), proving
-# the C++/FFI path a hand-written kernel actually takes. residual_add is the
-# smallest @func in the tree (plain elementwise add), so nvcc stays fast.
-# Compiled lazily (first call, not import time) and cached at module scope --
-# one compile, shared by every DeepseekV4DecoderLayerRT instance/layer.
 
 _RESIDUAL_ADD_EXT_NAME = "tilefoundry_dsv4_flash_residual_add"
 _residual_add_ext = None
@@ -158,7 +98,7 @@ torch::Tensor residual_add_cuda(torch::Tensor a, torch::Tensor b) {
 def _get_residual_add_ext():
     global _residual_add_ext
     if _residual_add_ext is None:
-        from torch.utils.cpp_extension import load_inline  # noqa: PLC0415 -- lazy, heavy (nvcc)
+        from torch.utils.cpp_extension import load_inline  # noqa: PLC0415
 
         _residual_add_ext = load_inline(
             name=_RESIDUAL_ADD_EXT_NAME,
@@ -200,10 +140,7 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             kv_nope = kv_4d[..., :nope_dim]
             kv_rope_in = kv_4d[..., nope_dim:]
 
-            # fp8 fake-quant of the non-rope portion: block absmax -> clamp to
-            # a floor -> round the scale up to a power of two -> divide ->
-            # clamp to the e4m3 grid -> real fp8 round trip -> dequant. All in
-            # f32, matching the semantic body's own explicit cast chain.
+            # fp8 fake-quant: absmax -> pow2 scale -> clamp -> fp8 round-trip -> dequant, in f32.
             kv_nope_f32 = kv_nope.float()
             kv_nope_blk = kv_nope_f32.reshape(1, 1, 1, kv_quant_blocks, KV_QUANT_BLOCK)
             kv_amax = kv_nope_blk.abs().amax(dim=-1, keepdim=True).clamp_min(FP8E4M3_QUANT_EPS)
@@ -213,8 +150,7 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             kv_dq = kv_q_fp8.to(_F32) * kv_scale
             kv_nope_q = kv_dq.reshape(1, 1, 1, nope_dim).to(_BF16)
 
-            # Interleaved-pairs RoPE on the rope slice: f32 upcast for the
-            # rotation, single rounding back to bf16 at the end.
+            # interleaved-pairs RoPE: rotate in f32, round to bf16 once at the end.
             kv_r0, kv_r1 = kv_rope_in[..., 0::2], kv_rope_in[..., 1::2]
             kv_r0f, kv_r1f = kv_r0.float(), kv_r1.float()
             kv_o0 = (kv_r0f * cos_pos - kv_r1f * sin_pos).to(_BF16)
@@ -222,8 +158,7 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             kv_rope_out = torch.stack((kv_o0, kv_o1), dim=-1).reshape(1, 1, 1, rope_dim)
             kv_final = torch.cat((kv_nope_q, kv_rope_out), dim=-1)
 
-            # Functional cache write (tf.cache_update): a NEW tensor, cache0
-            # left untouched -- never `cache0[...] = ...` in place.
+            # functional cache write: returns a new tensor, never mutates kv_cache0 in place.
             cur_pos_i = int(cur_pos.reshape(-1)[0].item())
             s_i = int(s.reshape(-1)[0].item())
             out = kv_cache0.clone()
@@ -235,8 +170,6 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             self, hidden, gamma_q_lora, w_q_a, w_q_b, ones_head_dim, cos_pos, sin_pos,
             kv_cache, attn_mask, attn_sink, scale, w_o_a, w_o_b,
         ):
-            # Low-rank Q, per-head unweighted RMS rescale (all-ones weight),
-            # then the same interleaved-pairs RoPE as mla_kv_update.
             q_lat = _rms_norm(torch.matmul(hidden, w_q_a), gamma_q_lora)
             q_full = torch.matmul(q_lat, w_q_b)
             q = q_full.reshape(1, 1, n_heads, head_dim)
@@ -251,8 +184,6 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             q_rope_out = torch.stack((q_o0, q_o1), dim=-1).reshape(1, 1, n_heads, rope_dim)
             q_final = torch.cat((q_nope, q_rope_out), dim=-1)
 
-            # MQA broadcast (n_kv_heads==1 -> n_heads); kv_cache is both K/V
-            # (MLA-absorbed). matmuls stay in bf16 (no upcast) throughout.
             k_b = torch.repeat_interleave(kv_cache, n_heads, dim=2)
             q_h = q_final.permute(0, 2, 1, 3).contiguous()
             k_h = k_b.permute(0, 2, 1, 3).contiguous()
@@ -260,13 +191,11 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             k_t = k_h.permute(0, 1, 3, 2).contiguous()
             scores = torch.matmul(q_s, k_t) + attn_mask
 
-            # attn_sink as an extra softmax column, sliced back off before P@V.
             scores_ext = torch.cat((scores, attn_sink), dim=-1)
             probs_ext = torch.softmax(scores_ext.float(), dim=-1).to(_BF16)
             probs = probs_ext[..., :window]
             ctx = torch.matmul(probs, k_h)
 
-            # Inverse-RoPE the context (conjugate angle: cos+sin swap signs).
             ctx_nope = ctx[..., :nope_dim]
             ctx_rope_in = ctx[..., nope_dim:]
             ctx_r0, ctx_r1 = ctx_rope_in[..., 0::2], ctx_rope_in[..., 1::2]
@@ -279,8 +208,6 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             attn_out_heads_last = ctx_final.permute(0, 2, 1, 3).contiguous()
             o_flat = attn_out_heads_last.reshape(1, 1, q_proj)
 
-            # Grouped low-rank O projection: one batched matmul over the
-            # o_groups axis (config-driven, not an unrolled fixed count).
             o_grouped = o_flat.reshape(o_groups, 1, 1, wo_a_in)
             w_o_a_grouped = w_o_a.reshape(o_groups, 1, wo_a_in, o_lora_rank)
             y_grouped = torch.matmul(o_grouped, w_o_a_grouped)
@@ -331,9 +258,6 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             w3 = _expert_weight(w3_weight, w3_scale, (blk_inter, blk_dim))
             w2 = _expert_weight(w2_weight, w2_scale, (blk_dim, blk_inter))
 
-            # Per-expert batched matmul (bf16, no upcast), swiglu with the
-            # clamp limit (up: both sides; gate: upper side only), cast to f32
-            # only where the semantic body's own tf.cast(..., "f32") sits.
             token = xt.reshape(1, 1, dim, 1)
             gate_value = torch.matmul(w1, token).reshape(1, n_act, moe_inter).float()
             up_value = torch.matmul(w3, token).reshape(1, n_act, moe_inter).float()
@@ -351,9 +275,7 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             w1_weight, w1_scale, w3_weight, w3_scale, w2_weight, w2_scale,
         ):
             xt = x.reshape(1, dim)
-            # Deliberate exception to "matmul stays in bf16": the semantic
-            # body itself casts both operands to f32 before this one, for
-            # routing-score precision -- mirrored here, not "fixed" away.
+            # routing-gate matmul upcasts to f32 here only, matching the semantic body.
             gate = torch.matmul(xt.float(), gate_weight.float().t())
             softplus = torch.log(torch.exp(gate) + 1.0)
             scores = softplus * torch.rsqrt(softplus)
@@ -361,9 +283,6 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             gweights = torch.gather(scores, 1, eids)
             weight_sum = gweights.sum(dim=-1, keepdim=True)
             gweights = (gweights / weight_sum) * route_scale
-            # Sibling call: self.moe_experts_core auto-fills its own 6 consts
-            # from _bound, exactly like the semantic body's bare-name call
-            # passing them through explicitly -- same tensors, either way.
             return self.moe_experts_core(x, gweights, eids)
 
         @runtime_func
@@ -372,8 +291,6 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             shared_w2_weight, shared_w2_scale,
         ):
             xt = x.reshape(1, dim)
-            # w3 reuses the w1 dequant helper (same (moe_inter, dim) shape),
-            # matching the semantic body's own reuse.
             w1 = self.shared_fp8_dequant_w1(shared_w1_weight, shared_w1_scale)
             w3 = self.shared_fp8_dequant_w1(shared_w3_weight, shared_w3_scale)
             gate = torch.matmul(xt, w1.t()).float()
@@ -396,11 +313,6 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             shared_w1_weight, shared_w1_scale, shared_w3_weight, shared_w3_scale,
             shared_w2_weight, shared_w2_scale,
         ):
-            # Every *_weight/*_scale param above is accepted (same signature
-            # as the semantic @func) but only reached through the sibling
-            # self.-calls below, which pull the identical bound tensors
-            # themselves -- exactly how the semantic entry's own body only
-            # forwards them, never touching them directly either.
             routed_experts = self.moe_hash_gather(hidden, token_ids)
             routed_reduced = routed_experts.sum(dim=1, keepdim=False)
             routed_value = routed_reduced.to(_BF16).reshape(1, 1, dim)
@@ -452,9 +364,6 @@ def _build_root_funcs(config: DSV4Config) -> dict[str, object]:
 
     @runtime_func
     def lm_head(self, hidden, lm_head_weight):
-        # lm_head_weight arrives already canonical (dim, vocab): the
-        # transpose from the checkpoint's (vocab, dim) is prepare-time-only
-        # (the semantic function's own .converter), never re-applied here.
         logits = torch.matmul(hidden.reshape(1, dim), lm_head_weight)
         return logits.reshape(1, 1, vocab)
 
@@ -474,9 +383,6 @@ def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> RuntimeModule:
     moe_cls = _build_moe_rt(config, moe_ir)
     decoder_layer_cls = _build_decoder_layer_rt(layer0_ir, attention_cls, moe_cls)
 
-    # One shared decoder-layer class, one attribute per real layer name --
-    # config.n_layers many (1 at tiny(), 43 at REAL), read off ir.modules
-    # itself rather than hardcoded.
     namespace: dict[str, object] = dict(_build_root_funcs(config))
     for layer_ir in ir.modules:
         namespace[layer_ir.name] = decoder_layer_cls

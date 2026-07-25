@@ -6,7 +6,6 @@ from tilefoundry.runtime.module import CompiledModule
 
 def load_linked_module(linked: "LinkedModule") -> CompiledModule:
     """Load *linked*'s shared library and bind its entry into a ``CompiledModule``."""
-    # noqa lazy: tvm_ffi is an optional runtime dep, imported at load time only.
     import tvm_ffi  # noqa: PLC0415
 
     loaded = tvm_ffi.load_module(str(linked.library_path))
