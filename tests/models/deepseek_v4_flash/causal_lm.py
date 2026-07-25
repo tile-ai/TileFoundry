@@ -3,70 +3,33 @@ decoder layers, final norm, lm_head, plus the generate()-facing
 forward / init_caches / prepare_inputs_for_generation hooks."""
 from __future__ import annotations
 
-import json
-import math
-from pathlib import Path
-
 from tests.models.deepseek_v4_flash.attention import build_attention
-from tests.models.deepseek_v4_flash.config import DSV4Config
+from tests.models.deepseek_v4_flash.config import HF_CONFIG, DSV4Config
 from tests.models.deepseek_v4_flash.moe import build_moe
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Tensor, tf
 from tilefoundry.ir.core.module import Module
 
-
-def _load_rope_params() -> dict:
-    """``rope_theta`` / ``rope_scaling`` (YaRN): not in ``DSV4Config``, read
-    directly from ``config.json``."""
-    with open(Path(__file__).with_name("config.json"), encoding="utf-8") as fh:
-        cfg = json.load(fh)
-    scaling = cfg["rope_scaling"]
-    if scaling["type"] != "yarn":
-        raise ValueError(f"unsupported rope_scaling type {scaling['type']!r}")
-    return {
-        "theta": float(cfg["rope_theta"]),
-        "factor": float(scaling["factor"]),
-        "beta_fast": float(scaling["beta_fast"]),
-        "beta_slow": float(scaling["beta_slow"]),
-        "orig_max_pos": int(scaling["original_max_position_embeddings"]),
-    }
+_MAIN_ROPE: "tuple | None" = None
 
 
-_ROPE_PARAMS = _load_rope_params()
+def _main_rope() -> tuple:
+    """HF's own inverse frequencies and attention scaling for the ``main`` rope
+    label, computed by ``DeepseekV4RotaryEmbedding`` rather than reproduced.
 
+    A ``sliding_attention`` layer takes ``main`` (plain rope); only the
+    compressed layer types take the yarn-scaled ``compress`` label.
+    """
+    global _MAIN_ROPE
+    if _MAIN_ROPE is None:
+        from transformers.models.deepseek_v4.modeling_deepseek_v4 import (  # noqa: PLC0415
+            DeepseekV4RotaryEmbedding,
+        )
 
-def _yarn_inv_freq_and_scale(rope_dim: int):
-    """YaRN inverse frequencies (``rope_dim // 2`` of them) and the mscale
-    attention scale folded into cos/sin at construction."""
-    import torch  # noqa: PLC0415
-
-    theta = _ROPE_PARAMS["theta"]
-    factor = _ROPE_PARAMS["factor"]
-    beta_fast = _ROPE_PARAMS["beta_fast"]
-    beta_slow = _ROPE_PARAMS["beta_slow"]
-    orig_max_pos = _ROPE_PARAMS["orig_max_pos"]
-
-    pos_freqs = theta ** (torch.arange(0, rope_dim, 2, dtype=torch.float64) / rope_dim)
-    inv_freq_extrapolation = 1.0 / pos_freqs
-    inv_freq_interpolation = 1.0 / (factor * pos_freqs)
-
-    def _correction_dim(num_rotations: float) -> float:
-        return (
-            rope_dim * math.log(orig_max_pos / (num_rotations * 2 * math.pi))
-        ) / (2 * math.log(theta))
-
-    low = max(math.floor(_correction_dim(beta_fast)), 0)
-    high = min(math.ceil(_correction_dim(beta_slow)), rope_dim - 1)
-    if low == high:
-        high += 0.001  # avoid divide-by-zero below when low == high
-    ramp = (torch.arange(rope_dim // 2, dtype=torch.float64) - low) / (high - low)
-    extrapolation_factor = 1.0 - ramp.clamp(0, 1)
-    inv_freq = (
-        inv_freq_interpolation * (1 - extrapolation_factor)
-        + inv_freq_extrapolation * extrapolation_factor
-    )
-    attention_factor = 0.1 * math.log(factor) + 1.0 if factor > 1 else 1.0
-    return inv_freq, attention_factor
+        _MAIN_ROPE = DeepseekV4RotaryEmbedding.compute_default_rope_parameters(
+            HF_CONFIG, layer_type="main"
+        )
+    return _MAIN_ROPE
 
 
 def _rope_cos_sin(config: DSV4Config, position: int, *, device):
@@ -74,10 +37,10 @@ def _rope_cos_sin(config: DSV4Config, position: int, *, device):
     ``(config.rope_half,)`` f32, one value per rotated pair."""
     import torch  # noqa: PLC0415
 
-    inv_freq, attention_factor = _yarn_inv_freq_and_scale(config.rope_dim)
-    angles = position * inv_freq
-    cos = (angles.cos() * attention_factor).to(dtype=torch.float32, device=device)
-    sin = (angles.sin() * attention_factor).to(dtype=torch.float32, device=device)
+    inv_freq, attention_scaling = _main_rope()
+    angles = position * inv_freq.to(torch.float64)
+    cos = (angles.cos() * attention_scaling).to(dtype=torch.float32, device=device)
+    sin = (angles.sin() * attention_scaling).to(dtype=torch.float32, device=device)
     return cos, sin
 
 
