@@ -13,13 +13,14 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
    ``access_relation.build_relation`` (the *forward*, input-type-driven
    registry) when the op has one registered. ``build_relation`` returns
    the relation at *element* granularity (``AccessRelationResult.domain``
-   ranges over real tensor extents); V1 tiles it down to a small fixed
-   tile size (``DEFAULT_TILE_SIZE``) by re-deriving the domain from the
-   tile-count extents (via ``isl_utility.to_domain``, reused) and
-   reusing each access map's own formula at the new granularity --
+   ranges over real tensor extents, static or ``DimVar``-parametrised);
+   V1 tiles it down to a small fixed tile size (``DEFAULT_TILE_SIZE``) by
+   re-deriving the domain from the tile-count extents (``_tile_domain``)
+   and reusing each access map's own formula at the new granularity --
    valid because ``build_relation``'s maps are pure per-axis
    selections/broadcasts with no bounds of their own (see
-   ``_retile_map``).
+   ``_retile_map``). Any isl parameter used is resolved back to its
+   ``ShapeDim`` in the returned ``TileGraph.params``.
 3. An op with no registered forward relation (``build_relation`` returns
    ``None``) has no generic path -- V1 special-cases ``RMSNorm`` only
    (see ``_rmsnorm_access``), and raises a clear, actionable
@@ -51,7 +52,7 @@ from .tile_graph import TileGraph, TileUnit
 
 # V1 has no tile-pin annotation reader yet (`where(...)` is future work --
 # see the module docstring); every domain axis is tiled by this one fixed
-# size, and extraction raises if an axis doesn't divide evenly.
+# size (ceiling division, see `_tile_extents`).
 DEFAULT_TILE_SIZE = 32
 
 # Cosmetic-only: short isl tuple names for the two ops this V1 slice
@@ -79,6 +80,7 @@ class _StatementAccess:
     op: Call
     reads: tuple["isl.map", ...]
     writes: tuple["isl.map", ...]
+    params: dict
 
 
 def _buffer_namer():
@@ -133,49 +135,117 @@ def _assign_statement_names(ops: list[object]) -> list[str]:
     return names
 
 
-def _domain_extents(domain: "isl.set") -> tuple[int, ...]:
-    """Read ``domain``'s per-axis ``[lo, hi]`` bounds back as plain ints.
+@dataclass(frozen=True)
+class _ParamAxis:
+    """Marks a domain axis whose extent is the isl parameter ``param``,
+    not a static int (see ``_domain_extents``)."""
 
-    V1 only tiles a fully static domain (no isl parameters); a
-    dynamic-shape (``DimVar``-parametrised) domain is a documented V1 gap
-    (see the ``extract()`` docstring / task report), not a silent
-    best-effort guess.
-    """
-    if domain.dim(isl.dim_type.PARAM) != 0:
+    param: str
+
+
+def _axis_param_name(domain: "isl.set", axis: int) -> "str | None":
+    """The isl parameter axis ``axis``'s upper bound depends on, or
+    ``None`` if it's a plain constant. ``dim_max``'s pw_aff mentions
+    every param in the domain regardless (its piece's validity condition
+    leaks in), so this checks each piece's own ``aff`` instead."""
+    mx = domain.dim_max(axis)
+    if mx.is_cst():
+        return None
+    nparams = domain.dim(isl.dim_type.PARAM)
+    pieces: list = []
+    mx.foreach_piece(lambda s, aff: pieces.append(aff))
+    names = {
+        domain.get_dim_name(isl.dim_type.PARAM, p)
+        for aff in pieces
+        for p in range(nparams)
+        if aff.involves_dims(isl.dim_type.PARAM, p, 1)
+    }
+    if len(names) != 1:
         raise ExtractError(
-            "kernelize.extract: dynamic (isl-parameter-carrying) domains are "
-            "not tileable in V1 -- only fully static tensor shapes are "
-            "supported today; a real per-axis tile pin (from a `where(...)` "
-            "annotation) is future work"
+            f"kernelize.extract: domain axis {axis}'s bound depends on "
+            f"{len(names)} isl parameters {sorted(names)!r} -- V1 "
+            "dynamic-shape tiling only supports a bound tied to exactly "
+            "one parameter per axis"
         )
+    return next(iter(names))
+
+
+def _domain_extents(domain: "isl.set") -> tuple:
+    """Read ``domain``'s per-axis bounds back: a static axis as a plain
+    ``[lo, hi]`` int extent, a dynamic axis as a ``_ParamAxis`` marker.
+    Only SET axes are read -- a PARAM dim is never treated as one."""
     rank = domain.dim(isl.dim_type.SET)
-    extents = []
+    extents: list = []
     for i in range(rank):
+        name = _axis_param_name(domain, i)
+        if name is not None:
+            extents.append(_ParamAxis(name))
+            continue
         lo = int(domain.dim_min_val(i).num_si())
         hi = int(domain.dim_max_val(i).num_si())
         extents.append(hi - lo + 1)
     return tuple(extents)
 
 
-def _tile_extents(extents: tuple[int, ...], tile_size: int) -> tuple[int, ...]:
+def _tile_extents(extents: tuple, tile_size: int) -> tuple:
     tiled = []
     for axis, extent in enumerate(extents):
+        if isinstance(extent, _ParamAxis):
+            tiled.append(extent)
+            continue
         if not isinstance(extent, int) or isinstance(extent, bool):
             raise ExtractError(
                 f"kernelize.extract: domain axis {axis} has a non-static "
                 f"extent {extent!r} ({type(extent).__name__}) -- V1 only "
-                "tiles fully static (plain int) tensor shapes; dynamic "
-                "DimVar shapes are future work"
+                "tiles a plain int extent or a dynamic-shape axis "
+                "(_domain_extents' _ParamAxis marker)"
             )
-        if extent % tile_size != 0:
-            raise ExtractError(
-                f"kernelize.extract: domain axis {axis} has extent {extent}, "
-                f"not evenly divisible by the fixed V1 tile size {tile_size} "
-                "-- V1 requires every axis to divide evenly; a real per-axis "
-                "tile pin is future work"
-            )
-        tiled.append(extent // tile_size)
+        tiled.append(-(-extent // tile_size))  # ceildiv
     return tuple(tiled)
+
+
+def _tile_domain(
+    extents: tuple, tile_size: int, elem_domain: "isl.set", stmt_name: str,
+) -> "isl.set":
+    """``extents`` (``_tile_extents``'s output) -> the tuple-named
+    tile-count domain. All-static defers to ``to_domain`` unchanged; a
+    ``_ParamAxis`` gets a ``tile_size*d_i < param`` bound instead of a
+    fixed count, bounded via ``elem_domain``'s own parameter range."""
+    if not any(isinstance(e, _ParamAxis) for e in extents):
+        domain, _ = to_domain(extents)
+        return domain.set_tuple_name(stmt_name)
+
+    dims = [f"d{i}" for i in range(len(extents))]
+    constraints = [
+        f"{tile_size}*d{i} < {e.param} and d{i} >= 0"
+        if isinstance(e, _ParamAxis)
+        else f"0 <= d{i} < {e}"
+        for i, e in enumerate(extents)
+    ]
+    params = sorted({e.param for e in extents if isinstance(e, _ParamAxis)})
+    prefix = f"[{', '.join(params)}] -> "
+    body = f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}"
+    domain = isl.set(prefix + body).intersect_params(elem_domain.params())
+    return domain.set_tuple_name(stmt_name)
+
+
+def _collect_params(extents: tuple, param_map: dict, stmt_name: str) -> dict:
+    """This statement's ``TileGraph.params`` contribution: each dynamic
+    axis's isl parameter resolved back to its ``ShapeDim`` via
+    ``param_map``."""
+    out: dict = {}
+    for e in extents:
+        if not isinstance(e, _ParamAxis):
+            continue
+        dim = param_map.get(e.param)
+        if dim is None:
+            raise ExtractError(
+                f"kernelize.extract: statement {stmt_name!r} has a dynamic "
+                f"axis bound to isl parameter {e.param!r}, but its access "
+                "relation's param_map has no entry for it"
+            )
+        out[e.param] = dim
+    return out
 
 
 def _retile_map(m: "isl.map", stmt_name: str, tile_domain: "isl.set", buffer_name: str) -> "isl.map":
@@ -207,8 +277,8 @@ def _registered_access(
     (``access_relation.build_relation`` returned non-``None``, e.g. MatMul).
     """
     tile_extents = _tile_extents(_domain_extents(result.domain), tile_size)
-    tile_domain, _ = to_domain(tile_extents)
-    tile_domain = tile_domain.set_tuple_name(stmt_name)
+    tile_domain = _tile_domain(tile_extents, tile_size, result.domain, stmt_name)
+    params = _collect_params(tile_extents, result.param_map, stmt_name)
 
     n_inputs = len(call.args)
     output_maps = result.maps[n_inputs:]
@@ -242,7 +312,7 @@ def _registered_access(
 
     return _StatementAccess(
         name=stmt_name, domain=tile_domain, op=call,
-        reads=tuple(reads), writes=tuple(writes),
+        reads=tuple(reads), writes=tuple(writes), params=params,
     )
 
 
@@ -256,7 +326,10 @@ def _rmsnorm_access(call: Call, stmt_name: str, tile_size: int, namer) -> _State
     statement reads/writes the whole row), so its domain is only the
     *batch* axes (``x.shape[:-1]``), tiled; the reduction axis is an
     existentially-quantified range dim on the access maps, matching
-    m1_deps_probe.py's ``RN[i] -> h[i,j] : 0<=j<Tj`` shape.
+    m1_deps_probe.py's ``RN[i] -> h[i,j] : 0<=j<Tj`` shape. A batch axis
+    may itself be dynamic -- it goes through the same pipeline
+    ``_registered_access`` does; the reduction/weight axes stay
+    static-only.
     """
     x, weight = call.args
     x_shape = x.type.shape
@@ -267,12 +340,13 @@ def _rmsnorm_access(call: Call, stmt_name: str, tile_size: int, namer) -> _State
             f"rank-1 weight, got x.shape={x_shape} weight.shape={w_shape}"
         )
 
-    batch_extents = _tile_extents(x_shape[:-1], tile_size)
+    elem_batch_domain, batch_param_map = to_domain(x_shape[:-1])
+    batch_extents = _tile_extents(_domain_extents(elem_batch_domain), tile_size)
     reduce_tiles = _tile_extents((x_shape[-1],), tile_size)[0]
     weight_tiles = _tile_extents((w_shape[0],), tile_size)[0]
 
-    domain, _ = to_domain(batch_extents)
-    domain = domain.set_tuple_name(stmt_name)
+    domain = _tile_domain(batch_extents, tile_size, elem_batch_domain, stmt_name)
+    params = _collect_params(batch_extents, batch_param_map, stmt_name)
 
     batch_dims = [f"d{i}" for i in range(len(batch_extents))]
     src = f"[{', '.join(batch_dims)}]"
@@ -287,7 +361,9 @@ def _rmsnorm_access(call: Call, stmt_name: str, tile_size: int, namer) -> _State
         _retile_map(read_w, stmt_name, domain, namer(weight)),
     )
     writes = (_retile_map(write_y, stmt_name, domain, namer(call)),)
-    return _StatementAccess(name=stmt_name, domain=domain, op=call, reads=reads, writes=writes)
+    return _StatementAccess(
+        name=stmt_name, domain=domain, op=call, reads=reads, writes=writes, params=params,
+    )
 
 
 def _extract_statement(call: Call, stmt_name: str, tile_size: int, namer) -> _StatementAccess:
@@ -380,19 +456,31 @@ def extract(hir: Function, *, tile_size: int = DEFAULT_TILE_SIZE) -> TileGraph:
     domain = isl.union_set("{}")
     reads = isl.union_map("{}")
     writes = isl.union_map("{}")
+    params: dict = {}
     for acc in accesses:
         domain = domain.union(acc.domain)
         for m in acc.reads:
             reads = reads.union(m)
         for m in acc.writes:
             writes = writes.union(m)
+        for name, dim in acc.params.items():
+            prev = params.get(name)
+            if prev is not None and prev != dim:
+                raise ExtractError(
+                    f"kernelize.extract: isl parameter {name!r} resolves to "
+                    f"conflicting ShapeDims across statements: {prev!r} vs "
+                    f"{dim!r}"
+                )
+            params[name] = dim
 
     schedule_map = _initial_schedule(accesses)
     info = isl.union_access_info(reads).set_must_source(writes).set_schedule_map(schedule_map)
     deps = info.compute_flow().get_must_dependence()
 
     units = tuple(TileUnit(name=acc.name, op=acc.op) for acc in accesses)
-    return TileGraph(domain=domain, deps=deps, reads=reads, writes=writes, units=units, params={})
+    return TileGraph(
+        domain=domain, deps=deps, reads=reads, writes=writes, units=units, params=params,
+    )
 
 
 __all__ = ["extract", "ExtractError", "DEFAULT_TILE_SIZE"]
