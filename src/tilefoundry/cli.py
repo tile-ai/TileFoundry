@@ -15,7 +15,18 @@ from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.target import CudaTarget, default_target
+from tilefoundry.kernelize import (
+    EmitScaffoldError,
+    ExtractError,
+    HoleContract,
+    ScheduleTree,
+    SolveResourcesError,
+    emit_scaffold,
+    extract,
+    schedule,
+    solve_resources,
+)
+from tilefoundry.target import CudaTarget, default_target, resolve_target
 from tilefoundry.target.hardware import format_capabilities, load_hardware_spec
 
 _HELP_SPEC_TOPICS = {
@@ -181,6 +192,73 @@ def run_authored_analysis(source: str, analyses: tuple[str, ...]) -> int:
     return 0
 
 
+def _entry_function(ir: Module | Function) -> Function:
+    """Resolve the HIR Function `kernelize` runs its pipeline over -- the
+    same Module -> entry_function() convention as `_selected_target`."""
+    function = ir.entry_function() if isinstance(ir, Module) else ir
+    if not isinstance(function, Function):
+        raise TypeError(f"kernelize requires a HIR Function entry, got {type(function).__name__}")
+    return function
+
+
+def _decisions_of(solved: ScheduleTree) -> dict:
+    """Decode the top-level ``DECISIONS`` isl mark that `solve_resources`
+    hangs on the solved schedule tree's root (see
+    ``kernelize/solve_resources.py``) -- always present on its output."""
+    mark_id = solved.tree.get_root().child(0).get_id()
+    return mark_id.user()
+
+
+def _hole_contract_line(contract: HoleContract) -> str:
+    op_name = type(contract.op_ref.target).__name__
+    inputs = ",".join(view.tensor_name for view in contract.inputs)
+    coords = ",".join(contract.coords)
+    return (
+        f"hole={contract.name} op={op_name} coords={coords} "
+        f"inputs={inputs} output={contract.output.tensor_name}"
+    )
+
+
+def run_kernelize(source: str, target: str | None) -> int:
+    """Load, extract, schedule, solve, and scaffold one authored HIR
+    Function -- the kernelize-path analogue of `run_authored_analysis`:
+    same source loading, ``#``-headed machine-parsable summary style."""
+    ir = load_authored_ir(source)
+    function = _entry_function(ir)
+    resolved_target = resolve_target(target) if target is not None else _selected_target(ir)
+
+    tg = extract(function)
+    tree = schedule(tg)
+    solved = solve_resources(tg, tree, target=resolved_target)
+    skeleton, swimlane, contracts = emit_scaffold(solved, tg)
+    decisions = _decisions_of(solved)
+
+    header = [
+        f"kernelize target={resolved_target.name} function={function.name} "
+        f"statements={','.join(unit.name for unit in tg.units)}",
+        f"decisions status={decisions['status']} makespan={decisions['makespan']}",
+    ]
+    for name, stmt in decisions["statements"].items():
+        header.append(
+            f"decisions statement={name} atom={stmt['atom'] or 'none'} "
+            f"place={stmt['place']} start={stmt['start']} end={stmt['end']}"
+        )
+    if solved.ring:
+        header.append(
+            "ring " + " ".join(f"{buf}={depth}" for buf, depth in sorted(solved.ring.items()))
+        )
+    summary = "\n".join(f"# {line}" for line in header)
+    holes = "\n".join(f"# {_hole_contract_line(contract)}" for contract in contracts)
+
+    sys.stdout.write(
+        f"{summary}\n\n"
+        f"# skeleton\n{skeleton.text}\n"
+        f"# swimlane\n{swimlane.text}\n\n"
+        f"# holes\n{holes}\n"
+    )
+    return 0
+
+
 def _add_source_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("source", metavar="SOURCE", help="model.py[:Module[.function]]")
 
@@ -193,6 +271,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source_argument(analyze)
     for analysis in ("roofline", "footprint", "timeline"):
         analyze.add_argument(f"--{analysis}", action="store_true", help=f"print {analysis}")
+
+    kernelize = commands.add_parser(
+        "kernelize",
+        help="extract/schedule/solve authored HIR into an agent-fillable kernel scaffold",
+    )
+    _add_source_argument(kernelize)
+    kernelize.add_argument(
+        "--target", default=None, help="override the resolved compile target (e.g. cuda)"
+    )
 
     inspect = commands.add_parser("inspect", help="inspect installed target facts")
     inspect_commands = inspect.add_subparsers(dest="inspect_command", required=True)
@@ -226,6 +313,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         except Exception as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "kernelize":
+        try:
+            return run_kernelize(args.source, args.target)
+        except (
+            ExtractError,
+            EmitScaffoldError,
+            SolveResourcesError,
+            OSError,
+            TypeError,
+            ValueError,
+        ) as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1
 
