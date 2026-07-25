@@ -187,6 +187,11 @@ class Module:      # tilefoundry.ir.core.module
     recurse into each child under `resource.subtree(child.name)` — the
     semantic-side counterpart of the `RuntimeModule` twin's own `load`
     (§1.1).
+  - state is the caller's: a tensor that must survive across steps (e.g. a KV
+    cache) is an ordinary `Tensor` param passed in and returned, and a step MUST
+    NOT mutate one it was given. Sharding such a tensor is therefore the same
+    mechanism as for any other — its own `TensorType.layout` — rather than a
+    second description for an opaque state object.
   - `Module.forward(*acts)` (`__call__` is `forward`): run a registered
     `forward` orchestration method (`Module.methods`) if the class body
     defined one, else the entry `@func` — with `ConstTensor` params filled
@@ -405,40 +410,6 @@ def bench(fn: Callable, inputs: tuple, iters: int = 100, *, device: Device) -> R
   - neither helper is specific to `RuntimeModule`: *candidate* / *reference*
     / *fn* may be a `RuntimeModule` bound method, a raw torch callable, or
     an evaluator closure — anything callable on *inputs*.
-
-### 1.7 `generate` — shared decode loop
-
-```python
-def generate(m, input_ids, max_new_tokens: int, *, device: str = "cuda") -> tuple: ...
-
-# The two hooks `generate` requires of *m*: ordinary Python methods on the
-# model, collected by `@module` (docs/spec/core-ir.md §1) and reused unchanged
-# by its runtime twin.
-def init_caches(self, device: str = "cuda", mesh=None) -> tuple: ...
-def prepare_inputs_for_generation(
-    self, input_ids, step: int, past_key_values, device: str = "cuda"
-) -> tuple: ...
-```
-
-- constraints:
-  - one implementation serves every model: `generate` MUST NOT know anything
-    model-specific — rope, windowing, cache layout, masking and the argument
-    order all live behind the two hooks.
-  - `generate` calls `init_caches(device=...)` once, then per step calls
-    `prepare_inputs_for_generation(input_ids, step, past_key_values,
-    device=...)` for the complete positional argument tuple and `m(*args)`,
-    which MUST return `(logits, past_key_values)`. It returns
-    `(per_step_logits, past_key_values)` and applies neither sampling nor a
-    stopping condition — both are the caller's.
-  - a missing hook MUST raise `TypeError` naming the module and the hook.
-  - state is held by the caller and threaded functionally: `past_key_values` is
-    a plain tuple of ordinary tensors, one per layer, passed in and returned. A
-    step MUST NOT mutate a cache it was given. Sharding a cache is therefore
-    the same mechanism as for any other tensor — its own `TensorType.layout` —
-    rather than a second description for an opaque cache object.
-  - because the hooks are ordinary methods on the semantic `Module`, its
-    `RuntimeModule` twin (§1.1) resolves them to the same functions: `generate`
-    accepts either side, which is what makes them comparable with `check`.
 
 ## 2. C++ Runtime Surface
 

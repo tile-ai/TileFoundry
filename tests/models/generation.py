@@ -1,7 +1,5 @@
-"""Model-agnostic decode loop: one ``generate()`` shared by every ``Module`` /
-``RuntimeModule`` twin. Per-model behavior (rope, windowing, cache layout,
-...) lives on the model itself via ``init_caches`` / ``prepare_inputs_for_generation``;
-this file knows neither. See docs/spec/runtime.md.
+"""Model-agnostic decode loop shared by the model fixtures: the caller owns the
+caches, the model owns ``init_caches`` / ``prepare_inputs_for_generation``.
 """
 from __future__ import annotations
 
@@ -19,9 +17,8 @@ def _require_hook(m, hook: str) -> None:
 
 def generate(m, input_ids, max_new_tokens: int, *, device: str = "cuda"):
     """Run *max_new_tokens* decode steps of *m*, threading ``past_key_values``
-    functionally from step to step. Returns ``(logits_per_step,
-    past_key_values)``; no sampling or stopping condition — that is left to
-    the caller."""
+    from step to step. Returns ``(logits_per_step, past_key_values)``; sampling
+    and stopping are the caller's."""
     _require_hook(m, "init_caches")
     _require_hook(m, "prepare_inputs_for_generation")
 

@@ -14,12 +14,12 @@ from tests.models.deepseek_v4_flash.causal_lm import build_causal_lm
 from tests.models.deepseek_v4_flash.config import DSV4Config
 from tests.models.deepseek_v4_flash.hf_alias import hf_alias
 from tests.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
+from tests.models.generation import generate
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.runtime import (
     SafetensorsResource,
     bench,
     check,
-    generate,
     runtime_func,
     runtime_module,
 )
