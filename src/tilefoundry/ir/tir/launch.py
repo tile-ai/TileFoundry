@@ -1,9 +1,8 @@
 """``tir.Launch`` — host-side device-kernel launch effect Op.
 
 ``LaunchAttrs`` and ``CudaLaunchAttr`` are authored-IR metadata consumed by
-``Launch``. CUDA lowering interprets their selector/value pairs. The runtime
-``tilefoundry.runtime.module.LaunchConfig`` remains separate post-codegen
-launch metadata.
+``Launch``. CUDA lowering interprets their selector/value pairs; launch geometry
+is emitted into the generated host entry and is not carried past codegen.
 """
 from __future__ import annotations
 

@@ -1,25 +1,11 @@
-"""Runtime loader — turn a ``LinkedModule`` into a callable ``RuntimeModule``."""
+"""Runtime loader — turn a ``LinkedModule`` into a callable ``CompiledModule``."""
 from __future__ import annotations
 
-from tilefoundry.runtime.function import CompiledFunction
-from tilefoundry.runtime.module import RuntimeModule
+from tilefoundry.runtime.module import CompiledModule
 
 
-class _LoadedModule(RuntimeModule):
-    """One compiled entry as a ``RuntimeModule``: ``forward`` delegates to the
-    bound ``CompiledFunction`` (weights are ordinary entry arguments on the
-    compiled path, so ``load`` is the inherited no-op)."""
-
-    def __init__(self, name: str, fn: CompiledFunction) -> None:
-        super().__init__(name=name, entry=name)
-        self.fn = fn
-
-    def forward(self, *args):
-        return self.fn(*args)
-
-
-def load_linked_module(linked: "LinkedModule") -> RuntimeModule:
-    """Load *linked*'s shared library and bind its entry into a ``RuntimeModule``."""
+def load_linked_module(linked: "LinkedModule") -> CompiledModule:
+    """Load *linked*'s shared library and bind its entry into a ``CompiledModule``."""
     # noqa lazy: tvm_ffi is an optional runtime dep, imported at load time only.
     import tvm_ffi  # noqa: PLC0415
 
@@ -31,10 +17,7 @@ def load_linked_module(linked: "LinkedModule") -> RuntimeModule:
             f"load_linked_module: library {linked.library_path} has no "
             f"symbol {linked.entry.name!r}"
         ) from e
-    return _LoadedModule(
-        linked.entry.name,
-        CompiledFunction(type=linked.entry, entry=entry_callable),
-    )
+    return CompiledModule(type=linked.entry, fn=entry_callable)
 
 
 __all__ = ["load_linked_module"]

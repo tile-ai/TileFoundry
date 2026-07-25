@@ -1,36 +1,24 @@
-"""ABI layer — ``CallableType`` / ``ParamABI`` / ``KernelInfo`` / ``LaunchConfig``,
-``RuntimeFunction`` (the implementation base class), and ``CompiledFunction``
-(the compiled out-param entry implementation the loader binds).
+"""ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the
+implementation base class). See docs/spec/runtime.md §1.1.1.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
 
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.storage import StorageKind
-
-
-@dataclass(frozen=True)
-class KernelInfo:
-    """ABI of a single ``__global__`` kernel in the generated source."""
-    name: str
-    param_names: tuple[str, ...]
+from tilefoundry.ir.types import TensorType
 
 
 @dataclass(frozen=True)
 class ParamABI:
-    """One parameter of a host-visible entry: name, element type, shape
-    (a static dim is its ``int`` value, a dynamic dim is ``-1``), storage."""
+    """One parameter of a host-visible entry: its name and IR ``TensorType``
+    (dtype / shape / storage / layout come from ``type`` — a dynamic dim is
+    whatever ``type.shape`` already carries, e.g. a ``DimVar``; no sentinel)."""
     name: str
-    dtype: DType
-    shape: tuple[int, ...]
-    storage: StorageKind | None
+    type: TensorType
 
 
 @dataclass(frozen=True)
-class CallableType:
+class EntryABI:
     """Host-visible ABI for a function entry.
 
     ``params`` lists ALL parameters (inputs + outputs) in declaration order.
@@ -53,13 +41,6 @@ class CallableType:
         return self.params[self.input_count:]
 
 
-@dataclass(frozen=True)
-class LaunchConfig:
-    """CUDA kernel launch config — (grid_dims, block_dims) as dim3-shaped 3-tuples."""
-    grid: tuple[int, int, int]
-    block: tuple[int, int, int]
-
-
 class RuntimeFunction:
     """Implementation base class: an ABI ``type`` plus a subclass-overridden
     ``__call__``. A handwritten torch / triton / CUDA implementation subclasses
@@ -67,7 +48,7 @@ class RuntimeFunction:
     returns its value(s) directly from ``__call__``.
     """
 
-    def __init__(self, type: CallableType) -> None:
+    def __init__(self, type: EntryABI) -> None:
         self.type = type
 
     def __call__(self, *args):
@@ -76,88 +57,32 @@ class RuntimeFunction:
         )
 
 
-class CompiledFunction(RuntimeFunction):
-    """A compiled out-param entry (bound by the runtime loader).
-
-    ``type.output_count`` trailing params are outputs:
-    - auto-alloc: ``fn(a)`` — allocates outputs, calls the entry, returns them
-    - pre-alloc:  ``fn(a, out)`` — uses the provided output tensor(s)
+def param_abi_of(var) -> ParamABI:
+    """One ``ParamABI`` for a declared parameter ``Var``: its name and IR
+    ``TensorType``. Shared by ``codegen/cuda/emit.py``'s host-entry ABI
+    derivation and ``entry_abi_of`` below — the single derivation site for
+    both compiled and HIR-signature ABIs.
     """
-
-    def __init__(self, type: CallableType, entry: Callable) -> None:
-        super().__init__(type)
-        self.entry = entry
-
-    def __call__(self, *args):
-        if len(args) == len(self.type.params):
-            return self._call_pre_alloc(*args)
-        elif len(args) == self.type.input_count:
-            return self._call_auto_alloc(*args)
-        raise TypeError(
-            f"{self.type.name}: expected "
-            f"{self.type.input_count} inputs (auto-alloc) or "
-            f"{len(self.type.params)} inputs+outputs (pre-alloc), "
-            f"got {len(args)}"
-        )
-
-    def _call_pre_alloc(self, *args):
-        self.entry(*args)
-        n_out = self.type.output_count
-        outputs = args[-n_out:]
-        return outputs[0] if n_out == 1 else outputs
-
-    def _call_auto_alloc(self, *args):
-        # noqa lazy: torch is an optional runtime dep, needed only for alloc.
-        import torch  # noqa: PLC0415
-
-        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
-
-        device = None
-        for a in args:
-            if isinstance(a, torch.Tensor):
-                device = a.device
-                break
-        if device is None:
-            raise TypeError(
-                f"{self.type.name}: cannot infer device for auto-alloc; "
-                f"no torch.Tensor in inputs"
-            )
-        outs = []
-        for p in self.type.output_params:
-            outs.append(torch.empty(p.shape, dtype=to_torch_dtype(p.dtype), device=device))
-        self.entry(*args, *outs)
-        return outs[0] if len(outs) == 1 else tuple(outs)
-
-
-def _abi_dim(dim) -> int:
-    static = static_dim_value(dim)
-    return static if static is not None else -1
-
-
-def callable_type_of(fn) -> CallableType:
-    """Derive a ``CallableType`` for a HIR ``Function``: one ``ParamABI`` per
-    declared parameter, ``output_count=0`` (a value-returning implementation),
-    mirroring ``codegen/cuda/emit.py::_param_abi``'s dynamic-dim rule (a
-    static dim stays its ``int`` value; a dynamic dim becomes ``-1``).
-    """
-    params = tuple(
-        ParamABI(
-            name=var.name,
-            dtype=var.type.dtype,
-            shape=tuple(_abi_dim(s) for s in var.type.shape),
-            storage=var.type.storage,
-        )
-        for var in fn.params
+    ty = var.type
+    assert isinstance(ty, TensorType), (
+        f"param {var.name!r} must be TensorType, got {type(ty).__name__}"
     )
-    return CallableType(name=fn.name, params=params, output_count=0)
+    return ParamABI(name=var.name, type=ty)
+
+
+def entry_abi_of(fn) -> EntryABI:
+    """Derive an ``EntryABI`` for a HIR ``Function``: one ``ParamABI`` per
+    declared parameter (via ``param_abi_of``), ``output_count=0`` (a
+    value-returning implementation, not an out-param entry).
+    """
+    params = tuple(param_abi_of(var) for var in fn.params)
+    return EntryABI(name=fn.name, params=params, output_count=0)
 
 
 __all__ = [
-    "CallableType",
-    "CompiledFunction",
-    "KernelInfo",
-    "LaunchConfig",
+    "EntryABI",
     "ParamABI",
     "RuntimeFunction",
-    "callable_type_of",
+    "entry_abi_of",
+    "param_abi_of",
 ]
