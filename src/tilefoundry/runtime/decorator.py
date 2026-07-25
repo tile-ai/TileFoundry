@@ -86,15 +86,10 @@ def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Calla
 
 
 class _Twin(RuntimeModule):
-    """Base of every ``@runtime_module`` result.
-
-    Holds the three behaviours that need no per-class state — they read only
-    ``self._ir`` / ``self.modules`` / ``self._bound``, all set by the generated
-    ``__init__`` — so they are defined once here instead of being rebuilt as
-    closures for every decorated class. That also makes the reuse contract
-    observable: a twin that authors its own ``forward`` shadows
-    ``_Twin.forward`` in its own class namespace, and one that reuses the
-    semantic module's orchestration does not.
+    """Base of every ``@runtime_module`` result: the behaviours that read only
+    ``self._ir`` / ``self.modules`` / ``self._bound``, so they are defined once
+    here rather than rebuilt as closures per decorated class (docs/spec/
+    runtime.md §1.1). An authored ``forward`` shadows this one by ordinary MRO.
     """
 
     _ir: Module
