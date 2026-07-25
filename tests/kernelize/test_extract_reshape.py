@@ -18,9 +18,8 @@ flat-index equality between old/new shape, isl div/mod for a merge, plain
 multiply-add for a split; see that function's docstring for the general
 construction). Shapes below (``H=3, D=8, HD=24``, all pairwise distinct from
 ``B=1, S=4``) mirror the qwen3 head-split/merge reshape shape the task calls
-out, at toy size; ``tile_size=1`` throughout so the asserted access maps are
-exact per-element formulas, not V1's coarser tile-count reuse (same
-reasoning as ``test_extract_repeat_interleave.py`` / ``test_extract_rope.py``).
+out, at toy size; extraction is plain element granularity throughout, so the
+asserted access maps are exact per-element formulas.
 """
 from __future__ import annotations
 
@@ -47,7 +46,7 @@ def test_reshape_split_is_not_a_statement():
     """``y = reshape(x, [B,S,H,D])`` (splitting a merged head axis, the
     qwen3 q/k/v-projection shape) contributes zero units -- only
     ``Sigmoid`` extracts."""
-    tg = extract(split_then_sigmoid, tile_size=1)
+    tg = extract(split_then_sigmoid)
     assert isinstance(tg, TileGraph)
     assert len(tg.units) == 1
     assert tg.units[0].name == "Sigmoid"
@@ -60,7 +59,7 @@ def test_reshape_split_pierces_to_the_real_buffer():
     through the reshape to ``x``'s own (merged-axis) coordinates: no
     div/mod needed for a split, the new (h,d) pair reconstructs the old
     flat offset by plain multiply-add (``D*h + d``)."""
-    tg = extract(split_then_sigmoid, tile_size=1)
+    tg = extract(split_then_sigmoid)
 
     print("\n=== reshape split: domain ===")
     print(tg.domain)
@@ -99,7 +98,7 @@ def test_reshape_merge_pierces_via_div_mod():
     from the *new* merged flat offset genuinely needs div/mod, unlike the
     split direction -- this is inherent to unpacking a flat index, not a
     design gap (see ``flat_reshape_map``'s docstring)."""
-    tg = extract(merge_then_sigmoid, tile_size=1)
+    tg = extract(merge_then_sigmoid)
     assert len(tg.units) == 1
     assert tg.units[0].name == "Sigmoid"
 
@@ -129,7 +128,7 @@ def test_reshape_chain_pierces_through_both_hops():
     both hops fold away, and Sigmoid's read composes straight through to
     ``x2`` -- ``_buffer_namer``'s recursion chases the whole chain, not
     just one hop."""
-    tg = extract(reshape_chain_then_sigmoid, tile_size=1)
+    tg = extract(reshape_chain_then_sigmoid)
     assert len(tg.units) == 1
     op_kinds = [type(u.op.target).__name__ for u in tg.units]
     assert "Reshape" not in op_kinds
@@ -159,7 +158,7 @@ def test_reshape_multiple_consumers_each_pierce_independently():
     reshape output each pierce independently to the same source buffer --
     the fold is a property of the reshape ``Call``, not of any one reader.
     """
-    tg = extract(reshape_multi_consumer, tile_size=1)
+    tg = extract(reshape_multi_consumer)
     op_names = {u.name for u in tg.units}
     assert op_names == {"Sigmoid", "Unary", "Binary"}
 
@@ -189,4 +188,4 @@ def test_boundary_reshape_with_no_consumer_fails_closed():
     reshape folds away -- `extract` fails closed with its existing
     empty-body error rather than fabricating a copy statement."""
     with pytest.raises(ExtractError, match="no compute ops to extract"):
-        extract(bare_reshape_return, tile_size=1)
+        extract(bare_reshape_return)

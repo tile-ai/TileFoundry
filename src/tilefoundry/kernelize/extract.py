@@ -1,6 +1,6 @@
 """``extract(hir) -> TileGraph`` -- lift an HIR ``Function`` body into a
-polyhedral (isl) representation: one statement per compute op, tiled to a
-fixed V1 tile size, with reads/writes/deps ready to feed
+polyhedral (isl) representation: one statement per compute op, at element
+granularity, with reads/writes/deps ready to feed
 ``isl.schedule_constraints`` (see ``schedule_tree.py``).
 
 Algorithm (docstring mirrors the design so the "why" travels with the code):
@@ -13,26 +13,27 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
    ``_buffer_namer``). Each such ``Call`` becomes one statement -- or
    several, for an op whose outputs cannot share one domain (``RoPE``'s
    GQA q/k, see ``_rope_access``).
-2. For each statement, get its access relations via
-   ``access_relation.build_relation`` (the *forward*, input-type-driven
-   registry) when the op has one registered. ``build_relation`` returns
-   the relation at *element* granularity (``AccessRelationResult.domain``
-   ranges over real tensor extents, static or ``DimVar``-parametrised);
-   V1 tiles it down to a small fixed tile size (``DEFAULT_TILE_SIZE``) by
-   re-deriving the domain from the tile-count extents (``_tile_domain``)
-   and reusing each access map's own formula at the new granularity --
-   valid because ``build_relation``'s maps are pure per-axis
-   selections/broadcasts with no bounds of their own (see
-   ``_retile_map``). Any isl parameter used is resolved back to its
-   ``ShapeDim`` in the returned ``TileGraph.params``.
+2. For each statement, narrow every argument's type to its local (per-shard)
+   shape when it carries a ``ShardLayout`` (``_local_type``: each mesh
+   ``Split``'s *tensor* axis divided by its mesh extent, tensor rank
+   preserved -- centralized here, once, so every registered relation is
+   sharding-aware without knowing sharding exists), then get the
+   statement's access relations via ``access_relation.build_relation``
+   (the *forward*, input-type-driven registry) over those local types.
+   ``build_relation`` returns the relation at *element* granularity
+   (``AccessRelationResult.domain`` ranges over the, already-local, tensor
+   extents, static or ``DimVar``-parametrised); extract only stamps the
+   statement's tuple name onto it and reuses each access map's own
+   formula unchanged (see ``_bind_map``) -- no retiling happens here. Any
+   isl parameter used is resolved back to its ``ShapeDim`` via the
+   relation's own ``param_map`` into the returned ``TileGraph.params``.
 3. An op with no registered forward relation (``build_relation`` returns
-   ``None``) has no generic path -- V1 special-cases ``RMSNorm`` (see
-   ``_rmsnorm_access``), and raises a clear, actionable
-   ``NotImplementedError`` for anything else (never silently guesses).
-   ``RoPE`` *is* registered but is also special-cased (``_rope_access``):
-   its relation is single-domain (one value input + its own cos/sin/pos),
-   so extract calls it once per branch (q, k) rather than through the
-   generic multi-domain-per-statement path.
+   ``None``) raises a clear, actionable ``NotImplementedError`` -- extract
+   never silently guesses an access pattern. ``RoPE`` *is* registered but
+   is also special-cased (``_rope_access``): its relation is single-domain
+   (one value input + its own cos/sin/pos), so extract calls it once per
+   branch (q, k) rather than through the generic multi-domain-per-statement
+   path.
 4. Union every statement's domain/reads/writes into one
    ``isl.union_set``/``isl.union_map`` pair, then auto-infer ``deps`` by
    feeding an initial (topological-postorder) execution order into
@@ -52,19 +53,14 @@ from tilefoundry.analysis.analyzer import _postorder
 from tilefoundry.ir.core import Call, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
-from tilefoundry.visitor_registry.isl_utility import to_domain
 
 from .tile_graph import TileGraph, TileUnit
-
-# V1 has no tile-pin annotation reader yet (`where(...)` is future work --
-# see the module docstring); every domain axis is tiled by this one fixed
-# size (ceiling division, see `_tile_extents`).
-DEFAULT_TILE_SIZE = 32
 
 # Cosmetic-only: short isl tuple names for the two ops this V1 slice
 # exercises, matching the m1_deps_probe.py / PoC 09 reference output
@@ -83,8 +79,8 @@ class ExtractError(NotImplementedError):
 
 @dataclass(frozen=True)
 class _StatementAccess:
-    """Extraction-internal: one statement's tiled domain + tuple-named
-    access maps, before they are unioned into the returned ``TileGraph``."""
+    """Extraction-internal: one statement's domain + tuple-named access
+    maps, before they are unioned into the returned ``TileGraph``."""
 
     name: str
     domain: "isl.set"
@@ -183,158 +179,83 @@ def _assign_statement_names(ops: list[object]) -> list[str]:
     return names
 
 
-@dataclass(frozen=True)
-class _ParamAxis:
-    """Marks a domain axis whose extent is the isl parameter ``param``,
-    not a static int (see ``_domain_extents``)."""
+def _local_type(ty: TensorType) -> TensorType:
+    """*ty* narrowed to its per-shard local shape when ``ty.layout`` is a
+    ``ShardLayout``, else *ty* unchanged.
 
-    param: str
-
-
-def _axis_param_name(domain: "isl.set", axis: int) -> "str | None":
-    """The isl parameter axis ``axis``'s upper bound depends on, or
-    ``None`` if it's a plain constant. ``dim_max``'s pw_aff mentions
-    every param in the domain regardless (its piece's validity condition
-    leaks in), so this checks each piece's own ``aff`` instead."""
-    mx = domain.dim_max(axis)
-    if mx.is_cst():
-        return None
-    nparams = domain.dim(isl.dim_type.PARAM)
-    pieces: list = []
-    mx.foreach_piece(lambda s, aff: pieces.append(aff))
-    names = {
-        domain.get_dim_name(isl.dim_type.PARAM, p)
-        for aff in pieces
-        for p in range(nparams)
-        if aff.involves_dims(isl.dim_type.PARAM, p, 1)
-    }
-    if len(names) != 1:
-        raise ExtractError(
-            f"kernelize.extract: domain axis {axis}'s bound depends on "
-            f"{len(names)} isl parameters {sorted(names)!r} -- V1 "
-            "dynamic-shape tiling only supports a bound tied to exactly "
-            "one parameter per axis"
-        )
-    return next(iter(names))
-
-
-def _domain_extents(domain: "isl.set") -> tuple:
-    """Read ``domain``'s per-axis bounds back: a static axis as a plain
-    ``[lo, hi]`` int extent, a dynamic axis as a ``_ParamAxis`` marker.
-    Only SET axes are read -- a PARAM dim is never treated as one."""
-    rank = domain.dim(isl.dim_type.SET)
-    extents: list = []
-    for i in range(rank):
-        name = _axis_param_name(domain, i)
-        if name is not None:
-            extents.append(_ParamAxis(name))
+    ``shard_layout_local_shape`` divides *layout* positions, not tensor
+    axes: ``canonical_shard_layout`` (the real ``make_shard_tensor_type``
+    path) factors a split tensor axis into extra layout positions, so that
+    helper's result can outrank the tensor -- an access relation built from
+    it would then carry more dims than the buffer it reads/writes, and
+    ``compute_flow`` silently drops the dependence rather than raising.
+    ``split_target_axes`` instead names, per mesh axis, which *tensor* axis
+    a ``Split`` targets; dividing that axis by its mesh extent keeps rank
+    intact. A ``Partial``/``Broadcast``/``Dynamic`` mesh axis consumes no
+    tensor axis. Centralized here (not per-relation) so every registered
+    ``type_relation`` is sharding-aware for free.
+    """
+    layout = ty.layout
+    if not isinstance(layout, ShardLayout):
+        return ty
+    targets = split_target_axes(layout, ty.shape)
+    mesh_extents = layout.mesh.layout.shape
+    local = list(ty.shape)
+    for mesh_axis, tensor_axis in enumerate(targets):
+        if tensor_axis is None:
+            continue  # Partial / Broadcast / Dynamic: no tensor axis consumed
+        extent = mesh_extents[mesh_axis]
+        if extent is None:
+            local[tensor_axis] = 1  # launch-provided CTA split: one shard, one slice
             continue
-        lo = int(domain.dim_min_val(i).num_si())
-        hi = int(domain.dim_max_val(i).num_si())
-        extents.append(hi - lo + 1)
-    return tuple(extents)
-
-
-def _tile_extents(extents: tuple, tile_size: int) -> tuple:
-    tiled = []
-    for axis, extent in enumerate(extents):
-        if isinstance(extent, _ParamAxis):
-            tiled.append(extent)
-            continue
-        if not isinstance(extent, int) or isinstance(extent, bool):
+        size = local[tensor_axis]
+        if not isinstance(size, int) or isinstance(size, bool):
             raise ExtractError(
-                f"kernelize.extract: domain axis {axis} has a non-static "
-                f"extent {extent!r} ({type(extent).__name__}) -- V1 only "
-                "tiles a plain int extent or a dynamic-shape axis "
-                "(_domain_extents' _ParamAxis marker)"
+                f"kernelize.extract: tensor axis {tensor_axis} is Split-sharded "
+                f"but its extent {size!r} is not a static int -- cannot divide "
+                "a dynamic axis by a mesh extent"
             )
-        tiled.append(-(-extent // tile_size))  # ceildiv
-    return tuple(tiled)
-
-
-def _tile_domain(
-    extents: tuple, tile_size: int, elem_domain: "isl.set", stmt_name: str,
-) -> "isl.set":
-    """``extents`` (``_tile_extents``'s output) -> the tuple-named
-    tile-count domain. All-static defers to ``to_domain`` unchanged; a
-    ``_ParamAxis`` gets a ``tile_size*d_i < param`` bound instead of a
-    fixed count, bounded via ``elem_domain``'s own parameter range."""
-    if not any(isinstance(e, _ParamAxis) for e in extents):
-        domain, _ = to_domain(extents)
-        return domain.set_tuple_name(stmt_name)
-
-    dims = [f"d{i}" for i in range(len(extents))]
-    constraints = [
-        f"{tile_size}*d{i} < {e.param} and d{i} >= 0"
-        if isinstance(e, _ParamAxis)
-        else f"0 <= d{i} < {e}"
-        for i, e in enumerate(extents)
-    ]
-    params = sorted({e.param for e in extents if isinstance(e, _ParamAxis)})
-    prefix = f"[{', '.join(params)}] -> "
-    body = f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}"
-    domain = isl.set(prefix + body).intersect_params(elem_domain.params())
-    return domain.set_tuple_name(stmt_name)
-
-
-def _collect_params(extents: tuple, param_map: dict, stmt_name: str) -> dict:
-    """This statement's ``TileGraph.params`` contribution: each dynamic
-    axis's isl parameter resolved back to its ``ShapeDim`` via
-    ``param_map``."""
-    out: dict = {}
-    for e in extents:
-        if not isinstance(e, _ParamAxis):
-            continue
-        dim = param_map.get(e.param)
-        if dim is None:
+        if size % extent != 0:
             raise ExtractError(
-                f"kernelize.extract: statement {stmt_name!r} has a dynamic "
-                f"axis bound to isl parameter {e.param!r}, but its access "
-                "relation's param_map has no entry for it"
+                f"kernelize.extract: tensor axis {tensor_axis} (extent {size}) "
+                f"is not evenly divisible by its mesh extent {extent}"
             )
-        out[e.param] = dim
-    return out
+        local[tensor_axis] = size // extent
+    return TensorType(shape=tuple(local), dtype=ty.dtype, layout=None, storage=ty.storage)
 
 
-def _retile_map(m: "isl.map", stmt_name: str, tile_domain: "isl.set", buffer_name: str) -> "isl.map":
-    """Reuse an *element*-granularity access map's own formula at *tile*
-    granularity.
-
-    ``build_relation``'s maps (e.g. matmul's ``{ [d0,d1,d2] -> [d0,d2] }``)
-    are pure per-axis selections/broadcasts with no bounds of their own --
-    the bounds live entirely in the paired ``domain``. isl requires a
-    map's ``IN`` tuple identity (name *and* param space) to match the set
-    it is intersected with, so the statement name has to be stamped on
-    *before* ``intersect_domain`` -- reversing that order raises
-    ``isl.Error: incompatible spaces`` (confirmed against isl-python
-    0.1.8 while building this module). Restricting the *same* formula to
-    a differently-bounded (tile-count instead of element-count) domain of
-    equal rank is exactly "op iteration space div tile size".
+def _bind_map(m: "isl.map", stmt_name: str, domain: "isl.set", buffer_name: str) -> "isl.map":
+    """Stamp one ``build_relation`` access map (element-granularity, no
+    bounds of its own -- the bounds live entirely in the paired ``domain``)
+    with its statement/buffer tuple names and restrict it to ``domain``.
+    isl requires a map's ``IN`` tuple identity (name *and* param space) to
+    match the set it is intersected with, so the statement name has to be
+    stamped on *before* ``intersect_domain`` -- reversing that order raises
+    ``isl.Error: incompatible spaces`` (confirmed against isl-python 0.1.8
+    while building this module).
     """
     return (
         m.set_tuple_name(isl.dim_type.IN, stmt_name)
-        .intersect_domain(tile_domain)
+        .intersect_domain(domain)
         .set_tuple_name(isl.dim_type.OUT, buffer_name)
     )
 
 
-def _read_map(m: "isl.map", stmt_name: str, tile_domain: "isl.set", arg, namer) -> "isl.map":
+def _read_map(m: "isl.map", stmt_name: str, domain: "isl.set", arg, namer) -> "isl.map":
     """A read access for input ``arg``, pierced through any reshape view
-    (``namer.pierce``) before retiling -- the view-fold's landing point for
+    (``namer.pierce``) before binding -- the view-fold's landing point for
     every op's input side (an op's own output buffer never needs piercing,
     a reshape output is never written to)."""
-    return _retile_map(namer.pierce(m, arg), stmt_name, tile_domain, namer(arg))
+    return _bind_map(namer.pierce(m, arg), stmt_name, domain, namer(arg))
 
 
 def _registered_access(
-    call: Call, stmt_name: str, tile_size: int, result: AccessRelationResult, namer,
+    call: Call, stmt_name: str, result: AccessRelationResult, namer,
 ) -> _StatementAccess:
     """Statement extraction for an op with a registered forward relation
-    (``access_relation.build_relation`` returned non-``None``, e.g. MatMul).
-    """
-    tile_extents = _tile_extents(_domain_extents(result.domain), tile_size)
-    tile_domain = _tile_domain(tile_extents, tile_size, result.domain, stmt_name)
-    params = _collect_params(tile_extents, result.param_map, stmt_name)
+    (``access_relation.build_relation`` returned non-``None``, e.g. MatMul,
+    RMSNorm)."""
+    domain = result.domain.set_tuple_name(stmt_name)
 
     n_inputs = len(call.args)
     output_maps = result.maps[n_inputs:]
@@ -348,13 +269,13 @@ def _registered_access(
     reads: list["isl.map"] = []
     writes: list["isl.map"] = []
     for i, arg in enumerate(call.args):
-        reads.append(_read_map(result.maps[i], stmt_name, tile_domain, arg, namer))
+        reads.append(_read_map(result.maps[i], stmt_name, domain, arg, namer))
 
     n_outputs = len(output_maps)
     for out_idx, raw_map in enumerate(output_maps):
         out_buf = namer(call) if n_outputs == 1 else f"{namer(call)}_{out_idx}"
-        tiled = _retile_map(raw_map, stmt_name, tile_domain, out_buf)
-        writes.append(tiled)
+        bound = _bind_map(raw_map, stmt_name, domain, out_buf)
+        writes.append(bound)
         # An output map that is not injective means two distinct domain
         # points (e.g. two different k-steps of a reduction) write the
         # *same* output cell -- only sound as a read-modify-write
@@ -363,95 +284,45 @@ def _registered_access(
         # exactly like m1_deps_probe.py's hand-written `MM -> h` read).
         # An injective output map (the common elementwise/projection
         # case) is pure write, no self-read.
-        if not tiled.is_injective():
-            reads.append(tiled)
+        if not bound.is_injective():
+            reads.append(bound)
 
     return _StatementAccess(
-        name=stmt_name, domain=tile_domain, op=call,
-        reads=tuple(reads), writes=tuple(writes), params=params,
-    )
-
-
-def _rmsnorm_access(call: Call, stmt_name: str, tile_size: int, namer) -> _StatementAccess:
-    """V1 fallback for ``RMSNorm``: it has no upstream-registered forward
-    relation (``build_relation`` returns ``None`` -- see the task report),
-    so this hand-derives the same shape a real registration would.
-
-    RMSNorm reduces over the tensor's last axis entirely *inside* one
-    statement instance (V1 does not tile the reduction axis -- the
-    statement reads/writes the whole row), so its domain is only the
-    *batch* axes (``x.shape[:-1]``), tiled; the reduction axis is an
-    existentially-quantified range dim on the access maps, matching
-    m1_deps_probe.py's ``RN[i] -> h[i,j] : 0<=j<Tj`` shape. A batch axis
-    may itself be dynamic -- it goes through the same pipeline
-    ``_registered_access`` does; the reduction/weight axes stay
-    static-only.
-    """
-    x, weight = call.args
-    x_shape = x.type.shape
-    w_shape = weight.type.shape
-    if len(x_shape) < 1 or len(w_shape) != 1:
-        raise ExtractError(
-            "kernelize.extract: RMSNorm V1 fallback expects rank>=1 x and "
-            f"rank-1 weight, got x.shape={x_shape} weight.shape={w_shape}"
-        )
-
-    elem_batch_domain, batch_param_map = to_domain(x_shape[:-1])
-    batch_extents = _tile_extents(_domain_extents(elem_batch_domain), tile_size)
-    reduce_tiles = _tile_extents((x_shape[-1],), tile_size)[0]
-    weight_tiles = _tile_extents((w_shape[0],), tile_size)[0]
-
-    domain = _tile_domain(batch_extents, tile_size, elem_batch_domain, stmt_name)
-    params = _collect_params(batch_extents, batch_param_map, stmt_name)
-
-    batch_dims = [f"d{i}" for i in range(len(batch_extents))]
-    src = f"[{', '.join(batch_dims)}]"
-    row = ", ".join(batch_dims + ["j"])
-
-    read_x = isl.map(f"{{ {src} -> [{row}] : 0 <= j < {reduce_tiles} }}")
-    read_w = isl.map(f"{{ {src} -> [j] : 0 <= j < {weight_tiles} }}")
-    write_y = isl.map(f"{{ {src} -> [{row}] : 0 <= j < {reduce_tiles} }}")
-
-    reads = (
-        _read_map(read_x, stmt_name, domain, x, namer),
-        _read_map(read_w, stmt_name, domain, weight, namer),
-    )
-    writes = (_retile_map(write_y, stmt_name, domain, namer(call)),)
-    return _StatementAccess(
-        name=stmt_name, domain=domain, op=call, reads=reads, writes=writes, params=params,
+        name=stmt_name, domain=domain, op=call,
+        reads=tuple(reads), writes=tuple(writes), params=result.param_map,
     )
 
 
 def _rope_branch(
     call: Call, x, cos_cache, sin_cache, pos_ids, out_idx: int,
-    stmt_name: str, tile_size: int, namer,
+    stmt_name: str, namer,
 ) -> _StatementAccess:
     """One RoPE branch (q or k): calls the registered relation with *x*
     standing in for both value-input slots, keeping only *x*'s own reads
     and its ``out_idx`` output."""
-    x_ty, cos_ty, sin_ty, pos_ty = x.type, cos_cache.type, sin_cache.type, pos_ids.type
+    x_ty, cos_ty, sin_ty, pos_ty = (
+        _local_type(t.type) for t in (x, cos_cache, sin_cache, pos_ids)
+    )
     result = build_relation(call, (x_ty, x_ty, cos_ty, sin_ty, pos_ty), TypeInferContext())
-    tile_extents = _tile_extents(_domain_extents(result.domain), tile_size)
-    tile_domain = _tile_domain(tile_extents, tile_size, result.domain, stmt_name)
-    params = _collect_params(tile_extents, result.param_map, stmt_name)
+    domain = result.domain.set_tuple_name(stmt_name)
 
     reads = [
-        _read_map(result.maps[0], stmt_name, tile_domain, x, namer),
-        _read_map(result.maps[2], stmt_name, tile_domain, cos_cache, namer),
-        _read_map(result.maps[3], stmt_name, tile_domain, sin_cache, namer),
-        _read_map(result.maps[4], stmt_name, tile_domain, pos_ids, namer),
+        _read_map(result.maps[0], stmt_name, domain, x, namer),
+        _read_map(result.maps[2], stmt_name, domain, cos_cache, namer),
+        _read_map(result.maps[3], stmt_name, domain, sin_cache, namer),
+        _read_map(result.maps[4], stmt_name, domain, pos_ids, namer),
     ]
     out_buf = f"{namer(call)}_{out_idx}"
-    write = _retile_map(result.maps[5 + out_idx], stmt_name, tile_domain, out_buf)
+    write = _bind_map(result.maps[5 + out_idx], stmt_name, domain, out_buf)
     if not write.is_injective():
         reads.append(write)
     return _StatementAccess(
-        name=stmt_name, domain=tile_domain, op=call,
-        reads=tuple(reads), writes=(write,), params=params,
+        name=stmt_name, domain=domain, op=call,
+        reads=tuple(reads), writes=(write,), params=result.param_map,
     )
 
 
-def _rope_access(call: Call, stmt_name: str, tile_size: int, namer) -> list[_StatementAccess]:
+def _rope_access(call: Call, stmt_name: str, namer) -> list[_StatementAccess]:
     """RoPE -> two statements, one per value input: GQA's Hq != Hkv means
     q_rope/k_rope cannot share one domain (see the task report's path A).
     Output buffers use the same ``_{out_idx}`` suffix ``_registered_access``
@@ -461,27 +332,24 @@ def _rope_access(call: Call, stmt_name: str, tile_size: int, namer) -> list[_Sta
     """
     q, k, cos_cache, sin_cache, pos_ids = call.args
     return [
-        _rope_branch(call, q, cos_cache, sin_cache, pos_ids, 0, f"{stmt_name}_q", tile_size, namer),
-        _rope_branch(call, k, cos_cache, sin_cache, pos_ids, 1, f"{stmt_name}_k", tile_size, namer),
+        _rope_branch(call, q, cos_cache, sin_cache, pos_ids, 0, f"{stmt_name}_q", namer),
+        _rope_branch(call, k, cos_cache, sin_cache, pos_ids, 1, f"{stmt_name}_k", namer),
     ]
 
 
-def _extract_statement(call: Call, stmt_name: str, tile_size: int, namer) -> list[_StatementAccess]:
+def _extract_statement(call: Call, stmt_name: str, namer) -> list[_StatementAccess]:
     if isinstance(call.target, RoPE):
-        return _rope_access(call, stmt_name, tile_size, namer)
-    input_types = tuple(arg.type for arg in call.args)
+        return _rope_access(call, stmt_name, namer)
+    input_types = tuple(_local_type(arg.type) for arg in call.args)
     result = build_relation(call, input_types, TypeInferContext())
     if result is not None:
-        return [_registered_access(call, stmt_name, tile_size, result, namer)]
-    if isinstance(call.target, RMSNorm):
-        return [_rmsnorm_access(call, stmt_name, tile_size, namer)]
+        return [_registered_access(call, stmt_name, result, namer)]
     raise ExtractError(
         f"kernelize.extract: op {type(call.target).__name__!r} has no "
         "registered forward type_relation (access_relation.build_relation "
-        "returned None) and no V1 fallback in kernelize.extract. Register "
-        "one via tilefoundry.visitor_registry.access_relation."
-        "register_type_relation(...), or extend the V1 fallback table in "
-        "this module -- do not guess an access pattern silently."
+        "returned None) -- register one via tilefoundry.visitor_registry."
+        "access_relation.register_type_relation(...); extract has no "
+        "per-op fallback."
     )
 
 
@@ -514,9 +382,9 @@ def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
     return sched
 
 
-def extract(hir: Function, *, tile_size: int = DEFAULT_TILE_SIZE) -> TileGraph:
+def extract(hir: Function) -> TileGraph:
     """Lift ``hir``'s body into a :class:`TileGraph`: one statement per
-    compute op (tiled to ``tile_size``), with ``deps`` auto-inferred from
+    compute op at element granularity, with ``deps`` auto-inferred from
     ``reads``/``writes`` (see module docstring for the full algorithm)."""
     if hir.body is None:
         raise ExtractError(
@@ -556,7 +424,7 @@ def extract(hir: Function, *, tile_size: int = DEFAULT_TILE_SIZE) -> TileGraph:
     namer = _buffer_namer()
     accesses: list[_StatementAccess] = []
     for call, name in zip(compute_calls, stmt_names):
-        accesses.extend(_extract_statement(call, name, tile_size, namer))
+        accesses.extend(_extract_statement(call, name, namer))
 
     domain = isl.union_set("{}")
     reads = isl.union_map("{}")
@@ -588,4 +456,4 @@ def extract(hir: Function, *, tile_size: int = DEFAULT_TILE_SIZE) -> TileGraph:
     )
 
 
-__all__ = ["extract", "ExtractError", "DEFAULT_TILE_SIZE"]
+__all__ = ["extract", "ExtractError"]

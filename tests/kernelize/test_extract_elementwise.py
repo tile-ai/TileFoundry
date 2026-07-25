@@ -3,34 +3,21 @@
 ``tilefoundry.ir.hir.nn.sigmoid`` / ``tilefoundry.ir.hir.math.unary``) --
 before this, ``access_relation.build_relation`` returned ``None`` for both,
 so ``kernelize.extract`` raised (its generic path is the *only* one that
-consults ``type_relation_registry``; V1's hand-written fallback table only
-covers ``RMSNorm``, see ``extract.py``'s ``_extract_statement``).
+consults ``type_relation_registry`` -- an op with no registered relation has
+no fallback, see ``extract.py``'s ``_extract_statement``).
 
 Two things this file checks, mirroring ``test_gemm_rmsnorm.py``'s shape for
 the matmul/rmsnorm family:
 
 1. A minimal single-op HIR (``y = sigmoid(x)``, ``y = exp(x)``) extracts to a
-   one-statement ``TileGraph`` with a real tiled domain and one read + one
-   write access map apiece (identity, no broadcast -- single input, output
-   shape == input shape).
+   one-statement ``TileGraph`` with a real (element-granularity) domain and
+   one read + one write access map apiece (identity, no broadcast -- single
+   input, output shape == input shape).
 2. The real qwen3-1.7b ``mlp`` kernel (``rms_norm`` + 3x ``matmul`` + 1x
    ``sigmoid`` + 2x ``mul``, no nested ``@func`` -- see
    ``tests/models/qwen3_1_7b/qwen3_1_7b_module.py``) extracts *whole*: every
-   op now resolves an access relation -- MatMul/Binary were already
-   registered, RMSNorm uses extract's V1 fallback, and Sigmoid is the one
-   this task adds.
-
-``Qwen3_1_7B.mlp``'s real shapes (batch=1, ``S_CAP``=4, ``HIDDEN``=2048,
-``INTERMEDIATE``=6144, from ``tests/models/qwen3_1_7b/common.py``) are not
-evenly divisible by the fixed V1 ``DEFAULT_TILE_SIZE`` (32) -- ``S_CAP=4``
-alone rules it out -- and this suite must not perturb those shared dims
-(other component tests in that package depend on them). ``tile_size=1``
-sidesteps that V1 "must divide evenly" restriction (every extent is
-trivially divisible by 1): isl represents the resulting domains as plain
-bounded-box constraints regardless of the bound's magnitude, so this is a
-legitimate, structure-preserving way to ask "does every op resolve a
-relation" without touching the model's real dimensions or the fixed V1
-tile size.
+   op now resolves an access relation -- MatMul/Binary/RMSNorm were already
+   registered, and Sigmoid is the one this task adds.
 """
 from __future__ import annotations
 
@@ -105,11 +92,10 @@ def test_extract_qwen3_mlp_whole():
     nested ``@func`` -- extracts as a *single* ``TileGraph`` with one
     statement per op. Before this task's fix, ``extract(Qwen3_1_7B.mlp)``
     raised ``ExtractError`` at the ``Sigmoid`` call (no registered
-    ``type_relation`` and no V1 fallback); now every op resolves one:
-    MatMul/Binary(MUL) were already registered, RMSNorm uses extract's V1
-    fallback (``_rmsnorm_access``), Sigmoid is this task's addition.
+    ``type_relation``); now every op resolves one: MatMul/Binary(MUL)/
+    RMSNorm were already registered, Sigmoid is this task's addition.
     """
-    tg = extract(Qwen3_1_7B.mlp, tile_size=1)
+    tg = extract(Qwen3_1_7B.mlp)
     assert isinstance(tg, TileGraph)
 
     op_names = [type(u.op.target).__name__ for u in tg.units]

@@ -14,7 +14,7 @@ from .emit_scaffold import (
     TensorView,
     emit_scaffold,
 )
-from .extract import DEFAULT_TILE_SIZE, ExtractError, extract
+from .extract import ExtractError, extract
 from .inline import InlineError, inline_calls
 from .schedule_tree import ScheduleTree, schedule
 from .solve_resources import SolveResourcesError, solve_resources
@@ -26,7 +26,6 @@ __all__ = [
     "TileUnit",
     "extract",
     "ExtractError",
-    "DEFAULT_TILE_SIZE",
     "inline_calls",
     "InlineError",
     "ScheduleTree",

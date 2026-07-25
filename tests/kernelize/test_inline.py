@@ -161,7 +161,7 @@ def test_inline_then_extract_mlp_subgraph():
     flat = inline_calls(_mlp_via_nested_call)
     assert _nested_function_calls(flat.body) == []
 
-    tg = extract(flat, tile_size=1)
+    tg = extract(flat)
     assert isinstance(tg, TileGraph)
     op_names = [type(u.op.target).__name__ for u in tg.units]
     assert Counter(op_names) == Counter({"RMSNorm": 1, "MatMul": 3, "Sigmoid": 1, "Binary": 2})

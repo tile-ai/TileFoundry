@@ -28,10 +28,10 @@ from tilefoundry.kernelize import (
 
 @func
 def gemm_rmsnorm(
-    x: Tensor[(64, 128), "f32"],
-    w: Tensor[(128, 64), "f32"],
-    weight: Tensor[(64,), "f32"],
-) -> Tensor[(64, 64), "f32"]:
+    x: Tensor[(2, 4), "f32"],
+    w: Tensor[(4, 2), "f32"],
+    weight: Tensor[(2,), "f32"],
+) -> Tensor[(2, 2), "f32"]:
     h = matmul(x, w)
     y = rms_norm(h, weight)
     return y

@@ -20,11 +20,8 @@ the gather degenerates to a seq-axis identity, broadcast over batch/head
 seq-identity access.
 
 Shapes (batch=1, seq=4, Hq=16, Hkv=8, head_dim=128) match the task's GQA
-ask; extracted at ``tile_size=1`` (elementwise) like
-``test_extract_repeat_interleave.py``'s non-32-dividing precedent -- Hq/Hkv
-are both < the default tile size, so tiling them would collapse both to a
-single tile-count and hide the very Hq-vs-Hkv distinction this test is
-about.
+ask, extracted at plain element granularity -- Hq/Hkv stay their own real
+extents, keeping the Hq-vs-Hkv distinction this test is about.
 """
 from __future__ import annotations
 
@@ -54,7 +51,7 @@ def rope_gqa(
 def test_extract_rope_splits_into_q_and_k_statements():
     """One ``RoPE`` Call extracts to two statements, not one -- GQA's
     Hq != Hkv means q_rope/k_rope cannot share a domain (path A)."""
-    tg = extract(rope_gqa, tile_size=1)
+    tg = extract(rope_gqa)
     assert isinstance(tg, TileGraph)
     assert len(tg.units) == 2
 
@@ -65,7 +62,7 @@ def test_extract_rope_splits_into_q_and_k_statements():
 def test_extract_rope_domains_reflect_gqa_head_counts():
     """``RoPE_q``'s domain ranges over Hq=16 heads, ``RoPE_k``'s over
     Hkv=8 -- the two GQA-mismatched iteration spaces side by side."""
-    tg = extract(rope_gqa, tile_size=1)
+    tg = extract(rope_gqa)
 
     print("\n=== rope: domain ===")
     print(tg.domain)
@@ -86,7 +83,7 @@ def test_extract_rope_cos_sin_pos_are_regular_affine_access():
     assumption ``pos_ids == arange(seq)``; pos_ids gets the matching
     seq-identity access. Same formula for both branches: only the
     surrounding domain (Hq vs Hkv) differs."""
-    tg = extract(rope_gqa, tile_size=1)
+    tg = extract(rope_gqa)
 
     print("\n=== rope: reads ===")
     print(tg.reads)
@@ -106,7 +103,7 @@ def test_extract_rope_writes_and_no_cross_branch_dependence():
     suffix convention ``_registered_access`` uses for any multi-output op),
     both writes are injective (pure elementwise, no self-read), and q/k are
     independent -- no dependence is inferred between the two branches."""
-    tg = extract(rope_gqa, tile_size=1)
+    tg = extract(rope_gqa)
 
     print("=== rope: writes ===")
     print(tg.writes)
@@ -145,7 +142,7 @@ def test_extract_rope_k_branch_feeds_downstream_repeat_interleave():
         k_b = repeat_interleave(k_rope, repeats=GQA_GROUP, axis=2)
         return q_rope, k_b
 
-    tg = extract(rope_then_expand, tile_size=1)
+    tg = extract(rope_then_expand)
     names_by_op = {u.name: type(u.op.target).__name__ for u in tg.units}
     assert names_by_op == {
         "RoPE_q": "RoPE", "RoPE_k": "RoPE", "RepeatInterleave": "RepeatInterleave",

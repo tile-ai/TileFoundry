@@ -42,12 +42,11 @@ def _softmax_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 
     SoftMax is a single fused HIR op -- max/exp/sum are internal to its
     semantics, never separate nodes -- so its access pattern is
-    structurally identical to the RMSNorm V1 kernelize fallback
-    (``kernelize.extract._rmsnorm_access``): the domain is the batch axes
-    only (``x.shape[:-1]``), and the reduced axis is an extra
-    existential/range dim on the read/write map rather than a domain dim
-    -- one statement instance owns an entire row (V1 does not tile the
-    reduction axis), matching how a real online-softmax kernel is
+    structurally identical to ``RMSNorm``'s own registration: the domain
+    is the batch axes only (``x.shape[:-1]``), and the reduced axis is an
+    extra existential/range dim on the read/write map rather than a
+    domain dim -- one statement instance owns an entire row (V1 does not
+    tile the reduction axis), matching how a real online-softmax kernel is
     structured. The output map reuses the exact same formula as the input
     map: softmax's output is elementwise-shaped like its input, so the
     same whole-row access describes both the read and the write.
@@ -71,13 +70,20 @@ def _softmax_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
             f"rank-{rank} input; reducing any other axis has no kernelize "
             "access-relation modeling yet"
         )
+    reduce_extent = x.shape[-1]
+    if not isinstance(reduce_extent, int) or isinstance(reduce_extent, bool):
+        raise NotImplementedError(
+            "SoftMax type_relation: reduction axis must be a static int, "
+            f"got {reduce_extent!r} -- a dynamic reduction axis has no isl "
+            "representation here"
+        )
 
     batch_shape = x.shape[:-1]
     domain, param_map = to_domain(batch_shape)
     dims = [f"d{i}" for i in range(len(batch_shape))]
     src = "[" + ", ".join(dims) + "]"
     row = ", ".join(dims + ["j"])
-    row_map = isl.map(f"{{ {src} -> [{row}] : 0 <= j < {x.shape[-1]} }}")
+    row_map = isl.map(f"{{ {src} -> [{row}] : 0 <= j < {reduce_extent} }}")
     return AccessRelationResult(domain=domain, maps=(row_map, row_map), param_map=param_map)
 
 

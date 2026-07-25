@@ -724,6 +724,34 @@ Consensus torch.nn.functional ops.
     commutes; typeinfer rejects any `Partial` operand, including secondary
     affine inputs.
 
+##### RMSNorm
+```python
+class RMSNorm(Op):
+    """Normalize ``x`` by the root-mean-square of its last axis, scaled by ``weight``.
+
+    Attributes:
+        x: input; tensor normalized over its last axis.
+        weight: input; rank-1 scale, same length as ``x``'s last axis.
+        eps: attribute; added to the mean square before the root.
+    """
+
+    x: Tensor
+    weight: Tensor
+    eps: float = 1e-6
+```
+- constraints:
+  - `weight` MUST be rank-1 with the same length as `x`'s last axis; every
+    other `x` axis, including a dynamic (`DimVar` / dim-arithmetic) entry,
+    flows through unchanged.
+  - The normalization reduces the whole last axis at once (every output
+    element depends on that axis's full mean of squares), so the reduced
+    axis MUST stay inside a single op instance: it is never an
+    iteration-domain axis of its own, only an existential range that both
+    the read and the write cover in full.
+  - `x` / `weight` normalize across an axis (a non-monotonic combination of
+    every value on that axis), so no mesh-axis reduction provably commutes;
+    typeinfer rejects any `Partial` operand.
+
 ##### RoPE
 ```python
 class RoPE(Op):

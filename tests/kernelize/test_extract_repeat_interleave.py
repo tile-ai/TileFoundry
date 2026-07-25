@@ -3,8 +3,8 @@ that it carries a registered forward ``type_relation`` (see
 ``tilefoundry.ir.hir.tensor.repeat_interleave``) -- before this,
 ``access_relation.build_relation`` returned ``None`` for it (it had no
 access relation of any kind), so ``kernelize.extract`` raised (its generic
-path is the *only* one that consults ``type_relation_registry``; V1's
-hand-written fallback table only covers ``RMSNorm``, see ``extract.py``'s
+path is the *only* one that consults ``type_relation_registry`` -- an op
+with no registered relation has no fallback, see ``extract.py``'s
 ``_extract_statement``).
 
 ``y = repeat_interleave(x, repeats=4, axis=2)`` grows axis 2 from ``H`` kv
@@ -23,11 +23,8 @@ repeats-1``, i.e. ``o2 = floor(d2/repeats)``) -- deliberately *not* the same
 semantics rather than a syntactic round-trip.
 
 Shapes (batch=1, S=5, H=2, D=3, all pairwise distinct so an axis mixup would
-show up as a mismatch) are extracted with ``tile_size=1`` (elementwise
-granularity, per ``test_extract_elementwise.py`` precedent) since axis 2's
-expanded extent (``H * repeats`` = 8) does not divide evenly by the fixed V1
-``DEFAULT_TILE_SIZE`` (32) -- this test is about the access-map shape, not
-tiling.
+show up as a mismatch) extract at plain element granularity -- this test is
+about the access-map shape, not any tiling of it.
 """
 from __future__ import annotations
 
@@ -51,7 +48,7 @@ def gqa_expand(x: Tensor[(B, S, H, D), "f32"]) -> Tensor[(B, S, H * REPEATS, D),
 def test_extract_repeat_interleave_single_statement():
     """``y = repeat_interleave(x, repeats=4, axis=2)`` extracts to one
     statement instead of raising ``ExtractError``."""
-    tg = extract(gqa_expand, tile_size=1)
+    tg = extract(gqa_expand)
     assert isinstance(tg, TileGraph)
     assert len(tg.units) == 1
     unit = tg.units[0]
@@ -79,7 +76,7 @@ def test_extract_repeat_interleave_access_maps_are_floor_div():
     inequality, independent of the relation's own ``floor(a/b)`` syntax);
     the write map is identity. No statement is self- or cross-dependent
     (single elementwise op, nothing else reads its output)."""
-    tg = extract(gqa_expand, tile_size=1)
+    tg = extract(gqa_expand)
 
     expected_domain = isl.set(
         f"{{ RepeatInterleave[d0,d1,d2,d3] : 0<=d0<{B} and 0<=d1<{S} "

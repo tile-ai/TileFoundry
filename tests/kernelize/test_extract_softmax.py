@@ -3,19 +3,18 @@ forward ``type_relation`` (see ``tilefoundry.ir.hir.nn.softmax``) -- before
 this, ``access_relation.build_relation`` returned ``None`` for it (only a
 GLOBAL-level identity ``access_relation``, no forward relation), so
 ``kernelize.extract`` raised (its generic path is the *only* one that
-consults ``type_relation_registry``; V1's hand-written fallback table only
-covers ``RMSNorm``, see ``extract.py``'s ``_extract_statement``).
+consults ``type_relation_registry`` -- an op with no registered relation has
+no fallback, see ``extract.py``'s ``_extract_statement``).
 
 SoftMax is a single fused HIR op (max/exp/sum are internal, never separate
-nodes), so its access pattern is structurally identical to the RMSNorm V1
-kernelize fallback (``extract._rmsnorm_access``): the domain is the batch
-axes only (``x.shape[:-1]``) and the reduced (last) axis is an extra
-existential dim on the read/write map -- one statement instance owns an
-entire row, mirroring ``test_gemm_rmsnorm.py``'s ``RN[i]`` shape.
+nodes), so its access pattern is structurally identical to ``RMSNorm``'s own
+registration (``rms_norm.py``'s ``_rms_norm_type_relation``): the domain is
+the batch axes only (``x.shape[:-1]``) and the reduced (last) axis is an
+extra existential dim on the read/write map -- one statement instance owns
+an entire row, mirroring ``test_gemm_rmsnorm.py``'s ``RN[i]`` shape.
 
-Shapes are chosen so the fixed V1 tile size (``kernelize.DEFAULT_TILE_SIZE
-== 32``) divides every extent evenly (``64 / 32 == 2``), matching
-``test_gemm_rmsnorm.py``'s convention.
+Shapes match ``test_gemm_rmsnorm.py``'s small element-granularity
+convention (a batch extent of 2, a reduced extent of 64).
 """
 from __future__ import annotations
 
@@ -28,16 +27,16 @@ from tilefoundry.kernelize import TileGraph, extract
 
 
 @func
-def softmax_only(x: Tensor[(64, 64), "f32"]) -> Tensor[(64, 64), "f32"]:
+def softmax_only(x: Tensor[(2, 64), "f32"]) -> Tensor[(2, 64), "f32"]:
     y = softmax(x, axis=-1)
     return y
 
 
 def test_extract_softmax_single_statement():
     """``y = softmax(x, axis=-1)`` extracts to one statement: domain =
-    the batch axis only (tiled), reads/writes both range over the whole
-    (existentially-quantified) row -- not just the batch-tiled column --
-    exactly like ``RMSNorm``'s ``_rmsnorm_access`` fallback shape."""
+    the batch axis only, reads/writes both range over the whole
+    (existentially-quantified) row -- not just the batch column --
+    exactly like ``RMSNorm``'s own registration."""
     tg = extract(softmax_only)
     assert isinstance(tg, TileGraph)
     assert len(tg.units) == 1
@@ -53,17 +52,14 @@ def test_extract_softmax_single_statement():
     print("=== softmax: deps ===")
     print(tg.deps)
 
-    # domain: batch axis only (M=64 tiled by 32 -> 2), NOT batch+reduce (which
-    # would be a 2-D domain like Reduce's full-element-shape relation) --
-    # the reduced axis never becomes a statement-instance dim.
+    # domain: batch axis only (extent 2), NOT batch+reduce (which would be
+    # a 2-D domain like Reduce's full-element-shape relation) -- the
+    # reduced axis never becomes a statement-instance dim.
     assert tg.domain.is_equal(isl.union_set("{ SoftMax[i] : 0 <= i < 2 }"))
 
     # reads/writes: SoftMax[i] touches x/y[i, j] for the *entire* reduced
-    # axis (0<=j<64 -- the row's real element extent; the batch axis alone
-    # is what V1's fixed-size tiling divides down to tile-counts, see the
-    # task report's "same tile_size gap as _rmsnorm_access" note) -- i.e.
-    # one statement instance genuinely reads/writes the whole row, not a
-    # per-column slice.
+    # axis (0<=j<64, the row's real element extent) -- i.e. one statement
+    # instance genuinely reads/writes the whole row, not a per-column slice.
     expected_reads = isl.union_map(
         "{ SoftMax[i] -> x[i, j] : 0 <= i < 2 and 0 <= j < 64 }"
     )
@@ -86,10 +82,10 @@ def test_extract_softmax_single_statement():
 
 @func
 def attention_scores_softmax(
-    q: Tensor[(64, 64), "f32"],
-    k: Tensor[(64, 64), "f32"],
-    v: Tensor[(64, 64), "f32"],
-) -> Tensor[(64, 64), "f32"]:
+    q: Tensor[(2, 2), "f32"],
+    k: Tensor[(2, 2), "f32"],
+    v: Tensor[(2, 2), "f32"],
+) -> Tensor[(2, 2), "f32"]:
     scores = matmul(q, k)
     probs = softmax(scores, axis=-1)
     out = matmul(probs, v)
@@ -123,15 +119,15 @@ def test_extract_softmax_fuses_with_surrounding_matmuls():
 
     # Four dependences, exactly mirroring test_gemm_rmsnorm.py's shape (each
     # MatMul's own k-carry, plus the two cross-statement fusion edges) --
-    # q/k/v are all (64,64) so every MatMul's K tile count is 2 (last k-step
+    # q/k/v are all (2,2) so every MatMul's K extent is 2 (last k-step
     # index 1, one carry step 0->1):
     #   - QK^T's k-carry: MM0[i,j,k] -> MM0[i,j,k+1]
     #   - QK^T's *last* k-step feeds every SoftMax row it overlaps (SoftMax
-    #     reads the whole row -- all j tiles of `scores` -- so the source is
-    #     independent of j, one edge per (i,j) writer instance):
+    #     reads the whole row -- all j positions of `scores` -- so the source
+    #     is independent of j, one edge per (i,j) writer instance):
     #       MM0[i,j,1] -> SoftMax[i]
     #   - SoftMax feeds *every* (j,k) instance of the PV matmul that reads
-    #     `probs[i,k]` (independent of the PV matmul's own N-tile j, and for
+    #     `probs[i,k]` (independent of the PV matmul's own N axis j, and for
     #     every k since SoftMax wrote the whole row in one shot):
     #       SoftMax[i] -> MM1[i,j,k]
     #   - PV's own k-carry: MM1[i,j,k] -> MM1[i,j,k+1]
