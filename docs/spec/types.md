@@ -333,8 +333,9 @@ class CallableType(IRType):
     are not part of the type. Names live on `Function.params`
     (`Var.name`) at the IR level.
   - The host-ABI counterpart in
-    [runtime §1.1](./runtime.md#11-runtimemodule) is a separate
-    construct (also named `CallableType` in `tilefoundry.runtime.module`)
-    that carries `ParamABI` records with dtype / shape / storage /
-    output_count for the loader. The two live in different layers
-    and are disambiguated by import path; do not conflate them.
+    [runtime §1.1.1](./runtime.md#111-runtimefunction) is a separate
+    construct — `EntryABI` in `tilefoundry.runtime.function` — whose
+    `ParamABI` records are `(name, type: TensorType)`: dtype / shape /
+    storage / layout are reached through `type` rather than restated. The
+    two live in different layers and are disambiguated by import path; do
+    not conflate them.

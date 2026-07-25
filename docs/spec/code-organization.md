@@ -65,10 +65,12 @@ layout reflects that boundary directly.
   `tir/stmts/`, and `memory/` / `nn/` / `arith/` / `reduce/` /
   `tensor/` each have their own subdirectory. There is no
   `codegen/<target>/hir/`.
-- Authored launch attributes belong to `ir/tir/launch.py`; runtime
-  `LaunchConfig` metadata belongs to `runtime/` and describes post-codegen
-  launch geometry. The two launch contracts are distinct even though both
-  are consumed across the codegen boundary.
+- Authored launch attributes belong to `ir/tir/launch.py`; launch-geometry
+  derivation (grid / block extents) is an internal `codegen/cuda/emit.py`
+  helper (`_derive_launch_config`), consumed within codegen itself rather
+  than carried past it as a runtime-owned metadata type. The two launch
+  contracts are distinct even though both are consumed across the codegen
+  boundary.
 
 ## 2. File naming and content rules
 
