@@ -15,6 +15,7 @@ from .emit_scaffold import (
     emit_scaffold,
 )
 from .extract import DEFAULT_TILE_SIZE, ExtractError, extract
+from .inline import InlineError, inline_calls
 from .schedule_tree import ScheduleTree, schedule
 from .solve_resources import SolveResourcesError, solve_resources
 from .target_facts import AtomFact, candidate_atoms
@@ -26,6 +27,8 @@ __all__ = [
     "extract",
     "ExtractError",
     "DEFAULT_TILE_SIZE",
+    "inline_calls",
+    "InlineError",
     "ScheduleTree",
     "schedule",
     "Skeleton",
