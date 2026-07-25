@@ -8,9 +8,11 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
 1. Walk ``hir.body`` with the analyzer's own ``_postorder`` (SSA-DAG
    postorder -- dependencies before dependents) and keep the ``Call``
    nodes whose target is a compute op (not a nested HIR ``Function``,
-   not a structural node, e.g. ``TupleGetItem``). Each such ``Call``
-   becomes one statement -- or several, for an op whose outputs cannot
-   share one domain (``RoPE``'s GQA q/k, see ``_rope_access``).
+   not a structural/view node, e.g. ``TupleGetItem`` or the zero-op
+   ``Reshape``, folded into every consumer's access map instead -- see
+   ``_buffer_namer``). Each such ``Call`` becomes one statement -- or
+   several, for an op whose outputs cannot share one domain (``RoPE``'s
+   GQA q/k, see ``_rope_access``).
 2. For each statement, get its access relations via
    ``access_relation.build_relation`` (the *forward*, input-type-driven
    registry) when the op has one registered. ``build_relation`` returns
@@ -52,6 +54,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.nn.rope import RoPE
+from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 from tilefoundry.visitor_registry.isl_utility import to_domain
@@ -102,9 +105,13 @@ def _buffer_namer():
     call's name plus the same ``_{index}`` suffix a multi-output statement
     writes under (``_registered_access``, ``_rope_access``), so a
     downstream read lines up with the write without minting a fresh name.
+    ``Reshape`` is the same passthrough (also chases a chain), but its
+    source has a different coordinate space -- the returned callable also
+    carries that recomposition as ``namer.pierce(m, expr)`` (``_read_map``).
     """
     seen: dict[int, str] = {}
     used: set[str] = set()
+    reshape_source: dict[int, "isl.map | None"] = {}
 
     def name_for(expr) -> str:
         key = id(expr)
@@ -113,6 +120,10 @@ def _buffer_namer():
             return cached
         if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem):
             name = f"{name_for(expr.args[0])}_{expr.target.index}"
+            seen[key] = name
+            return name
+        if isinstance(expr, Call) and isinstance(expr.target, Reshape):
+            name = name_for(expr.args[0])
             seen[key] = name
             return name
         if isinstance(expr, Var):
@@ -128,6 +139,27 @@ def _buffer_namer():
         seen[key] = candidate
         return candidate
 
+    def source_map(expr) -> "isl.map | None":
+        """``expr``'s own coords -> its ultimate non-reshape source's coords,
+        composed hop-by-hop through a chain of reshapes; ``None`` if ``expr``
+        is not (transitively) a reshape output."""
+        key = id(expr)
+        if key in reshape_source:
+            return reshape_source[key]
+        result = None
+        if isinstance(expr, Call) and isinstance(expr.target, Reshape):
+            x = expr.args[0]
+            hop = flat_reshape_map(x.type.shape, expr.type.shape)
+            upstream = source_map(x)
+            result = hop if upstream is None else hop.apply_range(upstream)
+        reshape_source[key] = result
+        return result
+
+    def pierce(m: "isl.map", expr) -> "isl.map":
+        resh = source_map(expr)
+        return m if resh is None else m.apply_range(resh)
+
+    name_for.pierce = pierce
     return name_for
 
 
@@ -286,6 +318,14 @@ def _retile_map(m: "isl.map", stmt_name: str, tile_domain: "isl.set", buffer_nam
     )
 
 
+def _read_map(m: "isl.map", stmt_name: str, tile_domain: "isl.set", arg, namer) -> "isl.map":
+    """A read access for input ``arg``, pierced through any reshape view
+    (``namer.pierce``) before retiling -- the view-fold's landing point for
+    every op's input side (an op's own output buffer never needs piercing,
+    a reshape output is never written to)."""
+    return _retile_map(namer.pierce(m, arg), stmt_name, tile_domain, namer(arg))
+
+
 def _registered_access(
     call: Call, stmt_name: str, tile_size: int, result: AccessRelationResult, namer,
 ) -> _StatementAccess:
@@ -308,7 +348,7 @@ def _registered_access(
     reads: list["isl.map"] = []
     writes: list["isl.map"] = []
     for i, arg in enumerate(call.args):
-        reads.append(_retile_map(result.maps[i], stmt_name, tile_domain, namer(arg)))
+        reads.append(_read_map(result.maps[i], stmt_name, tile_domain, arg, namer))
 
     n_outputs = len(output_maps)
     for out_idx, raw_map in enumerate(output_maps):
@@ -373,8 +413,8 @@ def _rmsnorm_access(call: Call, stmt_name: str, tile_size: int, namer) -> _State
     write_y = isl.map(f"{{ {src} -> [{row}] : 0 <= j < {reduce_tiles} }}")
 
     reads = (
-        _retile_map(read_x, stmt_name, domain, namer(x)),
-        _retile_map(read_w, stmt_name, domain, namer(weight)),
+        _read_map(read_x, stmt_name, domain, x, namer),
+        _read_map(read_w, stmt_name, domain, weight, namer),
     )
     writes = (_retile_map(write_y, stmt_name, domain, namer(call)),)
     return _StatementAccess(
@@ -396,10 +436,10 @@ def _rope_branch(
     params = _collect_params(tile_extents, result.param_map, stmt_name)
 
     reads = [
-        _retile_map(result.maps[0], stmt_name, tile_domain, namer(x)),
-        _retile_map(result.maps[2], stmt_name, tile_domain, namer(cos_cache)),
-        _retile_map(result.maps[3], stmt_name, tile_domain, namer(sin_cache)),
-        _retile_map(result.maps[4], stmt_name, tile_domain, namer(pos_ids)),
+        _read_map(result.maps[0], stmt_name, tile_domain, x, namer),
+        _read_map(result.maps[2], stmt_name, tile_domain, cos_cache, namer),
+        _read_map(result.maps[3], stmt_name, tile_domain, sin_cache, namer),
+        _read_map(result.maps[4], stmt_name, tile_domain, pos_ids, namer),
     ]
     out_buf = f"{namer(call)}_{out_idx}"
     write = _retile_map(result.maps[5 + out_idx], stmt_name, tile_domain, out_buf)
@@ -503,6 +543,8 @@ def extract(hir: Function, *, tile_size: int = DEFAULT_TILE_SIZE) -> TileGraph:
             )
         if isinstance(e.target, TupleGetItem):
             continue  # structural projection, not a statement of its own
+        if isinstance(e.target, Reshape):
+            continue  # zero-op view, folded into consumer access (_buffer_namer)
         compute_calls.append(e)
     if not compute_calls:
         raise ExtractError(
