@@ -47,28 +47,51 @@ def _validate_one_pattern(pattern: Any) -> Pattern:
     return pattern
 
 
+def _validate_converter_weight_name(base: HirFunction, weight_name: str) -> None:
+    for p in base.params:
+        if p.name == weight_name:
+            if not p.is_const:
+                raise TypeError(
+                    f"tilefoundry.converter: {base.name!r} param {weight_name!r} "
+                    f"is not a ConstTensor; a converter target must be declared "
+                    f"ConstTensor[...]"
+                )
+            return
+    raise TypeError(
+        f"tilefoundry.converter: {base.name!r} has no ConstTensor param named "
+        f"{weight_name!r}"
+    )
+
+
 def _definition_namespace() -> dict[str, Any]:
-    """Sibling IR functions visible where this decorator is applied.
+    """Names visible where this decorator is applied.
 
     Walks to the first frame outside this module (the ``@module`` class body or
-    the enclosing scope) and returns only its bindings that are already parsed
-    IR functions — i.e. ``@func`` / ``@prim_func`` siblings defined above this
-    one. Restricting to IR functions keeps the merge additive (it cannot shadow
-    an unrelated global) and only enables callee-before-caller sibling calls;
-    forward references stay unresolved."""
-    from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
-
+    the enclosing scope) and returns its bindings. ``_collect_closure`` merges
+    them *below* the function's own globals and freevars, so they can only add
+    names, never shadow one. Two things need this: ``@func`` / ``@prim_func``
+    siblings defined above this one (callee-before-caller sibling calls; a
+    forward reference stays unresolved), and a value a factory holds in a local
+    — notably a config object referenced only inside a type annotation, which
+    never becomes a closure freevar because ``from __future__ import
+    annotations`` leaves annotations unevaluated, so the compiler emits no
+    load for it."""
     frame = sys._getframe(1)
     here = __file__
     while frame is not None and frame.f_code.co_filename == here:
         frame = frame.f_back
-    if frame is None:
-        return {}
-    return {
-        name: value
-        for name, value in frame.f_locals.items()
-        if isinstance(value, (HirFunction, PrimFunction))
-    }
+    # Walk the enclosing scopes outward: a @func inside a factory's @module
+    # class body sees the class body first, then the factory's own locals (where
+    # a config object lives). Stop at the module frame — past it is only import
+    # / test-runner machinery. An inner scope wins over an outer one.
+    ns: dict[str, Any] = {}
+    while frame is not None:
+        for name, value in frame.f_locals.items():
+            ns.setdefault(name, value)
+        if frame.f_code.co_name == "<module>":
+            break
+        frame = frame.f_back
+    return ns
 
 
 def func(fn=None, *, topologies=(), target=None):
@@ -139,6 +162,46 @@ def _specialize(self: HirFunction, pattern: Any):
 # (next to `func` and the definition-frame walk) so sibling resolution sees the
 # same frame chain; `hir.Function` stays free of any parser/decorator import.
 HirFunction.specialize = _specialize
+
+
+def _converter(self: HirFunction, weight_name: str):
+    """``@base.converter(weight_name)`` — register a per-weight offline
+    converter (docs/spec/runtime.md §1.1.2).
+
+    Mirrors ``.specialize``: returns a decorator that parses a throwaway
+    ``def`` (params annotated with the raw checkpoint names/types, exactly
+    like a ``@func``) into a ``hir.Function``, registers it on
+    ``base.converters``, and returns the parsed IR so ``@module`` can
+    recognise and skip it. ``weight_name`` must name a ``ConstTensor`` param
+    of ``base``. Legal only before ``base`` enters a ``Module`` (sealed).
+    """
+    _validate_converter_weight_name(self, weight_name)
+
+    def _wrap_converter(fn_inner):
+        extra_closure = _definition_namespace()
+        ir = parse_func(
+            fn_inner, topologies=self.topologies, target=self.target,
+            extra_closure=extra_closure,
+        )
+        if ir.body is None:
+            raise TypeError(
+                "tilefoundry.converter: a converter must have a real body, "
+                "not `pass`"
+            )
+        # The decorated def name (`_`) is a throwaway; the converter carries a
+        # traceable name derived from the base + weight (authoring mutation,
+        # before the base is sealed).
+        object.__setattr__(ir, "name", f"{self.name}.converter[{weight_name}]")
+        verify_function(ir)
+        self.add_converter(weight_name, ir)
+        return ir
+
+    return _wrap_converter
+
+
+# `f.converter(weight_name)` is the authoring surface for a per-weight offline
+# converter — same rationale as `f.specialize` above.
+HirFunction.converter = _converter
 
 
 def prim_func(fn=None, *, target=None):

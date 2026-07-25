@@ -62,7 +62,7 @@ def test_qkv_rope_evaluate():
     cur_pos, s = 5, 3
     torch_dt, atol, rtol = torch.bfloat16, 2e-2, 2e-2
     mod = Qwen3_30B_A3B
-    fn = mod.qkv_rope
+    fn = mod.lookup("qkv_rope")
 
     dev = "cuda"
     layer = common.build_hf_layer(seed=0, device=dev, dtype=torch_dt)
@@ -103,7 +103,7 @@ def test_input_rms_norm_evaluate():
     """K1 input RMSNorm, pulled from the module, vs HF ``input_layernorm``."""
     torch_dt, atol, rtol = torch.bfloat16, 2e-2, 2e-2
     mod = Qwen3_30B_A3B
-    fn = mod.input_rms_norm
+    fn = mod.lookup("input_rms_norm")
 
     dev = "cuda"
     torch.manual_seed(0)
@@ -126,7 +126,7 @@ def test_gqa_attend_evaluate():
     cur_pos, s = 5, 3
     torch_dt, atol, rtol = torch.bfloat16, 2e-2, 2e-2
     mod = Qwen3_30B_A3B
-    fn = mod.gqa_attend
+    fn = mod.lookup("gqa_attend")
 
     dev = "cuda"
     torch.manual_seed(0)
@@ -185,7 +185,7 @@ def test_self_attention_evaluate():
     cur_pos, s = 5, 3
     torch_dt, atol, rtol = torch.bfloat16, 2e-2, 2e-2
     mod = Qwen3_30B_A3B
-    fn = mod.self_attention
+    fn = mod.lookup("self_attention")
 
     dev = "cuda"
     torch.manual_seed(0)

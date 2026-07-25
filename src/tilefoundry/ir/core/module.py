@@ -1,27 +1,23 @@
 """Module — top-level compilation unit.
 
-``entry`` names the public entry function; verify_module checks it resolves.
-``metadata`` holds lowering / target configuration (e.g. target).
-``topologies`` carries the module-level topology declarations; these form the
-namespace against which ``with Mesh(topology="cta", ...)`` strings resolve.
-``modules`` nests child ``Module``s (e.g. a decoder layer's attention / MoE
-sub-blocks) purely as a namespace / addressing device — a tree of modules is
-addressed by attribute path (``root.layer0.attention``); entry resolution and
-``Call`` semantics are unaffected, and a child's functions are never folded
-into the parent's ``functions``. ``weights`` and ``states`` declare this
-module's own named tensor slots (shape/dtype only, no values); they are the
-schema ``prepare`` / ``forward`` resolve against, and neither field
-participates in typeinfer or verify.
+``entry`` names the public entry function; ``modules`` nests child
+``Module``s, addressed by attribute path (e.g. ``root.layer0.attention``). A
+class body collects three member kinds (see ``tilefoundry.module``): DSL
+functions, child ``Module``s, and plain Python orchestration methods
+(``methods``, bound like instance methods — ``m.forward(...)``).
+``weights`` is derived from every function's ``ConstTensor`` params; there
+is no ``states`` — a persistent tensor (e.g. a KV cache) is an ordinary
+``Tensor`` param the caller owns.
 
-A ``Module`` is directly runnable: ``forward`` evaluates the entry @func — the
-same-shaped forward as its runtime twin, run through the evaluator instead of
-kernels — and ``prepare`` runs each node's weight ``convert`` @func offline. The
-runtime twin (``tilefoundry.runtime.RuntimeModule``) is written separately but
-mirrors this structure, loads the directory ``prepare`` writes, and
-``runtime.check`` compares the two forwards.
+``forward`` runs the step; ``load`` binds weights from a ``RuntimeResource``;
+``prepare`` runs every node's per-weight converters offline. See
+docs/spec/core-ir.md, docs/spec/runtime.md.
 """
 from __future__ import annotations
 
+import dataclasses
+import functools
+import types
 from dataclasses import dataclass, field
 from typing import Mapping, Union
 
@@ -43,8 +39,7 @@ class Module:
     modules: tuple["Module", ...] = field(default_factory=tuple)
     topologies: tuple[Topology, ...] = field(default_factory=tuple)
     metadata: dict[str, object] = field(default_factory=dict)
-    weights: Mapping[str, TensorType] = field(default_factory=dict)
-    states: Mapping[str, TensorType] = field(default_factory=dict)
+    methods: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Seal each function so authoring mutation (``add_variant`` /
@@ -54,10 +49,10 @@ class Module:
         already fully constructed (and so already sealed their own functions)
         by the time they are passed in here, so sealing does not recurse.
 
-        A function name and a child module name must be disjoint at this
-        module's own level — both are resolved through the same attribute /
-        addressing surface (``__getattr__``), so a name used by both would be
-        ambiguous."""
+        A function name, a child module name, and a method name must be
+        disjoint at this module's own level — all three are resolved through
+        the same attribute / addressing surface (``__getattr__``), so a name
+        used by more than one would be ambiguous."""
         for fn in self.functions:
             seal = getattr(fn, "seal", None)
             if callable(seal):
@@ -68,20 +63,56 @@ class Module:
                 f"Module {self.name!r}: name(s) {clash} used by both a "
                 f"function and a child module; names must be disjoint"
             )
+        method_clash = sorted(
+            set(self.methods)
+            & ({fn.name for fn in self.functions} | {m.name for m in self.modules})
+        )
+        if method_clash:
+            raise ValueError(
+                f"Module {self.name!r}: name(s) {method_clash} used by both a "
+                f"method and a function/child module; names must be disjoint"
+            )
 
-    def __getattr__(self, name: str) -> "ModuleFunction | Module":
-        """Attribute access forwards to the function or child module of that
-        name, so a module reads like the model it mirrors:
-        ``decoder.self_attention`` / ``decoder.layer0.attention``. Each name
-        maps to at most one entry (specialization variants live on the
-        function's ``variants``, not as separate entries). Only fires for
+    @property
+    def weights(self) -> Mapping[str, TensorType]:
+        """Derived weight schema: the union, in (function order, param
+        order), of every function's ``ConstTensor`` params. A name shared by
+        two functions must carry an identical ``TensorType``."""
+        result: dict[str, TensorType] = {}
+        owner: dict[str, str] = {}
+        for fn in self.functions:
+            for p in fn.params:
+                if not p.is_const:
+                    continue
+                prior = result.get(p.name)
+                if prior is not None and prior != p.type:
+                    raise ValueError(
+                        f"Module {self.name!r}: weight {p.name!r} has "
+                        f"conflicting TensorType between {owner[p.name]!r} "
+                        f"({prior!r}) and {fn.name!r} ({p.type!r})"
+                    )
+                result[p.name] = p.type
+                owner[p.name] = fn.name
+        return result
+
+    def __getattr__(self, name: str):
+        """Attribute access forwards to the function, child module, or bound
+        method of that name, so a module reads like the model it mirrors:
+        ``decoder.self_attention(...)`` / ``decoder.layer0.attention`` /
+        ``decoder.init_caches(...)``. A function name resolves to a **callable**
+        that runs it (weights filled by name, activations positional) — the same
+        spelling its ``RuntimeModule`` twin answers with a kernel, which is what
+        lets one orchestration method serve both sides. The IR node itself is
+        reached with ``lookup`` / ``function_named``. Each name maps to at most
+        one entry (specialization variants and converters live on their base's
+        ``variants`` / ``converters``, not as separate entries). Only fires for
         names absent as real attributes; dunder/private names are never
-        functions or modules and fall through to ``AttributeError``."""
+        functions, modules, or methods and fall through to ``AttributeError``."""
         if name.startswith("_"):
             raise AttributeError(name)
         matches = tuple(fn for fn in self.functions if fn.name == name)
         if len(matches) == 1:
-            return matches[0]
+            return functools.partial(self._run, matches[0])
         if len(matches) > 1:
             raise AttributeError(
                 f"Module {self.name!r}: {name!r} resolves to {len(matches)} "
@@ -95,7 +126,12 @@ class Module:
                 f"Module {self.name!r}: {name!r} resolves to {len(mod_matches)} "
                 f"child modules; one name must map to one module"
             )
-        raise AttributeError(f"Module {self.name!r} has no function or child module {name!r}")
+        method = self.methods.get(name)
+        if method is not None:
+            return types.MethodType(method, self)
+        raise AttributeError(
+            f"Module {self.name!r} has no function, child module, or method {name!r}"
+        )
 
     def function_named(self, name: str) -> tuple[ModuleFunction, ...]:
         """Return the functions whose name matches, in source order.
@@ -132,38 +168,63 @@ class Module:
             )
         return matches[0]
 
-    def forward(self, resource, *acts, device: str = "cuda"):
-        """Evaluate the entry @func with weight/state params filled by name from
-        *resource* and activation params supplied positionally — the
-        same-shaped forward as a ``runtime.RuntimeModule`` twin, run through the
-        evaluator instead of kernels (``runtime.check`` compares the two). A
-        multi-node composition is chained by the caller, one ``forward`` per
-        node, mirroring the runtime orchestration."""
+    def load(self, resource) -> None:
+        """Bind this node's ``weights`` by name from *resource*, then recurse
+        into each child module under ``resource.subtree(child.name)``."""
+        bound: dict[str, object] = {}
+        for name in self.weights:
+            try:
+                bound[name] = resource.load(name)
+            except KeyError as e:
+                raise KeyError(f"Module {self.name!r}: missing weight {name!r}") from e
+        object.__setattr__(self, "_bound", bound)
+        for child in self.modules:
+            child.load(resource.subtree(child.name))
+
+    def _run(self, fn: ModuleFunction, *acts):
+        """Evaluate *fn* with its ``ConstTensor`` params filled by name from
+        ``load``'s bound weights and every other param taken positionally from
+        *acts* — the semantic counterpart of the twin calling a kernel."""
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
-        fn = self.lookup(self.entry)
+        bound = getattr(self, "_bound", {})
         args = []
         activations = iter(acts)
         for param in fn.params:
-            if param.name in self.weights or param.name in self.states:
-                args.append(resource.load(param.name))
+            if param.is_const:
+                try:
+                    args.append(bound[param.name])
+                except KeyError:
+                    raise KeyError(
+                        f"Module {self.name!r}: weight {param.name!r} of "
+                        f"{fn.name!r} is not bound; call load(resource) first"
+                    ) from None
             else:
                 args.append(next(activations))
-        return evaluate(fn, *args, device=device)
+        return evaluate(fn, *args)
+
+    def forward(self, *acts):
+        """Run this node's step: a registered ``methods["forward"]``
+        orchestration callable if present (called bound, like an instance
+        method), else the entry @func through the evaluator. A multi-node
+        composition is chained by the caller, one ``forward`` per node."""
+        method = self.methods.get("forward")
+        if method is not None:
+            return method(self, *acts)
+        return self._run(self.lookup(self.entry), *acts)
+
+    __call__ = forward
 
     def prepare(self, raw, out_dir: str, *, device: str = "cpu") -> None:
-        """Run every node's weight ``convert`` @func over *raw* and write the
-        converted (canonical) weights to *out_dir* (dot-prefixed by module
-        path).
+        """Run every node's per-weight converters over *raw* and write the
+        canonical weights to *out_dir* (docs/spec/runtime.md §1.1.2).
 
-        A module carries its weight converter as a sibling @func named
-        ``convert`` (peer to the compute @func); its params are the raw
-        checkpoint names and its results are this module's declared ``weights``
-        (declaration order), in the canonical form the compute @func consumes.
-        A node with no ``convert`` passes its declared ``weights`` through
-        unchanged; declared ``states`` present in *raw* pass through as initial
-        values. Output is a plain safetensors directory (one shard +
-        ``model.safetensors.index.json``) — no content-hash cache / manifest.
+        A weight with a registered ``Function.converter`` is built from
+        *raw* by the converter's own (raw) param names — ``load_group``
+        assembles a one-to-many alias via ``torch.stack``, prepare's only
+        reshaping. A weight with no converter passes through *raw*
+        unchanged. Output: one safetensors shard +
+        ``model.safetensors.index.json``.
         """
         flat: dict[str, object] = {}
         self._prepare_into(raw, "", flat, device)
@@ -182,33 +243,59 @@ class Module:
         )
 
     def _prepare_into(self, raw, prefix: str, flat: dict, device: str) -> None:
+        import torch  # noqa: PLC0415 -- optional runtime dep
+
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
+        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
 
-        convert = next((f for f in self.functions if f.name == "convert"), None)
-        weight_names = list(self.weights)
-        if convert is not None:
-            raw_args = [raw.load(p.name) for p in convert.params]
-            result = evaluate(convert, *raw_args, device=device)
-            values = list(result) if isinstance(result, tuple) else [result]
-            if len(values) != len(weight_names):
+        converter_map: dict[str, ModuleFunction] = {}
+        for fn in self.functions:
+            for weight_name, conv in getattr(fn, "converters", ()):
+                prior = converter_map.get(weight_name)
+                if prior is not None and prior is not conv:
+                    raise ValueError(
+                        f"Module {self.name!r}: weight {weight_name!r} has "
+                        f"more than one registered converter"
+                    )
+                converter_map[weight_name] = conv
+
+        def _fetch(name):
+            """One raw tensor for *name*: a one-to-many alias is assembled here
+            (prepare's only reshaping), a one-to-one alias is loaded as is."""
+            parts = raw.load_group(name)
+            return torch.stack(parts) if parts is not None else raw.load(name)
+
+        for w, decl_type in self.weights.items():
+            conv = converter_map.get(w)
+            key = prefix + w
+            if conv is None:
+                # No converter: the canonical form is the raw form (a stack of
+                # per-shard tensors still counts — assembly is not a transform).
+                value = _fetch(w)
+            else:
+                value = evaluate(conv, *[_fetch(p.name) for p in conv.params], device=device)
+            source = f"converter for weight {key!r}" if conv is not None else f"raw weight {key!r}"
+            if tuple(value.shape) != tuple(decl_type.shape):
                 raise ValueError(
-                    f"Module {self.name!r}: 'convert' returned {len(values)} tensor(s) "
-                    f"but the module declares {len(weight_names)} weight(s) {weight_names}"
+                    f"Module {self.name!r}: {source} has shape "
+                    f"{tuple(value.shape)}, declared {tuple(decl_type.shape)}"
                 )
-            for name, value in zip(weight_names, values):
-                flat[prefix + name] = value.detach().contiguous().cpu()
-        else:
-            for name in weight_names:
-                flat[prefix + name] = raw.load(name).detach().contiguous().cpu()
-
-        for state_name in self.states:
-            try:
-                flat[prefix + state_name] = raw.load(state_name).detach().contiguous().cpu()
-            except KeyError:
-                pass  # no initial value in raw — the runtime allocates it
+            expected_dtype = to_torch_dtype(decl_type.dtype)
+            if value.dtype != expected_dtype:
+                raise ValueError(
+                    f"Module {self.name!r}: {source} has dtype "
+                    f"{value.dtype}, declared {decl_type.dtype}"
+                )
+            flat[key] = value.detach().contiguous().cpu()
 
         for child in self.modules:
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
+
+    def renamed(self, name: str) -> "Module":
+        """Return a copy of this node under a different ``name`` — one
+        definition, N addressable instances (e.g. 43 identical decoder
+        layers from a factory)."""
+        return dataclasses.replace(self, name=name)
 
 
 __all__ = ["Module", "ModuleFunction"]

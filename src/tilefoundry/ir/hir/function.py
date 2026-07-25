@@ -24,6 +24,10 @@ class Function(Expr):
     topologies: tuple[Topology, ...] = field(default_factory=tuple)
     specializations: tuple[Pattern, ...] = field(default_factory=tuple)
     variants: tuple["Function", ...] = field(default_factory=tuple)
+    # (weight_name, converter) pairs — a tuple-of-pairs (not a dict) for the
+    # same reason as ``variants``: it must stay hashable/comparable so
+    # ``Function``'s dataclass eq/hash keep working.
+    converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple)
     target: Target | None = None
 
     @classmethod
@@ -37,6 +41,7 @@ class Function(Expr):
         topologies: tuple[Topology, ...] = (),
         specializations: tuple[Pattern, ...] = (),
         variants: tuple["Function", ...] = (),
+        converters: tuple[tuple[str, "Function"], ...] = (),
         target: Target | None = None,
     ) -> "Function":
         """Construct a Function with the canonical CallableType."""
@@ -48,6 +53,7 @@ class Function(Expr):
             topologies=tuple(topologies),
             specializations=tuple(specializations),
             variants=tuple(variants),
+            converters=tuple(converters),
             target=target,
             type=callable_type_for(params, return_type),
         )
@@ -66,15 +72,37 @@ class Function(Expr):
             )
         object.__setattr__(self, "variants", (*self.variants, variant))
 
+    def add_converter(self, weight_name: str, fn: "Function") -> None:
+        """Register a per-weight offline converter ``fn`` for ``weight_name``.
+
+        Mirrors ``add_variant``: authoring-phase mutation via
+        ``object.__setattr__`` (``converters`` participates in eq/hash), a
+        sealed base rejects further registration, and a repeated
+        ``weight_name`` raises.
+        """
+        if getattr(self, "_sealed", False):
+            raise RuntimeError(
+                f"hir Function {self.name!r}: cannot add a converter after "
+                f"the function has entered a Module (sealed)"
+            )
+        if any(existing == weight_name for existing, _ in self.converters):
+            raise ValueError(
+                f"hir Function {self.name!r}: a converter for weight "
+                f"{weight_name!r} is already registered"
+            )
+        object.__setattr__(self, "converters", (*self.converters, (weight_name, fn)))
+
     def seal(self) -> None:
         """Freeze authoring mutation: ``add_variant`` raises afterwards.
 
         Called by ``Module`` construction on each function it contains.
-        Idempotent. Variants are sealed alongside their base.
+        Idempotent. Variants and converters are sealed alongside their base.
         """
         object.__setattr__(self, "_sealed", True)
         for v in self.variants:
             v.seal()
+        for _, conv in self.converters:
+            conv.seal()
 
 
 # ir.visitor imports Function from this module at module level; this
