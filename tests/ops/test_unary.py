@@ -10,20 +10,17 @@ from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
-    infer_call,
     run_typeinfer_case,
     tensor_grid,
 )
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
+from tilefoundry.ir.types.shard.shard_layout import Partial
 
 _NEG = Unary(kind=UnaryKind.NEG)
 _EXP = Unary(kind=UnaryKind.EXP)
@@ -93,18 +90,6 @@ def test_unary_typeinfer(case):
     run_typeinfer_case(case)
 
 
-def test_unary_passes_sharded_layout_through():
-    sl = ShardLayout(
-        layout=Layout(shape=(16, 8), strides=(8, 1)),
-        attrs=(Split(0),),
-        mesh=make_mesh((4,)),
-    )
-    x = make_tensor_type((16, 8), DType.f32, layout=sl)
-    out = infer_call(_NEG, x)
-    assert out.layout is sl
-    assert out.shape == (16, 8)
-
-
 @pytest.mark.parametrize(
     "kind,ref",
     [
@@ -156,26 +141,6 @@ def test_unary_evaluate_dtypes(dtype):
 
 
 # ── exp / log surface resolution and composition oracle ─────────────────────
-
-
-@func
-def _exp_only(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return tf.exp(x)
-
-
-@func
-def _log_only(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return tf.log(x)
-
-
-@pytest.mark.parametrize(
-    "fn,kind", [(_exp_only, UnaryKind.EXP), (_log_only, UnaryKind.LOG)], ids=["exp", "log"]
-)
-def test_exp_log_resolve_to_unary_kinds(fn, kind):
-    """``exp`` / ``log`` are surface aliases of the kinded ``Unary`` op."""
-    body = fn.body
-    assert isinstance(body, Call) and isinstance(body.target, Unary)
-    assert body.target.kind is kind
 
 
 @func

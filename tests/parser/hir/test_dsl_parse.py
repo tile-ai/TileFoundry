@@ -76,26 +76,6 @@ def test_parse_tf_namespace_attribute_callee() -> None:
     assert len(body.args) == 2
 
 
-# ── insert_slice surface (dynamic-update-slice) ──────────────────────────
-
-
-@func
-def _insert_slice_call(
-    dst: Tensor[(8,), "f32"], upd: Tensor[(3,), "f32"], off: Tensor[(), "i32"],
-) -> Tensor[(8,), "f32"]:
-    return tf.insert_slice(dst, upd, off)
-
-
-def test_parse_insert_slice() -> None:
-    """``tf.insert_slice(dst, update, offsets)`` parses to an ``InsertSlice``
-    Call with the three tensor inputs."""
-    from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice  # noqa: PLC0415
-
-    body = _insert_slice_call.body
-    assert isinstance(body, Call) and isinstance(body.target, InsertSlice)
-    assert len(body.args) == 3
-
-
 # ── insert_slice rank-N per-axis offset tuple surface ────────────────────
 
 

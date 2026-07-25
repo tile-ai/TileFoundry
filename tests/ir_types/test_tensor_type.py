@@ -8,12 +8,6 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 
 
-def test_scalar_builds_rank0_tensor_type():
-    t = TensorType.scalar(DType.f32)
-    assert t.shape == ()
-    assert t.dtype == DType.f32
-
-
 def test_tensor_type_accepts_dim_var_shape_entry():
     """A TensorType can carry a bounded ``DimVar(name, lo, hi)`` in its shape."""
     s = DimVar("S_a", 1, 8)

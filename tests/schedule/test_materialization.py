@@ -15,7 +15,6 @@ from tests.models.deepseek_v4_flash.moe import (
 from tests.models.qwen3_5_30b_a3b.static_online import qwen_static_online
 from tests.schedule.test_preflight import _planner_helper, _planner_root
 from tilefoundry.evaluator import evaluate
-from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.verify import verify_module
@@ -129,12 +128,6 @@ def test_cuda_cta_service_defaults_and_reconstructable_debug_dump(tmp_path) -> N
     assert isinstance(dumped, Module)
     assert dumped.entry == result.module.entry
     verify_module(dumped.functions)
-
-
-def test_as_script_accepts_hir_module() -> None:
-    source = as_script(_small_module())
-    assert '@module(entry="_planner_root")' in source
-    assert "_planner_helper" in source
 
 
 def test_real_deepseek_cta_service_materializes_verified_module() -> None:

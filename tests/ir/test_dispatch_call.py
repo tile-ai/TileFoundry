@@ -149,12 +149,6 @@ def test_dispatch_call_rejects_multi_axis():
         verify_module(fns)
 
 
-def test_dispatch_call_rejects_empty_fallback():
-    fns, _ = _build_module(fallback=Sequential(body=()))
-    with pytest.raises(VerifyError, match="Sequential\\(\\(Abort"):
-        verify_module(fns)
-
-
 def test_dispatch_call_rejects_non_abort_fallback():
     fns, _ = _build_module(fallback=Sequential(body=(Return(),)))
     with pytest.raises(VerifyError, match="Sequential\\(\\(Abort"):

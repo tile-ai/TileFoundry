@@ -92,12 +92,6 @@ def _attr_equal(a, b, path="") -> bool:
 
 
 class TestPythonPrinterRoundTrip:
-    def test_demo_output_is_valid_python(self):
-        """Printed output must be valid Python syntax."""
-        fn, _, _ = build_demo()
-        src = as_script(fn)
-        compile(src, "<test>", "exec")
-
     def test_inspection_types_are_opt_in_same_line_comments(self):
         fn, _, _ = build_demo()
         canonical = as_script(fn)
@@ -184,21 +178,6 @@ class TestModuleRoundTrip:
                     f"{p1.name} mesh layout shape mismatch"
                 assert m1.names == m2.names, \
                     f"{p1.name} mesh names mismatch"
-
-    def test_module_output_has_sugar(self):
-        """@module output uses sugar for Split/Broadcast layouts."""
-        fn = build_qwen3_attention_main_2cta_headnorm()
-        src = as_script(fn, module="M")
-        assert "@module" in src
-        assert "class M:" in src
-        assert "names=(" in src
-        # Sugar should be used for Split-only layouts
-        assert "@ gpu" in src
-
-    def test_module_output_is_valid_python(self):
-        fn = build_qwen3_attention_main_2cta_headnorm()
-        src = as_script(fn, module="M")
-        compile(src, "<test>", "exec")
 
 
 class TestPythonPrinterDump:

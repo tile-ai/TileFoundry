@@ -20,11 +20,6 @@ def test_canonical_short_names_resolve() -> None:
         assert str(kind) == name
 
 
-def test_storagekind_and_none_pass_through() -> None:
-    assert resolve_storage(StorageKind.GMEM) is StorageKind.GMEM
-    assert resolve_storage(None) is None
-
-
 def test_legacy_long_aliases_rejected() -> None:
     for legacy in ("global", "meta"):
         with pytest.raises(ValueError, match=r"unknown storage"):

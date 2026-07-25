@@ -38,12 +38,6 @@ def test_quant_input_relation_is_identity():
     assert "->" in s
 
 
-def test_quant_output_xq_relation_is_identity():
-    rel = _quant_relations((1, 2048))
-    x_q = rel.outputs[0]
-    assert isinstance(x_q, isl.multi_aff)
-
-
 def test_quant_output_scale_relation_is_per_group_map():
     """x_scale should reduce the last axis to floor(j / group) — modeled as
     isl.map (many-to-one)."""

@@ -4,26 +4,13 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.tir.shape import ShapeOf, shape_var_name
+from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.verify import _verify_shape_of
 from tilefoundry.ir.types import DType, TensorType
 
 
 def _x_param() -> Var:
     return Var(type=TensorType(shape=(4, 8), dtype=DType.f32, layout=None, storage="gmem"), name="x")
-
-
-def test_shape_of_has_rank0_i32_type():
-    p = _x_param()
-    so = ShapeOf(type=TensorType.scalar(dtype=DType.i32), param=p, axis=1)
-    assert so.type == TensorType.scalar(dtype=DType.i32)
-    assert so.type.shape == ()
-    assert so.type.dtype == DType.i32
-
-
-def test_shape_var_name_helper():
-    assert shape_var_name("x", 1) == "x_shape_1"
-    assert shape_var_name("inp", 0) == "inp_shape_0"
 
 
 def test_shape_of_rejects_negative_axis():

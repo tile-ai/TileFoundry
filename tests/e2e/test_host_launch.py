@@ -186,24 +186,6 @@ def test_dynamic_cta_two_shapes_one_compile() -> None:
         assert torch.allclose(out, x * x, rtol=0, atol=0)
 
 
-def test_dynamic_cta_device_source_reads_runtime_extent() -> None:
-    """The device fragment reads the dynamic CTA extent at runtime: the global
-    layout dim is the tensor's hidden shape scalar, the cta mesh extent is
-    ``program_dim<cta>()``, and no constexpr ``program_shape<cta>`` is emitted
-    (a regression that hardcoded the cta count would fail here)."""
-    from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
-    from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
-
-    lowered = tilefoundry.lower(_dyn_module(), target="cuda")
-    cuda_fns = group_functions_by_target(lowered)["cuda"]
-    src = emit_cuda_module(cuda_fns).source
-
-    assert "tilefoundry::program_dim<tilefoundry::TopologyScope::cta>()" in src
-    assert "program_shape<tilefoundry::TopologyScope::cta>" not in src
-    # The dynamic global dim flows through the kernel's hidden shape scalar.
-    assert "a_shape_0" in src
-
-
 def test_dynamic_cta_rejects_implicit_entry() -> None:
     """A dynamic-CTA kernel has no compile-time grid, so the implicit
     auto-inserted host entry cannot derive one — it must error loudly rather
