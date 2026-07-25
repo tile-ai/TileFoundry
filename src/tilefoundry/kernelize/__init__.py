@@ -16,6 +16,7 @@ from .emit_scaffold import (
 )
 from .extract import DEFAULT_TILE_SIZE, ExtractError, extract
 from .schedule_tree import ScheduleTree, schedule
+from .solve_resources import SolveResourcesError, solve_resources
 from .target_facts import AtomFact, candidate_atoms
 from .tile_graph import TileGraph, TileUnit
 
@@ -35,4 +36,6 @@ __all__ = [
     "emit_scaffold",
     "AtomFact",
     "candidate_atoms",
+    "SolveResourcesError",
+    "solve_resources",
 ]
