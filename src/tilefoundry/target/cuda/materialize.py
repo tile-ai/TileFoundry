@@ -471,7 +471,20 @@ class _Materializer:
         if bucket_id not in self.selected_buckets:
             raise self._fail(f"bucket {bucket_id} is not selected")
         if base is None:
-            base = self._rebuild_expr(self._scope_expr(path, self.problem.buckets[bucket_id].value_id), path)
+            value_id = self.problem.buckets[bucket_id].value_id
+            base = self._rebuild_expr(self._scope_expr(path, value_id), path)
+            # A bucket is per tensor leaf, but ``_scope_expr`` can resolve to
+            # either (a) the value's raw producer expression — for a
+            # tuple-returning op (``tf.topk``) that is the whole tuple, and
+            # needs projecting down to this leaf — or (b) an already
+            # per-leaf-narrowed expression from a *different* scope (e.g. a
+            # helper function's own parameter Var, whose declared type is
+            # already this single tensor leaf, not the producer's tuple).
+            # Only project in case (a): projecting an already-tensor `base`
+            # would try to descend into a tuple that is not there.
+            leaf_path = self.problem.values[value_id].leaf_path
+            if leaf_path and isinstance(base.type, TupleType):
+                base = self._project(base, leaf_path)
         producer_id = self.producer_by_bucket.get(bucket_id)
         if producer_id is None:
             result = self._coerce(base, bucket_id)
@@ -481,6 +494,12 @@ class _Materializer:
                 if len(candidate.input_bucket_ids) != 1 or len(candidate.output_bucket_ids) != 1:
                     raise self._fail(f"synthesized candidate {producer_id} is not unary")
                 source = self._selected_bucket_expr(candidate.input_bucket_ids[0], path)
+                if not isinstance(source.type, TensorType):
+                    raise self._fail(
+                        f"synthesized Reshard candidate {producer_id} requires a "
+                        f"tensor-typed input, but bucket {candidate.input_bucket_ids[0]} "
+                        f"resolved to {type(source.type).__name__}"
+                    )
                 target = self._placed_tensor_type(candidate.output_bucket_ids[0])
                 call = Call(
                     type=target,
@@ -755,14 +774,29 @@ class _Materializer:
         )
         try:
             result = self._infer(call)
-        except RuntimeError as exc:
-            message = str(exc)
-            normalized_message = message.lower()
-            if (
-                "reshard" not in normalized_message
-                and "must not be split-sharded" not in normalized_message
-                and "different meshes" not in normalized_message
-                and "split on the same mesh axes" not in normalized_message
+        except RuntimeError:
+            # A candidate's per-bucket types are chosen independently by the
+            # P2/P3 solver; once concretely rebuilt, its args' shard states
+            # can disagree in ways many different ops reject with no single
+            # common message text (Reshard mesh/split mismatches, Gather's
+            # unsupported sharded operand, Binary's incompatible output
+            # shard, the whole Partial-commutation family in
+            # ``_shard_checks.py``, ...). P2's per-candidate dry-run type
+            # check does not always catch these ahead of time either — it is
+            # only sound for Var/Constant args, since a Call-typed arg
+            # re-infers from its own untouched subtree, ignoring the
+            # candidate's substituted type — so a candidate can be offered
+            # and selected that only becomes invalid once P4 rebuilds it with
+            # the real, placed operand types. The one repair this
+            # materializer can make is forcing every genuinely-sharded
+            # (non-Broadcast) arg to Broadcast, so gate the retry on whether
+            # that could possibly change anything, rather than on matching
+            # the failure's message text.
+            if not any(
+                isinstance(arg.type, TensorType)
+                and isinstance(arg.type.layout, ShardLayout)
+                and not all(isinstance(attr, Broadcast) for attr in arg.type.layout.attrs)
+                for arg in args
             ):
                 raise
             mesh = next(
@@ -795,7 +829,19 @@ class _Materializer:
         )
         instance.expr_cache[id(expr)] = result
         for bucket_id in candidate.output_bucket_ids:
-            self.bucket_exprs.setdefault((path, bucket_id), result)
+            key = (path, bucket_id)
+            if key in self.bucket_exprs:
+                continue
+            # ``result`` is the whole rebuilt value for this op, but a bucket is
+            # per tensor leaf — for a tuple-returning op (``tf.topk``) ``result``
+            # is the whole tuple. Project each bucket down to its own leaf so a
+            # later lookup by bucket id (e.g. a solver-synthesized Reshard's
+            # input) never sees a tuple-typed expression. Mirrors the same
+            # per-leaf projection used in ``_selected_bucket_expr`` and
+            # ``_build_root``.
+            value_id = self.problem.buckets[bucket_id].value_id
+            leaf_path = self.problem.values[value_id].leaf_path
+            self.bucket_exprs[key] = self._project(result, leaf_path) if leaf_path else result
         return result
 
     def _build_root(self) -> Function:
