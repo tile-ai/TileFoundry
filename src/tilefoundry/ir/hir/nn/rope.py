@@ -24,9 +24,12 @@ from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
+    AccessRelationResult,
     AccessRelations,
     register_access_relation,
+    register_type_relation,
 )
+from tilefoundry.visitor_registry.isl_utility import to_domain
 
 
 @register_op
@@ -99,6 +102,48 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         inputs=(q_id, k_id, OPAQUE, OPAQUE, OPAQUE),
         outputs=(q_id, k_id),
     )
+
+@register_type_relation(RoPE)
+def _rope_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
+    """Forward relation for one RoPE branch: the value input paired with
+    itself (``x, x, cos, sin, pos``) -- GQA's Hq != Hkv means q_rope and
+    k_rope cannot share one domain, so ``kernelize.extract``'s
+    ``_rope_access`` calls this once per branch (q or k) and keeps only
+    that branch's maps (see the task report, path A).
+
+    cos_cache/sin_cache access is seq+head_dim identity, batch/head
+    broadcast: V1 assumes prefill ``pos_ids == arange(seq)``, so
+    ``cos_cache[pos_ids[s]] == cos_cache[s]`` -- the data-dependent gather
+    degenerates to a plain seq-axis identity. pos_ids itself gets the same
+    seq-identity access (decode's arbitrary pos_ids is a backlog item).
+    """
+    x_ty, x2_ty, cos_ty, sin_ty, pos_ty = input_types
+    if x_ty.shape != x2_ty.shape:
+        raise NotImplementedError(
+            "RoPE type_relation: expects the value input paired with "
+            "itself (kernelize.extract splits a real Hq != Hkv call into "
+            f"two such branches -- see _rope_access), got shapes "
+            f"{x_ty.shape} vs {x2_ty.shape}"
+        )
+    if len(x_ty.shape) != 4:
+        raise NotImplementedError(
+            "RoPE type_relation: V1 only supports rank-4 [batch,seq,head,"
+            f"head_dim] q/k, got shape {x_ty.shape}"
+        )
+    if len(cos_ty.shape) != 2 or len(sin_ty.shape) != 2:
+        raise NotImplementedError(
+            "RoPE type_relation: V1 only supports rank-2 [max_pos,head_dim] "
+            f"cos/sin caches, got {cos_ty.shape} / {sin_ty.shape}"
+        )
+
+    domain, param_map = to_domain(x_ty.shape)
+    x_map = isl.map("{ [d0,d1,d2,d3] -> [d0,d1,d2,d3] }")
+    cache_map = isl.map("{ [d0,d1,d2,d3] -> [d1,d3] }")
+    pos_map = isl.map("{ [d0,d1,d2,d3] -> [d1] }")
+    # boundary order: q, k, cos_cache, sin_cache, pos_ids, q_rope, k_rope --
+    # q/k slots and both outputs share x_map since x is paired with itself.
+    maps = (x_map, x_map, cache_map, cache_map, pos_map, x_map, x_map)
+    return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 @register_eval(RoPE)
 def _eval_rope(ctx):

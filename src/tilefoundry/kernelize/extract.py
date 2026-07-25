@@ -8,7 +8,9 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
 1. Walk ``hir.body`` with the analyzer's own ``_postorder`` (SSA-DAG
    postorder -- dependencies before dependents) and keep the ``Call``
    nodes whose target is a compute op (not a nested HIR ``Function``,
-   not a structural node). Each such ``Call`` becomes one statement.
+   not a structural node, e.g. ``TupleGetItem``). Each such ``Call``
+   becomes one statement -- or several, for an op whose outputs cannot
+   share one domain (``RoPE``'s GQA q/k, see ``_rope_access``).
 2. For each statement, get its access relations via
    ``access_relation.build_relation`` (the *forward*, input-type-driven
    registry) when the op has one registered. ``build_relation`` returns
@@ -22,9 +24,13 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
    ``_retile_map``). Any isl parameter used is resolved back to its
    ``ShapeDim`` in the returned ``TileGraph.params``.
 3. An op with no registered forward relation (``build_relation`` returns
-   ``None``) has no generic path -- V1 special-cases ``RMSNorm`` only
-   (see ``_rmsnorm_access``), and raises a clear, actionable
+   ``None``) has no generic path -- V1 special-cases ``RMSNorm`` (see
+   ``_rmsnorm_access``), and raises a clear, actionable
    ``NotImplementedError`` for anything else (never silently guesses).
+   ``RoPE`` *is* registered but is also special-cased (``_rope_access``):
+   its relation is single-domain (one value input + its own cos/sin/pos),
+   so extract calls it once per branch (q, k) rather than through the
+   generic multi-domain-per-statement path.
 4. Union every statement's domain/reads/writes into one
    ``isl.union_set``/``isl.union_map`` pair, then auto-infer ``deps`` by
    feeding an initial (topological-postorder) execution order into
@@ -45,6 +51,8 @@ from tilefoundry.ir.core import Call, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
+from tilefoundry.ir.hir.nn.rope import RoPE
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 from tilefoundry.visitor_registry.isl_utility import to_domain
 
@@ -89,7 +97,11 @@ def _buffer_namer():
     read again by rms_norm) gets the same buffer name everywhere it is
     referenced. Prefers the authored name (``Var.name`` for a parameter,
     ``binding_name`` -- the parser-attached SSA let-binding -- for a Call
-    result) and de-dupes any accidental collision with a numeric suffix.
+    result) and de-dupes any accidental collision with a numeric suffix. A
+    ``TupleGetItem`` has no buffer of its own -- it resolves to its source
+    call's name plus the same ``_{index}`` suffix a multi-output statement
+    writes under (``_registered_access``, ``_rope_access``), so a
+    downstream read lines up with the write without minting a fresh name.
     """
     seen: dict[int, str] = {}
     used: set[str] = set()
@@ -99,6 +111,10 @@ def _buffer_namer():
         cached = seen.get(key)
         if cached is not None:
             return cached
+        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem):
+            name = f"{name_for(expr.args[0])}_{expr.target.index}"
+            seen[key] = name
+            return name
         if isinstance(expr, Var):
             base = expr.name
         else:
@@ -366,13 +382,59 @@ def _rmsnorm_access(call: Call, stmt_name: str, tile_size: int, namer) -> _State
     )
 
 
-def _extract_statement(call: Call, stmt_name: str, tile_size: int, namer) -> _StatementAccess:
+def _rope_branch(
+    call: Call, x, cos_cache, sin_cache, pos_ids, out_idx: int,
+    stmt_name: str, tile_size: int, namer,
+) -> _StatementAccess:
+    """One RoPE branch (q or k): calls the registered relation with *x*
+    standing in for both value-input slots, keeping only *x*'s own reads
+    and its ``out_idx`` output."""
+    x_ty, cos_ty, sin_ty, pos_ty = x.type, cos_cache.type, sin_cache.type, pos_ids.type
+    result = build_relation(call, (x_ty, x_ty, cos_ty, sin_ty, pos_ty), TypeInferContext())
+    tile_extents = _tile_extents(_domain_extents(result.domain), tile_size)
+    tile_domain = _tile_domain(tile_extents, tile_size, result.domain, stmt_name)
+    params = _collect_params(tile_extents, result.param_map, stmt_name)
+
+    reads = [
+        _retile_map(result.maps[0], stmt_name, tile_domain, namer(x)),
+        _retile_map(result.maps[2], stmt_name, tile_domain, namer(cos_cache)),
+        _retile_map(result.maps[3], stmt_name, tile_domain, namer(sin_cache)),
+        _retile_map(result.maps[4], stmt_name, tile_domain, namer(pos_ids)),
+    ]
+    out_buf = f"{namer(call)}_{out_idx}"
+    write = _retile_map(result.maps[5 + out_idx], stmt_name, tile_domain, out_buf)
+    if not write.is_injective():
+        reads.append(write)
+    return _StatementAccess(
+        name=stmt_name, domain=tile_domain, op=call,
+        reads=tuple(reads), writes=(write,), params=params,
+    )
+
+
+def _rope_access(call: Call, stmt_name: str, tile_size: int, namer) -> list[_StatementAccess]:
+    """RoPE -> two statements, one per value input: GQA's Hq != Hkv means
+    q_rope/k_rope cannot share one domain (see the task report's path A).
+    Output buffers use the same ``_{out_idx}`` suffix ``_registered_access``
+    uses for a same-domain multi-output op, so ``_buffer_namer``'s
+    ``TupleGetItem`` passthrough resolves a downstream read to the matching
+    branch's write.
+    """
+    q, k, cos_cache, sin_cache, pos_ids = call.args
+    return [
+        _rope_branch(call, q, cos_cache, sin_cache, pos_ids, 0, f"{stmt_name}_q", tile_size, namer),
+        _rope_branch(call, k, cos_cache, sin_cache, pos_ids, 1, f"{stmt_name}_k", tile_size, namer),
+    ]
+
+
+def _extract_statement(call: Call, stmt_name: str, tile_size: int, namer) -> list[_StatementAccess]:
+    if isinstance(call.target, RoPE):
+        return _rope_access(call, stmt_name, tile_size, namer)
     input_types = tuple(arg.type for arg in call.args)
     result = build_relation(call, input_types, TypeInferContext())
     if result is not None:
-        return _registered_access(call, stmt_name, tile_size, result, namer)
+        return [_registered_access(call, stmt_name, tile_size, result, namer)]
     if isinstance(call.target, RMSNorm):
-        return _rmsnorm_access(call, stmt_name, tile_size, namer)
+        return [_rmsnorm_access(call, stmt_name, tile_size, namer)]
     raise ExtractError(
         f"kernelize.extract: op {type(call.target).__name__!r} has no "
         "registered forward type_relation (access_relation.build_relation "
@@ -439,6 +501,8 @@ def extract(hir: Function, *, tile_size: int = DEFAULT_TILE_SIZE) -> TileGraph:
                 "supported in V1 -- extract one flattened Function body at "
                 "a time"
             )
+        if isinstance(e.target, TupleGetItem):
+            continue  # structural projection, not a statement of its own
         compute_calls.append(e)
     if not compute_calls:
         raise ExtractError(
@@ -448,10 +512,9 @@ def extract(hir: Function, *, tile_size: int = DEFAULT_TILE_SIZE) -> TileGraph:
 
     stmt_names = _assign_statement_names([call.target for call in compute_calls])
     namer = _buffer_namer()
-    accesses = [
-        _extract_statement(call, name, tile_size, namer)
-        for call, name in zip(compute_calls, stmt_names)
-    ]
+    accesses: list[_StatementAccess] = []
+    for call, name in zip(compute_calls, stmt_names):
+        accesses.extend(_extract_statement(call, name, tile_size, namer))
 
     domain = isl.union_set("{}")
     reads = isl.union_map("{}")
