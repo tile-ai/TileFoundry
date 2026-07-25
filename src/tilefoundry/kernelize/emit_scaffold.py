@@ -1,32 +1,27 @@
-"""``emit_scaffold(tree, tg) -> (Skeleton, Swimlane, list[HoleContract])`` --
-M2 of the agent-friendly compiler path: turn M1's isl schedule tree into
-something an agent (or a human) can fill in: a holed C-like loop skeleton,
-a human-readable Mermaid swimlane, and one ``HoleContract`` per statement.
+"""``emit_scaffold(tg) -> (Skeleton, Swimlane, list[HoleContract])`` --
+M2 of the agent-friendly compiler path: turn ``tg``'s isl schedule tree
+(``tg.tree``, filled in by ``schedule()``) into something an agent (or a
+human) can fill in: a holed C-like loop skeleton, a human-readable
+Mermaid swimlane, and one ``HoleContract`` per statement. ``TileGraph``
+carries the model (``reads``/``writes``/``units``) and the schedule tree
+together, so this is the single argument the whole render needs.
 
-Signature note (flagged, not silently patched around): the M2 brief specs
-``emit_scaffold(tree: ScheduleTree) -> ...``, but ``HoleContract.op_ref``/
-``inputs``/``output`` need the HIR ``Call`` and the access-relation maps --
-``TileUnit.op`` / ``TileGraph.reads`` / ``TileGraph.writes``. ``ScheduleTree``
-is isl-only (a schedule + a ``ring`` dict, see ``schedule_tree.py``) and
-was intentionally not touched here (M1 owner asked for import-only), so it
-carries no such back-reference. This module therefore takes ``tg`` as a
-second, required argument; the report calls this out explicitly.
-
-TensorView reuse note (flagged): ``src/tilefoundry/ir/tir/memory/tensor_view.
-py`` already defines a ``TensorView``, but it is a TIR ``Op`` -- constructed
-via ``ParamDef``/``register_op``/``register_typeinfer`` and driven through
-the HIR->TIR pass machinery, wrapping a real memory ``Expr`` plus a
-``Layout``/``ShardLayout``. ``kernelize`` is documented (see
-``kernelize/__init__.py``) as living *alongside* that path, never importing
-it; and structurally, ``TileGraph`` does not expose a buffer-name -> HIR
--value table (that mapping is private to ``extract._buffer_namer``), so
-there is no memory ``Expr`` here to wrap even if we did import it. What a
-``HoleContract`` actually needs -- one buffer's polyhedral access footprint
-at one statement, i.e. an ``isl.map`` from statement coordinates to buffer
-elements -- is a different concept from a TIR slice/layout view besides
-sharing a name. V1 therefore falls back to a minimal local ``TensorView``
-dataclass (``tensor_name``/``index_map``/``dtype``), with ``dtype``
-best-effort recovered from HIR type info (see ``_dtype_table``).
+BufferAccess reuse note (flagged): ``src/tilefoundry/ir/tir/memory/
+tensor_view.py`` already defines a ``TensorView``, but it is a TIR ``Op``
+-- constructed via ``ParamDef``/``register_op``/``register_typeinfer`` and
+driven through the HIR->TIR pass machinery, wrapping a real memory
+``Expr`` plus a ``Layout``/``ShardLayout``. ``kernelize`` is documented
+(see ``kernelize/__init__.py``) as living *alongside* that path, never
+importing it; and structurally, ``TileGraph`` does not expose a
+buffer-name -> HIR-value table (that mapping is private to
+``extract._buffer_namer``), so there is no memory ``Expr`` here to wrap
+even if we did import it. What a ``HoleContract`` actually needs -- one
+buffer's polyhedral access footprint at one statement, i.e. an
+``isl.map`` from statement coordinates to buffer elements -- is a
+different concept from a TIR slice/layout view besides sharing a name.
+V1 therefore falls back to a minimal local ``BufferAccess`` dataclass
+(``tensor_name``/``index_map``/``dtype``), with ``dtype`` best-effort
+recovered from HIR type info (see ``_dtype_table``).
 
 Skeleton rendering note: the validated hook probe
 (``m2_hook_probe.py``) flagged ``isl.id.alloc`` as the wrong constructor.
@@ -55,13 +50,12 @@ import isl
 
 from tilefoundry.ir.core import Var, binding_name
 
-from .schedule_tree import ScheduleTree
 from .tile_graph import TileGraph, TileUnit
 
 
 class EmitScaffoldError(RuntimeError):
-    """A construct `emit_scaffold` does not (yet) support, or a ``tree``/
-    ``tg`` consistency precondition that did not hold -- always raised with
+    """A construct `emit_scaffold` does not (yet) support, or a ``tg``
+    consistency precondition that did not hold -- always raised with
     a specific, actionable message; V1 never silently guesses."""
 
 
@@ -93,9 +87,9 @@ class Swimlane:
 
 
 @dataclass(frozen=True)
-class TensorView:
+class BufferAccess:
     """V1 fallback view of one buffer touched by one statement (see the
-    module docstring's "TensorView reuse note" for why the existing TIR
+    module docstring's "BufferAccess reuse note" for why the existing TIR
     ``TensorView`` is not reused here). ``index_map`` is the ``isl.map``
     (from ``TileGraph.reads``/``writes``) taking this statement's
     coordinates to elements of buffer ``tensor_name``; ``dtype`` is
@@ -113,16 +107,13 @@ class HoleContract:
     ``(inputs, coords) -> output`` -- no side effects, no indexing/sync (the
     skeleton already carries those). ``op_ref`` is ``TileUnit.op`` (the HIR
     ``Call``) so M3 can fill the hole and diff it against the HIR
-    Evaluator's own op subgraph result; M2 itself never runs it. ``budget``
-    is reserved for a future resource-budget annotation pass -- always
-    empty in V1, mirroring ``ScheduleTree.ring``."""
+    Evaluator's own op subgraph result; M2 itself never runs it."""
 
     name: str
     op_ref: object
-    inputs: tuple[TensorView, ...]
-    output: TensorView
+    inputs: tuple[BufferAccess, ...]
+    output: BufferAccess
     coords: tuple[str, ...]
-    budget: dict
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +162,8 @@ def _by_buf(union_map: "isl.union_map", stmt_name: str) -> dict[str, "isl.map"]:
 
 def _ordered_inputs(
     unit: TileUnit, read_by_buf: dict[str, "isl.map"], dtype_table: dict[str, object]
-) -> tuple[TensorView, ...]:
-    """Reads of ``unit``, as ``TensorView``s ordered to match
+) -> tuple[BufferAccess, ...]:
+    """Reads of ``unit``, as ``BufferAccess``es ordered to match
     ``unit.op.args`` (the natural, human-readable source-call order) --
     e.g. MM's ``(x, w)`` before its own read-modify-write self-read on
     ``h``. Any read not reachable from ``op.args`` (that self-read: the
@@ -192,14 +183,14 @@ def _ordered_inputs(
             ordered.append(name)
             used.add(name)
     return tuple(
-        TensorView(tensor_name=name, index_map=read_by_buf[name], dtype=dtype_table.get(name))
+        BufferAccess(tensor_name=name, index_map=read_by_buf[name], dtype=dtype_table.get(name))
         for name in ordered
     )
 
 
 def _output_view(
     unit: TileUnit, write_by_buf: dict[str, "isl.map"], dtype_table: dict[str, object]
-) -> TensorView:
+) -> BufferAccess:
     if len(write_by_buf) != 1:
         raise EmitScaffoldError(
             f"emit_scaffold: statement {unit.name!r} writes {len(write_by_buf)} "
@@ -208,7 +199,7 @@ def _output_view(
             "n_outputs support in extract._registered_access)"
         )
     ((name, m),) = write_by_buf.items()
-    return TensorView(tensor_name=name, index_map=m, dtype=dtype_table.get(name))
+    return BufferAccess(tensor_name=name, index_map=m, dtype=dtype_table.get(name))
 
 
 # ---------------------------------------------------------------------------
@@ -231,14 +222,10 @@ def _call_coords(expr: "isl.ast_expr") -> tuple[str, tuple[str, ...]]:
 
 
 def _ring_ref(buf_name: str, coords: tuple[str, ...], ring: dict) -> str:
-    """Render one buffer reference for a hole call. V1's ``ring`` is
-    always ``{}`` (``schedule()`` never populates it -- see
-    ``ScheduleTree``), so this always falls through to the bare buffer
-    name; reserved so a future ring-stage annotation pass
-    (``ring[buf] = N``) can index the buffer by its innermost coordinate
-    mod ``N`` without touching any other rendering code. Untested against
-    a real scheduler-produced ring (there is none yet in V1) -- only
-    against a hand-built ``ScheduleTree`` in this module's own tests."""
+    """Render one buffer reference for a hole call. ``schedule()`` always
+    leaves ``tg.ring`` at ``{}``; ``solve_resources()`` is the producer,
+    so this falls through to the bare buffer name until that has run --
+    then indexes the buffer by its innermost coordinate mod ``N``."""
     n = ring.get(buf_name)
     if not n or n <= 1:
         return buf_name
@@ -278,14 +265,18 @@ def _wrap_hole_stmt(indent: str, hole_line: str) -> str:
 
 
 def _build_skeleton(
-    tree: ScheduleTree, tg: TileGraph, dtype_table: dict[str, object]
+    tg: TileGraph, dtype_table: dict[str, object]
 ) -> tuple[Skeleton, dict[str, HoleContract]]:
-    """isl ``ast_build`` codegen (PoC 11) over ``tree.tree``, with an
+    """isl ``ast_build`` codegen (PoC 11) over ``tg.tree``, with an
     ``at_each_domain`` hook (validated in ``m2_hook_probe.py``) that
     records each statement's hole-call replacement text in visit order,
     then splices those replacements into the final ``to_C_str()`` text.
     Also builds each statement's ``HoleContract`` along the way (first
     occurrence only -- one contract per *statement*, not per call site)."""
+    if tg.tree is None:
+        raise EmitScaffoldError(
+            "emit_scaffold: tg.tree is None -- call schedule(tg) before emit_scaffold(tg)"
+        )
     units_by_name = {u.name: u for u in tg.units}
     contracts: dict[str, HoleContract] = {}
     occurrences: list[tuple[str, str]] = []  # (original call text, wrapped replacement)
@@ -300,8 +291,8 @@ def _build_skeleton(
             if unit is None:
                 raise EmitScaffoldError(
                     f"emit_scaffold: schedule tree statement {stmt_name!r} has no "
-                    "matching TileUnit in tg.units -- tree and tg must come from "
-                    "the same extract()/schedule() pipeline run"
+                    "matching TileUnit in tg.units -- tg.tree and tg.units must come "
+                    "from the same extract()/schedule() pipeline run"
                 )
             read_by_buf = _by_buf(tg.reads, stmt_name)
             write_by_buf = _by_buf(tg.writes, stmt_name)
@@ -313,18 +304,17 @@ def _build_skeleton(
                 inputs=inputs,
                 output=output,
                 coords=coords,
-                budget={},
             )
             contracts[stmt_name] = contract
 
-        in_refs = tuple(_ring_ref(v.tensor_name, coords, tree.ring) for v in contract.inputs)
-        out_ref = _ring_ref(contract.output.tensor_name, coords, tree.ring)
+        in_refs = tuple(_ring_ref(v.tensor_name, coords, tg.ring) for v in contract.inputs)
+        out_ref = _ring_ref(contract.output.tensor_name, coords, tg.ring)
         hole_line = _render_hole_call(contract.name, in_refs, out_ref, coords)
         occurrences.append((node.to_C_str(), hole_line))
         return node
 
     build = isl.ast_build.from_context(isl.set("{ : }")).set_at_each_domain(at_each_domain)
-    ast = build.node_from(tree.tree)
+    ast = build.node_from(tg.tree)
     text = ast.to_C_str()
 
     rendered: list[str] = []
@@ -423,15 +413,13 @@ def _build_swimlane(tg: TileGraph, contracts: dict[str, HoleContract]) -> Swimla
 # ---------------------------------------------------------------------------
 
 
-def emit_scaffold(
-    tree: ScheduleTree, tg: TileGraph
-) -> tuple[Skeleton, Swimlane, list[HoleContract]]:
-    """M2: render ``tree`` (M1's isl schedule tree over ``tg``) into a
-    holed skeleton + a human swimlane + one ``HoleContract`` per
-    statement. See the module docstring for why this takes ``tg`` in
-    addition to ``tree``, and for the ``TensorView``-reuse decision."""
+def emit_scaffold(tg: TileGraph) -> tuple[Skeleton, Swimlane, list[HoleContract]]:
+    """M2: render ``tg`` (carrying M1's isl schedule tree, from
+    ``schedule(tg)``) into a holed skeleton + a human swimlane + one
+    ``HoleContract`` per statement. See the module docstring for the
+    ``BufferAccess``-reuse decision."""
     dtype_table = _dtype_table(tg.units)
-    skeleton, contracts = _build_skeleton(tree, tg, dtype_table)
+    skeleton, contracts = _build_skeleton(tg, dtype_table)
     swimlane = _build_swimlane(tg, contracts)
     return skeleton, swimlane, list(contracts.values())
 
@@ -439,7 +427,7 @@ def emit_scaffold(
 __all__ = [
     "Skeleton",
     "Swimlane",
-    "TensorView",
+    "BufferAccess",
     "HoleContract",
     "EmitScaffoldError",
     "emit_scaffold",

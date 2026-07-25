@@ -1,4 +1,4 @@
-"""``extract(HIR) -> TileGraph -> schedule(TileGraph) -> ScheduleTree`` for a
+"""``extract(HIR) -> TileGraph -> schedule(TileGraph) -> TileGraph`` for a
 minimal gemm+rmsnorm HIR ``Function`` -- the agent-friendly compiler
 path's polyhedral extraction + isl scheduling stage (``kernelize/``),
 independent of the existing HIR -> TIR -> CUDA path (``compile.py`` /
@@ -20,7 +20,7 @@ import isl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.kernelize import ScheduleTree, TileGraph, extract, schedule
+from tilefoundry.kernelize import TileGraph, extract, schedule
 
 
 @func
@@ -113,7 +113,7 @@ def test_schedule_is_legal_and_fuses_mm_with_rn():
     print("\n=== gemm+rmsnorm isl schedule tree ===")
     print(tree)
 
-    assert isinstance(tree, ScheduleTree)
+    assert isinstance(tree, TileGraph)
     assert tree.tree.get_domain().is_equal(tg.domain)
     assert tree.ring == {}
 

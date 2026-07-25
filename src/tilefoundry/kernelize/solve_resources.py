@@ -1,10 +1,10 @@
-"""``solve_resources(tg, sched, target=None, options=None) -> ScheduleTree`` --
+"""``solve_resources(tg, target=None, options=None) -> TileGraph`` --
 M3 (direction C)'s second, core block: CP-SAT fills every isl-statement's
 resource decisions (which MMA atom, which lane it runs on, each buffer's
-ring/software-pipelining depth), minimizes a coarse makespan, and hangs the
-decoded decisions back onto M1's schedule tree -- refining an affine-only
-``ScheduleTree`` (``schedule_tree.py``, ``ring={}`` always) into one that
-actually carries resource decisions.
+ring/software-pipelining depth), minimizes a coarse makespan, and returns
+``tg`` with ``ring``/``decisions`` filled in -- refining a ``TileGraph``
+whose ``tree`` is affine-only (``schedule_tree.py``, ``ring={}`` always)
+into one that also carries resource decisions.
 
 This is a from-scratch *statement*-granularity port of
 ``target.cuda.solver``'s HIR-granularity CP-SAT idiom -- ``pick`` BoolVar +
@@ -54,20 +54,13 @@ V1 simplifications (see the task report for the full reasoning):
   makespan shape, not a blind ``sum(duration)``. No lane/topology overlap
   constraint exists at all (that is ``solver.py``'s own hard problem).
 
-Mark placement: the task brief offers either a per-statement
-``DECISION_<stmt>`` mark on that statement's own band, or one top-level
-``DECISIONS`` mark holding the full dict (``m3_cpsat_probe.py``'s
-approach) -- and explicitly permits picking the simpler one. V1 does the
-latter: a single ``isl.id("DECISIONS", decisions)`` inserted just below
-the schedule tree's root (``root.child(0)`` -- confirmed by
-``m3_marktree_probe.py``/``m3_cpsat_probe.py`` to be exactly where
-``insert_mark`` belongs; isl fuses same-tuple-prefix statements into one
-shared outer band there, so for e.g. gemm+rmsnorm this one mark already
-sits directly above the one band covering *both* statements). The
-richer per-statement-band mark is not implemented.
+Decisions land as plain ``TileGraph`` fields (``ring``, ``decisions``),
+never an isl mark -- a Python dict is not safe payload for isl's own
+C-managed tree nodes.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import isl
@@ -76,7 +69,6 @@ from ortools.sat.python import cp_model
 from tilefoundry.schedule import ScheduleOptions
 from tilefoundry.target import Target, default_target, resolve_target
 
-from .schedule_tree import ScheduleTree
 from .target_facts import AtomFact, candidate_atoms
 from .tile_graph import TileGraph, TileUnit
 
@@ -281,21 +273,18 @@ def _horizon(tg: TileGraph, per_stmt_candidates: dict[str, list[AtomFact]]) -> i
 
 def solve_resources(
     tg: TileGraph,
-    sched: ScheduleTree,
     target: Target | str | None = None,
     options: ScheduleOptions | None = None,
-) -> ScheduleTree:
-    """CP-SAT resource solve over ``sched`` (M1's isl schedule tree for
-    ``tg``): choose each statement's MMA atom (when ``target_facts.
-    candidate_atoms`` lists one), a lane placement, and a per-buffer ring
-    pipeline depth, minimizing a coarse deps-chain makespan (see module
-    docstring for exactly how simplified). The decoded decisions are hung
-    back onto ``sched.tree`` as one top-level ``"DECISIONS"`` isl mark;
-    the ring depths are threaded into the returned ``ScheduleTree.ring``
-    -- the exact ``{buffer_name: depth}`` shape ``emit_scaffold._ring_ref``
-    already knows how to consume, so ``emit_scaffold(solve_resources(tg,
-    schedule(tg)), tg)`` renders ring-indexed (``% N``) buffer references
-    end to end.
+) -> TileGraph:
+    """CP-SAT resource solve over ``tg`` (carrying M1's isl schedule tree
+    already, from ``schedule(tg)``): choose each statement's MMA atom
+    (when ``target_facts.candidate_atoms`` lists one), a lane placement,
+    and a per-buffer ring pipeline depth, minimizing a coarse deps-chain
+    makespan (see module docstring for exactly how simplified). Returns
+    ``tg`` with ``ring``/``decisions`` filled in -- the exact
+    ``{buffer_name: depth}`` shape ``emit_scaffold._ring_ref`` already
+    knows how to consume, so ``emit_scaffold(solve_resources(schedule(
+    tg)))`` renders ring-indexed (``% N``) buffer references end to end.
 
     Raises :class:`SolveResourcesError` if CP-SAT reports the model
     infeasible (or any other non-``OPTIMAL``/``FEASIBLE`` status) -- never
@@ -374,11 +363,7 @@ def solve_resources(
         "ring": ring_decisions,
     }
 
-    root = sched.tree.get_root()
-    marked_node = root.child(0).insert_mark(isl.id("DECISIONS", decisions))
-    new_tree = marked_node.get_schedule()
-
-    return ScheduleTree(tree=new_tree, ring=ring_decisions)
+    return dataclasses.replace(tg, ring=ring_decisions, decisions=decisions)
 
 
 __all__ = ["SolveResourcesError", "solve_resources"]

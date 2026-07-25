@@ -19,8 +19,8 @@ from tilefoundry.kernelize import (
     EmitScaffoldError,
     ExtractError,
     HoleContract,
-    ScheduleTree,
     SolveResourcesError,
+    TileGraph,
     emit_scaffold,
     extract,
     schedule,
@@ -201,12 +201,9 @@ def _entry_function(ir: Module | Function) -> Function:
     return function
 
 
-def _decisions_of(solved: ScheduleTree) -> dict:
-    """Decode the top-level ``DECISIONS`` isl mark that `solve_resources`
-    hangs on the solved schedule tree's root (see
-    ``kernelize/solve_resources.py``) -- always present on its output."""
-    mark_id = solved.tree.get_root().child(0).get_id()
-    return mark_id.user()
+def _decisions_of(solved: TileGraph) -> dict:
+    """The resource decisions `solve_resources` records on its output."""
+    return solved.decisions
 
 
 def _hole_contract_line(contract: HoleContract) -> str:
@@ -228,9 +225,8 @@ def run_kernelize(source: str, target: str | None) -> int:
     resolved_target = resolve_target(target) if target is not None else _selected_target(ir)
 
     tg = extract(function)
-    tree = schedule(tg)
-    solved = solve_resources(tg, tree, target=resolved_target)
-    skeleton, swimlane, contracts = emit_scaffold(solved, tg)
+    solved = solve_resources(schedule(tg), target=resolved_target)
+    skeleton, swimlane, contracts = emit_scaffold(solved)
     decisions = _decisions_of(solved)
 
     header = [

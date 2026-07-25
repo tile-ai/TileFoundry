@@ -1,4 +1,4 @@
-"""``emit_scaffold(ScheduleTree, TileGraph) -> (Skeleton, Swimlane,
+"""``emit_scaffold(TileGraph) -> (Skeleton, Swimlane,
 list[HoleContract])`` -- M2 of the agent-friendly compiler path, one stage
 past M1's ``extract`` -> ``schedule`` (``test_gemm_rmsnorm.py``). Reuses
 that exact gemm+rmsnorm HIR so the expected statement names/coordinates
@@ -11,15 +11,17 @@ import dataclasses
 import re
 
 import isl
+import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
 from tilefoundry.kernelize import (
+    BufferAccess,
+    EmitScaffoldError,
     HoleContract,
     Skeleton,
     Swimlane,
-    TensorView,
     emit_scaffold,
     extract,
     schedule,
@@ -39,8 +41,8 @@ def gemm_rmsnorm(
 
 def _emit():
     tg = extract(gemm_rmsnorm)
-    tree = schedule(tg)
-    return tg, tree, emit_scaffold(tree, tg)
+    tg = schedule(tg)
+    return tg, emit_scaffold(tg)
 
 
 def test_skeleton_has_holed_calls_inside_the_loop_nest():
@@ -48,7 +50,7 @@ def test_skeleton_has_holed_calls_inside_the_loop_nest():
     but every naked statement call is rendered as a ``HOLE_<name>(...)``
     call carrying its schedule coordinates -- never the bare
     ``MM(c0, c1, c2)`` isl's default codegen would print."""
-    _tg, _tree, (skeleton, _swimlane, _contracts) = _emit()
+    _tg, (skeleton, _swimlane, _contracts) = _emit()
     print("\n=== skeleton.text ===")
     print(skeleton.text)
 
@@ -74,7 +76,7 @@ def test_swimlane_is_legal_mermaid_gantt():
     16-instance domain is minimally unrolled (prologue/steady/epilogue +
     an elided-middle marker), RN's 2-instance domain is small enough to
     show whole (nothing collapsed)."""
-    _tg, _tree, (_skeleton, swimlane, _contracts) = _emit()
+    _tg, (_skeleton, swimlane, _contracts) = _emit()
     print("\n=== swimlane ===")
     print(swimlane.text)
 
@@ -98,11 +100,11 @@ def test_swimlane_is_legal_mermaid_gantt():
     assert "省略" not in rn_section
 
 
-def test_hole_contracts_one_per_statement_with_op_ref_and_tensorviews():
+def test_hole_contracts_one_per_statement_with_op_ref_and_bufferaccesses():
     """One HoleContract per statement (MM, RN), each carrying its real
     op_ref (the HIR Call TileUnit.op, by identity), its schedule coords,
-    and a TensorView per read/write with a real isl index_map."""
-    tg, _tree, (_skeleton, _swimlane, contracts) = _emit()
+    and a BufferAccess per read/write with a real isl index_map."""
+    tg, (_skeleton, _swimlane, contracts) = _emit()
 
     assert len(contracts) == 2
     by_name = {c.name: c for c in contracts}
@@ -114,9 +116,8 @@ def test_hole_contracts_one_per_statement_with_op_ref_and_tensorviews():
     assert isinstance(mm, HoleContract)
     assert mm.op_ref is op_by_stmt["MM"]
     assert mm.coords == ("c0", "c1", "c2")
-    assert mm.budget == {}
-    assert all(isinstance(v, TensorView) for v in mm.inputs)
-    assert isinstance(mm.output, TensorView)
+    assert all(isinstance(v, BufferAccess) for v in mm.inputs)
+    assert isinstance(mm.output, BufferAccess)
     # x, w (true inputs) + h (the k-reduction's RMW self-read) -- included
     # honestly rather than silently dropped, see _ordered_inputs.
     assert {v.tensor_name for v in mm.inputs} == {"x", "w", "h"}
@@ -130,7 +131,6 @@ def test_hole_contracts_one_per_statement_with_op_ref_and_tensorviews():
     rn = by_name["HOLE_RN"]
     assert rn.op_ref is op_by_stmt["RN"]
     assert rn.coords == ("c0",)
-    assert rn.budget == {}
     assert {v.tensor_name for v in rn.inputs} == {"h", "weight"}
     assert rn.output.tensor_name == "y"
     assert rn.output.index_map.get_tuple_name(isl.dim_type.IN) == "RN"
@@ -141,13 +141,13 @@ def test_ring_mod_index_is_reserved_but_wired():
     ``test_gemm_rmsnorm.py``'s own ``tree.ring == {}`` assertion), so the
     ``ring[buf] = N -> buf[<last coord> % N]`` rendering path has no real
     scheduler-produced input to exercise it against -- only a hand-built
-    ``ScheduleTree`` variant, here."""
+    ``TileGraph`` variant, here."""
     tg = extract(gemm_rmsnorm)
-    tree = schedule(tg)
-    assert tree.ring == {}
+    tg = schedule(tg)
+    assert tg.ring == {}
 
-    ring_tree = dataclasses.replace(tree, ring={"h": 3})
-    skeleton, _swimlane, _contracts = emit_scaffold(ring_tree, tg)
+    ring_tg = dataclasses.replace(tg, ring={"h": 3})
+    skeleton, _swimlane, _contracts = emit_scaffold(ring_tg)
 
     print("\n=== skeleton.text (ring={'h': 3}) ===")
     print(skeleton.text)
@@ -160,3 +160,13 @@ def test_ring_mod_index_is_reserved_but_wired():
     assert re.search(r"/\*in\*/ x, w, h\[c2 % 3\], /\*out\*/ h\[c2 % 3\]", skeleton.text)
     # unrelated buffers (x, w, weight, y) are unaffected.
     assert re.search(r"/\*in\*/ h\[c0 % 3\], weight, /\*out\*/ y", skeleton.text)
+
+
+def test_emit_scaffold_before_schedule_raises_clear_error():
+    """``tg.tree`` is ``None`` straight out of ``extract()`` -- calling
+    ``emit_scaffold`` before ``schedule(tg)`` fails closed with a message
+    naming the missing step, not a confusing isl ``AttributeError``."""
+    tg = extract(gemm_rmsnorm)
+    assert tg.tree is None
+    with pytest.raises(EmitScaffoldError, match="schedule"):
+        emit_scaffold(tg)

@@ -1,4 +1,4 @@
-"""``TileGraph`` / ``TileUnit`` — the extraction-side polyhedral IR.
+"""``TileGraph`` / ``TileUnit`` — the polyhedral model plus its schedule.
 
 ``docs/spec/tilegraph.md`` defines ``TileGraph`` conceptually as a
 per-level SSA DAG with a single ``domain: isl.set`` and a
@@ -10,19 +10,19 @@ therefore a from-scratch V1 shape sized for the isl scheduler, not an
 implementation of the spec's node types (``ITileNode`` / ``DiGraph`` /
 ``AccessRelation`` are pass-private here, not reused).
 
-Field/type provenance:
-
-- ``domain``/``reads``/``writes`` are per-statement pieces unioned
-  together, one tuple name (``TileUnit.name``) per statement.
-- ``deps`` is not authored -- it is derived by
-  :func:`tilefoundry.kernelize.extract.extract` from ``reads``/``writes``
-  via ``isl.union_access_info(...).compute_flow()`` (see that module for
-  the algorithm), mirroring the validated
-  ``m1_deps_probe.py`` technique.
+``domain``/``reads``/``writes`` are per-statement pieces unioned
+together, one tuple name (``TileUnit.name``) per statement. ``deps`` is
+auto-inferred by :func:`extract.extract` from ``reads``/``writes`` via
+``isl.union_access_info(...).compute_flow()``. ``tree``/``ring``/
+``decisions`` start empty from ``extract`` and fill in as the same object
+flows through ``schedule()`` then ``solve_resources()`` -- one object
+carries the whole pipeline's state, so every later stage (``schedule``,
+``solve_resources``, ``emit_scaffold``) takes and returns a single
+``TileGraph``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import isl
 
@@ -44,7 +44,7 @@ class TileUnit:
 
 @dataclass(frozen=True)
 class TileGraph:
-    """Polyhedral extraction of one HIR ``Function`` body.
+    """Polyhedral extraction of one HIR ``Function`` body, plus its schedule.
 
     ``domain``/``reads``/``writes`` are unions of per-``TileUnit`` pieces,
     each tuple-named by its producing statement (domain/reads/writes) or
@@ -53,6 +53,13 @@ class TileGraph:
     ``extract.py``). ``params`` resolves any dynamic-shape isl parameter
     name appearing in ``domain`` back to its ``ShapeDim`` (empty for an
     all-static V1 extraction).
+
+    ``tree`` is the isl schedule computed by ``schedule()`` (``None``
+    before that runs). ``ring`` maps a buffer name to its software-
+    pipelining depth; ``decisions`` carries ``solve_resources()``'s full
+    per-statement resource picks plus its solve status/makespan. Both are
+    plain fields, never an isl mark payload -- isl marks are process-
+    global C state, not a place for an arbitrary Python object to live.
     """
 
     domain: "isl.union_set"
@@ -61,6 +68,9 @@ class TileGraph:
     writes: "isl.union_map"
     units: tuple[TileUnit, ...]
     params: dict
+    tree: "isl.schedule | None" = None
+    ring: dict = field(default_factory=dict)
+    decisions: dict | None = None
 
 
 __all__ = ["TileGraph", "TileUnit"]

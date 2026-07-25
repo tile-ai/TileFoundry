@@ -104,7 +104,7 @@ def test_dynamic_matmul_end_to_end_emits_symbolic_loop():
     names the isl parameter directly, never a fixed integer trip count."""
     tg = extract(dyn_matmul)
     tree = schedule(tg)
-    skeleton, _swimlane, contracts = emit_scaffold(tree, tg)
+    skeleton, _swimlane, contracts = emit_scaffold(tree)
 
     print("\n=== dynamic matmul skeleton ===")
     print(skeleton.text)

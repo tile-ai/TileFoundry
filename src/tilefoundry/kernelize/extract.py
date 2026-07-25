@@ -7,12 +7,16 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
 
 1. Walk ``hir.body`` with the analyzer's own ``_postorder`` (SSA-DAG
    postorder -- dependencies before dependents) and keep the ``Call``
-   nodes whose target is a compute op (not a nested HIR ``Function``,
-   not a structural/view node, e.g. ``TupleGetItem`` or the zero-op
-   ``Reshape``, folded into every consumer's access map instead -- see
-   ``_buffer_namer``). Each such ``Call`` becomes one statement -- or
-   several, for an op whose outputs cannot share one domain (``RoPE``'s
-   GQA q/k, see ``_rope_access``).
+   nodes whose target is a compute op (not a structural/view node, e.g.
+   ``TupleGetItem`` or the zero-op ``Reshape``, folded into every
+   consumer's access map instead -- see ``_buffer_namer``). A ``Call``
+   whose target is a nested HIR ``Function`` is penetrated instead of
+   rejected: ``_walk_calls`` binds its params to the caller's own
+   (already-resolved) argument expressions and recurses into its body,
+   prefixing every statement/buffer that body contributes with the
+   callee name plus a per-call-site index. Each compute ``Call`` becomes
+   one statement -- or several, for an op whose outputs cannot share one
+   domain (``RoPE``'s GQA q/k, see ``_rope_access``).
 2. For each statement, narrow every argument's type to its local (per-shard)
    shape when it carries a ``ShardLayout`` (``_local_type``: each mesh
    ``Split``'s *tensor* axis divided by its mesh extent, tensor rank
@@ -45,18 +49,21 @@ shape departs from ``docs/spec/tilegraph.md``'s single-domain sketch.
 """
 from __future__ import annotations
 
+import dataclasses
+import itertools
 from dataclasses import dataclass
 
 import isl
 
 from tilefoundry.analysis.analyzer import _postorder
-from tilefoundry.ir.core import Call, TypeInferContext, Var, binding_name
+from tilefoundry.ir.core import Call, Tuple, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 
@@ -104,12 +111,16 @@ def _buffer_namer():
     ``Reshape`` is the same passthrough (also chases a chain), but its
     source has a different coordinate space -- the returned callable also
     carries that recomposition as ``namer.pierce(m, expr)`` (``_read_map``).
+    ``prefix`` (only ever passed for a statement's own output, never a
+    read) tags a fresh name with the penetrated helper it came from, so
+    two call sites of the same helper never collide.
     """
     seen: dict[int, str] = {}
     used: set[str] = set()
     reshape_source: dict[int, "isl.map | None"] = {}
+    anonymous = itertools.count()
 
-    def name_for(expr) -> str:
+    def name_for(expr, prefix: str = "") -> str:
         key = id(expr)
         cached = seen.get(key)
         if cached is not None:
@@ -125,7 +136,11 @@ def _buffer_namer():
         if isinstance(expr, Var):
             base = expr.name
         else:
-            base = binding_name(expr) or f"t{key}"
+            # An unbound intermediate (a bare `return op(...)`) has no authored
+            # name; number it in visit order rather than by `id`, which would
+            # put a memory address in the skeleton and change run to run.
+            base = binding_name(expr) or f"t{next(anonymous)}"
+        base = f"{prefix}{base}"
         candidate = base
         suffix = 0
         while candidate in used:
@@ -250,7 +265,7 @@ def _read_map(m: "isl.map", stmt_name: str, domain: "isl.set", arg, namer) -> "i
 
 
 def _registered_access(
-    call: Call, stmt_name: str, result: AccessRelationResult, namer,
+    call: Call, stmt_name: str, result: AccessRelationResult, namer, prefix: str,
 ) -> _StatementAccess:
     """Statement extraction for an op with a registered forward relation
     (``access_relation.build_relation`` returned non-``None``, e.g. MatMul,
@@ -273,7 +288,7 @@ def _registered_access(
 
     n_outputs = len(output_maps)
     for out_idx, raw_map in enumerate(output_maps):
-        out_buf = namer(call) if n_outputs == 1 else f"{namer(call)}_{out_idx}"
+        out_buf = namer(call, prefix) if n_outputs == 1 else f"{namer(call, prefix)}_{out_idx}"
         bound = _bind_map(raw_map, stmt_name, domain, out_buf)
         writes.append(bound)
         # An output map that is not injective means two distinct domain
@@ -295,7 +310,7 @@ def _registered_access(
 
 def _rope_branch(
     call: Call, x, cos_cache, sin_cache, pos_ids, out_idx: int,
-    stmt_name: str, namer,
+    stmt_name: str, namer, prefix: str,
 ) -> _StatementAccess:
     """One RoPE branch (q or k): calls the registered relation with *x*
     standing in for both value-input slots, keeping only *x*'s own reads
@@ -312,7 +327,7 @@ def _rope_branch(
         _read_map(result.maps[3], stmt_name, domain, sin_cache, namer),
         _read_map(result.maps[4], stmt_name, domain, pos_ids, namer),
     ]
-    out_buf = f"{namer(call)}_{out_idx}"
+    out_buf = f"{namer(call, prefix)}_{out_idx}"
     write = _bind_map(result.maps[5 + out_idx], stmt_name, domain, out_buf)
     if not write.is_injective():
         reads.append(write)
@@ -322,7 +337,7 @@ def _rope_branch(
     )
 
 
-def _rope_access(call: Call, stmt_name: str, namer) -> list[_StatementAccess]:
+def _rope_access(call: Call, stmt_name: str, namer, prefix: str) -> list[_StatementAccess]:
     """RoPE -> two statements, one per value input: GQA's Hq != Hkv means
     q_rope/k_rope cannot share one domain (see the task report's path A).
     Output buffers use the same ``_{out_idx}`` suffix ``_registered_access``
@@ -332,18 +347,18 @@ def _rope_access(call: Call, stmt_name: str, namer) -> list[_StatementAccess]:
     """
     q, k, cos_cache, sin_cache, pos_ids = call.args
     return [
-        _rope_branch(call, q, cos_cache, sin_cache, pos_ids, 0, f"{stmt_name}_q", namer),
-        _rope_branch(call, k, cos_cache, sin_cache, pos_ids, 1, f"{stmt_name}_k", namer),
+        _rope_branch(call, q, cos_cache, sin_cache, pos_ids, 0, f"{stmt_name}_q", namer, prefix),
+        _rope_branch(call, k, cos_cache, sin_cache, pos_ids, 1, f"{stmt_name}_k", namer, prefix),
     ]
 
 
-def _extract_statement(call: Call, stmt_name: str, namer) -> list[_StatementAccess]:
+def _extract_statement(call: Call, stmt_name: str, namer, prefix: str) -> list[_StatementAccess]:
     if isinstance(call.target, RoPE):
-        return _rope_access(call, stmt_name, namer)
+        return _rope_access(call, stmt_name, namer, prefix)
     input_types = tuple(_local_type(arg.type) for arg in call.args)
     result = build_relation(call, input_types, TypeInferContext())
     if result is not None:
-        return [_registered_access(call, stmt_name, result, namer)]
+        return [_registered_access(call, stmt_name, result, namer, prefix)]
     raise ExtractError(
         f"kernelize.extract: op {type(call.target).__name__!r} has no "
         "registered forward type_relation (access_relation.build_relation "
@@ -382,49 +397,171 @@ def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
     return sched
 
 
-def extract(hir: Function) -> TileGraph:
-    """Lift ``hir``'s body into a :class:`TileGraph`: one statement per
-    compute op at element granularity, with ``deps`` auto-inferred from
-    ``reads``/``writes`` (see module docstring for the full algorithm)."""
-    if hir.body is None:
-        raise ExtractError(
-            f"kernelize.extract: hir Function {hir.name!r} has no body "
-            "(a dispatch prototype cannot be extracted)"
-        )
+def _resolve(expr, table: dict[int, object]):
+    """``expr`` if it is not (transitively) bound in ``table``, else the
+    expression it resolves to -- a penetrated callee's own param Var
+    bound to the caller's argument, or a penetrated wrapper Call aliased
+    to whatever its body ultimately resolves to."""
+    return table.get(id(expr), expr)
 
-    order = _postorder(hir.body)
+
+def _bind_dim_vars(params: tuple[Var, ...], args: tuple, callee_name: str) -> None:
+    """Mirrors ``evaluator.interpreter._bind_dim_vars`` at the type level:
+    each ``DimVar`` in a callee param's declared shape binds to the
+    caller argument's ``ShapeDim`` at that axis. A conflicting bind for
+    the same name is an actionable error naming the callee -- defense in
+    depth, since ``hir.function.elaborate`` already requires a call's
+    argument shapes to equal the callee's own declared ones exactly."""
+    binding: dict[str, object] = {}
+    for p, a in zip(params, args):
+        p_shape = getattr(p.type, "shape", None)
+        a_shape = getattr(a.type, "shape", None)
+        if p_shape is None or a_shape is None:
+            continue
+        for axis, dim in enumerate(p_shape):
+            if not isinstance(dim, DimVar) or axis >= len(a_shape):
+                continue
+            bound = a_shape[axis]
+            prev = binding.get(dim.name)
+            if prev is not None and prev != bound:
+                raise ExtractError(
+                    f"kernelize.extract: call to {callee_name!r}: DimVar "
+                    f"{dim.name!r} binds to conflicting shapes {prev!r} vs {bound!r}"
+                )
+            binding[dim.name] = bound
+
+
+@dataclass(frozen=True)
+class _Gathered:
+    """One compute-op ``Call``, args already resolved against every
+    enclosing penetrated call's argument substitution, ready for
+    ``_extract_statement``. ``prefix`` is its owning scope's call-site
+    tag (empty at the top level); ``stmt_name`` already carries it."""
+
+    call: Call
+    stmt_name: str
+    prefix: str
+
+
+def _maybe_replace_args(e: Call, resolved_args: tuple) -> Call:
+    if all(r is a for r, a in zip(resolved_args, e.args)):
+        return e
+    return dataclasses.replace(e, args=resolved_args)
+
+
+def _walk_calls(
+    body, prefix: str, active: tuple[int, ...],
+    site_counter: dict[str, int], table: dict[int, object],
+) -> list["_Gathered"]:
+    """Postorder over one function body, penetrating every ``Call``
+    whose target is a ``Function``: bind its params to the caller's own
+    (already-resolved) argument expressions in ``table``, recurse into
+    its body under a callee-name-plus-call-site-index-prefixed scope,
+    and splice the resulting statements in at the call's own position --
+    then alias the wrapper call to whatever its body resolved to, so a
+    sibling statement reading the wrapper's result finds the real
+    producer. Every other ``Call``/``Tuple`` node gets its own
+    args/elements resolved through ``table`` and registered there too,
+    so a later reference (in this or an enclosing scope) sees the
+    resolved form. Raises on self-recursion, a dispatch prototype or an
+    arity mismatch, naming the offending callee.
+    """
+    order = _postorder(body)
     if any(isinstance(e, GridRegionExpr) for e in order):
         raise ExtractError(
             "kernelize.extract: GridRegionExpr (looped) bodies are not "
             "supported in V1 -- only a flat SSA-DAG of compute-op Calls is"
         )
 
-    compute_calls: list[Call] = []
+    own_targets: list[object] = []
+    pending: list[object] = []  # _Gathered (nested, done) | Call (own, needs a name)
     for e in order:
+        if isinstance(e, Tuple):
+            resolved_elems = tuple(_resolve(x, table) for x in e.elements)
+            same = all(r is x for r, x in zip(resolved_elems, e.elements))
+            table[id(e)] = e if same else dataclasses.replace(e, elements=resolved_elems)
+            continue
         if not isinstance(e, Call):
             continue
-        if isinstance(e.target, Function):
-            raise ExtractError(
-                "kernelize.extract: nested HIR Function calls are not "
-                "supported in V1 -- extract one flattened Function body at "
-                "a time"
+
+        target = e.target
+        resolved_args = tuple(_resolve(a, table) for a in e.args)
+
+        if isinstance(target, Function):
+            callee = target
+            if id(callee) in active:
+                raise ExtractError(
+                    f"kernelize.extract: self-recursive call to {callee.name!r} "
+                    "-- extract cannot unroll a function that (transitively) "
+                    "calls itself"
+                )
+            if callee.variants or callee.body is None:
+                raise ExtractError(
+                    f"kernelize.extract: {callee.name!r} is a dispatch "
+                    "prototype (has variants / no body) -- extract has no "
+                    "runtime shape to pick a variant statically"
+                )
+            if len(resolved_args) != len(callee.params):
+                raise ExtractError(
+                    f"kernelize.extract: call to {callee.name!r} expects "
+                    f"{len(callee.params)} arg(s), got {len(resolved_args)}"
+                )
+            for p, a in zip(callee.params, resolved_args):
+                table[id(p)] = a
+            _bind_dim_vars(callee.params, resolved_args, callee.name)
+            idx = site_counter.get(callee.name, 0)
+            site_counter[callee.name] = idx + 1
+            nested = _walk_calls(
+                callee.body, f"{prefix}{callee.name}{idx}_",
+                active + (id(callee),), site_counter, table,
             )
-        if isinstance(e.target, TupleGetItem):
-            continue  # structural projection, not a statement of its own
-        if isinstance(e.target, Reshape):
-            continue  # zero-op view, folded into consumer access (_buffer_namer)
-        compute_calls.append(e)
-    if not compute_calls:
+            pending.extend(nested)
+            table[id(e)] = _resolve(callee.body, table)
+            continue
+
+        if isinstance(target, (TupleGetItem, Reshape)):
+            table[id(e)] = _maybe_replace_args(e, resolved_args)
+            continue  # structural view, not a statement of its own
+
+        resolved = _maybe_replace_args(e, resolved_args)
+        table[id(e)] = resolved
+        own_targets.append(target)
+        pending.append(resolved)
+
+    own_names = iter(_assign_statement_names(own_targets))
+    gathered: list[_Gathered] = []
+    for item in pending:
+        if isinstance(item, _Gathered):
+            gathered.append(item)
+        else:
+            gathered.append(
+                _Gathered(call=item, stmt_name=f"{prefix}{next(own_names)}", prefix=prefix)
+            )
+    return gathered
+
+
+def extract(hir: Function) -> TileGraph:
+    """Lift ``hir``'s body into a :class:`TileGraph`: one statement per
+    compute op at element granularity, penetrating every nested ``@func``
+    call, with ``deps`` auto-inferred from ``reads``/``writes`` (see
+    module docstring for the full algorithm)."""
+    if hir.body is None:
+        raise ExtractError(
+            f"kernelize.extract: hir Function {hir.name!r} has no body "
+            "(a dispatch prototype cannot be extracted)"
+        )
+
+    gathered = _walk_calls(hir.body, "", (id(hir),), {}, {})
+    if not gathered:
         raise ExtractError(
             f"kernelize.extract: hir Function {hir.name!r} body has no "
             "compute ops to extract"
         )
 
-    stmt_names = _assign_statement_names([call.target for call in compute_calls])
     namer = _buffer_namer()
     accesses: list[_StatementAccess] = []
-    for call, name in zip(compute_calls, stmt_names):
-        accesses.extend(_extract_statement(call, name, namer))
+    for g in gathered:
+        accesses.extend(_extract_statement(g.call, g.stmt_name, namer, g.prefix))
 
     domain = isl.union_set("{}")
     reads = isl.union_map("{}")
