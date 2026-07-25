@@ -1,197 +1,34 @@
-"""DeepSeek-V4-Flash causal-LM model tree: embed, per-layer attention/moe
-decoder layers, final norm, lm_head, plus the generate()-facing
-forward / init_caches / prepare_inputs_for_generation hooks."""
+"""Assemble the DeepSeek-V4-Flash tree at a given scale: each node's declarative
+source under ``model/`` is loaded with *config* injected."""
 from __future__ import annotations
 
-from tests.models.deepseek_v4_flash.attention import build_attention
-from tests.models.deepseek_v4_flash.config import HF_CONFIG, DSV4Config
-from tests.models.deepseek_v4_flash.moe import build_moe
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf
+from pathlib import Path
+
+from tests.models.deepseek_v4_flash.config import DSV4Config
+from tests.models.loader import load_model
 from tilefoundry.ir.core.module import Module
 
-_MAIN_ROPE: "tuple | None" = None
+_MODEL_DIR = Path(__file__).parent / "model"
+
+__all__ = ["load_causal_lm"]
 
 
-def _main_rope() -> tuple:
-    """HF's own inverse frequencies and attention scaling for the ``main`` rope
-    label, computed by ``DeepseekV4RotaryEmbedding`` rather than reproduced.
-
-    A ``sliding_attention`` layer takes ``main`` (plain rope); only the
-    compressed layer types take the yarn-scaled ``compress`` label.
-    """
-    global _MAIN_ROPE
-    if _MAIN_ROPE is None:
-        from transformers.models.deepseek_v4.modeling_deepseek_v4 import (  # noqa: PLC0415
-            DeepseekV4RotaryEmbedding,
-        )
-
-        _MAIN_ROPE = DeepseekV4RotaryEmbedding.compute_default_rope_parameters(
-            HF_CONFIG, layer_type="main"
-        )
-    return _MAIN_ROPE
+def _load_layer(config: DSV4Config, index: int) -> Module:
+    """One decoder layer with its own freshly loaded attention / moe:
+    ``Module.renamed`` is a shallow copy, so a shared child would let this
+    layer's ``load()`` clobber another's."""
+    attention_module = load_model(_MODEL_DIR / "attention.py", config=config).DeepseekV4Attention
+    moe_module = load_model(_MODEL_DIR / "moe.py", config=config).DeepseekV4MoE
+    layer = load_model(
+        _MODEL_DIR / "decoder_layer.py",
+        config=config, attention_module=attention_module, moe_module=moe_module,
+    ).DeepseekV4DecoderLayer
+    return layer.renamed(f"layer{index}")
 
 
-def _rope_cos_sin(config: DSV4Config, position: int, *, device):
-    """cos / sin for one absolute sequence *position*, each
-    ``(config.rope_half,)`` f32, one value per rotated pair."""
-    import torch  # noqa: PLC0415
-
-    inv_freq, attention_scaling = _main_rope()
-    angles = position * inv_freq.to(torch.float64)
-    cos = (angles.cos() * attention_scaling).to(dtype=torch.float32, device=device)
-    sin = (angles.sin() * attention_scaling).to(dtype=torch.float32, device=device)
-    return cos, sin
-
-
-def _decode_attn_mask(config: DSV4Config, step: int, *, device):
-    """Additive mask ``(1, 1, 1, config.window)`` bf16 for decode step *step*;
-    masks not-yet-written slots while the window is filling, none once it has
-    wrapped (order doesn't matter to softmax)."""
-    import torch  # noqa: PLC0415
-
-    mask = torch.zeros(config.window, dtype=torch.bfloat16, device=device)
-    if step < config.window - 1:
-        mask[step + 1 :] = float("-inf")
-    return mask.view(1, 1, 1, config.window)
-
-
-def build_decoder_layer(config: DSV4Config) -> Module:
-    """One decoder layer: two pre-norms + residual add, nesting
-    ``build_attention(config)`` / ``build_moe(config)`` as its
-    ``attention`` / ``moe`` attributes."""
-
-    @module(entry="residual_add")
-    class DeepseekV4DecoderLayer:
-        @func
-        def pre_attn_rms_norm(
-            x: Tensor[(1, 1, config.dim), "bf16"],
-            pre_attn_norm_weight: ConstTensor[(config.dim,), "bf16"],
-        ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.rms_norm(x, pre_attn_norm_weight)
-
-        @func
-        def pre_moe_rms_norm(
-            x: Tensor[(1, 1, config.dim), "bf16"],
-            pre_moe_norm_weight: ConstTensor[(config.dim,), "bf16"],
-        ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            # ffn_norm.weight is a layer-level tensor (real checkpoint), not part of moe.
-            return tf.rms_norm(x, pre_moe_norm_weight)
-
-        @func
-        def residual_add(
-            a: Tensor[(1, 1, config.dim), "bf16"],
-            b: Tensor[(1, 1, config.dim), "bf16"],
-        ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.add(a, b)
-
-        attention = build_attention(config)
-        moe = build_moe(config)
-
-        def forward(
-            self, hidden, cos_pos, sin_pos, cur_pos, s, kv_cache0, attn_mask, scale,
-            ones_head_dim, token_ids,
-        ):
-            attn_in = self.pre_attn_rms_norm(hidden)
-            attn_out, kv_cache1 = self.attention(
-                attn_in, cos_pos, sin_pos, cur_pos, s, kv_cache0, attn_mask, scale, ones_head_dim,
-            )
-            h1 = self.residual_add(hidden, attn_out)
-            moe_in = self.pre_moe_rms_norm(h1)
-            moe_out = self.moe(moe_in, token_ids)
-            out = self.residual_add(h1, moe_out)
-            return out, kv_cache1
-
-    return DeepseekV4DecoderLayer
-
-
-def build_causal_lm(config: DSV4Config) -> Module:
-    """Full model tree: ``embed`` -> ``config.n_layers`` decoder layers ->
-    ``final_rms_norm`` -> ``lm_head``, plus the ``generate()``-facing
-    ``forward`` / ``init_caches`` / ``prepare_inputs_for_generation`` hooks."""
-
-    @module(entry="lm_head")
-    class DeepseekV4ForCausalLM:
-        @func
-        def embed(
-            table: ConstTensor[(config.vocab, config.dim), "bf16"],
-            token_ids: Tensor[(1,), "i64"],
-        ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.reshape(tf.gather(table, token_ids, axis=0), new_shape=(1, 1, config.dim))
-
-        @func
-        def final_rms_norm(
-            hidden: Tensor[(1, 1, config.dim), "bf16"],
-            final_norm_weight: ConstTensor[(config.dim,), "bf16"],
-        ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.rms_norm(hidden, final_norm_weight)
-
-        @func
-        def lm_head(
-            hidden: Tensor[(1, 1, config.dim), "bf16"],
-            lm_head_weight: ConstTensor[(config.dim, config.vocab), "bf16"],
-        ) -> Tensor[(1, 1, config.vocab), "bf16"]:
-            logits = tf.matmul(tf.reshape(hidden, new_shape=(1, config.dim)), lm_head_weight)
-            return tf.reshape(logits, new_shape=(1, 1, config.vocab))
-
-        @lm_head.converter("lm_head_weight")
-        def _(
-            head_weight_raw: ConstTensor[(config.vocab, config.dim), "bf16"],
-        ) -> Tensor[(config.dim, config.vocab), "bf16"]:
-            # head.weight is (vocab, dim); transpose to match lm_head's (dim, vocab) matmul.
-            return tf.transpose(head_weight_raw, perm=(1, 0))
-
-        # Built fresh per index: a shared instance's attention/moe would let one layer's .load() clobber another's.
-        layers = tuple(
-            build_decoder_layer(config).renamed(f"layer{i}") for i in range(config.n_layers)
-        )
-
-        def forward(
-            self, token_ids, cos_pos, sin_pos, cur_pos, s, past_key_values, attn_mask, scale,
-            ones_head_dim,
-        ):
-            hidden = self.embed(token_ids)
-            new_caches = []
-            for i in range(config.n_layers):
-                layer = getattr(self, f"layer{i}")
-                hidden, new_cache = layer(
-                    hidden, cos_pos, sin_pos, cur_pos, s, past_key_values[i], attn_mask, scale,
-                    ones_head_dim, token_ids,
-                )
-                new_caches.append(new_cache)
-            normed = self.final_rms_norm(hidden)
-            logits = self.lm_head(normed)
-            return logits, tuple(new_caches)
-
-        def init_caches(self, device="cuda", mesh=None):
-            import torch  # noqa: PLC0415
-
-            return tuple(
-                torch.zeros(1, config.window, 1, config.head_dim, dtype=torch.bfloat16, device=device)
-                for _ in range(config.n_layers)
-            )
-
-        def prepare_inputs_for_generation(self, input_ids, step, past_key_values, device="cuda"):
-            import torch  # noqa: PLC0415
-
-            ids = input_ids.reshape(-1)
-            token_ids = ids[step].reshape(1).to(device=device, dtype=torch.int64)
-            cur_pos = torch.tensor([step % config.window], device=device, dtype=torch.int32)
-            s = torch.tensor([1], device=device, dtype=torch.int32)
-            cos, sin = _rope_cos_sin(config, step, device=device)
-            cos_pos = cos.view(1, 1, 1, config.rope_half)
-            sin_pos = sin.view(1, 1, 1, config.rope_half)
-            attn_mask = _decode_attn_mask(config, step, device=device)
-            scale = torch.full(
-                (1, 1, 1, 1), config.head_dim ** -0.5, device=device, dtype=torch.bfloat16,
-            )
-            ones_head_dim = torch.ones(config.head_dim, device=device, dtype=torch.bfloat16)
-            return (
-                token_ids, cos_pos, sin_pos, cur_pos, s, past_key_values, attn_mask, scale,
-                ones_head_dim,
-            )
-
-    return DeepseekV4ForCausalLM
-
-
-__all__ = ["build_causal_lm", "build_decoder_layer"]
+def load_causal_lm(config: DSV4Config) -> Module:
+    """The full tree at *config*'s scale."""
+    decoder_layers = tuple(_load_layer(config, i) for i in range(config.n_layers))
+    return load_model(
+        _MODEL_DIR / "causal_lm.py", config=config, decoder_layers=decoder_layers,
+    ).DeepseekV4ForCausalLM

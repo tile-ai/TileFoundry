@@ -371,7 +371,7 @@ def _build_root_funcs(config: DSV4Config) -> dict[str, object]:
 
 
 def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> RuntimeModule:
-    """The runtime twin of `build_causal_lm(config)`'s tree; `ir` is that
+    """The runtime twin of `load_causal_lm(config)`'s tree; `ir` is that
     semantic root (its children/entry/functions drive the twin)."""
     if not ir.modules:
         raise ValueError("build_runtime_causal_lm: ir has no decoder layers")

@@ -10,7 +10,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from tests.models.deepseek_v4_flash.causal_lm import build_causal_lm
+from tests.models.deepseek_v4_flash.causal_lm import load_causal_lm
 from tests.models.deepseek_v4_flash.config import DSV4Config
 from tests.models.deepseek_v4_flash.hf_alias import hf_alias
 from tests.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
@@ -124,7 +124,7 @@ def config():
 
 @pytest.fixture(scope="module")
 def semantic(config):
-    return build_causal_lm(config)
+    return load_causal_lm(config)
 
 
 @pytest.fixture(scope="module")
