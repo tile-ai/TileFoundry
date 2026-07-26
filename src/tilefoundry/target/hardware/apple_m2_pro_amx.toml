@@ -122,6 +122,20 @@ provenance = "estimated"
 conditions = "read off measured thread scaling of the same GEMM: 504.9, 767.8, 967.5 and 1108.3 GFLOP/s at 1, 2, 4 and 8 threads, saturating at 2.2 times one thread; Apple publishes no AMX unit count"
 source = "AMX f32 GEMM thread-scaling measurement on the host"
 
+[facts.neon_f32_outer_product]
+value = "4x4"
+unit = "f32 elements"
+provenance = "derived"
+conditions = "four FMLA vD.4s, vN.4s, vM.s[i] over four accumulator registers are the smallest whole f32 outer product NEON issues"
+source = "Arm A64 instruction set, FMLA (by element)"
+
+[facts.neon_f32_core_throughput]
+value = 107.7
+unit = "GFLOP/s"
+provenance = "measured"
+conditions = "one performance core, single thread; M=N=K=512 f32 GEMM under a 4x16 micro-kernel (a 1x4 grid of 4x4 atoms, C register-resident over the whole K loop), panels pre-packed so the figure is the atom issue rate and not a packing cost, warmed, best of five rounds; result exact against Accelerate cblas_sgemm"
+source = "NEON f32 GEMM benchmark on the host"
+
 [facts.amx_f32_instruction_peak]
 value = "unavailable"
 unit = ""
@@ -130,8 +144,8 @@ conditions = "Apple publishes no AMX instruction throughput; the measured sustai
 source = ""
 
 [facts.compiler_policy_tile_capacity]
-value = 4096
-unit = "B"
+value = 128
+unit = "KiB"
 provenance = "derived"
-conditions = "the resource solve bounds one tile's resident footprint by the Z accumulator file, the innermost store a tile lives in"
+conditions = "a core-level tile's resident working set is recorded against the performance core's L1d; the AMX register files bound one atom instance instead, and do so by filtering the candidate atoms of a statement that overflows them"
 source = "tilefoundry policy"

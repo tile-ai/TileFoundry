@@ -48,11 +48,13 @@ ATTENTION_BIAS = False
 VOCAB = 151936
 MAX_POS = 32768
 
-# Static test-speed contract: no KV cache, no dynamic dims. This is a
-# single-shot prefill oracle (``cur_pos`` is always 0) — a small fixed
-# sequence tile is enough since op semantics are length-agnostic; a real
-# context length is unnecessary Phase-0 runtime cost.
-S_CAP = 4
+# Static: no KV cache, no dynamic dims — a single-shot prefill oracle
+# (``cur_pos`` is always 0). Op semantics are length-agnostic, but atom matching
+# is not: an atom's row granularity has to divide the op's row count, and at
+# S_CAP=4 every matmul here fails that (``4 % 16 != 0`` against the AMX outer
+# product) and lists no candidate at all. 64 is a length that keeps the
+# numerical oracle cheap and still divides both modelled granularities.
+S_CAP = 64
 
 # HIR dtype for every Tensor annotation in this package: f32 everywhere. There
 # is no CUDA on this box, so there is no bf16 branch to also cover (contrast

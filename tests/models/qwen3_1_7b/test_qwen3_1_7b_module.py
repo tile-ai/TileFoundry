@@ -12,7 +12,14 @@ from __future__ import annotations
 import torch
 
 from tests.models.qwen3_1_7b import common
-from tests.models.qwen3_1_7b.qwen3_1_7b_module import Qwen3_1_7B
+from tests.models.qwen3_1_7b.qwen3_1_7b_module import (
+    MB,
+    MT,
+    NB_HID,
+    NB_INT,
+    NT,
+    Qwen3_1_7B,
+)
 from tilefoundry.evaluator import evaluate
 
 HIDDEN = common.HIDDEN
@@ -103,6 +110,38 @@ def test_mlp_evaluate():
         device=DEV,
     )
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
+
+
+def test_tiled_mlp_matches_untiled_mlp():
+    """tiled_mlp (the K-loop / 32x32-block rewrite of `mlp`) against `mlp`
+    itself on the same inputs: the loop tiling only reassociates the K
+    reduction, so the two must agree to f32 round-off. Also checked against
+    HF, so a bug shared by both rewrites cannot hide."""
+    layer, *_ = _fixtures()
+    mlp = layer.mlp
+    torch.manual_seed(1)
+    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
+    weights = (
+        layer.post_attention_layernorm.weight,
+        common.linear_weight(mlp.gate_proj),
+        common.linear_weight(mlp.up_proj),
+        common.linear_weight(mlp.down_proj),
+    )
+
+    with torch.no_grad():
+        ref = mlp(layer.post_attention_layernorm(x))
+    untiled = evaluate(Qwen3_1_7B.mlp, x, *weights, device=DEV)
+    tiled = evaluate(
+        Qwen3_1_7B.tiled_mlp,
+        x,
+        *weights,
+        torch.zeros(MB, NB_INT, MT, NT, device=DEV),
+        torch.zeros(MB, NB_HID, MT, NT, device=DEV),
+        device=DEV,
+    )
+
+    torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
+    torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
 
 def test_decoder_layer_evaluate():

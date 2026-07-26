@@ -12,6 +12,7 @@ splice over the final text.
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass
 
 import isl
@@ -329,14 +330,18 @@ def _illustrative_instances(
     (prologue) + up to ``depth + 1`` following instances (steady-state) +
     the last instance (epilogue) -- never the full ``K``-instance unroll.
     Returns ``(shown, n_collapsed)``; ``n_collapsed == 0`` when the whole
-    domain already fits in prologue+steady+epilogue (nothing to elide)."""
+    domain already fits in prologue+steady+epilogue (nothing to elide).
+
+    A real kernel's domain runs to hundreds of millions of points, so the
+    head is taken off ``product``'s lazy stream and the last coordinate --
+    which its lexicographic order puts at ``extent - 1`` on every axis -- is
+    read off the extents rather than by exhausting it."""
     depth = len(extents)
-    all_coords = list(itertools.product(*(range(e) for e in extents)))
-    total = len(all_coords)
+    total = math.prod(extents)
     head_n = min(1 + (depth + 1), total)
-    head = all_coords[:head_n]
-    tail = all_coords[-1:] if total > head_n else []
-    shown = head + [c for c in tail if c not in head]
+    head = list(itertools.islice(itertools.product(*(range(e) for e in extents)), head_n))
+    last = tuple(e - 1 for e in extents)
+    shown = head + ([last] if total > head_n and last not in head else [])
     return shown, total - len(shown)
 
 

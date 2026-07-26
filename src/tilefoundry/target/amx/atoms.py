@@ -1,7 +1,8 @@
 """``candidate_atoms(op, target) -> list[AtomFact]`` -- bridge one HIR
-compute op to the AMX atom catalogue it could run on. It only *lists*
-candidates (a hard filter over shape/dtype/layout); it never picks one,
-that ranking is the schedule layer's CP-SAT job.
+compute op to the atom catalogue of the AMX target, which spans two
+execution units: the AMX coprocessor and the core's own NEON SIMD pipes.
+It only *lists* candidates (a hard filter over shape, dtype, layout and
+operand storage); it never picks one, that choice is the schedule layer's.
 """
 from __future__ import annotations
 
@@ -13,14 +14,53 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.target import Target, resolve_target
+from tilefoundry.target.amx.device import AppleM2Pro
 from tilefoundry.target.amx.target import AmxTarget
 
 
 @dataclass(frozen=True)
-class AmxOpSpec:
-    """A named, fully-specified AMX matrix instruction."""
+class StorageLevel:
+    """Where an atom's operands sit while it executes: per operand role, the
+    bytes that role has to fit into. A level backed by a larger store only
+    streams its operands through, so it budgets no role and holds anything."""
 
     name: str
+    budget: tuple[tuple[str, int], ...] = ()
+
+    def holds(self, operand_bytes: dict[str, int]) -> bool:
+        """Whether every budgeted role fits -- vacuously so when none is."""
+        return all(operand_bytes[role] <= limit for role, limit in self.budget)
+
+
+# The X/Y/Z register files are AMX ISA geometry, not a per-part figure, so the
+# level they form is read once off the recorded device facts.
+_ISA = AppleM2Pro()
+
+# An AMX operand is addressed as a register: A in X, B in Y, C in the Z
+# accumulator file, and one instance never reaches outside them.
+AMX_REGISTERS = StorageLevel(
+    name="amx_xyz_registers",
+    budget=(
+        ("a_bytes", _ISA.amx_staging_bytes),
+        ("b_bytes", _ISA.amx_staging_bytes),
+        ("c_bytes", _ISA.amx_accumulator_bytes),
+    ),
+)
+
+# NEON loads and stores its operands through the core's caches, which unified
+# memory backs: an operand too big to stay resident streams instead of being
+# rejected, so this level budgets nothing.
+CORE_CACHE = StorageLevel(name="core_cache")
+
+
+@dataclass(frozen=True)
+class AmxOpSpec:
+    """A named, fully-specified matrix instruction: which execution unit issues
+    it, and which storage level has to hold the operands it is handed."""
+
+    name: str
+    unit: str
+    level: StorageLevel
     shape_mnk: tuple[int, int, int]
     dtype_a: DType
     dtype_b: DType
@@ -29,27 +69,42 @@ class AmxOpSpec:
 
 @dataclass(frozen=True)
 class AmxAtom:
-    """Realized AMX atom -- op plus the register bytes each operand holds."""
+    """Realized atom -- op plus the bytes each of its own operands occupies."""
 
     op: AmxOpSpec
-    x_bytes: int
-    y_bytes: int
-    z_bytes: int
+    a_bytes: int
+    b_bytes: int
+    c_bytes: int
 
 
 # One FMA32 multiplies a 64-byte X operand by a 64-byte Y operand, so its shape
 # is a 16x16 f32 rank-one outer product: K is the atom's own extent, 1.
 AMX_FMA32_16x16x1_F32 = AmxOpSpec(
     name="AMX_FMA32_16x16x1_F32",
+    unit="amx",
+    level=AMX_REGISTERS,
     shape_mnk=(16, 16, 1),
     dtype_a=DType.f32,
     dtype_b=DType.f32,
     dtype_c=DType.f32,
 )
 
-# The AMX atom catalogue this bridge searches; add an AmxOpSpec here to extend
-# it. FMA16 and FMA64 exist in the instruction set and are not modelled.
-_AMX_OP_CATALOG: tuple[AmxOpSpec, ...] = (AMX_FMA32_16x16x1_F32,)
+# `FMLA vD.4s, vN.4s, vM.s[i]` accumulates a 4-lane f32 vector times one
+# broadcast lane of another; four of them over four accumulator registers are
+# the smallest whole f32 outer product NEON issues, so K is 1 as for FMA32.
+NEON_FMLA_4x4x1_F32 = AmxOpSpec(
+    name="NEON_FMLA_4x4x1_F32",
+    unit="neon",
+    level=CORE_CACHE,
+    shape_mnk=(4, 4, 1),
+    dtype_a=DType.f32,
+    dtype_b=DType.f32,
+    dtype_c=DType.f32,
+)
+
+# The catalogue this bridge searches; add an AmxOpSpec here to extend it. AMX
+# FMA16 and FMA64 exist in the instruction set and are not modelled.
+_AMX_OP_CATALOG: tuple[AmxOpSpec, ...] = (AMX_FMA32_16x16x1_F32, NEON_FMLA_4x4x1_F32)
 
 
 def _dense_bytes(shape: tuple[int, ...], dtype: DType) -> int:
@@ -57,36 +112,50 @@ def _dense_bytes(shape: tuple[int, ...], dtype: DType) -> int:
     return math.ceil(math.prod(shape) * dtype.bit_width / 8)
 
 
+def _operand_bytes(shape_mnk: tuple[int, int, int], op: AmxOpSpec) -> dict[str, int]:
+    """Bytes each of a ``shape_mnk`` matmul's operand roles has to hold at
+    ``op``'s dtypes.
+
+    A and B are *staged* one reduction step at a time, so their roles hold one
+    column and one row rather than the whole K extent. C accumulates, so its
+    role holds the entire M by N block for as long as the reduction runs --
+    which is what makes a wide matmul unable to sit in a register file that a
+    narrow one fits exactly.
+    """
+    m, n, _ = shape_mnk
+    return {
+        "a_bytes": _dense_bytes((m,), op.dtype_a),
+        "b_bytes": _dense_bytes((n,), op.dtype_b),
+        "c_bytes": _dense_bytes((m, n), op.dtype_c),
+    }
+
+
 def make_atom(op: AmxOpSpec) -> AmxAtom:
-    """Realize ``op``: the X/Y operand and Z accumulator bytes its shape needs."""
-    m, n, k = op.shape_mnk
-    return AmxAtom(
-        op=op,
-        x_bytes=_dense_bytes((m, k), op.dtype_a),
-        y_bytes=_dense_bytes((k, n), op.dtype_b),
-        z_bytes=_dense_bytes((m, n), op.dtype_c),
-    )
+    """Realize ``op``: the bytes its own three operand roles need."""
+    return AmxAtom(op=op, **_operand_bytes(op.shape_mnk, op))
 
 
 def _roofline_duration_ns(atom: AmxAtom, target: AmxTarget) -> tuple[float, float]:
     """Nominal roofline estimate (ns) for *one* atom instance, as
     ``(duration, compute_only)``.
 
-    Compute is the atom's own MNK flops over one AMX unit's measured f32
-    throughput; memory is its X+Y+Z bytes over unified-memory bandwidth. The
-    compute-only half is returned separately for a consumer that accounts the
-    surrounding traffic itself and would otherwise charge memory twice. This is
-    a nominal estimate to rank against, not a claim of accuracy.
+    Compute is the atom's own MNK flops over the measured f32 throughput of
+    the unit that issues it; memory is its three operands' bytes over
+    unified-memory bandwidth. The compute-only half is returned separately for
+    a consumer that accounts the surrounding traffic itself and would otherwise
+    charge memory twice. A nominal estimate to rank against, not a claim of
+    accuracy. Both halves are positive, so neither needs a floor -- one that
+    rounded up to a nanosecond would swallow a sub-ns SIMD atom whole.
     """
     m, n, k = atom.op.shape_mnk
     flops = 2 * m * n * k
-    moved_bytes = atom.x_bytes + atom.y_bytes + atom.z_bytes
+    moved_bytes = atom.a_bytes + atom.b_bytes + atom.c_bytes
     device = target.device
-    compute_ns = flops * 1_000_000_000 / device.throughput_for(atom.op.dtype_a)
+    compute_ns = flops * 1_000_000_000 / device.throughput_for(atom.op.unit, atom.op.dtype_a)
     memory_ns = (
         moved_bytes * 1_000_000_000 / device.unified_memory_bandwidth_bytes_per_second
     )
-    return max(compute_ns, memory_ns, 1.0), compute_ns
+    return max(compute_ns, memory_ns), compute_ns
 
 
 def _operands_layout_ok(lhs: TensorType, rhs: TensorType) -> bool:
@@ -106,12 +175,15 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
     ``Call``) on ``target`` (a default :class:`AmxTarget` when omitted; a
     backend name string is resolved via ``resolve_target``).
 
-    Hard filter only -- no ranking, no CP-SAT: an atom is a candidate iff
+    Hard filter only -- no ranking: an atom is a candidate iff
 
     1. ``op``'s M/N/K are all static and evenly divisible by the atom's
        ``shape_mnk``;
-    2. ``op``'s lhs/rhs dtypes match the atom's ``dtype_a``/``dtype_b``; and
-    3. the operands' layouts are compatible (``_operands_layout_ok``).
+    2. ``op``'s lhs/rhs dtypes match the atom's ``dtype_a``/``dtype_b``;
+    3. the operands' layouts are compatible (``_operands_layout_ok``); and
+    4. ``op``'s own three operands fit the atom's storage level -- which is
+       what separates a register-resident unit from one streaming through
+       cache, and so what an untiled whole-tensor statement fails.
 
     Returns ``[]`` when no registered atom clears the filter (a legitimate "no
     candidates" outcome, not an error). Raises ``NotImplementedError`` for an
@@ -144,6 +216,8 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
             continue
         if lhs_type.dtype != amx_op.dtype_a or rhs_type.dtype != amx_op.dtype_b:
             continue
+        if not amx_op.level.holds(_operand_bytes((m, n, k), amx_op)):
+            continue
         atom = make_atom(amx_op)
         duration, compute_duration = _roofline_duration_ns(atom, target)
         facts.append(
@@ -153,13 +227,13 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
                 duration=duration,
                 compute_duration=compute_duration,
                 storage={
-                    "x_bytes": atom.x_bytes,
-                    "y_bytes": atom.y_bytes,
-                    "z_bytes": atom.z_bytes,
-                    "register_bytes": atom.x_bytes + atom.y_bytes + atom.z_bytes,
+                    "a_bytes": atom.a_bytes,
+                    "b_bytes": atom.b_bytes,
+                    "c_bytes": atom.c_bytes,
+                    "operand_bytes": atom.a_bytes + atom.b_bytes + atom.c_bytes,
                 },
-                # AMX instructions issue in order on the coprocessor pipe.
-                resource={"amx": 1},
+                # Both units issue their atoms in order; neither has an async form.
+                resource={amx_op.unit: 1},
                 is_async=False,
                 atom=atom,
             )
@@ -167,4 +241,14 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
     return facts
 
 
-__all__ = ["AMX_FMA32_16x16x1_F32", "AmxAtom", "AmxOpSpec", "candidate_atoms", "make_atom"]
+__all__ = [
+    "AMX_FMA32_16x16x1_F32",
+    "AMX_REGISTERS",
+    "CORE_CACHE",
+    "NEON_FMLA_4x4x1_F32",
+    "AmxAtom",
+    "AmxOpSpec",
+    "StorageLevel",
+    "candidate_atoms",
+    "make_atom",
+]

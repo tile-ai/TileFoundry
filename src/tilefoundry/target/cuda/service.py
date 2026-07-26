@@ -25,6 +25,11 @@ class _CudaCtaAnalysis:
     def __init__(self, target: "CudaTarget") -> None:
         self._target = target
 
+    @property
+    def tile_capacity_bytes(self) -> int:
+        """A CTA-level tile's resident working set lives in shared memory."""
+        return self._target.device.shared_memory_per_cta_bytes
+
     def candidate_atoms(self, op: Call) -> list[AtomFact]:
         return candidate_atoms(op, self._target)
 

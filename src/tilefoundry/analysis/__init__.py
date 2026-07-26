@@ -28,10 +28,14 @@ from .poly import (
 
 class Analysis(Protocol):
     """One stage's target-dependent facts, for the Schedule stage that
-    solves over them: the polyhedral model itself is target-independent
-    (:func:`extract`), the atom catalogue is not."""
+    decides over them: the polyhedral model itself is target-independent
+    (:func:`extract`), the atom catalogue and the store a tile lives in are
+    not. That store belongs to the level, not the device -- an AMX tile at the
+    ``core`` level lives in L1d, a CUDA one at the ``cta`` level in shared
+    memory."""
 
     stage: str
+    tile_capacity_bytes: int
 
     def candidate_atoms(self, op: "Call") -> list[AtomFact]: ...
 

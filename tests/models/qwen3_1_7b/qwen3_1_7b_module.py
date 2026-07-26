@@ -56,6 +56,19 @@ from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 
+# ── tiled_mlp block shape ───────────────────────────────────────────────
+# The AMX f32 register files (Apple M2 Pro, target/hardware/*.toml): Z holds
+# 4096 B = 32x32 f32, X and Y 512 B each. MT x NT is therefore the largest
+# accumulator block that stays Z-resident for a whole K walk, and one k step
+# stages MT (resp. NT) f32 = 128 B in X (resp. Y). KT = 64 matches the PoC's
+# measured best BM/BN/BK.
+MT, NT, KT = 32, 32, 64
+MB = S_CAP // MT                 # 2   token blocks
+NB_INT = INTERMEDIATE // NT      # 192 gate/up column blocks
+NB_HID = HIDDEN // NT            # 64  down-projection column blocks
+NK_HID = HIDDEN // KT            # 32  gate/up K steps
+NK_INT = INTERMEDIATE // KT      # 96  down-projection K steps
+
 
 @module(entry="decoder_layer")
 class Qwen3_1_7B:
@@ -124,6 +137,78 @@ class Qwen3_1_7B:
         act = tf.mul(gate, tf.sigmoid(gate))
         h = tf.mul(act, up)
         return tf.matmul(h, w_down)
+
+    @func
+    def tiled_mlp(
+        hidden: Tensor[(1, S_CAP, HIDDEN), DT],
+        gamma_post: Tensor[(HIDDEN,), DT],
+        w_gate: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
+        w_up: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
+        w_down: Tensor[(1, INTERMEDIATE, HIDDEN), DT],
+        z_int: Tensor[(MB, NB_INT, MT, NT), DT],
+        z_hid: Tensor[(MB, NB_HID, MT, NT), DT],
+    ) -> Tensor[(1, S_CAP, HIDDEN), DT]:
+        # Same value as `mlp`, written as the loop nest AMX wants: every matmul
+        # is [MT, KT] @ [KT, NT] over a (token-block, column-block) batch pair,
+        # and the K walk is an authored `for ... in tile(...)` whose carried arg
+        # IS the accumulator buffer — no AllocTensor, the loop carry holds it.
+        # `z_int` / `z_hid` are the zero seeds for those carries (a caller-
+        # supplied buffer rather than a `zeros` op, which has no access
+        # relation). The reshape/transpose pairs only re-index: [1, S, K] ->
+        # [NK, MB, 1, MT, KT] blocks the M/K axes, [1, K, N] ->
+        # [NK, 1, NB, KT, NT] the K/N axes, and `gather(_, k, axis=0)` picks
+        # iteration k's K slice of both.
+        hidden_norm = tf.rms_norm(hidden, gamma_post)
+        x_blk = tf.reshape(
+            tf.transpose(
+                tf.reshape(hidden_norm, new_shape=(MB, MT, NK_HID, KT)), perm=(2, 0, 1, 3)
+            ),
+            new_shape=(NK_HID, MB, 1, MT, KT),
+        )
+        wg_blk = tf.reshape(
+            tf.transpose(
+                tf.reshape(w_gate, new_shape=(NK_HID, KT, NB_INT, NT)), perm=(0, 2, 1, 3)
+            ),
+            new_shape=(NK_HID, 1, NB_INT, KT, NT),
+        )
+        wu_blk = tf.reshape(
+            tf.transpose(
+                tf.reshape(w_up, new_shape=(NK_HID, KT, NB_INT, NT)), perm=(0, 2, 1, 3)
+            ),
+            new_shape=(NK_HID, 1, NB_INT, KT, NT),
+        )
+        gate_z = z_int
+        up_z = z_int
+        for kh in tile(NK_HID):
+            x_k = tf.gather(x_blk, kh, axis=0)
+            gate_z = tf.add(gate_z, tf.matmul(x_k, tf.gather(wg_blk, kh, axis=0)))
+            up_z = tf.add(up_z, tf.matmul(x_k, tf.gather(wu_blk, kh, axis=0)))
+        gate = tf.reshape(
+            tf.transpose(gate_z, perm=(0, 2, 1, 3)), new_shape=(1, S_CAP, INTERMEDIATE)
+        )
+        up = tf.reshape(
+            tf.transpose(up_z, perm=(0, 2, 1, 3)), new_shape=(1, S_CAP, INTERMEDIATE)
+        )
+        h = tf.mul(tf.mul(gate, tf.sigmoid(gate)), up)
+        h_blk = tf.reshape(
+            tf.transpose(tf.reshape(h, new_shape=(MB, MT, NK_INT, KT)), perm=(2, 0, 1, 3)),
+            new_shape=(NK_INT, MB, 1, MT, KT),
+        )
+        wd_blk = tf.reshape(
+            tf.transpose(
+                tf.reshape(w_down, new_shape=(NK_INT, KT, NB_HID, NT)), perm=(0, 2, 1, 3)
+            ),
+            new_shape=(NK_INT, 1, NB_HID, KT, NT),
+        )
+        out_z = z_hid
+        for ki in tile(NK_INT):
+            out_z = tf.add(
+                out_z,
+                tf.matmul(tf.gather(h_blk, ki, axis=0), tf.gather(wd_blk, ki, axis=0)),
+            )
+        return tf.reshape(
+            tf.transpose(out_z, perm=(0, 2, 1, 3)), new_shape=(1, S_CAP, HIDDEN)
+        )
 
     @func
     def decoder_layer(
