@@ -2,7 +2,9 @@
 
 Importing this module loads every registered per-Op emitter under ``cuda/tir/``
 so its ``@register_codegen_cuda`` handler is active before codegen runs, and
-exposes the launch-config / ABI helpers shared by the split-pipeline emitters.
+exposes the launch-config helper shared by the split-pipeline emitters. Param
+ABI derivation lives in ``runtime.function.param_abi_of`` (shared with
+``entry_abi_of``), not here.
 """
 from __future__ import annotations
 
@@ -14,10 +16,7 @@ import pkgutil
 
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.tir.stmts import LetStmt, MeshScope, Sequential
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.runtime.module import ParamABI
 
 _log = logging.getLogger(__name__)
 _tir_path = os.path.dirname(__file__)
@@ -72,30 +71,9 @@ def _output_count_from_fn(fn) -> int:
     """Read output_count from the lowered PrimFunction metadata.
 
     The HIR-to-TIR lowering pass records output_count on the PrimFunction so
-    codegen can pass it through to CallableType without guessing.
+    codegen can pass it through to EntryABI without guessing.
     """
     return getattr(fn, "output_count", 1)
-
-
-def _param_abi(var) -> ParamABI:
-    ty = var.type
-    assert isinstance(ty, TensorType), f"PrimFunction param {var.name!r} must be TensorType"
-
-    def _abi_dim(s):
-        static = static_dim_value(s)
-        if static is not None:
-            return static
-        # Dynamic dim (e.g. DimVar) — host wrapper resolves the real
-        # extent from the runtime tensor; the ABI shape entry stays
-        # symbolic so the launcher can detect "this axis is runtime".
-        return -1
-
-    return ParamABI(
-        name=var.name,
-        dtype=ty.dtype.name,
-        shape=tuple(_abi_dim(s) for s in ty.shape),
-        storage=ty.storage,
-    )
 
 
 def _derive_launch_config(

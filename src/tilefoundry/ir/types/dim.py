@@ -50,29 +50,25 @@ class DimVar(Op, metaclass=_DimVarMeta):
     lo = ParamDef(kind="attribute", annotation=int)
     hi = ParamDef(kind="attribute", annotation=int)
 
-    # Author-facing dim arithmetic sugar — lets DSL annotations write
-    # ``Tensor[(..., CTX_LEN + 1, ...), "bf16"]`` and have the shape
-    # entry land as a ``simplify_dim(DimAdd, ...)`` ``Call`` (i.e. an
-    # ``Expr``, which is a valid ``ShapeDim``). Symmetric ``__radd__``
-    # handles ``1 + CTX_LEN``.
+    # Dim arithmetic sugar, so a DSL annotation can write ``CTX_LEN + 1``.
     def __add__(self, other):
         return _dim_binop(DimAdd, self, other)
 
     def __radd__(self, other):
         return _dim_binop(DimAdd, other, self)
 
+    def __floordiv__(self, other):
+        return _dim_binop(DimFloorDiv, self, other)
+
+    def __rfloordiv__(self, other):
+        return _dim_binop(DimFloorDiv, other, self)
+
 
 def _dim_binop(op_cls, a, b):
-    """Build a dim-arithmetic Call from ``int`` (non-bool), ``DimVar``,
-    or ``Expr`` operands. Anything else returns ``NotImplemented`` so
-    Python falls through to the normal ``TypeError`` for unsupported
-    operand types, preserving the ``ShapeDim = int | DimVar | Expr``
-    contract and preventing malformed IR. Operand canonicalisation
-    (int → ``Constant``) happens once, inside ``simplify_dim``.
-    """
+    """Build a dim-arithmetic Call, or ``NotImplemented`` for operands outside
+    ``ShapeDim = int | DimVar | Expr``."""
     def _ok(v):
-        # ``bool`` is a subclass of ``int`` — reject explicitly so
-        # ``CTX_LEN + True`` does not silently become ``CTX_LEN + 1``.
+        # bool subclasses int; reject it so ``CTX_LEN + True`` is not ``+ 1``.
         if isinstance(v, bool):
             return False
         return isinstance(v, (int, DimVar, Expr))
@@ -220,6 +216,30 @@ def is_dim_expr(value) -> bool:
     return False
 
 
+def dim_min(a, b) -> Expr:
+    """Symbolic ``min(a, b)`` dim expression, folded to a ``Constant`` when both
+    operands are static.
+    """
+    result = _dim_binop(DimMin, a, b)
+    if result is NotImplemented:
+        raise TypeError(
+            f"dim_min: operands must be int, DimVar, or Expr, got "
+            f"{type(a).__name__} and {type(b).__name__}"
+        )
+    return result
+
+
+def dim_max(a, b) -> Expr:
+    """Symbolic ``max(a, b)`` dim expression; see ``dim_min``."""
+    result = _dim_binop(DimMax, a, b)
+    if result is NotImplemented:
+        raise TypeError(
+            f"dim_max: operands must be int, DimVar, or Expr, got "
+            f"{type(a).__name__} and {type(b).__name__}"
+        )
+    return result
+
+
 def ceildiv(a, b) -> Expr:
     """Ceiling division ``(a + b - 1) // b`` as a dim expression.
 
@@ -244,5 +264,7 @@ __all__ = [
     "DimMax",
     "simplify_dim",
     "is_dim_expr",
+    "dim_min",
+    "dim_max",
     "ceildiv",
 ]

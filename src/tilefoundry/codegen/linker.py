@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.runtime.module import CallableType, KernelInfo, LaunchConfig
+from tilefoundry.runtime.function import EntryABI
 
 _TILEFOUNDRY_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_INCLUDE = _TILEFOUNDRY_ROOT / "include"
@@ -26,9 +26,7 @@ class LinkedModule:
     """Linked .so + host-visible ABI metadata. Consumed by the runtime loader."""
     library_path: Path
     source: str
-    entry: CallableType
-    launch_config: LaunchConfig
-    kernels: tuple[KernelInfo, ...]
+    entry: EntryABI
 
 
 def _render_cmakelists(*, name: str, includes: list[str], device_options: str, cuda_arch: str) -> str:
@@ -63,9 +61,7 @@ def link_modules(
     *,
     workdir: str | Path,
     lib_name: str,
-    entry: CallableType,
-    launch_config: LaunchConfig,
-    kernels: tuple[KernelInfo, ...],
+    entry: EntryABI,
     nvcc: str = "nvcc",
     host_cxx: str = "g++",
     extra_nvcc_flags: tuple[str, ...] = (),
@@ -152,8 +148,6 @@ def link_modules(
         library_path=lib,
         source=source,
         entry=entry,
-        launch_config=launch_config,
-        kernels=kernels,
     )
 
 

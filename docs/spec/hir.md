@@ -449,7 +449,8 @@ class Unary(Op):
 
     Attributes:
         x: input; input tensor.
-        kind: attribute; unary tag including neg, abs, logical_not, rsqrt, exp, and log.
+        kind: attribute; unary tag including neg, abs, logical_not, rsqrt,
+            exp, log, ceil, round, exp2, and log2.
     """
 
     x: Tensor
@@ -457,16 +458,19 @@ class Unary(Op):
 ```
 - constraints:
   - Behavior follows torch pointwise semantics with TileFoundry type promotion.
-  - `exp` is the natural exponential `e ** x`; `log` is the natural logarithm.
+  - `exp` is the natural exponential `e ** x`; `log` is the natural logarithm;
+    `exp2` / `log2` are the base-2 counterparts. `ceil` rounds toward
+    positive infinity; `round` rounds to the nearest integer with ties to
+    even (banker's rounding, matching torch's own `round` semantics).
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
     output only when `kind` provably commutes with `reduction`; typeinfer
     rejects otherwise, naming the offending operand and the fix (an explicit
-    `Reshard` to `Broadcast`). `exp` / `log` / `relu` are monotone
-    non-decreasing, so they commute with `max` / `min` but not `sum`. `neg`
-    is linear, so it commutes with `sum` but not `max` / `min` (negation
-    reverses order). `abs` / `square` / `rsqrt` / `logical_not` are not
-    proven to commute with any `reduction` and reject a `Partial` operand
-    unconditionally.
+    `Reshard` to `Broadcast`). `exp` / `log` / `relu` / `ceil` / `round` /
+    `exp2` / `log2` are monotone non-decreasing, so they commute with `max` /
+    `min` but not `sum`. `neg` is linear, so it commutes with `sum` but not
+    `max` / `min` (negation reverses order). `abs` / `square` / `rsqrt` /
+    `logical_not` are not proven to commute with any `reduction` and reject a
+    `Partial` operand unconditionally.
 
 #### `ir/hir/tensor/`
 
@@ -674,7 +678,7 @@ class TopK(Op):
     """
 
     x: Tensor
-    k: int
+    k: ShapeDim
     axis: int = -1
     largest: bool = True
     sorted: bool = True
@@ -682,8 +686,27 @@ class TopK(Op):
 - constraints:
   - The result is a `(values, indices)` tuple; both shrink the selected axis to
     length `k`; `values` keep `x`'s dtype and `indices` are `i64`.
-  - `k` MUST be non-negative, and a static `k` greater than the selected-axis
-    length fails typeinfer.
+  - `k` is a `ShapeDim` ([types §4](./types.md)): a static `int`, or a dynamic
+    k derived from a context-length `DimVar` (e.g. `dim_min(512, CTX_LEN //
+    4)`) — a first-class value propagated as the selected axis's symbolic
+    length in the output shape, not a pad+mask workaround. `k` MUST satisfy
+    the `ShapeDim` contract (`int` / `DimVar` / dim-arithmetic `Expr`); any
+    other value fails typeinfer.
+  - `k` MUST be non-negative (checked whenever `k` is static) and MUST NOT
+    exceed the selected-axis length (checked whenever the axis length is
+    static and `k` is either static or a symbolic value whose
+    statically-derivable upper bound — `DimVar.hi - 1`, composed through
+    `DimMin`/`DimMax`/`DimAdd`/`DimMul`/`DimFloorDiv`/`DimMod` — is known). A
+    symbolic `k` against a symbolic axis length, or an upper bound that does
+    not statically compose (e.g. through `DimSub`, or a `DimFloorDiv`/
+    `DimMod` with a symbolic divisor), is not checked at typeinfer — it fails
+    open, same as the pre-existing static-only check this widens.
+  - A symbolic `k`'s `DimVar`(s) MUST be resolvable from `x`'s own (input)
+    shape at evaluation time: narrower than `GridRegionExpr`'s `ShapeDim`
+    fields ([§1.2](#12-gridregionexpr)), which resolve against the enclosing
+    Function's full parameter shapes — a `k` expression whose `DimVar`
+    appears only in some other argument, never in `x`, is not resolvable at
+    TopK's evaluation site.
   - The selected axis MUST NOT be `Split`-sharded by a `ShardLayout`; a split
     selected axis fails typeinfer.
   - A `ShardLayout` output preserves the non-selected sharding and any

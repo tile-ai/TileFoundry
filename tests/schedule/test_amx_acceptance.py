@@ -37,9 +37,9 @@ _ATOM_SHAPES = {
     NEON_FMLA_4x4x1_F32.name: NEON_FMLA_4x4x1_F32.shape_mnk,
 }
 _KERNELS = {
-    "mlp": Qwen3_1_7B.mlp,
-    "self_attention": Qwen3_1_7B.self_attention,
-    "tiled_mlp": Qwen3_1_7B.tiled_mlp,
+    "mlp": Qwen3_1_7B.lookup("mlp"),
+    "self_attention": Qwen3_1_7B.lookup("self_attention"),
+    "tiled_mlp": Qwen3_1_7B.lookup("tiled_mlp"),
 }
 
 

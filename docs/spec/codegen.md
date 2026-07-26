@@ -161,23 +161,18 @@ needs.
 class LinkedModule:
     library_path: Path                  # the produced shared library
     source: str                         # the assembled host + device source
-    entry: CallableType                 # the host-visible callable type of the module entry
-    launch_config: LaunchConfig         # the entry's launch geometry (grid / block extents)
-    kernels: tuple[KernelInfo, ...]     # the ABI of the module's __global__ kernels
+    entry: EntryABI                     # the host-visible ABI of the module entry
 ```
 
 - constraints:
   - MUST point at the produced shared library.
   - MUST carry the assembled host + device source — the diagnostic source the
     runtime exposes as `RuntimeModule.source` ([runtime](./runtime.md)).
-  - MUST be the host-visible callable type of the module entry.
-  - MUST carry the entry's launch geometry (grid / block extents).
-  - MUST list the ABI of the module's `__global__` kernels.
+  - MUST be the host-visible ABI of the module entry.
 
-The `entry` `CallableType`, `launch_config` `LaunchConfig`, and `kernels`
-`KernelInfo` are host-visible ABI metadata types owned by
-[runtime](./runtime.md); codegen references them on `LinkedModule` and MUST NOT
-redefine them.
+The `entry` `EntryABI` is a host-visible ABI metadata type owned by
+[runtime](./runtime.md); codegen references it on `LinkedModule` and MUST NOT
+redefine it.
 
 The link step consumes the per-target `LinkableModule`s, compiles each with its
 own toolchain, and links them into one `LinkedModule`. `LinkedModule` is

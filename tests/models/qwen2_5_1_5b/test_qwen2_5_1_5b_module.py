@@ -43,7 +43,7 @@ def test_input_rms_norm_evaluate():
 
     with torch.no_grad():
         ref = layer.input_layernorm(x)
-    out = evaluate(Qwen2_5_1_5B.input_rms_norm, x, layer.input_layernorm.weight, device=DEV)
+    out = evaluate(Qwen2_5_1_5B.lookup("input_rms_norm"), x, layer.input_layernorm.weight, device=DEV)
 
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
@@ -64,7 +64,7 @@ def test_self_attention_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Qwen2_5_1_5B.self_attention,
+        Qwen2_5_1_5B.lookup("self_attention"),
         x,
         layer.input_layernorm.weight,
         common.linear_weight(attn.q_proj),
@@ -95,7 +95,7 @@ def test_mlp_evaluate():
         ref = mlp(layer.post_attention_layernorm(x))
 
     out = evaluate(
-        Qwen2_5_1_5B.mlp,
+        Qwen2_5_1_5B.lookup("mlp"),
         x,
         layer.post_attention_layernorm.weight,
         common.linear_weight(mlp.gate_proj),
@@ -120,7 +120,7 @@ def test_decoder_layer_evaluate():
         ref = layer(x, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Qwen2_5_1_5B.decoder_layer,
+        Qwen2_5_1_5B.lookup("decoder_layer"),
         x,
         layer.input_layernorm.weight,
         common.linear_weight(attn.q_proj),

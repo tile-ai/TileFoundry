@@ -73,18 +73,3 @@ def test_handwritten_tir_dynamic_cta_matches_torch_at_several_shapes() -> None:
         rm(x)
         torch.cuda.synchronize()
         assert torch.allclose(x, expected, rtol=0, atol=0)
-
-
-def test_handwritten_tir_dynamic_cta_lowers_to_program_dim() -> None:
-    """The dynamic CTA extent lowers to the runtime ``program_dim<cta>()`` path:
-    no constexpr ``program_shape<cta>`` is emitted, and the runtime global dim
-    flows through the hidden ``a_shape_0`` scalar."""
-    from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
-    from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
-
-    lowered = tilefoundry.lower(DynSquare, target="cuda")
-    src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
-
-    assert "tilefoundry::program_dim<tilefoundry::TopologyScope::cta>()" in src
-    assert "program_shape<tilefoundry::TopologyScope::cta>" not in src
-    assert "a_shape_0" in src

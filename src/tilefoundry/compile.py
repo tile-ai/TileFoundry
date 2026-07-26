@@ -140,7 +140,11 @@ def build(
     if target != "cuda":
         raise ValueError(f"tilefoundry.build: target {target!r} not supported yet")
 
-    workdir = os.path.join(tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_split")
+    # Keyed by pid so concurrent processes (e.g. pytest-xdist workers) building
+    # same-named entries never share a cmake/nvcc build directory.
+    workdir = os.path.join(
+        tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
+    )
     return _build_split_runtime_module(mod, workdir=workdir)
 
 
@@ -155,13 +159,8 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     """
     # noqa lazy: keep these heavy codegen/runtime imports off the module load
     # path and out of any import cycle with this top-level module.
-    from tilefoundry.codegen.cuda.emit import (  # noqa: PLC0415
-        _derive_launch_config,
-        _output_count_from_fn,
-        _param_abi,
-    )
+    from tilefoundry.codegen.cuda.emit import _output_count_from_fn  # noqa: PLC0415
     from tilefoundry.codegen.cuda.tir.prim_function import (  # noqa: PLC0415
-        _is_dispatch_entry_shape,
         _is_hidden_shape_scalar,
     )
     from tilefoundry.codegen.linker import link_modules  # noqa: PLC0415
@@ -172,12 +171,8 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
         insert_default_host_entry,
     )
+    from tilefoundry.runtime.function import EntryABI, param_abi_of  # noqa: PLC0415
     from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
-    from tilefoundry.runtime.module import (  # noqa: PLC0415
-        CallableType,
-        KernelInfo,
-        LaunchConfig,
-    )
 
     linked = insert_default_host_entry(mod)
     groups = group_functions_by_target(linked)
@@ -201,28 +196,11 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     entry_buffer_params = tuple(
         p for p in cpu_entry.params if not _is_hidden_shape_scalar(p, cpu_entry.params)
     )
-    entry_type = CallableType(
+    entry_type = EntryABI(
         name=cpu_entry.name,
-        params=tuple(_param_abi(p) for p in entry_buffer_params),
+        params=tuple(param_abi_of(p) for p in entry_buffer_params),
         output_count=_output_count_from_fn(cpu_entry),
     )
-
-    # Metadata lists every device kernel / dispatch variant (a dispatch entry
-    # emits no kernel). All kernels share the device module's launch config
-    # (enforced by the device module's topology check), so one LaunchConfig is
-    # representative.
-    kernel_fns = [f for f in cuda_group if not _is_dispatch_entry_shape(f)]
-    kernels = tuple(
-        KernelInfo(
-            name=f"{f.name}_kernel",
-            param_names=tuple(p.name for p in f.params),
-        )
-        for f in kernel_fns
-    )
-    # Metadata only — the split pipeline's real launch grid is computed in the
-    # host wrapper. A dynamic (launch-provided) CTA extent yields grid.x=None
-    # here rather than raising.
-    grid, block = _derive_launch_config(kernel_fns[0].body)
 
     cuda_arch = cuda_group[0].target.arch.removeprefix("sm_")
     linked_module = link_modules(
@@ -230,8 +208,6 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
         workdir=workdir,
         lib_name=cpu_entry.name,
         entry=entry_type,
-        launch_config=LaunchConfig(grid=grid, block=block),
-        kernels=kernels,
         cuda_arch=cuda_arch,
     )
     return load_linked_module(linked_module)

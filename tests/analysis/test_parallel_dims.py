@@ -37,7 +37,7 @@ def _by_op(fn) -> dict[str, tuple[str, tuple[bool, ...]]]:
 
 
 @pytest.mark.parametrize(
-    "fn", [Qwen3_1_7B.mlp, Qwen3_1_7B.self_attention], ids=["mlp", "self_attention"]
+    "fn", [Qwen3_1_7B.lookup("mlp"), Qwen3_1_7B.lookup("self_attention")], ids=["mlp", "self_attention"]
 )
 def test_only_a_matmuls_own_reduction_dimension_is_serial(fn):
     """Every matmul's last dimension (k) is the accumulation and is not
@@ -64,7 +64,7 @@ def test_the_reduction_free_statements_are_fully_parallel():
     """Named explicitly, since it is the half of the rule a pinned matmul
     check cannot cover: the two normalisations and the softmax carry no
     dependence at all, on any of their own dimensions."""
-    rows = _by_op(Qwen3_1_7B.self_attention)
+    rows = _by_op(Qwen3_1_7B.lookup("self_attention"))
     reductions = {
         name: row for name, (op, row) in rows.items() if op in ("RMSNorm", "SoftMax")
     }

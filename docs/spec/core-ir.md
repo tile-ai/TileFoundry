@@ -40,8 +40,13 @@ class Module:
     name: str                                               # the module name
     functions: tuple[hir.Function | tir.PrimFunction, ...]  # the heterogeneous hir.Function | tir.PrimFunction container
     entry: str                                              # name of the public entry function (a name present in functions)
+    modules: tuple["Module", ...]                           # child modules, each named by the attribute it is attached under
     topologies: tuple[Topology, ...]                        # module-level program topology namespace
     metadata: dict[str, object]                             # target / option metadata, never semantic mesh bindings
+    methods: Mapping[str, object]                           # plain Python orchestration methods (e.g. forward), bound like instance methods
+
+    @property
+    def weights(self) -> Mapping[str, TensorType]: ...     # derived — see below; there is no `states` field
 ```
 
 - constraints:
@@ -65,6 +70,26 @@ class Module:
   topologies here by name and creates a lexical mesh binding.
 - `metadata` carries target / compiler-option configuration, never
   semantic topology / mesh information.
+- Each entry of `modules` is named by the attribute it is attached under —
+  torch / HuggingFace checkpoint-naming semantics: assigning a child to
+  `self.self_attn` in a class body names that child `self_attn` in the tree,
+  independent of the child's own `name`. `mod.renamed(name)` returns a copy
+  of `mod` under a different `name` — one definition addressable as N
+  distinct instances (e.g. N identical decoder layers, each built fresh and
+  renamed by index).
+- `methods` collects plain Python functions (orchestration methods, e.g.
+  `forward` / `init_caches`; full collection rule in
+  [parser §2.7](./parser.md#27-module-authoring-surface)). A function name,
+  a child module name, and a method name MUST be disjoint at one `Module`'s
+  own level — all three resolve through the same attribute surface (§1.1
+  below), so a name used by more than one would be ambiguous.
+- `weights` is a derived property, not a stored field: each access unions
+  every function's `ConstTensor` params (`Var.is_const`), in (function
+  order, param order); the same name in two functions MUST carry an
+  identical `TensorType`, or the access raises. There is no `states` field
+  or persistent-state concept in the IR — a tensor that must survive across
+  steps (e.g. a KV cache) is an ordinary `Tensor` param the caller passes in
+  and receives back explicitly (docs/spec/runtime.md §1.1.2).
 - Constructing a `Module` **seals** its functions: each base function and
   its specialization variants are finalized. Variants may be added to a
   base only during authoring, before the base enters a `Module`; once
@@ -73,24 +98,38 @@ class Module:
 
 ### 1.1 Function access
 
-A `Module` mirrors the model it describes: a caller reaches a kernel by name.
+A `Module` mirrors the model it describes: a caller reaches a kernel, a child
+component, or an orchestration step through the same attribute surface.
 
-Each `name` maps to at most one `Module.functions` entry. Shape-specialization
-variants of a function live inside that entry's `Function.variants`
+Each `name` maps to at most one entry among `Module.functions`,
+`Module.modules`, and `Module.methods` — and a function name, a child module
+name, and a method name MUST be mutually disjoint at one `Module`'s own level
+(checked at construction), since all three resolve through the attribute
+surface below. Within `functions` alone, shape-specialization variants of a
+function live inside that entry's `Function.variants`
 ([hir.md §1.1](./hir.md#11-function)), never as separate same-name
 entries — so name resolution is always single-valued.
 
-- `mod.lookup(name)` returns the function named `name`; it raises when no
-  function matches. This is the canonical name-resolution contract (e.g. for a
-  `SymbolRef` callee).
+- `mod.lookup(name)` returns the function named `name`; it raises unless
+  exactly one function matches. This is the canonical name-resolution
+  contract (e.g. for a `SymbolRef` callee) and always returns the `Function`
+  / `PrimFunction` node itself.
 - `mod.function_named(name)` returns the entries named `name`. In a verified
   module this is length 0 or 1 (variants are not separate entries).
 - `mod.entry_function()` returns the function named by `entry`.
-- Python attribute access `mod.<name>` is sugar for name lookup: it MUST return
-  the function when one is named `<name>` and MUST raise `AttributeError` when
-  none match. Names beginning with `_` are never functions and resolve by normal
-  attribute rules. This lets a module read like the model it mirrors —
-  `decoder.self_attention`.
+- Python attribute access `mod.<name>` resolves, in order, a function, a
+  child module, or a method named `<name>`, and MUST raise `AttributeError`
+  when none match or when more than one same-kind entry shares the name. A
+  **function** name resolves to a callable that runs it — not to the
+  `Function` / `PrimFunction` node itself (reach that with `lookup` /
+  `function_named` above) — with its `ConstTensor` params filled by name
+  from what `load` bound and every other param positional
+  (docs/spec/runtime.md §1.1.2). A **child module** name resolves to that
+  child `Module`. A **method** name resolves to the class-body function
+  bound like an instance method (`m.forward(...)`). Names beginning with `_`
+  are never functions, modules, or methods and resolve by normal attribute
+  rules. This lets a module read like the model it mirrors —
+  `decoder.layer0.attention(...)`.
 
 ## 2. `Expr`
 

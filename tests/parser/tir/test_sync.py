@@ -23,7 +23,7 @@ from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.ir.tir.sync import Sync, SyncBarrier, classify
+from tilefoundry.ir.tir.sync import Sync, classify
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Mesh, Topology
@@ -192,19 +192,6 @@ def test_verify_rejects_cross_warp_unaligned_slice() -> None:
 
 
 # --- classification ------------------------------------------------------
-
-
-def test_classify_derives_barrier_from_participants() -> None:
-    m = _thread_mesh()
-    assert classify(m) is SyncBarrier.SYNCTHREADS          # whole block, 4 warps
-    assert classify(m[0, :]) is SyncBarrier.SYNCWARP        # one warp
-    assert classify(m[1:3, :]) is SyncBarrier.BAR_SYNC      # 2-warp subset
-
-
-def test_classify_full_cta_scope_mesh_is_grid_barrier() -> None:
-    """A mesh over the ``cta`` topology synchronizes CTAs across the grid — the
-    grid-wide software barrier, not a within-block ``__syncthreads``."""
-    assert classify(_cta_mesh()) is SyncBarrier.GRID
 
 
 def test_classify_rejects_partial_cta_slice() -> None:

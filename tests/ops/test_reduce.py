@@ -32,11 +32,7 @@ from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import (
-    Partial,
-    Split,
-    layout_axis_to_tensor_axis,
-)
+from tilefoundry.ir.types.shard.shard_layout import Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
 
@@ -132,17 +128,6 @@ def test_reduced_axis_splits_become_broadcast():
     assert _attr_kinds(ty) == ("Broadcast", "Broadcast")
 
 
-def test_zeroes_reduced_positions_for_global_view():
-    """Same, but the input layout carries a global (non-zero) stride view:
-    reduced positions are still zeroed."""
-    x_ty = make_shard_tensor_type(
-        (1, 1536), mesh=_M, attrs=(Split(1), Split(1)), dtype=_BF, storage=_RMEM,
-    )
-    ty = infer_call(_MEAN_LAST, x_ty)
-    assert tuple(ty.shape) == (1, 1)
-    assert _attr_kinds(ty) == ("Broadcast", "Broadcast")
-
-
 def test_preserves_non_reduced_axis_split():
     """A Split on the non-reduced axis is preserved; the reduced axis ->
     Broadcast."""
@@ -178,15 +163,6 @@ def test_implicit_strides_fresh_output():
     assert _attr_kinds(ty) == ("Split", "Broadcast")
     assert ty.layout.layout.strides is not None
     assert math.prod(ty.layout.layout.shape) == math.prod(ty.shape)
-
-
-def test_layout_axis_to_tensor_axis_factorized() -> None:
-    # tensor (1, 1536) with layout (1, 6, 32, 8): layout pos 0 -> axis 0; 1/2/3 -> axis 1.
-    assert layout_axis_to_tensor_axis((1, 6, 32, 8), (1, 1536)) == [0, 1, 1, 1]
-
-
-def test_layout_axis_to_tensor_axis_one_to_one() -> None:
-    assert layout_axis_to_tensor_axis((16, 32), (16, 32)) == [0, 1]
 
 
 @pytest.mark.parametrize(

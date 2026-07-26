@@ -47,7 +47,7 @@ def test_input_rms_norm_evaluate():
 
     with torch.no_grad():
         ref = layer.input_layernorm(x)
-    out = evaluate(MiniCPM3_4B.input_rms_norm, x, layer.input_layernorm.weight, device=DEV)
+    out = evaluate(MiniCPM3_4B.lookup("input_rms_norm"), x, layer.input_layernorm.weight, device=DEV)
 
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
@@ -68,7 +68,7 @@ def test_mla_attention_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        MiniCPM3_4B.mla_attention,
+        MiniCPM3_4B.lookup("mla_attention"),
         x,
         layer.input_layernorm.weight,
         common.linear_weight(attn.q_a_proj),
@@ -99,7 +99,7 @@ def test_mlp_evaluate():
         ref = mlp(layer.post_attention_layernorm(x))
 
     out = evaluate(
-        MiniCPM3_4B.mlp,
+        MiniCPM3_4B.lookup("mlp"),
         x,
         layer.post_attention_layernorm.weight,
         common.linear_weight(mlp.gate_proj),
@@ -126,7 +126,7 @@ def test_decoder_layer_evaluate():
         ref = layer(x, attention_mask=mask, position_embeddings=(cos, sin))
 
     out = evaluate(
-        MiniCPM3_4B.decoder_layer,
+        MiniCPM3_4B.lookup("decoder_layer"),
         x,
         layer.input_layernorm.weight,
         common.linear_weight(attn.q_a_proj),

@@ -1,4 +1,4 @@
-"""Qwen3-1.7B dense decoder layer: pull a kernel by attribute, evaluate vs HF.
+"""Qwen3-1.7B dense decoder layer: resolve a kernel by name, evaluate vs HF.
 
 Phase 0 cpu + f32 oracle (no CUDA on this box — every ``device=`` below is
 ``"cpu"``). Each test resolves one kernel from the ``Qwen3_1_7B`` module
@@ -45,7 +45,7 @@ def test_input_rms_norm_evaluate():
 
     with torch.no_grad():
         ref = layer.input_layernorm(x)
-    out = evaluate(Qwen3_1_7B.input_rms_norm, x, layer.input_layernorm.weight, device=DEV)
+    out = evaluate(Qwen3_1_7B.lookup("input_rms_norm"), x, layer.input_layernorm.weight, device=DEV)
 
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
@@ -66,7 +66,7 @@ def test_self_attention_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Qwen3_1_7B.self_attention,
+        Qwen3_1_7B.lookup("self_attention"),
         x,
         layer.input_layernorm.weight,
         common.linear_weight(attn.q_proj),
@@ -96,7 +96,7 @@ def test_mlp_evaluate():
         ref = mlp(layer.post_attention_layernorm(x))
 
     out = evaluate(
-        Qwen3_1_7B.mlp,
+        Qwen3_1_7B.lookup("mlp"),
         x,
         layer.post_attention_layernorm.weight,
         common.linear_weight(mlp.gate_proj),
@@ -125,8 +125,8 @@ def test_tiled_mlp_matches_untiled_mlp():
 
     with torch.no_grad():
         ref = mlp(layer.post_attention_layernorm(x))
-    untiled = evaluate(Qwen3_1_7B.mlp, x, *weights, device=DEV)
-    tiled = evaluate(Qwen3_1_7B.tiled_mlp, x, *weights, device=DEV)
+    untiled = evaluate(Qwen3_1_7B.lookup("mlp"), x, *weights, device=DEV)
+    tiled = evaluate(Qwen3_1_7B.lookup("tiled_mlp"), x, *weights, device=DEV)
 
     torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -146,7 +146,7 @@ def test_decoder_layer_evaluate():
         ref = layer(x, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Qwen3_1_7B.decoder_layer,
+        Qwen3_1_7B.lookup("decoder_layer"),
         x,
         layer.input_layernorm.weight,
         common.linear_weight(attn.q_proj),

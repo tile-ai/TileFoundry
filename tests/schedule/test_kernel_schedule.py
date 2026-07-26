@@ -93,7 +93,7 @@ def _member_values(band: "isl.schedule_node_band", domain: "isl.union_set", pos:
     return int(keep.count_val().num_si())
 
 
-_KERNELS = [gemm_rmsnorm, Qwen3_1_7B.mlp, Qwen3_1_7B.self_attention]
+_KERNELS = [gemm_rmsnorm, Qwen3_1_7B.lookup("mlp"), Qwen3_1_7B.lookup("self_attention")]
 _IDS = ["gemm_rmsnorm", "mlp", "self_attention"]
 
 

@@ -47,7 +47,7 @@ RUN pip install --no-cache-dir \
         "jinja2>=3.0" \
         apache-tvm-ffi \
         "graphviz>=0.20" \
-        "transformers>=4.57" \
+        "transformers>=5.12" \
         "pytest>=8" \
         "ruff==0.14.13" \
         "pre-commit>=3"

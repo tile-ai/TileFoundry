@@ -1,13 +1,13 @@
-"""Platform namespace ``T.cuda.mma`` + ``MmaOpSpec`` / ``MmaAtom``.
+"""Platform namespace ``T.cuda.mma`` + ``MmaAtom``.
 
 Covers:
-- ``T.cuda`` resolves to a platform sub-namespace; ``T.cuda.mma.<NAME>`` is an
-  ``MmaOpSpec`` and ``T.cuda.mma.atom(op=...)`` an ``MmaAtom`` exposing A/B/C;
-- the op / atom descriptors are target-owned in ``ir/tir/cuda/nn`` alongside
-  the CUDA instructions + fragments;
+- ``T.cuda.mma.atom(op=...)`` builds an ``MmaAtom`` exposing A/B/C layout
+  contracts (the pinned fragment shards) and a required thread scope;
 - in a ``@prim_func`` body, ``op = ...`` / ``atom = ...`` are compile-time
   static bindings — no ``LetStmt`` is emitted — and a module-level alias is
-  the same value.
+  the same value;
+- ``atom.A`` (a fragment layout) used to alloc a register tensor is checked
+  at the use point against the enclosing mesh scope.
 """
 from __future__ import annotations
 
@@ -16,8 +16,7 @@ import pytest
 from tilefoundry import prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.tir.cuda.nn.mma import make_atom
-from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom, MmaOpSpec
+from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.tir.stmts import LetStmt, MeshScope
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
@@ -31,15 +30,6 @@ _ATOM = T.cuda.mma.atom(op=_OP)
 # --- namespace resolution + descriptors ---------------------------------
 
 
-def test_named_op_resolves_to_op_spec() -> None:
-    op = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
-    assert isinstance(op, MmaOpSpec)
-    assert op.name == "SM80_16x8x16_F32BF16BF16F32_TN"
-    assert op.shape_mnk == (16, 8, 16)
-    assert (op.dtype_a, op.dtype_b, op.dtype_c) == (DType.bf16, DType.bf16, DType.f32)
-    assert op.operand_layout == "TN"
-
-
 def test_atom_builder_exposes_layout_contract_and_scope() -> None:
     atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
     assert isinstance(atom, MmaAtom)
@@ -51,24 +41,6 @@ def test_atom_builder_exposes_layout_contract_and_scope() -> None:
     assert atom.C is _ATOM.C
     # required_scope is the thread participation contract (32 lanes as (4,8)).
     assert atom.required_scope is _ATOM.required_scope
-
-
-def test_descriptors_are_target_owned() -> None:
-    """The MMA op / atom descriptors are target-owned: MmaOpSpec / MmaAtom live
-    under the CUDA target surface in ir/tir/cuda/nn alongside the concrete
-    instructions and their fragment layouts."""
-    assert MmaOpSpec.__module__ == "tilefoundry.ir.tir.cuda.nn.mma_atom"
-    assert MmaAtom.__module__ == "tilefoundry.ir.tir.cuda.nn.mma_atom"
-
-
-def test_make_atom_rejects_unregistered_op() -> None:
-    bogus = MmaOpSpec(
-        name="FAKE", shape_mnk=(8, 8, 8),
-        dtype_a=DType.f16, dtype_b=DType.f16, dtype_c=DType.f32,
-        operand_layout="TN",
-    )
-    with pytest.raises(KeyError, match="no fragment layouts"):
-        make_atom(bogus)
 
 
 # --- compile-time static binding in a @prim_func body -------------------

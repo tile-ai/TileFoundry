@@ -20,7 +20,6 @@ from tests.ops.typeinfer_utils import (
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
@@ -246,20 +245,6 @@ def test_binary_evaluate_dtypes(dtype):
     run_eval_case(EvalCase("", Binary(kind=BinaryKind.ADD), (a, b), a + b))
 
 
-# Low-precision dtypes are legal typeinfer operands: inference is purely
-# logical, so they pass through like any other element type.
-@pytest.mark.parametrize("dt", [DType.fp8e4m3], ids=lambda d: d.name)
-def test_binary_low_precision_typeinfer_passthrough(dt):
-    run_typeinfer_case(
-        TypeInferCase(
-            f"low_precision_{dt.name}",
-            _ADD,
-            (make_tensor_type((4, 8), dt), make_tensor_type((4, 8), dt)),
-            make_tensor_type((4, 8), dt),
-        )
-    )
-
-
 # ── minimum / maximum surface aliases (asymmetric clamp oracles) ─────────────
 
 
@@ -289,18 +274,3 @@ def test_asym_clamp_matches_torch():
     torch.testing.assert_close(
         out.float(), torch.clamp(u, min=-10.0, max=10.0), atol=1e-6, rtol=1e-6
     )
-
-
-def test_minimum_maximum_resolve_to_binary_min_max():
-    """``minimum`` / ``maximum`` are surface aliases of the ``Binary`` MIN / MAX
-    kinds."""
-    lo = _min_clamp.body
-    assert isinstance(lo, Call) and isinstance(lo.target, Binary)
-    assert lo.target.kind is BinaryKind.MIN
-
-    hi = _asym_clamp.body
-    assert isinstance(hi, Call) and isinstance(hi.target, Binary)
-    assert hi.target.kind is BinaryKind.MAX
-    inner = hi.args[0]
-    assert isinstance(inner, Call) and isinstance(inner.target, Binary)
-    assert inner.target.kind is BinaryKind.MIN

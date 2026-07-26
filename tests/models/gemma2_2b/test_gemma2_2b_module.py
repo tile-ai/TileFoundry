@@ -54,7 +54,7 @@ def test_input_rms_norm_evaluate():
     with torch.no_grad():
         ref = layer.input_layernorm(x)
     out = evaluate(
-        Gemma2_2B.input_rms_norm, x, common.rms_gamma(layer.input_layernorm), device=DEV,
+        Gemma2_2B.lookup("input_rms_norm"), x, common.rms_gamma(layer.input_layernorm), device=DEV,
     )
 
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -76,7 +76,7 @@ def test_self_attention_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Gemma2_2B.self_attention,
+        Gemma2_2B.lookup("self_attention"),
         h,
         common.linear_weight(attn.q_proj),
         common.linear_weight(attn.k_proj),
@@ -116,7 +116,7 @@ def test_self_attention_sliding_window_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=sliding_mask)
 
     out = evaluate(
-        Gemma2_2B.self_attention,
+        Gemma2_2B.lookup("self_attention"),
         h,
         common.linear_weight(attn.q_proj),
         common.linear_weight(attn.k_proj),
@@ -147,7 +147,7 @@ def test_mlp_gelu_tanh_evaluate():
         ref = mlp(x)
 
     out = evaluate(
-        Gemma2_2B.mlp,
+        Gemma2_2B.lookup("mlp"),
         x,
         common.linear_weight(mlp.gate_proj),
         common.linear_weight(mlp.up_proj),
@@ -173,7 +173,7 @@ def test_decoder_layer_evaluate():
         ref = layer(x, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Gemma2_2B.decoder_layer,
+        Gemma2_2B.lookup("decoder_layer"),
         x,
         common.rms_gamma(layer.input_layernorm),
         common.linear_weight(attn.q_proj),

@@ -90,12 +90,12 @@ def test_extract_unary_exp_single_statement():
 def test_extract_qwen3_mlp_whole():
     """qwen3-1.7b's ``mlp`` -- rms_norm + matmul x3 + sigmoid + mul x2, no
     nested ``@func`` -- extracts as a *single* ``TileGraph`` with one
-    statement per op. Before this task's fix, ``extract(Qwen3_1_7B.mlp)``
+    statement per op. Before this task's fix, extracting the whole ``mlp``
     raised ``ExtractError`` at the ``Sigmoid`` call (no registered
     ``type_relation``); now every op resolves one: MatMul/Binary(MUL)/
     RMSNorm were already registered, Sigmoid is this task's addition.
     """
-    tg = extract(Qwen3_1_7B.mlp)
+    tg = extract(Qwen3_1_7B.lookup("mlp"))
     assert isinstance(tg, TileGraph)
 
     op_names = [type(u.op.target).__name__ for u in tg.units]

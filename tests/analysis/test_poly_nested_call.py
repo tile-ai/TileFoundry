@@ -48,7 +48,7 @@ def test_self_attention_penetrates_input_rms_norm_with_prefixed_names():
     helper's own RMSNorm op shows up as a statement, and both its
     statement name and its output buffer carry the ``input_rms_norm0_``
     call-site prefix so a hole is traceable to the helper it came from."""
-    tg = extract(Qwen3_1_7B.self_attention)
+    tg = extract(Qwen3_1_7B.lookup("self_attention"))
     assert isinstance(tg, TileGraph)
 
     stmt_names = [u.name for u in tg.units]

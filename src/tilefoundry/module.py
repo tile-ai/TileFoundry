@@ -1,38 +1,61 @@
-"""``@module`` decorator — collect a class of DSL functions into an IR Module."""
+"""``@module`` decorator — collect a class body into an IR ``Module``."""
 
 from __future__ import annotations
 
+import inspect
+
 
 def module(cls=None, *, entry: str):
-    """Collect a class body's ``@func`` / ``@prim_func`` members into a ``Module``."""
+    """Collect a class body into a ``Module``: DSL functions, child ``Module``s
+    (or a tuple/list of them), and plain orchestration methods. See
+    docs/spec/parser.md §2.7."""
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
 
     def _wrap(cls_inner):
         functions = []
+        child_modules = []
+        methods = {}
         for name, value in vars(cls_inner).items():
             if name.startswith("__") and name.endswith("__"):
                 continue
-            if not isinstance(value, (HirFunction, PrimFunction)):
-                raise TypeError(
-                    f"@module {cls_inner.__name__!r}: member {name!r} is a "
-                    f"{type(value).__name__}, not an @func / @prim_func result; a "
-                    f"@module class body may contain only DSL functions"
-                )
-            # Specialization variants live on their base's ``variants`` (the
-            # throwaway ``@base.specialize`` def), not as standalone entries.
-            if getattr(value, "specializations", ()):
+            if isinstance(value, Module):
+                # torch / HF semantics: a child is named by its attribute, not
+                # by its class.
+                child_modules.append(value.renamed(name) if value.name != name else value)
                 continue
-            functions.append(value)
+            if isinstance(value, (tuple, list)) and value and all(
+                isinstance(m, Module) for m in value
+            ):
+                # N siblings the factory already named; one attribute cannot.
+                child_modules.extend(value)
+                continue
+            if isinstance(value, (HirFunction, PrimFunction)):
+                functions.append(value)
+                continue
+            if inspect.isfunction(value):
+                methods[name] = value
+                continue
+            raise TypeError(
+                f"@module {cls_inner.__name__!r}: member {name!r} is a "
+                f"{type(value).__name__}, not an @func / @prim_func result, a "
+                f"Module (or tuple/list of Modules), or a plain function; a "
+                f"@module class body may contain only these three member kinds"
+            )
+        # Variants and converters live on their base, not as standalone entries.
+        converter_fns = {
+            conv for fn in functions for _, conv in getattr(fn, "converters", ())
+        }
+        functions = [
+            fn for fn in functions
+            if not getattr(fn, "specializations", ()) and fn not in converter_fns
+        ]
         if not functions:
             raise TypeError(
                 f"@module {cls_inner.__name__!r}: no @func / @prim_func members"
             )
         names = [fn.name for fn in functions]
-        # One name maps to one function (core-ir verify_module invariant): a
-        # class-body alias (``y = some_func``) collects the same function twice,
-        # so reject any repeated function name.
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
             raise ValueError(
@@ -40,12 +63,26 @@ def module(cls=None, *, entry: str):
                 f"{dupes} (a class-body alias of a DSL function is not allowed; "
                 f"one name maps to one function)"
             )
+        mod_names = [m.name for m in child_modules]
+        mod_dupes = sorted({n for n in mod_names if mod_names.count(n) > 1})
+        if mod_dupes:
+            raise ValueError(
+                f"@module {cls_inner.__name__!r}: duplicate child module name(s) "
+                f"{mod_dupes} (a class-body alias of a nested @module is not "
+                f"allowed; one name maps to one child module)"
+            )
         if entry not in names:
             raise ValueError(
                 f"@module {cls_inner.__name__!r}: entry {entry!r} names no "
                 f"collected function (have {names})"
             )
-        return Module(name=cls_inner.__name__, functions=tuple(functions), entry=entry)
+        return Module(
+            name=cls_inner.__name__,
+            functions=tuple(functions),
+            entry=entry,
+            modules=tuple(child_modules),
+            methods=methods,
+        )
 
     if cls is not None:
         return _wrap(cls)

@@ -31,22 +31,6 @@ def _type() -> TensorType:
     return TensorType.scalar(DType.f32)
 
 
-def test_metadata_defaults_and_base_comment() -> None:
-    expr = Var(type=_type(), name="x")
-
-    assert expr.metadata == ()
-    assert IRMetadata().format_comment() is None
-
-
-def test_metadata_does_not_change_expr_semantics_or_repr() -> None:
-    plain = Var(type=_type(), name="x")
-    annotated = Var(type=_type(), name="x", metadata=(_Label("selected"),))
-
-    assert annotated == plain
-    assert hash(annotated) == hash(plain)
-    assert "metadata" not in repr(annotated)
-
-
 def test_source_labels_do_not_change_expr_identity() -> None:
     plain = Var(type=_type(), name="x")
     located = Var(

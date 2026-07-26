@@ -24,15 +24,15 @@ decorator-form ::= '@tilefoundry.module'
 
 `@tilefoundry.module(entry="<name>")` decorates a class and evaluates to a
 `core_ir.Module`: the decorated name binds to the Module itself
-(not the class). It collects the class body's `@func` / `@prim_func`
-methods, in definition order, as the module's `functions`. The class body is a
-pure function container — every non-dunder member MUST be a DSL function — and
-`entry` is a required argument naming the public entry function (full contract
-in [§2.7](#27-module-authoring-surface)). A method MAY call a sibling method
-declared *above* it — the call lowers to a `Call` targeting that
-sibling function; forward references (a callee declared below the
-caller) are unresolved (see [§3.3](#33-description)). Functions are
-reached by name on the result (see [core-ir §1.1](./core-ir.md#11-function-access)).
+(not the class). It collects the class body's `@func` / `@prim_func` results,
+child `Module`s, and plain Python functions, in definition order, into the
+result's `functions` / `modules` / `methods` (full contract in
+[§2.7](#27-module-authoring-surface)); `entry` is a required argument naming
+the public entry function. A member MAY call a sibling **defined above it** —
+the call lowers to a `Call` targeting that sibling function; forward
+references (a callee declared below the caller) are unresolved (see
+[§3.3](#33-description)). Functions are reached by name on the result (see
+[core-ir §1.1](./core-ir.md#11-function-access)).
 
 `@tilefoundry.func` and `@tilefoundry.prim_func` decorate functions and
 evaluate to the parsed IR directly: `@func` to a `hir.Function`
@@ -550,17 +550,40 @@ surface so editors complete `T.cuda.mma.<NAME>` and `.atom(...)`.
 
 ### 2.7 `@module` authoring surface
 
-`@module(entry="<name>")` collects a class of DSL functions into a
-`Module` ([core-ir §1](./core-ir.md#1-module)). The decorated name binds to the
+`@module(entry="<name>")` collects a class body into a `Module`
+([core-ir §1](./core-ir.md#1-module)). The decorated name binds to the
 resulting `Module`.
 
-- Every non-dunder class member MUST be an `@func` / `@prim_func` result (an
-  `hir.Function` / `tir.PrimFunction`); any other member — an undecorated
-  method, a nested class, a stray attribute — MUST be rejected.
-- Members are collected in **definition order** into `Module.functions`. A
-  specialization variant (a `@base.specialize` def) is not a standalone member.
+- Every non-dunder class member MUST be one of three kinds: an `@func` /
+  `@prim_func` result (an `hir.Function` / `tir.PrimFunction`); a child
+  `Module` — or a tuple/list of them, how a factory attaches N identical
+  instances under one attribute (each already named by the factory, e.g.
+  `renamed(f"layer{i}")`); or a plain Python function (an orchestration
+  method, e.g. `forward` / `init_caches`). Any other member — a stray
+  attribute, an undecorated method that is neither a DSL function nor a
+  plain orchestration function, … — MUST be rejected. A specialization
+  variant (a `@base.specialize` def) and a per-weight converter (a
+  `@base.converter(name)` def,
+  [runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward))
+  are not standalone members — both live on their base function and are
+  skipped when collecting.
+- A nested `class` statement is a legal member when it is itself decorated
+  with `@module(...)`: by the time the outer class body finishes running,
+  the inner decorator has already replaced the name with a `Module`
+  instance, so it is collected as an ordinary child `Module`. An
+  *undecorated* nested class is rejected (it is none of the three kinds).
+- `@func` / `@prim_func` results are collected in **definition order** into
+  `Module.functions`; the class body MUST contain at least one. A child
+  `Module` is collected into `Module.modules`, renamed to the attribute it
+  is attached under — torch / HuggingFace checkpoint-naming semantics:
+  assigning a child to `self.self_attn` names it `self_attn` in the tree,
+  independent of the child's own class name
+  ([core-ir §1](./core-ir.md#1-module)). A plain Python function is
+  collected into `Module.methods` by its own name. A duplicate function
+  name, or duplicate child module name, across the class body MUST be
+  rejected.
 - `entry` MUST name exactly one collected function; an unknown name MUST be
-  rejected. The class body MUST contain at least one DSL function.
+  rejected.
 - A member MAY call a sibling **defined above it** (the call resolves to the
   sibling function / launches a sibling device kernel); a forward reference to a
   sibling defined below stays unresolved and MUST fail.

@@ -717,8 +717,9 @@ class LaunchAttrs:
 `CudaLaunchAttr` identifies the CUDA launch-attribute values carried by
 `LaunchAttrs.entries`; CUDA target lowering interprets them and rejects
 unsupported values. These are authored-IR selectors, not a target registration
-API. Runtime `tilefoundry.runtime.module.LaunchConfig` is separate metadata
-for post-codegen launch geometry and is not part of the `Launch` schema.
+API. Launch geometry is derived inside codegen and emitted into the generated
+host entry; it is not part of the `Launch` schema and is not carried as runtime
+metadata.
 
 ```python
 class Launch(Op):

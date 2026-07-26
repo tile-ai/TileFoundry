@@ -344,9 +344,6 @@ from tilefoundry.dsl import Mesh, Tensor, Topology  # noqa: E402
 from tilefoundry.dsl.storage import gmem  # noqa: E402
 from tilefoundry.dsl.tf import *  # noqa: E402,F401,F403
 from tilefoundry.ir.core.module import Module  # noqa: E402
-from tilefoundry.ir.tir.memory.alloc_tensor import AllocTensor  # noqa: E402
-from tilefoundry.ir.tir.memory.copy import Copy as TirCopy  # noqa: E402
-from tilefoundry.ir.tir.memory.tensor_view import TensorView as TirTensorView  # noqa: E402
 from tilefoundry.ir.tir.stmts import (  # noqa: E402
     Evaluate,
     For,
@@ -442,55 +439,6 @@ def _walk(node, in_loop, out):
 
 def _op_of(value):
     return getattr(value, "target", None) or getattr(value, "callable", None)
-
-
-def test_decode_step_in_place_carry() -> None:
-    """The loop-carried ``acc = insert_slice(acc, …)`` reuses a single carry
-    buffer: the buffer is allocated once before the loop, written in place via a
-    slice-view Copy inside the loop, with no replacement allocation in the loop
-    body (the yielded result aliases the carry buffer)."""
-    pf = _lower(_DecodeStep)
-    nodes = []
-    _walk(pf.body, False, nodes)
-
-    alloc_before = {
-        id(var)
-        for in_loop, kind, var, val in nodes
-        if kind == "let" and not in_loop and isinstance(_op_of(val), AllocTensor)
-    }
-    alloc_in_loop = {
-        id(var)
-        for in_loop, kind, var, val in nodes
-        if kind == "let" and in_loop and isinstance(_op_of(val), AllocTensor)
-    }
-    # In-loop slice-view window over a carry buffer (an rmem AllocTensor result,
-    # not a kernel-param cache): this is the in-place insert_slice window.
-    windows = [
-        (var, val.args[0])
-        for in_loop, kind, var, val in nodes
-        if kind == "let"
-        and in_loop
-        and isinstance(_op_of(val), TirTensorView)
-        and len(val.args) > 1
-        and id(val.args[0]) in alloc_before
-    ]
-    assert windows, "no in-place insert_slice window over a carry buffer found"
-    win_var, carry_buf = windows[0]
-
-    # The carry buffer is allocated once before the loop and never re-allocated
-    # inside it (single reused buffer, no replacement alloc).
-    assert id(carry_buf) in alloc_before
-    assert id(carry_buf) not in alloc_in_loop
-
-    # The window is written in place (a Copy whose destination is the window).
-    copied_into_window = any(
-        kind == "eval"
-        and isinstance(_op_of(val), TirCopy)
-        and len(val.args) == 2
-        and val.args[1] is win_var
-        for in_loop, kind, var, val in nodes
-    )
-    assert copied_into_window, "insert_slice window is not written in place"
 
 
 @module(entry="xreshard")

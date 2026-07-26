@@ -3,7 +3,7 @@
 Phase 0 companion to ``tests/models/qwen3_1_7b/qwen3_1_7b_module.py``: same
 ``@module class`` authoring style (each kernel is a named ``@func`` method;
 the decorator returns the ``tilefoundry.ir.core.module.Module`` that the class
-name binds directly to — ``Qwen2_5_1_5B.self_attention`` pulls a kernel by
+name binds directly to — ``Qwen2_5_1_5B.lookup("self_attention")`` pulls a kernel by
 attribute, mirroring the HF model). As with the Qwen3-1.7B sibling:
 
 - the MLP is a single dense SwiGLU expert (plain gate/up/down projection, no

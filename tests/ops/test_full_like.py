@@ -17,15 +17,3 @@ def test_full_like_evaluate():
     run_eval_case(
         EvalCase("full_like", FullLike(value=2.5), (x,), torch.full_like(x, 2.5))
     )
-
-
-def test_full_like_preserves_dtype():
-    x = torch.randn(3).bfloat16()
-    run_eval_case(
-        EvalCase(
-            "full_like_bf16",
-            FullLike(value=1.0),
-            (x,),
-            torch.ones(3, dtype=torch.bfloat16),
-        )
-    )

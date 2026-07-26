@@ -3,8 +3,8 @@
 Phase 0 companion to ``tests/models/qwen3_5_30b_a3b/qwen3_module.py``: same
 ``@module class`` authoring style (each kernel is a named ``@func`` method;
 the decorator returns the ``tilefoundry.ir.core.module.Module`` that the class
-name binds directly to — ``Qwen3_1_7B.self_attention`` pulls a kernel by
-attribute, mirroring the HF model). Two things make this contract simpler
+name binds directly to — ``Qwen3_1_7B.lookup("self_attention")`` resolves one
+kernel to its IR node). Two things make this contract simpler
 than the MoE-30B one:
 
 - the MLP is a single dense SwiGLU expert (plain gate/up/down projection), not
