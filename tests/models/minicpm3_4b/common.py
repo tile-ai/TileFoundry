@@ -184,7 +184,9 @@ def rope_caches(cfg, max_pos, device="cpu", dtype=None):
     applies.
     """
     import torch  # noqa: PLC0415
-    from transformers.models.minicpm3.modeling_minicpm3 import MiniCPM3RotaryEmbedding  # noqa: PLC0415
+    from transformers.models.minicpm3.modeling_minicpm3 import (  # noqa: PLC0415
+        MiniCPM3RotaryEmbedding,
+    )
 
     rotary = MiniCPM3RotaryEmbedding(cfg).to(device)
     position_ids = torch.arange(max_pos, device=device).unsqueeze(0)

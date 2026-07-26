@@ -13,6 +13,7 @@ from .tanh import Tanh
 
 __all__ = [
     "Conv2D",
+    "Gelu",
     "LayerNorm",
     "MatMul",
     "ReLU",
