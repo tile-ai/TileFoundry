@@ -2,14 +2,13 @@
 forward ``type_relation`` (see ``tilefoundry.ir.hir.nn.rope``) -- before
 this, ``access_relation.build_relation`` returned ``None`` for it (only a
 GLOBAL-level ``access_relation`` with cos/sin/pos_ids marked ``OPAQUE``), so
-``kernelize.extract`` raised.
+``analysis.extract`` raised.
 
 RoPE rotates q and k independently, and GQA gives them different head
 counts (Hq != Hkv, e.g. qwen3-1.7b's 16 query / 8 key-value heads) -- so
 q_rope and k_rope cannot share one iteration domain. ``extract`` now lifts
 one ``RoPE`` Call into *two* statements, ``RoPE_q[b,s,Hq,d]`` and
-``RoPE_k[b,s,Hkv,d]`` (``extract._rope_access`` -- path A of the task
-report), each calling the registered relation with its own tensor paired
+``RoPE_k[b,s,Hkv,d]`` (``poly._rope_access``), each calling the registered relation with its own tensor paired
 against itself.
 
 The registered relation also turns cos_cache/sin_cache from opaque
@@ -28,9 +27,9 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- rope/repeat_interleave resolved dynamically
-from tilefoundry.kernelize import TileGraph, extract
 
 B, S, HQ, HKV, D, MAX_POS = 1, 4, 16, 8, 128, 8
 GQA_GROUP = HQ // HKV

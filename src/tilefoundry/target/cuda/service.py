@@ -1,19 +1,32 @@
-"""Private CUDA CTA Schedule service."""
+"""Private CUDA CTA stage services."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from tilefoundry.analysis import AtomFact
 from tilefoundry.inspection import as_script
+from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.schedule import ScheduleOptions, ScheduleResult
 
+from .atoms import candidate_atoms
 from .materialize import materialize_planning_solution
 from .planner import build_planning_problem
 from .report import project_schedule_report
 from .solver import solve_planning_problem
+
+
+class _CudaCtaAnalysis:
+    stage = "cta"
+
+    def __init__(self, target: "CudaTarget") -> None:
+        self._target = target
+
+    def candidate_atoms(self, op: Call) -> list[AtomFact]:
+        return candidate_atoms(op, self._target)
 
 
 class _CudaCtaSchedule:
@@ -58,4 +71,4 @@ def _write_materialized_dump(module: Module, directory: Path) -> None:
     (directory / "materialized_hir.py").write_text(source)
 
 
-__all__ = ["_CudaCtaSchedule"]
+__all__ = ["_CudaCtaAnalysis", "_CudaCtaSchedule"]

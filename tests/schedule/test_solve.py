@@ -1,10 +1,10 @@
-"""``solve_resources(tg, target) -> TileGraph`` -- M3 (direction
-C)'s core CP-SAT resource-decision block: over M1's isl schedule tree for
-a bf16 gemm+rmsnorm HIR ``Function`` (bf16 so MM has a real SM80 atom
-candidate, mirroring ``test_target_facts.py``'s own dtype note), choose
-each statement's atom / lane placement / per-buffer ring depth, minimize
-a coarse makespan, and return the decoded decisions as ``TileGraph``
-fields -- then feed the result into M2's ``emit_scaffold`` end to end and
+"""``solve_resources(tg, target) -> TileGraph`` -- the CP-SAT
+resource-decision step: over the isl schedule tree for a bf16
+gemm+rmsnorm HIR ``Function`` (bf16 so MM has a real SM80 atom candidate,
+mirroring ``test_atom_facts.py``'s own dtype note), choose each
+statement's atom / lane placement / per-buffer ring depth, minimize a
+coarse makespan, and return the decoded decisions as ``TileGraph``
+fields -- then feed the result into ``emit_scaffold`` end to end and
 confirm the solved ring depths actually show up as ``% N`` indexing in
 the rendered skeleton (proof the CP-SAT ring decision really flows all
 the way to the scaffold, not just to ``TileGraph.ring`` in isolation).
@@ -14,16 +14,12 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.kernelize import (
-    SolveResourcesError,
-    TileGraph,
-    emit_scaffold,
-    extract,
-    schedule,
-    solve_resources,
-)
+from tilefoundry.schedule.kernel_schedule import compute_schedule
+from tilefoundry.schedule.render import emit_scaffold
+from tilefoundry.schedule.solve_resources import SolveResourcesError, solve_resources
 from tilefoundry.target import default_target
 
 
@@ -56,7 +52,7 @@ def test_solve_resources_picks_atom_places_and_rings_end_to_end():
     the decisions land as ``TileGraph`` fields, and emit_scaffold renders
     that ring depth as real `% N` indexing in the skeleton."""
     tg = extract(bf16_gemm_rmsnorm)
-    tg = schedule(tg)
+    tg = compute_schedule(tg)
 
     solved = solve_resources(tg, target="cuda")
     assert isinstance(solved, TileGraph)
@@ -102,7 +98,7 @@ def test_no_candidate_statements_fall_back_to_default_duration_without_crashing(
     catalogue entry at all) -- solve_resources must still solve (default
     duration per statement, no atom `pick` vars at all), not raise."""
     tg = extract(f32_gemm_rmsnorm)
-    tg = schedule(tg)
+    tg = compute_schedule(tg)
 
     solved = solve_resources(tg, target="cuda")
     decisions = solved.decisions
@@ -116,9 +112,9 @@ def test_no_candidate_statements_fall_back_to_default_duration_without_crashing(
 
 def test_default_target_resolution_matches_explicit_cuda_target():
     """``target=None`` resolves via ``default_target()`` -- same
-    convention as ``target_facts.candidate_atoms``."""
+    convention as the CUDA target's own ``candidate_atoms``."""
     tg = extract(bf16_gemm_rmsnorm)
-    tg = schedule(tg)
+    tg = compute_schedule(tg)
 
     implicit = solve_resources(tg)
     explicit = solve_resources(tg, target=default_target())
@@ -131,7 +127,7 @@ def test_empty_tile_graph_raises_clear_error():
     """``tg.units == ()`` is an explicit, actionable error, never a
     silent no-op or a confusing CP-SAT/isl traceback."""
     tg = extract(bf16_gemm_rmsnorm)
-    tg = schedule(tg)
+    tg = compute_schedule(tg)
     empty_tg = type(tg)(
         domain=tg.domain, deps=tg.deps, reads=tg.reads, writes=tg.writes,
         units=(), params=tg.params, tree=tg.tree,

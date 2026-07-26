@@ -1,26 +1,16 @@
-"""``candidate_atoms(op, target) -> list[AtomFact]`` -- the first M3
-(direction C) block: bridge one HIR compute op to the TIR MMA atom
-catalogue it could run on. This is the ground floor of the kernelize
-*solver* path -- it only *lists* candidates (a hard filter over
-shape/dtype/layout); it never picks one, that ranking is CP-SAT's job,
-still to come. Independent of, and untouched by, ``tile_graph`` /
-``extract`` / ``schedule_tree`` / ``emit_scaffold`` (M1/M2) -- this module
-never imports them, and they never import this one.
-
-``AtomFact`` packages one candidate atom's target-relevant facts
-(duration / storage / resource) alongside the real ``MmaAtom`` (so a
-later fill/codegen stage has the realized fragment layouts on hand, not
-just the summary numbers). See each helper's docstring below for exactly
-where its numbers come from.
+"""``candidate_atoms(op, target) -> list[AtomFact]`` -- bridge one HIR
+compute op to the TIR MMA atom catalogue it could run on. It only *lists*
+candidates (a hard filter over shape/dtype/layout); it never picks one,
+that ranking is the schedule layer's CP-SAT job. See each helper's
+docstring below for exactly where its numbers come from.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
+from tilefoundry.analysis.atom_facts import AtomFact
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN, make_atom
-from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom, MmaOpSpec
+from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaOpSpec
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import ShardLayout
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_local_shape
@@ -35,34 +25,6 @@ from tilefoundry.target.cuda.target import CudaTarget
 # point (this module cannot, and does not try to, discover
 # _ATOM_TABLE's private keys on its own).
 _MMA_OP_CATALOG: tuple[MmaOpSpec, ...] = (SM80_16x8x16_F32BF16BF16F32_TN,)
-
-
-@dataclass(frozen=True)
-class AtomFact:
-    """One MMA atom's target-relevant facts, for later CP-SAT atom selection.
-
-    ``shape``/``dtype`` mirror the atom's own ``MmaOpSpec`` (``shape_mnk``,
-    ``(dtype_a, dtype_b, dtype_c)``) for a quick look without unpacking
-    ``atom.op``. ``duration`` is a nominal roofline estimate in ns (see
-    ``_roofline_duration_ns``) -- a placeholder to rank against until a real
-    measured number backfills it. ``storage`` is per-thread register
-    fragment occupancy in bytes, keyed ``"{a,b,c}_reg_bytes"`` plus the
-    ``"reg_bytes"`` total (see ``_fragment_reg_bytes``). ``resource`` is the
-    atom's required thread-scope footprint, e.g. ``{"lane": 32}`` for one
-    warp. ``is_async`` marks an asynchronous (wgmma-family) instruction --
-    always ``False`` for today's one synchronous SM80 ``mma.sync`` atom.
-    ``atom`` is the realized ``MmaAtom`` (fragment layouts + required scope,
-    from ``ir.tir.cuda.nn.mma.make_atom``), carried through so a later
-    fill/codegen stage need not re-resolve it from ``shape``/``dtype`` alone.
-    """
-
-    shape: tuple[int, int, int]
-    dtype: tuple[DType, DType, DType]
-    duration: float
-    storage: dict[str, int]
-    resource: dict[str, int]
-    is_async: bool
-    atom: MmaAtom
 
 
 def _is_async_op(op: MmaOpSpec) -> bool:
@@ -169,11 +131,11 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
         if isinstance(op, Call):
             got += f" (target={type(op.target).__name__})"
         raise NotImplementedError(
-            f"kernelize.candidate_atoms: only a MatMul Call is supported, got {got}"
+            f"candidate_atoms: only a MatMul Call is supported, got {got}"
         )
     if not isinstance(target, CudaTarget):
         raise NotImplementedError(
-            "kernelize.candidate_atoms: only CudaTarget is supported, got "
+            "candidate_atoms: only CudaTarget is supported, got "
             f"{type(target).__name__}"
         )
 
@@ -213,4 +175,4 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
     return facts
 
 
-__all__ = ["AtomFact", "candidate_atoms"]
+__all__ = ["candidate_atoms"]

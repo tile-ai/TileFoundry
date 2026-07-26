@@ -67,7 +67,7 @@ def _softmax_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
         raise NotImplementedError(
             "SoftMax type_relation: V1 only supports axis=-1 (the last "
             f"axis) -- got axis={axis} (normalized {norm_axis}) for a "
-            f"rank-{rank} input; reducing any other axis has no kernelize "
+            f"rank-{rank} input; reducing any other axis has no "
             "access-relation modeling yet"
         )
     reduce_extent = x.shape[-1]

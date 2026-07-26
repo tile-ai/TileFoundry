@@ -45,11 +45,18 @@ class CudaTarget(Target):
         object.__setattr__(self, "name", "cuda")
         object.__setattr__(self, "architecture", architecture)
         object.__setattr__(self, "device", device)
+        from tilefoundry.analysis import Analysis  # noqa: PLC0415
         from tilefoundry.schedule import Schedule  # noqa: PLC0415
 
-        from .service import _CudaCtaSchedule  # noqa: PLC0415
+        from .service import _CudaCtaAnalysis, _CudaCtaSchedule  # noqa: PLC0415
 
-        bind_services(self, ((Schedule, "cta", _CudaCtaSchedule(self)),))
+        bind_services(
+            self,
+            (
+                (Analysis, "cta", _CudaCtaAnalysis(self)),
+                (Schedule, "cta", _CudaCtaSchedule(self)),
+            ),
+        )
 
     @property
     def arch(self) -> str:

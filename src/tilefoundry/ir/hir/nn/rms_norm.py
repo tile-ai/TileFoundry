@@ -94,7 +94,7 @@ def _rms_norm_type_relation(call: "Call", input_types, ctx) -> AccessRelationRes
     existential range dim on the read/write maps rather than a domain
     dim. ``weight`` fills that same range; the output map reuses the
     input map's formula (RMSNorm is elementwise-shaped like its input).
-    Sharding is the caller's concern (``kernelize.extract``'s
+    Sharding is the caller's concern (``analysis.poly``'s
     ``_local_type`` narrows a sharded input before it ever reaches here),
     not this relation's.
     """

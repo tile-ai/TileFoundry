@@ -3,7 +3,7 @@ replacement for the deleted ``inline_calls`` pre-flattening pass. Instead
 of rejecting ``Call(target=Function)``, the walker binds the callee's
 params to the caller's own argument expressions and recurses straight
 into its body, prefixing every statement/buffer it contributes with the
-callee name plus a per-call-site index (``extract._walk_calls``).
+callee name plus a per-call-site index (``poly._walk_calls``).
 
 Self-recursion and an arity mismatch cannot be authored through the
 normal ``@func`` surface: ``tilefoundry.script._definition_namespace``
@@ -24,12 +24,12 @@ import pytest
 
 from tests.models.qwen3_1_7b.qwen3_1_7b_module import Qwen3_1_7B
 from tilefoundry import func
+from tilefoundry.analysis import ExtractError, TileGraph, extract
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul resolved dynamically
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType, make_tensor_type
-from tilefoundry.kernelize import ExtractError, TileGraph, extract
 
 
 def _write_bufs(tg: TileGraph, stmt_name: str) -> list[str]:

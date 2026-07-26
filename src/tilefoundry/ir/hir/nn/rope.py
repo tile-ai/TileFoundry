@@ -107,9 +107,9 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
 def _rope_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     """Forward relation for one RoPE branch: the value input paired with
     itself (``x, x, cos, sin, pos``) -- GQA's Hq != Hkv means q_rope and
-    k_rope cannot share one domain, so ``kernelize.extract``'s
+    k_rope cannot share one domain, so ``analysis.poly``'s
     ``_rope_access`` calls this once per branch (q or k) and keeps only
-    that branch's maps (see the task report, path A).
+    that branch's maps.
 
     cos_cache/sin_cache access is seq+head_dim identity, batch/head
     broadcast: V1 assumes prefill ``pos_ids == arange(seq)``, so
@@ -121,7 +121,7 @@ def _rope_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     if x_ty.shape != x2_ty.shape:
         raise NotImplementedError(
             "RoPE type_relation: expects the value input paired with "
-            "itself (kernelize.extract splits a real Hq != Hkv call into "
+            "itself (analysis.extract splits a real Hq != Hkv call into "
             f"two such branches -- see _rope_access), got shapes "
             f"{x_ty.shape} vs {x2_ty.shape}"
         )

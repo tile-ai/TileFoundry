@@ -223,11 +223,11 @@ def _eval_reshape(ctx):
     return TensorValue(data=ctx.args[0].data.reshape(shape), type=ctx.result_type)
 
 
-# ── view-fold support (kernelize.extract) ───────────────────────────────────
+# ── view-fold support (analysis.extract) ────────────────────────────────────
 # A reshape is a zero-op at the buffer level (same memory, reinterpreted), so
 # extract folds it instead of emitting a statement: a consumer's read of the
 # reshape output is composed with `flat_reshape_map` to reach the real
-# buffer's own coordinates directly (see extract.py's `_buffer_namer`).
+# buffer's own coordinates directly (see poly.py's `_buffer_namer`).
 
 
 def _static_extent(dim) -> "int | None":

@@ -1,7 +1,7 @@
 """``extract(hir) -> TileGraph`` -- lift an HIR ``Function`` body into a
 polyhedral (isl) representation: one statement per compute op, at element
 granularity, with reads/writes/deps ready to feed
-``isl.schedule_constraints`` (see ``schedule_tree.py``).
+``isl.schedule_constraints`` (see ``schedule/kernel_schedule.py``).
 
 Algorithm (docstring mirrors the design so the "why" travels with the code):
 
@@ -43,19 +43,15 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
    feeding an initial (topological-postorder) execution order into
    ``isl.union_access_info(...).compute_flow()`` -- the exact technique
    validated in ``m1_deps_probe.py``.
-
-See the module docstring in ``tile_graph.py`` for why ``TileGraph``'s
-shape departs from ``docs/spec/tilegraph.md``'s single-domain sketch.
 """
 from __future__ import annotations
 
 import dataclasses
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.analysis.analyzer import _postorder
 from tilefoundry.ir.core import Call, Tuple, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -67,7 +63,54 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 
-from .tile_graph import TileGraph, TileUnit
+from .analyzer import _postorder
+
+
+@dataclass(frozen=True)
+class TileUnit:
+    """One statement's identity.
+
+    ``name`` is the isl tuple name shared by this statement's pieces of
+    ``TileGraph.domain``/``reads``/``writes``/``deps`` (e.g. ``"MM"``).
+    ``op`` is the HIR ``Call`` (op@site) that produced this statement --
+    the call node itself, not just its bare ``Op``, so a consumer can
+    still recover ``op.target`` / ``op.args`` / ``op.type``.
+    """
+
+    name: str
+    op: object
+
+
+@dataclass(frozen=True)
+class TileGraph:
+    """Polyhedral model of one HIR ``Function`` body, plus its schedule.
+
+    ``domain``/``reads``/``writes`` are unions of per-``TileUnit`` pieces,
+    one tuple name per producing statement (domain/reads/writes) or
+    accessed buffer (reads/writes range) -- a *union* domain, not the
+    single ``isl.set`` ``docs/spec/tilegraph.md`` sketches, because
+    ``isl.schedule_constraints`` needs one named tuple per statement.
+    ``deps`` is the auto-inferred RAW must-dependence relation between
+    statement instances (see :func:`extract`). ``params`` resolves any
+    dynamic-shape isl parameter name appearing in ``domain`` back to its
+    ``ShapeDim``.
+
+    ``tree``/``ring``/``decisions`` start empty and fill in as the same
+    object flows through the schedule layer's own stages. Both dict
+    fields are plain fields, never an isl mark payload -- isl marks are
+    process-global C state, not a place for a Python object to live.
+    """
+
+    domain: "isl.union_set"
+    deps: "isl.union_map"
+    reads: "isl.union_map"
+    writes: "isl.union_map"
+    units: tuple[TileUnit, ...]
+    params: dict
+    tree: "isl.schedule | None" = None
+    ring: dict = field(default_factory=dict)
+    decisions: dict | None = None
+
 
 # Cosmetic-only: short isl tuple names for the two ops this V1 slice
 # exercises, matching the m1_deps_probe.py / PoC 09 reference output
@@ -226,13 +269,13 @@ def _local_type(ty: TensorType) -> TensorType:
         size = local[tensor_axis]
         if not isinstance(size, int) or isinstance(size, bool):
             raise ExtractError(
-                f"kernelize.extract: tensor axis {tensor_axis} is Split-sharded "
+                f"extract: tensor axis {tensor_axis} is Split-sharded "
                 f"but its extent {size!r} is not a static int -- cannot divide "
                 "a dynamic axis by a mesh extent"
             )
         if size % extent != 0:
             raise ExtractError(
-                f"kernelize.extract: tensor axis {tensor_axis} (extent {size}) "
+                f"extract: tensor axis {tensor_axis} (extent {size}) "
                 f"is not evenly divisible by its mesh extent {extent}"
             )
         local[tensor_axis] = size // extent
@@ -276,7 +319,7 @@ def _registered_access(
     output_maps = result.maps[n_inputs:]
     if not output_maps:
         raise ExtractError(
-            f"kernelize.extract: {type(call.target).__name__} build_relation "
+            f"extract: {type(call.target).__name__} build_relation "
             "produced no output map(s); a compute-op statement must write "
             "at least one value"
         )
@@ -360,7 +403,7 @@ def _extract_statement(call: Call, stmt_name: str, namer, prefix: str) -> list[_
     if result is not None:
         return [_registered_access(call, stmt_name, result, namer, prefix)]
     raise ExtractError(
-        f"kernelize.extract: op {type(call.target).__name__!r} has no "
+        f"extract: op {type(call.target).__name__!r} has no "
         "registered forward type_relation (access_relation.build_relation "
         "returned None) -- register one via tilefoundry.visitor_registry."
         "access_relation.register_type_relation(...); extract has no "
@@ -425,7 +468,7 @@ def _bind_dim_vars(params: tuple[Var, ...], args: tuple, callee_name: str) -> No
             prev = binding.get(dim.name)
             if prev is not None and prev != bound:
                 raise ExtractError(
-                    f"kernelize.extract: call to {callee_name!r}: DimVar "
+                    f"extract: call to {callee_name!r}: DimVar "
                     f"{dim.name!r} binds to conflicting shapes {prev!r} vs {bound!r}"
                 )
             binding[dim.name] = bound
@@ -469,7 +512,7 @@ def _walk_calls(
     order = _postorder(body)
     if any(isinstance(e, GridRegionExpr) for e in order):
         raise ExtractError(
-            "kernelize.extract: GridRegionExpr (looped) bodies are not "
+            "extract: GridRegionExpr (looped) bodies are not "
             "supported in V1 -- only a flat SSA-DAG of compute-op Calls is"
         )
 
@@ -491,19 +534,19 @@ def _walk_calls(
             callee = target
             if id(callee) in active:
                 raise ExtractError(
-                    f"kernelize.extract: self-recursive call to {callee.name!r} "
+                    f"extract: self-recursive call to {callee.name!r} "
                     "-- extract cannot unroll a function that (transitively) "
                     "calls itself"
                 )
             if callee.variants or callee.body is None:
                 raise ExtractError(
-                    f"kernelize.extract: {callee.name!r} is a dispatch "
+                    f"extract: {callee.name!r} is a dispatch "
                     "prototype (has variants / no body) -- extract has no "
                     "runtime shape to pick a variant statically"
                 )
             if len(resolved_args) != len(callee.params):
                 raise ExtractError(
-                    f"kernelize.extract: call to {callee.name!r} expects "
+                    f"extract: call to {callee.name!r} expects "
                     f"{len(callee.params)} arg(s), got {len(resolved_args)}"
                 )
             for p, a in zip(callee.params, resolved_args):
@@ -547,14 +590,14 @@ def extract(hir: Function) -> TileGraph:
     module docstring for the full algorithm)."""
     if hir.body is None:
         raise ExtractError(
-            f"kernelize.extract: hir Function {hir.name!r} has no body "
+            f"extract: hir Function {hir.name!r} has no body "
             "(a dispatch prototype cannot be extracted)"
         )
 
     gathered = _walk_calls(hir.body, "", (id(hir),), {}, {})
     if not gathered:
         raise ExtractError(
-            f"kernelize.extract: hir Function {hir.name!r} body has no "
+            f"extract: hir Function {hir.name!r} body has no "
             "compute ops to extract"
         )
 
@@ -577,7 +620,7 @@ def extract(hir: Function) -> TileGraph:
             prev = params.get(name)
             if prev is not None and prev != dim:
                 raise ExtractError(
-                    f"kernelize.extract: isl parameter {name!r} resolves to "
+                    f"extract: isl parameter {name!r} resolves to "
                     f"conflicting ShapeDims across statements: {prev!r} vs "
                     f"{dim!r}"
                 )
@@ -593,4 +636,4 @@ def extract(hir: Function) -> TileGraph:
     )
 
 
-__all__ = ["extract", "ExtractError"]
+__all__ = ["ExtractError", "TileGraph", "TileUnit", "extract"]

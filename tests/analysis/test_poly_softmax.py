@@ -2,18 +2,18 @@
 forward ``type_relation`` (see ``tilefoundry.ir.hir.nn.softmax``) -- before
 this, ``access_relation.build_relation`` returned ``None`` for it (only a
 GLOBAL-level identity ``access_relation``, no forward relation), so
-``kernelize.extract`` raised (its generic path is the *only* one that
+``analysis.extract`` raised (its generic path is the *only* one that
 consults ``type_relation_registry`` -- an op with no registered relation has
-no fallback, see ``extract.py``'s ``_extract_statement``).
+no fallback, see ``poly.py``'s ``_extract_statement``).
 
 SoftMax is a single fused HIR op (max/exp/sum are internal, never separate
 nodes), so its access pattern is structurally identical to ``RMSNorm``'s own
 registration (``rms_norm.py``'s ``_rms_norm_type_relation``): the domain is
 the batch axes only (``x.shape[:-1]``) and the reduced (last) axis is an
 extra existential dim on the read/write map -- one statement instance owns
-an entire row, mirroring ``test_gemm_rmsnorm.py``'s ``RN[i]`` shape.
+an entire row, mirroring ``test_poly_model.py``'s ``RN[i]`` shape.
 
-Shapes match ``test_gemm_rmsnorm.py``'s small element-granularity
+Shapes match ``test_poly_model.py``'s small element-granularity
 convention (a batch extent of 2, a reduced extent of 64).
 """
 from __future__ import annotations
@@ -21,9 +21,9 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/softmax resolved dynamically
-from tilefoundry.kernelize import TileGraph, extract
 
 
 @func
@@ -97,7 +97,7 @@ def test_extract_softmax_fuses_with_surrounding_matmuls():
     extracts alongside ``MatMul`` in the same ``TileGraph`` and the
     auto-inferred deps connect it on both sides (QK^T feeds softmax,
     softmax feeds the PV matmul) -- the same MM -> RN fusion shape
-    ``test_gemm_rmsnorm.py`` validates, now with SoftMax as the row-reducing
+    ``test_poly_model.py`` validates, now with SoftMax as the row-reducing
     middle statement instead of RMSNorm."""
     tg = extract(attention_scores_softmax)
     assert isinstance(tg, TileGraph)
@@ -117,7 +117,7 @@ def test_extract_softmax_fuses_with_surrounding_matmuls():
     assert not tg.domain.is_empty()
     assert not tg.deps.is_empty()
 
-    # Four dependences, exactly mirroring test_gemm_rmsnorm.py's shape (each
+    # Four dependences, exactly mirroring test_poly_model.py's shape (each
     # MatMul's own k-carry, plus the two cross-statement fusion edges) --
     # q/k/v are all (2,2) so every MatMul's K extent is 2 (last k-step
     # index 1, one carry step 0->1):

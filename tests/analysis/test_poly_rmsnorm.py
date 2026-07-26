@@ -1,7 +1,7 @@
 """``extract`` coverage for ``RMSNorm`` now that it carries a registered
 forward ``type_relation`` (``rms_norm.py``'s ``_rms_norm_type_relation``,
-modelled on ``SoftMax``'s -- see ``test_extract_softmax.py``) instead of a
-kernelize-private fallback: the domain is the batch axes only
+modelled on ``SoftMax``'s -- see ``test_poly_softmax.py``) instead of a
+poly-private fallback: the domain is the batch axes only
 (``x.shape[:-1]``) and the reduced (last) axis is an existential range dim
 on the read/write maps, with ``weight`` read over that same range.
 
@@ -14,12 +14,12 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
+from tilefoundry.analysis.poly import _local_type
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- rms_norm resolved dynamically
 from tilefoundry.ir.types import make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import Mesh, Split, Topology
-from tilefoundry.kernelize import TileGraph, extract
-from tilefoundry.kernelize.extract import _local_type
 
 _MESH = Mesh(Topology("gpu", 2), (2,), names=("a",))
 

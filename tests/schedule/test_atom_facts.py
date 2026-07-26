@@ -1,26 +1,26 @@
-"""``candidate_atoms(op, target) -> list[AtomFact]`` -- M3 (direction C)'s
-first block: HIR ``MatMul`` op + target -> the MMA atom candidates it
-could run on (a hard filter over shape/dtype/layout; no CP-SAT ranking
-yet -- that is future work, this module never touches the solver).
+"""``candidate_atoms(op, target) -> list[AtomFact]`` -- the CUDA target's
+own candidate enumeration: HIR ``MatMul`` op + target -> the MMA atom
+candidates it could run on (a hard filter over shape/dtype/layout; no
+CP-SAT ranking, that is ``test_solve.py``'s subject).
 
-Builds a bf16 gemm HIR function (mirrors ``test_gemm_rmsnorm.py``'s
+Builds a bf16 gemm HIR function (mirrors ``test_poly_model.py``'s
 construction, dtype swapped to bf16 -- the sole dtype the one registered
-SM80 atom accepts, per the task's own dtype note) and checks the listed
-``AtomFact`` against that atom's real, known numbers -- not just
-non-empty/non-zero placeholders.
+SM80 atom accepts) and checks the listed ``AtomFact`` against that atom's
+real, known numbers -- not just non-empty/non-zero placeholders.
 """
 from __future__ import annotations
 
 import pytest
 
 from tilefoundry import func
+from tilefoundry.analysis import AtomFact
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
 from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType
-from tilefoundry.kernelize import AtomFact, candidate_atoms
 from tilefoundry.target import default_target
+from tilefoundry.target.cuda.atoms import candidate_atoms
 
 
 @func(target="cuda")

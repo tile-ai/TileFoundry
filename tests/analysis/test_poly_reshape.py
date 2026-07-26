@@ -1,7 +1,7 @@
 """``extract`` coverage for ``Reshape`` -- the view-fold (not a fallback
 relation like ``RMSNorm``, not a registered ``type_relation`` like
 ``Transpose``): before this task ``Reshape`` had no forward ``type_relation``
-and no V1 fallback, so ``kernelize.extract`` raised at any ``Reshape`` call
+and no V1 fallback, so ``analysis.extract`` raised at any ``Reshape`` call
 (the last blocker to a real decoder layer's whole self-attention/mlp
 extracting -- ``tests/models/qwen3_1_7b/qwen3_1_7b_module.py`` reshapes q/k/v
 into heads and reshapes ``attn_out`` back).
@@ -27,9 +27,9 @@ import isl
 import pytest
 
 from tilefoundry import func
+from tilefoundry.analysis import ExtractError, TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- reshape/sigmoid/exp/add resolved dynamically
-from tilefoundry.kernelize import ExtractError, TileGraph, extract
 
 B, S, H, D = 1, 4, 3, 8
 HD = H * D

@@ -10,22 +10,21 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from tilefoundry.analysis import AnalysisError, AnalysisOptions, analyze
+from tilefoundry.analysis import (
+    AnalysisError,
+    AnalysisOptions,
+    ExtractError,
+    TileGraph,
+    analyze,
+    extract,
+)
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.kernelize import (
-    EmitScaffoldError,
-    ExtractError,
-    HoleContract,
-    SolveResourcesError,
-    TileGraph,
-    emit_scaffold,
-    extract,
-    schedule,
-    solve_resources,
-)
+from tilefoundry.schedule.kernel_schedule import compute_schedule
+from tilefoundry.schedule.render import EmitScaffoldError, HoleContract, emit_scaffold
+from tilefoundry.schedule.solve_resources import SolveResourcesError, solve_resources
 from tilefoundry.target import CudaTarget, default_target, resolve_target
 from tilefoundry.target.hardware import format_capabilities, load_hardware_spec
 
@@ -225,7 +224,7 @@ def run_kernelize(source: str, target: str | None) -> int:
     resolved_target = resolve_target(target) if target is not None else _selected_target(ir)
 
     tg = extract(function)
-    solved = solve_resources(schedule(tg), target=resolved_target)
+    solved = solve_resources(compute_schedule(tg), target=resolved_target)
     skeleton, swimlane, contracts = emit_scaffold(solved)
     decisions = _decisions_of(solved)
 

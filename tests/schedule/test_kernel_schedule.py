@@ -1,26 +1,17 @@
-"""``extract(HIR) -> TileGraph -> schedule(TileGraph) -> TileGraph`` for a
-minimal gemm+rmsnorm HIR ``Function`` -- the agent-friendly compiler
-path's polyhedral extraction + isl scheduling stage (``kernelize/``),
-independent of the existing HIR -> TIR -> CUDA path (``compile.py`` /
-``passes`` / ``codegen`` / ``ir`` are untouched by this module and this
-test).
-
-Extraction is plain element granularity (no tiling), so matmul's M/N/K
-(2, 2, 4) *are* the iteration domain directly -- chosen at this small size
-so the expected ``deps`` stay a direct, hand-checkable transcription of the
-M1 de-risk probe (an isl ``union_access_info``/``compute_flow`` script over
-gemm+rmsnorm reads/writes) and ``.tmp/poc/09_schedule_tree.py`` (mod isl's
-``d0,d1,d2`` anonymous-tuple dim names vs. the reference's hand-picked
-``i,j,k`` -- purely cosmetic).
+"""``compute_schedule(TileGraph) -> TileGraph`` -- the isl affine schedule
+computed over the polyhedral facts ``tests/analysis/test_poly_model.py``
+pins, for the same minimal gemm+rmsnorm HIR ``Function``: it must cover the
+whole domain, order every dependence strictly, and fuse the two statements.
 """
 from __future__ import annotations
 
 import isl
 
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.kernelize import TileGraph, extract, schedule
+from tilefoundry.schedule.kernel_schedule import compute_schedule
 
 
 @func
@@ -32,36 +23,6 @@ def gemm_rmsnorm(
     h = matmul(x, w)
     y = rms_norm(h, weight)
     return y
-
-
-def test_extract_deps_include_k_carry_and_mm_to_rn():
-    """One TileUnit per compute op (MM, RN), and ``deps`` auto-inferred
-    from access relations alone (isl.union_access_info.compute_flow, per
-    m1_deps_probe.py) reproduces exactly the two dependences that PoC
-    hand-wrote: matmul's k-reduction carry and the MM -> RN RAW-on-h
-    fusion edge -- nothing more, nothing less."""
-    tg = extract(gemm_rmsnorm)
-    assert isinstance(tg, TileGraph)
-
-    names_by_op = {u.name: type(u.op.target).__name__ for u in tg.units}
-    assert names_by_op == {"MM": "MatMul", "RN": "RMSNorm"}
-
-    print("\n=== domain ===")
-    print(tg.domain)
-    print("=== reads ===")
-    print(tg.reads)
-    print("=== writes ===")
-    print(tg.writes)
-    print("=== deps (auto-inferred) ===")
-    print(tg.deps)
-
-    k_carry = isl.map("{ MM[i,j,k] -> MM[i,j,k+1] : 0<=i<2 and 0<=j<2 and 0<=k<3 }")
-    mm_to_rn = isl.map("{ MM[i,j,3] -> RN[i] : 0<=i<2 and 0<=j<2 }")
-    assert k_carry.is_subset(tg.deps)
-    assert mm_to_rn.is_subset(tg.deps)
-
-    expected_total = isl.union_map("{}").union(k_carry).union(mm_to_rn)
-    assert tg.deps.is_equal(expected_total)
 
 
 def _lex_positive(rank: int) -> "isl.set":
@@ -97,7 +58,7 @@ def _outer_dimension(sched_map: "isl.union_map") -> "isl.union_map":
 
 
 def test_schedule_is_legal_and_fuses_mm_with_rn():
-    """``schedule()`` covers exactly ``tg``'s domain, orders every dependence
+    """``compute_schedule()`` covers exactly ``tg``'s domain, orders every dependence
     strictly, and puts MM and RN in one band.
 
     Both checks read the schedule as a relation, not as printed text. Legality
@@ -108,7 +69,7 @@ def test_schedule_is_legal_and_fuses_mm_with_rn():
     fusion check catches.
     """
     tg = extract(gemm_rmsnorm)
-    tree = schedule(tg)
+    tree = compute_schedule(tg)
 
     print("\n=== gemm+rmsnorm isl schedule tree ===")
     print(tree)

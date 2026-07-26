@@ -2,9 +2,9 @@
 that it carries a registered forward ``type_relation`` (see
 ``tilefoundry.ir.hir.tensor.repeat_interleave``) -- before this,
 ``access_relation.build_relation`` returned ``None`` for it (it had no
-access relation of any kind), so ``kernelize.extract`` raised (its generic
+access relation of any kind), so ``analysis.extract`` raised (its generic
 path is the *only* one that consults ``type_relation_registry`` -- an op
-with no registered relation has no fallback, see ``extract.py``'s
+with no registered relation has no fallback, see ``poly.py``'s
 ``_extract_statement``).
 
 ``y = repeat_interleave(x, repeats=4, axis=2)`` grows axis 2 from ``H`` kv
@@ -15,7 +15,7 @@ identity (one write per domain point) and the input map reads
 ``repeats`` consecutive output positions alias the same input element.
 
 This test checks that shape by construction, not just non-emptiness (mirrors
-``test_extract_elementwise.py``'s single-op shape, strengthened per this
+``test_poly_elementwise.py``'s single-op shape, strengthened per this
 task's ask): the extracted read map must equal a hand-built map expressed as
 an isl existential-quantifier inequality (``repeats*o2 <= d2 <= repeats*o2 +
 repeats-1``, i.e. ``o2 = floor(d2/repeats)``) -- deliberately *not* the same
@@ -31,9 +31,9 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- repeat_interleave resolved dynamically
-from tilefoundry.kernelize import TileGraph, extract
 
 REPEATS = 4
 B, S, H, D = 1, 5, 2, 3

@@ -3,7 +3,7 @@ used to make ``extract`` raise outright; now a ``DimVar`` axis flows straight
 through as an isl parameter (``to_domain`` already produces one), and
 resolves back to its ``ShapeDim`` in ``TileGraph.params``.
 
-Checks: (1) the static gemm+rmsnorm HIR (``test_gemm_rmsnorm.py``) still
+Checks: (1) the static gemm+rmsnorm HIR (``test_poly_model.py``) still
 extracts unchanged; (2) a ``DimVar`` M-axis matmul extracts a parametrised
 ``TileGraph``; (3) that same dynamic graph schedules and emits a skeleton
 with a symbolic loop bound.
@@ -15,9 +15,11 @@ import re
 import isl
 
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.kernelize import TileGraph, emit_scaffold, extract, schedule
+from tilefoundry.schedule.kernel_schedule import compute_schedule
+from tilefoundry.schedule.render import emit_scaffold
 
 
 @func
@@ -33,7 +35,7 @@ def gemm_rmsnorm(
 
 def test_static_gemm_rmsnorm_extract_unchanged():
     """Static HIR still extracts the exact k-carry + MM->RN dependences
-    ``test_gemm_rmsnorm.py`` validates; ``TileGraph.params`` stays empty."""
+    ``test_poly_model.py`` validates; ``TileGraph.params`` stays empty."""
     tg = extract(gemm_rmsnorm)
     assert isinstance(tg, TileGraph)
     assert tg.params == {}
@@ -71,7 +73,7 @@ def test_dynamic_matmul_extract_params_and_domain():
     ``TileGraph.params['seq']`` back to the exact ``DimVar``, and the M
     axis is still bounded (``dim_max_val`` a finite 126, not ``infty``,
     since ``seq``'s own half-open range ``[1, 128)`` tops out at 127).
-    ``schedule()`` stays parametrised too."""
+    ``compute_schedule()`` stays parametrised too."""
     tg = extract(dyn_matmul)
     assert isinstance(tg, TileGraph)
 
@@ -95,15 +97,15 @@ def test_dynamic_matmul_extract_params_and_domain():
     assert int(mm_set.dim_max_val(1).num_si()) == 1
     assert int(mm_set.dim_max_val(2).num_si()) == 3
 
-    tree = schedule(tg)
+    tree = compute_schedule(tg)
     assert "[seq]" in str(tree)
 
 
 def test_dynamic_matmul_end_to_end_emits_symbolic_loop():
-    """extract -> schedule -> emit_scaffold: the M loop's upper bound
+    """extract -> compute_schedule -> emit_scaffold: the M loop's upper bound
     names the isl parameter directly, never a fixed integer trip count."""
     tg = extract(dyn_matmul)
-    tree = schedule(tg)
+    tree = compute_schedule(tg)
     skeleton, _swimlane, contracts = emit_scaffold(tree)
 
     print("\n=== dynamic matmul skeleton ===")

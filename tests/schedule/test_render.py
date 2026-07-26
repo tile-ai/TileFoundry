@@ -1,9 +1,9 @@
 """``emit_scaffold(TileGraph) -> (Skeleton, Swimlane,
-list[HoleContract])`` -- M2 of the agent-friendly compiler path, one stage
-past M1's ``extract`` -> ``schedule`` (``test_gemm_rmsnorm.py``). Reuses
-that exact gemm+rmsnorm HIR so the expected statement names/coordinates
-(``MM[i,j,k]``, ``RN[i]``) and the PoC 11 / M2 hook-probe-validated isl
-codegen shape line up 1:1 with what this test asserts.
+list[HoleContract])`` -- the render step, one stage past ``extract`` ->
+``compute_schedule`` (``test_poly_model.py`` / ``test_kernel_schedule.py``).
+Reuses that exact gemm+rmsnorm HIR so the expected statement
+names/coordinates (``MM[i,j,k]``, ``RN[i]``) line up 1:1 with what this
+test asserts.
 """
 from __future__ import annotations
 
@@ -14,17 +14,17 @@ import isl
 import pytest
 
 from tilefoundry import func
+from tilefoundry.analysis import extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.kernelize import (
+from tilefoundry.schedule.kernel_schedule import compute_schedule
+from tilefoundry.schedule.render import (
     BufferAccess,
     EmitScaffoldError,
     HoleContract,
     Skeleton,
     Swimlane,
     emit_scaffold,
-    extract,
-    schedule,
 )
 
 
@@ -41,7 +41,7 @@ def gemm_rmsnorm(
 
 def _emit():
     tg = extract(gemm_rmsnorm)
-    tg = schedule(tg)
+    tg = compute_schedule(tg)
     return tg, emit_scaffold(tg)
 
 
@@ -137,13 +137,13 @@ def test_hole_contracts_one_per_statement_with_op_ref_and_bufferaccesses():
 
 
 def test_ring_mod_index_is_reserved_but_wired():
-    """V1's ``schedule()`` always leaves ``ring`` empty (mirrors
-    ``test_gemm_rmsnorm.py``'s own ``tree.ring == {}`` assertion), so the
+    """V1's ``compute_schedule()`` always leaves ``ring`` empty (mirrors
+    ``test_kernel_schedule.py``'s own ``tree.ring == {}`` assertion), so the
     ``ring[buf] = N -> buf[<last coord> % N]`` rendering path has no real
     scheduler-produced input to exercise it against -- only a hand-built
     ``TileGraph`` variant, here."""
     tg = extract(gemm_rmsnorm)
-    tg = schedule(tg)
+    tg = compute_schedule(tg)
     assert tg.ring == {}
 
     ring_tg = dataclasses.replace(tg, ring={"h": 3})
@@ -164,7 +164,7 @@ def test_ring_mod_index_is_reserved_but_wired():
 
 def test_emit_scaffold_before_schedule_raises_clear_error():
     """``tg.tree`` is ``None`` straight out of ``extract()`` -- calling
-    ``emit_scaffold`` before ``schedule(tg)`` fails closed with a message
+    ``emit_scaffold`` before ``compute_schedule(tg)`` fails closed with a message
     naming the missing step, not a confusing isl ``AttributeError``."""
     tg = extract(gemm_rmsnorm)
     assert tg.tree is None

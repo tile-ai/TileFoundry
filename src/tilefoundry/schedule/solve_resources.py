@@ -1,31 +1,31 @@
 """``solve_resources(tg, target=None, options=None) -> TileGraph`` --
-M3 (direction C)'s second, core block: CP-SAT fills every isl-statement's
-resource decisions (which MMA atom, which lane it runs on, each buffer's
-ring/software-pipelining depth), minimizes a coarse makespan, and returns
-``tg`` with ``ring``/``decisions`` filled in -- refining a ``TileGraph``
-whose ``tree`` is affine-only (``schedule_tree.py``, ``ring={}`` always)
-into one that also carries resource decisions.
+CP-SAT fills every isl-statement's resource decisions (which MMA atom,
+which lane it runs on, each buffer's ring/software-pipelining depth),
+minimizes a coarse makespan, and returns ``tg`` with ``ring``/``decisions``
+filled in -- refining a ``TileGraph`` whose ``tree`` is affine-only
+(``kernel_schedule.py``, ``ring={}`` always) into one that also carries
+resource decisions.
 
 This is a from-scratch *statement*-granularity port of
 ``target.cuda.solver``'s HIR-granularity CP-SAT idiom -- ``pick`` BoolVar +
 ``AddExactlyOne`` to choose a candidate (``solver.py`` :183), an ``IntVar``
 placement (``solver.py``'s ``offset`` :322-328), a ``makespan`` ``IntVar`` +
-``Minimize`` (``solver.py`` :407/737) -- onto ``kernelize``'s isl statement
-domain instead of ``solver.py``'s HIR-op/bucket domain. The whole shape was
-validated end-to-end first as a throwaway probe script
-(``m3_cpsat_probe.py`` -- toy candidates) and then again against this
-module's own real ``extract()``/``schedule()``/``candidate_atoms()`` pipeline
-(``probe_solve_resources.py``) before this file was written.
+``Minimize`` (``solver.py`` :407/737) -- onto the isl statement domain
+instead of ``solver.py``'s HIR-op/bucket domain.
 
-V1 simplifications (see the task report for the full reasoning):
+Candidate atoms come from the target's own ``(Analysis, stage)`` service,
+never from a target package this module imports: the CP-SAT model itself is
+target-independent.
+
+V1 simplifications:
 
 * **atom choice** -- exactly ``solver.py``'s ``pick`` + ``AddExactlyOne``
-  idiom, per statement, over ``target_facts.candidate_atoms``'s list. A
-  statement with no candidate (V1's catalogue is MatMul-only -- anything
-  else, e.g. RMSNorm, makes ``candidate_atoms`` raise ``NotImplementedError``)
-  is *not* given a pick var at all -- it gets a fixed nominal duration
-  instead (see ``_default_duration_units``), so one uncovered op never
-  aborts the whole solve.
+  idiom, per statement, over the Analysis service's candidate list. A
+  statement with no candidate (V1's CUDA catalogue is MatMul-only --
+  anything else, e.g. RMSNorm, raises ``NotImplementedError``) is *not*
+  given a pick var at all -- it gets a fixed nominal duration instead
+  (see ``_default_duration_units``), so one uncovered op never aborts
+  the whole solve.
 * **place** -- one ``NewIntVar(0, lanes-1)`` per statement, ``lanes`` from
   ``target.device.sm_count`` when the target exposes one (a small fixed
   fallback otherwise). It is solved for and decoded, but -- unlike
@@ -37,7 +37,7 @@ V1 simplifications (see the task report for the full reasoning):
   ``solver.py``'s own ``AddCumulative``/``hbm_capacity_bytes`` accounting,
   out of scope here) and does not link ring depth to makespan/overlap --
   it is produced, not (yet) optimized over. The lower bound is 2, not 1,
-  on purpose: ``emit_scaffold._ring_ref`` treats depth <= 1 as "no ring"
+  on purpose: ``render._ring_ref`` treats depth <= 1 as "no ring"
   (bare buffer name, no ``% N``), so a depth of 1 would be a CP-SAT
   decision silently invisible downstream; forcing >= 2 guarantees every
   produced ring decision is an observable one.
@@ -46,8 +46,8 @@ V1 simplifications (see the task report for the full reasoning):
   ``tg.deps`` (instance-granularity) down to statement-granularity
   precedence pairs (``_statement_precedence_pairs``: "some instance of A
   must precede some instance of B") enforced as ``start[B] >= end[A]``,
-  and ``makespan = max(all ends)``, minimized. This is the "按 deps 链"
-  option the task brief explicitly allows in place of a full
+  and ``makespan = max(all ends)``, minimized. This is a deps-chain
+  makespan in place of a full
   ``AddNoOverlap2D`` time x resource pack: statements on an independent
   branch can still overlap (unconstrained relative to each other), while
   statements on a dependence chain serialize -- a real (if coarse)
@@ -66,26 +66,26 @@ from dataclasses import dataclass
 import isl
 from ortools.sat.python import cp_model
 
-from tilefoundry.schedule import ScheduleOptions
+from tilefoundry.analysis import Analysis, AtomFact
+from tilefoundry.analysis.poly import TileGraph, TileUnit
 from tilefoundry.target import Target, default_target, resolve_target
 
-from .target_facts import AtomFact, candidate_atoms
-from .tile_graph import TileGraph, TileUnit
+from . import ScheduleOptions
 
 # ---------------------------------------------------------------------------
 # V1 fixed constants -- see the module docstring's "V1 simplifications" for
 # the reasoning behind each.
 # ---------------------------------------------------------------------------
 
-# ns -> integer CP-SAT duration units. target_facts._roofline_duration_ns
-# floors every atom at 1.0ns; a bare round(ns) would flatten every
+# ns -> integer CP-SAT duration units. An atom's own roofline estimate is
+# floored at 1.0ns; a bare round(ns) would flatten every
 # candidate to the same "1" and make atom choice cost-indifferent inside
 # CP-SAT. Scaling by 1000 keeps 3 decimal digits of the roofline estimate.
 _DURATION_SCALE = 1000
 
 # Nominal per-statement-instance cost (ns), for a statement with no
-# registered atom candidate (e.g. RMSNorm -- target_facts has no roofline
-# cost model for it, being MatMul-only in V1). Matches the same "~1ns"
+# registered atom candidate (e.g. RMSNorm -- CUDA's V1 catalogue is
+# MatMul-only, so it has no roofline cost model). Matches the same "~1ns"
 # order of magnitude as the atom path's own floor; not a measured number.
 _DEFAULT_DURATION_NS = 1.0
 
@@ -131,15 +131,27 @@ class _StatementPlan:
 # ---------------------------------------------------------------------------
 
 
-def _candidates_for(unit: TileUnit, target: Target) -> list[AtomFact]:
-    """``candidate_atoms``, made robust to the statements it was never
-    meant to cover. V1's atom catalogue is MatMul-only (see
-    ``target_facts.candidate_atoms``'s own docstring); any other op
-    (RMSNorm today) makes it raise ``NotImplementedError`` -- caught here
-    and downgraded to "no candidates" so one uncovered statement never
-    aborts the whole resource solve."""
+def _analysis_service(target: Target, stage: str) -> Analysis:
+    """The ``(Analysis, stage)`` service ``target`` binds -- the only route
+    to a candidate atom, so a target that binds none is a solve-time error
+    naming what is missing, not a silent no-candidate solve."""
     try:
-        return candidate_atoms(unit.op, target)
+        return target.service(Analysis, stage)
+    except (TypeError, ValueError) as error:
+        raise SolveResourcesError(
+            f"solve_resources: target {target.name!r} binds no Analysis "
+            f"service at stage {stage!r}: {error}"
+        ) from error
+
+
+def _candidates_for(unit: TileUnit, analysis: Analysis) -> list[AtomFact]:
+    """``analysis.candidate_atoms``, made robust to the statements the
+    target's catalogue was never meant to cover. CUDA's is MatMul-only; any
+    other op (RMSNorm today) makes it raise ``NotImplementedError`` --
+    caught here and downgraded to "no candidates" so one uncovered
+    statement never aborts the whole resource solve."""
+    try:
+        return analysis.candidate_atoms(unit.op)
     except NotImplementedError:
         return []
 
@@ -150,8 +162,8 @@ def _duration_units(fact: AtomFact) -> int:
 
 def _statement_volume(tg: TileGraph, stmt_name: str) -> int:
     """Product of ``stmt_name``'s own tiled-domain axis extents (the same
-    ``dim_min_val``/``dim_max_val`` technique as ``extract._domain_extents``
-    / ``emit_scaffold._statement_extents``) -- V1's only "how much work"
+    ``dim_min_val``/``dim_max_val`` technique as
+    ``render._statement_extents``) -- V1's only "how much work"
     signal for a statement with no atom candidate to size its default
     duration from."""
     sets: list["isl.set"] = []
@@ -166,7 +178,7 @@ def _statement_volume(tg: TileGraph, stmt_name: str) -> int:
                 volume *= hi - lo + 1
             return volume
     raise SolveResourcesError(
-        f"kernelize.solve_resources: no domain set found for statement {stmt_name!r} "
+        f"solve_resources: no domain set found for statement {stmt_name!r} "
         "-- tg.domain and tg.units must come from the same extract() run"
     )
 
@@ -275,16 +287,17 @@ def solve_resources(
     tg: TileGraph,
     target: Target | str | None = None,
     options: ScheduleOptions | None = None,
+    stage: str = "cta",
 ) -> TileGraph:
-    """CP-SAT resource solve over ``tg`` (carrying M1's isl schedule tree
-    already, from ``schedule(tg)``): choose each statement's MMA atom
-    (when ``target_facts.candidate_atoms`` lists one), a lane placement,
-    and a per-buffer ring pipeline depth, minimizing a coarse deps-chain
-    makespan (see module docstring for exactly how simplified). Returns
-    ``tg`` with ``ring``/``decisions`` filled in -- the exact
-    ``{buffer_name: depth}`` shape ``emit_scaffold._ring_ref`` already
-    knows how to consume, so ``emit_scaffold(solve_resources(schedule(
-    tg)))`` renders ring-indexed (``% N``) buffer references end to end.
+    """CP-SAT resource solve over ``tg`` (carrying the isl schedule tree
+    already, from ``compute_schedule(tg)``): choose each statement's atom
+    (when ``target``'s ``(Analysis, stage)`` service lists one), a lane
+    placement, and a per-buffer ring pipeline depth, minimizing a coarse
+    deps-chain makespan (see module docstring for exactly how simplified).
+    Returns ``tg`` with ``ring``/``decisions`` filled in -- the exact
+    ``{buffer_name: depth}`` shape ``render._ring_ref`` already knows how
+    to consume, so ``emit_scaffold(solve_resources(compute_schedule(tg)))``
+    renders ring-indexed (``% N``) buffer references end to end.
 
     Raises :class:`SolveResourcesError` if CP-SAT reports the model
     infeasible (or any other non-``OPTIMAL``/``FEASIBLE`` status) -- never
@@ -292,13 +305,14 @@ def solve_resources(
     """
     if not tg.units:
         raise SolveResourcesError(
-            "kernelize.solve_resources: tg.units is empty -- nothing to solve resources for"
+            "solve_resources: tg.units is empty -- nothing to solve resources for"
         )
     target = default_target() if target is None else resolve_target(target)
     options = options if options is not None else ScheduleOptions()
 
+    analysis = _analysis_service(target, stage)
     lanes = _lane_count(target)
-    per_stmt_candidates = {unit.name: _candidates_for(unit, target) for unit in tg.units}
+    per_stmt_candidates = {unit.name: _candidates_for(unit, analysis) for unit in tg.units}
     horizon = _horizon(tg, per_stmt_candidates)
 
     model = cp_model.CpModel()
@@ -311,7 +325,7 @@ def solve_resources(
     for a, b in _statement_precedence_pairs(tg):
         if a not in plans or b not in plans:
             raise SolveResourcesError(
-                f"kernelize.solve_resources: tg.deps references statement {a!r}->{b!r} "
+                f"solve_resources: tg.deps references statement {a!r}->{b!r} "
                 "not present in tg.units"
             )
         model.Add(plans[b].start >= plans[a].end)
@@ -331,14 +345,14 @@ def solve_resources(
 
     if status == cp_model.INFEASIBLE:
         raise SolveResourcesError(
-            f"kernelize.solve_resources: infeasible resource model for statements "
+            f"solve_resources: infeasible resource model for statements "
             f"{[u.name for u in tg.units]!r} on target {target.name!r}"
         )
     if status == cp_model.MODEL_INVALID:
-        raise SolveResourcesError("kernelize.solve_resources: OR-Tools reported an invalid model")
+        raise SolveResourcesError("solve_resources: OR-Tools reported an invalid model")
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolveResourcesError(
-            f"kernelize.solve_resources: unexpected CP-SAT status "
+            f"solve_resources: unexpected CP-SAT status "
             f"{solver.StatusName(status)!r}"
         )
 

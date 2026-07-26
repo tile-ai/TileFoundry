@@ -2,11 +2,11 @@
 ``Unary`` carry a registered forward ``type_relation`` (see
 ``tilefoundry.ir.hir.nn.sigmoid`` / ``tilefoundry.ir.hir.math.unary``) --
 before this, ``access_relation.build_relation`` returned ``None`` for both,
-so ``kernelize.extract`` raised (its generic path is the *only* one that
+so ``analysis.extract`` raised (its generic path is the *only* one that
 consults ``type_relation_registry`` -- an op with no registered relation has
-no fallback, see ``extract.py``'s ``_extract_statement``).
+no fallback, see ``poly.py``'s ``_extract_statement``).
 
-Two things this file checks, mirroring ``test_gemm_rmsnorm.py``'s shape for
+Two things this file checks, mirroring ``test_poly_model.py``'s shape for
 the matmul/rmsnorm family:
 
 1. A minimal single-op HIR (``y = sigmoid(x)``, ``y = exp(x)``) extracts to a
@@ -25,9 +25,9 @@ from collections import Counter
 
 from tests.models.qwen3_1_7b.qwen3_1_7b_module import Qwen3_1_7B
 from tilefoundry import func
+from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- sigmoid/exp resolved dynamically
-from tilefoundry.kernelize import TileGraph, extract
 
 
 @func
@@ -125,7 +125,7 @@ def test_extract_qwen3_mlp_whole():
 
     # Sigmoid's own statement (this task's addition) actually contributed to
     # both unions -- its tuple name shows up in each dump, mirroring
-    # test_gemm_rmsnorm.py's own "MM[" / "RN[" substring convention for
+    # test_poly_model.py's own "MM[" / "RN[" substring convention for
     # checking a statement's presence in a printed isl union.
     sigmoid_unit = next(u for u in tg.units if type(u.op.target).__name__ == "Sigmoid")
     assert f"{sigmoid_unit.name}[" in str(tg.reads)
