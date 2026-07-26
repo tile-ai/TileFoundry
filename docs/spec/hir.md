@@ -384,10 +384,10 @@ registered `@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
   emitting an effect-form Call into HIR is a verify error.
 
 Generic, analysis-wide typing behavior is owned by
-[analysis](./analysis.md): relation-driven type validity
-([analysis §1.1](./analysis.md#11-relation-derived-type-behavior)), output
+[semantic-analysis](./semantic-analysis.md): relation-driven type validity
+([semantic-analysis §1.1](./semantic-analysis.md#11-relation-derived-type-behavior)), output
 storage of multi-input ops, and operand layout / mesh ownership
-([analysis §3.3](./analysis.md#33-output-storage-and-meshlayout-compatibility)).
+([semantic-analysis §3.3](./semantic-analysis.md#33-output-storage-and-meshlayout-compatibility)).
 HIR ops call these services; each op's registered typeinfer owns the layout /
 mesh compatibility and result layout it requires, and `Reshard` is the explicit
 op that changes a value's layout / mesh.

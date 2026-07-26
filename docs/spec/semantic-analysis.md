@@ -1,4 +1,4 @@
-# TileFoundry Spec — analysis (static analysis services)
+# TileFoundry Spec — semantic-analysis (per-Op semantic derivation)
 
 This spec owns TileFoundry's concrete static analysis services — the semantic
 contracts that derive types, access relations, and shard layouts over the IR.

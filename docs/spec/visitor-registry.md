@@ -250,7 +250,7 @@ class AccessRelationResult:
 
 - constraints:
   - the carrier holds **no** tensor shape; the output shape is typeinfer-side
-    data (see [analysis §1.1](./analysis.md#11-relation-derived-type-behavior)).
+    data (see [semantic-analysis §1.1](./semantic-analysis.md#11-relation-derived-type-behavior)).
 
 #### `domain`
 
@@ -276,7 +276,7 @@ One access `isl.map` per boundary value, in boundary order — inputs
 first, then outputs — each mapping the iteration domain to that tensor's
 index space. The carrier holds **no** tensor shape: the output shape is
 typeinfer-side data, not part of the relation (see
-[analysis §1.1](./analysis.md#11-relation-derived-type-behavior)).
+[semantic-analysis §1.1](./semantic-analysis.md#11-relation-derived-type-behavior)).
 
 Registry + decorator:
 

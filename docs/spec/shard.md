@@ -462,8 +462,8 @@ it verbatim.
 
 `ShardLayout` here is the data model that the analysis services read and
 produce. Logical-shape-to-layout-domain interpretation and relation-driven
-shard propagation are owned by [analysis §3](./analysis.md#3-shard-propagation):
+shard propagation are owned by [semantic-analysis §3](./semantic-analysis.md#3-shard-propagation):
 logical shape → layout domain in
-[analysis §3.1](./analysis.md#31-logical-shape-to-layout-domain), and
+[semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain), and
 relation-driven propagation in
-[analysis §3.2](./analysis.md#32-relation-driven-shard-propagation).
+[semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation).
