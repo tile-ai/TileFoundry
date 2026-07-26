@@ -16,14 +16,14 @@ from tests.models.qwen3_5_30b_a3b.static_online import qwen_static_online
 from tests.schedule.test_preflight import _planner_helper, _planner_root
 from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
+from tilefoundry.ir.constraints import (
+    ScheduleConstraint,
+    ScheduleConstraintMetadata,
+)
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.schedule import Schedule, ScheduleOptions
-from tilefoundry.schedule.constraints import (
-    ScheduleConstraint,
-    ScheduleConstraintMetadata,
-)
 from tilefoundry.target.cuda.materialize import materialize_planning_solution
 from tilefoundry.target.cuda.planner import build_planning_problem
 from tilefoundry.target.cuda.solver import solve_planning_problem

@@ -3,19 +3,19 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, Tuple, VerifyError
-from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Broadcast, Partial, Split
-from tilefoundry.parser.hir_parser import parse_script
-from tilefoundry.schedule.constraints import (
+from tilefoundry.ir.constraints import (
     LayoutConstraint,
     MeshConstraint,
     ScheduleConstraintMetadata,
     StorageConstraint,
     constraint_metadata,
 )
+from tilefoundry.ir.core import Call, Tuple, VerifyError
+from tilefoundry.ir.hir.verify import verify_function
+from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import Broadcast, Partial, Split
+from tilefoundry.parser.hir_parser import parse_script
 
 
 def _source(body: str) -> str:

@@ -11,6 +11,7 @@ from tests.models.deepseek_v4_flash.moe import (
     moe_topk,
 )
 from tilefoundry.inspection import as_script
+from tilefoundry.ir.constraints import LayoutConstraint, constraint_metadata
 from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.matmul import MatMul
@@ -19,7 +20,6 @@ from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types.shard import Broadcast, Split
-from tilefoundry.schedule.constraints import LayoutConstraint, constraint_metadata
 from tilefoundry.target import CudaTarget
 
 

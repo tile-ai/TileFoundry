@@ -6,6 +6,7 @@ from typing import Iterable
 
 from ortools.sat.python import cp_model
 
+from tilefoundry.ir.constraints import ScheduleConstraintMetadata
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -25,7 +26,6 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.types import TensorType, TupleType, Type, callable_type_for
 from tilefoundry.ir.types.shard import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.schedule.constraints import ScheduleConstraintMetadata
 from tilefoundry.target import CudaTarget, Target, default_target
 from tilefoundry.target.cuda.cost import tensor_bytes
 from tilefoundry.visitor_registry import cost_evaluator_registry

@@ -12,6 +12,14 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from tilefoundry.ir.constraints import (
+    LayoutConstraint,
+    MeshConstraint,
+    ScheduleConstraintMetadata,
+    StorageConstraint,
+    constraint_metadata,
+)
+from tilefoundry.ir.constraints.layout import is_layout_wildcard
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -55,14 +63,6 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import _expr_children
-from tilefoundry.schedule.constraints import (
-    LayoutConstraint,
-    MeshConstraint,
-    ScheduleConstraintMetadata,
-    StorageConstraint,
-    constraint_metadata,
-)
-from tilefoundry.schedule.constraints.layout import is_layout_wildcard
 from tilefoundry.target import CpuTarget, CudaTarget, Target
 from tilefoundry.target.cuda import SM90
 

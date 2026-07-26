@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from tilefoundry.ir.constraints import ScheduleConstraintMetadata
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, source_metadata
 from tilefoundry.ir.core.metadata import remove_metadata
 from tilefoundry.ir.core.module import Module
@@ -22,7 +23,6 @@ from tilefoundry.ir.types.shard import (
     try_c_order_strides,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.schedule.constraints import ScheduleConstraintMetadata
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .planner import OpCandidate, PlanningProblem

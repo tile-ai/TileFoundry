@@ -4,6 +4,16 @@ import ast
 import dataclasses
 from typing import Any
 
+from tilefoundry.ir.constraints import (
+    ConstraintProvenance,
+    LayoutConstraint,
+    MeshConstraint,
+    ScheduleConstraint,
+    ScheduleConstraintMetadata,
+    SourceLocation,
+    StorageConstraint,
+)
+from tilefoundry.ir.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.ir.core import BindingMetadata, Expr, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -21,16 +31,6 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
 from tilefoundry.ir.visitor import ExprMutator
-from tilefoundry.schedule.constraints import (
-    ConstraintProvenance,
-    LayoutConstraint,
-    MeshConstraint,
-    ScheduleConstraint,
-    ScheduleConstraintMetadata,
-    SourceLocation,
-    StorageConstraint,
-)
-from tilefoundry.schedule.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.target import Target, resolve_target
 
 from .base import (

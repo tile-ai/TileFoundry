@@ -7,6 +7,14 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Literal, Mapping
 
+from tilefoundry.ir.constraints import (
+    LayoutConstraint,
+    MeshConstraint,
+    ScheduleConstraintMetadata,
+    StorageConstraint,
+    constraint_metadata,
+    is_layout_wildcard,
+)
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -41,14 +49,6 @@ from tilefoundry.ir.types.shard import (
     try_c_order_strides,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.schedule.constraints import (
-    LayoutConstraint,
-    MeshConstraint,
-    ScheduleConstraintMetadata,
-    StorageConstraint,
-    constraint_metadata,
-    is_layout_wildcard,
-)
 from tilefoundry.target.cuda.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
