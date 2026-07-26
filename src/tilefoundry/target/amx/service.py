@@ -9,9 +9,9 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule import ScheduleOptions, ScheduleReport, ScheduleResult
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 
-# `solve_resources` measures its makespan in sub-ns duration units; the public
+# `select_atoms` measures its makespan in sub-ns duration units; the public
 # report is in ns, and the scale that converts them has no public accessor yet.
-from tilefoundry.schedule.solve_resources import _DURATION_SCALE, solve_resources
+from tilefoundry.schedule.select_atoms import _DURATION_SCALE, select_atoms
 
 from .atoms import candidate_atoms
 
@@ -70,7 +70,7 @@ class _AmxCoreSchedule:
                 f"core Schedule options must be ScheduleOptions, got "
                 f"{type(options).__name__}"
             )
-        solved = solve_resources(build_schedule_tree(extract(root)), self._target, self.stage)
+        solved = select_atoms(build_schedule_tree(extract(root)), self._target, self.stage)
         return ScheduleResult(module=module, report=_project_report(root, solved, self.stage))
 
 

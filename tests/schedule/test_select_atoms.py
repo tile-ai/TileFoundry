@@ -1,4 +1,4 @@
-"""``solve_resources(tg, target) -> TileGraph`` -- the resource decisions
+"""``select_atoms(tg, target) -> TileGraph`` -- the resource decisions
 over the isl schedule tree of a bf16 gemm+rmsnorm HIR ``Function`` (bf16 so
 MM has a real SM80 atom candidate, mirroring ``test_atom_facts.py``'s own
 dtype note).
@@ -26,7 +26,7 @@ from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
 from tilefoundry.schedule.kernel_schedule import band_statement, build_schedule_tree, schedule_bands
 from tilefoundry.schedule.render import emit_scaffold
-from tilefoundry.schedule.solve_resources import SolveResourcesError, solve_resources
+from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
 from tilefoundry.target import default_target
 from tilefoundry.target.base import Device
 from tilefoundry.target.cuda.target import CudaTarget
@@ -77,7 +77,7 @@ def _scheduled(fn=bf16_gemm_rmsnorm) -> TileGraph:
 
 
 def _bands_of(tree: "isl.schedule", stmt: str) -> list["isl.schedule_node_band"]:
-    """``stmt``'s own bands, in top-down order -- one before ``solve_resources``
+    """``stmt``'s own bands, in top-down order -- one before ``select_atoms``
     has tiled, a tile band and a point band after."""
     return [band for band in schedule_bands(tree) if band_statement(band) == stmt]
 
@@ -100,7 +100,7 @@ def test_solve_decides_the_atom_tile_and_rings_end_to_end():
     is its own extent and a whole multiple of that atom's shape on every
     dimension, h -- the only buffer carrying a dependence -- gets the ring, and
     every statement's footprint is recorded against the capacity fact."""
-    solved = solve_resources(_scheduled(), target="cuda")
+    solved = select_atoms(_scheduled(), target="cuda")
     assert isinstance(solved, TileGraph)
     decisions = solved.decisions
     print("\n=== decisions ===")
@@ -156,7 +156,7 @@ def test_tiling_the_bands_yields_a_tile_and_point_pair_at_atom_granularity():
     tg = _scheduled()
     assert len(schedule_bands(tg.tree)) == len(tg.units) == 2
 
-    solved = solve_resources(tg, target="cuda")
+    solved = select_atoms(tg, target="cuda")
     print("\n=== tiled schedule tree ===")
     print(solved.tree)
     assert len(schedule_bands(solved.tree)) == 4
@@ -181,7 +181,7 @@ def test_a_capacity_too_small_for_the_footprint_is_recorded_not_raised():
     one tile holds still yields a full set of decisions, with the overflow
     recorded per statement. V1 reports a bad schedule, it does not refuse one."""
     target = CudaTarget(device=_TunedDevice(shared_memory_per_cta_bytes=512))
-    solved = solve_resources(_scheduled(), target=target)
+    solved = select_atoms(_scheduled(), target=target)
     decisions = solved.decisions
     print("\n=== over-capacity decisions ===")
     for name, stmt in decisions["statements"].items():
@@ -199,7 +199,7 @@ def test_ring_depth_is_the_carried_tile_distance_plus_one():
     dimension, and nothing else: MM -> RN crosses statements, which the
     sequenced tree orders outright rather than through a ring. The ring holds
     one more slot than that distance measured in tiles."""
-    solved = solve_resources(_scheduled(), target="cuda")
+    solved = select_atoms(_scheduled(), target="cuda")
     tile = solved.decisions["statements"]["MM"]["tile"]
     distance = math.ceil(1 / tile[2])
     print("\n=== MM tile ===", tile, "carried tiles", distance, "ring", solved.ring)
@@ -212,7 +212,7 @@ def test_the_recorded_footprint_matches_the_footprint_isl_counts():
     tile instance of each statement touches, buffer by buffer. Every band is
     its statement's own identity, so the box is written straight in the
     statement's coordinates."""
-    solved = solve_resources(_scheduled(), target="cuda")
+    solved = select_atoms(_scheduled(), target="cuda")
     elem_bytes = {"x": 2, "w": 2, "h": 2, "y": 2, "weight": 4}
 
     for stmt, extents in (("MM", _MM_EXTENTS), ("RN", (64,))):
@@ -252,7 +252,7 @@ def test_no_candidate_statements_still_decide_with_a_default_duration():
     statement (MM: the sole SM80 atom is bf16-only; RN: no V1 catalogue entry at
     all). No atom then granularises the tile, but the tile, ring and timeline
     decisions still have to come out."""
-    solved = solve_resources(_scheduled(f32_gemm_rmsnorm), target="cuda")
+    solved = select_atoms(_scheduled(f32_gemm_rmsnorm), target="cuda")
     decisions = solved.decisions
     mm, rn = decisions["statements"]["MM"], decisions["statements"]["RN"]
     print("\n=== f32 decisions ===", mm["tile"], rn["tile"], solved.ring, decisions["makespan"])
@@ -271,8 +271,8 @@ def test_no_candidate_statements_still_decide_with_a_default_duration():
 def test_default_target_resolution_matches_explicit_cuda_target():
     """``target=None`` resolves via ``default_target()`` -- same convention
     as the CUDA target's own ``candidate_atoms``."""
-    implicit = solve_resources(_scheduled())
-    explicit = solve_resources(_scheduled(), target=default_target())
+    implicit = select_atoms(_scheduled())
+    explicit = select_atoms(_scheduled(), target=default_target())
 
     assert implicit.decisions["statements"]["MM"]["atom"] == _SM80_ATOM
     assert explicit.decisions["statements"]["MM"]["atom"] == _SM80_ATOM
@@ -287,22 +287,22 @@ def test_empty_tile_graph_raises_clear_error():
     no-op or a confusing isl traceback."""
     tg = _scheduled()
     empty = replace(tg, units=())
-    with pytest.raises(SolveResourcesError, match="units is empty"):
-        solve_resources(empty, target="cuda")
+    with pytest.raises(AtomSelectionError, match="units is empty"):
+        select_atoms(empty, target="cuda")
 
 
 def test_solving_before_build_schedule_tree_raises_clear_error():
-    with pytest.raises(SolveResourcesError, match="build_schedule_tree"):
-        solve_resources(extract(bf16_gemm_rmsnorm), target="cuda")
+    with pytest.raises(AtomSelectionError, match="build_schedule_tree"):
+        select_atoms(extract(bf16_gemm_rmsnorm), target="cuda")
 
 
 def test_resolving_an_already_tiled_tree_raises_clear_error():
-    """``solve_resources`` decides over the untiled tree; handed its own
+    """``select_atoms`` decides over the untiled tree; handed its own
     output it names the band count rather than silently deciding over tile
     coordinates."""
-    solved = solve_resources(_scheduled(), target="cuda")
-    with pytest.raises(SolveResourcesError, match="band"):
-        solve_resources(solved, target="cuda")
+    solved = select_atoms(_scheduled(), target="cuda")
+    with pytest.raises(AtomSelectionError, match="band"):
+        select_atoms(solved, target="cuda")
 
 
 def test_a_statement_order_that_runs_against_a_dependence_is_rejected():
@@ -311,5 +311,5 @@ def test_a_statement_order_that_runs_against_a_dependence_is_rejected():
     reversing it puts RN's start before the MM it reads from."""
     tg = extract(bf16_gemm_rmsnorm)
     reversed_units = build_schedule_tree(replace(tg, units=tuple(reversed(tg.units))))
-    with pytest.raises(SolveResourcesError, match="orders 'MM' before 'RN'"):
-        solve_resources(reversed_units, target="cuda")
+    with pytest.raises(AtomSelectionError, match="orders 'MM' before 'RN'"):
+        select_atoms(reversed_units, target="cuda")

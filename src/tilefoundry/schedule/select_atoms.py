@@ -1,5 +1,5 @@
-"""``solve_resources(tg, target, stage) -> TileGraph`` -- the resource
-decisions over one scheduled ``TileGraph``.
+"""``select_atoms(tg, target, stage) -> TileGraph`` -- pick each statement's
+compute atom, and measure what that pick implies.
 
 Every operation carries its own extent and that extent *is* its tile: what
 the author wrote is what one hole computes. The one choice left per statement
@@ -48,7 +48,7 @@ _DEFAULT_DURATION_NS = 1.0
 _DEFAULT_UNITS = round(_DEFAULT_DURATION_NS * _DURATION_SCALE)
 
 
-class SolveResourcesError(RuntimeError):
+class AtomSelectionError(RuntimeError):
     """A ``tg`` consistency precondition did not hold, or the stage exposes
     no fact the decisions stand on -- always raised with a specific,
     actionable message; V1 never silently ignores a bad input."""
@@ -91,8 +91,8 @@ def _analysis_service(target: Target, stage: str) -> Analysis:
     try:
         return target.service(Analysis, stage)
     except (TypeError, ValueError) as error:
-        raise SolveResourcesError(
-            f"solve_resources: target {target.name!r} binds no Analysis "
+        raise AtomSelectionError(
+            f"select_atoms: target {target.name!r} binds no Analysis "
             f"service at stage {stage!r}: {error}"
         ) from error
 
@@ -116,8 +116,8 @@ def _tile_capacity(analysis: Analysis) -> int:
     value = getattr(analysis, "tile_capacity_bytes", None)
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
-    raise SolveResourcesError(
-        f"solve_resources: stage {analysis.stage!r} exposes no tile-memory "
+    raise AtomSelectionError(
+        f"select_atoms: stage {analysis.stage!r} exposes no tile-memory "
         f"capacity ({type(analysis).__name__}.tile_capacity_bytes is {value!r})"
     )
 
@@ -128,8 +128,8 @@ def _atom_shape(name: str, rank: int, fact: AtomFact) -> tuple[int, ...]:
     atom granularises ``[m, n, k]`` and says nothing about the batch
     dimensions a batched matmul iterates outside them, which take extent 1."""
     if len(fact.shape) > rank:
-        raise SolveResourcesError(
-            f"solve_resources: statement {name!r} spans {rank} dimension(s) but "
+        raise AtomSelectionError(
+            f"select_atoms: statement {name!r} spans {rank} dimension(s) but "
             f"its candidate atom shape {fact.shape} has {len(fact.shape)} -- an "
             "atom cannot granularise a domain narrower than itself"
         )
@@ -149,8 +149,8 @@ def _held_by_statement(
             dims[group] = [{} for _ in fp.dims]
             bytes_of[group] = fp.elem_bytes
         if len(dims[group]) != len(fp.dims):
-            raise SolveResourcesError(
-                f"solve_resources: buffer {fp.buffer!r} is accessed with "
+            raise AtomSelectionError(
+                f"select_atoms: buffer {fp.buffer!r} is accessed with "
                 f"{len(fp.dims)} and {len(dims[group])} dimension(s)"
             )
         for pos, extent in enumerate(fp.dims):
@@ -171,13 +171,13 @@ def _band_of(tg: TileGraph) -> dict[str, "isl.schedule_node_band"]:
     bands = {band_statement(band): band for band in found}
     missing = sorted(unit.name for unit in tg.units if unit.name not in bands)
     if missing:
-        raise SolveResourcesError(
-            f"solve_resources: statements {missing} have no band in tg.tree "
+        raise AtomSelectionError(
+            f"select_atoms: statements {missing} have no band in tg.tree "
             f"(it carries {sorted(bands)}) -- both must come from one run"
         )
     if len(found) != len(tg.units):
-        raise SolveResourcesError(
-            f"solve_resources: tg.tree carries {len(found)} band(s) for "
+        raise AtomSelectionError(
+            f"select_atoms: tg.tree carries {len(found)} band(s) for "
             f"{len(tg.units)} statement(s) -- an already tiled tree has two, and "
             "resources are decided over the untiled one"
         )
@@ -206,15 +206,15 @@ def _collect_facts(tg: TileGraph, analysis: Analysis) -> _Facts:
         rank = len(extents[name])
         dims = statement_time_dims(tg, time_map)[name]
         if not _is_own_identity(dims, extents[name]):
-            raise SolveResourcesError(
-                f"solve_resources: the band of statement {name!r} schedules "
-                f"dimensions {dims}, not its own in order -- solve_resources "
+            raise AtomSelectionError(
+                f"select_atoms: the band of statement {name!r} schedules "
+                f"dimensions {dims}, not its own in order -- select_atoms "
                 "decides per domain dimension, which needs an identity band"
             )
         parallel = tg.parallel_dims.get(name, ())
         if len(parallel) != rank:
-            raise SolveResourcesError(
-                f"solve_resources: tg.parallel_dims carries {len(parallel)} flag(s) for "
+            raise AtomSelectionError(
+                f"select_atoms: tg.parallel_dims carries {len(parallel)} flag(s) for "
                 f"the {rank} dimension(s) of statement {name!r} -- extract fills one "
                 "per dimension, and placement is read off them"
             )
@@ -250,9 +250,21 @@ def _extent_value(extent: AxisExtent, tile: tuple[int, ...]) -> int:
 
 
 def _occupancy_bytes(occupancy: _Occupancy, tile: tuple[int, ...]) -> int:
-    count = math.prod(
-        max(_extent_value(extent, tile) for extent in options) for options in occupancy.dims
-    )
+    """Bytes one tile of ``occupancy``'s buffer holds.
+
+    A tile dimension is counted once over the whole buffer, not once per
+    buffer dimension it reaches: one flat reshape equality ties every buffer
+    dimension to every iteration dimension, so a per-dimension product would
+    multiply the same tile extent in several times and claim more elements
+    than the tile has iterations to touch.
+    """
+    axes: set[int] = set()
+    constants = 1
+    for options in occupancy.dims:
+        for extent in options:
+            axes.update(extent.axes)
+        constants *= max(extent.constant for extent in options)
+    count = constants * math.prod(tile[axis] for axis in sorted(axes))
     return count * occupancy.elem_bytes
 
 
@@ -318,13 +330,13 @@ def _check_precedence(tg: TileGraph, order: list[str]) -> None:
     position = {name: pos for pos, name in enumerate(order)}
     for a, b in sorted(_statement_precedence_pairs(tg)):
         if a not in position or b not in position:
-            raise SolveResourcesError(
-                f"solve_resources: tg.deps references statement {a!r}->{b!r} "
+            raise AtomSelectionError(
+                f"select_atoms: tg.deps references statement {a!r}->{b!r} "
                 "not present in tg.units"
             )
         if position[a] >= position[b]:
-            raise SolveResourcesError(
-                f"solve_resources: tg.deps orders {a!r} before {b!r}, but tg.units "
+            raise AtomSelectionError(
+                f"select_atoms: tg.deps orders {a!r} before {b!r}, but tg.units "
                 f"sequences them as {order} -- the timeline follows that order"
             )
 
@@ -343,7 +355,7 @@ def _place_of(facts: _Facts, name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def solve_resources(
+def select_atoms(
     tg: TileGraph,
     target: Target | str | None = None,
     stage: str = "cta",
@@ -352,16 +364,16 @@ def solve_resources(
     schedule tree from ``build_schedule_tree``), which candidate atom
     granularises it, then tile every band by that statement's own extent.
 
-    Raises :class:`SolveResourcesError` naming the cause when ``tg`` is not
+    Raises :class:`AtomSelectionError` naming the cause when ``tg`` is not
     consistent with itself or the stage exposes no capacity fact.
     """
     if not tg.units:
-        raise SolveResourcesError(
-            "solve_resources: tg.units is empty -- nothing to decide resources for"
+        raise AtomSelectionError(
+            "select_atoms: tg.units is empty -- nothing to decide resources for"
         )
     if tg.tree is None:
-        raise SolveResourcesError(
-            "solve_resources: tg.tree is None -- call build_schedule_tree(tg) first"
+        raise AtomSelectionError(
+            "select_atoms: tg.tree is None -- call build_schedule_tree(tg) first"
         )
     target = default_target() if target is None else resolve_target(target)
 
@@ -419,4 +431,4 @@ def solve_resources(
     )
 
 
-__all__ = ["SolveResourcesError", "solve_resources"]
+__all__ = ["AtomSelectionError", "select_atoms"]

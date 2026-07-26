@@ -13,11 +13,6 @@ import torch
 
 from tests.models.qwen3_1_7b import common
 from tests.models.qwen3_1_7b.qwen3_1_7b_module import (
-    MB,
-    MT,
-    NB_HID,
-    NB_INT,
-    NT,
     Qwen3_1_7B,
 )
 from tilefoundry.evaluator import evaluate
@@ -131,14 +126,7 @@ def test_tiled_mlp_matches_untiled_mlp():
     with torch.no_grad():
         ref = mlp(layer.post_attention_layernorm(x))
     untiled = evaluate(Qwen3_1_7B.mlp, x, *weights, device=DEV)
-    tiled = evaluate(
-        Qwen3_1_7B.tiled_mlp,
-        x,
-        *weights,
-        torch.zeros(MB, NB_INT, MT, NT, device=DEV),
-        torch.zeros(MB, NB_HID, MT, NT, device=DEV),
-        device=DEV,
-    )
+    tiled = evaluate(Qwen3_1_7B.tiled_mlp, x, *weights, device=DEV)
 
     torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)

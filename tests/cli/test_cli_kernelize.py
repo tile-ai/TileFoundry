@@ -1,7 +1,7 @@
 """CLI tests for the `kernelize` verb -- the kernelize-path analogue of
 `test_cli.py`'s `analyze` coverage: same `load_authored_ir` source loading,
 same `#`-headed machine-parsable output style, exercised end to end
-(`extract` -> `build_schedule_tree` -> `solve_resources` -> `emit_scaffold`) over a
+(`extract` -> `build_schedule_tree` -> `select_atoms` -> `emit_scaffold`) over a
 matmul-based HIR Function (kernelize's `extract` is only real for
 matmul-containing HIR today -- see `tests/schedule/test_solve.py`'s
 own `bf16_gemm_rmsnorm`, reused here verbatim as the CLI fixture).

@@ -1,4 +1,4 @@
-"""``solve_resources(tg, target=<amx>)`` -- the resource decisions run against
+"""``select_atoms(tg, target=<amx>)`` -- the resource decisions run against
 the AMX target's own facts.
 
 The subject is the fact plumbing, not a search: the picked atom has to
@@ -22,7 +22,7 @@ from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved 
 from tilefoundry.ir.core.module import Module
 from tilefoundry.schedule import Schedule, ScheduleOptions
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
-from tilefoundry.schedule.solve_resources import SolveResourcesError, solve_resources
+from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
 from tilefoundry.target import AmxTarget
 
 _AMX_ATOM = "AMX_FMA32_16x16x1_F32"
@@ -77,7 +77,7 @@ def _scheduled(fn=f32_matmul) -> TileGraph:
 
 
 def _solve(fn=f32_matmul) -> TileGraph:
-    return solve_resources(_scheduled(fn), target=AmxTarget(), stage="core")
+    return select_atoms(_scheduled(fn), target=AmxTarget(), stage="core")
 
 
 def _mm(solved: TileGraph) -> dict:
@@ -141,8 +141,8 @@ def test_the_same_tile_graph_decides_a_different_atom_on_cuda():
     so the CTA-level decisions name no atom at all where the AMX target's NEON
     entry granularises the same statement."""
     tg = _scheduled()
-    on_amx = _mm(solve_resources(tg, target=AmxTarget(), stage="core"))
-    on_cuda = _mm(solve_resources(tg, target="cuda", stage="cta"))
+    on_amx = _mm(select_atoms(tg, target=AmxTarget(), stage="core"))
+    on_cuda = _mm(select_atoms(tg, target="cuda", stage="cta"))
     print("\n=== amx  ===", on_amx["atom"], on_amx["tile"])
     print("=== cuda ===", on_cuda["atom"], on_cuda["tile"])
 
@@ -198,8 +198,8 @@ def test_a_stage_the_target_does_not_serve_is_named():
     """The capacity and the catalogue both come off the level's own Analysis
     service, so asking for a level the AMX target does not have is reported as
     that, not as a missing fact."""
-    with pytest.raises(SolveResourcesError, match="binds no Analysis service at stage 'cta'"):
-        solve_resources(_scheduled(), target=AmxTarget(), stage="cta")
+    with pytest.raises(AtomSelectionError, match="binds no Analysis service at stage 'cta'"):
+        select_atoms(_scheduled(), target=AmxTarget(), stage="cta")
 
 
 def test_the_bound_core_schedule_service_reports_the_nominal_makespan():

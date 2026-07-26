@@ -71,9 +71,11 @@ from tilefoundry.ir.core import Call, Tuple, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
+from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.gather import Gather
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
@@ -866,6 +868,15 @@ def _walk_calls(
         if isinstance(target, (TupleGetItem, Reshape, Gather)):
             table[id(e)] = _maybe_replace_args(e, resolved_args)
             continue  # structural view, not a statement of its own
+
+        if isinstance(target, (Zeros, FullLike)):
+            # A buffer declaration, not compute: it names a fresh buffer and
+            # gives it a starting value. No statement reads or writes it here,
+            # so it needs no access relation -- the first hole that accumulates
+            # into it writes rather than adds on its opening step, the way an
+            # AMX outer product takes `init = (k == 0)`.
+            table[id(e)] = _maybe_replace_args(e, resolved_args)
+            continue
 
         resolved = _maybe_replace_args(e, resolved_args)
         table[id(e)] = resolved

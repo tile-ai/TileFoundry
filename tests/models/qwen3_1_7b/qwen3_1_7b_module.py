@@ -145,17 +145,13 @@ class Qwen3_1_7B:
         w_gate: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
         w_up: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
         w_down: Tensor[(1, INTERMEDIATE, HIDDEN), DT],
-        z_int: Tensor[(MB, NB_INT, MT, NT), DT],
-        z_hid: Tensor[(MB, NB_HID, MT, NT), DT],
     ) -> Tensor[(1, S_CAP, HIDDEN), DT]:
         # Same value as `mlp`, written as the loop nest AMX wants: every matmul
         # is [MT, KT] @ [KT, NT] over a (token-block, column-block) batch pair,
         # and the K walk is an authored `for ... in tile(...)` whose carried arg
-        # IS the accumulator buffer — no AllocTensor, the loop carry holds it.
-        # `z_int` / `z_hid` are the zero seeds for those carries (a caller-
-        # supplied buffer rather than a `zeros` op, which has no access
-        # relation). The reshape/transpose pairs only re-index: [1, S, K] ->
-        # [NK, MB, 1, MT, KT] blocks the M/K axes, [1, K, N] ->
+        # IS the accumulator buffer — `zeros` declares it, the loop carry holds
+        # it, and nothing allocates. The reshape/transpose pairs only re-index:
+        # [1, S, K] -> [NK, MB, 1, MT, KT] blocks the M/K axes, [1, K, N] ->
         # [NK, 1, NB, KT, NT] the K/N axes, and `gather(_, k, axis=0)` picks
         # iteration k's K slice of both.
         hidden_norm = tf.rms_norm(hidden, gamma_post)
@@ -177,8 +173,8 @@ class Qwen3_1_7B:
             ),
             new_shape=(NK_HID, 1, NB_INT, KT, NT),
         )
-        gate_z = z_int
-        up_z = z_int
+        gate_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype=DT)
+        up_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype=DT)
         for kh in tile(NK_HID):
             x_k = tf.gather(x_blk, kh, axis=0)
             gate_z = tf.add(gate_z, tf.matmul(x_k, tf.gather(wg_blk, kh, axis=0)))
@@ -200,7 +196,7 @@ class Qwen3_1_7B:
             ),
             new_shape=(NK_INT, 1, NB_HID, KT, NT),
         )
-        out_z = z_hid
+        out_z = tf.zeros(shape=(MB, NB_HID, MT, NT), dtype=DT)
         for ki in tile(NK_INT):
             out_z = tf.add(
                 out_z,

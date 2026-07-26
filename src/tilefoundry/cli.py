@@ -24,7 +24,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import EmitScaffoldError, HoleContract, emit_scaffold
-from tilefoundry.schedule.solve_resources import SolveResourcesError, solve_resources
+from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
 from tilefoundry.target import CudaTarget, default_target, resolve_target
 from tilefoundry.target.hardware import format_capabilities, load_hardware_spec
 
@@ -201,7 +201,7 @@ def _entry_function(ir: Module | Function) -> Function:
 
 
 def _decisions_of(solved: TileGraph) -> dict:
-    """The resource decisions `solve_resources` records on its output."""
+    """The resource decisions `select_atoms` records on its output."""
     return solved.decisions
 
 
@@ -224,7 +224,7 @@ def run_kernelize(source: str, target: str | None) -> int:
     resolved_target = resolve_target(target) if target is not None else _selected_target(ir)
 
     tg = extract(function)
-    solved = solve_resources(build_schedule_tree(tg), target=resolved_target)
+    solved = select_atoms(build_schedule_tree(tg), target=resolved_target)
     skeleton, swimlane, contracts = emit_scaffold(solved)
     decisions = _decisions_of(solved)
 
@@ -316,7 +316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (
             ExtractError,
             EmitScaffoldError,
-            SolveResourcesError,
+            AtomSelectionError,
             OSError,
             TypeError,
             ValueError,

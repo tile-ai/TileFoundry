@@ -191,7 +191,7 @@ def _call_coords(expr: "isl.ast_expr") -> tuple[str, tuple[str, ...]]:
 
 def _ring_ref(buf_name: str, coords: tuple[str, ...], ring: dict) -> str:
     """Render one buffer reference for a hole call. ``build_schedule_tree()``
-    always leaves ``tg.ring`` at ``{}``; ``solve_resources()`` is the producer,
+    always leaves ``tg.ring`` at ``{}``; ``select_atoms()`` is the producer,
     so this falls through to the bare buffer name until that has run --
     then indexes the buffer by its innermost coordinate mod ``N``."""
     n = ring.get(buf_name)
