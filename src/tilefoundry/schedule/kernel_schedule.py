@@ -1,9 +1,19 @@
-"""``compute_schedule(tg) -> TileGraph`` -- pure-isl affine scheduling
-over a ``TileGraph``'s dependences, plus the two band operations the
-resource solve needs: find the band to decide over
-(:func:`outermost_band`) and split it into a tile/point band pair
-(:func:`tile_band`). Named for isl's own ``compute_schedule`` verb, so it
-never reads as the ``Schedule`` service this package also exports.
+"""``build_schedule_tree(tg) -> TileGraph`` -- construct an isl schedule
+tree over a ``TileGraph`` directly from its topological statement order,
+plus the band operations the resource solve needs: enumerate the bands to
+decide over (:func:`schedule_bands`, :func:`band_statement`) and split one
+into a tile/point band pair (:func:`tile_band`).
+
+Nothing here solves. ``tg.units`` is already a dependence-respecting order
+(``extract`` walks the SSA DAG in postorder), so sequencing the statements
+in that order is legal by construction -- no affine solve to converge, and
+no objective smuggled in from ``isl.schedule_constraints``, whose
+dependence-distance goal is not the one this layer optimises for.
+isl is left doing what it is unrivalled at: representing the tree,
+transforming bands and generating code from them.
+
+``coincident`` is written onto each band from ``tg.parallel_dims``, the
+fact ``analysis.poly`` measures off ``domain`` + ``deps``.
 """
 from __future__ import annotations
 
@@ -19,35 +29,87 @@ class KernelScheduleError(RuntimeError):
     with a message naming what was found instead."""
 
 
-def compute_schedule(tg: TileGraph) -> TileGraph:
-    """Compute an isl schedule tree from ``tg``'s domain + auto-inferred
-    deps (``tg.deps`` seeds validity, proximity and coincidence alike) and
-    return ``tg`` with ``tree`` filled in."""
-    sc = (
-        isl.schedule_constraints.on_domain(tg.domain)
-        .set_validity(tg.deps)
-        .set_proximity(tg.deps)
-        .set_coincidence(tg.deps)
-    )
-    return dataclasses.replace(tg, tree=sc.compute_schedule())
+def _domain_sets(domain: "isl.union_set") -> dict[str, "isl.set"]:
+    sets: list["isl.set"] = []
+    domain.foreach_set(sets.append)
+    return {s.get_tuple_name(): s for s in sets}
 
 
-def outermost_band(tree: "isl.schedule") -> "isl.schedule_node_band":
-    """The first band in top-down order -- the one whose members carry the
-    ``coincident`` marks and whose extent the resource solve tiles."""
+def _statement_schedule(s: "isl.set") -> "isl.schedule":
+    """One statement's own domain under one identity band, so the band's
+    members are that statement's own dimensions, in order."""
+    sched = isl.schedule.from_domain(s.to_union_set())
+    if not s.dim(isl.dim_type.SET):
+        return sched
+    identity = isl.multi_union_pw_aff.from_union_map(s.to_union_set().identity())
+    return sched.insert_partial_schedule(identity)
+
+
+def _mark_coincident(tree: "isl.schedule", parallel: dict[str, tuple[bool, ...]]):
+    """``parallel``'s per-dimension flags written onto every band member."""
+
+    def mark(node):
+        if not isinstance(node, isl.schedule_node_band):
+            return node
+        flags = parallel.get(band_statement(node), ())
+        for member, is_parallel in enumerate(flags[: node.n_member()]):
+            if is_parallel:
+                node = node.member_set_coincident(member, 1)
+        return node
+
+    return tree.get_root().map_descendant_bottom_up(mark).get_schedule()
+
+
+def build_schedule_tree(tg: TileGraph) -> TileGraph:
+    """A sequence of one identity band per statement, in ``tg.units``
+    order, with each band's ``coincident`` members taken from
+    ``tg.parallel_dims``; returned as ``tg`` with ``tree`` filled in.
+
+    The statements are not fused into one band: their ranks differ, so a
+    padded shared band member would mean a different loop in each of them.
+    """
+    if not tg.units:
+        raise KernelScheduleError("build_schedule_tree: tg.units is empty -- nothing to schedule")
+    by_name = _domain_sets(tg.domain)
+    missing = [unit.name for unit in tg.units if unit.name not in by_name]
+    if missing:
+        raise KernelScheduleError(
+            f"build_schedule_tree: statements {missing} have no domain piece -- "
+            "tg.units and tg.domain must come from one extract() run"
+        )
+    tree = _statement_schedule(by_name[tg.units[0].name])
+    for unit in tg.units[1:]:
+        tree = tree.sequence(_statement_schedule(by_name[unit.name]))
+    return dataclasses.replace(tg, tree=_mark_coincident(tree, tg.parallel_dims))
+
+
+def schedule_bands(tree: "isl.schedule") -> tuple["isl.schedule_node_band", ...]:
+    """Every band in ``tree``, in top-down order -- which for a
+    :func:`build_schedule_tree` tree is ``tg.units`` order."""
     found: list["isl.schedule_node_band"] = []
 
     def visit(node) -> bool:
-        if not found and isinstance(node, isl.schedule_node_band):
+        if isinstance(node, isl.schedule_node_band):
             found.append(node)
-        return not found
+        return True
 
     tree.get_root().foreach_descendant_top_down(visit)
     if not found:
+        raise KernelScheduleError(f"schedule_bands: schedule tree carries no band node: {tree}")
+    return tuple(found)
+
+
+def band_statement(band: "isl.schedule_node_band") -> str:
+    """The one statement ``band`` schedules."""
+    sets: list["isl.set"] = []
+    band.get_domain().foreach_set(sets.append)
+    unique = sorted({s.get_tuple_name() for s in sets})
+    if len(unique) != 1:
         raise KernelScheduleError(
-            f"outermost_band: schedule tree carries no band node: {tree}"
+            f"band_statement: band covers statements {unique} -- every band a "
+            "sequenced schedule tree carries belongs to exactly one statement"
         )
-    return found[0]
+    return unique[0]
 
 
 def tile_band(band: "isl.schedule_node_band", sizes: tuple[int, ...]) -> "isl.schedule":
@@ -67,4 +129,28 @@ def tile_band(band: "isl.schedule_node_band", sizes: tuple[int, ...]) -> "isl.sc
     return band.tile(multi).get_schedule()
 
 
-__all__ = ["KernelScheduleError", "compute_schedule", "outermost_band", "tile_band"]
+def tile_bands(tree: "isl.schedule", sizes: dict[str, tuple[int, ...]]) -> "isl.schedule":
+    """Every band in ``tree`` tiled by its own statement's ``sizes``.
+
+    Tiling replaces one band with two, shifting every band below it in
+    top-down order, so the walk runs bottom-up over the positions instead
+    of over live nodes (an ``isl.schedule_node`` does not survive the tree
+    it was taken from being rebuilt).
+    """
+    for position in reversed(range(len(schedule_bands(tree)))):
+        band = schedule_bands(tree)[position]
+        name = band_statement(band)
+        if name not in sizes:
+            raise KernelScheduleError(f"tile_bands: no tile size decided for statement {name!r}")
+        tree = tile_band(band, sizes[name])
+    return tree
+
+
+__all__ = [
+    "KernelScheduleError",
+    "band_statement",
+    "build_schedule_tree",
+    "schedule_bands",
+    "tile_band",
+    "tile_bands",
+]

@@ -18,7 +18,7 @@ from tilefoundry import func
 from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.schedule.kernel_schedule import compute_schedule
+from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import emit_scaffold
 
 
@@ -73,7 +73,7 @@ def test_dynamic_matmul_extract_params_and_domain():
     ``TileGraph.params['seq']`` back to the exact ``DimVar``, and the M
     axis is still bounded (``dim_max_val`` a finite 126, not ``infty``,
     since ``seq``'s own half-open range ``[1, 128)`` tops out at 127).
-    ``compute_schedule()`` stays parametrised too."""
+    ``build_schedule_tree()`` stays parametrised too."""
     tg = extract(dyn_matmul)
     assert isinstance(tg, TileGraph)
 
@@ -97,15 +97,15 @@ def test_dynamic_matmul_extract_params_and_domain():
     assert int(mm_set.dim_max_val(1).num_si()) == 1
     assert int(mm_set.dim_max_val(2).num_si()) == 3
 
-    tree = compute_schedule(tg)
+    tree = build_schedule_tree(tg)
     assert "[seq]" in str(tree)
 
 
 def test_dynamic_matmul_end_to_end_emits_symbolic_loop():
-    """extract -> compute_schedule -> emit_scaffold: the M loop's upper bound
+    """extract -> build_schedule_tree -> emit_scaffold: the M loop's upper bound
     names the isl parameter directly, never a fixed integer trip count."""
     tg = extract(dyn_matmul)
-    tree = compute_schedule(tg)
+    tree = build_schedule_tree(tg)
     skeleton, _swimlane, contracts = emit_scaffold(tree)
 
     print("\n=== dynamic matmul skeleton ===")

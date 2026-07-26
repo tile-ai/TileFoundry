@@ -7,7 +7,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule import ScheduleOptions, ScheduleReport, ScheduleResult
-from tilefoundry.schedule.kernel_schedule import compute_schedule
+from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 
 # `solve_resources` measures its makespan in CP-SAT duration units; the public
 # report is in ns, and the scale that converts them has no public accessor yet.
@@ -64,7 +64,7 @@ class _AmxCoreSchedule:
                 f"{type(options).__name__}"
             )
         solved = solve_resources(
-            compute_schedule(extract(root)), self._target, options, self.stage
+            build_schedule_tree(extract(root)), self._target, options, self.stage
         )
         return ScheduleResult(module=module, report=_project_report(root, solved, self.stage))
 

@@ -27,7 +27,7 @@ from tilefoundry import func
 from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.schedule.kernel_schedule import compute_schedule, outermost_band
+from tilefoundry.schedule.kernel_schedule import band_statement, build_schedule_tree, schedule_bands
 from tilefoundry.schedule.render import emit_scaffold
 from tilefoundry.schedule.solve_resources import SolveResourcesError, solve_resources
 from tilefoundry.target import default_target
@@ -76,19 +76,13 @@ class _TunedDevice(Device):
 
 
 def _scheduled(fn=bf16_gemm_rmsnorm) -> TileGraph:
-    return compute_schedule(extract(fn))
+    return build_schedule_tree(extract(fn))
 
 
-def _bands(tree: "isl.schedule") -> list["isl.schedule_node_band"]:
-    found: list["isl.schedule_node_band"] = []
-
-    def visit(node) -> bool:
-        if isinstance(node, isl.schedule_node_band):
-            found.append(node)
-        return True
-
-    tree.get_root().foreach_descendant_top_down(visit)
-    return found
+def _bands_of(tree: "isl.schedule", stmt: str) -> list["isl.schedule_node_band"]:
+    """``stmt``'s own bands, in top-down order -- one before ``solve_resources``
+    has tiled, a tile band and a point band after."""
+    return [band for band in schedule_bands(tree) if band_statement(band) == stmt]
 
 
 def _member_values(band: "isl.schedule_node_band", domain: "isl.union_set", pos: int) -> int:
@@ -119,11 +113,11 @@ def solved_models(monkeypatch):
 
 
 def test_solve_decides_atom_tile_lane_split_and_rings_end_to_end():
-    """The happy path, decision by decision: MM takes the SM80 atom, the
-    tile is a whole multiple of that atom's shape on every band member and
-    divides the band extent, the coincident extent is split over as many
-    lanes as it has tiles, h -- the only buffer carrying a dependence --
-    gets the ring, and the whole footprint fits the capacity fact."""
+    """The happy path, decision by decision: MM takes the SM80 atom, its
+    tile is a whole multiple of that atom's shape on every own dimension and
+    divides its own extent, each statement's parallel extent is split over
+    lanes, h -- the only buffer carrying a dependence -- gets the ring, and
+    every statement's footprint fits the capacity fact."""
     solved = solve_resources(_scheduled(), target="cuda")
     assert isinstance(solved, TileGraph)
     decisions = solved.decisions
@@ -134,36 +128,39 @@ def test_solve_decides_atom_tile_lane_split_and_rings_end_to_end():
     assert decisions["status"] in ("OPTIMAL", "FEASIBLE")
     assert decisions["makespan"] > 0
 
-    extents = (64, 64, 128)
-    tile, tiles = decisions["tile"], decisions["tiles"]
-    for axis, (size, count) in enumerate(zip(tile, tiles)):
-        assert size * count == extents[axis], (axis, size, count)
-        assert size % _SM80_SHAPE[axis] == 0, (axis, size)
-
     mm = decisions["statements"]["MM"]
+    for axis, (size, count) in enumerate(zip(mm["tile"], mm["tiles"])):
+        assert size * count == (64, 64, 128)[axis], (axis, size, count)
+        assert size % _SM80_SHAPE[axis] == 0, (axis, size)
     assert mm["atom"] == _SM80_ATOM
     # A hole is one tile instance holding several atom calls, never one.
     assert mm["tile_atoms"] > 1
-    assert mm["tile_atoms"] == (tile[0] // 16) * (tile[1] // 8) * (tile[2] // 16)
+    assert mm["tile_atoms"] == math.prod(
+        size // atom for size, atom in zip(mm["tile"], _SM80_SHAPE)
+    )
 
     rn = decisions["statements"]["RN"]
     assert rn["atom"] is None  # RMSNorm: no V1 atom candidate
+    assert rn["tile"][0] * rn["tiles"][0] == 64
     assert rn["start"] >= mm["end"]  # MM -> RN is a real RAW dependence on h
 
-    # place is derived from the band's coincident members, not solved.
-    assert decisions["coincident"] == (0,)
-    assert mm["place"] == "coincident[0]" and rn["place"] == "coincident[0]"
-    assert decisions["lane_split"] == builtins.min(decisions["lanes"], tiles[0])
-    assert mm["lane_rounds"] == math.ceil(tiles[0] / decisions["lane_split"])
+    # place is derived from parallel_dims, not solved: MM accumulates over k.
+    assert mm["coincident"] == (0, 1) and rn["coincident"] == (0,)
+    assert mm["place"] == "coincident[0,1]" and rn["place"] == "coincident[0]"
+    assert 1 <= decisions["lane_split"] <= decisions["lanes"]
+    for stmt in (mm, rn):
+        parallel = math.prod(stmt["tiles"][d] for d in stmt["coincident"])
+        assert stmt["lane_rounds"] == math.ceil(parallel / decisions["lane_split"])
 
-    # h carries MM's k accumulation and MM -> RN; nothing else carries one,
-    # and no atom is async, so nothing else may buy a slot.
+    # h carries MM's k accumulation; nothing else carries one, and no atom is
+    # async, so nothing else may buy a slot.
     assert solved.ring["h"] >= 2
     assert {buf: n for buf, n in solved.ring.items() if n > 1} == {"h": solved.ring["h"]}
     assert decisions["ring"] == solved.ring
 
-    total = builtins.sum(decisions["footprint_bytes"].values())
-    assert total <= decisions["capacity_bytes"], (total, decisions["capacity_bytes"])
+    for name, stmt in decisions["statements"].items():
+        total = builtins.sum(stmt["footprint_bytes"].values())
+        assert total <= decisions["capacity_bytes"], (name, total)
 
     skeleton, _swimlane, _contracts = emit_scaffold(solved)
     print("\n=== skeleton ===")
@@ -171,54 +168,57 @@ def test_solve_decides_atom_tile_lane_split_and_rings_end_to_end():
     assert f"% {solved.ring['h']}" in skeleton.text
 
 
-def test_tiling_the_band_yields_a_tile_and_point_pair_at_atom_granularity():
-    """AC-3-2 read off the returned tree, not off the decisions: the one
-    band ``compute_schedule`` produced becomes two nested bands, and each
-    tile band member's own stride is a whole multiple of the atom shape."""
+def test_tiling_the_bands_yields_a_tile_and_point_pair_at_atom_granularity():
+    """AC-3-2 read off the returned tree, not off the decisions: each band
+    ``build_schedule_tree`` produced becomes two nested bands, and each tile
+    band member's own stride is a whole multiple of the atom shape."""
     tg = _scheduled()
-    assert len(_bands(tg.tree)) == 1
+    assert len(schedule_bands(tg.tree)) == len(tg.units) == 2
 
     solved = solve_resources(tg, target="cuda")
-    bands = _bands(solved.tree)
     print("\n=== tiled schedule tree ===")
     print(solved.tree)
+    assert len(schedule_bands(solved.tree)) == 4
 
-    assert len(bands) == 2, f"expected a tile band and a point band, got {len(bands)}"
-    tile_band_node, point_band_node = bands
-    assert point_band_node.get_ancestor_child_position(tile_band_node) == 0
-    assert tile_band_node.n_member() == point_band_node.n_member() == 3
+    for stmt, extents, atom in (("MM", (64, 64, 128), _SM80_SHAPE), ("RN", (64,), None)):
+        bands = _bands_of(solved.tree, stmt)
+        assert len(bands) == 2, f"{stmt}: expected a tile and a point band, got {len(bands)}"
+        tile_band_node, point_band_node = bands
+        assert point_band_node.get_ancestor_child_position(tile_band_node) == 0
+        assert tile_band_node.n_member() == point_band_node.n_member() == len(extents)
 
-    extents = (64, 64, 128)
-    for pos in range(3):
-        n_tiles = _member_values(tile_band_node, solved.domain, pos)
-        stride = extents[pos] // n_tiles
-        assert stride == solved.decisions["tile"][pos], (pos, stride)
-        assert stride % _SM80_SHAPE[pos] == 0, (pos, stride, _SM80_SHAPE[pos])
-        assert _member_values(point_band_node, solved.domain, pos) == stride
+        for pos in range(len(extents)):
+            n_tiles = _member_values(tile_band_node, solved.domain, pos)
+            stride = extents[pos] // n_tiles
+            assert stride == solved.decisions["statements"][stmt]["tile"][pos], (stmt, pos)
+            assert _member_values(point_band_node, solved.domain, pos) == stride
+            if atom is not None:
+                assert stride % atom[pos] == 0, (stmt, pos, stride, atom[pos])
 
 
 def test_a_capacity_too_small_for_one_atom_tile_names_capacity_and_bytes():
     """AC-3-3: the smallest tile any solution can take is one atom on every
-    band member; a capacity below that footprint is reported with both
-    numbers, not as a bare infeasibility."""
-    target = CudaTarget(device=_TunedDevice(shared_memory_per_cta_bytes=1024))
+    dimension of the statement; a capacity below that footprint is reported
+    with the statement and both numbers, not as a bare infeasibility."""
+    target = CudaTarget(device=_TunedDevice(shared_memory_per_cta_bytes=512))
     with pytest.raises(SolveResourcesError) as error:
         solve_resources(_scheduled(), target=target)
 
     message = str(error.value)
     print("\n=== capacity error ===")
     print(message)
-    assert "capacity 1024 bytes" in message
-    # min tile (16, 8, 16): x 512 + w 256 + h 2048 + weight 256 + y 2048.
-    assert "requests 5120 bytes" in message
-    assert "h=2048" in message
+    assert "capacity 512 bytes" in message
+    assert "of statement 'MM'" in message
+    # MM's own min tile (16, 8, 16): x 512 + w 256 + h 256.
+    assert "requests 1024 bytes" in message
+    assert "x=512" in message
 
 
 def test_an_unsatisfiable_ring_lower_bound_reports_its_cause():
     """A capacity that holds one atom tile but not the ring depth the
-    dependence distance forces comes back naming the smallest tile, its
-    bytes and the carried distances -- V1 reports, it never reschedules."""
-    target = CudaTarget(device=_TunedDevice(shared_memory_per_cta_bytes=6000))
+    dependence distance forces comes back naming each statement's smallest
+    footprint and the carried distances -- V1 reports, it never reschedules."""
+    target = CudaTarget(device=_TunedDevice(shared_memory_per_cta_bytes=1024))
     with pytest.raises(SolveResourcesError) as error:
         solve_resources(_scheduled(), target=target)
 
@@ -226,24 +226,25 @@ def test_an_unsatisfiable_ring_lower_bound_reports_its_cause():
     print("\n=== infeasible cause ===")
     print(message)
     assert "INFEASIBLE" in message
-    assert "5120 of 6000 capacity bytes" in message
-    assert "'h': (0, 63, 1)" in message
+    assert "capacity 1024 bytes" in message
+    assert "'MM': 1024" in message
+    assert "'MM': {'h': (0, 0, 1)}" in message
 
 
 def test_ring_depth_is_the_carried_tile_distance_plus_one():
-    """isl reports h carried at distance 63 along band member 1 (MM writes
-    ``h[i, j]`` at time ``(i, j, k)``, RN reads the whole row at ``(i, 63,
-    127)``) and 1 along member 2 (the k accumulation). The ring must hold one
-    more slot than the widest of those distances measured in tiles, and the
-    objective must not buy a slot beyond it."""
+    """h carries MM's k accumulation at distance 1 along MM's own last
+    dimension, and nothing else: MM -> RN crosses statements, which the
+    sequenced tree orders outright rather than through a ring. The ring holds
+    one more slot than that distance measured in tiles, and the objective
+    must not buy a slot beyond it."""
     solved = solve_resources(_scheduled(), target="cuda")
-    tile = solved.decisions["tile"]
-    distance = builtins.max(math.ceil(63 / tile[1]), math.ceil(1 / tile[2]))
-    print("\n=== tile ===", tile, "carried tiles", distance, "ring", solved.ring)
-    assert solved.ring["h"] == distance + 1
+    tile = solved.decisions["statements"]["MM"]["tile"]
+    distance = math.ceil(1 / tile[2])
+    print("\n=== MM tile ===", tile, "carried tiles", distance, "ring", solved.ring)
+    assert solved.ring["h"] == distance + 1 == 2
 
-    # The same bound is what makes a capacity of 6000 infeasible even though
-    # one atom tile only needs 5120: see the previous test.
+    # The same bound is what makes a capacity of 1024 infeasible even though
+    # MM's own smallest tile only needs 1024: see the previous test.
 
 
 def test_is_async_decides_whether_a_read_buffer_may_ring_at_all(monkeypatch):
@@ -284,7 +285,7 @@ def test_a_load_bound_device_buys_more_than_two_ring_slots(monkeypatch):
     )
     slow = CudaTarget(device=_TunedDevice(hbm_bandwidth_bytes_per_second=100_000_000_000))
     solved = solve_resources(_scheduled(), target=slow)
-    print("\n=== load-bound ===", solved.decisions["tile"], solved.ring)
+    print("\n=== load-bound ===", solved.ring)
     print(solved.decisions["statements"]["MM"])
 
     assert builtins.max(solved.ring.values()) > 2
@@ -294,57 +295,59 @@ def test_a_load_bound_device_buys_more_than_two_ring_slots(monkeypatch):
 
 
 def test_the_lane_split_never_claims_more_lanes_than_the_hardware_has():
-    """The coincident extent is split across lanes, so a device with fewer
-    lanes than coincident tiles has to run several rounds per lane."""
+    """Each statement's parallel extent is split across lanes, so a device
+    with fewer lanes than parallel tiles has to run several rounds per lane."""
     solved = solve_resources(_scheduled(), target=CudaTarget(device=_TunedDevice(sm_count=2)))
     decisions = solved.decisions
-    print("\n=== two lanes ===", decisions["tile"], decisions["tiles"], decisions["lane_split"])
+    print("\n=== two lanes ===", decisions["lane_split"])
     print(decisions["statements"]["MM"])
 
     assert decisions["lanes"] == 2
     assert decisions["lane_split"] == 2
-    parallel = decisions["tiles"][0]
     for name in ("MM", "RN"):
-        rounds = decisions["statements"][name]["lane_rounds"]
-        assert rounds == math.ceil(parallel / 2), (name, rounds, parallel)
+        stmt = decisions["statements"][name]
+        parallel = math.prod(stmt["tiles"][d] for d in stmt["coincident"])
+        assert stmt["lane_rounds"] == math.ceil(parallel / 2), (name, parallel)
 
 
 def test_the_model_footprint_matches_the_footprint_isl_counts():
     """The capacity constraint is fed a product of tile extents; here it is
-    checked against isl's own count of the elements one tile instance
-    touches, buffer by buffer."""
+    checked against isl's own count of the elements one tile instance of each
+    statement touches, buffer by buffer. Every band is its statement's own
+    identity, so the box is written straight in the statement's coordinates."""
     solved = solve_resources(_scheduled(), target="cuda")
-    tile = solved.decisions["tile"]
-    band = outermost_band(compute_schedule(extract(bf16_gemm_rmsnorm)).tree)
-    time_map = band.get_partial_schedule_union_map()
-
-    origin = tuple(64 - tile[0] if i == 0 else 0 for i in range(3))
-    dims = ", ".join(f"i{i}" for i in range(3))
-    bounds = " and ".join(
-        f"{origin[i]} <= i{i} <= {origin[i] + tile[i] - 1}" for i in range(3)
-    )
-    box = isl.set(f"{{ [{dims}] : {bounds} }}")
-
     elem_bytes = {"x": 2, "w": 2, "h": 2, "y": 2, "weight": 4}
-    exact: dict[str, int] = {}
-    for um in (solved.reads, solved.writes):
-        maps: list["isl.map"] = []
-        um.foreach_map(maps.append)
-        for m in maps:
-            buf = m.get_tuple_name(isl.dim_type.OUT)
-            timed: list["isl.map"] = []
-            m.apply_domain(time_map).foreach_map(timed.append)
-            touched = timed[0].intersect_domain(box).range()
-            previous = exact.get(buf)
-            exact[buf] = touched if previous is None else previous.union(touched)
 
-    counted = {
-        buf: int(s.count_val().num_si()) * elem_bytes[buf] * solved.ring[buf]
-        for buf, s in exact.items()
-    }
-    print("\n=== model  ===", solved.decisions["footprint_bytes"])
-    print("=== isl    ===", counted)
-    assert counted == solved.decisions["footprint_bytes"]
+    for stmt, extents in (("MM", (64, 64, 128)), ("RN", (64,))):
+        tile = solved.decisions["statements"][stmt]["tile"]
+        rank = len(extents)
+        # A corner box: the last tile along dimension 0, the first elsewhere.
+        origin = tuple(extents[0] - tile[0] if d == 0 else 0 for d in range(rank))
+        dims = ", ".join(f"i{d}" for d in range(rank))
+        bounds = " and ".join(
+            f"{origin[d]} <= i{d} <= {origin[d] + tile[d] - 1}" for d in range(rank)
+        )
+        box = isl.set(f"{{ [{dims}] : {bounds} }}").set_tuple_name(stmt)
+
+        exact: dict[str, "isl.set"] = {}
+        for um in (solved.reads, solved.writes):
+            maps: list["isl.map"] = []
+            um.foreach_map(maps.append)
+            for m in maps:
+                if m.get_tuple_name(isl.dim_type.IN) != stmt:
+                    continue
+                buf = m.get_tuple_name(isl.dim_type.OUT)
+                touched = m.intersect_domain(box).range()
+                previous = exact.get(buf)
+                exact[buf] = touched if previous is None else previous.union(touched)
+
+        counted = {
+            buf: int(s.count_val().num_si()) * elem_bytes[buf] * solved.ring[buf]
+            for buf, s in exact.items()
+        }
+        print(f"\n=== {stmt} model ===", solved.decisions["statements"][stmt]["footprint_bytes"])
+        print(f"=== {stmt} isl   ===", counted)
+        assert counted == solved.decisions["statements"][stmt]["footprint_bytes"]
 
 
 def test_no_candidate_statements_still_solve_with_a_default_duration():
@@ -354,17 +357,19 @@ def test_no_candidate_statements_still_solve_with_a_default_duration():
     but the tile, lane split and ring decisions still have to come out."""
     solved = solve_resources(_scheduled(f32_gemm_rmsnorm), target="cuda")
     decisions = solved.decisions
-    print("\n=== f32 decisions ===", decisions["tile"], decisions["lane_split"], solved.ring)
+    mm, rn = decisions["statements"]["MM"], decisions["statements"]["RN"]
+    print("\n=== f32 decisions ===", mm["tile"], rn["tile"], decisions["lane_split"], solved.ring)
 
     assert decisions["status"] in ("OPTIMAL", "FEASIBLE")
-    assert decisions["statements"]["MM"]["atom"] is None
-    assert decisions["statements"]["RN"]["atom"] is None
-    assert decisions["statements"]["MM"]["tile_atoms"] is None
+    assert mm["atom"] is None and rn["atom"] is None
+    assert mm["tile_atoms"] is None
     assert decisions["makespan"] > 0
     for axis, extent in enumerate((64, 64, 128)):
-        assert decisions["tile"][axis] * decisions["tiles"][axis] == extent
+        assert mm["tile"][axis] * mm["tiles"][axis] == extent
     assert solved.ring["h"] >= 2
-    assert builtins.sum(decisions["footprint_bytes"].values()) <= decisions["capacity_bytes"]
+    for name, stmt in decisions["statements"].items():
+        total = builtins.sum(stmt["footprint_bytes"].values())
+        assert total <= decisions["capacity_bytes"], (name, total)
 
 
 def test_default_target_resolution_matches_explicit_cuda_target():
@@ -375,7 +380,10 @@ def test_default_target_resolution_matches_explicit_cuda_target():
 
     assert implicit.decisions["statements"]["MM"]["atom"] == _SM80_ATOM
     assert explicit.decisions["statements"]["MM"]["atom"] == _SM80_ATOM
-    assert implicit.decisions["tile"] == explicit.decisions["tile"]
+    assert (
+        implicit.decisions["statements"]["MM"]["tile"]
+        == explicit.decisions["statements"]["MM"]["tile"]
+    )
 
 
 def test_empty_tile_graph_raises_clear_error():
@@ -387,9 +395,18 @@ def test_empty_tile_graph_raises_clear_error():
         solve_resources(empty, target="cuda")
 
 
-def test_solving_before_compute_schedule_raises_clear_error():
-    with pytest.raises(SolveResourcesError, match="compute_schedule"):
+def test_solving_before_build_schedule_tree_raises_clear_error():
+    with pytest.raises(SolveResourcesError, match="build_schedule_tree"):
         solve_resources(extract(bf16_gemm_rmsnorm), target="cuda")
+
+
+def test_resolving_an_already_tiled_tree_raises_clear_error():
+    """``solve_resources`` decides over the untiled tree; handed its own
+    output it names the band count rather than silently deciding over tile
+    coordinates."""
+    solved = solve_resources(_scheduled(), target="cuda")
+    with pytest.raises(SolveResourcesError, match="band"):
+        solve_resources(solved, target="cuda")
 
 
 # ---------------------------------------------------------------------------

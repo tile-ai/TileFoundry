@@ -1,7 +1,7 @@
 """``extract(hir) -> TileGraph`` -- lift an HIR ``Function`` body into a
 polyhedral (isl) representation: one statement per compute op, at element
-granularity, with reads/writes/deps ready to feed
-``isl.schedule_constraints`` (see ``schedule/kernel_schedule.py``).
+granularity, with reads/writes/deps ready for the schedule layer to build a
+tree over (see ``schedule/kernel_schedule.py``).
 
 Algorithm (docstring mirrors the design so the "why" travels with the code):
 
@@ -42,7 +42,9 @@ Algorithm (docstring mirrors the design so the "why" travels with the code):
    ``isl.union_set``/``isl.union_map`` pair, then auto-infer ``deps`` by
    feeding an initial (topological-postorder) execution order into
    ``isl.union_access_info(...).compute_flow()`` -- the exact technique
-   validated in ``m1_deps_probe.py``.
+   validated in ``m1_deps_probe.py``. ``parallel_dims`` then falls out of
+   ``domain`` + ``deps`` alone (``_parallel_dims``), so which dimensions are
+   dependence-free is measured here rather than asked of a scheduler.
 """
 from __future__ import annotations
 
@@ -89,8 +91,8 @@ class TileGraph:
     ``domain``/``reads``/``writes`` are unions of per-``TileUnit`` pieces,
     one tuple name per producing statement (domain/reads/writes) or
     accessed buffer (reads/writes range) -- a *union* domain, not the
-    single ``isl.set`` ``docs/spec/tilegraph.md`` sketches, because
-    ``isl.schedule_constraints`` needs one named tuple per statement.
+    single ``isl.set`` ``docs/spec/tilegraph.md`` sketches, because the
+    schedule tree needs one named tuple per statement.
     ``deps`` is the auto-inferred RAW must-dependence relation between
     statement instances (see :func:`extract`). ``params`` resolves any
     dynamic-shape isl parameter name appearing in ``domain`` back to its
@@ -98,7 +100,10 @@ class TileGraph:
 
     ``buffer_dtypes`` resolves each buffer tuple name back to the HIR
     ``DType`` its elements carry, so a byte count over an access relation
-    needs no second walk of the HIR.
+    needs no second walk of the HIR. ``parallel_dims`` is per statement,
+    per own domain dimension, whether that dimension carries no dependence
+    (see :func:`_parallel_dims`) -- a measured fact, not a scheduler's
+    output, so the schedule layer reads it rather than deriving it.
 
     ``tree``/``ring``/``decisions`` start empty and fill in as the same
     object flows through the schedule layer's own stages. Both dict
@@ -113,6 +118,7 @@ class TileGraph:
     units: tuple[TileUnit, ...]
     params: dict
     buffer_dtypes: dict = field(default_factory=dict)
+    parallel_dims: dict = field(default_factory=dict)
     tree: "isl.schedule | None" = None
     ring: dict = field(default_factory=dict)
     decisions: dict | None = None
@@ -437,8 +443,8 @@ def _extract_statement(call: Call, stmt_name: str, namer, prefix: str) -> list[_
 
 def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
     """A total execution order sufficient to seed ``compute_flow`` --
-    *not* the final schedule (``schedule_tree.py`` computes that for
-    real). Encodes exactly m1_deps_probe.py step 4's two ingredients,
+    *not* the final schedule (``kernel_schedule.py`` builds that).
+    Encodes exactly m1_deps_probe.py step 4's two ingredients,
     concatenated as ``[stage, *own_dims, 0-pad]``: postorder call index
     as a leading stage tie-break, then each statement's own iteration
     dims in declared order. m1_deps_probe.py instead interleaves the
@@ -462,6 +468,35 @@ def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
         m = isl.map(f"{{ {src} -> {dst} }}").set_tuple_name(isl.dim_type.IN, acc.name)
         sched = sched.union(m.intersect_domain(acc.domain))
     return sched
+
+
+def _parallel_dims(domain: "isl.union_set", deps: "isl.union_map") -> dict[str, tuple[bool, ...]]:
+    """Per statement, per own domain dimension, whether that dimension is
+    free of dependence -- the fact ``coincident`` names in isl.
+
+    Only a statement's *self*-dependence can constrain its own loop
+    dimensions: the schedule layer sequences statements, so every
+    cross-statement dependence is already satisfied by that order. A
+    dimension is parallel when every self-dependence has distance 0 there
+    (a matmul's k, which accumulates, is the one that is not).
+    """
+    sets: list["isl.set"] = []
+    domain.foreach_set(sets.append)
+    out: dict[str, tuple[bool, ...]] = {}
+    for s in sets:
+        own = s.to_union_set()
+        rank = s.dim(isl.dim_type.SET)
+        self_deps = deps.intersect_domain(own).intersect_range(own)
+        if self_deps.is_empty():
+            out[s.get_tuple_name()] = (True,) * rank
+            continue
+        pieces: list["isl.set"] = []
+        self_deps.deltas().foreach_set(pieces.append)
+        out[s.get_tuple_name()] = tuple(
+            all(p.dim_min_val(d).is_zero() and p.dim_max_val(d).is_zero() for p in pieces)
+            for d in range(rank)
+        )
+    return out
 
 
 def _resolve(expr, table: dict[int, object]):
@@ -661,7 +696,7 @@ def extract(hir: Function) -> TileGraph:
     units = tuple(TileUnit(name=acc.name, op=acc.op) for acc in accesses)
     return TileGraph(
         domain=domain, deps=deps, reads=reads, writes=writes, units=units, params=params,
-        buffer_dtypes=buffer_dtypes,
+        buffer_dtypes=buffer_dtypes, parallel_dims=_parallel_dims(domain, deps),
     )
 
 

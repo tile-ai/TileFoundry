@@ -1,44 +1,13 @@
-"""``emit_scaffold(tg) -> (Skeleton, Swimlane, list[HoleContract])`` --
-turn ``tg``'s isl schedule tree (``tg.tree``, filled in by
-``compute_schedule()``) into something an agent (or a human) can fill in:
-a holed C-like loop skeleton, a human-readable Mermaid swimlane, and one
-``HoleContract`` per statement. ``TileGraph`` carries the model
-(``reads``/``writes``/``units``) and the schedule tree together, so this
-is the single argument the whole render needs.
+"""Render ``tg``'s schedule tree into a holed C-like skeleton, a Mermaid
+swimlane, and one hole per statement, via ``isl.ast_build`` codegen.
 
-BufferAccess reuse note (flagged): ``src/tilefoundry/ir/tir/memory/
-tensor_view.py`` already defines a ``TensorView``, but it is a TIR ``Op``
--- constructed via ``ParamDef``/``register_op``/``register_typeinfer`` and
-driven through the HIR->TIR pass machinery, wrapping a real memory
-``Expr`` plus a ``Layout``/``ShardLayout``. This render step lives
-*alongside* that path, never importing it; and structurally, ``TileGraph``
-does not expose a buffer-name -> HIR-value table (that mapping is private
-to ``analysis.poly``'s own namer), so there is no memory ``Expr`` here to
-wrap even if we did import it. What a ``HoleContract`` actually needs -- one
-buffer's polyhedral access footprint at one statement, i.e. an
-``isl.map`` from statement coordinates to buffer elements -- is a
-different concept from a TIR slice/layout view besides sharing a name.
-V1 therefore falls back to a minimal local ``BufferAccess`` dataclass
-(``tensor_name``/``index_map``/``dtype``), with ``dtype`` best-effort
-recovered from HIR type info (see ``_dtype_table``).
-
-Skeleton rendering note: the validated hook probe
-(``m2_hook_probe.py``) flagged ``isl.id.alloc`` as the wrong constructor.
-The right one is the positional ``isl.id(name, user)`` (confirmed by
-probing ``dir(isl.id)``/``help``); but probing further showed
-``ast_node.set_annotation``/``get_annotation`` round-tripping through
-``ast_build.node_from`` is unreliable once a non-``None`` Python ``user``
-payload is attached (``ann.name()`` raises ``AttributeError`` on the
-walked-back node, even though the same id's ``.name()`` works fine right
-after construction) -- so this module does not use isl node annotations at
-all. Instead ``at_each_domain`` reads each statement call's structure
-natively via ``ast_expr_op_call.op_arg()``/``op_n_arg()`` (statement name +
-coordinate sub-exprs, each rendered with their own ``to_C_str()`` --
-never hand-parsed from text), and the *substitution* of the naked call for
-the decorated hole call is a plain, cursor-ordered string splice against
-``ast.to_C_str()``'s final text (isl's own printer has no notion of a
-custom call-with-comments-and-extra-args shape, so there is no native isl
-API for that part regardless of the annotation question).
+``BufferAccess`` is local rather than the TIR ``TensorView`` Op: this needs
+a buffer's polyhedral footprint at one statement (an ``isl.map``), not a
+memory ``Expr`` plus ``Layout``. Two landmines: isl node annotations do not
+round-trip through ``ast_build.node_from`` once a Python ``user`` payload is
+attached, so ``at_each_domain`` reads calls natively; and isl's printer
+cannot emit a decorated hole call, so that one substitution is a string
+splice over the final text.
 """
 from __future__ import annotations
 
@@ -220,7 +189,7 @@ def _call_coords(expr: "isl.ast_expr") -> tuple[str, tuple[str, ...]]:
 
 
 def _ring_ref(buf_name: str, coords: tuple[str, ...], ring: dict) -> str:
-    """Render one buffer reference for a hole call. ``compute_schedule()``
+    """Render one buffer reference for a hole call. ``build_schedule_tree()``
     always leaves ``tg.ring`` at ``{}``; ``solve_resources()`` is the producer,
     so this falls through to the bare buffer name until that has run --
     then indexes the buffer by its innermost coordinate mod ``N``."""
@@ -275,7 +244,7 @@ def _build_skeleton(
     occurrence only -- one contract per *statement*, not per call site)."""
     if tg.tree is None:
         raise EmitScaffoldError(
-            "emit_scaffold: tg.tree is None -- call compute_schedule(tg) "
+            "emit_scaffold: tg.tree is None -- call build_schedule_tree(tg) "
             "before emit_scaffold(tg)"
         )
     units_by_name = {u.name: u for u in tg.units}
@@ -293,7 +262,7 @@ def _build_skeleton(
                 raise EmitScaffoldError(
                     f"emit_scaffold: schedule tree statement {stmt_name!r} has no "
                     "matching TileUnit in tg.units -- tg.tree and tg.units must come "
-                    "from the same extract()/compute_schedule() pipeline run"
+                    "from the same extract()/build_schedule_tree() pipeline run"
                 )
             read_by_buf = _by_buf(tg.reads, stmt_name)
             write_by_buf = _by_buf(tg.writes, stmt_name)
@@ -416,7 +385,7 @@ def _build_swimlane(tg: TileGraph, contracts: dict[str, HoleContract]) -> Swimla
 
 def emit_scaffold(tg: TileGraph) -> tuple[Skeleton, Swimlane, list[HoleContract]]:
     """Render ``tg`` (carrying its isl schedule tree, from
-    ``compute_schedule(tg)``) into a holed skeleton + a human swimlane + one
+    ``build_schedule_tree(tg)``) into a holed skeleton + a human swimlane + one
     ``HoleContract`` per statement. See the module docstring for the
     ``BufferAccess``-reuse decision."""
     dtype_table = _dtype_table(tg.units)

@@ -1,14 +1,20 @@
 """``solve_resources(tg, target, options, stage) -> TileGraph`` -- the
 CP-SAT resource decision over one scheduled ``TileGraph``.
 
-Decided together: per statement one atom, per band member a tile size that
-is a whole multiple of the picked atom's own extent, one split of the
-band's coincident extent across lanes, and per buffer a ring depth. The
-objective is a deps-chain makespan whose per-tile stage time is
-``compute + load - hidden``, so a deeper ring buys load overlap and a
-bigger tile amortises the load, both paid for against the capacity fact.
-Parallel placement is not solved: it is read off the band's ``coincident``
-members. Returns ``tg`` with the tiled tree, ``ring`` and ``decisions``.
+Decided together: per statement one atom and one tile size per own
+dimension that is a whole multiple of the picked atom's extent there, one
+split of every statement's parallel extent across lanes, and per buffer a
+ring depth. The objective is a deps-chain makespan whose per-tile stage
+time is ``compute + load - hidden``, so a deeper ring buys load overlap
+and a bigger tile amortises the load, both paid for against the capacity
+fact. Parallel placement is not solved: it is read off
+``tg.parallel_dims``. Returns ``tg`` with the tiled tree, ``ring`` and
+``decisions``.
+
+``build_schedule_tree`` gives each statement its own identity band, so a
+band member *is* a domain dimension of the one statement under it -- every
+fact and every variable below is per statement, per own dimension, with no
+band-member-to-domain-dimension mapping in between.
 """
 from __future__ import annotations
 
@@ -33,7 +39,7 @@ from tilefoundry.analysis.poly import (
 from tilefoundry.target import Target, default_target, resolve_target
 
 from . import ScheduleOptions
-from .kernel_schedule import outermost_band, tile_band
+from .kernel_schedule import band_statement, schedule_bands, tile_bands
 
 # ns -> integer CP-SAT duration units. An atom's own roofline estimate is
 # floored at 1.0ns; a bare round(ns) would flatten every candidate to the
@@ -74,22 +80,20 @@ class _Occupancy:
 @dataclass(frozen=True)
 class _Facts:
     """Everything the CP-SAT model reads, all of it measured before any
-    variable exists. ``dim_of[s][b]`` is the domain dimension of statement
-    ``s`` that band member ``b`` travels with (``-1`` when constant);
-    ``axes_of[s]`` is the members it varies in."""
+    variable exists. Every per-statement field is indexed by statement name
+    and, where it has a per-dimension shape, by that statement's own
+    dimension. ``held``/``distances`` are then per statement per buffer;
+    ``coincident[s]`` is the dimensions of ``s`` that carry no dependence."""
 
-    n_dims: int
-    extents: tuple[int, ...]
-    min_tile: tuple[int, ...]
-    coincident: tuple[int, ...]
-    axes_of: dict[str, tuple[int, ...]]
-    dim_of: dict[str, tuple[int, ...]]
+    extents: dict[str, tuple[int, ...]]
+    min_tile: dict[str, tuple[int, ...]]
+    coincident: dict[str, tuple[int, ...]]
     candidates: dict[str, tuple[AtomFact, ...]]
-    held: dict[str, _Occupancy]
+    held: dict[str, dict[str, _Occupancy]]
     loaded: dict[str, tuple[_Occupancy, ...]]
     reads_of: dict[str, tuple[str, ...]]
     readers_of: dict[str, tuple[str, ...]]
-    distances: dict[str, tuple[int, ...]]
+    distances: dict[str, dict[str, tuple[int, ...]]]
     capacity: int
     bandwidth: int
     lanes: int
@@ -140,17 +144,16 @@ def _lane_count(target: Target) -> int:
     return _LANES_FALLBACK
 
 
-def _atom_extents(dim_of: tuple[int, ...], axes: tuple[int, ...], name: str, fact: AtomFact):
-    """The atom's own extent per band member: its shape indexed by the
-    domain dimension that member travels with."""
-    rank = max(dim_of) + 1
+def _atom_shape(name: str, rank: int, fact: AtomFact) -> tuple[int, ...]:
+    """The atom's own extent per dimension of statement ``name`` -- its own
+    shape, which an identity band matches dimension for dimension."""
     if len(fact.shape) != rank:
         raise SolveResourcesError(
             f"solve_resources: statement {name!r} spans {rank} dimension(s) but "
             f"its candidate atom shape {fact.shape} has {len(fact.shape)} -- an "
             "atom can only granularise a domain of its own rank"
         )
-    return {b: fact.shape[dim_of[b]] for b in axes}
+    return tuple(fact.shape)
 
 
 def _merge(footprints: tuple[AccessFootprint, ...], key) -> dict[object, dict[str, _Occupancy]]:
@@ -180,33 +183,81 @@ def _merge(footprints: tuple[AccessFootprint, ...], key) -> dict[object, dict[st
     return merged
 
 
-def _collect_facts(tg: TileGraph, target: Target, analysis: Analysis) -> _Facts:
-    band = outermost_band(tg.tree)
-    time_map = band.get_partial_schedule_union_map()
-    n_dims = band.n_member()
-    extents = time_extents(tg, time_map)
-    dim_of = statement_time_dims(tg, time_map)
-    names = {unit.name for unit in tg.units}
-    if set(dim_of) != names:
+def _min_tile(name: str, rank: int, candidates: tuple[AtomFact, ...]) -> tuple[int, ...]:
+    """The smallest tile any solution can take for one statement: a whole
+    multiple of its chosen atom's extent, so per dimension the smallest of
+    its candidates' extents there (1 when it has no candidate)."""
+    if not candidates:
+        return (1,) * rank
+    shapes = [_atom_shape(name, rank, c) for c in candidates]
+    return tuple(min(shape[d] for shape in shapes) for d in range(rank))
+
+
+def _band_of(tg: TileGraph) -> dict[str, "isl.schedule_node_band"]:
+    """One band per statement, keyed by the statement it schedules."""
+    found = schedule_bands(tg.tree)
+    bands = {band_statement(band): band for band in found}
+    missing = sorted(unit.name for unit in tg.units if unit.name not in bands)
+    if missing:
         raise SolveResourcesError(
-            f"solve_resources: band covers statements {sorted(dim_of)} but "
-            f"tg.units names {sorted(names)} -- both must come from one run"
+            f"solve_resources: statements {missing} have no band in tg.tree "
+            f"(it carries {sorted(bands)}) -- both must come from one run"
         )
-    axes_of = {s: tuple(b for b in range(n_dims) if row[b] >= 0) for s, row in dim_of.items()}
-    candidates = {u.name: _candidates_for(u, analysis) for u in tg.units}
+    if len(found) != len(tg.units):
+        raise SolveResourcesError(
+            f"solve_resources: tg.tree carries {len(found)} band(s) for "
+            f"{len(tg.units)} statement(s) -- an already tiled tree has two, and "
+            "resources are decided over the untiled one"
+        )
+    return bands
 
-    # Any feasible tile is a whole multiple of every statement's chosen atom
-    # extent, so the smallest one is per member the largest of the per
-    # statement smallest candidate extents.
-    min_tile = [1] * n_dims
-    for name, cands in candidates.items():
-        per_atom = [_atom_extents(dim_of[name], axes_of[name], name, c) for c in cands]
-        if not per_atom:
-            continue
-        for b in axes_of[name]:
-            min_tile[b] = max(min_tile[b], min(extents_of[b] for extents_of in per_atom))
 
-    footprints = access_footprints(tg, time_map)
+def _is_own_identity(dims: tuple[int, ...], extents: tuple[int, ...]) -> bool:
+    """Whether a band schedules its statement's own dimensions, in order.
+    A one-point dimension reads as constant (isl sees ``d = 0``, not ``d``),
+    which is the identity there too."""
+    return all(
+        dim == pos or (dim == -1 and extents[pos] == 1) for pos, dim in enumerate(dims)
+    )
+
+
+def _collect_facts(tg: TileGraph, target: Target, analysis: Analysis) -> _Facts:
+    bands = _band_of(tg)
+    candidates = {unit.name: _candidates_for(unit, analysis) for unit in tg.units}
+    extents: dict[str, tuple[int, ...]] = {}
+    min_tile: dict[str, tuple[int, ...]] = {}
+    coincident: dict[str, tuple[int, ...]] = {}
+    distances: dict[str, dict[str, tuple[int, ...]]] = {}
+    time_maps = isl.union_map("{}")
+    for unit in tg.units:
+        name = unit.name
+        time_map = bands[name].get_partial_schedule_union_map()
+        extents[name] = time_extents(tg, time_map)
+        rank = len(extents[name])
+        dims = statement_time_dims(tg, time_map)[name]
+        if not _is_own_identity(dims, extents[name]):
+            raise SolveResourcesError(
+                f"solve_resources: the band of statement {name!r} schedules "
+                f"dimensions {dims}, not its own in order -- solve_resources "
+                "decides per domain dimension, which needs an identity band"
+            )
+        min_tile[name] = _min_tile(name, rank, candidates[name])
+        parallel = tg.parallel_dims.get(name, ())
+        if len(parallel) != rank:
+            raise SolveResourcesError(
+                f"solve_resources: tg.parallel_dims carries {len(parallel)} flag(s) for "
+                f"the {rank} dimension(s) of statement {name!r} -- extract fills one "
+                "per dimension, and placement is read off them"
+            )
+        coincident[name] = tuple(d for d, is_parallel in enumerate(parallel) if is_parallel)
+        distances[name] = {
+            buf: carried
+            for buf, carried in carried_distances(tg, time_map, rank).items()
+            if any(carried)
+        }
+        time_maps = time_maps.union(time_map)
+
+    footprints = access_footprints(tg, time_maps)
     reads = tuple(fp for fp in footprints if fp.is_read)
     reads_of: dict[str, set[str]] = {}
     readers_of: dict[str, set[str]] = {}
@@ -215,21 +266,18 @@ def _collect_facts(tg: TileGraph, target: Target, analysis: Analysis) -> _Facts:
         readers_of.setdefault(fp.buffer, set()).add(fp.statement)
 
     return _Facts(
-        n_dims=n_dims,
         extents=extents,
-        min_tile=tuple(min_tile),
-        coincident=tuple(b for b in range(n_dims) if band.member_get_coincident(b)),
-        axes_of=axes_of,
-        dim_of=dim_of,
+        min_tile=min_tile,
+        coincident=coincident,
         candidates=candidates,
-        held=_merge(footprints, lambda fp: None)[None],
+        held=_merge(footprints, lambda fp: fp.statement),
         loaded={
             stmt: tuple(group.values())
             for stmt, group in _merge(reads, lambda fp: fp.statement).items()
         },
         reads_of={s: tuple(sorted(bufs)) for s, bufs in reads_of.items()},
         readers_of={b: tuple(sorted(stmts)) for b, stmts in readers_of.items()},
-        distances=carried_distances(tg, time_map, n_dims),
+        distances=distances,
         capacity=_device_fact(target, _CAPACITY_FACTS, "tile-memory capacity"),
         bandwidth=_device_fact(target, _BANDWIDTH_FACTS, "memory bandwidth"),
         lanes=_lane_count(target),
@@ -286,18 +334,19 @@ def _product(model: cp_model.CpModel, factors: list, ub: int, name: str):
     return var
 
 
-def _bytes_expr(model: cp_model.CpModel, facts: _Facts, group, tile: list, name: str):
-    """The bytes ``group``'s occupancies hold in one tile: per buffer
-    dimension the widest extent any access needs, multiplied out."""
+def _bytes_expr(model: cp_model.CpModel, group, tile: list, extents: tuple[int, ...], name: str):
+    """The bytes ``group``'s occupancies hold in one tile of the statement
+    whose dimensions ``tile``/``extents`` describe: per buffer dimension the
+    widest extent any access needs, multiplied out."""
     parts = []
     for occupancy in group:
         factors = []
         for pos, options in enumerate(occupancy.dims):
-            ub = max(_extent_value(extent, facts.extents) for extent in options)
+            ub = max(_extent_value(extent, extents) for extent in options)
             widths = [
                 extent.constant * _product(
-                    model, [tile[b] for b in extent.axes],
-                    _extent_value(extent, facts.extents),
+                    model, [tile[d] for d in extent.axes],
+                    _extent_value(extent, extents),
                     f"tile_{name}_{occupancy.buffer}_{pos}_{i}",
                 )
                 for i, extent in enumerate(options)
@@ -309,7 +358,7 @@ def _bytes_expr(model: cp_model.CpModel, facts: _Facts, group, tile: list, name:
             model.AddMaxEquality(widest, widths)
             factors.append(widest)
         count = _product(
-            model, factors, _occupancy_bytes(occupancy, facts.extents) // occupancy.elem_bytes,
+            model, factors, _occupancy_bytes(occupancy, extents) // occupancy.elem_bytes,
             f"elems_{name}_{occupancy.buffer}",
         )
         parts.append(occupancy.elem_bytes * count)
@@ -324,7 +373,7 @@ class _Plan:
     name: str
     candidates: tuple[AtomFact, ...]
     pick: tuple[cp_model.IntVar, ...]
-    mult: dict[int, cp_model.IntVar]
+    mult: tuple[cp_model.IntVar, ...]
     compute: cp_model.IntVar
     load: cp_model.IntVar
     stage: cp_model.IntVar
@@ -333,69 +382,118 @@ class _Plan:
     end: cp_model.IntVar
 
 
-def _horizon(facts: _Facts) -> int:
-    """A static bound for every ``start``/``end``/``makespan``. A
-    statement's total compute is tile-independent (tile count times atoms
-    per tile is fixed by the atom); its total load is bounded by the most
-    tiles it can have times its whole-domain traffic."""
+def _compute_bound(facts: _Facts, name: str) -> int:
+    """One statement's whole compute cost, which is tile-independent: the
+    atom count over its domain times the atom's own duration, or the domain
+    volume at the default per-element cost."""
+    extents = facts.extents[name]
+    cands = facts.candidates[name]
+    if not cands:
+        return math.prod(extents) * _DEFAULT_UNITS
+    rank = len(extents)
+    return max(
+        _compute_units(c)
+        * math.prod(_ceil_div(extents[d], shape[d]) for d in range(rank))
+        for c, shape in ((c, _atom_shape(name, rank, c)) for c in cands)
+    )
+
+
+def _reload_factor(occupancy: _Occupancy, extents: tuple[int, ...]) -> int:
+    """How many times over one buffer's whole traffic a growing tile can
+    re-read it: a buffer dimension no tile dimension reaches shrinks the
+    traffic (fewer tiles, same bytes), one a single tile dimension reaches
+    leaves it flat, and a tile dimension two buffer dimensions share grows
+    it by that dimension's extent."""
+    reached = [0] * len(extents)
+    for options in occupancy.dims:
+        for axis in {a for extent in options for a in extent.axes}:
+            reached[axis] += 1
+    return math.prod(extents[d] ** (n - 1) for d, n in enumerate(reached) if n > 1)
+
+
+@dataclass(frozen=True)
+class _Bounds:
+    """The largest value each duration variable can take. ``compute``/``load``
+    are per tile, ``span`` is one statement's whole time and ``horizon`` their
+    sum -- the statements are sequenced, so that bounds the makespan. Every
+    variable gets the tightest of these it can, so no CP-SAT product has to
+    range over the whole horizon."""
+
+    compute: dict[str, int]
+    load: dict[str, int]
+    span: dict[str, int]
+    horizon: int
+
+    def stage(self, name: str) -> int:
+        return self.compute[name] + self.load[name]
+
+
+def _bounds(facts: _Facts) -> _Bounds:
     num, den = _bandwidth_ratio(facts.bandwidth)
-    total = 0
-    for name, axes in facts.axes_of.items():
-        cands = facts.candidates[name]
-        if cands:
-            total += max(
-                _compute_units(c) * math.prod(
-                    _ceil_div(facts.extents[b], extent) for b, extent
-                    in _atom_extents(facts.dim_of[name], axes, name, c).items()
-                )
-                for c in cands
-            )
-        else:
-            total += math.prod(facts.extents[b] for b in axes) * _DEFAULT_UNITS
-        tiles = math.prod(_ceil_div(facts.extents[b], facts.min_tile[b]) for b in axes)
-        whole = _total_bytes(facts.loaded.get(name, ()), facts.extents)
-        total += tiles * (_ceil_div(whole * den, num) + 1)
-    return max(1, total)
+    compute: dict[str, int] = {}
+    load: dict[str, int] = {}
+    span: dict[str, int] = {}
+    for name, extents in facts.extents.items():
+        loaded = facts.loaded.get(name, ())
+        instances = math.prod(extents) or 1
+        ones = (1,) * len(extents)
+        # The whole domain in one tile: the most bytes one tile can read.
+        whole = _ceil_div(_total_bytes(loaded, extents) * den, num) + 1
+        # Every tile at its finest: the most bytes every tile can read summed.
+        total = sum(
+            _occupancy_bytes(occupancy, ones) * instances * _reload_factor(occupancy, extents)
+            for occupancy in loaded
+        )
+        compute[name] = _compute_bound(facts, name)
+        load[name] = whole
+        span[name] = compute[name] + _ceil_div(total * den, num) + instances
+    return _Bounds(
+        compute=compute, load=load, span=span, horizon=max(1, sum(span.values()))
+    )
 
 
 def _plan_statements(
-    model: cp_model.CpModel, facts: _Facts, tile: list, horizon: int
+    model: cp_model.CpModel, facts: _Facts, tiles: dict[str, list], bounds: _Bounds
 ) -> dict[str, _Plan]:
     num, den = _bandwidth_ratio(facts.bandwidth)
+    horizon = bounds.horizon
     plans: dict[str, _Plan] = {}
-    for name, axes in facts.axes_of.items():
+    for name, extents in facts.extents.items():
+        rank = len(extents)
+        tile = tiles[name]
         cands = facts.candidates[name]
-        volume_ub = math.prod(facts.extents[b] for b in axes) or 1
-        mult: dict[int, cp_model.IntVar] = {}
-        compute = model.NewIntVar(1, horizon, f"compute_{name}")
+        volume_ub = math.prod(extents) or 1
+        mult: list[cp_model.IntVar] = []
+        compute = model.NewIntVar(1, bounds.compute[name], f"compute_{name}")
         if cands:
             pick = tuple(model.NewBoolVar(f"pick_{name}_{i}") for i in range(len(cands)))
             model.AddExactlyOne(pick)
-            per_atom = [_atom_extents(facts.dim_of[name], axes, name, c) for c in cands]
-            for b in axes:
-                sizes = [extents[b] for extents in per_atom]
-                atom = model.NewIntVar(min(sizes), max(sizes), f"atom_{name}_{b}")
+            shapes = [_atom_shape(name, rank, c) for c in cands]
+            for d in range(rank):
+                sizes = [shape[d] for shape in shapes]
+                atom = model.NewIntVar(min(sizes), max(sizes), f"atom_{name}_{d}")
                 model.Add(atom == sum(p * s for p, s in zip(pick, sizes)))
-                mult[b] = model.NewIntVar(1, facts.extents[b], f"mult_{name}_{b}")
-                model.AddMultiplicationEquality(tile[b], [atom, mult[b]])
+                factor = model.NewIntVar(1, extents[d], f"mult_{name}_{d}")
+                model.AddMultiplicationEquality(tile[d], [atom, factor])
+                mult.append(factor)
             units = [_compute_units(c) for c in cands]
             per_tile = model.NewIntVar(min(units), max(units), f"atom_units_{name}")
             model.Add(per_tile == sum(p * u for p, u in zip(pick, units)))
-            atoms = _product(model, [mult[b] for b in axes], volume_ub, f"atoms_{name}")
+            atoms = _product(model, mult, volume_ub, f"atoms_{name}")
             model.AddMultiplicationEquality(compute, [per_tile, atoms])
         else:
             pick = ()
-            volume = _product(model, [tile[b] for b in axes], volume_ub, f"volume_{name}")
+            volume = _product(model, list(tile), volume_ub, f"volume_{name}")
             model.Add(compute == volume * _DEFAULT_UNITS)
 
         read_bytes = _bytes_expr(
-            model, facts, facts.loaded.get(name, ()), tile, f"read_{name}"
+            model, facts.loaded.get(name, ()), tile, extents, f"read_{name}"
         )
-        load = model.NewIntVar(0, horizon, f"load_{name}")
+        load = model.NewIntVar(0, bounds.load[name], f"load_{name}")
         model.AddDivisionEquality(load, read_bytes * den + num - 1, num)
         plans[name] = _Plan(
-            name=name, candidates=cands, pick=pick, mult=mult, compute=compute, load=load,
-            stage=model.NewIntVar(1, horizon, f"stage_{name}"),
+            name=name, candidates=cands, pick=pick, mult=tuple(mult), compute=compute, load=load,
+            stage=model.NewIntVar(1, bounds.stage(name), f"stage_{name}"),
             chunks=model.NewIntVar(1, volume_ub, f"chunks_{name}"),
             start=model.NewIntVar(0, horizon, f"start_{name}"),
             end=model.NewIntVar(0, horizon, f"end_{name}"),
@@ -403,14 +501,24 @@ def _plan_statements(
     return plans
 
 
+def _holders(facts: _Facts) -> dict[str, tuple[str, ...]]:
+    """Per buffer, the statements holding it -- one buffer's ring is shared
+    by every statement that touches it, each at its own tile."""
+    out: dict[str, list[str]] = {}
+    for name, group in facts.held.items():
+        for buf in group:
+            out.setdefault(buf, []).append(name)
+    return {buf: tuple(stmts) for buf, stmts in sorted(out.items())}
+
+
 def _plan_rings(
-    model: cp_model.CpModel, facts: _Facts, plans: dict[str, _Plan], tile: list
+    model: cp_model.CpModel, facts: _Facts, plans: dict[str, _Plan], tiles: dict[str, list]
 ) -> tuple[dict[str, cp_model.IntVar], dict[str, int]]:
     """Per buffer a ring depth: at least one slot more than the tile
     distance isl reports for the dependence it carries, deeper only when it
     carries such a dependence or an async atom produces it, and in every
     case paid for in the capacity sum. The upper bound is what the capacity
-    fact can hold at the smallest tile."""
+    fact can hold at the smallest tile of its widest holder."""
     async_of = {
         name: (
             sum(p for p, c in zip(plan.pick, plan.candidates) if c.is_async)
@@ -420,18 +528,23 @@ def _plan_rings(
     }
     ring: dict[str, cp_model.IntVar] = {}
     uppers: dict[str, int] = {}
-    for buf, occupancy in facts.held.items():
-        distances = facts.distances.get(buf, (0,) * facts.n_dims)
-        carried = max(distances, default=0)
-        smallest = max(1, _occupancy_bytes(occupancy, facts.min_tile))
+    for buf, holders in _holders(facts).items():
+        smallest = max(
+            1,
+            max(_occupancy_bytes(facts.held[s][buf], facts.min_tile[s]) for s in holders),
+        )
+        carried = max(
+            (max(facts.distances[s].get(buf, (0,))) for s in holders), default=0
+        )
         upper = max(1, facts.capacity // smallest, carried + 1)
         depth = model.NewIntVar(1, upper, f"ring_{buf}")
-        for b, distance in enumerate(distances):
-            if distance == 0:
-                continue
-            steps = model.NewIntVar(1, distance, f"carry_{buf}_{b}")
-            model.AddDivisionEquality(steps, distance + tile[b] - 1, tile[b])
-            model.Add(depth >= steps + 1)
+        for s in holders:
+            for d, distance in enumerate(facts.distances[s].get(buf, ())):
+                if distance == 0:
+                    continue
+                steps = model.NewIntVar(1, distance, f"carry_{buf}_{s}_{d}")
+                model.AddDivisionEquality(steps, distance + tiles[s][d] - 1, tiles[s][d])
+                model.Add(depth >= steps + 1)
         usable = model.NewBoolVar(f"ring_ok_{buf}")
         model.AddMaxEquality(
             usable,
@@ -445,7 +558,7 @@ def _plan_rings(
 
 def _pipeline(
     model: cp_model.CpModel, facts: _Facts, plans: dict[str, _Plan],
-    ring: dict[str, cp_model.IntVar], uppers: dict[str, int], horizon: int,
+    ring: dict[str, cp_model.IntVar], uppers: dict[str, int], bounds: _Bounds,
 ) -> None:
     """``stage == compute + load - hidden``: the ring slots of every buffer a
     statement reads can hide at most that many extra tiles' worth of
@@ -453,15 +566,16 @@ def _pipeline(
     tile of load latency."""
     for name, plan in plans.items():
         bufs = facts.reads_of.get(name, ())
-        extra = model.NewIntVar(0, max(uppers.values(), default=1), f"extra_slots_{name}")
+        slots = max((uppers[b] for b in bufs), default=1)
+        extra = model.NewIntVar(0, slots, f"extra_slots_{name}")
         if bufs:
-            depth = model.NewIntVar(1, max(uppers[b] for b in bufs), f"depth_{name}")
+            depth = model.NewIntVar(1, slots, f"depth_{name}")
             model.AddMinEquality(depth, [ring[buf] for buf in bufs])
             model.Add(extra == depth - 1)
         else:
             model.Add(extra == 0)
-        hidden = model.NewIntVar(0, horizon, f"hidden_{name}")
-        cap = model.NewIntVar(0, horizon, f"hide_cap_{name}")
+        hidden = model.NewIntVar(0, bounds.load[name], f"hidden_{name}")
+        cap = model.NewIntVar(0, slots * bounds.compute[name], f"hide_cap_{name}")
         model.AddMultiplicationEquality(cap, [extra, plan.compute])
         model.AddMinEquality(hidden, [cap, plan.load])
         model.Add(plan.stage == plan.compute + plan.load - hidden)
@@ -484,32 +598,38 @@ def _statement_precedence_pairs(tg: TileGraph) -> set[tuple[str, str]]:
 
 
 def _capacity_precheck(facts: _Facts) -> None:
-    """The smallest footprint any solution can have -- every band member at
-    its smallest atom extent, every ring one slot deep. Over capacity here
-    is over capacity for every tile, so it is reported as such rather than
-    left to come back as a bare CP-SAT ``INFEASIBLE``."""
-    per_buffer = {
-        buf: _occupancy_bytes(occupancy, facts.min_tile)
-        for buf, occupancy in facts.held.items()
-    }
-    total = sum(per_buffer.values())
-    if total > facts.capacity:
-        detail = ", ".join(f"{buf}={n}" for buf, n in sorted(per_buffer.items()))
-        raise SolveResourcesError(
-            f"solve_resources: capacity {facts.capacity} bytes cannot hold one "
-            f"atom tile {facts.min_tile}, which requests {total} bytes ({detail})"
-        )
+    """The smallest footprint any solution can have for each statement --
+    every dimension at its smallest atom extent, every ring one slot deep.
+    Over capacity here is over capacity for every tile of that statement, so
+    it is reported as such rather than left to come back as a bare CP-SAT
+    ``INFEASIBLE``."""
+    for name, group in facts.held.items():
+        per_buffer = {
+            buf: _occupancy_bytes(occupancy, facts.min_tile[name])
+            for buf, occupancy in group.items()
+        }
+        total = sum(per_buffer.values())
+        if total > facts.capacity:
+            detail = ", ".join(f"{buf}={n}" for buf, n in sorted(per_buffer.items()))
+            raise SolveResourcesError(
+                f"solve_resources: capacity {facts.capacity} bytes cannot hold one "
+                f"atom tile {facts.min_tile[name]} of statement {name!r}, which "
+                f"requests {total} bytes ({detail})"
+            )
 
 
 def _infeasible_message(facts: _Facts, status: str) -> str:
-    smallest = _total_bytes(facts.held.values(), facts.min_tile)
-    carried = {buf: d for buf, d in sorted(facts.distances.items()) if any(d)}
+    smallest = {
+        name: _total_bytes(group.values(), facts.min_tile[name])
+        for name, group in facts.held.items()
+    }
+    carried = {name: dims for name, dims in facts.distances.items() if dims}
     uncovered = sorted(name for name, cands in facts.candidates.items() if not cands)
     return (
-        f"solve_resources: CP-SAT returned {status!r}; smallest tile "
-        f"{facts.min_tile} needs {smallest} of {facts.capacity} capacity bytes, "
-        f"carried dependence distances {carried}, statements with no candidate "
-        f"atom {uncovered}"
+        f"solve_resources: CP-SAT returned {status!r}; capacity {facts.capacity} "
+        f"bytes, smallest per-statement tile footprints {smallest}, carried "
+        f"dependence distances {carried}, statements with no candidate atom "
+        f"{uncovered}"
     )
 
 
@@ -524,10 +644,10 @@ def solve_resources(
     options: ScheduleOptions | None = None,
     stage: str = "cta",
 ) -> TileGraph:
-    """Decide atoms, tile sizes, the lane split of the band's coincident
-    extent and per-buffer ring depths over ``tg`` (which must already carry
-    an isl schedule tree from ``compute_schedule``), then tile the band by
-    the decided sizes.
+    """Decide, per statement, an atom and a tile size per own dimension, the
+    lane split of every statement's parallel extent, and per buffer a ring
+    depth over ``tg`` (which must already carry an isl schedule tree from
+    ``build_schedule_tree``), then tile every band by its decided sizes.
 
     Raises :class:`SolveResourcesError` naming the cause when the model
     cannot be satisfied -- V1 reports, it never retries with another
@@ -539,32 +659,43 @@ def solve_resources(
         )
     if tg.tree is None:
         raise SolveResourcesError(
-            "solve_resources: tg.tree is None -- call compute_schedule(tg) first"
+            "solve_resources: tg.tree is None -- call build_schedule_tree(tg) first"
         )
     target = default_target() if target is None else resolve_target(target)
     options = options if options is not None else ScheduleOptions()
 
     facts = _collect_facts(tg, target, _analysis_service(target, stage))
     _capacity_precheck(facts)
-    horizon = _horizon(facts)
+    bounds = _bounds(facts)
+    horizon = bounds.horizon
 
     model = cp_model.CpModel()
-    tile = [model.NewIntVar(1, facts.extents[b], f"tile_{b}") for b in range(facts.n_dims)]
-    counts = [model.NewIntVar(1, facts.extents[b], f"tiles_{b}") for b in range(facts.n_dims)]
-    for b in range(facts.n_dims):
-        model.AddMultiplicationEquality(facts.extents[b], [tile[b], counts[b]])
+    tiles: dict[str, list] = {}
+    counts: dict[str, list] = {}
+    for name, extents in facts.extents.items():
+        tiles[name] = [model.NewIntVar(1, e, f"tile_{name}_{d}") for d, e in enumerate(extents)]
+        counts[name] = [model.NewIntVar(1, e, f"tiles_{name}_{d}") for d, e in enumerate(extents)]
+        for d, extent in enumerate(extents):
+            model.AddMultiplicationEquality(extent, [tiles[name][d], counts[name][d]])
 
-    plans = _plan_statements(model, facts, tile, horizon)
-    ring, uppers = _plan_rings(model, facts, plans, tile)
-    footprint = []
-    for buf, occupancy in facts.held.items():
-        held = model.NewIntVar(0, facts.capacity, f"held_{buf}")
-        model.AddMultiplicationEquality(
-            held, [_bytes_expr(model, facts, (occupancy,), tile, "buf"), ring[buf]]
-        )
-        footprint.append(held)
-    model.Add(sum(footprint) <= facts.capacity)
-    _pipeline(model, facts, plans, ring, uppers, horizon)
+    plans = _plan_statements(model, facts, tiles, bounds)
+    ring, uppers = _plan_rings(model, facts, plans, tiles)
+    for name, group in facts.held.items():
+        footprint = []
+        for buf, occupancy in group.items():
+            held = model.NewIntVar(0, facts.capacity, f"held_{name}_{buf}")
+            model.AddMultiplicationEquality(
+                held,
+                [
+                    _bytes_expr(
+                        model, (occupancy,), tiles[name], facts.extents[name], f"buf_{name}"
+                    ),
+                    ring[buf],
+                ],
+            )
+            footprint.append(held)
+        model.Add(sum(footprint) <= facts.capacity)
+    _pipeline(model, facts, plans, ring, uppers, bounds)
 
     # The hardware bounds the lane split above; the round count each statement
     # divides out of it bounds the makespan. The objective's tie-break then
@@ -572,19 +703,20 @@ def solve_resources(
     # coincident tile count whenever the hardware has that many lanes.
     lane_split = model.NewIntVar(1, facts.lanes, "lane_split")
     for name, plan in plans.items():
-        axes = facts.axes_of[name]
-        volume_ub = math.prod(facts.extents[b] for b in axes) or 1
+        count = counts[name]
+        coincident = facts.coincident[name]
+        volume_ub = math.prod(facts.extents[name]) or 1
         parallel = _product(
-            model, [counts[b] for b in axes if b in facts.coincident],
+            model, [count[d] for d in range(len(count)) if d in coincident],
             volume_ub, f"parallel_{name}",
         )
         serial = _product(
-            model, [counts[b] for b in axes if b not in facts.coincident],
+            model, [count[d] for d in range(len(count)) if d not in coincident],
             volume_ub, f"serial_{name}",
         )
         model.AddDivisionEquality(plan.chunks, parallel + lane_split - 1, lane_split)
         rounds = _product(model, [plan.chunks, serial], volume_ub, f"rounds_{name}")
-        span = model.NewIntVar(1, horizon, f"span_{name}")
+        span = model.NewIntVar(1, bounds.span[name], f"span_{name}")
         model.AddMultiplicationEquality(span, [rounds, plan.stage])
         model.Add(plan.end == plan.start + span)
 
@@ -612,28 +744,23 @@ def solve_resources(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise SolveResourcesError(_infeasible_message(facts, solver.StatusName(status)))
 
-    sizes = tuple(solver.Value(v) for v in tile)
+    sizes = {name: tuple(solver.Value(v) for v in tile) for name, tile in tiles.items()}
     ring_decisions = {buf: solver.Value(var) for buf, var in ring.items()}
     decisions = {
         "status": solver.StatusName(status),
         "makespan": solver.Value(makespan),
-        "tile": sizes,
-        "tiles": tuple(solver.Value(v) for v in counts),
-        "coincident": facts.coincident,
         "lanes": facts.lanes,
         "lane_split": solver.Value(lane_split),
         "capacity_bytes": facts.capacity,
-        "footprint_bytes": {
-            buf: _occupancy_bytes(occupancy, sizes) * ring_decisions[buf]
-            for buf, occupancy in facts.held.items()
-        },
         "statements": {
             name: {
                 "atom": _picked_atom(solver, plan),
                 "place": _place_of(facts, name),
+                "tile": sizes[name],
+                "tiles": tuple(solver.Value(v) for v in counts[name]),
+                "coincident": facts.coincident[name],
                 "tile_atoms": (
-                    math.prod(solver.Value(v) for v in plan.mult.values())
-                    if plan.mult else None
+                    math.prod(solver.Value(v) for v in plan.mult) if plan.mult else None
                 ),
                 "compute": solver.Value(plan.compute),
                 "load": solver.Value(plan.load),
@@ -641,6 +768,10 @@ def solve_resources(
                 "lane_rounds": solver.Value(plan.chunks),
                 "start": solver.Value(plan.start),
                 "end": solver.Value(plan.end),
+                "footprint_bytes": {
+                    buf: _occupancy_bytes(occupancy, sizes[name]) * ring_decisions[buf]
+                    for buf, occupancy in facts.held[name].items()
+                },
             }
             for name, plan in plans.items()
         },
@@ -648,7 +779,7 @@ def solve_resources(
     }
     return dataclasses.replace(
         tg,
-        tree=tile_band(outermost_band(tg.tree), sizes),
+        tree=tile_bands(tg.tree, sizes),
         ring=ring_decisions,
         decisions=decisions,
     )
@@ -662,13 +793,12 @@ def _picked_atom(solver: cp_model.CpSolver, plan: _Plan) -> str | None:
 
 
 def _place_of(facts: _Facts, name: str) -> str:
-    """Placement is derived, never solved: the band members isl marked
-    coincident that this statement varies in are the ones spread over
-    lanes."""
-    members = [b for b in facts.axes_of[name] if b in facts.coincident]
+    """Placement is derived, never solved: this statement's own
+    dependence-free dimensions are the ones spread over lanes."""
+    members = facts.coincident[name]
     if not members:
         return "serial"
-    return "coincident[" + ",".join(str(b) for b in members) + "]"
+    return "coincident[" + ",".join(str(d) for d in members) + "]"
 
 
 __all__ = ["SolveResourcesError", "solve_resources"]
