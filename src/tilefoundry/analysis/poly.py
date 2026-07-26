@@ -971,23 +971,30 @@ def extract(hir: Function) -> TileGraph:
 
 @dataclass(frozen=True)
 class AxisExtent:
-    """One buffer dimension's extent inside one time-space box:
-    ``constant`` times the tile extent of every time dimension in ``axes``.
-    ``axes`` is empty for a dimension no time dimension reaches (the whole
-    of it is touched, as in ``RN[i] -> weight[j]``)."""
+    """One buffer dimension inside one statement's whole access: how many of
+    its elements are reached (``extent``), and which time dimensions reach
+    them (``axes``, empty when none does -- the whole dimension is touched
+    every iteration, as in ``RN[i] -> weight[j]``).
+
+    ``extent`` is measured, not derived from a tile size: a dimension read at
+    a rate (``repeat_interleave``'s ``b[h / 2]``) reaches half as many
+    elements as the iterations that reach it. ``axes`` carries no size, only
+    the reuse fact -- a dimension no time dimension reaches is re-read in
+    full by every iteration.
+    """
 
     axes: tuple[int, ...]
-    constant: int
+    extent: int
 
 
 @dataclass(frozen=True)
 class AccessFootprint:
     """One (statement, buffer) access sized per buffer dimension, so the
-    element count of one time-space box is the product over ``dims``.
+    element count is the product over ``dims``.
 
-    Exact when every buffer dimension moves with at most one time
-    dimension, an upper bound otherwise (a diagonal access ``b[t0 + t1]``
-    visits fewer than ``tile[0] * tile[1]`` elements).
+    The count is the bounding box of the access's range, which is exact for a
+    box-shaped access and an upper bound for one that leaves holes in it (a
+    diagonal ``b[t0 + t1]`` reaches a band inside its own box).
     """
 
     statement: str
@@ -1147,14 +1154,12 @@ def access_footprints(tg: TileGraph, time_map: "isl.union_map") -> tuple[AccessF
             timed = _as_map(m.apply_domain(time_map))
             dims = []
             for pos in range(timed.dim(isl.dim_type.OUT)):
-                involved = _travels_with(timed, pos)
-                if involved:
-                    dims.append(AxisExtent(axes=involved, constant=1))
-                    continue
                 lo, hi = _static_extent(
                     _only_out_dim(timed, pos).range(), 0, f"access_footprints[{buf}]"
                 )
-                dims.append(AxisExtent(axes=(), constant=hi - lo + 1))
+                dims.append(
+                    AxisExtent(axes=_travels_with(timed, pos), extent=hi - lo + 1)
+                )
             out.append(
                 AccessFootprint(
                     statement=stmt, buffer=buf, is_read=is_read, dims=tuple(dims),

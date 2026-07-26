@@ -245,26 +245,14 @@ def _ceil_div(a: int, b: int) -> int:
     return -(-a // b)
 
 
-def _extent_value(extent: AxisExtent, tile: tuple[int, ...]) -> int:
-    return extent.constant * math.prod(tile[axis] for axis in extent.axes)
-
-
-def _occupancy_bytes(occupancy: _Occupancy, tile: tuple[int, ...]) -> int:
-    """Bytes one tile of ``occupancy``'s buffer holds.
-
-    A tile dimension is counted once over the whole buffer, not once per
-    buffer dimension it reaches: one flat reshape equality ties every buffer
-    dimension to every iteration dimension, so a per-dimension product would
-    multiply the same tile extent in several times and claim more elements
-    than the tile has iterations to touch.
-    """
-    axes: set[int] = set()
-    constants = 1
-    for options in occupancy.dims:
-        for extent in options:
-            axes.update(extent.axes)
-        constants *= max(extent.constant for extent in options)
-    count = constants * math.prod(tile[axis] for axis in sorted(axes))
+def _occupancy_bytes(occupancy: _Occupancy) -> int:
+    """Bytes ``occupancy``'s buffer holds for one instance of its statement --
+    the product of the measured per-dimension extents. Each dimension is a
+    measured element count, so nothing here scales it by a tile size: the
+    statement's own extent *is* its tile."""
+    count = math.prod(
+        max(extent.extent for extent in options) for options in occupancy.dims
+    )
     return count * occupancy.elem_bytes
 
 
@@ -395,7 +383,7 @@ def select_atoms(
         shape = _atom_shape(name, len(extents), picked) if picked else None
         duration = _statement_units(extents, picked, shape)
         footprint = {
-            buf: _occupancy_bytes(occupancy, extents) * ring[buf]
+            buf: _occupancy_bytes(occupancy) * ring[buf]
             for buf, occupancy in facts.held[name].items()
         }
         statements[name] = {
