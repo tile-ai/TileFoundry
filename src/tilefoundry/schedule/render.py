@@ -227,7 +227,9 @@ def _ring_ref(buf_name: str, coords: tuple[str, ...], ring: dict) -> str:
     n = ring.get(buf_name)
     if not n or n <= 1:
         return buf_name
-    return f"{buf_name}[{coords[-1]} % {n}]"
+    # A tiled schedule's innermost coordinate is a sum (``c0 + c3``), and C
+    # binds ``%`` tighter than ``+``; the parentheses are load-bearing.
+    return f"{buf_name}[({coords[-1]}) % {n}]"
 
 
 def _render_hole_call(

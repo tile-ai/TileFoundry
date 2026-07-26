@@ -12,7 +12,18 @@ from .metadata import (
     TimelineMetadata,
     TrafficBytes,
 )
-from .poly import ExtractError, TileGraph, TileUnit, extract
+from .poly import (
+    AccessFootprint,
+    AxisExtent,
+    ExtractError,
+    TileGraph,
+    TileUnit,
+    access_footprints,
+    carried_distances,
+    extract,
+    statement_time_dims,
+    time_extents,
+)
 
 
 class Analysis(Protocol):
@@ -26,6 +37,8 @@ class Analysis(Protocol):
 
 
 __all__ = [
+    "AccessFootprint",
+    "AxisExtent",
     "Analysis",
     "AnalysisError",
     "AnalysisOptions",
@@ -38,6 +51,10 @@ __all__ = [
     "TileUnit",
     "TimelineMetadata",
     "TrafficBytes",
+    "access_footprints",
     "analyze",
+    "carried_distances",
     "extract",
+    "statement_time_dims",
+    "time_extents",
 ]

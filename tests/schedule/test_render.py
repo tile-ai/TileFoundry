@@ -17,7 +17,7 @@ from tilefoundry import func
 from tilefoundry.analysis import extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.schedule.kernel_schedule import compute_schedule
+from tilefoundry.schedule.kernel_schedule import compute_schedule, outermost_band, tile_band
 from tilefoundry.schedule.render import (
     BufferAccess,
     EmitScaffoldError,
@@ -155,11 +155,29 @@ def test_ring_mod_index_is_reserved_but_wired():
     # h is MM's accumulator (self-read + output, at MM's coords) and RN's
     # input (at RN's own coords) -- every reference to h is now indexed by
     # that statement's own last coordinate, mod the ring depth.
-    assert "h[c2 % 3]" in skeleton.text  # MM's own coords are (c0, c1, c2)
-    assert "h[c0 % 3]" in skeleton.text  # RN's own coords are (c0,)
-    assert re.search(r"/\*in\*/ x, w, h\[c2 % 3\], /\*out\*/ h\[c2 % 3\]", skeleton.text)
+    assert "h[(c2) % 3]" in skeleton.text  # MM's own coords are (c0, c1, c2)
+    assert "h[(c0) % 3]" in skeleton.text  # RN's own coords are (c0,)
+    assert re.search(r"/\*in\*/ x, w, h\[\(c2\) % 3\], /\*out\*/ h\[\(c2\) % 3\]", skeleton.text)
     # unrelated buffers (x, w, weight, y) are unaffected.
-    assert re.search(r"/\*in\*/ h\[c0 % 3\], weight, /\*out\*/ y", skeleton.text)
+    assert re.search(r"/\*in\*/ h\[\(c0\) % 3\], weight, /\*out\*/ y", skeleton.text)
+
+
+def test_ring_index_parenthesises_a_compound_tiled_coordinate():
+    """A tiled band's innermost coordinate is a sum (``c0 + c3``), and C
+    binds ``%`` tighter than ``+`` -- the ring index must parenthesise it or
+    it silently means ``c0 + (c3 % N)``."""
+    tg = compute_schedule(extract(gemm_rmsnorm))
+    band = outermost_band(tg.tree)
+    tiled = dataclasses.replace(tg, tree=tile_band(band, (1, 2, 4)), ring={"h": 3})
+
+    skeleton, _swimlane, _contracts = emit_scaffold(tiled)
+    print("\n=== skeleton.text (tiled, ring={'h': 3}) ===")
+    print(skeleton.text)
+
+    compound = re.findall(r"h\[([^\]]+)\]", skeleton.text)
+    assert compound, "the tiled skeleton must still index h by its ring"
+    for index in compound:
+        assert re.fullmatch(r"\([^()]+\) % 3", index), index
 
 
 def test_emit_scaffold_before_schedule_raises_clear_error():

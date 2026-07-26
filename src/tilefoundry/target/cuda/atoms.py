@@ -59,8 +59,9 @@ def _fragment_reg_bytes(fragment: ShardLayout, dtype: DType) -> int:
     return tensor_bytes(type)
 
 
-def _roofline_duration_ns(op: MmaOpSpec, target: CudaTarget) -> float:
-    """Nominal roofline estimate (ns) for *one* atom instance.
+def _roofline_duration_ns(op: MmaOpSpec, target: CudaTarget) -> tuple[float, float]:
+    """Nominal roofline estimate (ns) for *one* atom instance, as
+    ``(duration, compute_only)``.
 
     Mirrors ``target.cuda.planner._Planner._target_facts`` (:774): compute
     = flops*1e9*sm_count/(peak_for(dtype)*count), memory =
@@ -70,9 +71,10 @@ def _roofline_duration_ns(op: MmaOpSpec, target: CudaTarget) -> float:
     problem, not to ranking one atom). ``flops`` uses the atom's own MNK
     (2*m*n*k, mirroring ``target.cuda.cost``'s ``MatMul`` evaluator's
     ``2*batch*m*k*n`` with batch=1); ``moved_bytes`` is the atom's dense
-    A+B+C tile traffic. This is a *nominal* estimate -- ``AtomFact.duration``
-    is an explicit placeholder for a real measured number, not a claim of
-    accuracy.
+    A+B+C tile traffic. The compute-only half is returned separately for a
+    consumer that accounts the surrounding traffic itself. This is a
+    *nominal* estimate -- ``AtomFact.duration`` is an explicit placeholder
+    for a real measured number, not a claim of accuracy.
     """
     m, n, k = op.shape_mnk
     flops = 2 * m * n * k
@@ -84,7 +86,7 @@ def _roofline_duration_ns(op: MmaOpSpec, target: CudaTarget) -> float:
     device = target.device
     compute_ns = flops * 1_000_000_000 * device.sm_count / device.peak_for(op.dtype_a)
     memory_ns = moved_bytes * 1_000_000_000 / device.hbm_bandwidth_bytes_per_second
-    return max(compute_ns, memory_ns, 1.0)
+    return max(compute_ns, memory_ns, 1.0), compute_ns
 
 
 def _operands_layout_ok(lhs: TensorType, rhs: TensorType) -> bool:
@@ -156,11 +158,13 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
         a_bytes = _fragment_reg_bytes(atom.A, mma_op.dtype_a)
         b_bytes = _fragment_reg_bytes(atom.B, mma_op.dtype_b)
         c_bytes = _fragment_reg_bytes(atom.C, mma_op.dtype_c)
+        duration, compute_duration = _roofline_duration_ns(mma_op, target)
         facts.append(
             AtomFact(
                 shape=mma_op.shape_mnk,
                 dtype=(mma_op.dtype_a, mma_op.dtype_b, mma_op.dtype_c),
-                duration=_roofline_duration_ns(mma_op, target),
+                duration=duration,
+                compute_duration=compute_duration,
                 storage={
                     "a_reg_bytes": a_bytes,
                     "b_reg_bytes": b_bytes,

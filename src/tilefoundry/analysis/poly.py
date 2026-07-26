@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import math
 from dataclasses import dataclass, field
 
 import isl
@@ -58,7 +59,7 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
@@ -95,6 +96,10 @@ class TileGraph:
     dynamic-shape isl parameter name appearing in ``domain`` back to its
     ``ShapeDim``.
 
+    ``buffer_dtypes`` resolves each buffer tuple name back to the HIR
+    ``DType`` its elements carry, so a byte count over an access relation
+    needs no second walk of the HIR.
+
     ``tree``/``ring``/``decisions`` start empty and fill in as the same
     object flows through the schedule layer's own stages. Both dict
     fields are plain fields, never an isl mark payload -- isl marks are
@@ -107,6 +112,7 @@ class TileGraph:
     writes: "isl.union_map"
     units: tuple[TileUnit, ...]
     params: dict
+    buffer_dtypes: dict = field(default_factory=dict)
     tree: "isl.schedule | None" = None
     ring: dict = field(default_factory=dict)
     decisions: dict | None = None
@@ -138,6 +144,7 @@ class _StatementAccess:
     reads: tuple["isl.map", ...]
     writes: tuple["isl.map", ...]
     params: dict
+    dtypes: dict
 
 
 def _buffer_namer():
@@ -307,6 +314,16 @@ def _read_map(m: "isl.map", stmt_name: str, domain: "isl.set", arg, namer) -> "i
     return _bind_map(namer.pierce(m, arg), stmt_name, domain, namer(arg))
 
 
+def _out_dtype(call: Call, out_idx: int):
+    """The dtype of ``call``'s ``out_idx``-th output: a multi-output op
+    (``RoPE``) types its result as a ``TupleType``, a single-output one as
+    the ``TensorType`` itself."""
+    ty = call.type
+    if isinstance(ty, TupleType) and out_idx < len(ty.fields):
+        return getattr(ty.fields[out_idx], "dtype", None)
+    return getattr(ty, "dtype", None)
+
+
 def _registered_access(
     call: Call, stmt_name: str, result: AccessRelationResult, namer, prefix: str,
 ) -> _StatementAccess:
@@ -326,14 +343,18 @@ def _registered_access(
 
     reads: list["isl.map"] = []
     writes: list["isl.map"] = []
+    dtypes: dict = {}
     for i, arg in enumerate(call.args):
-        reads.append(_read_map(result.maps[i], stmt_name, domain, arg, namer))
+        m = _read_map(result.maps[i], stmt_name, domain, arg, namer)
+        reads.append(m)
+        dtypes[m.get_tuple_name(isl.dim_type.OUT)] = getattr(arg.type, "dtype", None)
 
     n_outputs = len(output_maps)
     for out_idx, raw_map in enumerate(output_maps):
         out_buf = namer(call, prefix) if n_outputs == 1 else f"{namer(call, prefix)}_{out_idx}"
         bound = _bind_map(raw_map, stmt_name, domain, out_buf)
         writes.append(bound)
+        dtypes[out_buf] = _out_dtype(call, out_idx)
         # An output map that is not injective means two distinct domain
         # points (e.g. two different k-steps of a reduction) write the
         # *same* output cell -- only sound as a read-modify-write
@@ -347,7 +368,7 @@ def _registered_access(
 
     return _StatementAccess(
         name=stmt_name, domain=domain, op=call,
-        reads=tuple(reads), writes=tuple(writes), params=result.param_map,
+        reads=tuple(reads), writes=tuple(writes), params=result.param_map, dtypes=dtypes,
     )
 
 
@@ -374,9 +395,12 @@ def _rope_branch(
     write = _bind_map(result.maps[5 + out_idx], stmt_name, domain, out_buf)
     if not write.is_injective():
         reads.append(write)
+    dtypes = {m.get_tuple_name(isl.dim_type.OUT): getattr(t.type, "dtype", None)
+              for m, t in zip(reads, (x, cos_cache, sin_cache, pos_ids))}
+    dtypes[out_buf] = _out_dtype(call, out_idx)
     return _StatementAccess(
         name=stmt_name, domain=domain, op=call,
-        reads=tuple(reads), writes=(write,), params=result.param_map,
+        reads=tuple(reads), writes=(write,), params=result.param_map, dtypes=dtypes,
     )
 
 
@@ -610,12 +634,16 @@ def extract(hir: Function) -> TileGraph:
     reads = isl.union_map("{}")
     writes = isl.union_map("{}")
     params: dict = {}
+    buffer_dtypes: dict = {}
     for acc in accesses:
         domain = domain.union(acc.domain)
         for m in acc.reads:
             reads = reads.union(m)
         for m in acc.writes:
             writes = writes.union(m)
+        for buf, dtype in acc.dtypes.items():
+            if dtype is not None:
+                buffer_dtypes.setdefault(buf, dtype)
         for name, dim in acc.params.items():
             prev = params.get(name)
             if prev is not None and prev != dim:
@@ -633,7 +661,221 @@ def extract(hir: Function) -> TileGraph:
     units = tuple(TileUnit(name=acc.name, op=acc.op) for acc in accesses)
     return TileGraph(
         domain=domain, deps=deps, reads=reads, writes=writes, units=units, params=params,
+        buffer_dtypes=buffer_dtypes,
     )
 
 
-__all__ = ["ExtractError", "TileGraph", "TileUnit", "extract"]
+# ---------------------------------------------------------------------------
+# Facts over a time space: extents, per-statement dims, dependence distance,
+# access footprint. Every one takes the time relation as data -- the schedule
+# layer owns the tree these are read off, this layer only measures.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AxisExtent:
+    """One buffer dimension's extent inside one time-space box:
+    ``constant`` times the tile extent of every time dimension in ``axes``.
+    ``axes`` is empty for a dimension no time dimension reaches (the whole
+    of it is touched, as in ``RN[i] -> weight[j]``)."""
+
+    axes: tuple[int, ...]
+    constant: int
+
+
+@dataclass(frozen=True)
+class AccessFootprint:
+    """One (statement, buffer) access sized per buffer dimension, so the
+    element count of one time-space box is the product over ``dims``.
+
+    Exact when every buffer dimension moves with at most one time
+    dimension, an upper bound otherwise (a diagonal access ``b[t0 + t1]``
+    visits fewer than ``tile[0] * tile[1]`` elements).
+    """
+
+    statement: str
+    buffer: str
+    is_read: bool
+    dims: tuple[AxisExtent, ...]
+    elem_bytes: int
+
+
+def _as_map(value) -> "isl.map":
+    """The single ``isl.map`` in ``value``, which isl-python returns as a
+    ``union_map`` when a ``map`` is composed with one."""
+    if not hasattr(value, "foreach_map"):
+        return value
+    maps: list["isl.map"] = []
+    value.foreach_map(maps.append)
+    if len(maps) != 1:
+        raise ExtractError(f"expected a single map, got {len(maps)}: {value}")
+    return maps[0]
+
+
+def _only_out_dim(m: "isl.map", pos: int) -> "isl.map":
+    n_out = m.dim(isl.dim_type.OUT)
+    return m.project_out(isl.dim_type.OUT, pos + 1, n_out - pos - 1).project_out(
+        isl.dim_type.OUT, 0, pos
+    )
+
+
+def _travels_with(m: "isl.map", pos: int) -> tuple[int, ...]:
+    """The input dimensions output dimension ``pos`` of ``m`` moves with.
+    The map's own domain bounds mention every input dimension, so they are
+    dropped first -- only the constraints that tie ``pos`` to an input can
+    answer this."""
+    coupled = _only_out_dim(m.drop_constraints_not_involving_dims(isl.dim_type.OUT, pos, 1), pos)
+    return tuple(
+        i for i in range(m.dim(isl.dim_type.IN))
+        if coupled.involves_dims(isl.dim_type.IN, i, 1)
+    )
+
+
+def _static_extent(s: "isl.set", pos: int, what: str) -> tuple[int, int]:
+    lo, hi = s.dim_min_val(pos), s.dim_max_val(pos)
+    if not (lo.is_int() and hi.is_int()):
+        raise ExtractError(
+            f"{what}: dimension {pos} of {s} is not statically bounded "
+            "-- a parametric extent has no integer tile count"
+        )
+    return int(lo.num_si()), int(hi.num_si())
+
+
+def time_extents(tg: TileGraph, time_map: "isl.union_map") -> tuple[int, ...]:
+    """Per-dimension extent of ``time_map``'s range over ``tg.domain``.
+    Raises unless every dimension starts at 0, since a tile index counts
+    from the origin."""
+    sets: list["isl.set"] = []
+    time_map.intersect_domain(tg.domain).range().foreach_set(sets.append)
+    if len(sets) != 1:
+        raise ExtractError(
+            f"time_extents: expected one time space, got {len(sets)} -- "
+            "every statement must share the band's own range space"
+        )
+    box = sets[0]
+    extents = []
+    for i in range(box.dim(isl.dim_type.SET)):
+        lo, hi = _static_extent(box, i, "time_extents")
+        if lo != 0:
+            raise ExtractError(
+                f"time_extents: time dimension {i} starts at {lo}, not 0 -- "
+                "tile counting assumes an origin-based extent"
+            )
+        extents.append(hi + 1)
+    return tuple(extents)
+
+
+def statement_time_dims(tg: TileGraph, time_map: "isl.union_map") -> dict[str, tuple[int, ...]]:
+    """Per statement, one entry per time dimension: the statement's own
+    domain dimension that dimension travels with, or ``-1`` when it is
+    constant there (``RN[d0] -> [d0, 63, 127]`` gives ``(0, -1, -1)``).
+    Raises on a skewed time dimension, which no per-axis tile size can
+    describe."""
+    maps: list["isl.map"] = []
+    time_map.foreach_map(maps.append)
+    out: dict[str, tuple[int, ...]] = {}
+    for m in maps:
+        name = m.get_tuple_name(isl.dim_type.IN)
+        row = []
+        for pos in range(m.dim(isl.dim_type.OUT)):
+            involved = _travels_with(m, pos)
+            if len(involved) > 1:
+                raise ExtractError(
+                    f"statement_time_dims: time dimension {pos} of statement "
+                    f"{name!r} mixes domain dimensions {involved} ({m}) -- "
+                    "a skewed band has no per-axis tile size"
+                )
+            row.append(involved[0] if involved else -1)
+        out[name] = tuple(row)
+    return out
+
+
+def _buffers_by_statement(um: "isl.union_map") -> dict[str, set[str]]:
+    maps: list["isl.map"] = []
+    um.foreach_map(maps.append)
+    out: dict[str, set[str]] = {}
+    for m in maps:
+        stmt = m.get_tuple_name(isl.dim_type.IN)
+        out.setdefault(stmt, set()).add(m.get_tuple_name(isl.dim_type.OUT))
+    return out
+
+
+def carried_distances(
+    tg: TileGraph, time_map: "isl.union_map", n_dims: int
+) -> dict[str, tuple[int, ...]]:
+    """Per buffer, the largest dependence distance isl reports along each
+    time dimension. A flow dependence ``a -> b`` is attributed to every
+    buffer ``a`` writes and ``b`` reads, which for a RAW must-dependence is
+    exactly the memory it travels through."""
+    written = _buffers_by_statement(tg.writes)
+    read = _buffers_by_statement(tg.reads)
+    names = {buf for bufs in (*written.values(), *read.values()) for buf in bufs}
+    distances: dict[str, list[int]] = {buf: [0] * n_dims for buf in names}
+    deps: list["isl.map"] = []
+    tg.deps.foreach_map(deps.append)
+    for dep in deps:
+        carriers = written.get(dep.get_tuple_name(isl.dim_type.IN), set()) & read.get(
+            dep.get_tuple_name(isl.dim_type.OUT), set()
+        )
+        if not carriers:
+            continue
+        pieces: list["isl.set"] = []
+        dep.apply_domain(time_map).apply_range(time_map).deltas().foreach_set(pieces.append)
+        for piece in pieces:
+            for i in range(n_dims):
+                lo, hi = _static_extent(piece, i, "carried_distances")
+                reach = max(abs(lo), abs(hi))
+                for buf in carriers:
+                    distances[buf][i] = max(distances[buf][i], reach)
+    return {buf: tuple(dims) for buf, dims in distances.items()}
+
+
+def access_footprints(tg: TileGraph, time_map: "isl.union_map") -> tuple[AccessFootprint, ...]:
+    """Every read and write of ``tg``, expressed against ``time_map``'s
+    range so a tile size per time dimension sizes it (see
+    :class:`AccessFootprint`)."""
+    out: list[AccessFootprint] = []
+    for um, is_read in ((tg.reads, True), (tg.writes, False)):
+        maps: list["isl.map"] = []
+        um.foreach_map(maps.append)
+        for m in maps:
+            stmt = m.get_tuple_name(isl.dim_type.IN)
+            buf = m.get_tuple_name(isl.dim_type.OUT)
+            dtype = tg.buffer_dtypes.get(buf)
+            if dtype is None:
+                raise ExtractError(
+                    f"access_footprints: buffer {buf!r} has no recorded dtype "
+                    "-- extract must resolve every accessed buffer's element type"
+                )
+            timed = _as_map(m.apply_domain(time_map))
+            dims = []
+            for pos in range(timed.dim(isl.dim_type.OUT)):
+                involved = _travels_with(timed, pos)
+                if involved:
+                    dims.append(AxisExtent(axes=involved, constant=1))
+                    continue
+                lo, hi = _static_extent(
+                    _only_out_dim(timed, pos).range(), 0, f"access_footprints[{buf}]"
+                )
+                dims.append(AxisExtent(axes=(), constant=hi - lo + 1))
+            out.append(
+                AccessFootprint(
+                    statement=stmt, buffer=buf, is_read=is_read, dims=tuple(dims),
+                    elem_bytes=math.ceil(dtype.bit_width / 8),
+                )
+            )
+    return tuple(out)
+
+
+__all__ = [
+    "AccessFootprint",
+    "AxisExtent",
+    "ExtractError",
+    "TileGraph",
+    "TileUnit",
+    "access_footprints",
+    "carried_distances",
+    "extract",
+    "statement_time_dims",
+    "time_extents",
+]
