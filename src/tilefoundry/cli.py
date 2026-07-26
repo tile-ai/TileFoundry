@@ -22,10 +22,10 @@ from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.schedule.kernel_schedule import build_schedule_tree
+from tilefoundry.schedule.kernel_schedule import KernelScheduleError, build_schedule_tree
 from tilefoundry.schedule.render import EmitScaffoldError, HoleContract, emit_scaffold
 from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
-from tilefoundry.target import CudaTarget, default_target, resolve_target
+from tilefoundry.target import CudaTarget, default_target
 from tilefoundry.target.hardware import format_capabilities, load_hardware_spec
 
 _HELP_SPEC_TOPICS = {
@@ -192,11 +192,11 @@ def run_authored_analysis(source: str, analyses: tuple[str, ...]) -> int:
 
 
 def _entry_function(ir: Module | Function) -> Function:
-    """Resolve the HIR Function `kernelize` runs its pipeline over -- the
+    """Resolve the HIR Function `schedule` runs its pipeline over -- the
     same Module -> entry_function() convention as `_selected_target`."""
     function = ir.entry_function() if isinstance(ir, Module) else ir
     if not isinstance(function, Function):
-        raise TypeError(f"kernelize requires a HIR Function entry, got {type(function).__name__}")
+        raise TypeError(f"schedule requires a HIR Function entry, got {type(function).__name__}")
     return function
 
 
@@ -215,21 +215,37 @@ def _hole_contract_line(contract: HoleContract) -> str:
     )
 
 
-def run_kernelize(source: str, target: str | None) -> int:
-    """Load, extract, schedule, solve, and scaffold one authored HIR
-    Function -- the kernelize-path analogue of `run_authored_analysis`:
-    same source loading, ``#``-headed machine-parsable summary style."""
+def _stage_or_die(target, stage: str) -> str:
+    """``stage`` if the resolved target owns a level by that name. A target
+    that enumerates its levels can name the alternatives; one that does not
+    leaves the service lookup inside `select_atoms` to report the mismatch."""
+    levels = getattr(target, "topology_levels", ())
+    if levels and stage not in levels:
+        raise ValueError(
+            f"target {target.name!r} has no topology level {stage!r}; "
+            f"--stage must be one of {', '.join(levels)}"
+        )
+    return stage
+
+
+def run_schedule(source: str, stage: str) -> int:
+    """Model, schedule, select atoms for, and scaffold one authored HIR
+    Function at one of its target's topology levels -- the schedule-path
+    analogue of `run_authored_analysis`: same source loading, ``#``-headed
+    machine-parsable summary style. The target comes from the Function, not
+    from a flag: a kernel is authored against one."""
     ir = load_authored_ir(source)
     function = _entry_function(ir)
-    resolved_target = resolve_target(target) if target is not None else _selected_target(ir)
+    resolved_target = _selected_target(ir)
+    stage = _stage_or_die(resolved_target, stage)
 
     tg = extract(function)
-    solved = select_atoms(build_schedule_tree(tg), target=resolved_target)
+    solved = select_atoms(build_schedule_tree(tg), target=resolved_target, stage=stage)
     skeleton, swimlane, contracts = emit_scaffold(solved)
     decisions = _decisions_of(solved)
 
     header = [
-        f"kernelize target={resolved_target.name} function={function.name} "
+        f"schedule target={resolved_target.name} stage={stage} function={function.name} "
         f"statements={','.join(unit.name for unit in tg.units)}",
         f"decisions status={decisions['status']} makespan={decisions['makespan']}",
     ]
@@ -267,13 +283,16 @@ def build_parser() -> argparse.ArgumentParser:
     for analysis in ("roofline", "footprint", "timeline"):
         analyze.add_argument(f"--{analysis}", action="store_true", help=f"print {analysis}")
 
-    kernelize = commands.add_parser(
-        "kernelize",
-        help="extract/schedule/solve authored HIR into an agent-fillable kernel scaffold",
+    schedule = commands.add_parser(
+        "schedule",
+        help="schedule authored HIR at one topology level into an agent-fillable scaffold",
     )
-    _add_source_argument(kernelize)
-    kernelize.add_argument(
-        "--target", default=None, help="override the resolved compile target (e.g. cuda)"
+    _add_source_argument(schedule)
+    schedule.add_argument(
+        "--stage",
+        required=True,
+        metavar="LEVEL",
+        help="topology level to schedule at (a level the Function's target owns, e.g. core)",
     )
 
     inspect = commands.add_parser("inspect", help="inspect installed target facts")
@@ -310,13 +329,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         except Exception as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1
-    if args.command == "kernelize":
+    if args.command == "schedule":
         try:
-            return run_kernelize(args.source, args.target)
+            return run_schedule(args.source, args.stage)
         except (
             ExtractError,
             EmitScaffoldError,
             AtomSelectionError,
+            KernelScheduleError,
             OSError,
             TypeError,
             ValueError,

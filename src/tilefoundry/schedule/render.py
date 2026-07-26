@@ -3,11 +3,18 @@ swimlane, and one hole per statement, via ``isl.ast_build`` codegen.
 
 ``BufferAccess`` is local rather than the TIR ``TensorView`` Op: this needs
 a buffer's polyhedral footprint at one statement (an ``isl.map``), not a
-memory ``Expr`` plus ``Layout``. Two landmines: isl node annotations do not
-round-trip through ``ast_build.node_from`` once a Python ``user`` payload is
-attached, so ``at_each_domain`` reads calls natively; and isl's printer
-cannot emit a decorated hole call, so that one substitution is a string
-splice over the final text.
+memory ``Expr`` plus ``Layout``.
+
+Three isl landmines, all measured on the installed binding. Node annotations
+do not round-trip through ``ast_build.node_from`` once a Python ``user``
+payload is attached, so ``at_each_domain`` reads each call natively. The
+designed way to emit a decorated statement -- ``ast_print_options``'
+``set_print_user`` -- does fire its callback once per statement, but neither
+``printer.to_file`` nor ``printer.to_file_path`` emits anything through this
+binding (a zero-byte file either way), so it is unusable. The hole call is
+therefore spliced into ``to_C_str()``'s text, in the order ``at_each_domain``
+saw the statements, and a statement whose text is not found where that order
+says it should be raises rather than silently dropping its hole.
 """
 from __future__ import annotations
 
@@ -291,7 +298,13 @@ def _build_skeleton(
     rendered: list[str] = []
     cursor = 0
     for original, hole_line in occurrences:
-        idx = text.index(original, cursor)
+        idx = text.find(original, cursor)
+        if idx < 0:
+            raise EmitScaffoldError(
+                f"emit_scaffold: statement call {original!r} is not in the generated "
+                f"text at or after offset {cursor} -- isl walked the statements in a "
+                "different order than it printed them, so the hole cannot be placed"
+            )
         indent = _line_indent(text, idx)
         rendered.append(text[cursor:idx])
         rendered.append(_wrap_hole_stmt(indent, hole_line))
