@@ -7,16 +7,32 @@ from importlib.resources import files
 from typing import Any
 
 
+def _load(name: str) -> dict[str, Any]:
+    resource = files("tilefoundry.target.hardware").joinpath(name)
+    return tomllib.loads(resource.read_text(encoding="utf-8"))
+
+
 def load_h200_sxm_sm90() -> dict[str, Any]:
     """Return the installed H200 SXM / SM90 hardware specification."""
-    resource = files("tilefoundry.target.hardware").joinpath("h200_sxm_sm90.toml")
-    return tomllib.loads(resource.read_text(encoding="utf-8"))
+    return _load("h200_sxm_sm90.toml")
+
+
+def load_apple_m2_pro_amx() -> dict[str, Any]:
+    """Return the installed Apple M2 Pro / AMX hardware specification."""
+    return _load("apple_m2_pro_amx.toml")
 
 
 def load_hardware_spec(target: object) -> dict[str, Any]:
     """Resolve an installed hardware spec for one exact authored target."""
+    from tilefoundry.target.amx import AmxTarget, AppleAmx, AppleM2Pro  # noqa: PLC0415
     from tilefoundry.target.cuda import H200SXM, SM90, CudaTarget  # noqa: PLC0415
 
+    if (
+        isinstance(target, AmxTarget)
+        and type(target.device) is AppleM2Pro
+        and type(target.architecture) is AppleAmx
+    ):
+        return load_apple_m2_pro_amx()
     if (
         isinstance(target, CudaTarget)
         and type(target.device) is H200SXM
@@ -56,4 +72,9 @@ def format_capabilities(
     return "\n".join(lines)
 
 
-__all__ = ["format_capabilities", "load_h200_sxm_sm90", "load_hardware_spec"]
+__all__ = [
+    "format_capabilities",
+    "load_apple_m2_pro_amx",
+    "load_h200_sxm_sm90",
+    "load_hardware_spec",
+]

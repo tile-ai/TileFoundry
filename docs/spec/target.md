@@ -43,7 +43,7 @@ class Architecture:
   - Concrete architecture values MUST be immutable.
   - `name` MUST be the stable architecture identity used by compilation.
   - `max_threads_per_cta` MUST describe the architecture's static CTA thread
-    limit.
+    limit when the architecture has a CTA thread level.
 
 ### 1.2 `Device`
 
@@ -166,6 +166,7 @@ class CpuTarget(Target):
 - `tilefoundry.target` MUST be the sole Target implementation package. The IR
   package MUST NOT own Target classes or Target imports.
 - `resolve_target("cuda")` MUST return a default `CudaTarget`,
+  `resolve_target("amx")` MUST return a default `AmxTarget`,
   `resolve_target("cpu")` MUST return a `CpuTarget`, and a Target object MUST
   pass through unchanged.
 - Authored HIR `Function.target` MUST default to `None`. A normal compile
@@ -174,3 +175,132 @@ class CpuTarget(Target):
 - After target resolution, CUDA Functions in one compilation group MUST carry
      equal architecture and device facts. A mismatch MUST fail before codegen
      grouping.
+
+## 7. `AppleAmx`
+
+```python
+class AppleAmx:
+    """Describe AMX compilation identity and structural capabilities."""
+
+    name: str = "apple_amx"
+    supported_compute_dtypes: tuple[DType, ...] = ...
+    instruction_capabilities: tuple[str, ...] = ...
+    amx_units_per_core: int = 1
+
+    def supports_compute_dtype(self, dtype: DType) -> bool: ...
+
+    def topology_limit(self, name: str) -> int: ...
+```
+
+- constraints:
+  - `name` MUST be the architecture identity used by AMX compilation.
+  - AppleAmx MUST own the supported compute DTypes and the per-core AMX unit
+    count. The modelled atom catalogue MAY be narrower than the supported
+    compute DTypes.
+  - Product- and frequency-dependent throughput values MUST NOT be stored on
+    AppleAmx.
+  - AMX has no CTA thread level, so AppleAmx MUST carry no CTA thread limit.
+
+## 8. `AppleM2Pro`
+
+```python
+class AppleM2Pro:
+    """Describe the apple_m2_pro package's fixed hard resource limits."""
+
+    name: str = "apple_m2_pro"
+    sm_count: int = 2
+    performance_core_count: int = 8
+    l1d_bytes_per_performance_core: int = 131_072
+    l2_bytes_per_performance_cluster: int = 16_777_216
+    unified_memory_bandwidth_bytes_per_second: int = 200_000_000_000
+    amx_staging_bytes: int = 512
+    amx_accumulator_bytes: int = 4096
+    l1_capacity_bytes: int
+    l2_bandwidth_bytes_per_second: int
+
+    def throughput_for(self, dtype: DType) -> int: ...
+```
+
+- constraints:
+  - AppleM2Pro MUST describe one package and MUST NOT carry a machine count.
+  - `sm_count` MUST be the number of independent AMX units, which is the
+    parallel-unit count a makespan divides work over. It MUST NOT be read as a
+    core count: the performance cores outnumber the units and share them.
+  - Cache and core facts MUST describe the performance core, not the efficiency
+    core, and MUST be fixed to the values recorded in the installed hardware
+    specification. Callers MUST NOT provide overrides.
+  - `l1_capacity_bytes` MUST be the capacity one tile's resident footprint is
+    bounded by, which on this device is the AMX accumulator file
+    `amx_accumulator_bytes`. The staging and bulk levels of the AMX storage
+    hierarchy MUST NOT be conflated with it.
+  - `l2_bandwidth_bytes_per_second` MUST be the bandwidth a tile's traffic is
+    charged against, which on this device is
+    `unified_memory_bandwidth_bytes_per_second`.
+  - `throughput_for` MUST return a measured per-unit AMX throughput recorded in
+    the installed hardware specification, and MUST raise an actionable error for
+    a compute DType with no measured entry rather than return an estimate.
+
+## 9. `AmxTarget`
+
+```python
+class AmxTarget(Target):
+    """Compose one AMX target from one architecture and one device."""
+
+    name: str = "amx"
+    architecture: AppleAmx = AppleAmx()
+    device: AppleM2Pro = AppleM2Pro()
+    arch: str
+    topology_levels: tuple[str, ...]
+
+    def topology_limit(self, name: str) -> int: ...
+
+    def validate_program_topology(self, topology: Topology) -> None: ...
+```
+
+- constraints:
+  - `AmxTarget()` MUST use AppleAmx and AppleM2Pro, and `arch` MUST equal
+    `architecture.name`.
+  - `topology_levels` MUST be `("core", "amx")`: the performance core one tile
+    stream runs on, and the AMX unit inside that core which issues one atom.
+  - `topology_limit("core")` MUST equal `device.performance_core_count` and
+    `topology_limit("amx")` MUST equal `architecture.amx_units_per_core`.
+  - Declared topology extents MUST be positive static integers within their
+    level's limit. AMX has no launch shape, so a deferred or symbolic extent
+    MUST NOT be admitted at either level.
+  - Unsupported topology levels MUST raise an actionable error naming the
+    supported levels, from both the limit lookup and topology validation.
+  - Each `AmxTarget` instance MUST bind exactly one private
+    `(Analysis, "core")` and one private `(Schedule, "core")` service. The
+    concrete implementations are not part of the public `analysis` or
+    `schedule` packages.
+  - The core Analysis service MUST list an op's AMX atom candidates by hard
+    filtering the registered catalogue on shape divisibility and operand DType,
+    and MUST NOT rank them. An op the catalogue does not cover MUST raise rather
+    than report an empty list.
+  - The core Schedule service MUST decide resources over the schedule tree
+    extracted from its root and report the objective in ns. It materializes
+    nothing at this stage, so the module it returns MUST be the module it was
+    given.
+
+## 10. Installed hardware facts
+
+- Each installed hardware specification is the source-attributed record of the
+  device and architecture facts one target stands on.
+- constraints:
+  - Every fact MUST carry `value`, `unit`, `provenance`, `conditions` and
+    `source`.
+  - `provenance` MUST name how the value was obtained: `measured` on the
+    described host, `vendor-spec` from the vendor's published figure, `direct`
+    from a cited reference, `derived` from other facts in the same
+    specification, `estimated` where it is a reading that no source states, or
+    `unavailable` where no value exists.
+  - A value that was not measured on the described host MUST NOT be recorded as
+    `measured`, and a value that is a reading rather than a citation MUST be
+    recorded as `estimated`.
+  - A fact with no available value MUST still be recorded, as `unavailable`
+    with the reason in `conditions`, so that the gap is explicit.
+  - A compiler policy MUST be recorded as a fact in its own right, named as
+    policy and attributed to the compiler rather than to the hardware.
+  - `load_hardware_spec` MUST resolve one exact authored target, and MUST raise
+    an actionable error naming the device and architecture when no
+    specification is installed for it.

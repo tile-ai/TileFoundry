@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from tilefoundry.target.amx import AmxTarget, AppleAmx, AppleM2Pro
 from tilefoundry.target.base import Architecture, CpuTarget, Device, Target
 from tilefoundry.target.cuda import H200SXM, SM90, CudaTarget
 
-_STRING_TARGETS = {"cuda": CudaTarget, "cpu": CpuTarget}
+_STRING_TARGETS = {"amx": AmxTarget, "cuda": CudaTarget, "cpu": CpuTarget}
 
 
 def resolve_target(target: str | Target) -> Target:
@@ -40,6 +41,9 @@ def validate_cuda_topology_levels(names) -> None:
 
 
 __all__ = [
+    "AmxTarget",
+    "AppleAmx",
+    "AppleM2Pro",
     "Architecture",
     "CpuTarget",
     "CudaTarget",
