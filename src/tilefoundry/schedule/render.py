@@ -5,21 +5,21 @@ swimlane, and one hole per statement, via ``isl.ast_build`` codegen.
 a buffer's polyhedral footprint at one statement (an ``isl.map``), not a
 memory ``Expr`` plus ``Layout``.
 
-Three isl landmines, all measured on the installed binding. Node annotations
-do not round-trip through ``ast_build.node_from`` once a Python ``user``
-payload is attached, so ``at_each_domain`` reads each call natively. The
-designed way to emit a decorated statement -- ``ast_print_options``'
-``set_print_user`` -- does fire its callback once per statement, but neither
-``printer.to_file`` nor ``printer.to_file_path`` emits anything through this
-binding (a zero-byte file either way), so it is unusable. The hole call is
-therefore spliced into ``to_C_str()``'s text, in the order ``at_each_domain``
-saw the statements, and a statement whose text is not found where that order
-says it should be raises rather than silently dropping its hole.
+A statement is printed as its hole through ``ast_print_options``'
+``set_print_user``, so isl owns the loop nest and the indentation and nothing
+is spliced into finished text. Two notes on the binding: an ``ast_node``
+annotation does not survive a walk (its Python ``user`` payload comes back
+overwritten), so the statement name and coordinates are read from the call
+expression natively; and ``isl.printer`` writes only to a file and buffers
+until ``flush``, so ``_print_to_str`` goes through a temporary one.
 """
 from __future__ import annotations
 
 import itertools
 import math
+import os
+import pathlib
+import tempfile
 from dataclasses import dataclass
 
 import isl
@@ -225,20 +225,22 @@ def _render_hole_call(
     return f"{hole_name}({', '.join(sections)});"
 
 
-def _line_indent(text: str, pos: int) -> str:
-    """Leading whitespace of the line containing ``text[pos]``."""
-    start = text.rfind("\n", 0, pos) + 1
-    return text[start:pos]
+def _print_to_str(node: "isl.ast_node", options: "isl.ast_print_options") -> str:
+    """``node`` printed as C through ``options``.
 
-
-def _wrap_hole_stmt(indent: str, hole_line: str) -> str:
-    """Wrap a hole call + its conservative sync placeholder in their own
-    brace block, so the substitution is always a single valid C-like
-    statement regardless of whether isl's printer had originally left the
-    replaced call brace-less (a single-statement loop body, e.g. the
-    innermost ``MM`` loop, prints with no braces at all)."""
-    inner = indent + "  "
-    return f"{{\n{inner}{hole_line}\n{inner}// barrier\n{indent}}}\n"
+    isl's printer only writes to a file, and it buffers until ``flush`` -- an
+    unflushed printer leaves a zero-byte file rather than raising. So the text
+    comes back through a temporary file, and the ``flush`` is what makes it
+    appear.
+    """
+    handle, path = tempfile.mkstemp(suffix=".c")
+    os.close(handle)
+    try:
+        printer = isl.printer.to_file_path(path).set_output_format(isl.format.C)
+        node.print(printer, options).flush()
+        return pathlib.Path(path).read_text(encoding="utf-8")
+    finally:
+        os.unlink(path)
 
 
 def _build_skeleton(
@@ -257,62 +259,57 @@ def _build_skeleton(
         )
     units_by_name = {u.name: u for u in tg.units}
     contracts: dict[str, HoleContract] = {}
-    occurrences: list[tuple[str, str]] = []  # (original call text, wrapped replacement)
 
-    def at_each_domain(node, build):
-        expr = node.get_expr()
-        stmt_name, coords = _call_coords(expr)
-
+    def contract_for(stmt_name: str, coords: tuple[str, ...]) -> HoleContract:
         contract = contracts.get(stmt_name)
-        if contract is None:
-            unit = units_by_name.get(stmt_name)
-            if unit is None:
-                raise EmitScaffoldError(
-                    f"emit_scaffold: schedule tree statement {stmt_name!r} has no "
-                    "matching TileUnit in tg.units -- tg.tree and tg.units must come "
-                    "from the same extract()/build_schedule_tree() pipeline run"
-                )
-            read_by_buf = _by_buf(tg.reads, stmt_name)
-            write_by_buf = _by_buf(tg.writes, stmt_name)
-            inputs = _ordered_inputs(unit, read_by_buf, dtype_table)
-            output = _output_view(unit, write_by_buf, dtype_table)
-            contract = HoleContract(
-                name=f"HOLE_{stmt_name}",
-                op_ref=unit.op,
-                inputs=inputs,
-                output=output,
-                coords=coords,
+        if contract is not None:
+            return contract
+        unit = units_by_name.get(stmt_name)
+        if unit is None:
+            raise EmitScaffoldError(
+                f"emit_scaffold: schedule tree statement {stmt_name!r} has no "
+                "matching TileUnit in tg.units -- tg.tree and tg.units must come "
+                "from the same extract()/build_schedule_tree() pipeline run"
             )
-            contracts[stmt_name] = contract
+        contract = HoleContract(
+            name=f"HOLE_{stmt_name}",
+            op_ref=unit.op,
+            inputs=_ordered_inputs(unit, _by_buf(tg.reads, stmt_name), dtype_table),
+            output=_output_view(unit, _by_buf(tg.writes, stmt_name), dtype_table),
+            coords=coords,
+        )
+        contracts[stmt_name] = contract
+        return contract
 
+    def line(printer, text: str):
+        return printer.start_line().print_str(text).end_line()
+
+    def print_user(printer, options, node):
+        """isl asks for one statement's text and owns the loop nest and the
+        indentation around it, so the hole is emitted here rather than spliced
+        into finished output.
+
+        The hole and its sync sit in their own brace block: isl prints a
+        single-statement loop body without braces, and two bare statements
+        there would put the sync outside the loop.
+        """
+        stmt_name, coords = _call_coords(node.get_expr())
+        contract = contract_for(stmt_name, coords)
         in_refs = tuple(_ring_ref(v.tensor_name, coords, tg.ring) for v in contract.inputs)
         out_ref = _ring_ref(contract.output.tensor_name, coords, tg.ring)
-        hole_line = _render_hole_call(contract.name, in_refs, out_ref, coords)
-        occurrences.append((node.to_C_str(), hole_line))
-        return node
+        printer = line(printer, "{")
+        printer = printer.indent(2)
+        printer = line(printer, _render_hole_call(contract.name, in_refs, out_ref, coords))
+        printer = line(printer, "// barrier")
+        printer = printer.indent(-2)
+        return line(printer, "}")
 
-    build = isl.ast_build.from_context(isl.set("{ : }")).set_at_each_domain(at_each_domain)
-    ast = build.node_from(tg.tree)
-    text = ast.to_C_str()
-
-    rendered: list[str] = []
-    cursor = 0
-    for original, hole_line in occurrences:
-        idx = text.find(original, cursor)
-        if idx < 0:
-            raise EmitScaffoldError(
-                f"emit_scaffold: statement call {original!r} is not in the generated "
-                f"text at or after offset {cursor} -- isl walked the statements in a "
-                "different order than it printed them, so the hole cannot be placed"
-            )
-        indent = _line_indent(text, idx)
-        rendered.append(text[cursor:idx])
-        rendered.append(_wrap_hole_stmt(indent, hole_line))
-        cursor = idx + len(original)
-    rendered.append(text[cursor:])
+    ast = isl.ast_build.from_context(isl.set("{ : }")).node_from(tg.tree)
+    options = isl.ast_print_options.alloc().set_print_user(print_user)
+    text = _print_to_str(ast, options)
 
     holes = tuple(contract.name for contract in contracts.values())
-    return Skeleton(text="".join(rendered), holes=holes), contracts
+    return Skeleton(text=text, holes=holes), contracts
 
 
 # ---------------------------------------------------------------------------
