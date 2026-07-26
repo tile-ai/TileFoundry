@@ -750,8 +750,13 @@ Consensus torch.nn.functional ops.
 ##### Gelu
 ```python
 class Gelu(Op):
-    """Gaussian Error Linear Unit. ``approximate="tanh"`` is the tanh-based
-    approximation (HF ``gelu_pytorch_tanh`` / Gemma-2 MLP activation)."""
+    """Gaussian Error Linear Unit.
+
+    Attributes:
+        x: input; tensor the activation applies to elementwise.
+        approximate: attribute; ``"tanh"`` selects the tanh-based
+            approximation (HF ``gelu_pytorch_tanh`` / Gemma-2 MLP activation).
+    """
 
     x: Tensor
     approximate: str = "tanh"
