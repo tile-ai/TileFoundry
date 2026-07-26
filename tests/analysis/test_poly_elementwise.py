@@ -15,7 +15,7 @@ the matmul/rmsnorm family:
    input, output shape == input shape).
 2. The real qwen3-1.7b ``mlp`` kernel (``rms_norm`` + 3x ``matmul`` + 1x
    ``sigmoid`` + 2x ``mul``, no nested ``@func`` -- see
-   ``tests/models/qwen3_1_7b/qwen3_1_7b_module.py``) extracts *whole*: every
+   ``tests/models/qwen3_1_7b/model/decoder_layer.py``) extracts *whole*: every
    op now resolves an access relation -- MatMul/Binary/RMSNorm were already
    registered, and Sigmoid is the one this task adds.
 """
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from tests.models.qwen3_1_7b.qwen3_1_7b_module import Qwen3_1_7B
+from tests.models.qwen3_1_7b import decoder_layer as qwen3
 from tilefoundry import func
 from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
@@ -95,7 +95,7 @@ def test_extract_qwen3_mlp_whole():
     ``type_relation``); now every op resolves one: MatMul/Binary(MUL)/
     RMSNorm were already registered, Sigmoid is this task's addition.
     """
-    tg = extract(Qwen3_1_7B.lookup("mlp"))
+    tg = extract(qwen3.mlp)
     assert isinstance(tg, TileGraph)
 
     op_names = [type(u.op.target).__name__ for u in tg.units]

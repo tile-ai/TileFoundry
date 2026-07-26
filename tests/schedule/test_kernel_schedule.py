@@ -17,7 +17,7 @@ import dataclasses
 import isl
 import pytest
 
-from tests.models.qwen3_1_7b.qwen3_1_7b_module import Qwen3_1_7B
+from tests.models.qwen3_1_7b import decoder_layer as qwen3
 from tilefoundry import func
 from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
@@ -93,7 +93,7 @@ def _member_values(band: "isl.schedule_node_band", domain: "isl.union_set", pos:
     return int(keep.count_val().num_si())
 
 
-_KERNELS = [gemm_rmsnorm, Qwen3_1_7B.lookup("mlp"), Qwen3_1_7B.lookup("self_attention")]
+_KERNELS = [gemm_rmsnorm, qwen3.mlp, qwen3.self_attention]
 _IDS = ["gemm_rmsnorm", "mlp", "self_attention"]
 
 

@@ -2,13 +2,13 @@
 
 Phase 0 cpu + f32 oracle (no CUDA on this box — every ``device=`` below is
 ``"cpu"``). Each test resolves one kernel from the ``Gemma2_2B`` module
-(mirroring ``tests/models/qwen3_1_7b/test_qwen3_1_7b_module.py``) and checks it
+(mirroring ``tests/models/qwen3_1_7b/test_model/decoder_layer.py``) and checks it
 against the corresponding Hugging Face ``Gemma2DecoderLayer`` submodule(s).
 Inputs are built fresh inside each test from the shared ``common`` fixtures —
 no module-level static tensors.
 
 ``self_attention`` / ``mlp`` are pure blocks here (unlike qwen3_1_7b, which
-fuses each block's preceding norm) — see ``gemma2_2b_module.py``'s docstring
+fuses each block's preceding norm) — see ``model/decoder_layer.py``'s docstring
 for why Gemma-2's four-norm layout makes that the natural split. So their
 tests apply the HF norm in plain torch test code before calling the kernel,
 rather than threading a `gamma_*` kernel argument through.
@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import torch
 
-from tests.models.gemma2_2b import common
-from tests.models.gemma2_2b.gemma2_2b_module import Gemma2_2B
+from tests.models.gemma2_2b import config
+from tests.models.gemma2_2b import gemma2_2b as model
 from tilefoundry.evaluator import evaluate
 
-HIDDEN = common.HIDDEN
-S_CAP = common.S_CAP
+HIDDEN = config.REAL.hidden
+S_CAP = config.REAL.s_cap
 
 DEV = "cpu"
 ATOL = RTOL = 2e-4
@@ -31,14 +31,14 @@ ATOL = RTOL = 2e-4
 def _fixtures():
     """A fresh HF layer + its RoPE caches / causal mask / attention scale, all
     on cpu. ``pos_ids`` is ``0..S_CAP-1`` — there is no prior KV-cache context
-    in this package, so ``cur_pos`` is always 0 (see ``common.causal_mask``).
+    in this package, so ``cur_pos`` is always 0 (see ``config.causal_mask``).
     ``scale`` is ``query_pre_attn_scalar**-0.5`` (0.0625 @ 256) — Gemma-2 does
     NOT use ``head_dim**-0.5``."""
-    layer = common.build_hf_layer(seed=0, device=DEV)
-    cfg = common.build_hf_config()
-    cos_cache, sin_cache = common.rope_caches(cfg, S_CAP, device=DEV)
+    layer = config.build_hf_layer(seed=0, device=DEV)
+    cfg = config.build_hf_config()
+    cos_cache, sin_cache = config.rope_caches(cfg, S_CAP, device=DEV)
     pos_ids = torch.arange(S_CAP, device=DEV, dtype=torch.int32)
-    mask = common.causal_mask(S_CAP, device=DEV)
+    mask = config.causal_mask(S_CAP, device=DEV)
     scale = torch.full((1, 1, 1, 1), layer.self_attn.scaling, device=DEV)
     return layer, cos_cache, sin_cache, pos_ids, mask, scale
 
@@ -46,7 +46,7 @@ def _fixtures():
 def test_input_rms_norm_evaluate():
     """input_rms_norm vs HF `input_layernorm` — `Gemma2RMSNorm` is
     `normed * (1.0 + weight)`, so `gamma_in` is pre-adjusted via
-    `common.rms_gamma`."""
+    `config.rms_gamma`."""
     layer, *_ = _fixtures()
     torch.manual_seed(1)
     x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
@@ -54,7 +54,7 @@ def test_input_rms_norm_evaluate():
     with torch.no_grad():
         ref = layer.input_layernorm(x)
     out = evaluate(
-        Gemma2_2B.lookup("input_rms_norm"), x, common.rms_gamma(layer.input_layernorm), device=DEV,
+        model.input_rms_norm, x, config.rms_gamma(layer.input_layernorm), device=DEV,
     )
 
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -76,17 +76,17 @@ def test_self_attention_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Gemma2_2B.lookup("self_attention"),
+        model.self_attention,
         h,
-        common.linear_weight(attn.q_proj),
-        common.linear_weight(attn.k_proj),
-        common.linear_weight(attn.v_proj),
+        config.linear_weight(attn.q_proj),
+        config.linear_weight(attn.k_proj),
+        config.linear_weight(attn.v_proj),
         cos_cache,
         sin_cache,
         pos_ids,
         mask,
         scale,
-        common.linear_weight(attn.o_proj),
+        config.linear_weight(attn.o_proj),
         device=DEV,
     )
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -105,7 +105,7 @@ def test_self_attention_sliding_window_evaluate():
     `SLIDING_WINDOW` (4096) would ever bind at this S_CAP."""
     layer, cos_cache, sin_cache, pos_ids, _mask, scale = _fixtures()
     attn = layer.self_attn
-    sliding_mask = common.sliding_causal_mask(S_CAP, window=2, device=DEV)
+    sliding_mask = config.sliding_causal_mask(S_CAP, window=2, device=DEV)
     torch.manual_seed(1)
     x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
 
@@ -116,17 +116,17 @@ def test_self_attention_sliding_window_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=sliding_mask)
 
     out = evaluate(
-        Gemma2_2B.lookup("self_attention"),
+        model.self_attention,
         h,
-        common.linear_weight(attn.q_proj),
-        common.linear_weight(attn.k_proj),
-        common.linear_weight(attn.v_proj),
+        config.linear_weight(attn.q_proj),
+        config.linear_weight(attn.k_proj),
+        config.linear_weight(attn.v_proj),
         cos_cache,
         sin_cache,
         pos_ids,
         sliding_mask,
         scale,
-        common.linear_weight(attn.o_proj),
+        config.linear_weight(attn.o_proj),
         device=DEV,
     )
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -147,11 +147,11 @@ def test_mlp_gelu_tanh_evaluate():
         ref = mlp(x)
 
     out = evaluate(
-        Gemma2_2B.lookup("mlp"),
+        model.mlp,
         x,
-        common.linear_weight(mlp.gate_proj),
-        common.linear_weight(mlp.up_proj),
-        common.linear_weight(mlp.down_proj),
+        config.linear_weight(mlp.gate_proj),
+        config.linear_weight(mlp.up_proj),
+        config.linear_weight(mlp.down_proj),
         device=DEV,
     )
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -173,24 +173,24 @@ def test_decoder_layer_evaluate():
         ref = layer(x, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        Gemma2_2B.lookup("decoder_layer"),
+        model.decoder_layer,
         x,
-        common.rms_gamma(layer.input_layernorm),
-        common.linear_weight(attn.q_proj),
-        common.linear_weight(attn.k_proj),
-        common.linear_weight(attn.v_proj),
+        config.rms_gamma(layer.input_layernorm),
+        config.linear_weight(attn.q_proj),
+        config.linear_weight(attn.k_proj),
+        config.linear_weight(attn.v_proj),
         cos_cache,
         sin_cache,
         pos_ids,
         mask,
         scale,
-        common.linear_weight(attn.o_proj),
-        common.rms_gamma(layer.post_attention_layernorm),
-        common.rms_gamma(layer.pre_feedforward_layernorm),
-        common.linear_weight(mlp.gate_proj),
-        common.linear_weight(mlp.up_proj),
-        common.linear_weight(mlp.down_proj),
-        common.rms_gamma(layer.post_feedforward_layernorm),
+        config.linear_weight(attn.o_proj),
+        config.rms_gamma(layer.post_attention_layernorm),
+        config.rms_gamma(layer.pre_feedforward_layernorm),
+        config.linear_weight(mlp.gate_proj),
+        config.linear_weight(mlp.up_proj),
+        config.linear_weight(mlp.down_proj),
+        config.rms_gamma(layer.post_feedforward_layernorm),
         device=DEV,
     )
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)

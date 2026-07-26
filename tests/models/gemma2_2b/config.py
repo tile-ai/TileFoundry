@@ -2,20 +2,20 @@
 
 The fourth of the Phase 0 dense/near-dense "打样" models (Qwen3-1.7B,
 Qwen2.5-1.5B, MiniCPM3, Gemma-2), authored against the same three-file
-template as ``tests/models/qwen3_1_7b/`` (``common.py`` + ``<model>_module.py``
-+ ``test_<model>_module.py``), run on macOS with no CUDA: **cpu + f32 only**.
+template as ``tests/models/qwen3_1_7b/`` (``config.py`` + ``model/decoder_layer.py``
++ ``test_decoder_layer.py``), run on macOS with no CUDA: **cpu + f32 only**.
 
 Pins the value oracle and the model contract every component test in this
 package shares — the Hugging Face reference (``transformers``
 ``Gemma2DecoderLayer`` built from a ``Gemma2Config`` at the Gemma-2-2B
 dimensions, random weights at a fixed seed), the model dimensions (GQA 8
 query / 4 key-value heads; dense gelu_pytorch_tanh-gated MLP), and the static
-single-shot-prefill contract (a fixed ``S_CAP``-token sequence, no KV cache,
+single-shot-prefill contract (a fixed ``REAL.s_cap``-token sequence, no KV cache,
 no dynamic ``DimVar``).
 
 Gemma-2 has no per-head q_norm/k_norm (that is Qwen3-specific), but adds
 three things Qwen3 does not have — all confirmed live against this repo's
-``transformers`` install (see module docstrings in ``gemma2_2b_module.py``
+``transformers`` install (see module docstrings in ``model/decoder_layer.py``
 for how each is composed into HIR):
 
 - ``Gemma2RMSNorm`` computes ``normed * (1.0 + weight)``, not
@@ -29,49 +29,76 @@ for how each is composed into HIR):
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+
 # ── Gemma-2-2B dimensions ────────────────────────────────────────────────
 # Public Gemma-2-2B config == `transformers.Gemma2Config()` defaults
 # (confirmed live in a REPL against this repo's transformers==5.14.1):
 # hidden_size=2304, num_attention_heads=8, num_key_value_heads=4,
 # head_dim=256 (explicit — NOT hidden_size // num_attention_heads == 288, so
-# unlike qwen3_1_7b, Q_PROJ != HIDDEN here), intermediate_size=9216,
+# unlike qwen3_1_7b, REAL.q_proj != REAL.hidden here), intermediate_size=9216,
 # rms_norm_eps=1e-6, query_pre_attn_scalar=256, attn_logit_softcapping=50.0,
 # sliding_window=4096, hidden_activation="gelu_pytorch_tanh",
 # max_position_embeddings=8192. rope_parameters resolves (rope_parameters=None
 # default) to {"rope_theta": 10000.0, "rope_type": "default"} — plain RoPE,
 # attention_scaling==1.0, same as qwen3_1_7b's cos/sin cache convention.
-HIDDEN = 2304
-HEAD_DIM = 256
-NUM_Q_HEADS = 8
-NUM_KV_HEADS = 4
-GQA_GROUP = NUM_Q_HEADS // NUM_KV_HEADS     # 2 query heads share one kv head
-Q_PROJ = NUM_Q_HEADS * HEAD_DIM             # 2048 (!= HIDDEN == 2304)
-KV_PROJ = NUM_KV_HEADS * HEAD_DIM           # 1024
-INTERMEDIATE = 9216
-RMS_EPS = 1e-6
-ROPE_THETA = 10_000.0
-ATTENTION_BIAS = False
-QUERY_PRE_ATTN_SCALAR = 256
-ATTN_SOFTCAP = 50.0
-SLIDING_WINDOW = 4096
-VOCAB = 256000
-MAX_POS = 8192
+@dataclass(frozen=True)
+class Gemma2Shape:
+    """One decoder layer's shape, plus the sequence length and dtype every
+    kernel in this package is authored at."""
 
-# Static test-speed contract: no KV cache, no dynamic dims — a single-shot
-# prefill oracle (``cur_pos`` always 0), same convention as qwen3_1_7b. Small
-# enough that `SLIDING_WINDOW` (4096) never binds: every position pair in an
-# `S_CAP`-token tile is well within the window, so a plain causal mask is
-# exactly equivalent to Gemma-2's alternating sliding/full attention for this
-# package's single (layer_idx=0) decoder layer.
-S_CAP = 4
+    hidden: int
+    head_dim: int
+    n_q_heads: int
+    n_kv_heads: int
+    intermediate: int
+    rms_eps: float
+    rope_theta: float
+    attention_bias: bool
+    query_pre_attn_scalar: int
+    attn_softcap: float
+    sliding_window: int
+    vocab: int
+    max_pos: int
+    s_cap: int
+    dt: str
 
-# HIR dtype for every Tensor annotation in this package: f32 everywhere (no
-# CUDA on this box, so no bf16 branch).
-DT = "f32"
+    @property
+    def gqa_group(self) -> int:
+        """Query heads sharing one key/value head."""
+        return self.n_q_heads // self.n_kv_heads
+
+    @property
+    def q_proj(self) -> int:
+        return self.n_q_heads * self.head_dim
+
+    @property
+    def kv_proj(self) -> int:
+        return self.n_kv_heads * self.head_dim
+
+
+REAL = Gemma2Shape(
+    hidden=2304,
+    head_dim=256,
+    n_q_heads=8,
+    n_kv_heads=4,
+    intermediate=9216,
+    rms_eps=1e-06,
+    rope_theta=10000.0,
+    attention_bias=False,
+    query_pre_attn_scalar=256,
+    attn_softcap=50.0,
+    sliding_window=4096,
+    vocab=256000,
+    max_pos=8192,
+    s_cap=4,
+    dt='f32',
+)
 
 # ── Component -> HF submodule map ───────────────────────────────────────
 # `self_attention` / `mlp` are pure blocks here (no fused norm, unlike
-# qwen3_1_7b) — see the `gemma2_2b_module.py` docstring for why Gemma-2's
+# qwen3_1_7b) — see the `model/decoder_layer.py` docstring for why Gemma-2's
 # four-norm layout makes that the natural fusion boundary. Only
 # `decoder_layer` composes the full HF submodule tree.
 COMPONENT_HF_SUBMODULES = {
@@ -87,20 +114,20 @@ def build_hf_config():
     from transformers import Gemma2Config  # noqa: PLC0415
 
     return Gemma2Config(
-        hidden_size=HIDDEN,
-        head_dim=HEAD_DIM,
-        num_attention_heads=NUM_Q_HEADS,
-        num_key_value_heads=NUM_KV_HEADS,
-        intermediate_size=INTERMEDIATE,
-        rms_norm_eps=RMS_EPS,
-        attention_bias=ATTENTION_BIAS,
-        query_pre_attn_scalar=QUERY_PRE_ATTN_SCALAR,
-        attn_logit_softcapping=ATTN_SOFTCAP,
-        sliding_window=SLIDING_WINDOW,
+        hidden_size=REAL.hidden,
+        head_dim=REAL.head_dim,
+        num_attention_heads=REAL.n_q_heads,
+        num_key_value_heads=REAL.n_kv_heads,
+        intermediate_size=REAL.intermediate,
+        rms_norm_eps=REAL.rms_eps,
+        attention_bias=REAL.attention_bias,
+        query_pre_attn_scalar=REAL.query_pre_attn_scalar,
+        attn_logit_softcapping=REAL.attn_softcap,
+        sliding_window=REAL.sliding_window,
         hidden_activation="gelu_pytorch_tanh",
         num_hidden_layers=1,
-        vocab_size=VOCAB,
-        max_position_embeddings=MAX_POS,
+        vocab_size=REAL.vocab,
+        max_position_embeddings=REAL.max_pos,
     )
 
 
@@ -148,8 +175,8 @@ def causal_mask(seq, device="cpu", dtype=None):
     attend key ``j`` (``j <= i``), ``-inf`` otherwise.
 
     No KV cache in this package: every token attends only within the same
-    ``S_CAP`` tile, i.e. ``cur_pos`` is always 0 (mirrors
-    ``qwen3_1_7b.common.causal_mask``).
+    ``REAL.s_cap`` tile, i.e. ``cur_pos`` is always 0 (mirrors
+    ``qwen3_1_7b.config.causal_mask``).
     """
     import torch  # noqa: PLC0415
 
@@ -167,7 +194,7 @@ def sliding_causal_mask(seq, window, device="cpu", dtype=None):
     more than ``window`` tokens in the past).
 
     Optional coverage for the sliding-window gotcha (hint #6): at this
-    package's ``S_CAP``, ``SLIDING_WINDOW`` (4096) never actually binds, so
+    package's ``REAL.s_cap``, ``REAL.sliding_window`` (4096) never actually binds, so
     the four required component tests all use the plain :func:`causal_mask`.
     This helper builds a deliberately small ``window`` so
     ``test_self_attention_sliding_window_evaluate`` exercises a mask that

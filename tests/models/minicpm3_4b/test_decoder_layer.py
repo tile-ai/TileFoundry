@@ -1,7 +1,7 @@
 """MiniCPM3-4B single decoder layer: pull a kernel by attribute, evaluate vs
 HF. Phase 0 cpu + f32 oracle (no CUDA on this box — every ``device=`` below
 is ``"cpu"``). Each test resolves one kernel from the ``MiniCPM3_4B`` module
-(mirroring ``tests/models/qwen3_1_7b/test_qwen3_1_7b_module.py``) and checks
+(mirroring ``tests/models/qwen3_1_7b/test_model/decoder_layer.py``) and checks
 it against the corresponding Hugging Face ``MiniCPM3DecoderLayer``
 submodule(s). Inputs are built fresh inside each test from the shared
 ``common`` fixtures — no module-level static tensors.
@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import torch
 
-from tests.models.minicpm3_4b import common
-from tests.models.minicpm3_4b.minicpm3_4b_module import MiniCPM3_4B
+from tests.models.minicpm3_4b import config
+from tests.models.minicpm3_4b import minicpm3_4b as model
 from tilefoundry.evaluator import evaluate
 
-HIDDEN = common.HIDDEN
-S_CAP = common.S_CAP
+HIDDEN = config.REAL.hidden
+S_CAP = config.REAL.s_cap
 
 DEV = "cpu"
 ATOL = RTOL = 2e-4
@@ -25,15 +25,15 @@ def _fixtures():
     """A fresh HF layer + its RoPE caches / causal mask / attention scale /
     residual scale, all on cpu. ``pos_ids`` is ``0..S_CAP-1`` — there is no
     prior KV-cache context in this package, so ``cur_pos`` is always 0 (see
-    ``common.causal_mask``). ``residual_scale`` is read directly off the HF
+    ``config.causal_mask``). ``residual_scale`` is read directly off the HF
     layer's own precomputed ``scale_depth / sqrt(num_hidden_layers)``, not
     re-derived from config fields, so this test has no independent copy of
     that formula to drift out of sync."""
-    layer = common.build_hf_layer(seed=0, device=DEV)
-    cfg = common.build_hf_config()
-    cos_cache, sin_cache = common.rope_caches(cfg, S_CAP, device=DEV)
+    layer = config.build_hf_layer(seed=0, device=DEV)
+    cfg = config.build_hf_config()
+    cos_cache, sin_cache = config.rope_caches(cfg, S_CAP, device=DEV)
     pos_ids = torch.arange(S_CAP, device=DEV, dtype=torch.int32)
-    mask = common.causal_mask(S_CAP, device=DEV)
+    mask = config.causal_mask(S_CAP, device=DEV)
     scale = torch.full((1, 1, 1, 1), layer.self_attn.scaling, device=DEV)
     residual_scale = torch.full((1, 1, 1), layer.residual_scale, device=DEV)
     return layer, cos_cache, sin_cache, pos_ids, mask, scale, residual_scale
@@ -47,7 +47,7 @@ def test_input_rms_norm_evaluate():
 
     with torch.no_grad():
         ref = layer.input_layernorm(x)
-    out = evaluate(MiniCPM3_4B.lookup("input_rms_norm"), x, layer.input_layernorm.weight, device=DEV)
+    out = evaluate(model.input_rms_norm, x, layer.input_layernorm.weight, device=DEV)
 
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
@@ -68,21 +68,21 @@ def test_mla_attention_evaluate():
         ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
 
     out = evaluate(
-        MiniCPM3_4B.lookup("mla_attention"),
+        model.mla_attention,
         x,
         layer.input_layernorm.weight,
-        common.linear_weight(attn.q_a_proj),
+        config.linear_weight(attn.q_a_proj),
         attn.q_a_layernorm.weight,
-        common.linear_weight(attn.q_b_proj),
-        common.linear_weight(attn.kv_a_proj_with_mqa),
+        config.linear_weight(attn.q_b_proj),
+        config.linear_weight(attn.kv_a_proj_with_mqa),
         attn.kv_a_layernorm.weight,
-        common.linear_weight(attn.kv_b_proj),
+        config.linear_weight(attn.kv_b_proj),
         cos_cache,
         sin_cache,
         pos_ids,
         mask,
         scale,
-        common.linear_weight(attn.o_proj),
+        config.linear_weight(attn.o_proj),
         device=DEV,
     )
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -99,12 +99,12 @@ def test_mlp_evaluate():
         ref = mlp(layer.post_attention_layernorm(x))
 
     out = evaluate(
-        MiniCPM3_4B.lookup("mlp"),
+        model.mlp,
         x,
         layer.post_attention_layernorm.weight,
-        common.linear_weight(mlp.gate_proj),
-        common.linear_weight(mlp.up_proj),
-        common.linear_weight(mlp.down_proj),
+        config.linear_weight(mlp.gate_proj),
+        config.linear_weight(mlp.up_proj),
+        config.linear_weight(mlp.down_proj),
         device=DEV,
     )
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -126,25 +126,25 @@ def test_decoder_layer_evaluate():
         ref = layer(x, attention_mask=mask, position_embeddings=(cos, sin))
 
     out = evaluate(
-        MiniCPM3_4B.lookup("decoder_layer"),
+        model.decoder_layer,
         x,
         layer.input_layernorm.weight,
-        common.linear_weight(attn.q_a_proj),
+        config.linear_weight(attn.q_a_proj),
         attn.q_a_layernorm.weight,
-        common.linear_weight(attn.q_b_proj),
-        common.linear_weight(attn.kv_a_proj_with_mqa),
+        config.linear_weight(attn.q_b_proj),
+        config.linear_weight(attn.kv_a_proj_with_mqa),
         attn.kv_a_layernorm.weight,
-        common.linear_weight(attn.kv_b_proj),
+        config.linear_weight(attn.kv_b_proj),
         cos_cache,
         sin_cache,
         pos_ids,
         mask,
         scale,
-        common.linear_weight(attn.o_proj),
+        config.linear_weight(attn.o_proj),
         layer.post_attention_layernorm.weight,
-        common.linear_weight(mlp.gate_proj),
-        common.linear_weight(mlp.up_proj),
-        common.linear_weight(mlp.down_proj),
+        config.linear_weight(mlp.gate_proj),
+        config.linear_weight(mlp.up_proj),
+        config.linear_weight(mlp.down_proj),
         residual_scale,
         device=DEV,
     )

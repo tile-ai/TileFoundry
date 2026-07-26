@@ -3,7 +3,7 @@ relation like ``RMSNorm``, not a registered ``type_relation`` like
 ``Transpose``): before this task ``Reshape`` had no forward ``type_relation``
 and no V1 fallback, so ``analysis.extract`` raised at any ``Reshape`` call
 (the last blocker to a real decoder layer's whole self-attention/mlp
-extracting -- ``tests/models/qwen3_1_7b/qwen3_1_7b_module.py`` reshapes q/k/v
+extracting -- ``tests/models/qwen3_1_7b/model/decoder_layer.py`` reshapes q/k/v
 into heads and reshapes ``attn_out`` back).
 
 A reshape is a zero-op at the buffer level (same memory, reinterpreted), so

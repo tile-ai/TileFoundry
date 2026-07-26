@@ -1,8 +1,9 @@
-"""Shared fixtures for the Qwen3-1.7B dense decoder-layer HIR description.
+"""Qwen3-1.7B dimensions and the Hugging Face oracle every test in this
+package compares against.
 
 Phase 0 "打样": the first of four planned dense/near-dense models (Qwen3-1.7B,
 Qwen2.5-1.5B, MiniCPM3, Gemma-2) authored against this same three-file
-template (``common.py`` + ``<model>_module.py`` + ``test_<model>_module.py``,
+template (``config.py`` + ``model/decoder_layer.py`` + ``test_decoder_layer.py``,
 mirroring ``tests/models/qwen3_5_30b_a3b/``), run on macOS with no CUDA:
 **cpu + f32 only**.
 
@@ -19,52 +20,80 @@ package shares:
   correctness, not context-length scaling), and
 - the component -> HF-submodule map.
 
-Component HIR ``@func``s live in ``qwen3_1_7b_module.py`` (the ``@module
-class`` authoring style, per ``qwen3_5_30b_a3b/qwen3_module.py``); this module
-only holds the shared dims, the HF layer / rope-cache / causal-mask builders,
-and the weight-layout helper, so every test file composes them rather than
-duplicating the description.
+Component HIR ``@func``s live in ``model/decoder_layer.py``, over this module's
+``REAL`` shape; ``decoder_layer.py`` binds the two together. This module holds
+only the shape, the HF layer / rope-cache / causal-mask builders, and the
+weight-layout helper.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 # ── Qwen3-1.7B dimensions ────────────────────────────────────────────────
 # Public Qwen3-1.7B config.json values (https://huggingface.co/Qwen/Qwen3-1.7B):
 # hidden_size=2048, num_attention_heads=16, num_key_value_heads=8, head_dim=128,
 # intermediate_size=6144, rms_norm_eps=1e-6, rope_theta=1e6,
-# max_position_embeddings=32768. Everything below matches those exactly;
-# fields not pinned by the task (e.g. attention_bias) fall back to
-# ``Qwen3Config`` defaults (also ``False``, so this is moot here).
-HIDDEN = 2048
-HEAD_DIM = 128
-NUM_Q_HEADS = 16
-NUM_KV_HEADS = 8
-GQA_GROUP = NUM_Q_HEADS // NUM_KV_HEADS    # 2 query heads share one kv head
-Q_PROJ = NUM_Q_HEADS * HEAD_DIM            # 2048
-KV_PROJ = NUM_KV_HEADS * HEAD_DIM          # 1024
-INTERMEDIATE = 6144
-RMS_EPS = 1e-6
-ROPE_THETA = 1_000_000.0
-ATTENTION_BIAS = False
-VOCAB = 151936
-MAX_POS = 32768
+# max_position_embeddings=32768. Fields the model does not pin (attention_bias)
+# fall back to the ``Qwen3Config`` default, which is also ``False``.
 
-# Static: no KV cache, no dynamic dims — a single-shot prefill oracle
-# (``cur_pos`` is always 0). Op semantics are length-agnostic, but atom matching
-# is not: an atom's row granularity has to divide the op's row count, and at
-# S_CAP=4 every matmul here fails that (``4 % 16 != 0`` against the AMX outer
-# product) and lists no candidate at all. 64 is a length that keeps the
-# numerical oracle cheap and still divides both modelled granularities.
-S_CAP = 64
 
-# HIR dtype for every Tensor annotation in this package: f32 everywhere. There
-# is no CUDA on this box, so there is no bf16 branch to also cover (contrast
-# ``qwen3_5_30b_a3b``, which is bf16-only / GPU-only).
-DT = "f32"
+@dataclass(frozen=True)
+class Qwen3Shape:
+    """One decoder layer's shape, plus the sequence length and dtype every
+    kernel in this package is authored at."""
+
+    hidden: int
+    head_dim: int
+    n_q_heads: int
+    n_kv_heads: int
+    intermediate: int
+    rms_eps: float
+    rope_theta: float
+    attention_bias: bool
+    vocab: int
+    max_pos: int
+    s_cap: int
+    dt: str
+
+    @property
+    def gqa_group(self) -> int:
+        """Query heads sharing one key/value head."""
+        return self.n_q_heads // self.n_kv_heads
+
+    @property
+    def q_proj(self) -> int:
+        return self.n_q_heads * self.head_dim
+
+    @property
+    def kv_proj(self) -> int:
+        return self.n_kv_heads * self.head_dim
+
+
+# ``s_cap`` is static: no KV cache, no dynamic dims -- a single-shot prefill
+# oracle (``cur_pos`` is always 0). Op semantics are length-agnostic, but atom
+# matching is not: an atom's row granularity has to divide the op's row count,
+# and at 4 every matmul here fails that (``4 % 16 != 0`` against the AMX outer
+# product) and lists no candidate. 64 is a length that keeps the numerical
+# oracle cheap and still divides both modelled granularities.
+REAL = Qwen3Shape(
+    hidden=2048,
+    head_dim=128,
+    n_q_heads=16,
+    n_kv_heads=8,
+    intermediate=6144,
+    rms_eps=1e-6,
+    rope_theta=1_000_000.0,
+    attention_bias=False,
+    vocab=151936,
+    max_pos=32768,
+    s_cap=64,
+    dt="f32",
+)
 
 # ── Component -> HF submodule map ───────────────────────────────────────
 # Each component's HIR is validated against these submodules of a single
 # ``Qwen3DecoderLayer``. ``self_attention`` and ``mlp`` each fuse their
-# preceding RMSNorm (see ``qwen3_1_7b_module.py`` docstring), so their HF
+# preceding RMSNorm (see ``model/decoder_layer.py`` docstring), so their HF
 # comparison composes the norm + block rather than the block alone.
 COMPONENT_HF_SUBMODULES = {
     "input_rms_norm": ("input_layernorm",),
@@ -74,22 +103,22 @@ COMPONENT_HF_SUBMODULES = {
 }
 
 
-def build_hf_config():
-    """Build a ``Qwen3Config`` at the Qwen3-1.7B dimensions (one decoder layer)."""
+def build_hf_config(shape: Qwen3Shape = REAL):
+    """Build a ``Qwen3Config`` at *shape*'s dimensions (one decoder layer)."""
     from transformers import Qwen3Config  # noqa: PLC0415
 
     return Qwen3Config(
-        hidden_size=HIDDEN,
-        head_dim=HEAD_DIM,
-        num_attention_heads=NUM_Q_HEADS,
-        num_key_value_heads=NUM_KV_HEADS,
-        intermediate_size=INTERMEDIATE,
-        rms_norm_eps=RMS_EPS,
-        rope_theta=ROPE_THETA,
-        attention_bias=ATTENTION_BIAS,
+        hidden_size=shape.hidden,
+        head_dim=shape.head_dim,
+        num_attention_heads=shape.n_q_heads,
+        num_key_value_heads=shape.n_kv_heads,
+        intermediate_size=shape.intermediate,
+        rms_norm_eps=shape.rms_eps,
+        rope_theta=shape.rope_theta,
+        attention_bias=shape.attention_bias,
         num_hidden_layers=1,
-        vocab_size=VOCAB,
-        max_position_embeddings=MAX_POS,
+        vocab_size=shape.vocab,
+        max_position_embeddings=shape.max_pos,
     )
 
 

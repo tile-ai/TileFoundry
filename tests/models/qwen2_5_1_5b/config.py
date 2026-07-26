@@ -2,7 +2,7 @@
 
 Phase 0 "打样": second of four planned dense/near-dense models (Qwen3-1.7B,
 Qwen2.5-1.5B, MiniCPM3, Gemma-2) authored against the same three-file
-template (``common.py`` + ``<model>_module.py`` + ``test_<model>_module.py``,
+template (``config.py`` + ``model/decoder_layer.py`` + ``test_decoder_layer.py``,
 mirroring ``tests/models/qwen3_1_7b/``, itself mirroring
 ``tests/models/qwen3_5_30b_a3b/``), run on macOS with no CUDA: **cpu + f32
 only**.
@@ -15,19 +15,19 @@ package shares:
   random weights at a fixed seed),
 - the model dimensions (GQA 12 query / 2 key-value heads; a dense SwiGLU MLP
   — no MoE router/gather),
-- the static single-shot-prefill contract (a fixed ``S_CAP``-token sequence,
+- the static single-shot-prefill contract (a fixed ``REAL.s_cap``-token sequence,
   no KV cache, no dynamic ``DimVar`` — Phase 0 validates op-composition
   correctness, not context-length scaling), and
 - the component -> HF-submodule map.
 
-Component HIR ``@func``s live in ``qwen2_5_1_5b_module.py`` (the ``@module
-class`` authoring style, per ``qwen3_1_7b/qwen3_1_7b_module.py``); this
+Component HIR ``@func``s live in ``model/decoder_layer.py`` (the ``@module
+class`` authoring style, per ``qwen3_1_7b/model/decoder_layer.py``); this
 module only holds the shared dims, the HF layer / rope-cache / causal-mask
 builders, and the weight-layout helper, so every test file composes them
 rather than duplicating the description.
 
 Two structural differences from the ``qwen3_1_7b`` sibling (see
-``qwen2_5_1_5b_module.py`` docstring for the HIR-level detail):
+``model/decoder_layer.py`` docstring for the HIR-level detail):
 
 - Qwen2 attention has no per-head ``q_norm`` / ``k_norm``: HF
   ``Qwen2Attention`` applies RoPE directly to the raw ``q_proj`` /
@@ -40,41 +40,66 @@ Two structural differences from the ``qwen3_1_7b`` sibling (see
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+
 # ── Qwen2.5-1.5B dimensions ──────────────────────────────────────────────
 # Public Qwen2.5-1.5B config.json values (https://huggingface.co/Qwen/Qwen2.5-1.5B):
 # hidden_size=1536, num_attention_heads=12, num_key_value_heads=2, head_dim=128,
 # intermediate_size=8960, rms_norm_eps=1e-6, rope_theta=1e6,
 # max_position_embeddings=32768. Everything below matches those exactly;
-# ``VOCAB`` / ``MAX_POS`` already equal the ``Qwen2Config`` dataclass
+# ``REAL.vocab`` / ``REAL.max_pos`` already equal the ``Qwen2Config`` dataclass
 # defaults (confirmed against the installed ``transformers`` package) and
 # are kept explicit only for parity with the ``qwen3_1_7b`` template.
-HIDDEN = 1536
-HEAD_DIM = 128
-NUM_Q_HEADS = 12
-NUM_KV_HEADS = 2
-GQA_GROUP = NUM_Q_HEADS // NUM_KV_HEADS    # 6 query heads share one kv head
-Q_PROJ = NUM_Q_HEADS * HEAD_DIM            # 1536
-KV_PROJ = NUM_KV_HEADS * HEAD_DIM          # 256
-INTERMEDIATE = 8960
-RMS_EPS = 1e-6
-ROPE_THETA = 1_000_000.0
-VOCAB = 151936
-MAX_POS = 32768
+@dataclass(frozen=True)
+class Qwen25Shape:
+    """One decoder layer's shape, plus the sequence length and dtype every
+    kernel in this package is authored at."""
 
-# Static test-speed contract: no KV cache, no dynamic dims. This is a
-# single-shot prefill oracle (``cur_pos`` is always 0) — a small fixed
-# sequence tile is enough since op semantics are length-agnostic; a real
-# context length is unnecessary Phase-0 runtime cost.
-S_CAP = 4
+    hidden: int
+    head_dim: int
+    n_q_heads: int
+    n_kv_heads: int
+    intermediate: int
+    rms_eps: float
+    rope_theta: float
+    vocab: int
+    max_pos: int
+    s_cap: int
+    dt: str
 
-# HIR dtype for every Tensor annotation in this package: f32 everywhere. There
-# is no CUDA on this box, so there is no bf16 branch to also cover.
-DT = "f32"
+    @property
+    def gqa_group(self) -> int:
+        """Query heads sharing one key/value head."""
+        return self.n_q_heads // self.n_kv_heads
+
+    @property
+    def q_proj(self) -> int:
+        return self.n_q_heads * self.head_dim
+
+    @property
+    def kv_proj(self) -> int:
+        return self.n_kv_heads * self.head_dim
+
+
+REAL = Qwen25Shape(
+    hidden=1536,
+    head_dim=128,
+    n_q_heads=12,
+    n_kv_heads=2,
+    intermediate=8960,
+    rms_eps=1e-06,
+    rope_theta=1000000.0,
+    vocab=151936,
+    max_pos=32768,
+    s_cap=4,
+    dt='f32',
+)
 
 # ── Component -> HF submodule map ───────────────────────────────────────
 # Each component's HIR is validated against these submodules of a single
 # ``Qwen2DecoderLayer``. ``self_attention`` and ``mlp`` each fuse their
-# preceding RMSNorm (see ``qwen2_5_1_5b_module.py`` docstring), so their HF
+# preceding RMSNorm (see ``model/decoder_layer.py`` docstring), so their HF
 # comparison composes the norm + block rather than the block alone.
 COMPONENT_HF_SUBMODULES = {
     "input_rms_norm": ("input_layernorm",),
@@ -89,16 +114,16 @@ def build_hf_config():
     from transformers import Qwen2Config  # noqa: PLC0415
 
     return Qwen2Config(
-        hidden_size=HIDDEN,
-        head_dim=HEAD_DIM,
-        num_attention_heads=NUM_Q_HEADS,
-        num_key_value_heads=NUM_KV_HEADS,
-        intermediate_size=INTERMEDIATE,
-        rms_norm_eps=RMS_EPS,
-        rope_theta=ROPE_THETA,
+        hidden_size=REAL.hidden,
+        head_dim=REAL.head_dim,
+        num_attention_heads=REAL.n_q_heads,
+        num_key_value_heads=REAL.n_kv_heads,
+        intermediate_size=REAL.intermediate,
+        rms_norm_eps=REAL.rms_eps,
+        rope_theta=REAL.rope_theta,
         num_hidden_layers=1,
-        vocab_size=VOCAB,
-        max_position_embeddings=MAX_POS,
+        vocab_size=REAL.vocab,
+        max_position_embeddings=REAL.max_pos,
     )
 
 
@@ -146,7 +171,7 @@ def causal_mask(seq, device="cpu", dtype=None):
     attend key ``j`` (``j <= i``), ``-inf`` otherwise.
 
     There is no KV cache in this package: every token attends only within the
-    same ``S_CAP`` tile, i.e. ``cur_pos`` is always 0.
+    same ``REAL.s_cap`` tile, i.e. ``cur_pos`` is always 0.
     """
     import torch  # noqa: PLC0415
 

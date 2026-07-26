@@ -23,7 +23,7 @@ import time
 import isl
 import pytest
 
-from tests.models.qwen3_1_7b.qwen3_1_7b_module import Qwen3_1_7B
+from tests.models.qwen3_1_7b import decoder_layer as qwen3
 from tilefoundry.analysis import Analysis, extract
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import emit_scaffold
@@ -37,9 +37,9 @@ _ATOM_SHAPES = {
     NEON_FMLA_4x4x1_F32.name: NEON_FMLA_4x4x1_F32.shape_mnk,
 }
 _KERNELS = {
-    "mlp": Qwen3_1_7B.lookup("mlp"),
-    "self_attention": Qwen3_1_7B.lookup("self_attention"),
-    "tiled_mlp": Qwen3_1_7B.lookup("tiled_mlp"),
+    "mlp": qwen3.mlp,
+    "self_attention": qwen3.self_attention,
+    "tiled_mlp": qwen3.tiled_mlp,
 }
 
 

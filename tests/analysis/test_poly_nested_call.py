@@ -22,7 +22,7 @@ from pathlib import Path
 import isl
 import pytest
 
-from tests.models.qwen3_1_7b.qwen3_1_7b_module import Qwen3_1_7B
+from tests.models.qwen3_1_7b import decoder_layer as qwen3
 from tilefoundry import func
 from tilefoundry.analysis import ExtractError, TileGraph, extract
 from tilefoundry.dsl import DimVar, Tensor
@@ -48,7 +48,7 @@ def test_self_attention_penetrates_input_rms_norm_with_prefixed_names():
     helper's own RMSNorm op shows up as a statement, and both its
     statement name and its output buffer carry the ``input_rms_norm0_``
     call-site prefix so a hole is traceable to the helper it came from."""
-    tg = extract(Qwen3_1_7B.lookup("self_attention"))
+    tg = extract(qwen3.self_attention)
     assert isinstance(tg, TileGraph)
 
     stmt_names = [u.name for u in tg.units]

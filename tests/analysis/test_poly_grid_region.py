@@ -15,7 +15,7 @@ What the model has to say, and what each test pins:
   the consumer's access map as that axis, so consecutive iterations address
   different slices; a data-dependent gather still fails closed.
 
-The real kernel is ``Qwen3_1_7B.lookup("tiled_mlp")`` (numerically checked against the
+The real kernel is ``qwen3.tiled_mlp`` (numerically checked against the
 untiled ``mlp`` in ``tests/models/qwen3_1_7b``); the small synthetic loops
 above it keep the expected sets hand-checkable.
 """
@@ -24,7 +24,8 @@ from __future__ import annotations
 import isl
 import pytest
 
-from tests.models.qwen3_1_7b.qwen3_1_7b_module import (
+from tests.models.qwen3_1_7b import decoder_layer as qwen3
+from tests.models.qwen3_1_7b.decoder_layer import (
     MB,
     MT,
     NB_HID,
@@ -32,7 +33,6 @@ from tests.models.qwen3_1_7b.qwen3_1_7b_module import (
     NK_HID,
     NK_INT,
     NT,
-    Qwen3_1_7B,
 )
 from tests.schedule.test_kernel_schedule import _lex_nonpositive
 from tilefoundry import func
@@ -236,7 +236,7 @@ def test_tiled_mlp_loop_axes_and_block_shapes():
     ``[MT, KT] @ [KT, NT]`` block pair batched over (token block, column
     block), with the K axis of the *loop* in front: the gate/up walk is
     ``NK_HID`` steps, the down walk ``NK_INT``."""
-    tg = extract(Qwen3_1_7B.lookup("tiled_mlp"))
+    tg = extract(qwen3.tiled_mlp)
     doms = _domains(tg)
 
     # The three accumulators are the loop carries; each is written by the
@@ -269,7 +269,7 @@ def test_tiled_mlp_carries_are_distance_one_and_schedule_legally():
     """The three accumulator carries each show up as a distance-1 dependence
     on their own loop axis, and ``build_schedule_tree`` orders every
     dependence of the whole graph strictly."""
-    tg = extract(Qwen3_1_7B.lookup("tiled_mlp"))
+    tg = extract(qwen3.tiled_mlp)
     for buf in ("gate_z", "up_z", "out_z"):
         name = _writer_of(tg, buf)
         assert _self_deltas(tg, name).is_equal(isl.set("{ [1, 0, 0, 0, 0] }")), buf

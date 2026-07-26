@@ -2,7 +2,7 @@
 Module — the Phase 0 **Multi-head Latent Attention (MLA)** entry.
 
 Same ``@module class`` authoring style as ``tests/models/qwen3_1_7b/
-qwen3_1_7b_module.py`` (each kernel is a named ``@func`` method; the
+model/decoder_layer.py`` (each kernel is a named ``@func`` method; the
 decorator returns the ``tilefoundry.ir.core.module.Module`` that the class
 name binds directly to). There is no MLA skeleton anywhere else in this repo
 — every step below is composed from existing primitive HIR ops (``matmul``,
@@ -24,11 +24,11 @@ config-specific numeric baked in.
 
 ── MLA op-flow (``mla_attention``), matching ``MiniCPM3Attention.forward`` ──
 
-Shapes below use ``Hq = NUM_Q_HEADS = 40``; all tensors are batch-1,
-``[1, S_CAP, ...]`` or ``[1, S_CAP, Hq, ...]`` layout throughout (the same
+Shapes below use ``Hq = config.n_q_heads = 40``; all tensors are batch-1,
+``[1, config.s_cap, ...]`` or ``[1, config.s_cap, Hq, ...]`` layout throughout (the same
 "head axis before the batch/head transpose" convention the Qwen3 siblings
 use, matching what ``tf.rope`` expects) until step 7 transposes to
-``[1, Hq, S_CAP, ...]`` right before the score matmul.
+``[1, Hq, config.s_cap, ...]`` right before the score matmul.
 
 1. **Q down -> norm -> up -> split** (``MiniCPM3Attention.forward`` L299-304):
    ``q_down = x @ Wq_a`` `[1,S,768]` -> ``rms_norm(., gamma_q_a, eps=1e-6)``
@@ -59,12 +59,12 @@ use, matching what ``tf.rope`` expects) until step 7 transposes to
    MLA / MQA-style-K use case and needs no special-casing.
 5. **k_rope cross-head broadcast** (L318, ``k_rot.expand(...)``): the rotated
    1-head ``k_rope`` broadcasts to all ``Hq`` heads via
-   ``tf.repeat_interleave(., repeats=NUM_Q_HEADS, axis=2)`` — algebraically
+   ``tf.repeat_interleave(., repeats=config.n_q_heads, axis=2)`` — algebraically
    identical to HF's ``expand`` here because there is exactly one element
    along that axis to begin with (repeating a size-1 axis has no
    "interleave vs. broadcast" ordering ambiguity), and the same primitive the
    Qwen3 siblings use for GQA head-repeat (there the repeated axis has
-   ``NUM_KV_HEADS`` > 1 elements; here it has exactly 1 — same op, different
+   ``config.n_kv_heads`` > 1 elements; here it has exactly 1 — same op, different
    input shape).
 6. **Reassemble** (L320-321): ``query = concat(q_nope, q_rope, axis=-1)``
    `[1,S,Hq,96]`, ``key = concat(k_nope, k_rope_broadcast, axis=-1)``
@@ -91,25 +91,6 @@ case.
 """
 from __future__ import annotations
 
-from tests.models.minicpm3_4b.common import (
-    ATTN_OUT,
-    DT,
-    HIDDEN,
-    INTERMEDIATE,
-    KV_A_PROJ,
-    KV_B_PROJ,
-    KV_LORA_RANK,
-    NUM_Q_HEADS,
-    Q_LORA_RANK,
-    Q_UP_PROJ,
-    QK_HEAD_DIM,
-    QK_NOPE_HEAD_DIM,
-    QK_ROPE_HEAD_DIM,
-    RMS_EPS,
-    RMS_EPS_LORA,
-    S_CAP,
-    V_HEAD_DIM,
-)
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
@@ -119,76 +100,76 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @f
 class MiniCPM3_4B:
     @func
     def input_rms_norm(
-        hidden: Tensor[(1, S_CAP, HIDDEN), DT],
-        gamma_in: Tensor[(HIDDEN,), DT],
-    ) -> Tensor[(1, S_CAP, HIDDEN), DT]:
+        hidden: Tensor[(1, config.s_cap, config.hidden), config.dt],
+        gamma_in: Tensor[(config.hidden,), config.dt],
+    ) -> Tensor[(1, config.s_cap, config.hidden), config.dt]:
         # Pre-attention input RMSNorm; HF `MiniCPM3DecoderLayer.input_layernorm`
-        # (eps = config.rms_norm_eps = 1e-5, RMS_EPS below — NOT the rms_norm
+        # (eps = config.rms_norm_eps = 1e-5, config.rms_eps below — NOT the rms_norm
         # op's own 1e-6 default; see module docstring's eps gotcha).
-        return tf.rms_norm(hidden, gamma_in, eps=RMS_EPS)
+        return tf.rms_norm(hidden, gamma_in, eps=config.rms_eps)
 
     @func
     def mla_attention(
-        hidden: Tensor[(1, S_CAP, HIDDEN), DT],
-        gamma_in: Tensor[(HIDDEN,), DT],
-        w_q_a: Tensor[(1, HIDDEN, Q_LORA_RANK), DT],
-        gamma_q_a: Tensor[(Q_LORA_RANK,), DT],
-        w_q_b: Tensor[(1, Q_LORA_RANK, Q_UP_PROJ), DT],
-        w_kv_a: Tensor[(1, HIDDEN, KV_A_PROJ), DT],
-        gamma_kv_a: Tensor[(KV_LORA_RANK,), DT],
-        w_kv_b: Tensor[(1, KV_LORA_RANK, KV_B_PROJ), DT],
-        cos_cache: Tensor[(S_CAP, QK_ROPE_HEAD_DIM), DT],
-        sin_cache: Tensor[(S_CAP, QK_ROPE_HEAD_DIM), DT],
-        pos_ids: Tensor[(S_CAP,), "i32"],
-        attn_mask: Tensor[(1, 1, S_CAP, S_CAP), DT],
-        scale: Tensor[(1, 1, 1, 1), DT],
-        w_o: Tensor[(1, ATTN_OUT, HIDDEN), DT],
-    ) -> Tensor[(1, S_CAP, HIDDEN), DT]:
+        hidden: Tensor[(1, config.s_cap, config.hidden), config.dt],
+        gamma_in: Tensor[(config.hidden,), config.dt],
+        w_q_a: Tensor[(1, config.hidden, config.q_lora_rank), config.dt],
+        gamma_q_a: Tensor[(config.q_lora_rank,), config.dt],
+        w_q_b: Tensor[(1, config.q_lora_rank, config.q_up_proj), config.dt],
+        w_kv_a: Tensor[(1, config.hidden, config.kv_a_proj), config.dt],
+        gamma_kv_a: Tensor[(config.kv_lora_rank,), config.dt],
+        w_kv_b: Tensor[(1, config.kv_lora_rank, config.kv_b_proj), config.dt],
+        cos_cache: Tensor[(config.s_cap, config.qk_rope_head_dim), config.dt],
+        sin_cache: Tensor[(config.s_cap, config.qk_rope_head_dim), config.dt],
+        pos_ids: Tensor[(config.s_cap,), "i32"],
+        attn_mask: Tensor[(1, 1, config.s_cap, config.s_cap), config.dt],
+        scale: Tensor[(1, 1, 1, 1), config.dt],
+        w_o: Tensor[(1, config.attn_out, config.hidden), config.dt],
+    ) -> Tensor[(1, config.s_cap, config.hidden), config.dt]:
         # Fused input_layernorm + self_attn: Multi-head Latent Attention (MLA)
         # — see the module docstring for the full 7-step breakdown. No KV
-        # cache — single-shot prefill, cur_pos == 0, plain [S_CAP,S_CAP] mask.
+        # cache — single-shot prefill, cur_pos == 0, plain [config.s_cap,config.s_cap] mask.
         x = input_rms_norm(hidden, gamma_in)
 
         # Step 1: Q down -> norm -> up -> reshape -> split (nope | rope).
         q_down = tf.matmul(x, w_q_a)
-        q_down_n = tf.rms_norm(q_down, gamma_q_a, eps=RMS_EPS_LORA)
+        q_down_n = tf.rms_norm(q_down, gamma_q_a, eps=config.rms_eps_lora)
         q_up = tf.matmul(q_down_n, w_q_b)
-        q = tf.reshape(q_up, new_shape=(1, S_CAP, NUM_Q_HEADS, QK_HEAD_DIM))
+        q = tf.reshape(q_up, new_shape=(1, config.s_cap, config.n_q_heads, config.qk_head_dim))
         q_nope = tf.slice(
-            q, begin=(0, 0, 0, 0), end=(1, S_CAP, NUM_Q_HEADS, QK_NOPE_HEAD_DIM), strides=(1, 1, 1, 1)
+            q, begin=(0, 0, 0, 0), end=(1, config.s_cap, config.n_q_heads, config.qk_nope_head_dim), strides=(1, 1, 1, 1)
         )
         q_rope = tf.slice(
-            q, begin=(0, 0, 0, QK_NOPE_HEAD_DIM), end=(1, S_CAP, NUM_Q_HEADS, QK_HEAD_DIM),
+            q, begin=(0, 0, 0, config.qk_nope_head_dim), end=(1, config.s_cap, config.n_q_heads, config.qk_head_dim),
             strides=(1, 1, 1, 1),
         )
 
         # Step 2: KV compress -> split (shared latent | shared rope slice).
         compressed = tf.matmul(x, w_kv_a)
         kv_c = tf.slice(
-            compressed, begin=(0, 0, 0), end=(1, S_CAP, KV_LORA_RANK), strides=(1, 1, 1)
+            compressed, begin=(0, 0, 0), end=(1, config.s_cap, config.kv_lora_rank), strides=(1, 1, 1)
         )
         k_rope_flat = tf.slice(
-            compressed, begin=(0, 0, KV_LORA_RANK), end=(1, S_CAP, KV_A_PROJ), strides=(1, 1, 1)
+            compressed, begin=(0, 0, config.kv_lora_rank), end=(1, config.s_cap, config.kv_a_proj), strides=(1, 1, 1)
         )
 
         # Step 3: KV up -> reshape -> split (nope | value), one pair per head.
-        kv_c_n = tf.rms_norm(kv_c, gamma_kv_a, eps=RMS_EPS_LORA)
+        kv_c_n = tf.rms_norm(kv_c, gamma_kv_a, eps=config.rms_eps_lora)
         kv_up = tf.matmul(kv_c_n, w_kv_b)
-        kv = tf.reshape(kv_up, new_shape=(1, S_CAP, NUM_Q_HEADS, QK_NOPE_HEAD_DIM + V_HEAD_DIM))
+        kv = tf.reshape(kv_up, new_shape=(1, config.s_cap, config.n_q_heads, config.qk_nope_head_dim + config.v_head_dim))
         k_nope = tf.slice(
-            kv, begin=(0, 0, 0, 0), end=(1, S_CAP, NUM_Q_HEADS, QK_NOPE_HEAD_DIM), strides=(1, 1, 1, 1)
+            kv, begin=(0, 0, 0, 0), end=(1, config.s_cap, config.n_q_heads, config.qk_nope_head_dim), strides=(1, 1, 1, 1)
         )
         value = tf.slice(
-            kv, begin=(0, 0, 0, QK_NOPE_HEAD_DIM),
-            end=(1, S_CAP, NUM_Q_HEADS, QK_NOPE_HEAD_DIM + V_HEAD_DIM), strides=(1, 1, 1, 1),
+            kv, begin=(0, 0, 0, config.qk_nope_head_dim),
+            end=(1, config.s_cap, config.n_q_heads, config.qk_nope_head_dim + config.v_head_dim), strides=(1, 1, 1, 1),
         )
 
         # Step 4: RoPE on the rope slice only (dim 32, not qk_head_dim 96).
-        k_rope = tf.reshape(k_rope_flat, new_shape=(1, S_CAP, 1, QK_ROPE_HEAD_DIM))
+        k_rope = tf.reshape(k_rope_flat, new_shape=(1, config.s_cap, 1, config.qk_rope_head_dim))
         q_rope_e, k_rope_e = tf.rope(q_rope, k_rope, cos_cache, sin_cache, pos_ids)
 
         # Step 5: k_rope is MQA-style shared -> broadcast to all query heads.
-        k_rope_b = tf.repeat_interleave(k_rope_e, repeats=NUM_Q_HEADS, axis=2)
+        k_rope_b = tf.repeat_interleave(k_rope_e, repeats=config.n_q_heads, axis=2)
 
         # Step 6: reassemble nope + rope (rope back in its original slot).
         query = tf.concat(q_nope, q_rope_e, axis=-1)
@@ -204,20 +185,20 @@ class MiniCPM3_4B:
         probs = tf.softmax(scores, axis=-1)
         ctx = tf.matmul(probs, v_h)
         attn_out = tf.transpose(ctx, perm=(0, 2, 1, 3))
-        attn_flat = tf.reshape(attn_out, new_shape=(1, S_CAP, ATTN_OUT))
+        attn_flat = tf.reshape(attn_out, new_shape=(1, config.s_cap, config.attn_out))
         return tf.matmul(attn_flat, w_o)
 
     @func
     def mlp(
-        hidden: Tensor[(1, S_CAP, HIDDEN), DT],
-        gamma_post: Tensor[(HIDDEN,), DT],
-        w_gate: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
-        w_up: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
-        w_down: Tensor[(1, INTERMEDIATE, HIDDEN), DT],
-    ) -> Tensor[(1, S_CAP, HIDDEN), DT]:
+        hidden: Tensor[(1, config.s_cap, config.hidden), config.dt],
+        gamma_post: Tensor[(config.hidden,), config.dt],
+        w_gate: Tensor[(1, config.hidden, config.intermediate), config.dt],
+        w_up: Tensor[(1, config.hidden, config.intermediate), config.dt],
+        w_down: Tensor[(1, config.intermediate, config.hidden), config.dt],
+    ) -> Tensor[(1, config.s_cap, config.hidden), config.dt]:
         # Fused post_attention_layernorm + dense SwiGLU, no residual. silu(x) =
         # x * sigmoid(x) — there is no standalone silu op in the HIR op surface.
-        hidden_norm = tf.rms_norm(hidden, gamma_post, eps=RMS_EPS)
+        hidden_norm = tf.rms_norm(hidden, gamma_post, eps=config.rms_eps)
         gate = tf.matmul(hidden_norm, w_gate)
         up = tf.matmul(hidden_norm, w_up)
         act = tf.mul(gate, tf.sigmoid(gate))
@@ -226,26 +207,26 @@ class MiniCPM3_4B:
 
     @func
     def decoder_layer(
-        hidden: Tensor[(1, S_CAP, HIDDEN), DT],
-        gamma_in: Tensor[(HIDDEN,), DT],
-        w_q_a: Tensor[(1, HIDDEN, Q_LORA_RANK), DT],
-        gamma_q_a: Tensor[(Q_LORA_RANK,), DT],
-        w_q_b: Tensor[(1, Q_LORA_RANK, Q_UP_PROJ), DT],
-        w_kv_a: Tensor[(1, HIDDEN, KV_A_PROJ), DT],
-        gamma_kv_a: Tensor[(KV_LORA_RANK,), DT],
-        w_kv_b: Tensor[(1, KV_LORA_RANK, KV_B_PROJ), DT],
-        cos_cache: Tensor[(S_CAP, QK_ROPE_HEAD_DIM), DT],
-        sin_cache: Tensor[(S_CAP, QK_ROPE_HEAD_DIM), DT],
-        pos_ids: Tensor[(S_CAP,), "i32"],
-        attn_mask: Tensor[(1, 1, S_CAP, S_CAP), DT],
-        scale: Tensor[(1, 1, 1, 1), DT],
-        w_o: Tensor[(1, ATTN_OUT, HIDDEN), DT],
-        gamma_post: Tensor[(HIDDEN,), DT],
-        w_gate: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
-        w_up: Tensor[(1, HIDDEN, INTERMEDIATE), DT],
-        w_down: Tensor[(1, INTERMEDIATE, HIDDEN), DT],
-        residual_scale: Tensor[(1, 1, 1), DT],
-    ) -> Tensor[(1, S_CAP, HIDDEN), DT]:
+        hidden: Tensor[(1, config.s_cap, config.hidden), config.dt],
+        gamma_in: Tensor[(config.hidden,), config.dt],
+        w_q_a: Tensor[(1, config.hidden, config.q_lora_rank), config.dt],
+        gamma_q_a: Tensor[(config.q_lora_rank,), config.dt],
+        w_q_b: Tensor[(1, config.q_lora_rank, config.q_up_proj), config.dt],
+        w_kv_a: Tensor[(1, config.hidden, config.kv_a_proj), config.dt],
+        gamma_kv_a: Tensor[(config.kv_lora_rank,), config.dt],
+        w_kv_b: Tensor[(1, config.kv_lora_rank, config.kv_b_proj), config.dt],
+        cos_cache: Tensor[(config.s_cap, config.qk_rope_head_dim), config.dt],
+        sin_cache: Tensor[(config.s_cap, config.qk_rope_head_dim), config.dt],
+        pos_ids: Tensor[(config.s_cap,), "i32"],
+        attn_mask: Tensor[(1, 1, config.s_cap, config.s_cap), config.dt],
+        scale: Tensor[(1, 1, 1, 1), config.dt],
+        w_o: Tensor[(1, config.attn_out, config.hidden), config.dt],
+        gamma_post: Tensor[(config.hidden,), config.dt],
+        w_gate: Tensor[(1, config.hidden, config.intermediate), config.dt],
+        w_up: Tensor[(1, config.hidden, config.intermediate), config.dt],
+        w_down: Tensor[(1, config.intermediate, config.hidden), config.dt],
+        residual_scale: Tensor[(1, 1, 1), config.dt],
+    ) -> Tensor[(1, config.s_cap, config.hidden), config.dt]:
         # Full decoder layer: mla_attention + scaled residual, then mlp +
         # scaled residual — mirrors `MiniCPM3DecoderLayer.forward` exactly,
         # INCLUDING the scale_depth residual scaling (MiniCPM's muP-style
