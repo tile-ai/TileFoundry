@@ -94,10 +94,10 @@ def test_swimlane_is_legal_mermaid_gantt():
     assert len(task_lines) > 0
 
     # MM's instances are collapsed (not fully unrolled)...
-    assert "省略" in swimlane.text
+    assert "elided" in swimlane.text
     # ...but RN's are small enough that nothing needs to be.
     rn_section = swimlane.text.split("section RN")[1]
-    assert "省略" not in rn_section
+    assert "elided" not in rn_section
 
 
 def test_hole_contracts_one_per_statement_with_op_ref_and_bufferaccesses():

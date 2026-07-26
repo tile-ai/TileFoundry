@@ -105,9 +105,9 @@ class TileGraph:
 
     ``domain``/``reads``/``writes`` are unions of per-``TileUnit`` pieces,
     one tuple name per producing statement (domain/reads/writes) or
-    accessed buffer (reads/writes range) -- a *union* domain, not the
-    single ``isl.set`` ``docs/spec/tilegraph.md`` sketches, because the
-    schedule tree needs one named tuple per statement.
+    accessed buffer (reads/writes range) -- a *union* domain rather than a
+    single ``isl.set``, because the schedule tree needs one named tuple per
+    statement.
     ``deps`` is the auto-inferred RAW must-dependence relation between
     statement instances (see :func:`extract`). ``params`` resolves any
     dynamic-shape isl parameter name appearing in ``domain`` back to its

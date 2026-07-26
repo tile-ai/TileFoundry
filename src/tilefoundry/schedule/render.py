@@ -375,7 +375,7 @@ def _swimlane_lines(tg: TileGraph, contracts: dict[str, HoleContract]) -> list[s
         for idx, coord in enumerate(shown):
             is_last = idx == n_shown - 1
             if collapsed and is_last:
-                lines.append(f"    … ×{collapsed} 省略 :{tick}, 1d")
+                lines.append(f"    ... x{collapsed} elided :{tick}, 1d")
                 tick += 1
             if not collapsed:
                 role = ""

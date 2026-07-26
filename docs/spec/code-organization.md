@@ -24,7 +24,8 @@ truth for the directory's structure and invariants.
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` (§2 rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` (§2 rule 5). |
 | `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per §2 Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
-| `schedule/` | [schedule](./schedule.md) | Direct public Schedule service protocol and immutable options, result, and report structures. The compact public surface lives in `schedule/__init__.py`; concrete stage services live with their owning Target. |
+| `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: `poly.py` (the polyhedral model — `extract` / `TileGraph` and the facts measured over a time relation), `atom_facts.py` (`AtomFact`), `analyzer.py` + `metadata.py` (the authored-HIR roofline / footprint / timeline metrics and their metadata records). The `Analysis` service protocol and the compact public surface live in `analysis/__init__.py`; per-target atom catalogues live with their owning Target. |
+| `schedule/` | [schedule](./schedule.md) | Direct public Schedule service protocol and immutable options, result, and report structures in `schedule/__init__.py`, plus the stages a service composes its solve from: `kernel_schedule.py` (schedule-tree construction and band operations), `select_atoms.py` (atom selection and the facts it records), `render.py` (holed skeleton, swimlane, hole contracts). Concrete stage services live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, §2 rule 6). |
 | `target/` | [target](./target.md) | Compilation target capability descriptors, architecture/device facts, immutable internal stage-service lookup, and Target-owned scheduling implementations: `Architecture` / `Device` / `Target` / `CudaTarget` / `CpuTarget` / `resolve_target`. |
 | `codegen/` | [codegen](./codegen.md) | Code generation: the emitter registry, the linkable / linked products and the linker, and per-target emitters under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, §2 rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only (kernel shells / host stubs). |
@@ -56,10 +57,14 @@ layout reflects that boundary directly.
   pipeline they are the front-end producer and back-end consumer of
   IR, not IR sublayers.
 - `schedule/` sits outside `ir/` because it defines a service over typed HIR,
-  not a new IR layer. The public package contains only the direct service
-  protocol and its shared value structures; Target-owned implementations,
-  planning graphs, solver models, and decoded blueprints remain outside the
-  public package.
+  not a new IR layer. `schedule/__init__.py` contains only the direct service
+  protocol and its shared value structures; the construction stages are imported
+  from their own modules, and Target-owned implementations, planning graphs,
+  solver models, and decoded blueprints stay out of that compact surface.
+- `analysis/` sits outside `ir/` for the same reason: it derives facts about
+  typed HIR rather than defining an IR layer. It reads the IR and the `Target`,
+  and never `schedule/` — the dependency between the two runs one way
+  ([architecture §5](./architecture.md#5-analysis--optimization)).
 - `codegen/<target>/` consumes only TIR. The subtree mirrors
   `ir/tir/`: `prim_function` lives in `tir/`, Stmt emitters in
   `tir/stmts/`, and `memory/` / `nn/` / `arith/` / `reduce/` /

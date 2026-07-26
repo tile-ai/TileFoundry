@@ -294,6 +294,51 @@ runs before the output type exists and typeinfer can call it without a
 cycle. `build_relation(call, input_types, ctx)` looks the handler up and
 returns its result, or `None` when the op has no registered builder.
 
+### 4.2 Per-boundary relation service — `access_relation`
+
+A second, independent registry over the same Op classes. Where `type_relation`
+(§4.1) returns one iteration domain plus one map per boundary and drives
+typeinfer, this one classifies each boundary on its own and admits a boundary
+the affine framework cannot express at all.
+
+```python
+AccessRelation = Union["isl.multi_aff", "isl.map", OpaqueRelation]
+
+class OpaqueRelation:
+    """Marker for a boundary the affine framework cannot express."""
+
+OPAQUE: OpaqueRelation      # the single instance
+
+class AccessRelations:
+    """One relation per boundary value, in boundary order."""
+
+    inputs: tuple[AccessRelation, ...]
+    outputs: tuple[AccessRelation, ...]
+```
+
+Registry + decorator:
+
+```python
+access_relation_registry: AnalysisRegistry     # keyed by type[Op]
+def register_access_relation(op_cls: type): ...
+```
+- constraints:
+  - The canonical carrier is `isl.multi_aff`. An `isl.map` is allowed where the
+    relation is reduction-like or otherwise many-to-one.
+  - A boundary whose access pattern is data-dependent, or otherwise outside
+    `isl.multi_aff` / `isl.map`, MUST carry `OPAQUE` rather than an
+    approximation. `OpaqueRelation` is a distinct type from either isl carrier
+    so a consumer can never read "opaque" as "identity".
+  - `OpaqueRelation` is a singleton: every construction returns the same
+    instance, and it round-trips through pickling as that instance.
+  - `inputs` has one entry per input arg in argument order; `outputs` has one
+    per output.
+
+The two registries are peers, not layers: a given Op MAY register with either,
+both, or neither. The polyhedral model ([analysis §1](./analysis.md#1-polyhedral-model))
+reads only §4.1's forward relation, so an Op it must cover needs a
+`type_relation` regardless of what it registers here.
+
 ## 5. Instance 2 — `verify`
 
 Context (extends `TypeInferContext` to share the type-of cache):

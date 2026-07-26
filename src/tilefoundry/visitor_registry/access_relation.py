@@ -62,9 +62,8 @@ class OpaqueRelation:
 OPAQUE = OpaqueRelation()
 
 
-# Per spec ``tilegraph.md`` §3.4 the canonical carrier is ``isl.multi_aff``;
-# ``isl.map`` is allowed when the relation is reduction-like or otherwise
-# many-to-one.
+# The canonical carrier is ``isl.multi_aff``; ``isl.map`` is allowed when the
+# relation is reduction-like or otherwise many-to-one.
 AccessRelation = Union["isl.multi_aff", "isl.map", OpaqueRelation]
 
 
@@ -77,9 +76,7 @@ AccessRelation = Union["isl.multi_aff", "isl.map", OpaqueRelation]
 class AccessRelations:
     """Per-Call access relations.
 
-    Mirrors ``TileGraph.input_access_relations`` / ``output_access_relations``
-    semantics from ``docs/spec/tilegraph.md`` §3.7: one relation per boundary
-    value, in boundary order.
+    One relation per boundary value, in boundary order.
 
     - ``inputs``: one entry per input arg of the Call (in argument order).
     - ``outputs``: one entry per output. Single-output ops have len 1;

@@ -273,10 +273,15 @@ class AmxTarget(Target):
     `(Analysis, "core")` and one private `(Schedule, "core")` service. The
     concrete implementations are not part of the public `analysis` or
     `schedule` packages.
-  - The core Analysis service MUST list an op's AMX atom candidates by hard
-    filtering the registered catalogue on shape divisibility and operand DType,
-    and MUST NOT rank them. An op the catalogue does not cover MUST raise rather
-    than report an empty list.
+  - The core Analysis service MUST list an op's atom candidates by hard
+    filtering the registered catalogue, and MUST NOT rank them. The filter is
+    shape divisibility, operand DType, operand layout, and the storage level
+    the atom's operand roles need — the last is what separates a
+    register-resident atom from one streaming through cache, so an op too wide
+    for the register files lists only the streaming atom.
+  - An op that clears no filter MUST report an empty candidate list, which is a
+    covered op with no usable atom rather than an error. Only an op kind or a
+    target the bridge does not model at all MUST raise.
   - The core Schedule service MUST decide resources over the schedule tree
     extracted from its root and report the objective in ns. It materializes
     nothing at this stage, so the module it returns MUST be the module it was

@@ -5,8 +5,9 @@ contracts that derive types, access relations, and shard layouts over the IR.
 Each service is a registry-backed derived visitor: the common registration and
 dispatch mechanism is owned by [visitor-registry](./visitor-registry.md); this
 file owns each service's requirements, handler shape, required context, and the
-semantic rules it enforces. TileGraph relation vocabulary is owned by
-[tilegraph](./tilegraph.md); this file links to it rather than redefining it.
+semantic rules it enforces. The forward relation's own result carrier is owned by
+[visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation);
+this file links to it rather than redefining it.
 
 ## 1. Type propagation
 
@@ -64,11 +65,11 @@ relation service ([visitor-registry §4.1](./visitor-registry.md#41-forward-rela
 
 The forward access relation is the boundary model shared by relation-derived
 type behavior and shard propagation: one iteration domain plus, per boundary, an
-affine access map from that domain to a tensor's index space. The relation
-vocabulary — access relations, opaque relations, and the access-relation result
-carrier — is defined in [tilegraph §3.4](./tilegraph.md#34-accessrelation); the
-relation service that produces it is registered as described in
+affine access map from that domain to a tensor's index space. Its result carrier
+`AccessRelationResult` and the registry that produces it are both defined in
 [visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation).
+The polyhedral model that lifts a whole `Function` body out of these per-op
+relations is owned by [analysis §1](./analysis.md#1-polyhedral-model).
 The rule reads only the access maps' affine structure (which domain dim each
 axis uses), never the domain bounds, so it is size-agnostic and identical for
 static and dynamic shapes.

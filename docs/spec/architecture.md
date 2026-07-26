@@ -18,6 +18,7 @@ graph TD
         coreir["<b>core-ir</b>"]
         hir["<b>hir</b>"]
         tir["<b>tir</b>"]
+        analysis["<b>analysis</b>"]
         schedule["<b>schedule</b>"]
         passes["<b>passes</b>"]
         target["<b>target</b>"]
@@ -37,19 +38,21 @@ graph TD
     subgraph aux["auxiliary"]
         inspection["<b>inspection</b>"]
         evaluator["<b>evaluator</b>"]
-        tilegraph["<b>tilegraph</b>"]
         codeorg["<b>code-organization</b>"]
     end
 
     parser --> coreir
     coreir --> hir
     coreir --> tir
+    hir --> analysis
     hir --> schedule
     schedule --> passes
     hir --> passes
     tir --> passes
     passes --> target
     target --> runtime
+    analysis -. facts read by .-> schedule
+    target -. provides named service .-> analysis
     target -. provides named service .-> schedule
 
     types -. carried by Expr type .-> coreir
@@ -60,7 +63,6 @@ graph TD
     vregistry -. used by .-> passes
     vregistry -. used by .-> target
 
-    tilegraph -. pass-private IR .-> passes
     inspection -. side-channel reader .-> hir
     inspection -. side-channel reader .-> tir
     evaluator -. reference oracle .-> hir
@@ -68,12 +70,13 @@ graph TD
 
 A TileFoundry compilation flows left to right along the **pipeline**:
 `parser → core-ir → {hir, tir} → passes → target → runtime`. Typed HIR MAY
-first pass through an explicitly selected `schedule` service that returns
-materialized HIR before pass sequencing. The
+first pass through an explicitly selected `schedule` service before pass
+sequencing; that service decides over the facts the `analysis` layer states
+about the same HIR, and the direction is one-way. The
 **type system** (types + shard) and the **IR framework**
 (visitor-mutator + visitor-registry) cut across every pipeline stage:
 they are co-designed with the IR, not standalone modules. Auxiliary
-specs (inspection, tilegraph, code-organization) attach where
+specs (inspection, evaluator, code-organization) attach where
 indicated and never gain pipeline ownership.
 
 ## 2. IR design
@@ -137,9 +140,13 @@ This stage layers two concerns on top of the same IR:
 2. **Passes** — module-level transforms sequenced by a `PassManager`
    ([passes](./passes.md)). Lowering passes and optimization passes
    are both ordinary stages in that manager. A pass may use a
-   pass-private intermediate representation
-   (e.g. [tilegraph](./tilegraph.md)) without elevating it to a peer
-   IR layer.
+   pass-private intermediate representation without elevating it to a
+   peer IR layer.
+3. **Fact layer** — the polyhedral model of one HIR `Function` body,
+   the per-stage target facts a Target binds as an `Analysis` service,
+   and the authored-HIR metrics ([analysis](./analysis.md)). It is
+   neither a pass nor an IR layer: it measures, and the scheduling
+   services below decide over what it measures.
 
 IR traversal / rewrite utilities (`ExprVisitor` / `ExprMutator` /
 `StmtVisitor` / `StmtMutator` / mixed stmt-expr rewriters) are shared
@@ -151,7 +158,9 @@ stage. A caller selects a named service from the root Function's Target and
 invokes it directly. A scheduling service may first verify an authored logical
 program and derive a plan-level execution blueprint; its public summary reports
 only the selected objective and proof state. The direct invocation contract and
-public result structures are owned by [schedule](./schedule.md).
+public result structures are owned by [schedule](./schedule.md). A stage's own
+`Analysis` service is bound on the same Target, under the same stage key, and is
+what that stage reads its facts from.
 
 ## 6. Target / codegen
 
@@ -209,10 +218,10 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[evaluator](./evaluator.md)** | HIR reference interpreter: `evaluate` entry, `Value` family (`TensorValue` / `TupleValue`), `register_eval` op registry, node-evaluation + `GridRegionExpr` + layout-domain rules. Logical reference oracle, no codegen / runtime |
 | **[visitor-registry](./visitor-registry.md)** | Derived-visitor dispatch pattern: `AnalysisRegistry`, per-class handler registration, four instances (`typeinfer` / `verify` / `codegen_<target>` / `cost`) with their Context / Visitor derivations |
 | **[semantic-analysis](./semantic-analysis.md)** | Static analysis service semantics: type propagation (relation-derived type behavior), access relation analysis, shard propagation (logical shape → layout domain, relation-driven propagation, output storage + mesh/layout compatibility). The registration mechanism itself is owned by visitor-registry |
+| **[analysis](./analysis.md)** | Fact layer: the polyhedral model of one HIR Function body (`TileGraph` / `extract`, authored-loop modelling, and the facts measured over a time relation), the per-stage `Analysis` service interface with `AtomFact`, and the authored-HIR roofline / footprint / timeline metrics |
 | **[visitor-mutator](./visitor-mutator.md)** | IR traversal / rewrite infrastructure: expr / stmt visitors, mutators, identity-preserving rewrite invariants, mixed stmt-expr traversal |
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
-| **[schedule](./schedule.md)** | Explicit Target-owned scheduling service: direct invocation protocol, shared options, result boundary, and stable makespan report |
-| **[tilegraph](./tilegraph.md)** | TileGraph — pass-internal IR for polyhedral / tile-search passes |
+| **[schedule](./schedule.md)** | Explicit Target-owned scheduling service: direct invocation protocol, shared options, result boundary, stable makespan report, and the schedule-tree construction / atom selection / scaffold emission stages a service composes its solve from |
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, immutable stage-service lookup, and admitted program topology levels |
 | **[codegen](./codegen.md)** | Emit / link pipeline and products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), emitter registry, dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
 | **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |
