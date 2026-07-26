@@ -724,6 +724,22 @@ Consensus torch.nn.functional ops.
     commutes; typeinfer rejects any `Partial` operand, including secondary
     affine inputs.
 
+##### Gelu
+```python
+class Gelu(Op):
+    """Gaussian Error Linear Unit. ``approximate="tanh"`` is the tanh-based
+    approximation (HF ``gelu_pytorch_tanh`` / Gemma-2 MLP activation)."""
+
+    x: Tensor
+    approximate: str = "tanh"
+```
+- constraints:
+  - Elementwise: the output type, shape, and layout are `x`'s.
+  - `x * Phi(x)` dips below zero before rising back through it near zero, so
+    GELU is **not** monotone and commutes with no reduction — unlike the
+    `ReLU` / `Sigmoid` / `Tanh` group above, which commutes with `max` / `min`.
+    typeinfer rejects any `Partial` operand with a `Reshard` remedy.
+
 ##### RMSNorm
 ```python
 class RMSNorm(Op):
@@ -764,6 +780,11 @@ class RoPE(Op):
     pos_ids: Tensor
 ```
 - constraints:
+  - The rotation is the **rotate-half** form: the last axis splits in two
+    halves and the pair `(x[i], x[i + d/2])` rotates together. This is the
+    unqualified HF convention (`apply_rotary_pos_emb` / `rotate_half`); the
+    interleaved form (`rotate_every_two`, GPT-J / CodeGen) is a different Op,
+    not an attribute of this one.
   - The result is `(q_rope, k_rope)` and each branch preserves the layout of
     its corresponding `q` or `k` input.
   - On each mesh axis, a branch MAY preserve one `Partial(sum)` on its
