@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from .dtype import BoolDType, DType, FloatDType, IntegerDType
 from .tensor_type import TensorType, TupleType, Type, UnitType
-from .utils import local_type_of, make_shard_tensor_type, make_tensor_type
+from .utils import (
+    local_type_of,
+    make_shard_tensor_type,
+    make_tensor_type,
+    numel,
+    tensor_bytes,
+)
 from .callable_type import (
     CallableType,
     callable_type_for,
@@ -27,6 +33,8 @@ __all__ = [
     "local_type_of",
     "make_shard_tensor_type",
     "make_tensor_type",
+    "numel",
+    "tensor_bytes",
 ]
 
 # Lazy-register dim ops' typeinfer after core is fully loaded. We defer the

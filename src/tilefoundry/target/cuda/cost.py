@@ -29,32 +29,9 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import DType, TensorType, TupleType, Type
+from tilefoundry.ir.types import DType, TensorType, Type, numel, tensor_bytes
 from tilefoundry.visitor_registry import register_cost_evaluator
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
-
-
-def _numel(type: Type) -> int:
-    if isinstance(type, TensorType):
-        values = []
-        for dim in type.shape:
-            if not isinstance(dim, int) or isinstance(dim, bool) or dim <= 0:
-                raise ValueError(
-                    f"cost: tensor extent {dim!r} is not a concrete positive integer"
-                )
-            values.append(dim)
-        return math.prod(values)
-    if isinstance(type, TupleType):
-        return sum(_numel(field) for field in type.fields)
-    return 0
-
-
-def tensor_bytes(type: Type) -> int:
-    if isinstance(type, TensorType):
-        return math.ceil(_numel(type) * type.dtype.bit_width / 8)
-    if isinstance(type, TupleType):
-        return sum(tensor_bytes(field) for field in type.fields)
-    return 0
 
 
 def _input_types(call: Call, ctx: CostContext) -> tuple[Type, ...]:
@@ -80,7 +57,7 @@ def _elementwise(call: Call, ctx: CostContext, *, dtype: DType | None = None) ->
             result_dtype = next(
                 type.dtype for type in inputs if isinstance(type, TensorType)
             )
-    return Cost({result_dtype: _numel(output)}, _traffic(inputs, output))
+    return Cost({result_dtype: numel(output)}, _traffic(inputs, output))
 
 
 @register_cost_evaluator(MatMul)
@@ -101,7 +78,7 @@ def _reduce(call: Call, ctx: CostContext) -> Cost:
     output = _output_type(call, ctx)
     if not isinstance(source, TensorType):
         raise ValueError("Reduce cost requires a tensor input")
-    return Cost({source.dtype: _numel(source)}, _traffic((source,), output))
+    return Cost({source.dtype: numel(source)}, _traffic((source,), output))
 
 
 @register_cost_evaluator(RMSNorm)
@@ -110,7 +87,7 @@ def _rms_norm(call: Call, ctx: CostContext) -> Cost:
     output = _output_type(call, ctx)
     if not isinstance(source, TensorType):
         raise ValueError("RMSNorm cost requires a tensor input")
-    return Cost({DType.f32: 8 * _numel(source)}, _traffic((source,), output))
+    return Cost({DType.f32: 8 * numel(source)}, _traffic((source,), output))
 
 
 @register_cost_evaluator(Binary)
@@ -164,7 +141,7 @@ def _layer_norm(call: Call, ctx: CostContext) -> Cost:
     output = _output_type(call, ctx)
     if not isinstance(source, TensorType):
         raise ValueError("LayerNorm cost requires a tensor input")
-    return Cost({DType.f32: 8 * _numel(source)}, _traffic(_input_types(call, ctx), output))
+    return Cost({DType.f32: 8 * numel(source)}, _traffic(_input_types(call, ctx), output))
 
 
 @register_cost_evaluator(TopK)
@@ -173,7 +150,7 @@ def _topk(call: Call, ctx: CostContext) -> Cost:
     output = _output_type(call, ctx)
     source = inputs[0]
     dtype = source.dtype if isinstance(source, TensorType) else DType.f32
-    return Cost({dtype: _numel(source)}, _traffic(inputs, output))
+    return Cost({dtype: numel(source)}, _traffic(inputs, output))
 
 
 @register_cost_evaluator(Gather)
@@ -202,7 +179,7 @@ def _quant(call: Call, ctx: CostContext) -> Cost:
     source = inputs[0]
     if not isinstance(source, TensorType):
         raise ValueError("Quant cost requires a tensor input")
-    return Cost({DType.f32: 4 * _numel(source)}, _traffic(inputs, output))
+    return Cost({DType.f32: 4 * numel(source)}, _traffic(inputs, output))
 
 
 @register_cost_evaluator(TupleGetItem)

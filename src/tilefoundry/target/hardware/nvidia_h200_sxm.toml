@@ -34,6 +34,13 @@ origin = "vendor"
 source = "https://www.nvidia.com/en-us/data-center/h200/"
 conditions = "4.8 TB/s peak HBM3e bandwidth, decimal"
 
+[facts.memory.l2.capacity]
+value = 50000000
+unit = "byte"
+origin = "reference"
+source = "https://resources.nvidia.com/en-us-hopper-architecture/nvidia-h100-tensor-c"
+conditions = "50 MB, decimal; the H200 product specification does not list an L2 capacity, so this is the published figure for the Hopper SXM part built on the same die rather than a statement about this product"
+
 [facts.memory.l2.bandwidth]
 status = "unavailable"
 conditions = "NVIDIA publishes no static L2 bandwidth to use for a roofline."

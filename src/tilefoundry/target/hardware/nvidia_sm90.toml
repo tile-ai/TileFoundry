@@ -66,6 +66,13 @@ origin = "vendor"
 source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
 conditions = "227 KiB maximum dynamic shared-memory allocation per CTA"
 
+[facts.memory.unified_l1_shared.per_sm]
+value = 262144
+unit = "byte"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities"
+conditions = "256 KiB of unified data cache per SM on compute capability 9.0; the shared-memory carveout and the L1 data cache divide this one block between them"
+
 [facts.memory.shared.bandwidth]
 status = "unavailable"
 conditions = "NVIDIA publishes no static shared-memory bandwidth to use for a roofline."

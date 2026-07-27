@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from tilefoundry.ir.types.storage import StorageKind
@@ -7,6 +8,41 @@ from tilefoundry.ir.types.storage import StorageKind
 from .dtype import DType
 from .shard import ComposedLayout, Layout, Mesh, ShardLayout, Split, canonical_shard_layout
 from .tensor_type import TensorType, TupleType, Type
+
+
+def numel(type: Type) -> int:
+    """Element count of ``type``, summed over a tuple's leaves.
+
+    A symbolic or non-positive extent is rejected rather than skipped: a size
+    that silently drops a dimension reads as a smaller tensor, not as an
+    unknown one.
+    """
+    if isinstance(type, TensorType):
+        values = []
+        for dim in type.shape:
+            if not isinstance(dim, int) or isinstance(dim, bool) or dim <= 0:
+                raise ValueError(
+                    f"numel: tensor extent {dim!r} is not a concrete positive integer"
+                )
+            values.append(dim)
+        return math.prod(values)
+    if isinstance(type, TupleType):
+        return sum(numel(field) for field in type.fields)
+    return 0
+
+
+def tensor_bytes(type: Type) -> int:
+    """Byte size of ``type``, summed over a tuple's leaves.
+
+    This is the logical size the type states, so it is the same number for
+    every backend. A sub-byte dtype rounds up to whole bytes per leaf, because
+    a leaf is addressed on its own.
+    """
+    if isinstance(type, TensorType):
+        return math.ceil(numel(type) * type.dtype.bit_width / 8)
+    if isinstance(type, TupleType):
+        return sum(tensor_bytes(field) for field in type.fields)
+    return 0
 
 
 def make_tensor_type(

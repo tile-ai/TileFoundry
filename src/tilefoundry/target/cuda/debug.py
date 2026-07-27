@@ -6,10 +6,9 @@ import json
 from pathlib import Path
 
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import TensorType, tensor_bytes
 
 from .allocation import _allocation_groups
-from .cost import tensor_bytes
 from .planner import PlanningProblem
 from .projection import project_physical_fusion
 

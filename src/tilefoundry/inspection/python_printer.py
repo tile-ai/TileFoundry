@@ -1018,6 +1018,8 @@ def _architecture_arg(target: CudaTarget) -> str | None:
         f"max_resident_ctas_per_sm={architecture.max_resident_ctas_per_sm}, "
         f"shared_memory_per_sm_bytes={architecture.shared_memory_per_sm_bytes}, "
         f"shared_memory_per_cta_bytes={architecture.shared_memory_per_cta_bytes}, "
+        f"unified_l1_shared_per_sm_bytes="
+        f"{architecture.unified_l1_shared_per_sm_bytes}, "
         f"registers_per_sm_32bit={architecture.registers_per_sm_32bit}"
         ")"
     )
@@ -1042,6 +1044,7 @@ def _device_arg(target: CudaTarget) -> str | None:
         f"sm_count={device.sm_count}, "
         f"hbm_capacity_bytes={device.hbm_capacity_bytes}, "
         f"hbm_bandwidth_bytes_per_second={device.hbm_bandwidth_bytes_per_second}, "
+        f"l2_capacity_bytes={device.l2_capacity_bytes!r}, "
         f"_dense_flops=({flops})"
         ")"
     )

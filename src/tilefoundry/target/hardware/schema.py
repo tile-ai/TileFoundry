@@ -65,6 +65,18 @@ class SchemaReader:
             )
         return value
 
+    def optional_integer(self, path: str, *, unit: str) -> int | None:
+        """A positive integer fact recorded in *unit*, or ``None``.
+
+        The leaf must still be declared, so the document states either the
+        number or that no number is available. ``None`` is a recorded absence,
+        never a missing key.
+        """
+        fact = self._leaf(path)
+        if not fact.available:
+            return None
+        return self.integer(path, unit=unit)
+
     def text(self, path: str) -> str:
         """A string fact, such as an identity name or a geometry."""
         fact = self._available(path, None)

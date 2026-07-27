@@ -13,15 +13,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.preflight import infer_authored_types, validate_authored
 from tilefoundry.analysis.registry import ANALYSES, AnalysisAlgorithm
+from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.registry import UnknownAlgorithmError
-
-
-class AnalysisError(ValueError):
-    """An analysis could not be composed or executed."""
 
 
 @dataclass(frozen=True)
@@ -160,12 +159,14 @@ def _metadata_snapshot(
     Keying on the object's identity rather than its value is what lets the
     caller tell a replacement from an untouched entry: an algorithm that
     rewrites another's Metadata to an equal value has still overwritten it.
-    """
-    from tilefoundry.analysis.analyzer import _postorder  # noqa: PLC0415
 
+    The Function objects are part of the walk, not just their bodies: a
+    whole-function record hangs on the Function itself, and a snapshot that
+    skipped it would leave those records outside ownership entirely.
+    """
     snapshot: dict[tuple[int, type], int] = {}
     for fn in functions:
-        for expr in (*fn.params, *_postorder(fn.body)):
+        for expr in values_of(fn):
             for item in expr.metadata:
                 snapshot[(id(expr), type(item))] = id(item)
     return snapshot
@@ -224,16 +225,10 @@ def _preflight(module: Module, function: Function) -> tuple[Function, ...]:
     Both cover the whole call graph reachable from *function*, because an
     analysis that walks into a callee reads the callee's inferred types too.
     """
-    from tilefoundry.analysis.analyzer import (  # noqa: PLC0415
-        _infer_authored_types,
-        _reachable_functions,
-        _validate_authored,
-    )
-
-    functions = _reachable_functions(function)
-    _infer_authored_types(functions, module)
-    _validate_authored(functions)
+    functions = reachable_functions(function)
+    infer_authored_types(functions, module)
+    validate_authored(functions)
     return functions
 
 
-__all__ = ["AnalysisError", "AnalysisResult", "analyze"]
+__all__ = ["AnalysisResult", "analyze"]

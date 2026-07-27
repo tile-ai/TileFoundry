@@ -5,7 +5,7 @@ tree over (see ``schedule/kernel_schedule.py``).
 
 Algorithm (docstring mirrors the design so the "why" travels with the code):
 
-1. Walk ``hir.body`` with the analyzer's own ``_postorder`` (SSA-DAG
+1. Walk ``hir.body`` with the shared ``postorder`` (SSA-DAG
    postorder -- dependencies before dependents) and keep the ``Call``
    nodes whose target is a compute op (not a structural/view node, e.g.
    ``TupleGetItem`` or the zero-op ``Reshape``, folded into every
@@ -81,7 +81,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 
-from .analyzer import _children, _postorder
+from .walk import children, postorder
 
 
 @dataclass(frozen=True)
@@ -726,7 +726,7 @@ def _loop_axes(root):
             for value in expr.yield_values:
                 visit(value, level + 1)
             return
-        for child in _children(expr):
+        for child in children(expr):
             visit(child, level)
 
     visit(root, 0)
@@ -749,7 +749,7 @@ def _loop_scopes(root) -> dict[int, tuple[_Loop, ...]]:
     by_id = {id(axis): axis for axis in axis_of.values()}
     variance: dict[int, frozenset] = {}
 
-    for e in _postorder(root):
+    for e in postorder(root):
         if isinstance(e, GridRegionExpr):
             own = set()
             for child in (*e.init_args, e.body, *e.yield_values):
@@ -762,7 +762,7 @@ def _loop_scopes(root) -> dict[int, tuple[_Loop, ...]]:
                 own |= set(variance.get(id(init), frozenset()))
         else:
             own = set()
-            for child in _children(e):
+            for child in children(e):
                 own |= variance.get(id(child), frozenset())
         variance[id(e)] = frozenset(own)
 
@@ -800,7 +800,7 @@ def _walk_calls(
     into one buffer.
     """
     scope = _loop_scopes(body)
-    order = _postorder(body)
+    order = postorder(body)
     grid_yields: dict[int, tuple] = {}
 
     own_targets: list[object] = []

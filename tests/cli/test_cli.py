@@ -92,11 +92,16 @@ def test_analyze_prints_summary_types_and_selected_metadata(tmp_path, capsys) ->
 
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out.startswith("# analysis target=cuda analyses=roofline,footprint,timeline")
+    assert captured.out.startswith("# analysis target=cuda analyses=roofline,memory,timeline")
     assert "type=Tensor[" in captured.out
-    assert "roofline flops=" in captured.out
-    assert "footprint live=" in captured.out
-    assert "timeline ctas=168 waves=2" in captured.out
+    # The summary reads the whole-function records off the IR rather than
+    # recomputing them, and the annotated body carries the per-Call ones.
+    assert "# peak-footprint gmem=" in captured.out
+    assert "# theoretical-bound=" in captured.out
+    assert "# theoretical-makespan=" in captured.out
+    assert "compute-cost flops=f32:" in captured.out
+    assert "roofline bound=" in captured.out
+    assert "timeline units=168 waves=2" in captured.out
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tmp_path, capsys) -> None:

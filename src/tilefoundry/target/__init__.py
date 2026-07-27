@@ -40,6 +40,18 @@ def validate_cuda_topology_levels(names) -> None:
             )
 
 
+def register_facts_projections() -> None:
+    """Load each backend's Facts projections, which register on import.
+
+    This cannot happen while this package is initialising: a projection names
+    the analysis Facts type it builds, and the analysis layer is built on the IR
+    that is still loading the Target at that point. The compiler entry triggers
+    it once both halves exist.
+    """
+    from tilefoundry.target.amx import facts as amx_facts  # noqa: PLC0415, F401
+    from tilefoundry.target.cuda import facts as cuda_facts  # noqa: PLC0415, F401
+
+
 __all__ = [
     "AmxTarget",
     "AppleAmx",
@@ -52,6 +64,7 @@ __all__ = [
     "SM90",
     "Target",
     "default_target",
+    "register_facts_projections",
     "resolve_target",
     "validate_cuda_topology_levels",
 ]

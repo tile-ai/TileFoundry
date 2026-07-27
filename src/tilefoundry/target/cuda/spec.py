@@ -62,6 +62,9 @@ def build_sm90(document: HardwareDocument) -> SM90:
         shared_memory_per_cta_bytes=reader.integer(
             "memory.shared.per_cta", unit="byte"
         ),
+        unified_l1_shared_per_sm_bytes=reader.integer(
+            "memory.unified_l1_shared.per_sm", unit="byte"
+        ),
         registers_per_sm_32bit=reader.integer("memory.register.per_sm", unit="register"),
     )
     reader.declared_unavailable("memory.shared.bandwidth")
@@ -80,6 +83,16 @@ def build_sm90(document: HardwareDocument) -> SM90:
             f"({architecture.shared_memory_per_cta_bytes} B) exceeds the per-SM "
             f"capacity ({architecture.shared_memory_per_sm_bytes} B)"
         )
+    if (
+        architecture.shared_memory_per_sm_bytes
+        > architecture.unified_l1_shared_per_sm_bytes
+    ):
+        raise SchemaValidationError(
+            f"{document.id}: the shared-memory carveout "
+            f"({architecture.shared_memory_per_sm_bytes} B) exceeds the unified "
+            f"L1 and shared block it is taken from "
+            f"({architecture.unified_l1_shared_per_sm_bytes} B)"
+        )
     return architecture
 
 
@@ -97,6 +110,7 @@ def build_h200_sxm(document: HardwareDocument) -> H200SXM:
         hbm_bandwidth_bytes_per_second=reader.integer(
             "memory.hbm.bandwidth", unit="byte/s"
         ),
+        l2_capacity_bytes=reader.optional_integer("memory.l2.capacity", unit="byte"),
         _dense_flops=dense_flops,
     )
     reader.declared_unavailable("memory.l2.bandwidth")

@@ -21,6 +21,9 @@ class H200SXM(Device):
     sm_count: int
     hbm_capacity_bytes: int
     hbm_bandwidth_bytes_per_second: int
+    # None when the product specification states no L2 capacity: an advisory
+    # about a cache whose size is unknown is worth less than no advisory.
+    l2_capacity_bytes: int | None
     _dense_flops: tuple[tuple[DType, int], ...]
 
     @property

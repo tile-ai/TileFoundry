@@ -29,6 +29,10 @@ class SM90(Architecture):
     max_resident_ctas_per_sm: int
     shared_memory_per_sm_bytes: int
     shared_memory_per_cta_bytes: int
+    # The shared-memory carveout and the L1 data cache divide one physical
+    # block, so L1's usable capacity is what a kernel's shared memory leaves of
+    # this figure rather than a constant of its own.
+    unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
 
     def supports_compute_dtype(self, dtype: DType) -> bool:

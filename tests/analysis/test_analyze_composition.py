@@ -14,13 +14,14 @@ import pytest
 
 from tests.fixtures.demo_ir import build_demo
 from tilefoundry.analysis import api
-from tilefoundry.analysis.analyzer import _postorder, _replace_metadata_in_place
-from tilefoundry.analysis.api import AnalysisError, AnalysisResult, analyze
+from tilefoundry.analysis.api import AnalysisResult, analyze
+from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import (
     ANALYSES,
     AnalysisAlgorithm,
     register_analysis,
 )
+from tilefoundry.analysis.walk import attach, detach, postorder
 from tilefoundry.ir.core import IRMetadata, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.registry import (
@@ -43,11 +44,11 @@ class _Beta(IRMetadata):
 
 
 def _first_expr(function):
-    return next(iter(_postorder(function.body)))
+    return next(iter(postorder(function.body)))
 
 
 def _write(function, metadata) -> None:
-    _replace_metadata_in_place(_first_expr(function), metadata)
+    attach(_first_expr(function), metadata)
 
 
 def _module() -> tuple[Module, object]:
@@ -378,3 +379,47 @@ def test_an_algorithm_declaration_is_checked_when_it_is_registered() -> None:
         AnalysisAlgorithm(
             selector="s", run=lambda *a: None, produces=(_Alpha, _Alpha)
         )
+
+
+def test_a_record_on_the_function_itself_is_owned_and_reported(registered) -> None:
+    """A whole-function record hangs on the Function, which is a value the walk
+    must reach: otherwise ownership never sees it and no reader is told it is
+    there."""
+    module, function = _module()
+    register_analysis(CudaTarget, "fn.owner", produces=(_Alpha,))(
+        lambda mod, fn, target, options: attach(fn, _Alpha(1))
+    )
+
+    result = analyze(module, function, analysis="fn.owner")
+
+    assert get_metadata(function, _Alpha) == _Alpha(1)
+    assert result.metadata_types == (_Alpha,)
+
+
+def test_writing_an_undeclared_type_to_the_function_is_a_violation(
+    registered,
+) -> None:
+    """The Function is not a place ownership stops being enforced."""
+    module, function = _module()
+    register_analysis(CudaTarget, "fn.trespass", produces=(_Alpha,))(
+        lambda mod, fn, target, options: attach(fn, _Beta(1))
+    )
+
+    with pytest.raises(AnalysisError, match=r"does not declare: \['_Beta'\]"):
+        analyze(module, function, analysis="fn.trespass")
+
+
+def test_deleting_a_function_record_the_analysis_does_not_own_is_a_violation(
+    registered,
+) -> None:
+    """Removing a whole-function record changes the IR as much as writing one."""
+    module, function = _module()
+    register_analysis(CudaTarget, "fn.writer", produces=(_Alpha,))(
+        lambda mod, fn, target, options: attach(fn, _Alpha(1))
+    )
+    register_analysis(
+        CudaTarget, "fn.eraser", requires=("fn.writer",), produces=(_Beta,)
+    )(lambda mod, fn, target, options: detach(fn, _Alpha))
+
+    with pytest.raises(AnalysisError, match=r"does not declare: \['_Alpha'\]"):
+        analyze(module, function, analysis="fn.eraser")

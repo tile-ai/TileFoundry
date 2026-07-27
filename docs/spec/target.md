@@ -87,6 +87,7 @@ class SM90:
     max_resident_ctas_per_sm: int
     shared_memory_per_sm_bytes: int
     shared_memory_per_cta_bytes: int
+    unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
 
     def supports_compute_dtype(self, dtype: DType) -> bool: ...
@@ -102,6 +103,11 @@ class SM90:
     capacity per SM and per CTA, and register-file capacity per SM. These are
     properties of the microarchitecture, so every product built on it shares
     them, and a device MUST NOT restate them.
+  - `unified_l1_shared_per_sm_bytes` MUST be the size of the one physical block
+    the shared-memory carveout and the L1 data cache are both taken from, and
+    MUST be at least `shared_memory_per_sm_bytes`. The architecture MUST NOT
+    state an L1 capacity: how much L1 remains depends on how much shared memory
+    a program asked for, which is not a property of the hardware.
   - Storage and scale DTypes `f4e2m1` and `f8e8m0` MUST NOT be reported as
     compute DTypes by SM90.
   - Device-frequency-dependent FLOP/s values MUST NOT be stored on SM90.
@@ -118,6 +124,7 @@ class H200SXM:
     sm_count: int
     hbm_capacity_bytes: int
     hbm_bandwidth_bytes_per_second: int
+    l2_capacity_bytes: int | None
 
     def peak_for(self, dtype: DType) -> int: ...
 ```
@@ -131,6 +138,9 @@ class H200SXM:
     `f16`, `bf16`, and `fp8e4m3`, each value taken from the installed document.
   - `f4e2m1` and `f8e8m0` MUST have no compute-throughput entry.
   - Unknown compute DTypes MUST raise an actionable error.
+  - `l2_capacity_bytes` MUST be `None` when the installed document records no
+    value for it. A recorded absence and a number are both statements about the
+    product; a substituted figure would not be.
   - No field MAY carry a default, and no resource value MAY be written as a
     Python literal: the installed document is the single source (§10).
     Selecting a different installed document by ID is not an override; supplying
@@ -448,6 +458,10 @@ conditions = "No validated number."
   - Units MUST be normalized while constructing the typed value: algorithms see
     canonical integers such as bytes and bytes per second, never source strings
     or unit conversion.
+  - A schema MAY model a leaf as optional, which yields the recorded number or
+    `None` for a leaf recorded unavailable. The leaf MUST still be declared: a
+    document says either what the value is or that there is none, and a missing
+    key MUST remain an error rather than becoming an absent value.
   - Resolution MUST retain each document's ID and content digest on the
     composed value, so a compiled artifact can name the exact resources it was
     built against. Editing any recorded value or its evidence MUST change the

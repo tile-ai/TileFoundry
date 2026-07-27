@@ -2,16 +2,34 @@
 
 from __future__ import annotations
 
+# ruff: noqa: I001 -- curated order: the families register themselves on import
+# and must load after the registry they register into.
+
 from typing import Protocol
 
-from .analyzer import AnalysisError, AnalysisOptions, AnalysisResult, analyze
-from .atom_facts import AtomFact
+from .errors import AnalysisError
+from .facts import (
+    ExplicitMemoryLevelFacts,
+    ImplicitMemoryLevelFacts,
+    MemoryHierarchyFacts,
+    MemoryLevelRelation,
+    MemoryRelationKind,
+    ParallelCapacityFacts,
+    ThroughputFacts,
+)
 from .metadata import (
-    FootprintMetadata,
+    ComputeCostMetadata,
+    LevelFootprint,
+    MemoryMetadata,
     RooflineMetadata,
     TimelineMetadata,
     TrafficBytes,
+    ValueLifetime,
 )
+from .registry import ANALYSES, AnalysisAlgorithm, register_analysis
+from . import compute_cost, memory, roofline, timeline  # noqa: F401
+from .analyzer import AnalysisOptions, AnalysisResult, analyze
+from .atom_facts import AtomFact
 from .poly import (
     AccessFootprint,
     AxisExtent,
@@ -41,24 +59,37 @@ class Analysis(Protocol):
 
 
 __all__ = [
+    "ANALYSES",
     "AccessFootprint",
-    "AxisExtent",
     "Analysis",
+    "AnalysisAlgorithm",
     "AnalysisError",
     "AnalysisOptions",
     "AnalysisResult",
     "AtomFact",
+    "AxisExtent",
+    "ComputeCostMetadata",
+    "ExplicitMemoryLevelFacts",
     "ExtractError",
-    "FootprintMetadata",
+    "ImplicitMemoryLevelFacts",
+    "LevelFootprint",
+    "MemoryHierarchyFacts",
+    "MemoryLevelRelation",
+    "MemoryMetadata",
+    "MemoryRelationKind",
+    "ParallelCapacityFacts",
     "RooflineMetadata",
+    "ThroughputFacts",
     "TileGraph",
     "TileUnit",
     "TimelineMetadata",
     "TrafficBytes",
+    "ValueLifetime",
     "access_footprints",
     "analyze",
     "carried_distances",
     "extract",
+    "register_analysis",
     "statement_time_dims",
     "time_extents",
 ]

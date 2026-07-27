@@ -12,12 +12,11 @@ from ortools.sat.python import cp_model
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import TensorType, Type
+from tilefoundry.ir.types import TensorType, Type, tensor_bytes
 from tilefoundry.ir.types.shard import ComposedLayout, ShardLayout
 from tilefoundry.schedule import ScheduleOptions
 
 from .allocation import _allocation_groups
-from .cost import tensor_bytes
 from .debug import write_debug_dumps
 from .planner import (
     OpCandidate,
