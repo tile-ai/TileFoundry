@@ -1,9 +1,15 @@
-"""What a solved partition states about the program it was asked about.
+"""What a solved partition decided, in terms an agent can act on.
 
-The plan names the selection by the problem's own stable identities and states
-what the solve proved about the objective. Nothing is rewritten: the Module the
-caller passed in is the Module it gets back, and a selected placement is a
-decision recorded next to the program rather than applied to it.
+The plan names values and operations by identities derived from the authored
+program, not by the indexes the problem happened to allocate, and states the
+ordinary IR type each value was placed in. Nothing is rewritten: the Module the
+caller passed in is the Module it gets back, and a placement is a decision
+recorded beside the program rather than applied to it.
+
+Verification re-checks the structure of that decision without rebuilding
+candidates or re-solving: references resolve, edges connect placements that can
+legally connect, positions stay inside the level, and operations that overlap in
+time do not overlap in position.
 """
 
 from __future__ import annotations
@@ -12,9 +18,13 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from tilefoundry.ir.core.metadata import binding_name
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import TensorType, Type
+from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard import ShardLayout, Topology
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule.plan import (
     PlanVerificationError,
     SchedulePlan,
@@ -23,6 +33,56 @@ from tilefoundry.schedule.plan import (
 
 from .problem import PartitionProblem
 from .solve import PartitionSolution
+
+
+@dataclass(frozen=True)
+class PositionInterval:
+    """The half-open range of parallel positions something occupies."""
+
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class TimeInterval:
+    """One operation's half-open execution interval."""
+
+    start_ns: int
+    end_ns: int
+
+
+@dataclass(frozen=True)
+class PlacedValue:
+    """One tensor value, the type it was placed in, and who touches it."""
+
+    id: str
+    type: Type
+    producer_id: str | None
+    consumer_ids: tuple[str, ...]
+    positions: PositionInterval
+
+
+@dataclass(frozen=True)
+class PartitionedOperation:
+    """One operation that runs, where it runs, and when.
+
+    `synthesized` marks a Reshard the algorithm introduced to connect two
+    otherwise unconnected placements. It is one of these records like any other
+    operation, so there is no second channel an agent would have to read to learn
+    that data moves.
+
+    `positions` is absent for an operation that occupies no parallel position of
+    its own. Moving a value between placements is charged as traffic rather than
+    as occupancy, so a Reshard has no position range to state.
+    """
+
+    id: str
+    operation: str
+    synthesized: bool
+    input_ids: tuple[str, ...]
+    output_ids: tuple[str, ...]
+    positions: PositionInterval | None
+    interval: TimeInterval | None
 
 
 @dataclass(frozen=True)
@@ -39,135 +99,525 @@ class PartitionProof:
     proven_optimal: bool
 
 
-@dataclass(frozen=True)
-class SelectedOperation:
-    """One selected candidate, and where in the topology and time it runs."""
-
-    candidate_id: int
-    site_id: int | None
-    operation: str
-    input_bucket_ids: tuple[int, ...]
-    output_bucket_ids: tuple[int, ...]
-    parallel_positions: int
-    start_ns: int
-    end_ns: int
+def _logical_tensor(type: Type) -> tuple[object, ...] | None:
+    """What stays the same across every placement of one tensor."""
+    if not isinstance(type, TensorType):
+        return None
+    return (type.shape, type.dtype, type.storage)
 
 
-@dataclass(frozen=True)
-class SelectedPlacement:
-    """One selected value, held in one selected type at one topology offset."""
+def _layout_json(type: Type) -> object:
+    """The placement part of one type, as plain data."""
+    if not isinstance(type, TensorType) or not isinstance(type.layout, ShardLayout):
+        return None
+    layout = type.layout
+    return {
+        "topology": layout.mesh.topology.name,
+        "mesh_shape": [str(dim) for dim in layout.mesh.layout.shape],
+        "attrs": [attr.__class__.__name__ for attr in layout.attrs],
+        "shape": [str(dim) for dim in layout.layout.shape],
+        "strides": [str(stride) for stride in layout.layout.strides],
+    }
 
-    bucket_id: int
-    value_id: int
-    type_id: int
-    offset: int
+
+def _type_json(type: Type) -> object:
+    """One selected type as plain data, in the plan's own vocabulary."""
+    if not isinstance(type, TensorType):
+        return {"kind": type.__class__.__name__}
+    return {
+        "kind": "tensor",
+        "shape": [str(dim) for dim in type.shape],
+        "dtype": type.dtype.name,
+        "storage": type.storage.name.lower(),
+        "layout": _layout_json(type),
+    }
+
+
+def _describe_type(type: Type) -> str:
+    """One short human-readable form of a selected type."""
+    if not isinstance(type, TensorType):
+        return type.__class__.__name__
+    shape = "x".join(str(dim) for dim in type.shape)
+    text = f"{shape}:{type.dtype.name}:{type.storage.name.lower()}"
+    if isinstance(type.layout, ShardLayout):
+        attrs = ",".join(attr.__class__.__name__ for attr in type.layout.attrs)
+        mesh = "x".join(str(dim) for dim in type.layout.mesh.layout.shape)
+        text += f" {type.layout.mesh.topology.name}[{mesh}]:{attrs}"
+    return text
 
 
 @dataclass(frozen=True)
 class PartitionSchedulePlan(SchedulePlan):
-    """The selection one partition solve committed to, and its proof."""
+    """The placement one partition solve committed to, and its proof."""
 
     topology: str
+    extent: int
     target: TargetSpecRef
-    placements: tuple[SelectedPlacement, ...]
-    operations: tuple[SelectedOperation, ...]
-    root_results: tuple[int, ...]
+    values: tuple[PlacedValue, ...]
+    operations: tuple[PartitionedOperation, ...]
+    root_results: tuple[str, ...]
     proof: PartitionProof
 
     def verify(self, module: Module, function: Function, topology: Topology) -> None:
-        """Check the plan against the request, without re-solving anything.
-
-        Only what the plan itself claims is checked: that it answers the request
-        it was made for, that every operation refers to placements the plan also
-        carries, and that every root result was placed. Whether the schedule is
-        good is what the proof states; whether it is well-formed is this.
-        """
-        if topology.name != self.topology:
-            raise PlanVerificationError(
-                f"partition plan decided topology {self.topology!r}, not "
-                f"{topology.name!r}"
-            )
-        placed = {placement.bucket_id for placement in self.placements}
-        placed_values = {placement.value_id for placement in self.placements}
-        for operation in self.operations:
-            for bucket_id in (*operation.input_bucket_ids, *operation.output_bucket_ids):
-                if bucket_id not in placed:
-                    raise PlanVerificationError(
-                        f"partition plan operation {operation.candidate_id} refers to "
-                        f"unplaced value bucket {bucket_id}"
-                    )
-            if operation.end_ns < operation.start_ns:
-                raise PlanVerificationError(
-                    f"partition plan operation {operation.candidate_id} ends before "
-                    "it starts"
-                )
-            if operation.parallel_positions < 0:
-                raise PlanVerificationError(
-                    f"partition plan operation {operation.candidate_id} occupies "
-                    f"{operation.parallel_positions} parallel positions"
-                )
-        for value_id in self.root_results:
-            if value_id not in placed_values:
-                raise PlanVerificationError(
-                    f"partition plan leaves root result value {value_id} unplaced"
-                )
+        """Check the decision holds together, without invoking a solver."""
+        self._check_request(topology)
+        values = self._checked_index()
+        self._check_references(values)
+        self._check_edges(values)
+        self._check_positions(values)
+        self._check_exclusion()
+        self._check_roots(values)
         if self.proof.best_bound_ns > self.proof.objective_ns:
             raise PlanVerificationError(
                 "partition plan states a bound above its own objective"
             )
 
+    def _check_request(self, topology: Topology) -> None:
+        if topology.name != self.topology:
+            raise PlanVerificationError(
+                f"partition plan decided topology {self.topology!r}, not "
+                f"{topology.name!r}"
+            )
+        extent = static_dim_value(topology.size)
+        if extent != self.extent:
+            raise PlanVerificationError(
+                f"partition plan decided over {self.extent} positions of "
+                f"{self.topology!r}, but the level declares {extent}"
+            )
+
+    def _checked_index(self) -> dict[str, PlacedValue]:
+        values: dict[str, PlacedValue] = {}
+        for value in self.values:
+            if value.id in values:
+                raise PlanVerificationError(
+                    f"partition plan places value {value.id!r} twice"
+                )
+            values[value.id] = value
+        seen: set[str] = set()
+        for operation in self.operations:
+            if operation.id in seen:
+                raise PlanVerificationError(
+                    f"partition plan runs operation {operation.id!r} twice"
+                )
+            seen.add(operation.id)
+        return values
+
+    def _check_references(self, values: dict[str, PlacedValue]) -> None:
+        operations = {operation.id for operation in self.operations}
+        for operation in self.operations:
+            for value_id in (*operation.input_ids, *operation.output_ids):
+                if value_id not in values:
+                    raise PlanVerificationError(
+                        f"partition plan operation {operation.id!r} refers to "
+                        f"unplaced value {value_id!r}"
+                    )
+        for value in self.values:
+            if value.producer_id is not None and value.producer_id not in operations:
+                raise PlanVerificationError(
+                    f"partition plan value {value.id!r} names producer "
+                    f"{value.producer_id!r}, which the plan does not run"
+                )
+            for consumer_id in value.consumer_ids:
+                if consumer_id not in operations:
+                    raise PlanVerificationError(
+                        f"partition plan value {value.id!r} names consumer "
+                        f"{consumer_id!r}, which the plan does not run"
+                    )
+
+    def _check_edges(self, values: dict[str, PlacedValue]) -> None:
+        for value in self.values:
+            if not isinstance(value.type, TensorType):
+                raise PlanVerificationError(
+                    f"partition plan places value {value.id!r} in "
+                    f"{type(value.type).__name__}, which is not a tensor type"
+                )
+            if value.type.storage is not StorageKind.GMEM:
+                raise PlanVerificationError(
+                    f"partition plan places value {value.id!r} in "
+                    f"{value.type.storage.name}, and a partitioned value is "
+                    "addressable global memory"
+                )
+        for operation in self.operations:
+            if not operation.synthesized:
+                continue
+            inputs = tuple(values[value_id] for value_id in operation.input_ids)
+            outputs = tuple(values[value_id] for value_id in operation.output_ids)
+            if len(inputs) != 1 or len(outputs) != 1:
+                raise PlanVerificationError(
+                    f"partition plan synthesized {operation.id!r} with "
+                    f"{len(inputs)} inputs and {len(outputs)} outputs; moving one "
+                    "value takes one of each"
+                )
+            source, target = inputs[0], outputs[0]
+            if _logical_tensor(source.type) != _logical_tensor(target.type):
+                raise PlanVerificationError(
+                    f"partition plan synthesized {operation.id!r} between "
+                    f"{source.id!r} and {target.id!r}, which are different logical "
+                    "tensors"
+                )
+            if source.type == target.type:
+                raise PlanVerificationError(
+                    f"partition plan synthesized {operation.id!r} between two "
+                    "identical placements, which moves nothing"
+                )
+
+    def _check_positions(self, values: dict[str, PlacedValue]) -> None:
+        for value in self.values:
+            self._check_interval(value.id, value.positions)
+        for operation in self.operations:
+            if operation.positions is not None:
+                self._check_interval(operation.id, operation.positions)
+            if operation.interval is not None and (
+                operation.interval.end_ns < operation.interval.start_ns
+            ):
+                raise PlanVerificationError(
+                    f"partition plan operation {operation.id!r} ends before it starts"
+                )
+
+    def _check_interval(self, owner: str, positions: PositionInterval) -> None:
+        if positions.end <= positions.start:
+            raise PlanVerificationError(
+                f"partition plan gives {owner!r} the empty position range "
+                f"[{positions.start}, {positions.end})"
+            )
+        if positions.start < 0 or positions.end > self.extent:
+            raise PlanVerificationError(
+                f"partition plan places {owner!r} on positions [{positions.start}, "
+                f"{positions.end}), outside the {self.extent} positions of "
+                f"{self.topology!r}"
+            )
+
+    def _check_exclusion(self) -> None:
+        """No two operations may hold the same position at the same time.
+
+        Only operations that occupy positions and run over an interval take part:
+        an operation charged as traffic states no occupancy to conflict over.
+        """
+        placed = tuple(
+            operation
+            for operation in self.operations
+            if operation.interval is not None and operation.positions is not None
+        )
+        for index, left in enumerate(placed):
+            for right in placed[index + 1 :]:
+                if not _overlap(
+                    left.interval.start_ns,
+                    left.interval.end_ns,
+                    right.interval.start_ns,
+                    right.interval.end_ns,
+                ):
+                    continue
+                if _overlap(
+                    left.positions.start,
+                    left.positions.end,
+                    right.positions.start,
+                    right.positions.end,
+                ):
+                    raise PlanVerificationError(
+                        f"partition plan runs {left.id!r} and {right.id!r} at the "
+                        "same time on overlapping positions"
+                    )
+
+    def _check_roots(self, values: dict[str, PlacedValue]) -> None:
+        """Every root result must be reachable by following producer edges.
+
+        A placement the plan does not produce is where the walk stops: it is
+        either the program's own input or a value a region carries, and neither is
+        an operation this plan decided about.
+        """
+        available = {value.id for value in self.values if value.producer_id is None}
+        producer_of = {
+            value.id: value.producer_id
+            for value in self.values
+            if value.producer_id is not None
+        }
+        inputs_of = {operation.id: operation.input_ids for operation in self.operations}
+
+        def reachable(value_id: str, active: frozenset[str]) -> bool:
+            if value_id in available:
+                return True
+            if value_id in active:
+                return False
+            producer = producer_of.get(value_id)
+            if producer is None:
+                return False
+            return all(
+                reachable(source, active | {value_id}) for source in inputs_of[producer]
+            )
+
+        for value_id in self.root_results:
+            if value_id not in values:
+                raise PlanVerificationError(
+                    f"partition plan leaves root result {value_id!r} unplaced"
+                )
+            if not reachable(value_id, frozenset()):
+                raise PlanVerificationError(
+                    f"partition plan cannot reach root result {value_id!r} from the "
+                    "program's own inputs"
+                )
+
+    def _rows(self) -> tuple[tuple[str, ...], ...]:
+        """The decided rows both renderings are built from, in one order."""
+        rows: list[tuple[str, ...]] = []
+        for operation in self.operations:
+            when = (
+                f"[{operation.interval.start_ns}, {operation.interval.end_ns})ns"
+                if operation.interval is not None
+                else "untimed"
+            )
+            where = (
+                f"positions [{operation.positions.start}, "
+                f"{operation.positions.end})"
+                if operation.positions is not None
+                else "no positions"
+            )
+            kind = operation.operation + (
+                " (synthesized)" if operation.synthesized else ""
+            )
+            rows.append(
+                (
+                    operation.id,
+                    kind,
+                    where,
+                    when,
+                    "in " + (" ".join(operation.input_ids) or "-"),
+                    "out " + (" ".join(operation.output_ids) or "-"),
+                )
+            )
+        for value in self.values:
+            rows.append(
+                (
+                    value.id,
+                    _describe_type(value.type),
+                    f"positions [{value.positions.start}, {value.positions.end})",
+                    "from " + (value.producer_id or "-"),
+                    "to " + (" ".join(value.consumer_ids) or "-"),
+                )
+            )
+        return tuple(rows)
+
     def to_json(self) -> str:
-        """Render the whole selection as sorted-key JSON."""
-        return json.dumps(asdict(self), sort_keys=True)
+        """Render the whole decision as sorted-key JSON."""
+        payload = {
+            "topology": self.topology,
+            "extent": self.extent,
+            "target": asdict(self.target),
+            "proof": asdict(self.proof),
+            "root_results": list(self.root_results),
+            "values": [
+                {
+                    "id": value.id,
+                    "type": _type_json(value.type),
+                    "producer_id": value.producer_id,
+                    "consumer_ids": list(value.consumer_ids),
+                    "positions": asdict(value.positions),
+                }
+                for value in self.values
+            ],
+            "operations": [
+                {
+                    "id": operation.id,
+                    "operation": operation.operation,
+                    "synthesized": operation.synthesized,
+                    "input_ids": list(operation.input_ids),
+                    "output_ids": list(operation.output_ids),
+                    "positions": (
+                        asdict(operation.positions)
+                        if operation.positions is not None
+                        else None
+                    ),
+                    "interval": (
+                        asdict(operation.interval)
+                        if operation.interval is not None
+                        else None
+                    ),
+                }
+                for operation in self.operations
+            ],
+        }
+        return json.dumps(payload, sort_keys=True)
 
     def render(self) -> str:
-        """Render the selection as one line per operation, in solve order."""
+        """Render the same decision as one line per operation and value."""
         lines = [
-            f"partition {self.topology} on {self.target.device_id} "
-            f"({self.proof.status}, makespan {self.proof.objective_ns}ns)"
+            f"partition {self.topology} x{self.extent} on {self.target.device_id} "
+            f"({self.proof.status}, makespan {self.proof.objective_ns}ns, bound "
+            f"{self.proof.best_bound_ns}ns)"
         ]
-        for operation in self.operations:
-            lines.append(
-                f"  {operation.operation} x{operation.parallel_positions} "
-                f"[{operation.start_ns}, {operation.end_ns})"
-            )
+        lines.extend("  " + " | ".join(row) for row in self._rows())
+        lines.append("  roots: " + (" ".join(self.root_results) or "-"))
         return "\n".join(lines)
+
+
+def _overlap(left_start: int, left_end: int, right_start: int, right_end: int) -> bool:
+    return left_start < right_end and right_start < left_end
+
+
+def _base_value_name(problem: PartitionProblem, value_id: int) -> str:
+    """A readable name for one value, derived from the authored program."""
+    info = problem.values[value_id]
+    name = binding_name(info.source) or getattr(info.source, "name", None)
+    if not name:
+        target = getattr(info.source, "target", None)
+        name = type(target).__name__.lower() if target is not None else "value"
+    for index in info.leaf_path:
+        name = f"{name}.{index}"
+    if info.role != "normal":
+        name = f"{name}.{info.role}"
+    return name
+
+
+def _placement_tag(type: Type) -> str:
+    """A short readable name for how one placement divides its value."""
+    if not isinstance(type, TensorType) or not isinstance(type.layout, ShardLayout):
+        return "whole"
+    kinds = {"Split": "split", "Broadcast": "bcast", "Partial": "partial"}
+    attrs = "".join(
+        kinds.get(attr.__class__.__name__, attr.__class__.__name__.lower())
+        for attr in type.layout.attrs
+    )
+    extent = type.layout.mesh.layout.shape[0]
+    return f"{attrs or 'whole'}{extent}"
+
+
+def _placement_ids(
+    problem: PartitionProblem, selected_buckets: tuple[int, ...]
+) -> dict[int, str]:
+    """One stable readable identity per selected placement.
+
+    A value may be resident in more than one placement at once: that is exactly
+    what a Reshard connects. The value's own name is used alone while it has a
+    single placement, and is qualified by how each placement divides it when it
+    has several, so a plan naming two placements of one tensor stays readable.
+    """
+    by_value: dict[int, list[int]] = {}
+    for bucket_id in sorted(selected_buckets):
+        by_value.setdefault(problem.buckets[bucket_id].value_id, []).append(bucket_id)
+    used: dict[str, int] = {}
+    ids: dict[int, str] = {}
+    for value_id in sorted(by_value):
+        buckets = by_value[value_id]
+        name = _base_value_name(problem, value_id)
+        for bucket_id in buckets:
+            base = name
+            if len(buckets) > 1:
+                type = problem.types[problem.buckets[bucket_id].type_id]
+                base = f"{name}@{_placement_tag(type)}"
+            count = used.get(base, 0)
+            used[base] = count + 1
+            ids[bucket_id] = base if count == 0 else f"{base}#{count}"
+    return ids
+
+
+def _operation_ids(
+    problem: PartitionProblem,
+    placement_ids: dict[int, str],
+    selected: tuple[int, ...],
+) -> dict[int, str]:
+    """One stable readable identity per selected operation."""
+    ids: dict[int, str] = {}
+    used: dict[str, int] = {}
+    for candidate_id in selected:
+        candidate = problem.candidates[candidate_id]
+        kind = type(candidate.op).__name__.lower()
+        produced = tuple(
+            placement_ids[bucket_id]
+            for bucket_id in candidate.output_bucket_ids
+            if bucket_id in placement_ids
+        )
+        base = f"{kind}:{produced[0]}" if produced else kind
+        count = used.get(base, 0)
+        used[base] = count + 1
+        ids[candidate_id] = base if count == 0 else f"{base}#{count}"
+    return ids
+
+
+def _placed_positions(problem: PartitionProblem, bucket_id: int | None) -> int:
+    """How many positions one selected placement occupies."""
+    if bucket_id is None:
+        return 1
+    type = problem.types[problem.buckets[bucket_id].type_id]
+    if not isinstance(type, TensorType) or not isinstance(type.layout, ShardLayout):
+        return 1
+    count = type.layout.mesh.layout.shape[0]
+    return count if isinstance(count, int) and count > 0 else 1
 
 
 def export_partition_plan(
     problem: PartitionProblem, solution: PartitionSolution
 ) -> PartitionSchedulePlan:
     """State the solved selection in the plan's own stable vocabulary."""
+    placement_ids = _placement_ids(problem, solution.selected_bucket_ids)
+    operation_ids = _operation_ids(
+        problem, placement_ids, solution.selected_candidate_ids
+    )
     intervals = dict(solution.candidate_intervals_ns)
     offsets = dict(solution.bucket_offsets)
-    operations = tuple(
-        SelectedOperation(
-            candidate_id=candidate_id,
-            site_id=problem.candidates[candidate_id].site_id,
-            operation=type(problem.candidates[candidate_id].op).__name__,
-            input_bucket_ids=problem.candidates[candidate_id].input_bucket_ids,
-            output_bucket_ids=problem.candidates[candidate_id].output_bucket_ids,
-            parallel_positions=problem.candidates[candidate_id].topology_count,
-            start_ns=intervals[candidate_id].start_ns if candidate_id in intervals else 0,
-            end_ns=intervals[candidate_id].end_ns if candidate_id in intervals else 0,
+
+    producers: dict[str, str] = {}
+    consumers: dict[str, list[str]] = {}
+    operations: list[PartitionedOperation] = []
+    for candidate_id in solution.selected_candidate_ids:
+        candidate = problem.candidates[candidate_id]
+        operation_id = operation_ids[candidate_id]
+        input_ids = tuple(
+            placement_ids[bucket_id] for bucket_id in candidate.input_bucket_ids
         )
-        for candidate_id in solution.selected_candidate_ids
-    )
-    placements = tuple(
-        SelectedPlacement(
-            bucket_id=bucket_id,
-            value_id=problem.buckets[bucket_id].value_id,
-            type_id=problem.buckets[bucket_id].type_id,
-            offset=offsets.get(bucket_id, 0),
+        output_ids = tuple(
+            placement_ids[bucket_id] for bucket_id in candidate.output_bucket_ids
         )
-        for bucket_id in solution.selected_bucket_ids
+        for placement in output_ids:
+            producers[placement] = operation_id
+        for placement in input_ids:
+            consumers.setdefault(placement, []).append(operation_id)
+        anchor = candidate.output_bucket_ids[0] if candidate.output_bucket_ids else None
+        interval = intervals.get(candidate_id)
+        positions = None
+        if candidate.topology_count > 0 and anchor is not None:
+            start = offsets.get(anchor, 0)
+            positions = PositionInterval(start, start + candidate.topology_count)
+        operations.append(
+            PartitionedOperation(
+                id=operation_id,
+                operation=type(candidate.op).__name__,
+                synthesized=candidate.site_id is None,
+                input_ids=input_ids,
+                output_ids=output_ids,
+                positions=positions,
+                interval=(
+                    TimeInterval(interval.start_ns, interval.end_ns)
+                    if interval is not None
+                    else None
+                ),
+            )
+        )
+
+    values = tuple(
+        PlacedValue(
+            id=placement_ids[bucket_id],
+            type=problem.types[problem.buckets[bucket_id].type_id],
+            producer_id=producers.get(placement_ids[bucket_id]),
+            consumer_ids=tuple(consumers.get(placement_ids[bucket_id], ())),
+            positions=PositionInterval(
+                offsets.get(bucket_id, 0),
+                offsets.get(bucket_id, 0) + _placed_positions(problem, bucket_id),
+            ),
+        )
+        for bucket_id in sorted(solution.selected_bucket_ids)
     )
+    root_placements = tuple(
+        placement_ids[bucket_id]
+        for bucket_id in sorted(solution.selected_bucket_ids)
+        if problem.buckets[bucket_id].value_id in set(problem.root_value_ids)
+    )
+
     return PartitionSchedulePlan(
         topology=problem.topology.name,
+        extent=problem.extent,
         target=problem.facts.spec,
-        placements=placements,
-        operations=operations,
-        root_results=problem.root_value_ids,
+        values=values,
+        operations=tuple(operations),
+        root_results=root_placements,
         proof=PartitionProof(
             status=solution.status,
             objective_ns=solution.makespan_ns,
@@ -180,7 +630,9 @@ def export_partition_plan(
 __all__ = [
     "PartitionProof",
     "PartitionSchedulePlan",
-    "SelectedOperation",
-    "SelectedPlacement",
+    "PartitionedOperation",
+    "PlacedValue",
+    "PositionInterval",
+    "TimeInterval",
     "export_partition_plan",
 ]

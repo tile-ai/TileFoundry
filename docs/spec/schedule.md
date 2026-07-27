@@ -209,36 +209,135 @@ class PipelineSchedulePlan(SchedulePlan):
 
 ### 2.5 `PartitionSchedulePlan`
 
+A partition plan states where each value was placed, which operations run over
+which placements, and what the solve proved. It names both by identities derived
+from the authored program rather than by the indexes its own problem allocated, so
+an agent reading the plan can find what it refers to in the program it wrote.
+
 ```python
+class PositionInterval:
+    """The half-open range of parallel positions something occupies.
+
+    Attributes:
+        start: attribute; First position occupied.
+        end: attribute; One past the last position occupied.
+    """
+
+    start: int
+    end: int
+
+class TimeInterval:
+    """One operation's half-open execution interval.
+
+    Attributes:
+        start_ns: attribute; Start of the interval, in ns.
+        end_ns: attribute; One past the end of the interval, in ns.
+    """
+
+    start_ns: int
+    end_ns: int
+
+class PlacedValue:
+    """One tensor value, the type it was placed in, and who touches it.
+
+    Attributes:
+        id: attribute; Stable identity of this placement, derived from the program.
+        type: attribute; The ordinary IR Type selected for it, carrying its layout and storage.
+        producer_id: attribute; The operation that produces it, or None when the plan produces none.
+        consumer_ids: attribute; Every operation that reads it.
+        positions: attribute; The positions this placement occupies.
+    """
+
+    id: str
+    type: Type
+    producer_id: str | None
+    consumer_ids: tuple[str, ...]
+    positions: PositionInterval
+
+class PartitionedOperation:
+    """One operation that runs, where it runs, and when.
+
+    Attributes:
+        id: attribute; Stable identity of this operation, derived from the program.
+        operation: attribute; The operation's own kind.
+        synthesized: attribute; True when the algorithm introduced it rather than the author.
+        input_ids: attribute; The placements it reads.
+        output_ids: attribute; The placements it produces.
+        positions: attribute; The positions it occupies, or None when it occupies none.
+        interval: attribute; Its execution interval, or None when the model gives it none.
+    """
+
+    id: str
+    operation: str
+    synthesized: bool
+    input_ids: tuple[str, ...]
+    output_ids: tuple[str, ...]
+    positions: PositionInterval | None
+    interval: TimeInterval | None
+
+class PartitionProof:
+    """What the solve proved about its own objective.
+
+    Attributes:
+        status: attribute; Whether optimality was proven or only feasibility reached.
+        objective_ns: attribute; The selected makespan, in ns.
+        best_bound_ns: attribute; The bound the solve established, in ns.
+        proven_optimal: attribute; True when the two met.
+    """
+
+    status: Literal["OPTIMAL", "FEASIBLE_NOT_PROVEN"]
+    objective_ns: int
+    best_bound_ns: int
+    proven_optimal: bool
+
 class PartitionSchedulePlan(SchedulePlan):
-    """State one solved spatial partition, in the deciding family's own terms."""
+    """The placement one partition solve committed to, and its proof."""
 
     topology: str
+    extent: int
     target: TargetSpecRef
-    placements: tuple[SelectedPlacement, ...]
-    operations: tuple[SelectedOperation, ...]
-    root_results: tuple[int, ...]
+    values: tuple[PlacedValue, ...]
+    operations: tuple[PartitionedOperation, ...]
+    root_results: tuple[str, ...]
     proof: PartitionProof
 ```
 
 - constraints:
-  - The plan MUST state the level it decided about and the identity of the
+  - Every structure MUST be immutable, and the plan MUST state the level it
+    decided about, how many positions of it there were, and the identity of the
     installed documents it decided against.
-  - The selection MUST be stated by the deciding family's own stable identities,
-    and those identities MUST be internally consistent: an operation MUST refer
-    only to placements the same plan carries.
+  - An identity MUST be derived from the authored program and MUST be unique
+    within the plan. One value MAY hold more than one placement at once -- that is
+    what a Reshard connects -- so a placement, not a value, is what an identity
+    names.
+  - `PlacedValue.type` MUST be the ordinary IR Type that was selected, so the
+    layout and storage a value was placed in are read off the type system rather
+    than restated in a parallel vocabulary.
+  - An operation the algorithm synthesized MUST appear among `operations`, marked
+    as synthesized, with the placements it moves between. There MUST be no
+    separate route, report, or debug channel through which a caller would learn
+    that data moves.
+  - An operation charged as traffic rather than as occupancy MUST state no
+    position range. Giving it one would claim it excludes other work from those
+    positions, which the decision does not.
   - `proof` MUST state the objective, the bound the solve established, and whether
     the two met. It is a result fact and MUST NOT become a generic report facade.
-  - An operation the algorithm synthesized to connect two otherwise unconnected
-    placements MUST appear among `operations` and MUST NOT be reported through a
-    separate route or report channel.
-  - `verify` MUST reject an operation on a placement the plan does not carry, an
-    interval that ends before it starts, an unplaced root result, and a bound above
-    the stated objective, and MUST do so without invoking a solver.
+  - `verify` MUST reject: a level or extent other than the one the plan decided;
+    two placements or two operations sharing an identity; a reference to a
+    placement or operation the plan does not carry; a placement in a type that is
+    not addressable global memory; a synthesized move between two placements that
+    are different logical tensors or that are identical; a position range outside
+    the level; an interval that ends before it starts; two operations holding the
+    same position at the same time; a root result the plan does not carry or
+    cannot reach by following producers; and a bound above the stated objective.
+    It MUST do all of that without rebuilding candidates and without invoking a
+    solver.
+  - JSON and text rendering MUST be deterministic and MUST state the same
+    placements, operations, intervals, and proof.
   - A solver variable or solver-native value MUST NOT appear in the exported plan.
-  - The plan MUST NOT carry a rewritten program: a partition decides where work
-    and its tensors go, and applying that decision to HIR is a separate operation
-    the caller asks for.
+  - The plan MUST NOT carry a rewritten program, and producing it MUST NOT rewrite
+    one: a partition decides where work and its tensors go, and applying that
+    decision to HIR is a separate operation the caller asks for.
 
 ### 2.6 `ScheduleReport`
 

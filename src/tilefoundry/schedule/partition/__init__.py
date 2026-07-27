@@ -9,7 +9,15 @@ vocabulary and no other algorithm reads them.
 from __future__ import annotations
 
 from .facts import PartitionFacts, PartitionFactsError, PartitionFactsQuery
-from .plan import PartitionProof, PartitionSchedulePlan, export_partition_plan
+from .plan import (
+    PartitionedOperation,
+    PartitionProof,
+    PartitionSchedulePlan,
+    PlacedValue,
+    PositionInterval,
+    TimeInterval,
+    export_partition_plan,
+)
 from .problem import PartitionProblem, PartitionProblemError, build_partition_problem
 from .program import PartitionProgram, PartitionProgramError, build_partition_program
 from .solve import PartitionSolution, PartitionSolveError, solve_partition_problem
@@ -24,6 +32,10 @@ __all__ = [
     "PartitionProgramError",
     "PartitionProof",
     "PartitionSchedulePlan",
+    "PartitionedOperation",
+    "PlacedValue",
+    "PositionInterval",
+    "TimeInterval",
     "PartitionSolution",
     "PartitionSolveError",
     "build_partition_problem",
