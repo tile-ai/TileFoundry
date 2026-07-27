@@ -203,7 +203,38 @@ class PartitionSchedulePlan(SchedulePlan):
         return values
 
     def _check_references(self, values: dict[str, PlacedValue]) -> None:
-        operations = {operation.id for operation in self.operations}
+        """Every edge must be named the same way from both of its ends.
+
+        Naming an operation that exists is not enough: an edge that one end
+        claims and the other does not is a claim about a decision nobody made,
+        and a reachability walk that followed it would report a program flow that
+        the operations do not implement.
+        """
+        operations = {operation.id: operation for operation in self.operations}
+        for value in self.values:
+            producer = value.producer_id
+            if producer is not None:
+                if producer not in operations:
+                    raise PlanVerificationError(
+                        f"partition plan value {value.id!r} names producer "
+                        f"{producer!r}, which the plan does not run"
+                    )
+                if value.id not in operations[producer].output_ids:
+                    raise PlanVerificationError(
+                        f"partition plan value {value.id!r} names producer "
+                        f"{producer!r}, which does not produce it"
+                    )
+            for consumer_id in value.consumer_ids:
+                if consumer_id not in operations:
+                    raise PlanVerificationError(
+                        f"partition plan value {value.id!r} names consumer "
+                        f"{consumer_id!r}, which the plan does not run"
+                    )
+                if value.id not in operations[consumer_id].input_ids:
+                    raise PlanVerificationError(
+                        f"partition plan value {value.id!r} names consumer "
+                        f"{consumer_id!r}, which does not read it"
+                    )
         for operation in self.operations:
             for value_id in (*operation.input_ids, *operation.output_ids):
                 if value_id not in values:
@@ -211,17 +242,18 @@ class PartitionSchedulePlan(SchedulePlan):
                         f"partition plan operation {operation.id!r} refers to "
                         f"unplaced value {value_id!r}"
                     )
-        for value in self.values:
-            if value.producer_id is not None and value.producer_id not in operations:
-                raise PlanVerificationError(
-                    f"partition plan value {value.id!r} names producer "
-                    f"{value.producer_id!r}, which the plan does not run"
-                )
-            for consumer_id in value.consumer_ids:
-                if consumer_id not in operations:
+            for value_id in operation.output_ids:
+                if values[value_id].producer_id != operation.id:
                     raise PlanVerificationError(
-                        f"partition plan value {value.id!r} names consumer "
-                        f"{consumer_id!r}, which the plan does not run"
+                        f"partition plan operation {operation.id!r} produces "
+                        f"{value_id!r}, which names producer "
+                        f"{values[value_id].producer_id!r}"
+                    )
+            for value_id in operation.input_ids:
+                if operation.id not in values[value_id].consumer_ids:
+                    raise PlanVerificationError(
+                        f"partition plan operation {operation.id!r} reads "
+                        f"{value_id!r}, which does not name it as a consumer"
                     )
 
     def _check_edges(self, values: dict[str, PlacedValue]) -> None:

@@ -322,10 +322,16 @@ class PartitionSchedulePlan(SchedulePlan):
     positions, which the decision does not.
   - `proof` MUST state the objective, the bound the solve established, and whether
     the two met. It is a result fact and MUST NOT become a generic report facade.
+  - An edge MUST be named the same way from both of its ends: a placement's
+    producer MUST list that placement among its outputs, its consumers MUST list
+    it among their inputs, and every operation's outputs and inputs MUST be
+    reflected back by the placements they name. An edge only one end claims is a
+    claim about a decision nobody made, and a walk that followed it would report a
+    program flow the operations do not implement.
   - `verify` MUST reject: a level or extent other than the one the plan decided;
     two placements or two operations sharing an identity; a reference to a
-    placement or operation the plan does not carry; a placement in a type that is
-    not addressable global memory; a synthesized move between two placements that
+    placement or operation the plan does not carry; an edge whose two ends
+    disagree; a placement in a type that is not addressable global memory; a synthesized move between two placements that
     are different logical tensors or that are identical; a position range outside
     the level; an interval that ends before it starts; two operations holding the
     same position at the same time; a root result the plan does not carry or

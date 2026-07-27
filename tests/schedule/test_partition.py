@@ -25,6 +25,7 @@ from tilefoundry.schedule.partition import (
     PartitionFactsError,
     PartitionProblemError,
     PartitionSchedulePlan,
+    PlacedValue,
     PositionInterval,
     build_partition_problem,
     build_partition_program,
@@ -270,7 +271,7 @@ def test_partition_plan_holds_one_value_in_two_placements_at_once() -> None:
     bases = {value.id.split("@", 1)[0] for value in qualified}
     for base in bases:
         placements = tuple(
-            value for value in plan.values if value.id.split("@", 1)[0] == base
+            value for value in qualified if value.id.split("@", 1)[0] == base
         )
         assert len(placements) > 1
         assert len({value.type for value in placements}) == len(placements)
@@ -301,6 +302,105 @@ def test_partition_plan_verification_rejects_a_dangling_producer() -> None:
         broken.verify(module, function, Topology("cta", 4))
 
 
+def test_partition_plan_verification_rejects_a_producer_that_produces_it_not() -> None:
+    """A named producer must actually list the placement among its outputs."""
+    module, function, _, _ = _closed()
+    plan = schedule(module, function, topology="cta").plan
+    produced = next(value for value in plan.values if value.producer_id)
+    other = next(
+        operation
+        for operation in plan.operations
+        if produced.id not in operation.output_ids
+    )
+
+    broken = replace(
+        plan,
+        values=tuple(
+            replace(value, producer_id=other.id) if value is produced else value
+            for value in plan.values
+        ),
+    )
+    with pytest.raises(PlanVerificationError, match="does not produce it"):
+        broken.verify(module, function, Topology("cta", 4))
+
+
+def test_partition_plan_verification_rejects_a_consumer_that_reads_it_not() -> None:
+    """A named consumer must actually list the placement among its inputs."""
+    module, function, _, _ = _closed()
+    plan = schedule(module, function, topology="cta").plan
+    read = next(value for value in plan.values if value.consumer_ids)
+    other = next(
+        operation
+        for operation in plan.operations
+        if read.id not in operation.input_ids
+    )
+
+    broken = replace(
+        plan,
+        values=tuple(
+            replace(value, consumer_ids=(*value.consumer_ids, other.id))
+            if value is read
+            else value
+            for value in plan.values
+        ),
+    )
+    with pytest.raises(PlanVerificationError, match="does not read it"):
+        broken.verify(module, function, Topology("cta", 4))
+
+
+def test_partition_plan_verification_rejects_an_output_the_value_disowns() -> None:
+    """The operation side of an edge must agree with the placement side."""
+    module, function, _, _ = _closed()
+    plan = schedule(module, function, topology="cta").plan
+    produced = next(value for value in plan.values if value.producer_id)
+
+    broken = replace(
+        plan,
+        values=tuple(
+            replace(value, producer_id=None) if value is produced else value
+            for value in plan.values
+        ),
+    )
+    with pytest.raises(PlanVerificationError, match="which names producer None"):
+        broken.verify(module, function, Topology("cta", 4))
+
+
+def test_partition_plan_verification_rejects_an_input_the_value_disowns() -> None:
+    module, function, _, _ = _closed()
+    plan = schedule(module, function, topology="cta").plan
+    read = next(value for value in plan.values if value.consumer_ids)
+
+    broken = replace(
+        plan,
+        values=tuple(
+            replace(value, consumer_ids=()) if value is read else value
+            for value in plan.values
+        ),
+    )
+    with pytest.raises(PlanVerificationError, match="does not name it as a consumer"):
+        broken.verify(module, function, Topology("cta", 4))
+
+
+def test_partition_plan_verification_will_not_reach_a_root_through_a_fabricated_edge() -> None:
+    """A root must be reachable through edges both ends agree on."""
+    module, function, _, _ = _closed()
+    plan = schedule(module, function, topology="cta").plan
+    real = next(operation for operation in plan.operations if operation.output_ids)
+
+    orphan = PlacedValue(
+        id="orphan",
+        type=plan.values[0].type,
+        producer_id=real.id,
+        consumer_ids=(),
+        positions=plan.values[0].positions,
+    )
+    broken = replace(
+        plan, values=(*plan.values, orphan), root_results=("orphan",)
+    )
+    with pytest.raises(PlanVerificationError, match="does not produce it"):
+        broken.verify(module, function, Topology("cta", 4))
+
+
 def test_partition_plan_verification_rejects_a_placement_outside_the_level() -> None:
     module, function, _, _ = _closed()
     plan = schedule(module, function, topology="cta").plan
@@ -326,7 +426,7 @@ def test_partition_plan_verification_rejects_two_operations_sharing_a_position()
         if operation.positions is not None and operation.interval is not None
     )
 
-    twin = replace(placed, id=placed.id + ".twin")
+    twin = replace(placed, id=placed.id + ".twin", input_ids=(), output_ids=())
     broken = replace(plan, operations=(*plan.operations, twin))
     with pytest.raises(PlanVerificationError, match="overlapping positions"):
         broken.verify(module, function, Topology("cta", 4))
@@ -335,22 +435,30 @@ def test_partition_plan_verification_rejects_two_operations_sharing_a_position()
 def test_partition_plan_verification_rejects_a_reshard_that_moves_nothing() -> None:
     module, function, _, _ = _closed()
     plan = schedule(module, function, topology="cta").plan
-    held = plan.values[0]
+    held = next(value for value in plan.values if value.producer_id is None)
+    identity = PartitionedOperation(
+        id="reshard:identity",
+        operation="Reshard",
+        synthesized=True,
+        input_ids=(held.id,),
+        output_ids=(held.id,),
+        positions=None,
+        interval=None,
+    )
 
     broken = replace(
         plan,
-        operations=(
-            *plan.operations,
-            PartitionedOperation(
-                id="reshard:identity",
-                operation="Reshard",
-                synthesized=True,
-                input_ids=(held.id,),
-                output_ids=(held.id,),
-                positions=None,
-                interval=None,
-            ),
+        values=tuple(
+            replace(
+                value,
+                producer_id=identity.id,
+                consumer_ids=(*value.consumer_ids, identity.id),
+            )
+            if value is held
+            else value
+            for value in plan.values
         ),
+        operations=(*plan.operations, identity),
     )
     with pytest.raises(PlanVerificationError, match="moves nothing"):
         broken.verify(module, function, Topology("cta", 4))
