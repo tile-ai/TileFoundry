@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from tilefoundry.analysis import AnalysisError, ExtractError, TileGraph, extract
+from tilefoundry.analysis import AnalysisError, ExtractError
 from tilefoundry.analysis.api import analyze
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
@@ -23,9 +23,7 @@ from tilefoundry.inspection.analysis_report import (
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.schedule.kernel_schedule import KernelScheduleError, build_schedule_tree
-from tilefoundry.schedule.render import EmitScaffoldError, HoleContract, emit_scaffold
-from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
+from tilefoundry.schedule import ScheduleError, schedule
 from tilefoundry.target import CudaTarget
 from tilefoundry.target.hardware import format_capabilities, hardware_documents
 
@@ -259,73 +257,12 @@ def _entry_function(ir: Module | Function) -> Function:
     return function
 
 
-def _decisions_of(solved: TileGraph) -> dict:
-    """The resource decisions `select_atoms` records on its output."""
-    return solved.decisions
-
-
-def _hole_contract_line(contract: HoleContract) -> str:
-    op_name = type(contract.op_ref.target).__name__
-    inputs = ",".join(view.tensor_name for view in contract.inputs)
-    coords = ",".join(contract.coords)
-    return (
-        f"hole={contract.name} op={op_name} coords={coords} "
-        f"inputs={inputs} output={contract.output.tensor_name}"
-    )
-
-
-def _stage_or_die(target, stage: str) -> str:
-    """``stage`` if the resolved target owns a level by that name. A target
-    that enumerates its levels can name the alternatives; one that does not
-    leaves the service lookup inside `select_atoms` to report the mismatch."""
-    levels = getattr(target, "topology_levels", ())
-    if levels and stage not in levels:
-        raise ValueError(
-            f"target {target.name!r} has no topology level {stage!r}; "
-            f"--stage must be one of {', '.join(levels)}"
-        )
-    return stage
-
-
-def run_schedule(source: str, stage: str) -> int:
-    """Model, schedule, select atoms for, and scaffold one authored HIR
-    Function at one of its target's topology levels -- the schedule-path
-    analogue of `run_authored_analysis`: same source loading, ``#``-headed
-    machine-parsable summary style. The target comes from the selected Module's
-    resolved Target, not from a flag: a kernel is authored against one."""
+def run_schedule(source: str, topology: str, *, as_json: bool = False) -> int:
+    """Schedule one authored Module through the public Schedule operation."""
     ir = load_authored_ir(source)
     function = _entry_function(ir)
-    resolved_target = _selected_target(ir)
-    stage = _stage_or_die(resolved_target, stage)
-
-    tg = extract(function)
-    solved = select_atoms(build_schedule_tree(tg), target=resolved_target, stage=stage)
-    skeleton, swimlane, contracts = emit_scaffold(solved)
-    decisions = _decisions_of(solved)
-
-    header = [
-        f"schedule target={resolved_target.name} stage={stage} function={function.name} "
-        f"statements={','.join(unit.name for unit in tg.units)}",
-        f"decisions status={decisions['status']} makespan={decisions['makespan']}",
-    ]
-    for name, stmt in decisions["statements"].items():
-        header.append(
-            f"decisions statement={name} atom={stmt['atom'] or 'none'} "
-            f"place={stmt['place']} start={stmt['start']} end={stmt['end']}"
-        )
-    if solved.ring:
-        header.append(
-            "ring " + " ".join(f"{buf}={depth}" for buf, depth in sorted(solved.ring.items()))
-        )
-    summary = "\n".join(f"# {line}" for line in header)
-    holes = "\n".join(f"# {_hole_contract_line(contract)}" for contract in contracts)
-
-    sys.stdout.write(
-        f"{summary}\n\n"
-        f"# skeleton\n{skeleton.text}\n"
-        f"# swimlane\n{swimlane.text}\n\n"
-        f"# holes\n{holes}\n"
-    )
+    result = schedule(ir, function, topology=topology)
+    sys.stdout.write((result.plan.to_json() if as_json else result.plan.render()) + "\n")
     return 0
 
 
@@ -353,15 +290,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     schedule = commands.add_parser(
         "schedule",
-        help="schedule authored HIR at one topology level into an agent-fillable scaffold",
+        help="schedule authored HIR at one declared topology level",
     )
     _add_source_argument(schedule)
     schedule.add_argument(
-        "--stage",
+        "--topology",
         required=True,
         metavar="LEVEL",
-        help="topology level to schedule at (a level the Module's target owns, e.g. core)",
+        help="declared topology level to schedule (for example cta)",
     )
+    schedule.add_argument("--json", action="store_true", help="print the selected plan as JSON")
 
     inspect = commands.add_parser("inspect", help="inspect installed target facts")
     inspect_commands = inspect.add_subparsers(dest="inspect_command", required=True)
@@ -399,12 +337,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     if args.command == "schedule":
         try:
-            return run_schedule(args.source, args.stage)
+            return run_schedule(args.source, args.topology, as_json=args.json)
         except (
             ExtractError,
-            EmitScaffoldError,
-            AtomSelectionError,
-            KernelScheduleError,
+            ScheduleError,
             OSError,
             TypeError,
             ValueError,

@@ -17,8 +17,6 @@ fact ``analysis.poly`` measures off ``domain`` + ``deps``.
 """
 from __future__ import annotations
 
-import dataclasses
-
 import isl
 
 from tilefoundry.analysis.poly import TileGraph
@@ -60,10 +58,8 @@ def _mark_coincident(tree: "isl.schedule", parallel: dict[str, tuple[bool, ...]]
     return tree.get_root().map_descendant_bottom_up(mark).get_schedule()
 
 
-def build_schedule_tree(tg: TileGraph) -> TileGraph:
-    """A sequence of one identity band per statement, in ``tg.units``
-    order, with each band's ``coincident`` members taken from
-    ``tg.parallel_dims``; returned as ``tg`` with ``tree`` filled in.
+def build_schedule_tree(tg: TileGraph) -> "isl.schedule":
+    """Build a private sequence of identity bands from immutable analysis.
 
     The statements are not fused into one band: their ranks differ, so a
     padded shared band member would mean a different loop in each of them.
@@ -80,7 +76,7 @@ def build_schedule_tree(tg: TileGraph) -> TileGraph:
     tree = _statement_schedule(by_name[tg.units[0].name])
     for unit in tg.units[1:]:
         tree = tree.sequence(_statement_schedule(by_name[unit.name]))
-    return dataclasses.replace(tg, tree=_mark_coincident(tree, tg.parallel_dims))
+    return _mark_coincident(tree, tg.parallel_dims)
 
 
 def schedule_bands(tree: "isl.schedule") -> tuple["isl.schedule_node_band", ...]:

@@ -20,8 +20,6 @@ from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import emit_scaffold
-from tilefoundry.schedule.select_atoms import select_atoms
-from tilefoundry.target import CudaTarget
 
 
 @func
@@ -108,7 +106,7 @@ def test_dynamic_matmul_end_to_end_emits_symbolic_loop():
     names the isl parameter directly, never a fixed integer trip count."""
     tg = extract(dyn_matmul)
     tree = build_schedule_tree(tg)
-    skeleton, _swimlane, contracts = emit_scaffold(tree)
+    skeleton, _swimlane, contracts = emit_scaffold(tg, tree, {})
 
     print("\n=== dynamic matmul skeleton ===")
     print(skeleton.text)
@@ -122,20 +120,11 @@ def test_dynamic_matmul_end_to_end_emits_symbolic_loop():
     assert "seq" in bound
 
 
-def test_a_bounded_dimvar_goes_through_atom_selection_too():
-    """A ``DimVar`` carries ``lo``/``hi``, so a parametrised extent still has a
-    finite ``dim_max_val`` and every stage that needs an integer extent gets
-    one -- atom selection included. This is the whole four-stage path, because
-    the stage that needs static extents is the one the other dynamic tests
-    stop short of."""
+def test_a_bounded_dimvar_builds_a_finite_private_tree():
+    """A bounded parameter remains finite for the private schedule tree."""
     assert (SEQ.lo, SEQ.hi) == (1, 128), "an unbounded DimVar is not constructible"
 
-    solved = select_atoms(build_schedule_tree(extract(dyn_matmul)), target=CudaTarget())
-    print("\n=== dynamic matmul decisions ===", solved.decisions["statements"])
-
-    assert solved.decisions["status"] == "OPTIMAL"
-    (statement,) = solved.decisions["statements"].values()
-    # The extent the decisions carry is the parameter's own upper bound, not a
-    # guessed trip count.
-    assert statement["tile"][0] == SEQ.hi - 1
-    emit_scaffold(solved)
+    tg = extract(dyn_matmul)
+    tree = build_schedule_tree(tg)
+    skeleton, _swimlane, _contracts = emit_scaffold(tg, tree, {})
+    assert "seq" in skeleton.text

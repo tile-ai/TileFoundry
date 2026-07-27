@@ -34,7 +34,6 @@ from tests.models.qwen3_1_7b.decoder_layer import (
     NK_INT,
     NT,
 )
-from tests.schedule.test_kernel_schedule import _lex_nonpositive
 from tilefoundry import func
 from tilefoundry.analysis import extract
 from tilefoundry.analysis.poly import ExtractError
@@ -136,10 +135,30 @@ def _self_deltas(tg, statement: str) -> "isl.set":
 def _violations(tg) -> "isl.union_set":
     """The dependence deltas ``tg.tree`` does not order strictly (same check
     ``tests/schedule/test_kernel_schedule.py`` makes)."""
-    sched = tg.tree.get_map()
+    sched = build_schedule_tree(tg).get_map()
     timed = tg.deps.apply_domain(sched).apply_range(sched)
     assert not timed.is_empty(), "every dependence must survive into time space"
     return _lex_nonpositive(timed.deltas())
+
+
+def _lex_nonpositive(deltas: "isl.union_set") -> "isl.union_set":
+    out = isl.union_set("{}")
+    pieces: list = []
+    deltas.foreach_set(pieces.append)
+    for piece in pieces:
+        rank = piece.dim(isl.dim_type.SET)
+        dims = ", ".join(f"d{i}" for i in range(rank))
+        positive = isl.set(
+            "{ "
+            + "; ".join(
+                f"[{dims}] : "
+                + " and ".join([*(f"d{i} = 0" for i in range(index)), f"d{index} > 0"])
+                for index in range(rank)
+            )
+            + " }"
+        )
+        out = out.union(piece.subtract(positive))
+    return out
 
 
 # ── the loop axis, and who gets one ───────────────────────────────────────
@@ -275,6 +294,6 @@ def test_tiled_mlp_carries_are_distance_one_and_schedule_legally():
         assert _self_deltas(tg, name).is_equal(isl.set("{ [1, 0, 0, 0, 0] }")), buf
         assert tg.parallel_dims[name] == (False, True, True, True, True)
 
-    tg = build_schedule_tree(tg)
-    assert tg.domain.is_subset(tg.tree.get_map().domain())
+    tree = build_schedule_tree(tg)
+    assert tg.domain.is_subset(tree.get_map().domain())
     assert _violations(tg).is_empty()

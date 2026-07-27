@@ -34,6 +34,18 @@ class EmitScaffoldError(RuntimeError):
     a specific, actionable message; V1 never silently guesses."""
 
 
+@dataclass(frozen=True)
+class _RenderProgram:
+    """Private renderer state kept separate from analysis output."""
+
+    graph: TileGraph
+    tree: "isl.schedule"
+    ring: dict[str, int]
+
+    def __getattr__(self, name: str):
+        return getattr(self.graph, name)
+
+
 # ---------------------------------------------------------------------------
 # Output data structures
 # ---------------------------------------------------------------------------
@@ -398,22 +410,18 @@ def _build_swimlane(tg: TileGraph, contracts: dict[str, HoleContract]) -> Swimla
 # ---------------------------------------------------------------------------
 
 
-def emit_scaffold(tg: TileGraph) -> tuple[Skeleton, Swimlane, list[HoleContract]]:
-    """Render ``tg`` (carrying its isl schedule tree, from
-    ``build_schedule_tree(tg)``) into a holed skeleton + a human swimlane + one
-    ``HoleContract`` per statement. See the module docstring for the
-    ``BufferAccess``-reuse decision."""
-    dtype_table = _dtype_table(tg.units)
-    skeleton, contracts = _build_skeleton(tg, dtype_table)
-    swimlane = _build_swimlane(tg, contracts)
+def emit_scaffold(
+    graph: TileGraph, tree: "isl.schedule", ring: dict[str, int]
+) -> tuple[Skeleton, Swimlane, list[HoleContract]]:
+    """Render private scheduling state over immutable analysis output."""
+    program = _RenderProgram(graph, tree, ring)
+    dtype_table = _dtype_table(program.units)
+    skeleton, contracts = _build_skeleton(program, dtype_table)
+    swimlane = _build_swimlane(program, contracts)
     return skeleton, swimlane, list(contracts.values())
 
 
 __all__ = [
-    "Skeleton",
-    "Swimlane",
-    "BufferAccess",
-    "HoleContract",
     "EmitScaffoldError",
     "emit_scaffold",
 ]

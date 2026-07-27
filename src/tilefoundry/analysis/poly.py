@@ -101,7 +101,7 @@ class TileUnit:
 
 @dataclass(frozen=True)
 class TileGraph:
-    """Polyhedral model of one HIR ``Function`` body, plus its schedule.
+    """Polyhedral model of one HIR ``Function`` body.
 
     ``domain``/``reads``/``writes`` are unions of per-``TileUnit`` pieces,
     one tuple name per producing statement (domain/reads/writes) or
@@ -120,10 +120,8 @@ class TileGraph:
     (see :func:`_parallel_dims`) -- a measured fact, not a scheduler's
     output, so the schedule layer reads it rather than deriving it.
 
-    ``tree``/``ring``/``decisions`` start empty and fill in as the same
-    object flows through the schedule layer's own stages. Both dict
-    fields are plain fields, never an isl mark payload -- isl marks are
-    process-global C state, not a place for a Python object to live.
+    This is analysis output only. Scheduling owns its ISL tree, resource
+    choices, and exported decisions in a separate private program view.
     """
 
     domain: "isl.union_set"
@@ -134,9 +132,6 @@ class TileGraph:
     params: dict
     buffer_dtypes: dict = field(default_factory=dict)
     parallel_dims: dict = field(default_factory=dict)
-    tree: "isl.schedule | None" = None
-    ring: dict = field(default_factory=dict)
-    decisions: dict | None = None
 
 
 # Cosmetic-only: short isl tuple names for the two ops this V1 slice

@@ -8,6 +8,8 @@ the target's own atom catalogue, in the shape the asking algorithm declared.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from tilefoundry.analysis.facts import (
     ExplicitMemoryLevelFacts,
     ImplicitMemoryLevelFacts,
@@ -17,10 +19,17 @@ from tilefoundry.analysis.facts import (
     ParallelCapacityFacts,
     ThroughputFacts,
 )
+from tilefoundry.ir.types import DType
 from tilefoundry.schedule.facts import (
     AtomCandidateFacts,
     AtomCandidateQuery,
+    AtomFact,
     TileStoreFacts,
+)
+from tilefoundry.schedule.pipeline.facts import (
+    PipelineFacts,
+    PipelineFactsQuery,
+    PipelineInstructionFacts,
 )
 from tilefoundry.target.facts import register_target_facts
 
@@ -151,17 +160,61 @@ def atom_candidates(
     return AtomCandidateFacts(tuple(candidate_atoms(query.op, target)))
 
 
+def pipeline_facts(target: CudaTarget, query: PipelineFactsQuery) -> PipelineFacts:
+    """Project every instruction and capacity fact before pipeline solving."""
+    if not isinstance(query, PipelineFactsQuery):
+        raise TypeError(
+            "CudaTarget pipeline facts need a PipelineFactsQuery, got "
+            f"{type(query).__name__}"
+        )
+    if query.stage != _SCHEDULED_STAGE:
+        raise ValueError(
+            f"CudaTarget states no pipeline facts for {query.stage!r}; it schedules "
+            f"{_SCHEDULED_STAGE!r}"
+        )
+    instructions: list[PipelineInstructionFacts] = []
+    for statement_id, op in query.statements:
+        if not isinstance(statement_id, str) or not statement_id:
+            raise ValueError(f"pipeline statement id must be a non-empty string, got {statement_id!r}")
+        try:
+            candidates = tuple(candidate_atoms(op, target))
+        except NotImplementedError:
+            candidates = ()
+        if not candidates:
+            candidates = (
+                AtomFact(
+                    shape=(1, 1, 1),
+                    dtype=(DType.f32, DType.f32, DType.f32),
+                    duration=1.0,
+                    compute_duration=1.0,
+                    storage={},
+                    resource={"lane": 1},
+                    is_async=False,
+                    atom=SimpleNamespace(op=SimpleNamespace(name="cuda.scalar")),
+                ),
+            )
+        instructions.append(PipelineInstructionFacts(statement_id, candidates))
+    return PipelineFacts(
+        stage=query.stage,
+        tile_capacity_bytes=target.architecture.shared_memory_per_cta_bytes,
+        max_threads_per_warp=target.architecture.max_threads_per_warp,
+        instructions=tuple(instructions),
+    )
+
+
 register_target_facts(CudaTarget, MemoryHierarchyFacts, memory_hierarchy)
 register_target_facts(CudaTarget, ThroughputFacts, throughput)
 register_target_facts(CudaTarget, ParallelCapacityFacts, parallel_capacity)
 register_target_facts(CudaTarget, TileStoreFacts, tile_store)
 register_target_facts(CudaTarget, AtomCandidateFacts, atom_candidates)
+register_target_facts(CudaTarget, PipelineFacts, pipeline_facts)
 
 
 __all__ = [
     "atom_candidates",
     "memory_hierarchy",
     "parallel_capacity",
+    "pipeline_facts",
     "throughput",
     "tile_store",
 ]

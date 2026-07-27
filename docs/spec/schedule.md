@@ -154,7 +154,33 @@ class SchedulePlan:
   - A Plan that does not hold together MUST raise `PlanVerificationError` and MUST
     NOT reach the caller.
 
-### 2.4 `ScheduleReport`
+### 2.4 `PipelineSchedulePlan`
+
+```python
+class PipelineSchedulePlan(SchedulePlan):
+    """Export one closed pipeline schedule."""
+
+    target: TargetSpecRef
+    scaffold: str
+    statements: tuple[ScheduledStatement, ...]
+    buffers: tuple[ScheduledBuffer, ...]
+    holes: tuple[KernelHole, ...]
+```
+
+- constraints:
+  - `target` MUST record architecture and device IDs with their content digests.
+  - Each `ScheduledStatement` MUST carry one stable ID, selected instruction,
+    tile, resource assignment, and a half-open interval.
+  - Each `ScheduledBuffer` MUST carry one stable ID, storage, positive ring
+    depth, and typed producer and consumer statement IDs.
+  - Each `KernelHole` MUST reference one stable statement ID and expose tuple
+    inputs, tuple outputs, and serialized ISL relations. It MUST NOT expose an
+    opaque HIR operation reference.
+  - JSON and text rendering MUST be deterministic views of the same decisions.
+  - Plan construction MUST finish Target Facts projection before creating the
+    closed problem. The problem and solve MUST hold no Target object or callback.
+
+### 2.5 `ScheduleReport`
 
 `ScheduleReport` is the reusable objective summary: the part of an answer that
 does not depend on what was decided. An algorithm whose Plan states an objective
