@@ -34,12 +34,18 @@ class _Marker(IRMetadata):
 
 
 def _small_module() -> Module:
-    return Module("small", (_planner_helper, _planner_root), "_planner_root")
+    return Module(
+        "small",
+        (_planner_helper, _planner_root.entry_function()),
+        "_planner_root",
+        target=_planner_root.resolve_target(),
+        topologies=_planner_root.effective_topologies(),
+    )
 
 
 def _small_solution():
     module = _small_module()
-    problem = build_planning_problem(module, _planner_root)
+    problem = build_planning_problem(module, module.entry_function())
     solution = solve_planning_problem(
         problem, ScheduleOptions(timeout_seconds=10, workers=1)
     )
@@ -52,7 +58,7 @@ def test_materialization_clones_helper_paths_and_preserves_values() -> None:
     rebuilt = materialize_planning_solution(problem, solution)
 
     assert rebuilt is not module
-    assert rebuilt.entry_function() is not _planner_root
+    assert rebuilt.entry_function() is not _planner_root.entry_function()
     names = [function.name for function in rebuilt.functions]
     assert names.count("_planner_helper__cta_1") == 1
     assert names.count("_planner_helper__cta_2") == 1
@@ -60,7 +66,7 @@ def test_materialization_clones_helper_paths_and_preserves_values() -> None:
 
     x = torch.arange(8, dtype=torch.float32)
     torch.testing.assert_close(
-        evaluate(_planner_root, x, device="cpu"),
+        evaluate(_planner_root.entry_function(), x, device="cpu"),
         evaluate(rebuilt.entry_function(), x, device="cpu"),
     )
     verify_module(rebuilt.functions)
@@ -69,7 +75,7 @@ def test_materialization_clones_helper_paths_and_preserves_values() -> None:
 def test_invalid_solution_fails_without_mutating_input_module() -> None:
     module, problem, solution = _small_solution()
     original_functions = module.functions
-    original_body = _planner_root.body
+    original_body = _planner_root.entry_function().body
     invalid = replace(
         solution,
         selected_candidate_ids=(*solution.selected_candidate_ids, max(problem.candidates) + 1),
@@ -79,15 +85,21 @@ def test_invalid_solution_fails_without_mutating_input_module() -> None:
         materialize_planning_solution(problem, invalid)
 
     assert module.functions == original_functions
-    assert _planner_root.body is original_body
+    assert _planner_root.entry_function().body is original_body
 
 
 def test_materialization_preserves_unrelated_metadata_and_consumes_constraints() -> None:
     marker = _Marker("keep")
     constraint = ScheduleConstraintMetadata(constraints=(ScheduleConstraint(),))
-    body = replace(_planner_root.body, metadata=(marker, constraint))
-    root = replace(_planner_root, body=body, metadata=(marker, constraint))
-    module = Module("small", (_planner_helper, root), root.name)
+    body = replace(_planner_root.entry_function().body, metadata=(marker, constraint))
+    root = replace(_planner_root.entry_function(), body=body, metadata=(marker, constraint))
+    module = Module(
+        "small",
+        (_planner_helper, root),
+        root.name,
+        target=_planner_root.resolve_target(),
+        topologies=_planner_root.effective_topologies(),
+    )
     problem = build_planning_problem(module, root)
     solution = solve_planning_problem(
         problem, ScheduleOptions(timeout_seconds=10, workers=1)
@@ -106,16 +118,16 @@ def test_materialization_preserves_unrelated_metadata_and_consumes_constraints()
 
 def test_cuda_cta_service_defaults_and_reconstructable_debug_dump(tmp_path) -> None:
     module = _small_module()
-    target = _planner_root.target
+    target = _planner_root.resolve_target()
     service = target.service(Schedule, "cta")
     assert service is target.service(Schedule, "cta")
 
-    default_result = service.solve(module, _planner_root)
+    default_result = service.solve(module, module.entry_function())
     assert default_result.report.stage == "cta"
 
     result = service.solve(
         module,
-        _planner_root,
+        module.entry_function(),
         ScheduleOptions(timeout_seconds=10, workers=1, debug_dump_dir=tmp_path),
     )
 
@@ -131,7 +143,7 @@ def test_cuda_cta_service_defaults_and_reconstructable_debug_dump(tmp_path) -> N
 
 
 def test_real_deepseek_cta_service_materializes_verified_module() -> None:
-    service = deepseek_v4_flash_moe.target.service(Schedule, "cta")
+    service = deepseek_v4_flash_module.resolve_target().service(Schedule, "cta")
 
     result = service.solve(
         deepseek_v4_flash_module,
@@ -146,15 +158,40 @@ def test_real_deepseek_cta_service_materializes_verified_module() -> None:
 
 
 def test_real_static_qwen_cta_service_materializes_verified_module() -> None:
-    module = Module("qwen", (qwen_static_online,), "qwen_static_online")
-    service = qwen_static_online.target.service(Schedule, "cta")
+    module = qwen_static_online
+    service = qwen_static_online.resolve_target().service(Schedule, "cta")
 
     result = service.solve(
         module,
-        qwen_static_online,
+        module.entry_function(),
         ScheduleOptions(timeout_seconds=60, workers=4),
     )
 
     assert result.report.status in {"OPTIMAL", "FEASIBLE_NOT_PROVEN"}
-    assert result.module.entry_function().name == qwen_static_online.name
+    assert result.module.entry_function().name == module.entry_function().name
     verify_module(result.module.functions)
+
+
+def test_materialization_keeps_the_context_an_inheriting_child_was_scheduled_under() -> None:
+    """The rebuilt Module leaves the owner chain, so it must carry the resolved
+    context: copying the declared fields would hand back a child whose Target no
+    longer resolves, while callers still schedule and verify against it."""
+    declared = _small_module()
+    child = Module("child", declared.functions, declared.entry)
+    owner = Module(
+        "owner", (), declared.entry, modules=(child,),
+        target=declared.resolve_target(),
+        topologies=declared.effective_topologies(),
+    )
+    inheriting = owner.modules[0]
+    assert inheriting.target is None and inheriting.topologies is None
+
+    problem = build_planning_problem(inheriting, inheriting.entry_function())
+    solution = solve_planning_problem(
+        problem, ScheduleOptions(timeout_seconds=10, workers=1)
+    )
+
+    rebuilt = materialize_planning_solution(problem, solution)
+
+    assert rebuilt.resolve_target() == declared.resolve_target()
+    assert rebuilt.effective_topologies() == declared.effective_topologies()

@@ -52,7 +52,7 @@ class _CudaCtaSchedule:
             raise TypeError(f"CTA Schedule expects a HIR Function root, got {type(root).__name__}")
         if root is not module.entry_function():
             raise ValueError("CTA Schedule requires root to be module.entry_function()")
-        if root.target is not self._target:
+        if module.resolve_target() is not self._target:
             raise ValueError("CTA Schedule requires the root Target to own the requested service")
         if options is None:
             options = ScheduleOptions()

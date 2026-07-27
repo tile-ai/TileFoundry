@@ -15,7 +15,7 @@ from __future__ import annotations
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403  -- bind bare op names
-from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import (
     Layout,
     Mesh,
@@ -68,9 +68,12 @@ def demo_canonical(
     raise RuntimeError("unreachable")
 
 
-def build_demo_canonical() -> Function:
-    """Return the canonical ``hir.Function`` from the topology-aware fixture."""
+def build_demo_canonical() -> Module:
+    """Return the canonical Module of the topology-aware fixture.
+
+    The fixture declares its execution context on the function, so the
+    decorated name is the single-function Module that owns it."""
     ir = demo_canonical
-    if not isinstance(ir, Function):
-        raise TypeError(f"expected Function, got {type(ir)}")
+    if not isinstance(ir, Module):
+        raise TypeError(f"expected Module, got {type(ir)}")
     return ir

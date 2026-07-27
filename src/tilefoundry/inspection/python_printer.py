@@ -1016,6 +1016,7 @@ def _emit_header(
     indent: str,
     *,
     for_module: bool = False,
+    target: "Target | None" = None,
 ) -> list[str]:
     """Import header + mesh-prelude shared by ``hir_function_to_python`` and
     ``_module_to_python`` — the only source for the imports/mesh-defs a
@@ -1026,9 +1027,9 @@ def _emit_header(
     if for_module:
         lines.append("from tilefoundry.module import module")
     lines.append("from tilefoundry import func")
-    if fn.target is not None:
+    if target is not None:
         lines.append("from tilefoundry.target import CpuTarget, CudaTarget")
-        if isinstance(fn.target, CudaTarget) and fn.target.architecture != SM90():
+        if isinstance(target, CudaTarget) and target.architecture != SM90():
             lines.append("from tilefoundry.ir.types import DType")
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
     lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
@@ -1064,17 +1065,7 @@ def _emit_decorated_defs(
     ``@<name>.specialize(pattern)`` block per variant (§2.6). Shared by
     standalone and module-wrapped output so a dispatch prototype prints
     identically in both."""
-    lines: list[str] = []
-    decorator_kwargs = []
-    if fn.target is not None:
-        decorator_kwargs.append(f"target={_target_str(fn.target)}")
-    if fn.topologies:
-        topo_strs = [f'Topology("{t.name}", {t.size})' for t in fn.topologies]
-        decorator_kwargs.append(f'topologies=({", ".join(topo_strs)},)')
-    if decorator_kwargs:
-        lines.append(f"@func({', '.join(decorator_kwargs)})")
-    else:
-        lines.append("@func")
+    lines: list[str] = ["@func"]
     lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options))
 
     # Variant defs: each a `@<base>.specialize(pattern)` over a throwaway `def _`.
@@ -1138,30 +1129,103 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
     return as_script(fn, module=module_name)
 
 
+def _module_hir_functions(mod: Module) -> tuple[HirFunction, ...]:
+    """The Module's HIR functions, rejecting a mixed HIR/TIR container."""
+    functions = tuple(fn for fn in mod.functions if isinstance(fn, HirFunction))
+    if len(functions) != len(mod.functions):
+        raise TypeError("HIR Module printer does not serialize mixed HIR/TIR Modules")
+    return functions
+
+
+def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
+    """Every HIR function owned by *mod* or any Module beneath it."""
+    functions = list(_module_hir_functions(mod))
+    for child in mod.modules:
+        functions.extend(_module_tree_functions(child))
+    return tuple(functions)
+
+
+def _module_decorator_line(mod: Module, entry_name: str) -> str:
+    """The ``@module(...)`` line declaring this Module's entry and Target. An
+    inherited Target prints nothing, so a re-parse rebuilds the same
+    declaration/inheritance split."""
+    kwargs = [f'entry="{entry_name}"']
+    if mod.target is not None:
+        kwargs.append(f"target={_target_str(mod.target)}")
+    return f"@module({', '.join(kwargs)})"
+
+
+def _topologies_declaration(mod: Module) -> str | None:
+    """The class-body ``topologies`` assignment, or ``None`` when this Module
+    inherits its hierarchy. It leads the body so a function parsed below it can
+    name one of those levels."""
+    if mod.topologies is None:
+        return None
+    if not mod.topologies:
+        return "topologies = ()"
+    topo_strs = [f'Topology("{t.name}", {t.size})' for t in mod.topologies]
+    return f'topologies = ({", ".join(topo_strs)},)'
+
+
+def _emit_module_class(
+    mod: Module, module_name: str, mesh_map: dict[int, str], indent: str,
+    options: PythonPrintOptions,
+) -> list[str]:
+    """One ``@module`` class block: its topology declaration, its functions,
+    then its nested Modules."""
+    functions = _module_hir_functions(mod)
+    entry = mod.entry_function() if functions else None
+    lines = [_module_decorator_line(mod, mod.entry), f"class {module_name}:"]
+    declaration = _topologies_declaration(mod)
+    if declaration is not None:
+        lines.append(f"{indent}{declaration}")
+        lines.append("")
+
+    ordered = tuple(fn for fn in functions if fn is not entry)
+    if entry is not None:
+        ordered += (entry,)
+    blocks: list[list[str]] = [
+        _emit_decorated_defs(fn, mesh_map, indent, options) for fn in ordered
+    ]
+    blocks.extend(
+        _emit_module_class(child, child.name, mesh_map, indent, options)
+        for child in mod.modules
+    )
+    for index, block in enumerate(blocks):
+        if index:
+            lines.append("")
+        lines.extend(f"{indent}{ln}" if ln else ln for ln in block)
+    return lines
+
+
 def _module_to_python(
     fn_or_module: HirFunction | Module, module_name: str | None = None,
     *, options: PythonPrintOptions | None = None,
 ) -> str:
-    """Render a function or every HIR function in a Module wrapper."""
+    """Render a function or a whole Module tree as ``@module`` source."""
     if isinstance(fn_or_module, Module):
-        entry = fn_or_module.entry_function()
-        if not isinstance(entry, HirFunction):
-            raise TypeError("HIR Module printer requires a HIR entry Function")
-        functions = tuple(fn for fn in fn_or_module.functions if isinstance(fn, HirFunction))
-        if len(functions) != len(fn_or_module.functions):
-            raise TypeError("HIR Module printer does not serialize mixed HIR/TIR Modules")
-        module_name = fn_or_module.name if module_name is None else module_name
+        root = fn_or_module
+        module_name = root.name if module_name is None else module_name
     else:
-        entry = fn_or_module
-        functions = (entry,)
-        module_name = "M" if module_name is None else module_name
+        root = Module(
+            name="M" if module_name is None else module_name,
+            functions=(fn_or_module,),
+            entry=fn_or_module.name,
+        )
+        module_name = root.name
+    functions = _module_tree_functions(root)
+    entry = root.entry_function()
+    if not isinstance(entry, HirFunction):
+        raise TypeError("HIR Module printer requires a HIR entry Function")
     indent4 = "    "
     meshes: dict[int, Mesh] = {}
     for fn in functions:
         meshes.update(_collect_all_meshes(fn))
     mesh_map = _mesh_name_map(meshes)
 
-    lines = _emit_header(entry, meshes, mesh_map, indent4, for_module=True)
+    lines = _emit_header(
+        entry, meshes, mesh_map, indent4, for_module=True, target=root.target,
+    )
     tensor_names = "ConstTensor, Tensor" if any(
         param.is_const for fn in functions for param in fn.params
     ) else "Tensor"
@@ -1169,15 +1233,9 @@ def _module_to_python(
         f"from tilefoundry.dsl import {tensor_names}" if line.startswith("from tilefoundry.dsl import Tensor") else line
         for line in lines
     ]
-
-    lines.append(f'@module(entry="{entry.name}")')
-    lines.append(f"class {module_name}:")
-
-    ordered_functions = tuple(fn for fn in functions if fn is not entry) + (entry,)
-    for index, fn in enumerate(ordered_functions):
-        if index:
-            lines.append("")
-        body = _emit_decorated_defs(fn, mesh_map, indent4, options or PythonPrintOptions())
-        lines.extend(f"{indent4}{ln}" if ln else ln for ln in body)
-
+    lines.extend(
+        _emit_module_class(
+            root, module_name, mesh_map, indent4, options or PythonPrintOptions(),
+        )
+    )
     return "\n".join(lines) + "\n"

@@ -264,18 +264,23 @@ entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
 **Input contract**:
 - Only TileFoundry IR objects (`Function` / `Module`) accepted.
 - Raw Python functions raise `TypeError` — use `@func` first.
-- Topology is declared on `Module` or single-function `@func(topologies=...)`.
+- Topology is declared by the `Module`; a single-function
+  `@func(topologies=...)` declares it through the implicit `Module` that
+  decorator yields ([parser §1.1](./parser.md#11-decorators)).
 - Mesh layout is expressed in the DSL with lexical `with Mesh(...) as mesh` scopes.
 - `jit()` has no `cta_mesh` / `thread_mesh` parameters.
 
 **Pipeline**: `jit()` reuses the existing `lower()` → `build()` pipeline
-(`compile()`).  It auto-wraps bare `Function` inputs into a `Module` and
-lifts `Function.topologies` into the module topology namespace.
+(`compile()`).  It auto-wraps a bare `Function` input into a single-function
+`Module` that declares no execution context.
 
 **Cache**: in-process dict cache keyed by
 `sha256(canonical_module_text + target_text + canonical_options_text)`.
-`canonical_module_text` includes functions, module/function topology
-declarations, and `with Mesh` scopes. No Python object identity and no
+`canonical_module_text` includes functions, the Module's *effective* topology
+hierarchy, and `with Mesh` scopes. It uses the effective hierarchy rather than
+the declared one so that a Module inheriting its hierarchy from an owner does
+not collide with an identically-authored Module under a different owner. No
+Python object identity and no
 dedicated `cta_mesh` / `thread_mesh` key fields participate in the key.
 `jit.cache_clear()` evicts; `jit.cache_info()` returns `{"size": N}`.
 

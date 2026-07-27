@@ -130,20 +130,20 @@ def _walk_ir(expr, seen=None):
 
 def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
     regions = tuple(
-        expr for expr in _walk_ir(qwen_static_online.body) if isinstance(expr, GridRegionExpr)
+        expr for expr in _walk_ir(qwen_static_online.entry_function().body) if isinstance(expr, GridRegionExpr)
     )
     assert len(regions) == 1
     region = regions[0]
     assert (region.start, region.extent, region.step) == (0, 4096, 1)
     assert {value.name for value in region.carried_args} == {"m", "l", "o"}
-    assert qwen_static_online.target == CudaTarget()
+    assert qwen_static_online.resolve_target() == CudaTarget()
     assert tuple(
-        (topology.name, topology.size) for topology in qwen_static_online.topologies
+        (topology.name, topology.size) for topology in qwen_static_online.effective_topologies()
     ) == (("cta", 132),)
 
     reparsed = parse_script(as_script(qwen_static_online))
     reparsed_regions = tuple(
-        expr for expr in _walk_ir(reparsed.body) if isinstance(expr, GridRegionExpr)
+        expr for expr in _walk_ir(reparsed.entry_function().body) if isinstance(expr, GridRegionExpr)
     )
     assert len(reparsed_regions) == 1
     assert reparsed_regions[0].extent == 4096

@@ -3,16 +3,22 @@ re-exports its hash-router and learned-router entries for ``test_moe.py`` and
 ``tests/schedule/*``."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from tests.models.deepseek_v4_flash.config import REAL
 from tests.models.loader import load_model
+from tilefoundry.target import CudaTarget
 
 _MODEL_PATH = Path(__file__).parent / "model" / "moe.py"
 _loaded = load_model(_MODEL_PATH, config=REAL)
 
-moe_hash_module = _loaded.DeepseekV4MoE
-deepseek_v4_flash_module = _loaded.DeepseekV4NoauxTcMoE
+# The authored modules declare no Target: they are nested as children of a
+# decoder layer, and only a root module declares the Target its tree runs on.
+# Standalone analysis/schedule callers select them as their own root, so those
+# re-exports declare it here.
+moe_hash_module = replace(_loaded.DeepseekV4MoE, target=CudaTarget())
+deepseek_v4_flash_module = replace(_loaded.DeepseekV4NoauxTcMoE, target=CudaTarget())
 
 # Real-scale model constants, re-exported for callers that only need the
 # numbers, not a built Module.

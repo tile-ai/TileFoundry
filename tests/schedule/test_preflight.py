@@ -34,7 +34,7 @@ def _planner_root(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
 def test_real_fixtures_build_finite_problems() -> None:
     deepseek = build_planning_problem(deepseek_v4_flash_module, deepseek_v4_flash_moe)
     qwen = build_planning_problem(
-        Module("qwen", (qwen_static_online,), "qwen_static_online"), qwen_static_online
+        qwen_static_online, qwen_static_online.entry_function()
     )
 
     assert deepseek.site_order == tuple(range(len(deepseek.site_order)))
@@ -71,7 +71,7 @@ def test_real_fixtures_build_finite_problems() -> None:
 
 
 def test_repeated_helper_calls_get_distinct_function_instances() -> None:
-    problem = build_planning_problem(Module("m", (_planner_root,), "_planner_root"), _planner_root)
+    problem = build_planning_problem(_planner_root, _planner_root.entry_function())
     instances = [function for _, function in problem.function_instances]
     assert len(instances) == 3
     assert instances[1] is instances[2]
@@ -98,7 +98,7 @@ def root(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
     return acc
 '''
     )
-    problem = build_planning_problem(Module("m", (root,), "root"), root)
+    problem = build_planning_problem(root, root.entry_function())
     assert len(problem.regions) == 1
     region = next(iter(problem.regions.values()))
     assert region.trip_count == 4
@@ -108,15 +108,19 @@ def root(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
 @pytest.mark.parametrize(
     "mutator, pattern",
     [
-        (lambda fn: replace(fn, target=None), "explicit CudaTarget"),
-        (lambda fn: replace(fn, topologies=()), "exactly one CTA"),
-        (lambda fn: replace(fn, topologies=(Topology("cta", None),)), "static CTA"),
+        (lambda mod: replace(mod, target=None), "explicit CudaTarget"),
+        (lambda mod: replace(mod, topologies=()), "exactly one CTA"),
+        (lambda mod: replace(mod, topologies=(Topology("cta", None),)), "static CTA"),
     ],
 )
 def test_planning_entry_rejects_invalid_root(mutator, pattern: str) -> None:
-    invalid = mutator(deepseek_v4_flash_moe)
+    root = deepseek_v4_flash_moe
+    declared = Module(
+        "m", (root,), root.name,
+        target=CudaTarget(), topologies=(Topology("cta", 132),),
+    )
     with pytest.raises(ValueError, match=pattern):
-        build_planning_problem(Module("m", (invalid,), invalid.name), invalid)
+        build_planning_problem(mutator(declared), root)
 
 
 def test_root_must_be_a_module_member() -> None:

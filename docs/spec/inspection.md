@@ -42,9 +42,17 @@ IR.
 `module_to_python(fn: hir.Function, module_name: str = "M") -> str` — wrap one
 or more HIR Functions in `@module(entry="<fn>") class Name:`. Module input
 emits all HIR Functions, preserving shared `Mesh` / `Topology` definitions at
-module level (before the class) so the class body stays a pure function
-container; sugar annotations are preserved. Mixed HIR/TIR Modules are
-rejected by the Python HIR printer.
+module level (before the class); sugar annotations are preserved. Mixed
+HIR/TIR Modules are rejected by the Python HIR printer.
+
+The printer MUST emit a Module's whole tree: each nested Module prints as a
+`@module` class inside its owner's body, so a re-parse rebuilds the same
+ownership. It MUST emit only what a Module *declares*, never what the Module
+resolves to — an inherited Target or topology hierarchy prints nothing, so
+the declaration-versus-inheritance split survives the round trip. A declared
+Target prints as the `@module(target=...)` argument and a declared hierarchy
+as the class body's leading `topologies` assignment
+([parser §2.7](./parser.md#27-module-authoring-surface)).
 
 ### 2.3 DSL text forms
 

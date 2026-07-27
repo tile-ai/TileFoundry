@@ -54,6 +54,22 @@ def test_cache_key_is_deterministic_and_topology_target_sensitive() -> None:
     assert opts_cuda != opts_hip
 
 
+def test_cache_key_uses_inherited_topologies_not_only_declared_ones() -> None:
+    """An inheriting child must not collide with an identical child whose owner
+    declares a different hierarchy: the key reads the effective hierarchy."""
+    fn_a, _, _ = build_demo()
+    child_a = Module(name=fn_a.name, functions=(fn_a,), entry=fn_a.name)
+    child_b = Module(name=fn_a.name, functions=(fn_a,), entry=fn_a.name)
+    owner_a = Module(name="owner", functions=(), entry=fn_a.name,
+                     modules=(child_a,), topologies=(Topology("cta", 128),))
+    owner_b = Module(name="owner", functions=(), entry=fn_a.name,
+                     modules=(child_b,), topologies=(Topology("cta", 64),))
+
+    inheriting, other = owner_a.modules[0], owner_b.modules[0]
+    assert inheriting.topologies is None and other.topologies is None
+    assert _canonical_module_text(inheriting) != _canonical_module_text(other)
+
+
 # ── compile-backed end-to-end ───────────────────────────────────────────
 
 

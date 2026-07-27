@@ -66,7 +66,7 @@ def test_bf16_gemm_lists_the_sm80_atom_with_real_numbers():
     candidate for a bf16 gemm whose M/N/K (64, 64, 128) all divide its
     (16, 8, 16) shape; every ``AtomFact`` field is checked against the
     atom's own known real numbers."""
-    facts = candidate_atoms(bf16_gemm.body, bf16_gemm.target)
+    facts = candidate_atoms(bf16_gemm.entry_function().body, bf16_gemm.resolve_target())
 
     print("\n=== candidate AtomFacts (bf16 gemm, M=64 N=64 K=128) ===")
     for fact in facts:
@@ -96,16 +96,16 @@ def test_bf16_gemm_lists_the_sm80_atom_with_real_numbers():
 def test_target_none_defaults_to_default_target():
     """``target=None`` resolves via ``default_target()`` -- the same
     result as passing an equivalent target explicitly."""
-    explicit = candidate_atoms(bf16_gemm.body, default_target())
-    implicit = candidate_atoms(bf16_gemm.body)
+    explicit = candidate_atoms(bf16_gemm.entry_function().body, default_target())
+    implicit = candidate_atoms(bf16_gemm.entry_function().body)
     assert implicit == explicit
 
 
 def test_target_accepts_a_backend_name_string():
     """A ``target=`` string resolves via ``resolve_target``, matching
     ``@func``'s own ``target=`` surface (``func(target="cuda")``)."""
-    by_string = candidate_atoms(bf16_gemm.body, "cuda")
-    by_object = candidate_atoms(bf16_gemm.body, default_target())
+    by_string = candidate_atoms(bf16_gemm.entry_function().body, "cuda")
+    by_object = candidate_atoms(bf16_gemm.entry_function().body, default_target())
     assert by_string == by_object
 
 
@@ -113,14 +113,14 @@ def test_f32_gemm_has_no_candidates_dtype_mismatch():
     """The SM80 atom is bf16 x bf16 -> f32; an all-f32 gemm's lhs/rhs
     dtype does not match (dtype_a=dtype_b=bf16), so the hard filter
     excludes it -- an empty list, not an error."""
-    facts = candidate_atoms(f32_gemm.body, f32_gemm.target)
+    facts = candidate_atoms(f32_gemm.entry_function().body, f32_gemm.resolve_target())
     assert facts == []
 
 
 def test_odd_shape_bf16_gemm_has_no_candidates_indivisible_mnk():
     """M=15 does not divide the atom's M=16 -- hard-filtered out even
     though dtype matches."""
-    facts = candidate_atoms(odd_shape_bf16_gemm.body, odd_shape_bf16_gemm.target)
+    facts = candidate_atoms(odd_shape_bf16_gemm.entry_function().body, odd_shape_bf16_gemm.resolve_target())
     assert facts == []
 
 
@@ -136,4 +136,4 @@ def test_non_cuda_target_raises():
     """V1 supports ``CudaTarget`` only -- no per-atom device facts
     (sm_count / hbm_bandwidth / peak_for) exist for a CPU target."""
     with pytest.raises(NotImplementedError):
-        candidate_atoms(bf16_gemm.body, target="cpu")
+        candidate_atoms(bf16_gemm.entry_function().body, target="cpu")

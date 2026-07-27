@@ -43,14 +43,11 @@ def _calls(fn):
 
 
 def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
-    assert deepseek_v4_flash_moe.target == CudaTarget()
+    assert deepseek_v4_flash_module.resolve_target() == CudaTarget()
     assert tuple(
-        (topology.name, topology.size) for topology in deepseek_v4_flash_moe.topologies
+        (topology.name, topology.size)
+        for topology in deepseek_v4_flash_module.effective_topologies()
     ) == (("cta", 132),)
-    assert all(
-        helper.target is None and helper.topologies == ()
-        for helper in deepseek_v4_flash_module.functions[:-1]
-    )
     assert deepseek_v4_flash_moe.params[4].type.shape == (N_ROUTED, MOE_INTER, DIM)
     assert deepseek_v4_flash_moe.params[8].type.shape == (N_ROUTED, DIM, MOE_INTER)
 
@@ -112,7 +109,8 @@ def test_routed_path_is_ordinary_batched_dataflow() -> None:
 
 
 def test_root_printer_keeps_explicit_input_contracts() -> None:
-    printed = as_script(deepseek_v4_flash_moe)
-    assert "@func(target=CudaTarget(), topologies=(Topology(" in printed
+    printed = as_script(deepseek_v4_flash_module)
+    assert '@module(entry="deepseek_v4_flash_moe", target=CudaTarget())' in printed
+    assert 'topologies = (Topology("cta", 132),)' in printed
     assert f"routed_experts: where(layout=(_, 6 @ cta, {DIM}))" in printed
     assert f"combined: where(layout=((_, _, {DIM}), {{cta @ B()}}))" in printed

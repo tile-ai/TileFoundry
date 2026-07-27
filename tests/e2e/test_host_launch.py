@@ -64,7 +64,7 @@ def _randn_rows() -> torch.Tensor:
 def test_implicit_entry_elementwise_multi_cta() -> None:
     """Multi-CTA elementwise via the implicit auto-inserted host entry."""
     rm = tilefoundry.compile(
-        Module(name="m", functions=(double_rows,), entry="double_rows"),
+        double_rows,
         target="cuda",
     )
     x = _randn_rows()
@@ -79,8 +79,9 @@ def test_explicit_host_entry_elementwise_multi_cta() -> None:
     rm = tilefoundry.compile(
         Module(
             name="m",
-            functions=(double_rows, host_double),
+            functions=(double_rows.entry_function(), host_double),
             entry="host_double",
+            topologies=double_rows.effective_topologies(),
         ),
         target="cuda",
     )
@@ -95,7 +96,7 @@ def test_explicit_host_entry_elementwise_multi_cta() -> None:
 def test_implicit_entry_within_cta_reduce() -> None:
     """Within-CTA per-row reduce via the implicit host entry."""
     rm = tilefoundry.compile(
-        Module(name="m", functions=(row_mean,), entry="row_mean"),
+        row_mean,
         target="cuda",
     )
     torch.manual_seed(1)
@@ -110,7 +111,7 @@ def test_launch_rejects_cpu_tensor_at_host_wrapper() -> None:
     """A CPU tensor handed to a CUDA launch must error at the host wrapper's
     device-placement check (naming the argument and the expected device)."""
     rm = tilefoundry.compile(
-        Module(name="m", functions=(double_rows,), entry="double_rows"),
+        double_rows,
         target="cuda",
     )
     x_cpu = torch.randn(_ROWS, _COLS, dtype=torch.float32)  # host tensor
@@ -167,8 +168,9 @@ def host_dyn_double(a: Tensor[(_NT, _TILE), "f32"], out: Tensor[(_NT, _TILE), "f
 def _dyn_module() -> Module:
     return Module(
         name="m",
-        functions=(dyn_double, host_dyn_double),
+        functions=(dyn_double.entry_function(), host_dyn_double),
         entry="host_dyn_double",
+        topologies=dyn_double.effective_topologies(),
     )
 
 
@@ -191,7 +193,8 @@ def test_dynamic_cta_rejects_implicit_entry() -> None:
     auto-inserted host entry cannot derive one — it must error loudly rather
     than guess a CTA count."""
     mod = Module(
-        name="m", functions=(dyn_double,), entry="dyn_double"
+        name="m", functions=(dyn_double.entry_function(),), entry="dyn_double",
+        topologies=dyn_double.effective_topologies()
     )
     with pytest.raises(Exception, match=r"cannot derive its grid"):
         tilefoundry.compile(mod, target="cuda")

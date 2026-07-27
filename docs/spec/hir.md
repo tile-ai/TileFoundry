@@ -40,20 +40,21 @@ class Function(Expr):
         params: each Var carries a type annotation.
         body: a single Expr — typically a Call DAG; None for a dispatch prototype.
         return_type: TensorType for single output, TupleType for multi.
-        topologies: convenience for single-function modules.
     """
 
     name: str
     params: tuple[Var, ...]
     body: Expr | None
     return_type: IRType
-    topologies: tuple[Topology, ...]
 ```
 - constraints:
   - an `Expr` subclass whose value type is the function signature; always returns
     by value (explicit output params are TIR-only). Typing and shape-dispatch
     rules are stated below.
   - defined as a frozen dataclass — instances are immutable after construction.
+  - a `Function` MUST NOT declare or override execution context. The `Module`
+    that owns it declares the `Target` and the ordered `Topology` hierarchy its
+    body runs against ([core-ir §1](./core-ir.md)).
 
 `Function.body` is a **single Expr** (usually a Call DAG, possibly
 nested inside a `GridRegionExpr`). HIR has no Stmt sequence; name
@@ -74,13 +75,12 @@ and call elaboration MUST allow that state. A Function boundary MUST preserve
 the `ShardLayout` mesh and per-axis reduction; it MUST NOT complete the value
 or reject it merely because it is `Partial`.
 
-`topologies` is the convenience declaration for a single-function
-program. Before `compile` / `jit`, it lifts to `Module.topologies`
-([core-ir §1](./core-ir.md)). A `with Mesh(topology="cta", ...) as cta:`
-inside the body resolves the topology name through the active
-namespace and creates a parser-lexical mesh binding;
-`ShardLayout.mesh` MUST point at an active binding on the lexical
-path.
+A `with Mesh(topology="cta", ...) as cta:` inside the body names a level of
+the execution domain the owning `Module` declares. The name MUST resolve to
+one of that Module's effective `Topology` levels, and the scope creates a
+parser-lexical mesh binding; `ShardLayout.mesh` MUST point at an active
+binding on the lexical path. A `Mesh` MAY map fewer levels than the domain
+declares, but it MUST NOT create a level or change one's extent.
 
 **Value type.** `Function.type` is the IR-level `CallableType`
 ([types §7](./types.md#7-callabletype)) projected from `params` +
@@ -214,9 +214,10 @@ freeze** below).
 
 - `variants` is a canonical IR field — it participates in structural
   equality, hashing, and canonical printing.
-- Every variant of a base MUST share the base's `name`, `params`,
-  `return_type`, `target`, and `topologies`: a variant specializes the
-  body, not the signature.
+- Every variant of a base MUST share the base's `name`, `params`, and
+  `return_type`: a variant specializes the body, not the signature. A variant
+  runs in the same execution domain as its base because both are owned by the
+  same `Module`.
 - A variant carries exactly one `DimVarRangePat` in `specializations`.
   The canonical signature is
   `";".join(f"{p.dim_var}${p.lo}_{p.hi}" for p in specializations)`

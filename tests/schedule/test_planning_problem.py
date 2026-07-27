@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types import DType, TensorType, local_type_of
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind
@@ -37,7 +36,7 @@ def test_where_fields_match_one_bucket_conjunctively() -> None:
             return_shape="(8, 8)",
         )
     )
-    problem = build_planning_problem(Module("m", (root,), "root"), root)
+    problem = build_planning_problem(root, root.entry_function())
     assert len(problem.requirements) == 1
     requirement = problem.requirements[0]
     assert len(requirement.bucket_ids) == 1
@@ -58,7 +57,7 @@ def test_non_gmem_source_fails_at_planning_boundary() -> None:
         )
     )
     with pytest.raises(ValueError, match="GMEM"):
-        build_planning_problem(Module("m", (root,), "root"), root)
+        build_planning_problem(root, root.entry_function())
 
 
 def test_local_projection_is_recursive_and_view_candidates_are_zero_time() -> None:
@@ -80,7 +79,7 @@ def test_local_projection_is_recursive_and_view_candidates_are_zero_time() -> No
             '    return tf.transpose(y, perm=(0,))\n'
         )
     )
-    problem = build_planning_problem(Module("m", (root,), "root"), root)
+    problem = build_planning_problem(root, root.entry_function())
     views = [
         candidate
         for candidate in problem.candidates.values()

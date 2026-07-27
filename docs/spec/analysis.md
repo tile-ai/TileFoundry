@@ -417,14 +417,14 @@ class AnalysisResult:
         metadata_types: attribute; The metadata record types this run attached.
     """
 
-    ir: "Module | Function"
+    ir: "Module"
     summary_lines: tuple[str, ...]
     metadata_types: tuple[type, ...]
 
 class AnalysisError(ValueError):
     """An authored program the analysis rejects, or a measurement that failed."""
 
-def analyze(ir: "Module | Function", *, options: AnalysisOptions | None = None) -> AnalysisResult: ...
+def analyze(ir: "Module", *, options: AnalysisOptions | None = None) -> AnalysisResult: ...
 ```
 
 - constraints:
@@ -444,8 +444,14 @@ def analyze(ir: "Module | Function", *, options: AnalysisOptions | None = None) 
     the option set.
   - A nested `Function` call MUST measure as its callee's own totals; an
     unresolved or recursive call graph MUST raise `AnalysisError`.
-  - `analyze` MUST accept a HIR `Function`, or a `Module` whose entry function
-    is one; anything else MUST raise `AnalysisError`.
+  - `analyze` MUST accept a `Module` whose entry function is a HIR `Function`,
+    and MUST reject a bare `Function`: a Function carries neither the Target the
+    cost model measures against nor the topology hierarchy execution counts
+    divide over ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
+  - The Target MUST come from `Module.resolve_target()` and from nowhere else.
+    Analyze MUST NOT read a Target out of module metadata and MUST NOT resolve an
+    undeclared Target to a default: reporting numbers for a device the author
+    never declared is worse than refusing to measure.
 
 ### 3.1 Metadata records
 
@@ -506,9 +512,9 @@ class TimelineMetadata(IRMetadata):
   - A `Call`'s flop and byte counts MUST come from that op's registered cost
     evaluator ([visitor-registry](./visitor-registry.md)) scaled by the call's
     execution count, which is the product of the execution-topology extents its
-    value meshes and its function declare. An op with no registered cost
-    evaluator MUST raise `AnalysisError`. Conflicting extents for one topology
-    name MUST raise rather than be reconciled.
+    value meshes carry and the owning Module declares. An op with no registered
+    cost evaluator MUST raise `AnalysisError`. Conflicting extents for one
+    topology name MUST raise rather than be reconciled.
   - `theoretical_ns` MUST be the larger of the compute time implied by `flops`
     over the device's peak throughput per DType and the memory time implied by
     global traffic over the device's memory bandwidth. A target that publishes

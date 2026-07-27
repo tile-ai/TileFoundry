@@ -8,21 +8,30 @@ grammar productions remain in the [parser specification](./parser.md).
 ## Commands
 
 ```text
-tilefoundry analyze model.py[:Module[.function]]
+tilefoundry analyze model.py[:Module[.child_module...][.function]]
     [--roofline] [--footprint] [--timeline]
 
-tilefoundry schedule model.py[:Module[.function]] --stage LEVEL
+tilefoundry schedule model.py[:Module[.child_module...][.function]] --stage LEVEL
 
-tilefoundry inspect capabilities model.py[:Module[.function]]
+tilefoundry inspect capabilities model.py[:Module[.child_module...][.function]]
 
 tilefoundry help dsl
 tilefoundry help cli
 ```
 
-`SOURCE` is a Python file followed optionally by `:Module`, `:Function`, or
-`:Module.function`. Without a selector, the source must define exactly one HIR
-Module or exactly one HIR Function. A selector chooses the named Module, the
-named Function, or a named Function inside a Module.
+`SOURCE` is a Python file followed optionally by
+`:Module[.child_module...][.function]`. Without a selector, the source must
+define exactly one top-level HIR Module or Function. A selector chooses the
+named Module, or a Function reached through the chain of child Modules that own
+it: each segment names a child Module of the one before it, and only the last
+MAY name a Function. A leaf selected this way MUST keep resolving the Target and
+hierarchy it inherits from the owners it was reached through.
+
+A selector MAY name a top-level binding that is a bare `Function` — a source
+whose `@func` declares no execution context binds one. Every verb here reads
+hardware facts, so such a selection MUST be rejected naming the Module that
+would declare its context, rather than analysed or scheduled against a default
+([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
 ## Analyze
 
@@ -32,8 +41,8 @@ layout enumeration, or automatic resharding.
 
 With no analysis flag, `analyze` runs roofline, footprint, and timeline. When
 one or more flags are present, it runs only the named analyses. The selected
-Function target, or the selected Module entry Function target, determines the
-hardware specification; there is no ordinary `--target` option.
+Module's resolved Target determines the hardware specification; there is no
+ordinary `--target` option.
 
 On success, stdout begins with the overall analysis summary followed by
 annotated HIR. On inference, verification, or analysis failure, stdout is empty
@@ -48,9 +57,11 @@ polyhedral model, construct the schedule tree, select each statement's atom,
 emit the scaffold. It selects nothing else — no tile search, no layout
 enumeration, no resharding.
 
-The target is not a flag. It comes from the selected Function's own target, or
-from the selected Module entry Function's, and falls back to the default target
-when the Function declares none: a kernel is authored against one target.
+The target is not a flag. It comes from the selected Module's resolved Target
+([core-ir §1](./core-ir.md#1-module)): a kernel is authored against one target.
+A selection that is a bare Function, or a Module whose owner chain declares no
+Target, MUST be rejected — `schedule` does not resolve an omission to a default
+([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
 `--stage` is required and names one topology level of that target
 ([target](./target.md)). A level the target does not own is rejected naming the
@@ -132,8 +143,8 @@ address.
 
 ## Inspect Capabilities
 
-`inspect capabilities` resolves the target from the selected Function or Module
-entry Function and prints the installed compact hardware capability record. It
+`inspect capabilities` resolves the target from the selected Module and prints
+the installed compact hardware capability record. It
 does not emit compiler operation coverage. Hardware facts identify their unit,
 qualification, source, and whether they are direct, derived, runtime queried,
 or unavailable.

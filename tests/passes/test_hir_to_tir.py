@@ -155,8 +155,7 @@ def test_lower_cta_only_kernel_skips_thread_mesh_scope() -> None:
             return reshard(z, layout=(1, 2048 @ cta), storage="gmem")
     """).lstrip()
 
-    fn = parse_script(src)
-    module = Module(name="t", functions=(fn,), entry=fn.name)
+    module = parse_script(src)
     new_module = HirToTirPass().run(module)
     [pf] = new_module.functions
 
@@ -237,9 +236,7 @@ def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
             a_reg = tf.reshard(a, (1, 32 @ m.t, 8), "rmem")
             return tf.reduce(a_reg, (-1,), True, ReduceKind.SUM)
 
-    fn = f
-    module = Module(name="t", functions=(fn,), entry=fn.name)
-    pf = HirToTirPass().run(module).functions[0]
+    pf = HirToTirPass().run(f).functions[0]
 
     def _find_reduce(s):
         if isinstance(s, Evaluate) and isinstance(s.callable, TirReduce):

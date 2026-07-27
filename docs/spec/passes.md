@@ -186,9 +186,9 @@ runs codegen → toolchain link → loader and returns a
 `RuntimeModule` ([runtime](./runtime.md)).
 
 `compile` is `build(lower(mod, ...))`. `jit` accepts a `Module` or
-an `hir.Function` (single-function convenience: it normalises into
-a `Module` and lifts `Function.topologies` to `Module.topologies`)
-and caches on the canonical module text + target + options hash.
+an `hir.Function` (single-function convenience: it normalises into a
+single-function `Module` that declares no execution context) and caches
+on the canonical module text + target + options hash.
 
 ### Dirty-scope retype / verify
 

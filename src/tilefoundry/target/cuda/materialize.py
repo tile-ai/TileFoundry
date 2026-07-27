@@ -865,9 +865,7 @@ class _Materializer:
             params=tuple(params),
             body=body,
             return_type=body.type,
-            topologies=source.topologies,
             specializations=source.specializations,
-            target=source.target,
         )
         result = replace(result, metadata=tuple(
             value for value in source.metadata if type(value) is not ScheduleConstraintMetadata
@@ -895,9 +893,7 @@ class _Materializer:
             params=params,
             body=body,
             return_type=body.type,
-            topologies=source.topologies,
             specializations=source.specializations,
-            target=source.target,
         )
         clone = replace(clone, metadata=tuple(
             value for value in source.metadata if type(value) is not ScheduleConstraintMetadata
@@ -928,12 +924,23 @@ class _Materializer:
             if path and instance.clone is not None and id(instance.source) not in module_function_ids
         ]
         functions.extend(extra_clones)
+        # The rebuilt Module is detached from the owner chain, so it carries the
+        # context it was scheduled under rather than what its source declared:
+        # copying the declared fields would strip an inheriting child's Target
+        # and hierarchy, and the result stays in the scheduling domain where
+        # callers resolve both off it.
+        source = self.problem.module
+        try:
+            resolved_target = source.resolve_target()
+        except ValueError:
+            resolved_target = None
         result = Module(
-            name=self.problem.module.name,
+            name=source.name,
             functions=tuple(functions),
-            entry=self.problem.module.entry,
-            topologies=self.problem.module.topologies,
-            metadata=dict(self.problem.module.metadata),
+            entry=source.entry,
+            target=resolved_target,
+            topologies=source.effective_topologies(),
+            metadata=dict(source.metadata),
         )
         try:
             verify_module(result.functions)

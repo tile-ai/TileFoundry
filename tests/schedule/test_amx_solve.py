@@ -19,7 +19,6 @@ from tilefoundry import func
 from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.ir.core.module import Module
 from tilefoundry.schedule import Schedule, ScheduleOptions
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
@@ -72,11 +71,11 @@ def wide_f32_matmul_rmsnorm(
     return y
 
 
-def _scheduled(fn=f32_matmul) -> TileGraph:
+def _scheduled(fn=f32_matmul.entry_function()) -> TileGraph:
     return build_schedule_tree(extract(fn))
 
 
-def _solve(fn=f32_matmul) -> TileGraph:
+def _solve(fn=f32_matmul.entry_function()) -> TileGraph:
     return select_atoms(_scheduled(fn), target=AmxTarget(), stage="core")
 
 
@@ -114,7 +113,7 @@ def test_a_register_sized_matmul_keeps_both_atoms_so_the_pick_is_a_choice():
     """A 16x8 by 8x16 matmul holds its operands in 512 B of X, 512 B of Y and
     1 KiB of Z, so the AMX outer product clears the storage filter too and the
     statement has two candidates. Both are recorded; the pick is the first."""
-    solved = _solve(register_sized_f32_matmul)
+    solved = _solve(register_sized_f32_matmul.entry_function())
     mm = _mm(solved)
     print("\n=== register-sized candidates ===", mm["candidates"], "picked", mm["atom"])
 
@@ -157,7 +156,7 @@ def test_an_op_outside_the_amx_catalogue_still_decides():
     """RMSNorm has no atom in this catalogue, so it granularises no tile member;
     the matmul in front of it still takes one and the dependence between them is
     still respected."""
-    solved = _solve(narrow_f32_matmul_rmsnorm)
+    solved = _solve(narrow_f32_matmul_rmsnorm.entry_function())
     statements = solved.decisions["statements"]
     print("\n=== amx gemm+rmsnorm ===", solved.ring)
     print(statements)
@@ -178,7 +177,7 @@ def test_a_footprint_past_the_core_l1d_is_recorded_rather_than_refused():
     past the 128 KiB L1d, on both statements. That is recorded per buffer with
     the bytes each one asks for, not raised: a schedule over capacity is a bad
     schedule, not an absent one."""
-    solved = _solve(wide_f32_matmul_rmsnorm)
+    solved = _solve(wide_f32_matmul_rmsnorm.entry_function())
     statements = solved.decisions["statements"]
     print("\n=== wide decisions ===")
     for name, stmt in statements.items():
@@ -205,11 +204,13 @@ def test_a_stage_the_target_does_not_serve_is_named():
 def test_the_bound_core_schedule_service_reports_the_nominal_makespan():
     """The service the target binds at its own topology level runs the same
     decisions and reports the nominal time in ns."""
-    module = Module("amx_matmul", (f32_matmul,), "f32_matmul")
-    service = f32_matmul.target.service(Schedule, "core")
-    assert service is f32_matmul.target.service(Schedule, "core")
+    module = f32_matmul
+    service = module.resolve_target().service(Schedule, "core")
+    assert service is module.resolve_target().service(Schedule, "core")
 
-    report = service.solve(module, f32_matmul, ScheduleOptions(timeout_seconds=30)).report
+    report = service.solve(
+        module, module.entry_function(), ScheduleOptions(timeout_seconds=30),
+    ).report
     print("\n=== report ===", report.to_json())
 
     assert report.stage == "core"
@@ -225,9 +226,9 @@ def test_the_bound_core_schedule_service_reports_the_nominal_makespan():
 def test_the_core_schedule_service_rejects_a_root_it_does_not_own():
     """The service decides for the target that owns it, and for the module's own
     entry function."""
-    service = f32_matmul.target.service(Schedule, "core")
-    other = Module("other", (narrow_f32_matmul_rmsnorm,), "narrow_f32_matmul_rmsnorm")
+    service = f32_matmul.resolve_target().service(Schedule, "core")
+    other = narrow_f32_matmul_rmsnorm
     with pytest.raises(ValueError, match="module.entry_function"):
-        service.solve(other, f32_matmul)
+        service.solve(other, f32_matmul.entry_function())
     with pytest.raises(TypeError, match="HIR Module"):
-        service.solve(f32_matmul, f32_matmul)
+        service.solve(f32_matmul.entry_function(), f32_matmul.entry_function())

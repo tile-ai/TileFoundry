@@ -9,9 +9,11 @@ from tilefoundry import module
 from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
 from tilefoundry.target import CudaTarget
 
-@module(entry="main")
+@module(entry="main", target=CudaTarget())
 class Model:
-    @func(target=CudaTarget(), topologies=(Topology("cta", 168),))
+    topologies = (Topology("cta", 168),)
+
+    @func
     def main(x: Tensor[(168,), "f32"]):
         with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
             x_local = tf.reshard(x, (168 @ cta.block,), "rmem")

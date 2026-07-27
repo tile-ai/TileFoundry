@@ -15,12 +15,12 @@ the analysis layer imports the schedule layer.
 
 ## 1. Direct service invocation
 
-The root Function's Target is the sole owner of service selection. A caller
+The Module's resolved Target is the sole owner of service selection. A caller
 selects an exact stage and invokes the returned service directly:
 
 ```python
 # example
-service = root.target.service(Schedule, stage)
+service = module.resolve_target().service(Schedule, stage)
 result = service.solve(module, root)
 ```
 
@@ -28,8 +28,11 @@ result = service.solve(module, root)
   - The caller MUST select a non-empty stage string explicitly.
   - Target service lookup MUST match the requested stage exactly and MUST NOT
     infer a stage from layouts, topology, or constraints.
-  - The service MUST come from `root.target`; a call MUST NOT override the
-    root Function's Target.
+  - The service MUST come from `module.resolve_target()`
+    ([core-ir §1](./core-ir.md#1-module)); a call MUST NOT override the Module's
+    resolved Target.
+  - Scheduling lookup MUST NOT fall back to a default Target when no Module in
+    the owner chain declares one ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
   - `root` MUST be `module.entry_function()` for the CTA service.
   - A service MAY accept `options=None`; this MUST mean a fresh default
     `ScheduleOptions()` value for that invocation.

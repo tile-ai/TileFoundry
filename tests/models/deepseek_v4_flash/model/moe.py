@@ -19,7 +19,6 @@ from __future__ import annotations
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, ReduceKind, Tensor, tf
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
 
 dim = config.dim  # bare-Name locals for the two where(layout=...) spots
 n_act = config.n_act  # below only -- see the module docstring.
@@ -31,6 +30,8 @@ class DeepseekV4MoE:
     ``forward``. Takes an already-normalized hidden state: the checkpoint's
     ``ffn_norm.weight`` is layer-level, so this component has no pre-MoE norm
     of its own (contrast ``DeepseekV4NoauxTcMoE`` below)."""
+    topologies = (Topology("cta", 132),)
+
 
     @func
     def shared_fp8_dequant_w1(
@@ -313,7 +314,7 @@ class DeepseekV4MoE:
     ) -> Tensor[(1, 1, config.dim), "bf16"]:
         return tf.add(routed, shared)
 
-    @func(target=CudaTarget(), topologies=(Topology("cta", 132),))
+    @func
     def deepseek_v4_flash_moe_hash(
         hidden: Tensor[(1, 1, config.dim), "bf16"],
         gate_weight: ConstTensor[(config.n_routed, config.dim), "bf16"],
@@ -373,6 +374,8 @@ class DeepseekV4NoauxTcMoE:
     """The learned/``noaux_tc``-router MoE component (entry
     ``deepseek_v4_flash_moe``): keeps its own ``pre_moe_rms_norm`` (contrast
     ``DeepseekV4MoE`` above)."""
+    topologies = (Topology("cta", 132),)
+
 
     @func
     def pre_moe_rms_norm(
@@ -655,7 +658,7 @@ class DeepseekV4NoauxTcMoE:
     ) -> Tensor[(1, 1, config.dim), "bf16"]:
         return tf.add(routed, shared)
 
-    @func(target=CudaTarget(), topologies=(Topology("cta", 132),))
+    @func
     def deepseek_v4_flash_moe(
         x: Tensor[(1, 1, config.dim), "bf16"],
         rms_weight: ConstTensor[(config.dim,), "bf16"],

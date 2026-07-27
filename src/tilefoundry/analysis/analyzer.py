@@ -24,9 +24,9 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.types import TensorType, TupleType, Type, callable_type_for
-from tilefoundry.ir.types.shard import ShardLayout
+from tilefoundry.ir.types.shard import ShardLayout, Topology
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.target import CudaTarget, Target, default_target
+from tilefoundry.target import CudaTarget, Target
 from tilefoundry.target.cuda.cost import tensor_bytes
 from tilefoundry.visitor_registry import cost_evaluator_registry
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TypeInferContext
@@ -245,17 +245,15 @@ def _traffic(call: Call, cost: Cost) -> tuple[tuple[str, TrafficBytes], ...]:
     )
 
 
-def _target_for(ir: Module | Function) -> Target:
-    if isinstance(ir, Function) and ir.target is not None:
-        return ir.target
-    if isinstance(ir, Module):
-        entry = ir.entry_function()
-        if isinstance(entry, Function) and entry.target is not None:
-            return entry.target
-        configured = ir.metadata.get("target")
-        if isinstance(configured, Target):
-            return configured
-    return default_target()
+def _target_for(ir: Module) -> Target:
+    """The Target the selected Module resolves to.
+
+    Analyze measures against declared hardware, so the Target comes from the
+    Module's owner chain and nowhere else: there is no metadata channel and no
+    default, because silently analysing against a target the author never
+    declared reports numbers for the wrong device.
+    """
+    return ir.resolve_target()
 
 
 def _bound_ns(cost: Cost, traffic, target: Target) -> int:
@@ -326,30 +324,24 @@ def _execution_domain_from_type(type_: Type) -> dict[str, int] | None:
     return dict(next(iter(domains))) if domains else None
 
 
-def _cta_count(call: Call, fn: Function) -> int:
+def _cta_count(call: Call, topologies: tuple[Topology, ...]) -> int:
     output = _cta_count_from_type(call.type)
     if output is not None:
         return output
     inputs = {value for arg in call.args if (value := _cta_count_from_type(arg.type))}
     if len(inputs) == 1:
         return next(iter(inputs))
-    if isinstance(call.target, Function):
-        target_declared = {
-            topology.size
-            for topology in call.target.topologies
-            if topology.name == "cta" and isinstance(topology.size, int)
-        }
-        if len(target_declared) == 1:
-            return next(iter(target_declared))
     declared = {
         topology.size
-        for topology in fn.topologies
+        for topology in topologies
         if topology.name == "cta" and isinstance(topology.size, int)
     }
     return next(iter(declared)) if len(declared) == 1 else 1
 
 
-def _execution_count(call: Call, fn: Function) -> int:
+def _execution_count(
+    call: Call, fn: Function, topologies: tuple[Topology, ...],
+) -> int:
     domain = _execution_domain_from_type(call.type)
     inputs = {
         tuple(sorted(value.items()))
@@ -363,7 +355,7 @@ def _execution_count(call: Call, fn: Function) -> int:
         )
     if domain is None:
         domain = dict(next(iter(inputs))) if inputs else {}
-    for topology in fn.topologies:
+    for topology in topologies:
         if not isinstance(topology.size, int) or topology.size <= 0:
             raise AnalysisError(
                 f"function {fn.name!r}: roofline requires positive static "
@@ -420,6 +412,7 @@ def _timeline_for_function(
     fn: Function,
     costs: dict[int, tuple[Cost, tuple[tuple[str, TrafficBytes], ...], int]],
     capacity: int,
+    topologies: tuple[Topology, ...],
 ) -> tuple[int, dict[int, TimelineMetadata]]:
     if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
         raise AnalysisError(
@@ -449,7 +442,7 @@ def _timeline_for_function(
                 continue
             if (
                 _local_placement_compatible(producer.type, consumer.type)
-                and _cta_count(producer, fn) == _cta_count(consumer, fn)
+                and _cta_count(producer, topologies) == _cta_count(consumer, topologies)
             ):
                 union(id(producer), id(consumer))
 
@@ -467,7 +460,7 @@ def _timeline_for_function(
         call_unit[id(call)] = unit_id
         unit = units[unit_id]
         unit.calls.append(call)
-        unit.grid_ctas = max(unit.grid_ctas, _cta_count(call, fn))
+        unit.grid_ctas = max(unit.grid_ctas, _cta_count(call, topologies))
         unit.duration_ns += costs[id(call)][2]
     for consumer in calls:
         consumer_unit = call_unit[id(consumer)]
@@ -621,13 +614,28 @@ def _sum_costs(costs: Iterable[Cost]) -> Cost:
 
 
 def analyze(
-    ir: Module | Function,
+    ir: Module,
     *,
     options: AnalysisOptions | None = None,
 ) -> AnalysisResult:
+    """Analyse one selected Module against the context it declares.
+
+    The Module is the execution domain, so a bare Function is not analysable:
+    it carries neither the Target the cost model measures against nor the
+    topology hierarchy the execution counts divide over. Author it inside the
+    Module that declares them.
+    """
+    if not isinstance(ir, Module):
+        raise TypeError(
+            f"analyze: expected a Module, got {type(ir).__name__}. A Function "
+            "carries no execution context; select the Module that owns it."
+        )
     options = options or AnalysisOptions()
     functions = _reachable_functions(ir)
-    module = ir if isinstance(ir, Module) else None
+    module = ir
+    # The execution domain is owned by the Module, so every function analysed
+    # here measures against one effective topology hierarchy.
+    topologies = module.effective_topologies()
     _infer_authored_types(functions, module)
     _validate_authored(functions)
     target = _target_for(ir)
@@ -658,7 +666,7 @@ def analyze(
                 duration = child.makespan_ns if options.timeline else roofline_bound
             else:
                 local_cost = _cost(expr, module)
-                cost = _scale_cost(local_cost, _execution_count(expr, fn))
+                cost = _scale_cost(local_cost, _execution_count(expr, fn, topologies))
                 traffic = _traffic(expr, cost)
                 roofline_bound = _bound_ns(cost, traffic, target)
                 duration = roofline_bound
@@ -693,7 +701,7 @@ def analyze(
                     _replace_metadata_in_place(expr, value)
         makespan = 0
         if options.timeline and costs:
-            makespan, timeline = _timeline_for_function(fn, costs, capacity)
+            makespan, timeline = _timeline_for_function(fn, costs, capacity, topologies)
             for expr in _postorder(fn.body):
                 value = timeline.get(id(expr))
                 if value is not None:

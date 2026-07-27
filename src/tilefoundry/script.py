@@ -7,11 +7,13 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
+from tilefoundry.module import TOPOLOGIES_ATTR, UNDECLARED
 from tilefoundry.parser import parse_func, parse_prim_func
 from tilefoundry.target import resolve_target
 
@@ -64,25 +66,68 @@ def _definition_namespace() -> dict[str, Any]:
     return ns
 
 
-def func(fn=None, *, topologies=(), target=None):
-    """Decorator: parse an ``@func``-decorated function into a ``hir.Function``.
+def _enclosing_topologies() -> tuple | None:
+    """The ``topologies`` an enclosing ``@module`` class body declares.
 
-    The decorated name binds to the resulting IR node, not the original
-    function. ``topologies`` declares the topology namespace (enabling
-    ``with Mesh(topology="cta", ...)``); ``target`` (a string or target object)
-    selects the compilation target, left unresolved by default until a normal
-    compile entry picks a backend. A ``pass`` body declares a dispatch
-    prototype; implementations are registered via :meth:`Function.specialize`."""
+    A function body may name a level of its own execution domain (``with
+    Mesh("warp", ...)``), and that name has to resolve while the body is
+    parsed. The owning ``@module`` decorator has not run yet at that point, but
+    the class body it decorates has already bound its ``topologies``
+    assignment, so the declaration is readable from that frame. Walking
+    outwards past a class body that declares nothing gives nested Modules the
+    same inheritance the IR applies.
+    """
+    frame = sys._getframe(1)
+    here = __file__
+    while frame is not None and frame.f_code.co_filename == here:
+        frame = frame.f_back
+    while frame is not None:
+        # A class body is the only scope that binds ``__qualname__`` locally.
+        if "__qualname__" in frame.f_locals:
+            declared = frame.f_locals.get(TOPOLOGIES_ATTR)
+            if declared is not None:
+                return tuple(declared)
+        elif frame.f_code.co_name == "<module>":
+            break
+        frame = frame.f_back
+    return None
+
+
+def func(fn=None, *, topologies=UNDECLARED, target=None):
+    """Decorator: parse an ``@func``-decorated function into HIR.
+
+    Plain ``@func`` binds the decorated name to a ``hir.Function``, parsed
+    against whatever topology hierarchy its owning ``@module`` class body
+    declares. Declaring execution context here instead — ``topologies`` (the
+    topology namespace enabling ``with Mesh(topology="cta", ...)``) or
+    ``target`` (a string or target object) — makes that function its own
+    execution domain, so the decorated name binds to the implicit
+    single-function ``Module`` carrying that context. A ``pass`` body declares
+    a dispatch prototype; implementations are registered via
+    :meth:`Function.specialize`."""
     resolved_target = resolve_target(target) if target is not None else None
+    declares_context = resolved_target is not None or topologies is not UNDECLARED
+    declared_topologies = None if topologies is UNDECLARED else tuple(topologies)
 
     def _wrap(fn_inner):
         extra_closure = _definition_namespace()
+        parse_topologies = declared_topologies
+        if parse_topologies is None:
+            parse_topologies = _enclosing_topologies()
         ir = parse_func(
-            fn_inner, topologies=topologies, target=resolved_target,
+            fn_inner, topologies=parse_topologies or (),
             extra_closure=extra_closure,
         )
         verify_function(ir)
-        return ir
+        if not declares_context:
+            return ir
+        return Module(
+            name=ir.name,
+            functions=(ir,),
+            entry=ir.name,
+            target=resolved_target,
+            topologies=declared_topologies,
+        )
 
     if fn is not None:
         return _wrap(fn)
@@ -100,8 +145,8 @@ def _specialize(self: HirFunction, pattern: Any):
     def _wrap_variant(fn_inner):
         extra_closure = _definition_namespace()
         ir = parse_func(
-            fn_inner, topologies=self.topologies, specializations=(pat,),
-            target=self.target, extra_closure=extra_closure,
+            fn_inner, topologies=_enclosing_topologies() or (),
+            specializations=(pat,), extra_closure=extra_closure,
         )
         if ir.body is None:
             raise TypeError(
@@ -128,10 +173,7 @@ def _converter(self: HirFunction, weight_name: str):
 
     def _wrap_converter(fn_inner):
         extra_closure = _definition_namespace()
-        ir = parse_func(
-            fn_inner, topologies=self.topologies, target=self.target,
-            extra_closure=extra_closure,
-        )
+        ir = parse_func(fn_inner, extra_closure=extra_closure)
         if ir.body is None:
             raise TypeError(
                 "tilefoundry.converter: a converter must have a real body, "

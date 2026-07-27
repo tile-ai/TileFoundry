@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tilefoundry import func
+from tilefoundry import func, module
 from tilefoundry.analysis import AnalysisOptions, FootprintMetadata, analyze
 from tilefoundry.analysis.analyzer import _postorder, _timeline_for_function
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
@@ -18,7 +18,7 @@ def _calls(function) -> tuple[Call, ...]:
     return tuple(expr for expr in _postorder(function.body) if isinstance(expr, Call))
 
 
-@func(topologies=(Topology("cta", 168),))
+@func(target="cuda", topologies=(Topology("cta", 168),))
 def _large_grid(source: Tensor[(1,), "f32"]):
     return tf.add(source, source)
 
@@ -36,7 +36,7 @@ def _reshard_boundary(source: Tensor[(1,), "f32"]):
         return tf.add(moved, moved)
 
 
-@func(topologies=(Topology("cta", 2), Topology("thread", 4)))
+@func(target="cuda", topologies=(Topology("cta", 2), Topology("thread", 4)))
 def _thread_sharded(source: Tensor[(8,), "f32"]):
     with Mesh(topology="thread", layout=(4,), names=("lane",)) as thread:
         local = tf.reshard(source, (8 @ thread.lane,), "rmem")
@@ -50,25 +50,29 @@ _THREAD_MESH = Mesh(
 )
 
 
-@func(topologies=(Topology("thread", 4),))
-def _footprint_helper(
-    source: Tensor[(8,), "f32", (8 @ _THREAD_MESH.lane,), "rmem"],
-):
-    return tf.add(source, source)
+@module(entry="_footprint_caller", target="cuda")
+class _Footprint:
+    topologies = (Topology("thread", 4),)
 
+    @func
+    def _footprint_helper(
+        source: Tensor[(8,), "f32", (8 @ _THREAD_MESH.lane,), "rmem"],
+    ):
+        return tf.add(source, source)
 
-@func(topologies=(Topology("thread", 4),))
-def _footprint_caller(
-    source: Tensor[(8,), "f32", (8 @ _THREAD_MESH.lane,), "rmem"],
-):
-    return _footprint_helper(source)
+    @func
+    def _footprint_caller(
+        source: Tensor[(8,), "f32", (8 @ _THREAD_MESH.lane,), "rmem"],
+    ):
+        return _footprint_helper(source)
 
 
 def test_fixed_grid_larger_than_capacity_unfolds_into_waves() -> None:
-    (call,) = _calls(_large_grid)
+    (call,) = _calls(_large_grid.entry_function())
 
     makespan, metadata = _timeline_for_function(
-        _large_grid, _costs(call), capacity=132
+        _large_grid.entry_function(), _costs(call), capacity=132,
+        topologies=_large_grid.effective_topologies(),
     )
 
     assert metadata[id(call)].grid_ctas == 168
@@ -87,10 +91,11 @@ def test_plain_gmem_layout_is_a_resolved_authored_type() -> None:
 
 
 def test_independent_units_overlap_when_their_cta_demands_fit() -> None:
-    routed, shared = _calls(_independent_branches)
+    routed, shared = _calls(_independent_branches.entry_function())
 
     makespan, metadata = _timeline_for_function(
-        _independent_branches, _costs(routed, shared), capacity=132
+        _independent_branches.entry_function(), _costs(routed, shared), capacity=132,
+        topologies=_independent_branches.effective_topologies(),
     )
 
     routed_timeline = metadata[id(routed)]
@@ -102,12 +107,13 @@ def test_independent_units_overlap_when_their_cta_demands_fit() -> None:
 
 
 def test_explicit_reshard_is_a_fusion_boundary_on_both_sides() -> None:
-    local, moved, consumer = _calls(_reshard_boundary)
+    local, moved, consumer = _calls(_reshard_boundary.entry_function())
     assert isinstance(local.target, Reshard)
     assert isinstance(moved.target, Reshard)
 
     makespan, metadata = _timeline_for_function(
-        _reshard_boundary, _costs(local, moved, consumer), capacity=132
+        _reshard_boundary.entry_function(), _costs(local, moved, consumer), capacity=132,
+        topologies=_reshard_boundary.effective_topologies(),
     )
 
     assert metadata[id(local)].end_ns == metadata[id(moved)].start_ns
@@ -126,11 +132,11 @@ def test_roofline_scales_leaf_cost_by_the_full_execution_mesh() -> None:
 
 def test_transparent_function_footprint_does_not_double_count_return() -> None:
     analyze(
-        _footprint_caller,
+        _Footprint,
         options=AnalysisOptions(roofline=False, footprint=True, timeline=False),
     )
 
-    call = _footprint_caller.body
+    call = _Footprint.entry_function().body
     assert isinstance(call, Call)
     footprint = get_metadata(call, FootprintMetadata)
     assert footprint is not None

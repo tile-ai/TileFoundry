@@ -154,7 +154,7 @@ infrastructure used by both passes and codegen walkers; the framework
 contract lives in [visitor-mutator](./visitor-mutator.md).
 
 Scheduling is an explicit Target-owned service boundary, not a pass-manager
-stage. A caller selects a named service from the root Function's Target and
+stage. A caller selects a named service from the Module's resolved Target and
 invokes it directly. A scheduling service may first verify an authored logical
 program and derive a plan-level execution blueprint; its public summary reports
 only the selected objective and proof state. The direct invocation contract and

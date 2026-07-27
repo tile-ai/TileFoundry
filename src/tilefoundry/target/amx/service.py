@@ -12,6 +12,7 @@ from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 # `select_atoms` measures its makespan in sub-ns duration units; the public
 # report is in ns, and the scale that converts them has no public accessor yet.
 from tilefoundry.schedule.select_atoms import _DURATION_SCALE, select_atoms
+from tilefoundry.target.base import Target
 
 from .atoms import candidate_atoms
 
@@ -59,7 +60,7 @@ class _AmxCoreSchedule:
             )
         if root is not module.entry_function():
             raise ValueError("core Schedule requires root to be module.entry_function()")
-        if root.target is not self._target:
+        if module.resolve_target() is not self._target:
             raise ValueError(
                 "core Schedule requires the root Target to own the requested service"
             )
@@ -71,10 +72,12 @@ class _AmxCoreSchedule:
                 f"{type(options).__name__}"
             )
         solved = select_atoms(build_schedule_tree(extract(root)), self._target, self.stage)
-        return ScheduleResult(module=module, report=_project_report(root, solved, self.stage))
+        return ScheduleResult(module=module, report=_project_report(root, self._target, solved, self.stage))
 
 
-def _project_report(root: Function, solved: "TileGraph", stage: str) -> ScheduleReport:
+def _project_report(
+    root: Function, target: Target, solved: "TileGraph", stage: str,
+) -> ScheduleReport:
     """Project one resource-solve result into the compact public report.
 
     A solve that did not prove optimality leaves no bound behind, so the only
@@ -84,7 +87,7 @@ def _project_report(root: Function, solved: "TileGraph", stage: str) -> Schedule
     optimal = solved.decisions["status"] == "OPTIMAL"
     return ScheduleReport(
         root=root.name,
-        target=root.target.name,
+        target=target.name,
         stage=stage,
         status="OPTIMAL" if optimal else "FEASIBLE_NOT_PROVEN",
         objective_name="makespan",

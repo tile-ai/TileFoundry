@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Union
 
 from tilefoundry.ir.core import Call, Expr, Var, VerifyError
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.launch import LaunchAttrs, launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -41,6 +42,15 @@ from .base import (
 )
 from .dispatch import resolve_callable
 from .symtab import LexicalEnv
+
+
+def _module_target(mod: Module):
+    """The Target a launch callee's Module declares, if it declares one."""
+    try:
+        return mod.resolve_target()
+    except ValueError:
+        return None
+
 
 
 @dataclass(frozen=True)
@@ -318,17 +328,22 @@ class _TirBodyVisitor(BaseExprVisitor):
         if not isinstance(callee_node, ast.Name):
             raise VerifyError("tir: launch(...) first argument must be a function name")
         callee_ir = self.closure.get(callee_node.id)
-        # The callee may be an already-lowered cuda PrimFunction or an HIR
-        # @func device function (lowered later — HirToTir rewrites the callee).
+        # The callee may be an already-lowered cuda PrimFunction, an HIR @func
+        # device function (lowered later — HirToTir rewrites the callee), or the
+        # Module that owns such a function and declares the Target it runs on.
+        callee_target = None
+        if isinstance(callee_ir, Module):
+            callee_target = _module_target(callee_ir)
+            callee_ir = callee_ir.entry_function()
+        elif isinstance(callee_ir, PrimFunction):
+            callee_target = callee_ir.target
         if not isinstance(callee_ir, (HirFunction, PrimFunction)):
             raise VerifyError(
                 f"tir: launch(...) callee {callee_node.id!r} must be a @func or "
                 f"@prim_func device function"
             )
         effective_target = (
-            callee_ir.target
-            if callee_ir.target is not None
-            else default_target()
+            callee_target if callee_target is not None else default_target()
         )
         if not isinstance(effective_target, CudaTarget):
             raise VerifyError(

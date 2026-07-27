@@ -65,12 +65,13 @@ def _walk_reshard_meshes(e):
 def test_topology_declarations_and_mesh_string_resolution() -> None:
     """``topologies=`` records inline declarations; string topology
     inside ``with Mesh(...)`` resolves to the declared Topology."""
-    ir = demo_topology_canonical
-    assert [t.name for t in ir.topologies] == ["cta", "thread"]
-    assert [t.size for t in ir.topologies] == [128, 256]
+    declared_topologies = demo_topology_canonical.effective_topologies()
+    ir = demo_topology_canonical.entry_function()
+    assert [t.name for t in declared_topologies] == ["cta", "thread"]
+    assert [t.size for t in declared_topologies] == [128, 256]
 
     # All reshard meshes refer to declared topologies.
-    declared = {t.name for t in ir.topologies}
+    declared = {t.name for t in declared_topologies}
     meshes = list(_walk_reshard_meshes(ir.body))
     assert len(meshes) >= 2
     assert all(m.topology.name in declared for m in meshes)
@@ -97,12 +98,12 @@ def test_topology_errors() -> None:
 
 def test_topology_roundtrip_through_printer() -> None:
     """Print → parse round-trip preserves topology declarations and sizes."""
-    ir1 = demo_topology_canonical
-    src = as_script(ir1)
-    assert "@func(topologies=(" in src
+    src = as_script(demo_topology_canonical)
+    assert '@module(entry="demo_topology_canonical")' in src
+    assert "topologies = (" in src
     assert 'Topology("cta", 128)' in src
-    ir2 = parse_script(src)
-    assert ir2.topologies == ir1.topologies
+    reparsed = parse_script(src)
+    assert reparsed.topologies == demo_topology_canonical.topologies
 
 
 # Sugar form: tuple-literal mesh layout + body sugar with @-bindings.
@@ -125,9 +126,9 @@ def demo_topology_sugar(
 def test_topology_sugar_layout_parses_and_lowers_correctly() -> None:
     """Tuple-literal Mesh layout + body sugar with @-bindings parses to
     the same shape/strides as the verbose form."""
-    fn = demo_topology_sugar
+    fn = demo_topology_sugar.entry_function()
     assert fn.name == "demo_topology_sugar"
-    assert len(fn.topologies) == 2
+    assert len(demo_topology_sugar.effective_topologies()) == 2
 
     def _all_calls(e):
         out = []

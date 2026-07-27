@@ -409,7 +409,7 @@ def build_dynamic_bare_and_closure_split_func():
 
 
 def test_reshard_sugar_accepts_dynamic_bare_and_closure_name_axis() -> None:
-    fn = build_dynamic_bare_and_closure_split_func()
+    fn = build_dynamic_bare_and_closure_split_func().entry_function()
     body = fn.body
     assert isinstance(body, Call) and isinstance(body.target, Reshard)
     # logical result shape is the un-factorised (1, S, 32, 128)

@@ -36,8 +36,9 @@ class CompilerOptions:
 def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
     """Normalise a ``Function`` or ``Module`` into a compile-ready ``Module``.
 
-    - ``Function`` → single-function ``Module``; ``Function.topologies``
-      are lifted into ``Module.topologies``.
+    - ``Function`` → the implicit single-function ``Module`` that owns it. It
+      declares no execution context: a Function that needs one is authored
+      inside the ``Module`` that declares it.
     - ``Module`` → validated and returned as the compile unit.
 
     Raises ``TypeError`` for unsupported input types.
@@ -47,7 +48,6 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
             name=fn_or_mod.name,
             functions=(fn_or_mod,),
             entry=fn_or_mod.name,
-            topologies=fn_or_mod.topologies,
         )
     if isinstance(fn_or_mod, Module):
         # Validate entry exists
@@ -84,18 +84,17 @@ def lower(
     if target != "cuda":
         raise ValueError(f"tilefoundry.lower: target {target!r} not supported yet")
 
-    # Validate every declared program topology level against the target before
-    # lowering — a function may declare an unsupported level (e.g. ``gpu``)
-    # without ever emitting a MeshScope, so the codegen-side check is not enough.
+    # Validate the module's declared program topology levels against its
+    # target before lowering — a module may declare an unsupported level (e.g.
+    # ``gpu``) without ever emitting a MeshScope, so the codegen-side check is
+    # not enough.
     from tilefoundry.target import default_target  # noqa: PLC0415
-    declared = list(mod.topologies)
-    for fn in mod.functions:
-        target_value = fn.target or default_target()
-        for topology in getattr(fn, "topologies", ()) or ():
-            target_value.validate_program_topology(topology)
-    entry_target = mod.entry_function().target or default_target()
-    for topology in declared:
-        entry_target.validate_program_topology(topology)
+    try:
+        module_target = mod.resolve_target()
+    except ValueError:
+        module_target = default_target()
+    for topology in mod.effective_topologies():
+        module_target.validate_program_topology(topology)
 
     pm = _build_default_pipeline()
     result = pm.run(mod)
@@ -105,6 +104,7 @@ def lower(
         name=result.name,
         functions=result.functions,
         entry=result.entry,
+        target=result.target,
         topologies=result.topologies,
         metadata=merged,
     )
@@ -228,15 +228,17 @@ def compile(
 def _canonical_module_text(mod: Module) -> str:
     """Produce canonical text for cache-key: entry-function source + topologies.
 
-    Includes ``Module.topologies`` in stable serialised form so that two
-    modules with the same entry function but different topology
-    declarations produce different cache keys.
+    Uses the *effective* hierarchy rather than the declared one, so that two
+    modules with the same entry function but different topologies produce
+    different cache keys even when one of them inherits its hierarchy from an
+    owner instead of declaring it.
     """
     fn_text = _as_script(mod.entry_function())
     # Append topology declarations in sorted-by-name stable form
-    if mod.topologies:
+    topologies = mod.effective_topologies()
+    if topologies:
         topo_lines = []
-        for t in sorted(mod.topologies, key=lambda t: t.name):
+        for t in sorted(topologies, key=lambda t: t.name):
             topo_lines.append(f"Topology({t.name!r}, {t.size})")
         fn_text += "\n" + "\n".join(topo_lines)
     return fn_text
@@ -252,8 +254,8 @@ def jit(
     """JIT-compile a ``hir.Function`` or ``Module`` and return a ``RuntimeModule``.
 
     ``Module`` is the compile unit.  ``Function`` input is normalised into a
-    single-function ``Module`` and ``Function.topologies`` are lifted to
-    ``Module.topologies`` before compiling.
+    single-function ``Module``, which declares no execution context: a Function
+    that needs one is authored inside the ``Module`` that declares it.
 
     Cache key is ``sha256(canonical_module_text + target_text +
     canonical_options_text)`` — no Python object identity participates.

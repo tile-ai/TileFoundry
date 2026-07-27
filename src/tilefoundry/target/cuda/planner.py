@@ -710,17 +710,6 @@ class _Planner:
                 f"P2: recursive helper call to {function.name!r} at "
                 f"{_expr_location(parent_call or function)}"
             )
-        if function is not self.root:
-            if function.target is not None and function.target != self.target:
-                raise ValueError(
-                    f"P2: helper {function.name!r} Target conflicts at "
-                    f"{_expr_location(parent_call or function)}"
-                )
-            if function.topologies:
-                raise ValueError(
-                    f"P2: helper {function.name!r} declares program topologies at "
-                    f"{_expr_location(parent_call or function)}"
-                )
         self._active_functions.add(id(function))
         self.function_instances.append((function_path, function))
         try:
@@ -1093,18 +1082,25 @@ def _validate_entry(module: Module, root: Function) -> tuple[CudaTarget, Topolog
         raise TypeError(f"P2: planning root must be a HIR Function, got {type(root).__name__}")
     if not any(function is root for function in module.functions):
         raise ValueError(f"P2: root function {root.name!r} is not a member of Module {module.name!r}")
-    if not isinstance(root.target, CudaTarget):
+    try:
+        target = module.resolve_target()
+    except ValueError:
+        target = None
+    if not isinstance(target, CudaTarget):
         raise ValueError(
             f"P2: root {root.name!r} requires an explicit CudaTarget, got "
-            f"{type(root.target).__name__ if root.target is not None else 'None'}"
+            f"{type(target).__name__ if target is not None else 'None'}"
         )
-    cta = tuple(topology for topology in root.topologies if topology.name == "cta")
+    cta = tuple(
+        topology for topology in module.effective_topologies()
+        if topology.name == "cta"
+    )
     if len(cta) != 1:
         raise ValueError(f"P2: root {root.name!r} requires exactly one CTA topology")
     count = static_dim_value(cta[0].size)
-    if count is None or not 1 <= count <= root.target.device.sm_count:
+    if count is None or not 1 <= count <= target.device.sm_count:
         raise ValueError(f"P2: root {root.name!r} requires a static CTA extent within device capacity")
-    return root.target, Topology("cta", count)
+    return target, Topology("cta", count)
 
 
 def build_planning_problem(module: Module, root: Function) -> PlanningProblem:

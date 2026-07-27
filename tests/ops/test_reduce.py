@@ -278,7 +278,9 @@ def test_analyze_rejects_cross_cta_reduce():
 
 @module(entry="cross_warp_sum")
 class _CrossWarpSumModule:
-    @func(topologies=(Topology("thread", 4 * 32),))
+    topologies = (Topology("thread", 4 * 32),)
+
+    @func
     def cross_warp_sum(a: Tensor[(4, 32), 'f32']):
         with Mesh(Topology("thread", 4 * 32), (4, 32), ('tk', 'hc')) as m:
             # Axis 0 (tk) spans the four warps; axis 1 (hc) is the lane axis and

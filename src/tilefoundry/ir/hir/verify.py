@@ -70,11 +70,6 @@ def _verify_variants(base: Function) -> None:
                 f"hir Function {base.name!r}: variant signature must match the "
                 f"base signature"
             )
-        if v.target != base.target or tuple(v.topologies) != tuple(base.topologies):
-            raise VerifyError(
-                f"hir Function {base.name!r}: variant target / topologies must "
-                f"match the base"
-            )
         sig = canonical_specialization_signature(v.specializations)
         if sig in sigs:
             raise VerifyError(

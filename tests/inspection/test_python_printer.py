@@ -145,7 +145,7 @@ class TestModuleRoundTrip:
 
         fn1 = build_qwen3_attention_main_2cta_headnorm()
         src = as_script(fn1, module="M")
-        fn2 = parse_script(src)
+        fn2 = parse_script(src).entry_function()
 
         for p1, p2 in zip(fn1.params, fn2.params):
             t1, t2 = p1.type, p2.type

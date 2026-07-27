@@ -72,7 +72,7 @@ class _TunedDevice(Device):
         return 989_500_000_000_000
 
 
-def _scheduled(fn=bf16_gemm_rmsnorm) -> TileGraph:
+def _scheduled(fn=bf16_gemm_rmsnorm.entry_function()) -> TileGraph:
     return build_schedule_tree(extract(fn))
 
 
@@ -293,7 +293,7 @@ def test_empty_tile_graph_raises_clear_error():
 
 def test_solving_before_build_schedule_tree_raises_clear_error():
     with pytest.raises(AtomSelectionError, match="build_schedule_tree"):
-        select_atoms(extract(bf16_gemm_rmsnorm), target="cuda")
+        select_atoms(extract(bf16_gemm_rmsnorm.entry_function()), target="cuda")
 
 
 def test_resolving_an_already_tiled_tree_raises_clear_error():
@@ -309,7 +309,7 @@ def test_a_statement_order_that_runs_against_a_dependence_is_rejected():
     """The nominal timeline is a prefix sum over ``tg.units``, so that order has
     to agree with every dependence isl reports between two statements --
     reversing it puts RN's start before the MM it reads from."""
-    tg = extract(bf16_gemm_rmsnorm)
+    tg = extract(bf16_gemm_rmsnorm.entry_function())
     reversed_units = build_schedule_tree(replace(tg, units=tuple(reversed(tg.units))))
     with pytest.raises(AtomSelectionError, match="orders 'MM' before 'RN'"):
         select_atoms(reversed_units, target="cuda")

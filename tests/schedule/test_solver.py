@@ -5,7 +5,6 @@ import json
 from tests.models.deepseek_v4_flash.moe import deepseek_v4_flash_module, deepseek_v4_flash_moe
 from tests.models.qwen3_5_30b_a3b.static_online import qwen_static_online
 from tests.schedule.test_preflight import _planner_root
-from tilefoundry.ir.core.module import Module
 from tilefoundry.schedule import ScheduleOptions
 from tilefoundry.target.cuda.allocation import _allocation_groups
 from tilefoundry.target.cuda.planner import build_planning_problem
@@ -15,7 +14,7 @@ from tilefoundry.target.cuda.solver import solve_planning_problem
 
 
 def _problem():
-    return build_planning_problem(Module("m", (_planner_root,), "_planner_root"), _planner_root)
+    return build_planning_problem(_planner_root, _planner_root.entry_function())
 
 
 def test_small_fixture_decodes_one_makespan_blueprint(tmp_path) -> None:
@@ -58,7 +57,7 @@ def test_small_fixture_decodes_one_makespan_blueprint(tmp_path) -> None:
 
 def test_static_qwen_root_decodes_closed_4096_trip_region() -> None:
     problem = build_planning_problem(
-        Module("qwen", (qwen_static_online,), "qwen_static_online"), qwen_static_online
+        qwen_static_online, qwen_static_online.entry_function()
     )
     solution = solve_planning_problem(problem, ScheduleOptions(timeout_seconds=60, workers=4))
 

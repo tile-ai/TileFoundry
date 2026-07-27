@@ -41,17 +41,26 @@ class Module:
     functions: tuple[hir.Function | tir.PrimFunction, ...]  # the heterogeneous hir.Function | tir.PrimFunction container
     entry: str                                              # name of the public entry function (a name present in functions)
     modules: tuple["Module", ...]                           # child modules, each named by the attribute it is attached under
-    topologies: tuple[Topology, ...]                        # module-level program topology namespace
+    target: Target | None                                   # the hardware this execution domain runs on; None inherits from the owner
+    topologies: tuple[Topology, ...] | None                 # the complete ordered parallel-resource hierarchy; None inherits, () declares none
     metadata: dict[str, object]                             # target / option metadata, never semantic mesh bindings
     methods: Mapping[str, object]                           # plain Python orchestration methods (e.g. forward), bound like instance methods
 
     @property
     def weights(self) -> Mapping[str, TensorType]: ...     # derived — see below; there is no `states` field
+
+    def resolve_target(self) -> Target: ...                # effective Target; fails when no owner declares one
+    def effective_topologies(self) -> tuple[Topology, ...]: ...   # effective hierarchy, inherited included
+    def resolve_topology(self, name: str) -> Topology: ...  # one effective level by exact name
 ```
 
 - constraints:
   - the top-level compilation unit (parser output; pass input/output);
     constructing a `Module` seals its functions.
+  - a `Module` is the execution domain of the functions it owns: it, not they,
+    declares the `Target` and the ordered `Topology` hierarchy.
+  - a `Module` owns its child subtree. Placing a child that already belongs to
+    another owner MUST NOT change what the first owner's subtree resolves.
 
 - `parse_module` (see [parser §1](./parser.md)) returns a `Module`.
 - `entry` is the public entry point — `tilefoundry.lower(...)` and the
@@ -60,14 +69,29 @@ class Module:
 - `entry` MUST be the `name` of a function present in `functions`;
   the verifier checks this.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
-  `Module` whose `entry` is set to that function. If the function
-  declares `topologies`, those declarations lift to the module-level
-  `topologies` namespace.
+  `Module` whose `entry` is set to that function. A function that declares
+  execution context of its own is therefore already a `Module`.
 - Same-module `@prim_func` calls resolve through the module's symbol
   table, not Python closures.
-- `topologies` is the module-level program topology namespace.
-  `with Mesh(topology="cta", ...)` inside a function body looks up
-  topologies here by name and creates a lexical mesh binding.
+- `topologies` is the execution domain's complete ordered hierarchy.
+  `with Mesh(topology="cta", ...)` inside a function body names one of the
+  effective levels and creates a lexical mesh binding.
+
+**Effective context.** `target` and `topologies` record what a Module
+*declares*, not what it resolves to; resolution is lexical over the owner
+chain and is not copied onto each Module or Function.
+
+- `resolve_target()` returns the nearest declaration at or above this Module,
+  and MUST fail when no owner in the chain declares one. Only the outermost
+  Module declares a `Target`: a child that declares its own MUST be rejected
+  when it is attached, so one tree has exactly one hardware declaration.
+- `topologies = None` declares nothing and inherits the owner's hierarchy;
+  `topologies = ()` declares an explicitly topology-free domain; an explicit
+  tuple replaces the inherited hierarchy whole rather than extending it. A
+  declared tuple MUST NOT repeat a level name.
+- `resolve_topology(name)` returns the single effective level with that exact
+  name and MUST fail, naming the levels that are available, when there is
+  none.
 - `metadata` carries target / compiler-option configuration, never
   semantic topology / mesh information.
 - Each entry of `modules` is named by the attribute it is attached under —

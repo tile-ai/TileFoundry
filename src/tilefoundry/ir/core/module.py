@@ -3,6 +3,7 @@ orchestration methods. See docs/spec/core-ir.md §1.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
 import types
@@ -13,25 +14,55 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.types.tensor_type import TensorType
+from tilefoundry.target import Target
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
 
+def _owned_by(child: "Module", parent: "Module") -> "Module":
+    """*child* linked back to *parent* as its owner.
+
+    An unowned child is claimed in place, so the authored tree keeps the very
+    objects its class body produced. A child that already belongs to another
+    owner is claimed as a copy instead: the two owners may resolve different
+    effective context, and re-pointing the original would silently change what
+    the first owner's subtree answers.
+    """
+    owner = getattr(child, "_parent", None)
+    if owner is None or owner is parent:
+        object.__setattr__(child, "_parent", parent)
+        return child
+    clone = copy.copy(child)
+    object.__setattr__(
+        clone, "modules", tuple(_owned_by(node, clone) for node in child.modules)
+    )
+    object.__setattr__(clone, "_parent", parent)
+    return clone
+
+
 @dataclass(frozen=True)
 class Module:
-    """Frozen container of functions + the name of the public entry function."""
+    """Frozen container of functions + the name of the public entry function.
+
+    A Module is also the execution domain of the functions it owns: it carries
+    the hardware ``target`` and the ordered ``topologies`` budget those
+    functions run against. ``topologies=None`` declares nothing and inherits
+    from the owning Module; ``topologies=()`` declares a topology-free Module.
+    """
 
     name: str
     functions: tuple[ModuleFunction, ...]
     entry: str
     modules: tuple["Module", ...] = field(default_factory=tuple)
-    topologies: tuple[Topology, ...] = field(default_factory=tuple)
+    target: Target | None = None
+    topologies: tuple[Topology, ...] | None = None
     metadata: dict[str, object] = field(default_factory=dict)
     methods: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Seal each function against further authoring mutation, and reject a
-        name shared by two of functions / modules / methods."""
+        """Seal each function against further authoring mutation, reject a
+        name shared by two of functions / modules / methods, validate the
+        declared execution context, and link each child to this owner."""
         for fn in self.functions:
             seal = getattr(fn, "seal", None)
             if callable(seal):
@@ -51,6 +82,78 @@ class Module:
                 f"Module {self.name!r}: name(s) {method_clash} used by both a "
                 f"method and a function/child module; names must be disjoint"
             )
+        if self.topologies is not None:
+            names = [t.name for t in self.topologies]
+            dupes = sorted({n for n in names if names.count(n) > 1})
+            if dupes:
+                raise ValueError(
+                    f"Module {self.name!r}: duplicate topology name(s) {dupes}; "
+                    f"one name must map to one level of the ordered hierarchy"
+                )
+        for child in self.modules:
+            if child.target is not None:
+                raise ValueError(
+                    f"Module {self.name!r}: child module {child.name!r} declares "
+                    f"its own target {child.target!r}; only the root module "
+                    f"declares a target and children inherit it"
+                )
+        # Own the subtree rather than sharing it. A child links back to its
+        # owner to resolve inherited context, so one child value placed under
+        # two owners could otherwise resolve against whichever constructed
+        # last -- including a copy made by ``dataclasses.replace``.
+        object.__setattr__(
+            self, "modules", tuple(_owned_by(child, self) for child in self.modules)
+        )
+
+    def _owner_path(self) -> str:
+        """This Module's dotted path from the outermost declared owner."""
+        names = [self.name]
+        node = getattr(self, "_parent", None)
+        while node is not None:
+            names.append(node.name)
+            node = getattr(node, "_parent", None)
+        return ".".join(reversed(names))
+
+    def resolve_target(self) -> Target:
+        """The effective Target: this Module's declaration, else the nearest
+        owner's. Raises when no owner in the chain declares one."""
+        node: "Module | None" = self
+        while node is not None:
+            if node.target is not None:
+                return node.target
+            node = getattr(node, "_parent", None)
+        raise ValueError(
+            f"Module {self._owner_path()!r}: no target is declared by this "
+            f"module or any of its owners; the root module must declare one"
+        )
+
+    def effective_topologies(self) -> tuple[Topology, ...]:
+        """The effective ordered Topology tuple: this Module's declaration,
+        else the nearest owner's, else empty at an undeclared root."""
+        node: "Module | None" = self
+        while node is not None:
+            if node.topologies is not None:
+                return node.topologies
+            node = getattr(node, "_parent", None)
+        return ()
+
+    def resolve_topology(self, name: str) -> Topology:
+        """The effective Topology named *name*; raises unless exactly one of
+        the effective levels matches."""
+        levels = self.effective_topologies()
+        matches = tuple(t for t in levels if t.name == name)
+        if not matches:
+            available = ", ".join(t.name for t in levels) or "none"
+            raise ValueError(
+                f"Module {self._owner_path()!r}: no topology named {name!r}; "
+                f"effective topology levels are {available}"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Module {self._owner_path()!r}: topology {name!r} resolves to "
+                f"{len(matches)} levels; one name must map to one level"
+            )
+        return matches[0]
 
     @property
     def weights(self) -> Mapping[str, TensorType]:

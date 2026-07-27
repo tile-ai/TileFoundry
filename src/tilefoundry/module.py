@@ -5,20 +5,75 @@ from __future__ import annotations
 import inspect
 
 
-def module(cls=None, *, entry: str):
+class _Undeclared:
+    """Distinguish an omitted topology declaration from an explicit empty one.
+
+    An explicit empty ``topologies`` declares a topology-free execution domain,
+    while omitting it declares nothing and inherits from the owning Module. A
+    plain ``None`` default cannot express both, because ``None`` is already the
+    IR's encoding of "inherit". This applies to both declaration surfaces: the
+    ``topologies`` assignment in a ``@module`` class body and the
+    ``topologies=`` argument of a standalone ``@func``."""
+
+    def __repr__(self) -> str:
+        return "UNDECLARED"
+
+
+UNDECLARED = _Undeclared()
+
+
+TOPOLOGIES_ATTR = "topologies"
+
+
+def module(cls=None, *, entry: str, target=None):
     """Collect a class body into a ``Module``: DSL functions, child ``Module``s
-    (or a tuple/list of them), and plain orchestration methods. See
-    docs/spec/parser.md §2.7."""
+    (or a tuple/list of them), and plain orchestration methods. See the module
+    authoring surface in docs/spec/parser.md.
+
+    ``target`` declares the hardware this execution domain runs on; only the
+    outermost Module declares it and nested Modules inherit it.
+
+    The ordered parallel-resource hierarchy is declared by a ``topologies``
+    assignment at the top of the class body rather than by a decorator
+    argument, because a function body may name one of those levels (``with
+    Mesh("warp", ...)``) and Python binds class-body names before it applies
+    this decorator. Omitting the assignment inherits the owning Module's
+    hierarchy; an explicit ``()`` declares a topology-free Module."""
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
+    from tilefoundry.ir.types.shard.mesh import Topology  # noqa: PLC0415
+    from tilefoundry.target import resolve_target  # noqa: PLC0415
+
+    resolved_target = resolve_target(target) if target is not None else None
+
+    def _declared_topologies(cls_inner):
+        """The class body's own ``topologies`` assignment, if it makes one.
+
+        Only this class's namespace counts: an attribute reached through a
+        base class is not a declaration by this execution domain.
+        """
+        declared = vars(cls_inner).get(TOPOLOGIES_ATTR, UNDECLARED)
+        if declared is UNDECLARED:
+            return None
+        if not isinstance(declared, (tuple, list)) or not all(
+            isinstance(t, Topology) for t in declared
+        ):
+            raise TypeError(
+                f"@module {cls_inner.__name__!r}: {TOPOLOGIES_ATTR} must be a "
+                f"tuple of Topology, got {declared!r}"
+            )
+        return tuple(declared)
 
     def _wrap(cls_inner):
+        declared_topologies = _declared_topologies(cls_inner)
         functions = []
         child_modules = []
         methods = {}
         for name, value in vars(cls_inner).items():
             if name.startswith("__") and name.endswith("__"):
+                continue
+            if name == TOPOLOGIES_ATTR:
                 continue
             if isinstance(value, Module):
                 # torch / HF semantics: a child is named by its attribute, not
@@ -81,6 +136,8 @@ def module(cls=None, *, entry: str):
             functions=tuple(functions),
             entry=entry,
             modules=tuple(child_modules),
+            target=resolved_target,
+            topologies=declared_topologies,
             methods=methods,
         )
 
@@ -89,4 +146,4 @@ def module(cls=None, *, entry: str):
     return _wrap
 
 
-__all__ = ["module"]
+__all__ = ["UNDECLARED", "module"]

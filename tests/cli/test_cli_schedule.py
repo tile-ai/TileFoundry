@@ -104,16 +104,19 @@ def test_schedule_reaches_the_amx_atom_at_the_core_level(tmp_path, capsys) -> No
     assert "# decisions statement=MM atom=AMX_FMA32_16x16x1_F32" in captured.out
 
 
-def test_schedule_falls_back_to_the_default_target_when_the_function_has_none(
+def test_schedule_rejects_a_selection_that_declares_no_execution_context(
     tmp_path, capsys
 ) -> None:
+    """A kernel is scheduled against the device it was authored for. A bare
+    ``@func`` declares no context, so it resolves to a Function and is rejected
+    rather than scheduled against a default target the author never named."""
     path = _write_module(tmp_path, _UNTARGETED_MODULE)
 
-    assert cli.main(["schedule", f"{path}:bf16_gemm_rmsnorm", "--stage", "cta"]) == 0
+    assert cli.main(["schedule", f"{path}:bf16_gemm_rmsnorm", "--stage", "cta"]) == 1
 
     captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out.startswith("# schedule target=cuda stage=cta")
+    assert captured.out == ""
+    assert "select the Module that declares it" in captured.err
 
 
 def test_schedule_names_the_levels_a_target_owns_when_the_stage_is_not_one(
@@ -127,3 +130,52 @@ def test_schedule_names_the_levels_a_target_owns_when_the_stage_is_not_one(
     assert captured.out == ""
     assert "has no topology level 'cta'" in captured.err
     assert "must be one of core, amx" in captured.err
+
+
+_NESTED_MODULE = """
+    from tilefoundry import func, module
+    from tilefoundry.dsl import Tensor
+    from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
+    from tilefoundry.ir.types.shard import Topology
+
+    @module(entry="bf16_gemm_rmsnorm", target="cuda")
+    class Model:
+        topologies = (Topology("cta", 132),)
+
+        @func
+        def bf16_gemm_rmsnorm(
+            x: Tensor[(64, 128), "bf16"],
+            w: Tensor[(128, 64), "bf16"],
+            weight: Tensor[(64,), "f32"],
+        ) -> Tensor[(64, 64), "bf16"]:
+            h = matmul(x, w)
+            y = rms_norm(h, weight)
+            return y
+
+        @module(entry="inner")
+        class child:
+            @func
+            def inner(
+                x: Tensor[(64, 128), "bf16"],
+                w: Tensor[(128, 64), "bf16"],
+                weight: Tensor[(64,), "f32"],
+            ) -> Tensor[(64, 64), "bf16"]:
+                h = matmul(x, w)
+                y = rms_norm(h, weight)
+                return y
+"""
+
+
+def test_schedule_selects_a_function_through_a_nested_module_path(
+    tmp_path, capsys
+) -> None:
+    """A leaf is selectable by the path of owners it hangs under, and the
+    selection still resolves the Target and hierarchy it inherits from them
+    rather than the empty context a detached copy would carry."""
+    path = _write_module(tmp_path, _NESTED_MODULE)
+
+    assert cli.main(["schedule", f"{path}:Model.child.inner", "--stage", "cta"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith("# schedule target=cuda stage=cta function=inner")

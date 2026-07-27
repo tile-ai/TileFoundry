@@ -151,7 +151,7 @@ def test_a_register_sized_f32_gemm_lists_the_amx_outer_product_atom():
     extent of one, and the whole gemm's three operands fit the X/Y/Z register
     files the atom addresses them as. Every field is checked against the atom's
     real numbers, not a placeholder."""
-    facts = candidate_atoms(register_sized_f32_gemm.body, register_sized_f32_gemm.target)
+    facts = candidate_atoms(register_sized_f32_gemm.entry_function().body, register_sized_f32_gemm.resolve_target())
     print("\n=== candidate AtomFacts (f32 gemm, M=16 N=16 K=8) ===")
     for fact in facts:
         print(fact)
@@ -190,7 +190,7 @@ def test_the_neon_atom_is_a_candidate_for_the_same_gemm_at_its_own_rate():
     """The second catalogue entry: a 4x4 f32 outer product on the core's NEON
     pipes, its operands streamed through cache rather than held in registers,
     priced at the measured NEON rate instead of the AMX one."""
-    facts = candidate_atoms(register_sized_f32_gemm.body, register_sized_f32_gemm.target)
+    facts = candidate_atoms(register_sized_f32_gemm.entry_function().body, register_sized_f32_gemm.resolve_target())
     fact = facts[1]
 
     assert fact.atom.op is NEON_FMLA_4x4x1_F32
@@ -211,7 +211,7 @@ def test_operands_too_big_for_the_register_files_leave_only_the_neon_atom():
     divide the AMX shape, but a 64x128 f32 A operand is 32 KiB against 512 B of
     X, so only the cache-streaming NEON atom survives. That is why an untiled
     whole-tensor statement lands on SIMD."""
-    facts = candidate_atoms(f32_gemm.body, f32_gemm.target)
+    facts = candidate_atoms(f32_gemm.entry_function().body, f32_gemm.resolve_target())
     print("\n=== candidates (f32 gemm, M=64 N=64 K=128) ===", [f.atom.op.name for f in facts])
 
     assert [fact.atom.op.name for fact in facts] == ["NEON_FMLA_4x4x1_F32"]
@@ -224,14 +224,14 @@ def test_an_indivisible_extent_lists_no_candidate(fn):
     """AC-4-2: an extent of 18 is a whole multiple of neither atom's M or N
     (16 for AMX, 4 for NEON) -- hard-filtered out, an empty list rather than an
     error."""
-    assert candidate_atoms(fn.body, fn.target) == []
+    assert candidate_atoms(fn.entry_function().body, fn.resolve_target()) == []
 
 
 def test_an_extent_coarser_than_one_atom_only_lists_the_finer_one():
     """The shape filter is per atom, not per catalogue: M=8 fits the register
     files whole, so nothing about storage rules the AMX atom out -- its own 16
     row granularity does, while NEON's 4 divides 8."""
-    facts = candidate_atoms(coarse_m_f32_gemm.body, coarse_m_f32_gemm.target)
+    facts = candidate_atoms(coarse_m_f32_gemm.entry_function().body, coarse_m_f32_gemm.resolve_target())
 
     assert [fact.atom.op.name for fact in facts] == ["NEON_FMLA_4x4x1_F32"]
     assert AMX_REGISTERS.holds({"a_bytes": 8 * 8 * 4, "b_bytes": 8 * 16 * 4, "c_bytes": 8 * 16 * 4})
@@ -240,22 +240,22 @@ def test_an_extent_coarser_than_one_atom_only_lists_the_finer_one():
 def test_a_non_f32_gemm_lists_no_candidate():
     """Both modelled atoms are f32, so a bf16 gemm's operand dtypes do not match
     any registered atom."""
-    assert candidate_atoms(bf16_gemm.body, bf16_gemm.target) == []
+    assert candidate_atoms(bf16_gemm.entry_function().body, bf16_gemm.resolve_target()) == []
 
 
 def test_candidate_atoms_defaults_and_resolves_a_backend_name():
     """``target=None`` defaults to the AMX target and a ``target=`` string is
     resolved, matching ``@func(target="amx")``'s own surface."""
-    explicit = candidate_atoms(f32_gemm.body, AmxTarget())
-    assert candidate_atoms(f32_gemm.body) == explicit
-    assert candidate_atoms(f32_gemm.body, "amx") == explicit
+    explicit = candidate_atoms(f32_gemm.entry_function().body, AmxTarget())
+    assert candidate_atoms(f32_gemm.entry_function().body) == explicit
+    assert candidate_atoms(f32_gemm.entry_function().body, "amx") == explicit
 
 
 def test_a_non_amx_target_raises():
     """The per-atom device facts this bridge reads (per-unit AMX and NEON
     throughput, unified-memory bandwidth) exist on the AMX device only."""
     with pytest.raises(NotImplementedError, match="only AmxTarget is supported"):
-        candidate_atoms(f32_gemm.body, target="cuda")
+        candidate_atoms(f32_gemm.entry_function().body, target="cuda")
 
 
 # ---------------------------------------------------------------------------

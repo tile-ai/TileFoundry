@@ -169,9 +169,33 @@ class CpuTarget(Target):
   `resolve_target("amx")` MUST return a default `AmxTarget`,
   `resolve_target("cpu")` MUST return a `CpuTarget`, and a Target object MUST
   pass through unchanged.
-- Authored HIR `Function.target` MUST default to `None`. A normal compile
-  boundary MAY resolve that omission to the default CUDA target for lowering,
-  but scheduling lookup MUST NOT apply that fallback.
+- A `Target` MUST be declared by the `Module` that owns the functions running
+  on it, never by an authored HIR `Function`. Analyze, Schedule, and compile
+  MUST obtain it through `Module.resolve_target()`
+  ([core-ir §1](./core-ir.md#1-module)).
+- Only the outermost `Module` of a tree declares a `Target`; every Module
+  below it inherits that one declaration and MUST NOT declare its own. A
+  Module that is reused both as an owned child and as an independently
+  analysed root therefore declares its Target only in the second role.
+- `Module.resolve_target()` MUST fail when no Module in the owner chain
+  declares a Target.
+- Analyze and Schedule MUST obtain the Target from `Module.resolve_target()`
+  and from nowhere else. Neither accepts a bare `Function`, and neither
+  resolves an undeclared Target to a default: both report hardware-dependent
+  results, so measuring or scheduling against a device the author never
+  declared is a silent wrong answer. In particular neither reads a Target out
+  of `Module.metadata`; the `metadata["target"]` the compile pipeline carries
+  is the codegen boundary's own record
+  ([passes §6](./passes.md#6-top-level-api)), not a Target source
+  for Analyze or Schedule.
+- The compile boundary MAY resolve that omission to the default CUDA target
+  for lowering, because `jit(fn)` on a plain Function is a documented entry
+  point ([runtime §1.3](./runtime.md#13-jit-api)) and codegen selects
+  its emitter from the lowered `PrimFunction.target` rather than from the
+  Module.
+- A lowered TIR `PrimFunction` retains its own `target`: after lowering it
+  selects the emitter that lowers it, which is how one Module's host and
+  device functions reach different backends.
 - After target resolution, CUDA Functions in one compilation group MUST carry
      equal architecture and device facts. A mismatch MUST fail before codegen
      grouping.

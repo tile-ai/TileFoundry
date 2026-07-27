@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import io
 import runpy
 import sys
@@ -25,7 +26,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule.kernel_schedule import KernelScheduleError, build_schedule_tree
 from tilefoundry.schedule.render import EmitScaffoldError, HoleContract, emit_scaffold
 from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
-from tilefoundry.target import CudaTarget, default_target
+from tilefoundry.target import CudaTarget
 from tilefoundry.target.hardware import format_capabilities, load_hardware_spec
 
 _HELP_SPEC_TOPICS = {
@@ -97,30 +98,64 @@ def _unique_values(namespace: dict[str, object], kind: type) -> tuple[object, ..
     return tuple(values)
 
 
+def _detached_selection(module: Module, entry: str) -> Module:
+    """*module* re-entried at *entry*.
+
+    ``replace`` rebuilds the value without its owner backlink, so a child
+    selected out of a tree would lose the Target and hierarchy it inherits.
+    The copy therefore carries the context it resolved through.
+    """
+    try:
+        target = module.resolve_target()
+    except ValueError:
+        target = module.target
+    return dataclasses.replace(
+        module,
+        entry=entry,
+        target=target,
+        topologies=module.effective_topologies(),
+    )
+
+
 def _select_ir(namespace: dict[str, object], selector: str | None) -> Module | Function:
     if selector is not None:
-        module_name, dot, function_name = selector.partition(".")
-        selected = namespace.get(module_name)
+        root_name, *path = selector.split(".")
+        selected = namespace.get(root_name)
         if selected is None:
-            raise ValueError(f"selector {module_name!r} is not defined by the source")
-        if not dot:
+            raise ValueError(f"selector {root_name!r} is not defined by the source")
+        if not path:
             if isinstance(selected, (Module, Function)):
                 return selected
             raise TypeError(
-                f"selector {module_name!r} resolves to {type(selected).__name__}, "
+                f"selector {root_name!r} resolves to {type(selected).__name__}, "
                 "expected Module or Function"
             )
         if not isinstance(selected, Module):
             raise TypeError(
-                f"selector root {module_name!r} is {type(selected).__name__}, expected Module"
+                f"selector root {root_name!r} is {type(selected).__name__}, expected Module"
             )
-        function = selected.lookup(function_name)
-        if not isinstance(function, Function):
-            raise TypeError(
-                f"selector {selector!r} resolves to {type(function).__name__}, "
-                "expected HIR Function"
-            )
-        return function
+        # Walk the child Modules the path names, so a leaf deep in the tree is
+        # selected through the owners it inherits its context from.
+        for index, name in enumerate(path):
+            children = {child.name: child for child in selected.modules}
+            if name in children:
+                selected = children[name]
+                continue
+            if index != len(path) - 1:
+                raise ValueError(
+                    f"selector {selector!r}: Module {selected.name!r} has no "
+                    f"child module {name!r}"
+                )
+            function = selected.lookup(name)
+            if not isinstance(function, Function):
+                raise TypeError(
+                    f"selector {selector!r} resolves to {type(function).__name__}, "
+                    "expected HIR Function"
+                )
+            # Naming a function selects it without losing the Target and
+            # Topologies of the Module it runs against.
+            return _detached_selection(selected, name)
+        return selected
 
     modules = _unique_values(namespace, Module)
     if len(modules) == 1:
@@ -146,22 +181,27 @@ def load_authored_ir(source: str) -> Module | Function:
     return _select_ir(namespace, selector)
 
 
-def _selected_target(ir: Module | Function):
-    if isinstance(ir, Function):
-        return ir.target or default_target()
+def _selected_target(ir: Module):
+    """The Target the selection declares. Schedule and Analyze read hardware
+    facts off it, so an undeclared Target is an authoring error rather than a
+    cue to pick one: the selection must name the device it was written for."""
+    if not isinstance(ir, Module):
+        raise TypeError(
+            f"expected a Module selection, got {type(ir).__name__}. A Function "
+            "carries no Target; select the Module that declares it."
+        )
     entry = ir.entry_function()
     if not isinstance(entry, Function):
         raise TypeError("capabilities requires a HIR Function entry")
-    return entry.target or default_target()
+    return ir.resolve_target()
 
 
 def _grid_cta_count(ir: Module | Function) -> int | None:
-    function = ir.entry_function() if isinstance(ir, Module) else ir
-    if not isinstance(function, Function):
+    if not isinstance(ir, Module):
         return None
     counts = {
         topology.size
-        for topology in function.topologies
+        for topology in ir.effective_topologies()
         if topology.name == "cta" and isinstance(topology.size, int)
     }
     return next(iter(counts)) if len(counts) == 1 else None
@@ -232,8 +272,8 @@ def run_schedule(source: str, stage: str) -> int:
     """Model, schedule, select atoms for, and scaffold one authored HIR
     Function at one of its target's topology levels -- the schedule-path
     analogue of `run_authored_analysis`: same source loading, ``#``-headed
-    machine-parsable summary style. The target comes from the Function, not
-    from a flag: a kernel is authored against one."""
+    machine-parsable summary style. The target comes from the selected Module's
+    resolved Target, not from a flag: a kernel is authored against one."""
     ir = load_authored_ir(source)
     function = _entry_function(ir)
     resolved_target = _selected_target(ir)
@@ -271,7 +311,11 @@ def run_schedule(source: str, stage: str) -> int:
 
 
 def _add_source_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("source", metavar="SOURCE", help="model.py[:Module[.function]]")
+    parser.add_argument(
+        "source",
+        metavar="SOURCE",
+        help="model.py[:Module[.child_module...][.function]]",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -292,7 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage",
         required=True,
         metavar="LEVEL",
-        help="topology level to schedule at (a level the Function's target owns, e.g. core)",
+        help="topology level to schedule at (a level the Module's target owns, e.g. core)",
     )
 
     inspect = commands.add_parser("inspect", help="inspect installed target facts")

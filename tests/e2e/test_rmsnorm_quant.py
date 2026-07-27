@@ -15,7 +15,9 @@ from tilefoundry.dsl import *  # Tensor, tf, T, func, Mesh, Topology, ReduceKind
 
 @module(entry="rmsnorm")
 class RmsnormModule:
-    @func(topologies=(Topology("thread", 6 * 32),))
+    topologies = (Topology("thread", 6 * 32),)
+
+    @func
     def rmsnorm(a: Tensor[(1, 1536), 'bf16']):
         with Mesh(Topology("thread", 6 * 32), (6, 32), ('w', 't')) as m:
             a_reg = tf.reshard(a, (1, 1536 @ (m.w, m.t)), 'rmem')
@@ -32,7 +34,9 @@ class RmsnormModule:
 
 @module(entry="rmsnorm_seq_2")
 class RmsnormSeq2Module:
-    @func(topologies=(Topology("thread", 2 * 4 * 32),))
+    topologies = (Topology("thread", 2 * 4 * 32),)
+
+    @func
     def rmsnorm_seq_2(a: Tensor[(2, 1536), 'bf16']):
         with Mesh(Topology("thread", 2 * 4 * 32), (2, 4, 32), ('x', 'y', 't')) as m:
             a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'rmem')
@@ -47,7 +51,9 @@ class RmsnormSeq2Module:
 
 @module(entry="rmsnorm_quant_seq_2")
 class RmsnormQuantSeq2Module:
-    @func(topologies=(Topology("thread", 2 * 4 * 32),))
+    topologies = (Topology("thread", 2 * 4 * 32),)
+
+    @func
     def rmsnorm_quant_seq_2(a: Tensor[(2, 1536), 'bf16']):
         with Mesh(Topology("thread", 2 * 4 * 32), (2, 4, 32), ('x', 'y', 't')) as m:
             a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'rmem')

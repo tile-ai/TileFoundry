@@ -8,27 +8,27 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, Type, callable_type_for
-from tilefoundry.ir.types.shard.mesh import Topology
-from tilefoundry.target import Target
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 
 @dataclass(frozen=True)
 class Function(Expr):
-    """HIR function container: a pure-SSA ``Expr`` whose value type is its callable signature."""
+    """HIR function container: a pure-SSA ``Expr`` whose value type is its callable signature.
+
+    A Function carries no execution context. The Module that owns it declares
+    the Target and the ordered Topology hierarchy its body maps onto.
+    """
     name: str
     params: tuple[Var, ...]
     body: Expr | None                       # None for a dispatch prototype (DSL ``pass``)
     return_type: Type
-    topologies: tuple[Topology, ...] = field(default_factory=tuple)
     specializations: tuple[Pattern, ...] = field(default_factory=tuple)
     variants: tuple["Function", ...] = field(default_factory=tuple)
     # (weight_name, converter) pairs — a tuple-of-pairs (not a dict) for the
     # same reason as ``variants``: it must stay hashable/comparable so
     # ``Function``'s dataclass eq/hash keep working.
     converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple)
-    target: Target | None = None
 
     @classmethod
     def build(
@@ -38,11 +38,9 @@ class Function(Expr):
         params: tuple[Var, ...],
         body: Expr | None,
         return_type: Type,
-        topologies: tuple[Topology, ...] = (),
         specializations: tuple[Pattern, ...] = (),
         variants: tuple["Function", ...] = (),
         converters: tuple[tuple[str, "Function"], ...] = (),
-        target: Target | None = None,
     ) -> "Function":
         """Construct a Function with the canonical CallableType."""
         return cls(
@@ -50,11 +48,9 @@ class Function(Expr):
             params=params,
             body=body,
             return_type=return_type,
-            topologies=tuple(topologies),
             specializations=tuple(specializations),
             variants=tuple(variants),
             converters=tuple(converters),
-            target=target,
             type=callable_type_for(params, return_type),
         )
 
@@ -300,9 +296,7 @@ def elaborate(
         params=new_params,
         body=new_body,
         return_type=new_body.type,
-        topologies=callee.topologies,
         specializations=callee.specializations,
-        target=callee.target,
     )
     ctx.elaboration_cache[cache_key] = instance
     return instance

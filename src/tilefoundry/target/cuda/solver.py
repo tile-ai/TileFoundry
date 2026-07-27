@@ -528,7 +528,7 @@ def _build_model(problem: PlanningProblem) -> _CpModelState:
 
     bandwidth_intervals: list[cp_model.IntervalVar] = []
     bandwidth_demands: list[int] = []
-    device = problem.root.target.device
+    device = problem.module.resolve_target().device
 
     def add_bandwidth_group(candidate_ids: list[int], demand: int, label: str) -> None:
         literals = [pick_candidates[candidate_id] for candidate_id in candidate_ids]
@@ -662,7 +662,7 @@ def _add_capacity_resource(
         byte_counts = [tensor_bytes(type) for type in type_values if isinstance(type, TensorType)]
         demands.append(max(byte_counts, default=0))
     if intervals:
-        model.AddCumulative(intervals, demands, problem.root.target.device.hbm_capacity_bytes)
+        model.AddCumulative(intervals, demands, problem.module.resolve_target().device.hbm_capacity_bytes)
 
 
 def _constant_or_selected(
@@ -722,7 +722,7 @@ def _write_failure(options: ScheduleOptions, problem: PlanningProblem, error: Ex
         "error": str(error),
         "root": problem.root.name,
         "status": type(error).__name__,
-        "target": problem.root.target.name,
+        "target": problem.module.resolve_target().name,
     }
     (options.debug_dump_dir / "solve_failure.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -743,7 +743,7 @@ def solve_planning_problem(problem: PlanningProblem, options: ScheduleOptions) -
         if status == cp_model.INFEASIBLE:
             raise ValueError(
                 f"P3: infeasible CTA blueprint for root {problem.root.name!r} "
-                f"on target {problem.root.target.name!r}"
+                f"on target {problem.module.resolve_target().name!r}"
             )
         if status == cp_model.MODEL_INVALID:
             raise RuntimeError("P3: OR-Tools reported an invalid planning model")

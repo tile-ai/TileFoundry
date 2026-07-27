@@ -19,11 +19,11 @@ def _type_label(type_value: object) -> str:
 
 
 def _problem_payload(problem: PlanningProblem) -> dict:
-    device = problem.root.target.device
+    device = problem.module.resolve_target().device
     return {
         "root": problem.root.name,
         "module": problem.module.name,
-        "target": problem.root.target.name,
+        "target": problem.module.resolve_target().name,
         "topology": {"name": problem.topology.name, "size": problem.topology.size},
         "values": [
             {

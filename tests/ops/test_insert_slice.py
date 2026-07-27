@@ -343,7 +343,6 @@ from tilefoundry import func, module  # noqa: E402
 from tilefoundry.dsl import Mesh, Tensor, Topology  # noqa: E402
 from tilefoundry.dsl.storage import gmem  # noqa: E402
 from tilefoundry.dsl.tf import *  # noqa: E402,F401,F403
-from tilefoundry.ir.core.module import Module  # noqa: E402
 from tilefoundry.ir.tir.stmts import (  # noqa: E402
     Evaluate,
     For,
@@ -367,8 +366,10 @@ class _DecodeStep:
     two-carry grid region (output accumulator + running total → a tuple, so
     ``tuple_get_item``), ``full_like`` inits, an in-place ``insert_slice`` write
     at a dynamic scalar offset, and a rank-4 ``cache_update`` KV write."""
+    topologies = (Topology("thread", 1),)
 
-    @func(topologies=(Topology("thread", 1),))
+
+    @func
     def decode_step(
         x: Tensor[(_DEC_D,), "f32"],
         v: Tensor[(1,), "f32"],
@@ -441,17 +442,14 @@ def _op_of(value):
     return getattr(value, "target", None) or getattr(value, "callable", None)
 
 
-@module(entry="xreshard")
-class _CrossCtaReshardOutput:
-    """A cross-CTA ownership-change reshard (split axis 0 → split axis 1) at the
-    output position (the returned value). The reshard-owned grid fence must not
-    be bypassed by the output-sink lowering."""
-
-    @func(topologies=(Topology("cta", 2),))
-    def xreshard(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_D), "f32"]:
-        with Mesh(topology="cta", layout=ShardMeshLayout(shape=(2,), strides=(1,))) as cta:
-            g1 = reshard(a, layout=(2 @ cta, _DEC_D), storage=gmem)
-            return reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
+# A cross-CTA ownership-change reshard (split axis 0 to split axis 1) at the
+# output position (the returned value). The reshard-owned grid fence must not
+# be bypassed by the output-sink lowering.
+@func(topologies=(Topology("cta", 2),))
+def _cross_cta_reshard_output(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_D), "f32"]:
+    with Mesh(topology="cta", layout=ShardMeshLayout(shape=(2,), strides=(1,))) as cta:
+        g1 = reshard(a, layout=(2 @ cta, _DEC_D), storage=gmem)
+        return reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
 
 
 def test_cross_cta_reshard_owned_sync() -> None:
@@ -459,9 +457,7 @@ def test_cross_cta_reshard_owned_sync() -> None:
     sync-then-reshard: the grid sync is emitted before the output copy, proving
     the output-sink path routes through the same reshard-owned fence as an
     intermediate reshard."""
-    pf = _lower(
-        Module(name="m", functions=(_CrossCtaReshardOutput.functions[0],), entry="xreshard")
-    )
+    pf = _lower(_cross_cta_reshard_output)
     nodes = []
     _walk(pf.body, False, nodes)
 
@@ -484,8 +480,10 @@ class _DynOffset:
     """A loop-carried in-place ``insert_slice`` whose offset is the loop
     induction variable (a rank-0 scalar), writing a length-1 update to a
     different position each iteration."""
+    topologies = (Topology("thread", 1),)
 
-    @func(topologies=(Topology("thread", 1),))
+
+    @func
     def dyn(base: Tensor[(_DYN_D,), "f32"], v: Tensor[(1,), "f32"]):
         with Mesh(Topology("thread", 1), (1,), ("t",)) as m:
             br = reshard(base, (_DYN_D @ m.t,), "rmem")
@@ -533,8 +531,10 @@ class _NdWindow:
     """A loop-carried rank-3 in-place ``insert_slice`` writing a non-trivial,
     non-contiguous window (full axis 0, window 2 on axis 1, partial 3-of-6 on
     axis 2) at the induction variable as the middle-axis tile coordinate."""
+    topologies = (Topology("thread", 1),)
 
-    @func(topologies=(Topology("thread", 1),))
+
+    @func
     def nd_window(
         base: Tensor[(_NW_A, _NW_B, _NW_C), "f32"],
         v: Tensor[(_NW_A, _NW_UB, _NW_UC), "f32"],

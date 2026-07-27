@@ -38,11 +38,19 @@ references (a callee declared below the caller) are unresolved (see
 evaluate to the parsed IR directly: `@func` to a `hir.Function`
 ([hir.md §1.1](./hir.md#11-function)), `@prim_func` to a
 `tir.PrimFunction`. The decorated name binds to that IR node, not to
-the original Python function. Used standalone (outside a `@module`
-class), passing the resulting function to `compile` / `jit` lifts it
-into an implicit single-function `Module` whose `entry` is that
-function. `@func` parses with dispatch token `"hir"`, `@prim_func`
+the original Python function. Passing a standalone function to `compile` /
+`jit` lifts it into an implicit single-function `Module` whose `entry` is
+that function. `@func` parses with dispatch token `"hir"`, `@prim_func`
 with `"tir"`.
+
+A standalone `@func` MAY declare its own execution context —
+`@func(target=..., topologies=(...))`. Declaring either makes that function
+its own execution domain, so the decorated name binds to the implicit
+single-function `Module` carrying the declaration rather than to the
+`hir.Function`. A plain `@func` inside a `@module` class body never does
+this: the class declares the domain, and the member stays a `hir.Function`
+so it remains callable by its siblings and specializable through
+`.specialize`.
 
 ```python
 # example
@@ -550,11 +558,14 @@ surface so editors complete `T.cuda.mma.<NAME>` and `.atom(...)`.
 
 ### 2.7 `@module` authoring surface
 
-`@module(entry="<name>")` collects a class body into a `Module`
+`@module(entry="<name>", target=...)` collects a class body into a `Module`
 ([core-ir §1](./core-ir.md#1-module)). The decorated name binds to the
-resulting `Module`.
+resulting `Module`. `target` declares the hardware the domain runs on; the
+ordered `Topology` hierarchy is declared by a `topologies` assignment in the
+class body instead (see below).
 
-- Every non-dunder class member MUST be one of three kinds: an `@func` /
+- Every non-dunder class member MUST be one of four kinds: the `topologies`
+  declaration; an `@func` /
   `@prim_func` result (an `hir.Function` / `tir.PrimFunction`); a child
   `Module` — or a tuple/list of them, how a factory attaches N identical
   instances under one attribute (each already named by the factory, e.g.
@@ -587,14 +598,34 @@ resulting `Module`.
 - A member MAY call a sibling **defined above it** (the call resolves to the
   sibling function / launches a sibling device kernel); a forward reference to a
   sibling defined below stays unresolved and MUST fail.
+- A `topologies = (Topology(...), ...)` assignment declares the domain's
+  complete ordered hierarchy and MUST precede the functions that name one of
+  its levels. Omitting it inherits the owning class's hierarchy; `()` declares
+  an explicitly topology-free domain. The value MUST be a tuple of `Topology`;
+  a value that is not, or an entry the parser cannot resolve statically, MUST be
+  rejected rather than read as an empty hierarchy. A deferred extent
+  (`Topology("cta", None)`, [target §4](./target.md#4-cudatarget)) is a
+  declaration in its own right and MUST survive parsing, not be dropped as
+  unresolvable.
 - The printer emits this surface: shared meshes at module level (before the
-  class) so the class body stays function-only, then `@module(entry="<entry>")`.
+  class) so the class body stays declaration-and-function-only, then
+  `@module(entry="<entry>")`, then the `topologies` declaration when the
+  Module makes one, then the functions and nested Modules.
 
 #### Design rationale
 
 `entry` is a function-name forward reference rather than a function object
 because a class decorator's arguments are evaluated before the class body runs,
 so the entry function does not yet exist when `@module(entry=...)` is called.
+
+`topologies` is a class-body assignment rather than a decorator argument for
+the mirror-image reason. A function body MAY name a level of its domain
+(`with Mesh(topology="cta", ...)`), and that name has to resolve while the
+body is parsed — which happens as the class body runs, before the decorator is
+applied. A class-body assignment is already bound at that point, so the
+declaration is readable exactly when it is needed; a decorator argument is
+not. `target` stays a decorator argument because nothing consumes it until
+after the `Module` exists.
 
 ## 3. Parser architecture
 
@@ -607,9 +638,9 @@ function-level entry points are independent calls; there is no
 ```python
 # tilefoundry/parser/hir_parser.py
 def parse_func        (fn, *, topologies=()) -> hir.Function: ...
-def parse_func_source (src: str) -> hir.Function: ...
-def parse_module_source(src: str) -> hir.Function: ...
-def parse_script      (src: str) -> hir.Function: ...
+def parse_func_source (src: str) -> core_ir.Module | hir.Function: ...
+def parse_module_source(src: str) -> core_ir.Module: ...
+def parse_script      (src: str) -> core_ir.Module | hir.Function: ...
 class _HirBodyVisitor(BaseExprVisitor): ...
 
 # tilefoundry/parser/tir_parser.py
@@ -654,8 +685,7 @@ classDiagram
     class dispatch          { resolve_op; resolve_stmt; resolve_schema; resolve_callable }
 
     parse_func ..> _HirBodyVisitor : drives
-    parse_module_source ..> parse_func : per @func
-    parse_module_source ..> parse_prim_func : per @prim_func
+    parse_module_source ..> parse_func : per @func (HIR only)
     parse_prim_func ..> _TirBodyVisitor : drives
     BaseExprVisitor <|-- _HirBodyVisitor
     BaseExprVisitor <|-- _TirBodyVisitor
@@ -668,14 +698,23 @@ classDiagram
 ### 3.3 Description
 
 `parse_func` / `parse_prim_func` consume a live Python function
-(`fn`) plus optional topology declarations. `parse_func_source` /
+(`fn`); `topologies` supplies the parse-time namespace a body may name,
+and is not retained on the resulting `Function`. `parse_func_source` /
 `parse_module_source` / `parse_script` accept Python source text.
-The two paths differ for the module-level form: the runtime
-`@tilefoundry.module` decorator builds the `core_ir.Module` from the
-class's already-parsed `@func` / `@prim_func` methods, whereas the
-source-text `parse_module_source` reads one `@func` and produces a
-single `hir.Function` (its surrounding `core_ir.Module` is built by
-the caller); there is no `parse_module(src) -> core_ir.Module`.
+Both paths return a `core_ir.Module` for module-level input, but they do not
+cover the same member kinds. The runtime `@tilefoundry.module` decorator builds
+the `core_ir.Module` from the class's already-parsed `@func` / `@prim_func`
+methods. The source-text `parse_module_source` / `parse_script` build it from
+the class body, including every `@func` it owns and each nested `@module`
+class. The source path is **HIR-only**: it MUST reject a `@prim_func`, whether
+as a class member or as the bare top-level function, and the error MUST name
+that boundary rather than report only the absence of an `@func`. Reading TIR
+back from source text is not part of the round trip, because the Python printer
+emits no mixed HIR/TIR module
+([inspection §2.2](./inspection.md#22-module-printer)). A source that declares
+only a bare `@func` returns that `hir.Function`, or the implicit
+single-function `core_ir.Module` when the decorator declares execution
+context — mirroring what executing the same source would bind.
 
 The closure dict supplies same-module callee lookup. Names defined
 in the user's Python module (other `@func` / `@prim_func`
