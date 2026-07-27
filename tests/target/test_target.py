@@ -45,7 +45,7 @@ def test_a_scheduler_is_reached_by_target_type_not_by_target_value() -> None:
     resolves none. Nothing about scheduling is stored on the target value, which
     is why two equal targets stay equal and interchangeable.
     """
-    assert SCHEDULES.selectors_for(CudaTarget) == ("cta",)
+    assert SCHEDULES.selectors_for(CudaTarget) == ("cta", "thread")
     assert SCHEDULES.selectors_for(CpuTarget) == ()
 
     custom = CudaTarget(architecture=replace(_installed_sm90(), name="sm_90_custom"))

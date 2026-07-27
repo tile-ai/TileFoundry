@@ -172,11 +172,15 @@ def atom_candidates(
 
 
 def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFacts:
-    """Project the finite AMX instruction catalogue before solving."""
+    """Project the finite AMX instruction catalogue before solving.
+
+    An AMX core both runs the work and owns the L1d the tile lives in, so here
+    the level asked about and the level the capacity belongs to are the same one.
+    """
     if not isinstance(query, PipelineFactsQuery):
         raise TypeError("AMX pipeline facts need a PipelineFactsQuery")
-    if query.stage != _SCHEDULED_STAGE:
-        raise ValueError(f"AMX states no pipeline facts for {query.stage!r}")
+    if query.topology != _SCHEDULED_STAGE:
+        raise ValueError(f"AMX states no pipeline facts for {query.topology!r}")
     instructions: list[PipelineInstructionFacts] = []
     for statement_id, op in query.statements:
         try:
@@ -198,7 +202,8 @@ def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFact
             )
         instructions.append(PipelineInstructionFacts(statement_id, candidates))
     return PipelineFacts(
-        stage=query.stage,
+        topology=query.topology,
+        tile_capacity_scope=_SCHEDULED_STAGE,
         tile_capacity_bytes=target.device.l1d_bytes_per_performance_core,
         max_threads_per_warp=1,
         instructions=tuple(instructions),

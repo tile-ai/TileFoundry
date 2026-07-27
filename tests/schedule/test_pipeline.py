@@ -30,21 +30,21 @@ def bf16_gemm_rmsnorm(
 
 
 def _module():
-    return replace(bf16_gemm_rmsnorm, topologies=(Topology("cta", 1),))
+    return replace(bf16_gemm_rmsnorm, topologies=(Topology("cta", 1), Topology("thread", 128)))
 
 
 def test_pipeline_closes_target_facts_before_solving_and_exports_stable_values() -> None:
     module = _module()
     function = module.entry_function()
     program = build_pipeline_program(module, function)
-    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("cta"))
-    problem = build_pipeline_problem(program, facts, Topology("cta", 1))
+    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("thread"))
+    problem = build_pipeline_problem(program, facts, Topology("thread", 128))
 
     assert tuple(item.id for item in problem.statements) == ("MM", "RN")
     assert all(item.candidates for item in problem.statements)
     assert not hasattr(problem, "target")
 
-    result = schedule(module, function, topology="cta")
+    result = schedule(module, function, topology="thread")
     plan = result.plan
     assert tuple(item.id for item in plan.statements) == ("MM", "RN")
     assert all(item.end > item.start >= 0 for item in plan.statements)
@@ -56,8 +56,8 @@ def test_pipeline_closes_target_facts_before_solving_and_exports_stable_values()
 def test_pipeline_rejects_missing_statement_facts_before_solving() -> None:
     module = _module()
     program = build_pipeline_program(module, module.entry_function())
-    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("cta"))
+    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("thread"))
     incomplete = replace(facts, instructions=facts.instructions[:-1])
 
     with pytest.raises(PipelineProblemError, match="do not match"):
-        build_pipeline_problem(program, incomplete, Topology("cta", 1))
+        build_pipeline_problem(program, incomplete, Topology("thread", 128))

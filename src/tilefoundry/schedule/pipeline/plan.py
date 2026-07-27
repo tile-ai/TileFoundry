@@ -6,20 +6,14 @@ import dataclasses
 import json
 from dataclasses import dataclass
 
-from tilefoundry.schedule.plan import PlanVerificationError, SchedulePlan
+from tilefoundry.schedule.plan import (
+    PlanVerificationError,
+    SchedulePlan,
+    TargetSpecRef,
+)
 
 from .program import PipelineProgram
 from .solve import PipelineSolution
-
-
-@dataclass(frozen=True)
-class TargetSpecRef:
-    """Stable identity of the installed target facts a plan relies on."""
-
-    architecture_id: str
-    architecture_digest: str
-    device_id: str
-    device_digest: str
 
 
 @dataclass(frozen=True)
@@ -147,13 +141,7 @@ def export_pipeline_plan(
         for contract in contracts
     )
     return PipelineSchedulePlan(
-        target=TargetSpecRef(
-            architecture_id=getattr(target, "architecture_id", None)
-            or target.architecture.name,
-            architecture_digest=getattr(target, "architecture_digest", None) or "",
-            device_id=getattr(target, "device_id", None) or target.device.name,
-            device_digest=getattr(target, "device_digest", None) or "",
-        ),
+        target=TargetSpecRef.of(target),
         scaffold=skeleton.text,
         statements=statements,
         buffers=buffers,

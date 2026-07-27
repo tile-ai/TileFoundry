@@ -1,4 +1,11 @@
-"""Private CUDA planning cost evaluators."""
+"""How much work each operation asks for, per instance.
+
+Flops and bytes follow from an operation's own semantics and its operand types,
+not from the machine that will run it: the same MatMul asks for the same
+multiply-accumulates on every backend. These evaluators are therefore owned here
+rather than by any target package, and both the analysis layer and the scheduling
+algorithms read the one registry they fill.
+"""
 
 from __future__ import annotations
 
@@ -30,8 +37,9 @@ from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, Type, numel, tensor_bytes
-from tilefoundry.visitor_registry import register_cost_evaluator
-from tilefoundry.visitor_registry.contexts import Cost, CostContext
+
+from .contexts import Cost, CostContext
+from .registries import register_cost_evaluator
 
 
 def _input_types(call: Call, ctx: CostContext) -> tuple[Type, ...]:

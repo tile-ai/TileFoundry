@@ -22,10 +22,10 @@ class PipelineProgram:
     tree: "isl.schedule"
     units: tuple[TileUnit, ...]
 
-    def facts_query(self, stage: str) -> PipelineFactsQuery:
+    def facts_query(self, topology: str) -> PipelineFactsQuery:
         """Return the explicit query used to project target facts once."""
         return PipelineFactsQuery(
-            stage=stage,
+            topology=topology,
             statements=tuple((unit.name, unit.op) for unit in self.units),
         )
 

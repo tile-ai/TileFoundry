@@ -63,96 +63,54 @@ no ordinary `--target` option.
 
 ## Schedule
 
-`schedule` models one authored HIR Function at one level of its target's
-topology and prints the scaffold an authoring agent fills. It runs the pipeline
-[schedule §4](./schedule.md#4-kernel-schedule-construction) defines: extract the
-polyhedral model, construct the schedule tree, select each statement's atom,
-emit the scaffold. It selects nothing else — no tile search, no layout
-enumeration, no resharding.
+`schedule` makes one public Schedule call
+([schedule §1](./schedule.md#1-the-public-schedule-operation)) and prints the
+Plan that call produced. It composes nothing itself: which algorithm runs, what
+it decides, and how the decision reads are owned by the algorithm registered for
+the selected Module's target at the requested level.
 
 The target is not a flag. It comes from the selected Module's resolved Target
 ([core-ir §1](./core-ir.md#1-module)): a kernel is authored against one target.
 A selection that is a bare Function, or a Module whose owner chain declares no
-Target, MUST be rejected — `schedule` does not resolve an omission to a default
+Target, MUST be rejected -- `schedule` does not resolve an omission to a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
-`--topology` is required and names one topology level declared by the selected Module.
-([target](./target.md)). A level the target does not own is rejected naming the
-levels it does own. A target that enumerates no levels leaves the mismatch to
-the scheduling-facts projection, which reports the same failure.
+- constraints:
+  - `--topology` MUST be required and MUST name one level the selected Module
+    declares. A level the Module does not declare, or one the target has no
+    algorithm for, MUST be reported as that.
+  - The command MUST call the public operation once and MUST NOT compose the
+    algorithm's stages itself, so what it prints cannot drift from what the
+    operation decided.
+  - Output MUST be the Plan's own rendering: its `render()` by default, its
+    `to_json()` under `--json`. The command MUST NOT impose a shape across
+    algorithms, because two algorithms deciding different things have nothing to
+    share a format for.
+  - On any failure stdout MUST be empty and stderr MUST carry one
+    `tilefoundry: error:` line naming the cause.
 
-On success stdout carries a `#`-headed machine-parsable summary followed by
-three labelled sections:
-
-| Section | Lines |
-|---|---|
-| summary | `# schedule` — target, stage, function, statement names; `# decisions` — status and makespan; one `# decisions statement=` per statement — its atom, derived placement, start and end; `# ring` — every buffer whose ring depth was decided, present only when one was |
-| `# skeleton` | the holed, C-like loop nest |
-| `# swimlane` | the Mermaid gantt rendering |
-| `# holes` | one `# hole=` line per hole contract: its op, schedule coordinates, input buffers, and output buffer |
-
-`makespan`, `start` and `end` are in the atom selector's own integer duration
-units, not nanoseconds
-([schedule §4.2](./schedule.md#42-atom-selection)); the `ns` figure is what a
-scheduling algorithm's own objective report carries
-([schedule §2.4](./schedule.md#24-schedulereport)).
-
-On any failure stdout is empty and stderr carries one `tilefoundry: error:` line
-naming the cause.
-
-Scheduling this AMX kernel, whose 32x32 f32 accumulator is exactly the width of
-the AMX accumulator register file:
+Scheduling this CUDA kernel at the level its Module divides over:
 
 ```python
 # example
-@func(target="amx")
+@func(target="cuda", topologies=(Topology("cta", 4),))
 def blocked_matmul(
-    x: Tensor[(32, 64), "f32"],
-    w: Tensor[(64, 32), "f32"],
-) -> Tensor[(32, 32), "f32"]:
+    x: Tensor[(64, 128), "bf16"],
+    w: Tensor[(128, 64), "bf16"],
+) -> Tensor[(64, 64), "bf16"]:
     return matmul(x, w)
 ```
 
-````text
+```text
 # example
-$ tilefoundry schedule model.py:blocked_matmul --stage core
-# schedule target=amx stage=core function=blocked_matmul statements=MM
-# decisions status=OPTIMAL makespan=1474560
-# decisions statement=MM atom=AMX_FMA32_16x16x1_F32 place=coincident[0,1] start=0 end=1474560
-# ring t0=2 w=1 x=1
-
-# skeleton
-for (int c3 = 0; c3 <= 31; c3 += 1)
-  for (int c4 = 0; c4 <= 31; c4 += 1)
-    for (int c5 = 0; c5 <= 63; c5 += 1)
-      {
-        HOLE_MM(/*in*/ x, w, t0[(c5) % 2], /*out*/ t0[(c5) % 2], /*coords*/ c3, c4, c5);
-        // barrier
-      }
-
-# swimlane
-```mermaid
-gantt
-    title tilefoundry scaffold -- statement swimlanes
-    dateFormat  X
-    axisFormat  %s
-    section MM
-    MM(0, 0, 0) (prologue) :0, 1d
-    MM(0, 0, 1) (steady) :1, 1d
-    MM(0, 0, 2) (steady) :2, 1d
-    MM(0, 0, 3) (steady) :3, 1d
-    MM(0, 0, 4) (steady) :4, 1d
-    ... x65530 elided :5, 1d
-    MM(31, 31, 63) (epilogue) :6, 1d
+$ tilefoundry schedule model.py:blocked_matmul --topology cta
+partition cta on nvidia.h200_sxm (OPTIMAL, makespan 35ns)
+  MatMul x4 [0, 35)
 ```
 
-# holes
-# hole=HOLE_MM op=MatMul coords=c3,c4,c5 inputs=x,w,t0 output=t0
-````
-
-The buffer named `t0` is the unbound `matmul` result: a value with no authored
-binding is numbered in visit order, so the skeleton never carries a memory
-address.
+The same Module scheduled at a level it also declares answers with that level's
+own algorithm and that algorithm's own Plan, which reads differently because it
+decided different things.
 
 ## Inspect Capabilities
 

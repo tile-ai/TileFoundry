@@ -62,6 +62,11 @@ from tilefoundry.ir.types import _register_dim_typeinfer
 from tilefoundry.ir import hir as _hir  # noqa: F401
 from tilefoundry.ir import tir as _tir  # noqa: F401
 
+# Every operation's per-instance work, registered once for whoever asks: the
+# analysis layer costs a program with it and the scheduling algorithms price
+# their candidates with it. Imported after the ops themselves exist.
+from tilefoundry.visitor_registry import op_cost as _op_cost  # noqa: F401
+
 # TupleGetItem moved from core.expr to hir.tensor as a proper Op.
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 

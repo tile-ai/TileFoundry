@@ -512,6 +512,11 @@ class CostEvaluator(ExprVisitor[Cost]): ...
 - constraints:
   - every required primitive Op MUST have one registered evaluator; a missing
     evaluator MUST fail with the Op name and source location.
+  - the evaluators MUST be owned by this layer and MUST be installed when the
+    package is imported. The work an Op asks for follows from its own semantics
+    and its operand types, so it is the same on every backend; registering them
+    from a target package would make one backend's presence decide whether any
+    consumer can cost a program at all.
   - `flops` MUST group leaf-local logical work by compute `DType`, and `bytes`
     MUST be one scalar logical byte count.
   - `CostContext.local_type_of` MUST apply every resolved nested `ShardLayout`

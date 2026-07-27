@@ -53,10 +53,6 @@ from tilefoundry.target.cuda.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
 
-# Importing the module installs the private evaluator registrations. It is
-# deliberately not re-exported from either the public schedule or target API.
-from . import cost as _cost  # noqa: F401
-
 PlacementRelation = Literal["SAME_INTERVAL", "CONTAINED"]
 ValueRole = Literal["normal", "carry", "yield", "result"]
 

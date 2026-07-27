@@ -51,9 +51,10 @@ def build_pipeline_problem(
     program: PipelineProgram, facts: PipelineFacts, topology: Topology
 ) -> PipelineProblem:
     """Close the problem from immutable analysis and already-projected facts."""
-    if facts.stage != topology.name:
+    if facts.topology != topology.name:
         raise PipelineProblemError(
-            f"pipeline facts describe {facts.stage!r}, not topology {topology.name!r}"
+            f"pipeline facts describe {facts.topology!r}, not topology "
+            f"{topology.name!r}"
         )
     if facts.tile_capacity_bytes <= 0:
         raise PipelineProblemError("pipeline facts require a positive tile capacity")

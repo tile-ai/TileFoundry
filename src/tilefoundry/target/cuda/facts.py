@@ -26,18 +26,28 @@ from tilefoundry.schedule.facts import (
     AtomFact,
     TileStoreFacts,
 )
+from tilefoundry.schedule.partition.facts import PartitionFacts, PartitionFactsQuery
 from tilefoundry.schedule.pipeline.facts import (
     PipelineFacts,
     PipelineFactsQuery,
     PipelineInstructionFacts,
 )
+from tilefoundry.schedule.plan import TargetSpecRef
 from tilefoundry.target.facts import register_target_facts
 
 from .atoms import candidate_atoms
 from .target import CudaTarget
 
-# The one topology level CUDA scheduling decides at.
-_SCHEDULED_STAGE = "cta"
+# The level a CUDA pipeline is asked about: how the threads of one CTA overlap
+# their work.
+_PIPELINE_TOPOLOGY = "thread"
+
+# The level whose store those threads cooperate in. Shared memory is a CTA-scoped
+# resource, so the capacity bounding a pipeline is not a per-thread number.
+_TILE_CAPACITY_SCOPE = "cta"
+
+# The level a CUDA partition decides about: work spread across the device.
+_PARTITION_TOPOLOGY = "cta"
 
 
 def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarchyFacts:
@@ -125,17 +135,17 @@ def parallel_capacity(
 def tile_store(target: CudaTarget, query: object = None) -> TileStoreFacts:
     """Where a tile of the queried level lives, and how much of it there is.
 
-    A CTA-level tile's resident working set lives in shared memory, whose
+    The resident working set of a cooperating tile lives in shared memory, whose
     per-CTA capacity is a limit of the architecture rather than of the device.
     """
     if not isinstance(query, str) or not query:
         raise TypeError(
             f"a tile store must be queried by stage name, got {query!r}"
         )
-    if query != _SCHEDULED_STAGE:
+    if query != _PIPELINE_TOPOLOGY:
         raise ValueError(
             f"CudaTarget states no tile store for stage {query!r}; it schedules "
-            f"{_SCHEDULED_STAGE!r}"
+            f"{_PIPELINE_TOPOLOGY!r}"
         )
     return TileStoreFacts(
         stage=query,
@@ -152,25 +162,29 @@ def atom_candidates(
             "CudaTarget atom candidates need an AtomCandidateQuery, got "
             f"{type(query).__name__}"
         )
-    if query.stage != _SCHEDULED_STAGE:
+    if query.stage != _PIPELINE_TOPOLOGY:
         raise ValueError(
             f"CudaTarget enumerates no atoms for stage {query.stage!r}; it "
-            f"schedules {_SCHEDULED_STAGE!r}"
+            f"schedules {_PIPELINE_TOPOLOGY!r}"
         )
     return AtomCandidateFacts(tuple(candidate_atoms(query.op, target)))
 
 
 def pipeline_facts(target: CudaTarget, query: PipelineFactsQuery) -> PipelineFacts:
-    """Project every instruction and capacity fact before pipeline solving."""
+    """Project every instruction and capacity fact before pipeline solving.
+
+    The capacity is per-CTA shared memory and is reported as CTA-scoped, because
+    that is whose store it is; the level being decided about is finer.
+    """
     if not isinstance(query, PipelineFactsQuery):
         raise TypeError(
             "CudaTarget pipeline facts need a PipelineFactsQuery, got "
             f"{type(query).__name__}"
         )
-    if query.stage != _SCHEDULED_STAGE:
+    if query.topology != _PIPELINE_TOPOLOGY:
         raise ValueError(
-            f"CudaTarget states no pipeline facts for {query.stage!r}; it schedules "
-            f"{_SCHEDULED_STAGE!r}"
+            f"CudaTarget states no pipeline facts for {query.topology!r}; it "
+            f"pipelines {_PIPELINE_TOPOLOGY!r}"
         )
     instructions: list[PipelineInstructionFacts] = []
     for statement_id, op in query.statements:
@@ -195,10 +209,41 @@ def pipeline_facts(target: CudaTarget, query: PipelineFactsQuery) -> PipelineFac
             )
         instructions.append(PipelineInstructionFacts(statement_id, candidates))
     return PipelineFacts(
-        stage=query.stage,
+        topology=query.topology,
+        tile_capacity_scope=_TILE_CAPACITY_SCOPE,
         tile_capacity_bytes=target.architecture.shared_memory_per_cta_bytes,
         max_threads_per_warp=target.architecture.max_threads_per_warp,
         instructions=tuple(instructions),
+    )
+
+
+def partition_facts(target: CudaTarget, query: PartitionFactsQuery) -> PartitionFacts:
+    """Project every rate, capacity, and position count before partitioning.
+
+    The parallel unit count is one active CTA per SM, the same compiler policy
+    the analysis layer is told; the rates and the capacity are the device's own.
+    After this call the partition holds numbers, not a target.
+    """
+    if not isinstance(query, PartitionFactsQuery):
+        raise TypeError(
+            "CudaTarget partition facts need a PartitionFactsQuery, got "
+            f"{type(query).__name__}"
+        )
+    if query.topology != _PARTITION_TOPOLOGY:
+        raise ValueError(
+            f"CudaTarget states no partition facts for {query.topology!r}; it "
+            f"partitions {_PARTITION_TOPOLOGY!r}"
+        )
+    device = target.device
+    return PartitionFacts(
+        topology=query.topology,
+        spec=TargetSpecRef.of(target),
+        parallel_units=device.sm_count,
+        memory_bandwidth_bytes_per_second=device.hbm_bandwidth_bytes_per_second,
+        memory_capacity_bytes=device.hbm_capacity_bytes,
+        peak_flops_per_second=tuple(
+            sorted(device.dense_flops_per_second.items(), key=lambda item: item[0].name)
+        ),
     )
 
 
@@ -208,12 +253,14 @@ register_target_facts(CudaTarget, ParallelCapacityFacts, parallel_capacity)
 register_target_facts(CudaTarget, TileStoreFacts, tile_store)
 register_target_facts(CudaTarget, AtomCandidateFacts, atom_candidates)
 register_target_facts(CudaTarget, PipelineFacts, pipeline_facts)
+register_target_facts(CudaTarget, PartitionFacts, partition_facts)
 
 
 __all__ = [
     "atom_candidates",
     "memory_hierarchy",
     "parallel_capacity",
+    "partition_facts",
     "pipeline_facts",
     "throughput",
     "tile_store",

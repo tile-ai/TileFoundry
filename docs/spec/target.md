@@ -193,14 +193,24 @@ class CudaTarget(Target):
   - `topology_limit("cta")` MUST be `None`: the CUDA grid is a launch shape
     rather than an SM allocation, so its static extent is unbounded here.
     `topology_limit("thread")` MUST equal `architecture.max_threads_per_cta`.
-  - CUDA MUST register exactly one scheduling algorithm, for the `cta` level
-    ([schedule §1.1](./schedule.md#11-algorithm-registration)). It is registered
-    for the `CudaTarget` type, so an instance constructed with custom `Device` or
-    `Architecture` values resolves the same algorithm. That algorithm and its
-    Plan type are not part of the public `schedule` package.
-  - The CTA-level tile store MUST be projected as
-    `architecture.shared_memory_per_cta_bytes`
-    ([schedule §5.2](./schedule.md#52-tilestorefacts-and-atomcandidatefacts)).
+  - CUDA MUST register one scheduling algorithm per level it schedules, and both
+    at the exact `(CudaTarget, level)` pair
+    ([schedule §1.1](./schedule.md#11-algorithm-registration)): the pipeline
+    family at `thread`, whose decision is how the threads of one CTA overlap
+    their work, and the partition family at `cta`, whose decision is how work and
+    its tensors divide across the device. They are registered for the
+    `CudaTarget` type, so an instance constructed with custom `Device` or
+    `Architecture` values resolves the same algorithms. Those algorithms and their
+    Plan types are not part of the public `schedule` package.
+  - The store the threads of one CTA cooperate in MUST be projected as
+    `architecture.shared_memory_per_cta_bytes`, and MUST be reported as belonging
+    to the `cta` scope even when the level being scheduled is `thread`
+    ([schedule §5](./schedule.md#5-scheduling-facts)).
+  - The partition projection MUST state the device's SM count as the parallel
+    units, its HBM bandwidth and capacity, and its dense peak rate per DType
+    ([schedule §5.3](./schedule.md#53-partitionfacts)). The SM count is the same
+    one-active-CTA-per-SM compiler policy the analysis layer is told, not the
+    hardware resident-CTA maximum.
   - Static declared topology extents MUST be positive integers within their
     target resource limits. `Topology("cta", None)` MUST remain valid for the
     handwritten dynamic-launch compile path.
@@ -377,9 +387,10 @@ class AmxTarget(Target):
   - Unsupported topology levels MUST raise an actionable error naming the
     supported levels, from both the limit lookup and topology validation.
   - AMX MUST register exactly one scheduling algorithm, for the `core` level
-    ([schedule §1.1](./schedule.md#11-algorithm-registration)). The `amx` level
-    issues one atom at a time, so there is nothing to place across it and no
-    algorithm for it. That algorithm and its Plan type are not part of the public
+    ([schedule §1.1](./schedule.md#11-algorithm-registration)). A core both runs
+    the work and owns the store its tile lives in, so the level asked about and
+    the capacity's scope are the same one. The `amx` level issues one atom at a
+    time, so there is nothing to place across it and no algorithm for it. That algorithm and its Plan type are not part of the public
     `schedule` package.
   - The core atom-candidate projection MUST list an op's candidates by hard
     filtering the registered catalogue, and MUST NOT rank them. The filter is
