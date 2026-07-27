@@ -529,3 +529,97 @@ class TimelineMetadata(IRMetadata):
     the reported makespan MUST respect both the unit order and that capacity.
   - The timeline is a modeled plan. It MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
+
+## 4. Composed analysis
+
+`tilefoundry.analysis.api.analyze` is the dependency-composed measurement
+operation. One call selects one root analysis by name; the operation resolves
+what that root transitively needs, runs each member once, and reports what ran.
+
+```python
+class AnalysisResult:
+    """What one composed Analyze call computed."""
+
+    module: "Module"
+    function: "Function"
+    analysis: str
+    executed: tuple[str, ...]
+    metadata_types: tuple[type[IRMetadata], ...]
+
+
+def analyze(
+    module: "Module",
+    function: "Function",
+    *,
+    analysis: str,
+    options: object | None = None,
+) -> AnalysisResult: ...
+```
+
+- constraints:
+  - One call MUST select exactly one root analysis. A caller wanting several
+    roots MUST call the operation once per root.
+  - The operation MUST resolve the root's full transitive dependency closure,
+    order it so every dependency precedes its dependants, and execute each
+    member exactly once per call. `executed` MUST report that order, so a shared
+    dependency appears once.
+  - Dependencies MUST be resolved under the same exact concrete Target as the
+    root, obtained from `Module.resolve_target()`.
+  - A dependency cycle MUST fail and MUST name the path that closes it. A
+    missing root and a missing dependency MUST be distinguishable: one is the
+    caller's selector, the other a broken registration.
+  - Type inference and validation MUST each run once per call, before any
+    analysis. No analysis MAY run once either has rejected the IR, because an
+    analysis reads inferred types and assumes a verified function.
+  - Re-running MUST recompute the closure and refresh the Metadata that closure
+    owns. There MUST be no cross-call cache. Metadata owned by nothing in the
+    closure MUST be left untouched.
+  - `metadata_types` MUST list the Metadata types the call actually wrote onto
+    the IR, in execution order and without repeats. An analysis that declares a
+    type but writes no record for this function MUST NOT contribute it, so a
+    renderer is never sent after records that are not there.
+  - `AnalysisResult` MUST be semantic. Human text, JSON, and annotated HIR are
+    renderings of it and of the Metadata on the IR, and MUST NOT be fields of
+    it.
+
+### 4.1 Analysis registration
+
+```python
+class AnalysisAlgorithm:
+    """One registered analysis: its identity, needs, and owned Metadata."""
+
+    selector: str
+    run: AnalysisCallable
+    requires: tuple[str, ...]
+    produces: tuple[type[IRMetadata], ...]
+
+
+def register_analysis(
+    target_type: type,
+    selector: str,
+    *,
+    requires: tuple[str, ...] = (),
+    produces: tuple[type[IRMetadata], ...] = (),
+) -> "Callable[[AnalysisCallable], AnalysisCallable]": ...
+```
+
+- constraints:
+  - An analysis MUST be registered under the exact
+    `(Target concrete type, selector)` pair, in the shared algorithm registry
+    contract ([code-organization](./code-organization.md)). A base-class
+    registration MUST NOT serve a subclass, and there MUST be no default-Target
+    fallback: two targets sharing a base can need different implementations.
+  - A target-independent analysis MUST still be registered once per supported
+    target, so the support matrix is read from the registrations rather than
+    inferred from an inheritance chain.
+  - A duplicate registration for one exact pair MUST fail rather than replace,
+    so dispatch cannot depend on import order.
+  - A declaration MUST be rejected when it requires itself, repeats a
+    dependency, produces the same Metadata type twice, or names a `produces`
+    entry that is not an `IRMetadata` subclass.
+  - An analysis MAY change only the Metadata types its registration declares.
+    Ownership MUST be enforced against what reached the IR rather than against
+    what the analysis reports, and MUST cover addition, replacement, and
+    removal alike: deleting another analysis's record changes the IR as much as
+    overwriting it. An equal-valued overwrite of another analysis's record MUST
+    also count as a violation.
