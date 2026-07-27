@@ -47,7 +47,6 @@ truth for the directory's structure and invariants.
 | `schedule/registry.py` | [schedule](./schedule.md) | The Schedule instance of the shared exact-key `AlgorithmRegistry`, keyed on `(concrete Target type, topology name)`, and the registration decorator. |
 | `schedule/errors.py` | [schedule](./schedule.md) | `ScheduleError`, the one diagnostic the schedule layer raises for a request it cannot serve or a solve that failed. Distinct from `PlanVerificationError`, which says a plan was produced and does not hold together. |
 | `target/<backend>/schedule.py` | [target](./target.md) | One backend's scheduling algorithms, registered for the exact levels it schedules as an import side effect. This is where that backend's private problem construction, solve, and Plan export are composed. |
-| `target/<backend>/plan.py` | [target](./target.md) | The Plan types one backend's algorithms export: the decisions they made, in their own vocabulary, with the whole of their JSON and human rendering. |
 | `schedule/partition/` | [schedule](./schedule.md) | The spatial partition family: program extraction, `PartitionFacts`, the closed candidate problem, the CP-SAT solve, and `PartitionSchedulePlan`. Every hardware number enters through the Facts, so no module below the family entry holds a Target. |
 | `visitor_registry/op_cost.py` | [analysis](./analysis.md) | Each operation's per-instance flops and bytes, registered into the shared cost-evaluator registry. Owned here rather than by any target package, because the work an operation asks for follows from its own semantics and operand types on every backend. |
 | `schedule/facts.py` | [schedule](./schedule.md) | What the schedule layer asks a target for: `AtomFact`, the per-level tile store, and the per-operation atom candidates. Owned here rather than by the analysis layer, because these are the inputs a scheduling decision is made over. |
@@ -64,7 +63,7 @@ truth for the directory's structure and invariants.
 **Stage boundary.** The pipeline picture in
 [architecture §1](./architecture.md#1-spec-relationship-map) places
 `parser/`, `schedule/`, and `codegen/` outside `ir/` (front-end producer,
-HIR materialization service, and back-end consumer); the physical directory
+decision service over typed HIR, and back-end consumer); the physical directory
 layout reflects that boundary directly.
 
 **Reading notes:**
@@ -85,8 +84,8 @@ layout reflects that boundary directly.
 - `schedule/` sits outside `ir/` because it defines an operation over typed HIR,
   not a new IR layer. `schedule/__init__.py` contains only the public operation
   and its shared value structures; the construction stages are imported from
-  their own modules, and concrete algorithms, planning graphs, solver models, and
-  decoded blueprints stay out of that compact surface.
+  their own modules, and each algorithm family's candidate graph, solver model,
+  and decoded solution stay private to that family.
 - `analysis/` sits outside `ir/` for the same reason: it derives facts about
   typed HIR rather than defining an IR layer. It reads the IR and the `Target`,
   and never `schedule/` — the dependency between the two runs one way

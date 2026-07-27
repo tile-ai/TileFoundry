@@ -158,9 +158,9 @@ contract lives in [visitor-mutator](./visitor-mutator.md).
 Scheduling is one explicit public operation, not a pass-manager stage and not a
 Target-owned service. A caller names the program and one level of the hierarchy
 that program declares; the algorithm registered for that exact hardware and level
-answers with a Plan it owns entirely. An algorithm may first verify an authored
-logical program and derive a plan-level execution blueprint; when it states an
-objective, that summary reports only the selected value and proof state. The
+answers with a Plan it owns entirely. What a Plan states is a decision about a
+program, never a rewritten one: no scheduling algorithm materializes its selection
+into HIR, and applying a decision is a separate operation a caller asks for. The
 invocation contract, the result boundary, and the Plan base are owned by
 [schedule](./schedule.md). An algorithm reads the hardware it decides over by
 projecting the same Target for the aggregates it declares.

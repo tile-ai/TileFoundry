@@ -406,7 +406,8 @@ class AmxTarget(Target):
     target the bridge does not model at all MUST raise.
   - The core-level algorithm MUST decide resources over the schedule tree
     extracted from the Module's entry function and report the objective in ns. It
-    materializes nothing, so its Plan MUST carry no program.
+    MUST NOT rewrite the program it decided about, and its Plan MUST carry no
+    program.
 
 ## 10. Installed hardware resources
 
