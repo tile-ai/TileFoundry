@@ -17,8 +17,9 @@ from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul resolved dynamical
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.schedule import Schedule
+from tilefoundry.registry import UnknownAlgorithmError
 from tilefoundry.schedule.facts import AtomFact, TileStoreFacts
+from tilefoundry.schedule.registry import SCHEDULES
 from tilefoundry.target import AmxTarget, resolve_target
 from tilefoundry.target.amx.atoms import (
     AMX_REGISTERS,
@@ -132,14 +133,16 @@ def test_a_core_extent_past_the_performance_core_count_is_rejected():
         target.validate_program_topology(Topology("core", DimVar("cores", 1, 8)))
 
 
-def test_each_amx_level_service_is_bound_exactly_once():
-    """The core stage binds one Schedule service; a stage the target does not
-    serve raises. Hardware facts are projected rather than served, so there is
-    no second service to bind."""
-    target = AmxTarget()
-    assert target.service(Schedule, "core").stage == "core"
-    with pytest.raises(ValueError, match="expected exactly one service"):
-        target.service(Schedule, "cta")
+def test_amx_is_schedulable_at_the_core_level_only():
+    """One scheduler is registered, at the level a tile stream is placed over.
+
+    The AMX unit inside a core issues one atom at a time, so there is nothing to
+    place across it and no scheduler for it. Asking at a level the target has
+    none for names the levels it does have.
+    """
+    assert SCHEDULES.selectors_for(AmxTarget) == ("core",)
+    with pytest.raises(UnknownAlgorithmError, match=r"available: \['core'\]"):
+        SCHEDULES.resolve(AmxTarget(), "amx")
 
 
 # ---------------------------------------------------------------------------

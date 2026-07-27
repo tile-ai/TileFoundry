@@ -12,14 +12,16 @@ the storage filter, not a cost model, is what separates the two.
 from __future__ import annotations
 
 import builtins
+import json
 
 import pytest
 
-from tilefoundry import func
+from tilefoundry import func, module
 from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
-from tilefoundry.schedule import Schedule, ScheduleOptions
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
 from tilefoundry.target import AmxTarget
@@ -33,6 +35,15 @@ _L1D_BYTES = 128 * 1024
 
 @func(target="amx")
 def f32_matmul(
+    x: Tensor[(64, 128), "f32"],
+    w: Tensor[(128, 64), "f32"],
+) -> Tensor[(64, 64), "f32"]:
+    h = matmul(x, w)  # noqa: F405
+    return h
+
+
+@func(target="amx", topologies=(Topology("core", 8),))
+def cored_f32_matmul(
     x: Tensor[(64, 128), "f32"],
     w: Tensor[(128, 64), "f32"],
 ) -> Tensor[(64, 64), "f32"]:
@@ -69,6 +80,31 @@ def wide_f32_matmul_rmsnorm(
     h = matmul(x, w)  # noqa: F405
     y = rms_norm(h, weight)  # noqa: F405
     return y
+
+
+@func
+def entry_matmul(
+    x: Tensor[(64, 128), "f32"],
+    w: Tensor[(128, 64), "f32"],
+) -> Tensor[(64, 64), "f32"]:
+    h = matmul(x, w)  # noqa: F405
+    return h
+
+
+@func
+def helper_matmul(
+    x: Tensor[(64, 128), "f32"],
+    w: Tensor[(128, 64), "f32"],
+) -> Tensor[(64, 64), "f32"]:
+    h = matmul(x, w)  # noqa: F405
+    return h
+
+
+@module(entry="entry_matmul", target="amx")
+class two_function_amx_module:
+    topologies = (Topology("core", 8),)
+    entry_matmul = entry_matmul
+    helper_matmul = helper_matmul
 
 
 def _scheduled(fn=f32_matmul.entry_function()) -> TileGraph:
@@ -201,34 +237,46 @@ def test_a_stage_the_target_does_not_serve_is_named():
         select_atoms(_scheduled(), target=AmxTarget(), stage="cta")
 
 
-def test_the_bound_core_schedule_service_reports_the_nominal_makespan():
-    """The service the target binds at its own topology level runs the same
-    decisions and reports the nominal time in ns."""
-    module = f32_matmul
-    service = module.resolve_target().service(Schedule, "core")
-    assert service is module.resolve_target().service(Schedule, "core")
+def test_scheduling_at_the_core_level_reports_the_nominal_makespan():
+    """The public call at the declared core level runs the same decisions.
 
-    report = service.solve(
-        module, module.entry_function(), ScheduleOptions(timeout_seconds=30),
-    ).report
+    Nothing is materialized at this level, so the plan is the objective and the
+    module comes back as the object that was passed in.
+    """
+    result = schedule(
+        cored_f32_matmul,
+        cored_f32_matmul.entry_function(),
+        topology="core",
+        options=ScheduleOptions(timeout_seconds=30),
+    )
+    report = result.plan.report
     print("\n=== report ===", report.to_json())
 
-    assert report.stage == "core"
+    assert result.module is cored_f32_matmul
+    assert result.topology == Topology("core", 8)
+    assert report.topology == "core"
     assert report.target == "amx"
-    assert report.root == "f32_matmul"
+    assert report.root == "cored_f32_matmul"
     assert report.status == "OPTIMAL"
     assert report.unit == "ns"
     assert report.selected > 0
     assert report.best_bound == report.selected
     assert report.gap == 0.0
+    assert json.loads(result.plan.to_json()) == json.loads(report.to_json())
 
 
-def test_the_core_schedule_service_rejects_a_root_it_does_not_own():
-    """The service decides for the target that owns it, and for the module's own
-    entry function."""
-    service = f32_matmul.resolve_target().service(Schedule, "core")
-    other = narrow_f32_matmul_rmsnorm
-    with pytest.raises(ValueError, match="module.entry_function"):
-        service.solve(other, f32_matmul.entry_function())
-    with pytest.raises(TypeError, match="HIR Module"):
-        service.solve(f32_matmul.entry_function(), f32_matmul.entry_function())
+def test_the_core_level_schedules_the_program_entry():
+    """The core split is defined against the program's own entry function.
+
+    A level the program does not declare is refused before the solve, which is
+    why the same call on an undeclared-hierarchy module names the hierarchy
+    rather than failing inside the solver.
+    """
+    with pytest.raises(ScheduleError, match="requires the module entry function"):
+        schedule(
+            two_function_amx_module,
+            two_function_amx_module.functions[1],
+            topology="core",
+        )
+    with pytest.raises(ScheduleError, match="no topology named 'core'"):
+        schedule(f32_matmul, f32_matmul.entry_function(), topology="core")

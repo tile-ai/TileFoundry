@@ -27,7 +27,6 @@ from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved 
 from tilefoundry.schedule.kernel_schedule import band_statement, build_schedule_tree, schedule_bands
 from tilefoundry.schedule.render import emit_scaffold
 from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
-from tilefoundry.target import default_target
 from tilefoundry.target.cuda.target import CudaTarget
 
 _SM80_ATOM = "SM80_16x8x16_F32BF16BF16F32_TN"
@@ -265,18 +264,14 @@ def test_no_candidate_statements_still_decide_with_a_default_duration():
         assert stmt["fits_capacity"], (name, stmt["footprint_bytes"])
 
 
-def test_default_target_resolution_matches_explicit_cuda_target():
-    """``target=None`` resolves via ``default_target()`` -- same convention
-    as the CUDA target's own ``candidate_atoms``."""
-    implicit = select_atoms(_scheduled())
-    explicit = select_atoms(_scheduled(), target=default_target())
+def test_the_target_to_decide_against_has_to_be_named():
+    """There is no default hardware to fall back to.
 
-    assert implicit.decisions["statements"]["MM"]["atom"] == _SM80_ATOM
-    assert explicit.decisions["statements"]["MM"]["atom"] == _SM80_ATOM
-    assert (
-        implicit.decisions["statements"]["MM"]["tile"]
-        == explicit.decisions["statements"]["MM"]["tile"]
-    )
+    Which atoms are candidates and how wide a tile may be are properties of one
+    machine, so a call that names none is asking for decisions nobody specified.
+    """
+    with pytest.raises(TypeError, match="required positional argument: 'target'"):
+        select_atoms(_scheduled())
 
 
 def test_empty_tile_graph_raises_clear_error():

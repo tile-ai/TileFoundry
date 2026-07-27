@@ -1,57 +1,85 @@
 # TileFoundry Spec — Schedule
 
-A Schedule is a Target-owned service over one explicitly selected stage of typed
-HIR. It reads a `Module` and one root `Function`, then returns one `Module` plus
-a stable objective summary. Whether that module is a materialization is the
-stage's own contract: a stage that rewrites the program returns the rewritten
-module, and a stage that only decides over it returns the module it was given.
-Scheduling is separate from pass sequencing: callers select the service by stage
-name, and the service owns the stage-specific algorithm.
+Scheduling decides how one Function is placed over one level of the parallel
+hierarchy its Module declares. One public operation names the program and the
+level; one registered algorithm answers with a Plan it owns entirely. What an
+algorithm decides is its own vocabulary: two algorithms placing different
+hardware over different levels do not decide the same things, and a shared result
+schema would either describe neither or force both to pretend.
 
-The service surface (§1–§2) is the public `schedule` package. The construction
-stages a service composes it from (§4) are imported from their own modules; they
+The public surface (§1–§2) is the `schedule` package. The construction stages an
+algorithm composes its solve from (§4) are imported from their own modules; they
 read [analysis](./analysis.md) facts, and the dependency is one-way — nothing in
 the analysis layer imports the schedule layer.
 
-## 1. Direct service invocation
-
-The Module's resolved Target is the sole owner of service selection. A caller
-selects an exact stage and invokes the returned service directly:
+## 1. The public Schedule operation
 
 ```python
-# example
-service = module.resolve_target().service(Schedule, stage)
-result = service.solve(module, root)
+def schedule(
+    module: Module,
+    function: Function,
+    *,
+    topology: str,
+    options: ScheduleOptions | None = None,
+) -> ScheduleResult: ...
 ```
 
 - constraints:
-  - The caller MUST select a non-empty stage string explicitly.
-  - Target service lookup MUST match the requested stage exactly and MUST NOT
-    infer a stage from layouts, topology, or constraints.
-  - The service MUST come from `module.resolve_target()`
-    ([core-ir §1](./core-ir.md#1-module)); a call MUST NOT override the Module's
-    resolved Target.
-  - Scheduling lookup MUST NOT fall back to a default Target when no Module in
-    the owner chain declares one ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
-  - `root` MUST be `module.entry_function()` for the CTA service.
-  - A service MAY accept `options=None`; this MUST mean a fresh default
-    `ScheduleOptions()` value for that invocation.
+  - The caller MUST supply the Module, the Function, and one non-empty topology
+    level name. Nothing about the request MAY be inferred from layouts,
+    constraints, or the shape of the program.
+  - The Target MUST come from `module.resolve_target()`
+    ([core-ir §1](./core-ir.md#1-module)); a call MUST NOT override it and MUST
+    NOT fall back to a default Target when no Module in the owner chain declares
+    one ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
+  - The level MUST be resolved from the Module's own effective hierarchy. A name
+    the hierarchy does not declare MUST fail, and a level whose extent is known
+    only at launch MUST fail: an algorithm places work across a level by counting
+    it.
+  - Target resolution, level resolution, and algorithm resolution MUST all
+    complete before the algorithm runs, so a request that cannot be served never
+    leaves a partial solve behind.
+  - `options=None` MUST mean a fresh default `ScheduleOptions()` for that call.
+  - The returned Plan MUST be verified (§2.3) before the result reaches the
+    caller.
+  - The common Schedule code MUST NOT import a concrete Target implementation.
+
+### 1.1 Algorithm registration
+
+An algorithm is registered for the exact `(concrete Target type, topology name)`
+pair in the shared algorithm registry contract
+([code-organization](./code-organization.md)).
+
+- constraints:
+  - Resolution MUST match both halves of the key exactly. A registration for a
+    base class MUST NOT serve a subclass: two targets that share a base can need
+    different algorithms, and inheriting one would silently run the wrong one.
+  - Registering the same pair twice MUST fail, so which hardware is schedulable
+    at which level is single-valued and readable off the registrations.
+  - A Target MUST NOT own a scheduling method, a scheduling service object, or a
+    `target.schedule()` wrapper. Registration is the only support declaration.
+  - There MUST be no public stage selector, no automatic level selection, and no
+    generic service-lookup facade for scheduling.
+  - An algorithm MUST own its whole problem: its private program view, its Facts
+    query, its constraint problem, its solve, and its Plan type. Those names MUST
+    remain private to the algorithm's own package.
 
 ## 2. Public structures
 
 ### 2.1 `ScheduleOptions`
 
-`ScheduleOptions` carries runtime controls shared by all schedule services.
+`ScheduleOptions` carries solver runtime controls, independent of which
+algorithm runs.
 
 ```python
 class ScheduleOptions:
-    """Configure one schedule service call.
+    """Configure one schedule call.
 
     Attributes:
         timeout_seconds: attribute; Wall-clock budget for the underlying solver.
         workers: attribute; Solver worker count, where zero selects the solver default.
         random_seed: attribute; Deterministic solver tie-break seed.
-        debug_dump_dir: attribute; Directory for stage-private artifacts, or None.
+        debug_dump_dir: attribute; Directory for algorithm-private artifacts, or None.
     """
 
     timeout_seconds: float = 60.0
@@ -67,42 +95,81 @@ class ScheduleOptions:
 
 ### 2.2 `ScheduleResult`
 
-`ScheduleResult` is the complete public result of a service call.
+`ScheduleResult` is the complete public result of one call.
 
 ```python
 class ScheduleResult:
-    """Carry one HIR module and its summary report.
+    """Carry what was decided, and what it was decided against.
 
     Attributes:
-        module: attribute; HIR module the reported solve applies to.
-        report: attribute; Stable cross-stage objective summary.
+        module: attribute; The Module the call was made on.
+        function: attribute; The Function that was scheduled.
+        topology: attribute; The resolved level of that Module's hierarchy.
+        plan: attribute; The verified Plan the selected algorithm produced.
     """
 
     module: Module
-    report: ScheduleReport
+    function: Function
+    topology: Topology
+    plan: SchedulePlan
 ```
 
 - constraints:
   - The structure MUST be immutable.
-  - `module` MUST be the output of the same solve `report` represents: the
-    materialized module for a stage that materializes, and the module the caller
-    passed in for a stage that materializes nothing at its level.
-  - A stage that materializes MUST return a verified module.
+  - `module` and `function` MUST be the same objects the caller supplied.
+    Scheduling decides about a program; it MUST NOT return a rewritten one in
+    their place. An algorithm whose decision *is* a rewritten program MUST carry
+    that program in its own Plan.
+  - `topology` MUST be the level as the Module declares it, not a normalized copy.
 
-### 2.3 `ScheduleReport`
+### 2.3 `SchedulePlan`
 
-`ScheduleReport` is the stable cross-stage makespan summary. Stage-private
-operation rows, use decisions, candidate costs, and solver-native models are
-not report fields.
+`SchedulePlan` is the extensible semantic base of every algorithm's result. It is
+not a union, a shared schema, or a shared JSON envelope.
+
+```python
+class SchedulePlan:
+    """One solve's decisions, owned by the algorithm that made them."""
+
+    def verify(self, module: Module, function: Function, topology: Topology) -> None: ...
+
+    def to_json(self) -> str: ...
+
+    def render(self) -> str: ...
+```
+
+- constraints:
+  - The base MUST expose exactly these three operations and MUST impose no
+    concrete field, shared schema, or common rendering on a subtype.
+  - The base MUST NOT carry a version field, a deserializer, a renderer registry,
+    or a generic data-export accessor. A Plan is produced by the algorithm that
+    solved for it, in the process that solved; reading one back from text would
+    mean trusting a document to describe decisions nobody made in that run.
+  - A subtype MUST own the whole of its JSON object and the whole of its human
+    rendering.
+  - `verify` MUST be a structural check of the exported plan against the request
+    it answers: that it refers only to things that exist and that its own
+    references agree. It MUST NOT re-solve, invoke a solver, or state anything
+    about whether the schedule is good.
+  - A Plan that does not hold together MUST raise `PlanVerificationError` and MUST
+    NOT reach the caller.
+
+### 2.4 `ScheduleReport`
+
+`ScheduleReport` is the reusable objective summary: the part of an answer that
+does not depend on what was decided. An algorithm whose Plan states an objective
+carries one of these rather than restating the same fields in its own vocabulary.
+Algorithm-private operation rows, use decisions, candidate costs, and
+solver-native models are not report fields.
 
 ```python
 class ScheduleReport:
     """Summarize the selected objective and proof state.
 
     Attributes:
-        root: attribute; Scheduled root Function name.
-        target: attribute; Root Target name.
-        stage: attribute; Exact stage key that produced the result.
+        root: attribute; Scheduled Function name.
+        target: attribute; Resolved Target name.
+        topology: attribute; The topology level the result was produced at.
         status: attribute; Public solution status.
         objective_name: attribute; Primary objective name.
         unit: attribute; Unit of the primary objective and bound.
@@ -113,7 +180,7 @@ class ScheduleReport:
 
     root: str
     target: str
-    stage: str
+    topology: str
     status: Literal["OPTIMAL", "FEASIBLE_NOT_PROVEN"]
     objective_name: Literal["makespan"]
     unit: Literal["ns"]
@@ -130,51 +197,23 @@ class ScheduleReport:
   - The structure MUST be immutable.
   - `selected`, `best_bound`, and `gap` MUST describe the one `makespan`
     objective in `ns`.
-  - `objective_name` is a fixed literal: every stage reports the same one
-    quantity, and the field names it rather than selecting it.
-  - The reported value MUST NOT be read as a proof that a solver optimised it. A
-    stage MAY minimize the makespan as a solver objective, and a stage MAY
-    instead compute it after the fact — as the nominal roofline estimate of the
-    decisions it recorded (§5.1). `status`,
-    `best_bound` and `gap` are what distinguish the two: a stage that did not
-    prove optimality MUST NOT report `selected` as its own bound.
+  - `objective_name` is a fixed literal: every algorithm that reports an
+    objective reports the same one quantity, and the field names it rather than
+    selecting it.
+  - The reported value MUST NOT be read as a proof that a solver optimised it. An
+    algorithm MAY minimize the makespan as a solver objective, and an algorithm
+    MAY instead compute it after the fact — as the nominal roofline estimate of
+    the decisions it recorded (§5.1). `status`, `best_bound` and `gap` are what
+    distinguish the two: an algorithm that did not prove optimality MUST NOT
+    report `selected` as its own bound.
   - A feasible incumbent MUST be reportable even when optimality is unproven.
   - JSON and Markdown rendering MUST contain every public field and MUST NOT
-    expose stage-private solve state.
+    expose algorithm-private solve state.
   - When the report summarizes a CTA execution blueprint, its selected value
     describes the modeled plan and MUST NOT be interpreted as a guarantee that
     current lowering preserves the planned intervals, reserves physical SM
     shares, promotes values to SRAM or registers, or proves runtime performance
     or out-of-memory safety.
-
-### 2.4 `Schedule`
-
-`Schedule` is the structural interface registered by a Target for one stage.
-
-```python
-class Schedule(Protocol):
-    """Solve one named scheduling stage.
-
-    Attributes:
-        stage: attribute; Exact Target service key for this implementation.
-    """
-
-    stage: str
-
-    def solve(
-        self,
-        module: Module,
-        root: Function,
-        options: ScheduleOptions | None = None,
-    ) -> ScheduleResult: ...
-```
-
-- constraints:
-  - `stage` MUST equal the exact key under which the service is registered.
-  - `solve` MUST read the supplied HIR directly and MUST return one
-    `ScheduleResult`.
-  - Stage-specific candidate rows, cost data, solver state, and materialization
-    helpers MUST remain private to the concrete service.
 
 ## 3. Constraint metadata
 
@@ -210,11 +249,11 @@ equality, hashing, or the printed `repr`.
 
 These values are hard filters for later scheduling stages. They carry no
 preferences, candidate rows, costs, solver state, or CTA capability
-decisions, and they do not register a scheduling service on a `CudaTarget`.
+decisions, and they do not register a scheduling algorithm for a `CudaTarget`.
 
 ## 4. Kernel schedule construction
 
-A stage service composes its solve from three stages over one
+An algorithm composes its solve from three stages over one
 `TileGraph` ([analysis §1.2](./analysis.md#12-tilegraph)). Each takes the graph
 and returns it enriched; none of them re-derives a fact the analysis layer
 already states.
@@ -227,13 +266,13 @@ extract(root)  ──▶  build_schedule_tree  ──▶  select_atoms  ──�
 ```
 
 Each stage lives in its own module of the `schedule` package and is imported
-from there; the compact public package surface (§1–§2) carries the service
-protocol only.
+from there; the compact public package surface (§1–§2) carries the public
+operation and its results only.
 
 | Stage | Signature | Error |
 |---|---|---|
 | tree construction | `build_schedule_tree(tg: TileGraph) -> TileGraph` | `KernelScheduleError` |
-| atom selection | `select_atoms(tg: TileGraph, target=None, stage="cta") -> TileGraph` | `AtomSelectionError` |
+| atom selection | `select_atoms(tg: TileGraph, target, stage="cta") -> TileGraph` | `AtomSelectionError` |
 | scaffold emission | `emit_scaffold(tg: TileGraph) -> tuple[Skeleton, Swimlane, list[HoleContract]]` | `EmitScaffoldError` |
 
 ### 4.1 Tree construction
@@ -289,7 +328,7 @@ which candidate atom granularises it; everything else is measured off `tg` and
 the scheduling facts projected for that stage (§5.2).
 
 ```python
-def select_atoms(tg: TileGraph, target: "Target | str | None" = None, stage: str = "cta") -> TileGraph: ...
+def select_atoms(tg: TileGraph, target: "Target | str", stage: str = "cta") -> TileGraph: ...
 
 class AtomSelectionError(RuntimeError):
     """A TileGraph consistency precondition that did not hold, or a stage that exposes no fact to decide on."""
@@ -303,6 +342,10 @@ class AtomSelectionError(RuntimeError):
     than its statement's own dimensions in order, a band count that does not
     match the statement count, or a `tg.parallel_dims` entry whose flag count
     does not match the statement's rank, MUST raise.
+  - The target MUST be named by the caller. There MUST be no default-Target
+    fallback: which atoms are candidates and how wide a tile may be are
+    properties of one machine, so a call that names none asks for decisions
+    nobody specified.
   - The scheduling facts MUST be projected from the resolved target at the
     requested stage. A stage the target does not schedule, or one whose
     `tile_capacity_bytes` is not positive, MUST raise `AtomSelectionError`
@@ -448,9 +491,9 @@ The polyhedral model is target-independent; the atom catalogue and the store a
 tile lives in are not. That store belongs to the **level**, not to the device: a
 tile at the AMX `core` level lives in that core's L1d, one at the CUDA `cta`
 level in shared memory. Both are obtained by projecting the Target
-([target §11](./target.md#11-target-facts-projection)), so a scheduling stage
-names the facts it needs and no stage calls into a target through a service
-object whose shape it must know.
+([target §11](./target.md#11-target-facts-projection)), so an algorithm names
+the facts it needs and never calls into a target through an object whose shape it
+must know.
 
 ### 5.1 `AtomFact`
 

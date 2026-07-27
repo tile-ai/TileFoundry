@@ -52,6 +52,18 @@ def register_facts_projections() -> None:
     from tilefoundry.target.cuda import facts as cuda_facts  # noqa: PLC0415, F401
 
 
+def register_schedule_algorithms() -> None:
+    """Load each backend's schedulers, which register on import.
+
+    Deferred for the reason the Facts projections are: a scheduler names the
+    public Schedule boundary, which rests on the IR that is still loading this
+    package at the time. Which hardware is schedulable at which level is then
+    exactly the set of registrations these modules make.
+    """
+    from tilefoundry.target.amx import schedule as amx_schedule  # noqa: PLC0415, F401
+    from tilefoundry.target.cuda import schedule as cuda_schedule  # noqa: PLC0415, F401
+
+
 __all__ = [
     "AmxTarget",
     "AppleAmx",
@@ -65,6 +77,7 @@ __all__ = [
     "Target",
     "default_target",
     "register_facts_projections",
+    "register_schedule_algorithms",
     "resolve_target",
     "validate_cuda_topology_levels",
 ]

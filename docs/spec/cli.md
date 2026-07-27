@@ -79,7 +79,7 @@ Target, MUST be rejected — `schedule` does not resolve an omission to a defaul
 `--stage` is required and names one topology level of that target
 ([target](./target.md)). A level the target does not own is rejected naming the
 levels it does own. A target that enumerates no levels leaves the mismatch to
-the stage service lookup, which reports the same failure.
+the scheduling-facts projection, which reports the same failure.
 
 On success stdout carries a `#`-headed machine-parsable summary followed by
 three labelled sections:
@@ -94,8 +94,8 @@ three labelled sections:
 `makespan`, `start` and `end` are in the atom selector's own integer duration
 units, not nanoseconds
 ([schedule §4.2](./schedule.md#42-atom-selection)); the `ns` figure is what a
-`Schedule` service's own report carries
-([schedule §2.3](./schedule.md#23-schedulereport)).
+scheduling algorithm's own objective report carries
+([schedule §2.4](./schedule.md#24-schedulereport)).
 
 On any failure stdout is empty and stderr carries one `tilefoundry: error:` line
 naming the cause.

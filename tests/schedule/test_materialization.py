@@ -1,4 +1,4 @@
-"""Focused P4 materialization and public CTA-service coverage."""
+"""Materialization of a solved CTA plan, and the public call that produces it."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from tilefoundry.ir.constraints import (
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.verify import verify_module
-from tilefoundry.schedule import Schedule, ScheduleOptions
+from tilefoundry.schedule import ScheduleOptions, schedule
 from tilefoundry.target.cuda.materialize import materialize_planning_solution
 from tilefoundry.target.cuda.planner import build_planning_problem
 from tilefoundry.target.cuda.solver import solve_planning_problem
@@ -116,60 +116,72 @@ def test_materialization_preserves_unrelated_metadata_and_consumes_constraints()
     )
 
 
-def test_cuda_cta_service_defaults_and_reconstructable_debug_dump(tmp_path) -> None:
+def test_cta_schedule_defaults_and_reconstructable_debug_dump(tmp_path) -> None:
+    """Solver controls default, and the dump is the plan's program as source.
+
+    The dumped file is imported back and verified, which is what makes it a
+    debug artifact rather than a rendering: it reconstructs the same Module the
+    plan carries.
+    """
     module = _small_module()
-    target = _planner_root.resolve_target()
-    service = target.service(Schedule, "cta")
-    assert service is target.service(Schedule, "cta")
 
-    default_result = service.solve(module, module.entry_function())
-    assert default_result.report.stage == "cta"
+    default_result = schedule(module, module.entry_function(), topology="cta")
+    assert default_result.plan.report.topology == "cta"
 
-    result = service.solve(
+    result = schedule(
         module,
         module.entry_function(),
-        ScheduleOptions(timeout_seconds=10, workers=1, debug_dump_dir=tmp_path),
+        topology="cta",
+        options=ScheduleOptions(timeout_seconds=10, workers=1, debug_dump_dir=tmp_path),
     )
 
-    assert result.report.stage == "cta"
+    assert result.plan.report.topology == "cta"
     dump = tmp_path / "materialized_hir.py"
     source = dump.read_text()
     compile(source, str(dump), "exec")
     namespace = runpy.run_path(str(dump))
     dumped = namespace["small"]
     assert isinstance(dumped, Module)
-    assert dumped.entry == result.module.entry
+    assert dumped.entry == result.plan.materialized.entry
     verify_module(dumped.functions)
 
 
-def test_real_deepseek_cta_service_materializes_verified_module() -> None:
-    service = deepseek_v4_flash_module.resolve_target().service(Schedule, "cta")
+def test_real_deepseek_cta_schedule_materializes_verified_module() -> None:
+    """A real model schedules at the CTA level and the plan carries the split.
 
-    result = service.solve(
+    The input Module comes back untouched -- what was rewritten is the plan's own
+    materialized program, which is where the per-CTA functions appear.
+    """
+    result = schedule(
         deepseek_v4_flash_module,
         deepseek_v4_flash_moe,
-        ScheduleOptions(timeout_seconds=60, workers=4),
+        topology="cta",
+        options=ScheduleOptions(timeout_seconds=60, workers=4),
     )
 
-    assert result.report.status in {"OPTIMAL", "FEASIBLE_NOT_PROVEN"}
-    assert result.module.entry_function().name == deepseek_v4_flash_moe.name
-    assert any("__cta_" in function.name for function in result.module.functions)
-    verify_module(result.module.functions)
+    assert result.module is deepseek_v4_flash_module
+    assert result.function is deepseek_v4_flash_moe
+    assert result.plan.report.status in {"OPTIMAL", "FEASIBLE_NOT_PROVEN"}
+    materialized = result.plan.materialized
+    assert materialized.entry_function().name == deepseek_v4_flash_moe.name
+    assert any("__cta_" in function.name for function in materialized.functions)
+    verify_module(materialized.functions)
 
 
-def test_real_static_qwen_cta_service_materializes_verified_module() -> None:
+def test_real_static_qwen_cta_schedule_materializes_verified_module() -> None:
+    """The same public call on a second real model, whose grid is static."""
     module = qwen_static_online
-    service = qwen_static_online.resolve_target().service(Schedule, "cta")
-
-    result = service.solve(
+    result = schedule(
         module,
         module.entry_function(),
-        ScheduleOptions(timeout_seconds=60, workers=4),
+        topology="cta",
+        options=ScheduleOptions(timeout_seconds=60, workers=4),
     )
 
-    assert result.report.status in {"OPTIMAL", "FEASIBLE_NOT_PROVEN"}
-    assert result.module.entry_function().name == module.entry_function().name
-    verify_module(result.module.functions)
+    assert result.plan.report.status in {"OPTIMAL", "FEASIBLE_NOT_PROVEN"}
+    materialized = result.plan.materialized
+    assert materialized.entry_function().name == module.entry_function().name
+    verify_module(materialized.functions)
 
 
 def test_materialization_keeps_the_context_an_inheriting_child_was_scheduled_under() -> None:

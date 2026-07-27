@@ -54,7 +54,6 @@ graph TD
     analysis -. facts read by .-> schedule
     target -. projects declared Facts .-> analysis
     target -. projects declared Facts .-> schedule
-    target -. provides named service .-> schedule
 
     types -. carried by Expr type .-> coreir
     shard -. layout sublayer .-> types
@@ -71,9 +70,9 @@ graph TD
 
 A TileFoundry compilation flows left to right along the **pipeline**:
 `parser → core-ir → {hir, tir} → passes → target → runtime`. Typed HIR MAY
-first pass through an explicitly selected `schedule` service before pass
-sequencing; that service decides over the facts the `analysis` layer states
-about the same HIR, and the direction is one-way. The
+first pass through the public `schedule` operation before pass sequencing; the
+algorithm it selects decides over the facts the `analysis` layer states about the
+same HIR, and the direction is one-way. The
 **type system** (types + shard) and the **IR framework**
 (visitor-mutator + visitor-registry) cut across every pipeline stage:
 they are co-designed with the IR, not standalone modules. Auxiliary
@@ -145,7 +144,7 @@ This stage layers two concerns on top of the same IR:
    peer IR layer.
 3. **Fact layer** — the polyhedral model of one HIR `Function` body and
    the authored-HIR metrics ([analysis](./analysis.md)). It is neither a
-   pass nor an IR layer: it measures, and the scheduling services below
+   pass nor an IR layer: it measures, and the scheduling algorithms below
    decide over what it measures. The facts a scheduling decision is made
    *over* — the atom catalogue and the store a tile lives in — belong to
    the scheduling layer that decides, not here
@@ -156,14 +155,15 @@ IR traversal / rewrite utilities (`ExprVisitor` / `ExprMutator` /
 infrastructure used by both passes and codegen walkers; the framework
 contract lives in [visitor-mutator](./visitor-mutator.md).
 
-Scheduling is an explicit Target-owned service boundary, not a pass-manager
-stage. A caller selects a named service from the Module's resolved Target and
-invokes it directly. A scheduling service may first verify an authored logical
-program and derive a plan-level execution blueprint; its public summary reports
-only the selected objective and proof state. The direct invocation contract and
-public result structures are owned by [schedule](./schedule.md). A stage reads
-the hardware it decides over by projecting the same Target for the aggregates it
-declares, rather than through a second service bound beside its own.
+Scheduling is one explicit public operation, not a pass-manager stage and not a
+Target-owned service. A caller names the program and one level of the hierarchy
+that program declares; the algorithm registered for that exact hardware and level
+answers with a Plan it owns entirely. An algorithm may first verify an authored
+logical program and derive a plan-level execution blueprint; when it states an
+objective, that summary reports only the selected value and proof state. The
+invocation contract, the result boundary, and the Plan base are owned by
+[schedule](./schedule.md). An algorithm reads the hardware it decides over by
+projecting the same Target for the aggregates it declares.
 
 ## 6. Target / codegen
 
@@ -228,8 +228,8 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[analysis](./analysis.md)** | Fact layer: the polyhedral model of one HIR Function body (`TileGraph` / `extract`, authored-loop modelling, and the facts measured over a time relation), and the composed authored-HIR measurement — its analysis families, their owned Metadata records, and the narrow Target Facts each family declares |
 | **[visitor-mutator](./visitor-mutator.md)** | IR traversal / rewrite infrastructure: expr / stmt visitors, mutators, identity-preserving rewrite invariants, mixed stmt-expr traversal |
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
-| **[schedule](./schedule.md)** | Explicit Target-owned scheduling service: direct invocation protocol, shared options, result boundary, stable makespan report, the schedule-tree construction / atom selection / scaffold emission stages a service composes its solve from, and the scheduling facts it projects (`AtomFact`, the per-level tile store, the per-operation candidates) |
-| **[target](./target.md)** | Target capability descriptors, architecture/device facts, immutable stage-service lookup, and admitted program topology levels |
+| **[schedule](./schedule.md)** | The public scheduling operation: invocation contract, exact algorithm registration, shared options, result boundary, the extensible Plan base, the reusable makespan report, the schedule-tree construction / atom selection / scaffold emission stages an algorithm composes its solve from, and the scheduling facts it projects (`AtomFact`, the per-level tile store, the per-operation candidates) |
+| **[target](./target.md)** | Target capability descriptors, architecture/device facts, Facts projection, and admitted program topology levels |
 | **[codegen](./codegen.md)** | Emit / link pipeline and products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), emitter registry, dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
 | **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |

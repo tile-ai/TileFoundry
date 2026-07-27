@@ -1,16 +1,26 @@
-"""Direct public Schedule service contract."""
+"""The public Schedule boundary.
+
+One call names a program and a level of its parallel hierarchy; one registered
+algorithm answers with a plan it owns entirely. The names re-exported here are
+that boundary and nothing else: how an algorithm reaches its answer, and what it
+looks at on the way, are its own.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
+
+from .api import ScheduleResult, schedule
+from .errors import ScheduleError
+from .plan import PlanVerificationError, SchedulePlan
 
 
 @dataclass(frozen=True)
 class ScheduleOptions:
-    """Solver runtime and debug controls shared by every stage."""
+    """Solver runtime and debug controls, independent of which algorithm runs."""
 
     timeout_seconds: float = 60.0
     workers: int = 0
@@ -20,11 +30,17 @@ class ScheduleOptions:
 
 @dataclass(frozen=True)
 class ScheduleReport:
-    """Minimal objective summary shared by all schedule stages."""
+    """What a solve proved about its objective.
+
+    This is the part of an answer that does not depend on what was decided: how
+    good the result is, and how sure the solver is of it. An algorithm whose
+    plan states an objective carries one of these rather than restating the same
+    nine fields in its own vocabulary.
+    """
 
     root: str
     target: str
-    stage: str
+    topology: str
     status: Literal["OPTIMAL", "FEASIBLE_NOT_PROVEN"]
     objective_name: Literal["makespan"]
     unit: Literal["ns"]
@@ -41,7 +57,7 @@ class ScheduleReport:
         rows = (
             ("root", self.root),
             ("target", self.target),
-            ("stage", self.stage),
+            ("topology", self.topology),
             ("status", self.status),
             ("objective_name", self.objective_name),
             ("unit", self.unit),
@@ -54,29 +70,12 @@ class ScheduleReport:
         return "\n".join(lines)
 
 
-@dataclass(frozen=True)
-class ScheduleResult:
-    """A materialized module and its public summary report."""
-
-    module: "Module"
-    report: ScheduleReport
-
-
-class Schedule(Protocol):
-    """One stage's complete solve service."""
-
-    stage: str
-
-    def solve(
-        self,
-        module: "Module",
-        root: "Function",
-        options: ScheduleOptions | None = None,
-    ) -> ScheduleResult: ...
-
 __all__ = [
-    "Schedule",
+    "PlanVerificationError",
+    "ScheduleError",
     "ScheduleOptions",
-    "ScheduleResult",
+    "SchedulePlan",
     "ScheduleReport",
+    "ScheduleResult",
+    "schedule",
 ]

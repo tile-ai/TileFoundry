@@ -35,11 +35,11 @@ def test_small_fixture_decodes_one_makespan_blueprint(tmp_path) -> None:
         for _, offset in solution.bucket_offsets
     )
 
-    report = project_schedule_report(problem, solution, stage="cta")
+    report = project_schedule_report(problem, solution, topology="cta")
     assert set(json.loads(report.to_json())) == {
         "root",
         "target",
-        "stage",
+        "topology",
         "status",
         "objective_name",
         "unit",

@@ -32,7 +32,7 @@ from tilefoundry.analysis.poly import (
     statement_time_dims,
     time_extents,
 )
-from tilefoundry.target import Target, default_target, resolve_target
+from tilefoundry.target import Target, resolve_target
 from tilefoundry.target.facts import TARGET_FACTS, TargetFactsError
 
 from .facts import AtomCandidateFacts, AtomCandidateQuery, AtomFact, TileStoreFacts
@@ -363,7 +363,7 @@ def _place_of(facts: _Facts, name: str) -> str:
 
 def select_atoms(
     tg: TileGraph,
-    target: Target | str | None = None,
+    target: Target | str,
     stage: str = "cta",
 ) -> TileGraph:
     """Decide, per statement of ``tg`` (which must already carry an isl
@@ -381,7 +381,7 @@ def select_atoms(
         raise AtomSelectionError(
             "select_atoms: tg.tree is None -- call build_schedule_tree(tg) first"
         )
-    target = default_target() if target is None else resolve_target(target)
+    target = resolve_target(target)
 
     facts = _collect_facts(tg, target, stage)
     order = [unit.name for unit in tg.units]

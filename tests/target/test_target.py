@@ -9,7 +9,8 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.schedule import Schedule
+from tilefoundry.registry import UnknownAlgorithmError
+from tilefoundry.schedule.registry import SCHEDULES
 from tilefoundry.target import (
     CpuTarget,
     CudaTarget,
@@ -36,19 +37,22 @@ def test_cuda_target_composes_fixed_architecture_and_device_facts() -> None:
     )
 
 
-def test_service_lookup_contract() -> None:
-    """Service lookup needs an exact non-empty identity key; services are
-    private state excluded from Target equality."""
-    target = Target("test")
-    with pytest.raises(ValueError, match="non-empty string"):
-        target.service(Schedule, "")
-    with pytest.raises(ValueError, match="exactly one service"):
-        target.service(Schedule, "cta")
+def test_a_scheduler_is_reached_by_target_type_not_by_target_value() -> None:
+    """Which levels a target can be scheduled at is a property of its type.
 
-    cuda = CudaTarget()
-    assert cuda.service(Schedule, "cta").stage == "cta"
+    A target carrying different hardware facts is still the same kind of
+    machine, so it resolves the same scheduler; a target with no registration
+    resolves none. Nothing about scheduling is stored on the target value, which
+    is why two equal targets stay equal and interchangeable.
+    """
+    assert SCHEDULES.selectors_for(CudaTarget) == ("cta",)
+    assert SCHEDULES.selectors_for(CpuTarget) == ()
+
     custom = CudaTarget(architecture=replace(_installed_sm90(), name="sm_90_custom"))
-    assert custom.service(Schedule, "cta").stage == "cta"
+    assert SCHEDULES.resolve(custom, "cta") is SCHEDULES.resolve(CudaTarget(), "cta")
+
+    with pytest.raises(UnknownAlgorithmError, match="no 'cta' registered for Target"):
+        SCHEDULES.resolve(Target("test"), "cta")
 
     assert CudaTarget() == CudaTarget()
     assert hash(CudaTarget()) == hash(CudaTarget())

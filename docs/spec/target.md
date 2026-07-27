@@ -1,9 +1,9 @@
 # TileFoundry Spec — Target
 
-A `Target` is the immutable capability context used by compilation and
-Target-owned HIR services. Architecture describes compilation identity and
-instruction structure. Device describes fixed product resources. A target's
-private service bindings are selected by exact interface identity and stage.
+A `Target` is the immutable capability context compilation and the compiler
+algorithms read. Architecture describes compilation identity and instruction
+structure. Device describes fixed product resources. A target is a value that
+answers questions about hardware; it does not own the operations that ask.
 
 ## 1. `Target`
 
@@ -31,6 +31,10 @@ class Target:
     object identity plus one exact stage string.
   - Missing or duplicate matches MUST raise an actionable built-in error that
     names the target, interface, and stage.
+  - A Target MUST NOT bind a scheduling service. Which algorithm schedules which
+    hardware at which level is declared by registration
+    ([schedule §1.1](./schedule.md#11-algorithm-registration)), not by a binding
+    on the target value.
   - Target values MUST NOT own code emission, linking, loading, or the public
     compile/build/jit entry points.
 
@@ -189,10 +193,11 @@ class CudaTarget(Target):
   - `topology_limit("cta")` MUST be `None`: the CUDA grid is a launch shape
     rather than an SM allocation, so its static extent is unbounded here.
     `topology_limit("thread")` MUST equal `architecture.max_threads_per_cta`.
-  - Each `CudaTarget` instance MUST bind exactly one private
-    `(Schedule, "cta")` service, including instances constructed with custom
-    `Device` or `Architecture` values. The concrete service implementation is
-    not part of the public `schedule` package.
+  - CUDA MUST register exactly one scheduling algorithm, for the `cta` level
+    ([schedule §1.1](./schedule.md#11-algorithm-registration)). It is registered
+    for the `CudaTarget` type, so an instance constructed with custom `Device` or
+    `Architecture` values resolves the same algorithm. That algorithm and its
+    Plan type are not part of the public `schedule` package.
   - The CTA-level tile store MUST be projected as
     `architecture.shared_memory_per_cta_bytes`
     ([schedule §5.2](./schedule.md#52-tilestorefacts-and-atomcandidatefacts)).
@@ -200,7 +205,6 @@ class CudaTarget(Target):
     target resource limits. `Topology("cta", None)` MUST remain valid for the
     handwritten dynamic-launch compile path.
   - Unsupported topology levels MUST fail at the generic lowering boundary.
-  - A `CudaTarget` MUST currently expose no concrete CTA scheduling service.
 
 ## 5. `CpuTarget`
 
@@ -372,9 +376,11 @@ class AmxTarget(Target):
     MUST NOT be admitted at either level.
   - Unsupported topology levels MUST raise an actionable error naming the
     supported levels, from both the limit lookup and topology validation.
-  - Each `AmxTarget` instance MUST bind exactly one private
-    `(Schedule, "core")` service. The concrete implementation is not part of the
-    public `schedule` package.
+  - AMX MUST register exactly one scheduling algorithm, for the `core` level
+    ([schedule §1.1](./schedule.md#11-algorithm-registration)). The `amx` level
+    issues one atom at a time, so there is nothing to place across it and no
+    algorithm for it. That algorithm and its Plan type are not part of the public
+    `schedule` package.
   - The core atom-candidate projection MUST list an op's candidates by hard
     filtering the registered catalogue, and MUST NOT rank them. The filter is
     shape divisibility, operand DType, operand layout, and the storage level
@@ -384,10 +390,9 @@ class AmxTarget(Target):
   - An op that clears no filter MUST report an empty candidate list, which is a
     covered op with no usable atom rather than an error. Only an op kind or a
     target the bridge does not model at all MUST raise.
-  - The core Schedule service MUST decide resources over the schedule tree
-    extracted from its root and report the objective in ns. It materializes
-    nothing at this stage, so the module it returns MUST be the module it was
-    given.
+  - The core-level algorithm MUST decide resources over the schedule tree
+    extracted from the Module's entry function and report the objective in ns. It
+    materializes nothing, so its Plan MUST carry no program.
 
 ## 10. Installed hardware resources
 

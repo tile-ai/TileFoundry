@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target.base import Architecture, Device, Target, bind_services
+from tilefoundry.target.base import Architecture, Device, Target
 from tilefoundry.target.hardware.registry import check_compatible, select
 
 
@@ -59,11 +59,6 @@ class CudaTarget(Target):
         object.__setattr__(self, "device_id", device_id)
         object.__setattr__(self, "architecture_digest", architecture.digest)
         object.__setattr__(self, "device_digest", device.digest)
-        from tilefoundry.schedule import Schedule  # noqa: PLC0415
-
-        from .service import _CudaCtaSchedule  # noqa: PLC0415
-
-        bind_services(self, ((Schedule, "cta", _CudaCtaSchedule(self)),))
 
     @property
     def arch(self) -> str:
