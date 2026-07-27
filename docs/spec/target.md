@@ -193,8 +193,9 @@ class CudaTarget(Target):
     `(Schedule, "cta")` service, including instances constructed with custom
     `Device` or `Architecture` values. The concrete service implementation is
     not part of the public `schedule` package.
-  - The CTA-level Analysis service MUST report a tile capacity of
-    `architecture.shared_memory_per_cta_bytes`.
+  - The CTA-level tile store MUST be projected as
+    `architecture.shared_memory_per_cta_bytes`
+    ([schedule §5.2](./schedule.md#52-tilestorefacts-and-atomcandidatefacts)).
   - Static declared topology extents MUST be positive integers within their
     target resource limits. `Topology("cta", None)` MUST remain valid for the
     handwritten dynamic-launch compile path.
@@ -372,10 +373,9 @@ class AmxTarget(Target):
   - Unsupported topology levels MUST raise an actionable error naming the
     supported levels, from both the limit lookup and topology validation.
   - Each `AmxTarget` instance MUST bind exactly one private
-    `(Analysis, "core")` and one private `(Schedule, "core")` service. The
-    concrete implementations are not part of the public `analysis` or
-    `schedule` packages.
-  - The core Analysis service MUST list an op's atom candidates by hard
+    `(Schedule, "core")` service. The concrete implementation is not part of the
+    public `schedule` package.
+  - The core atom-candidate projection MUST list an op's candidates by hard
     filtering the registered catalogue, and MUST NOT rank them. The filter is
     shape divisibility, operand DType, operand layout, and the storage level
     the atom's operand roles need — the last is what separates a

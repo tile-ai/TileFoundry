@@ -52,7 +52,8 @@ graph TD
     passes --> target
     target --> runtime
     analysis -. facts read by .-> schedule
-    target -. provides named service .-> analysis
+    target -. projects declared Facts .-> analysis
+    target -. projects declared Facts .-> schedule
     target -. provides named service .-> schedule
 
     types -. carried by Expr type .-> coreir
@@ -142,11 +143,13 @@ This stage layers two concerns on top of the same IR:
    are both ordinary stages in that manager. A pass may use a
    pass-private intermediate representation without elevating it to a
    peer IR layer.
-3. **Fact layer** — the polyhedral model of one HIR `Function` body,
-   the per-stage target facts a Target binds as an `Analysis` service,
-   and the authored-HIR metrics ([analysis](./analysis.md)). It is
-   neither a pass nor an IR layer: it measures, and the scheduling
-   services below decide over what it measures.
+3. **Fact layer** — the polyhedral model of one HIR `Function` body and
+   the authored-HIR metrics ([analysis](./analysis.md)). It is neither a
+   pass nor an IR layer: it measures, and the scheduling services below
+   decide over what it measures. The facts a scheduling decision is made
+   *over* — the atom catalogue and the store a tile lives in — belong to
+   the scheduling layer that decides, not here
+   ([schedule](./schedule.md)).
 
 IR traversal / rewrite utilities (`ExprVisitor` / `ExprMutator` /
 `StmtVisitor` / `StmtMutator` / mixed stmt-expr rewriters) are shared
@@ -158,9 +161,9 @@ stage. A caller selects a named service from the Module's resolved Target and
 invokes it directly. A scheduling service may first verify an authored logical
 program and derive a plan-level execution blueprint; its public summary reports
 only the selected objective and proof state. The direct invocation contract and
-public result structures are owned by [schedule](./schedule.md). A stage's own
-`Analysis` service is bound on the same Target, under the same stage key, and is
-what that stage reads its facts from.
+public result structures are owned by [schedule](./schedule.md). A stage reads
+the hardware it decides over by projecting the same Target for the aggregates it
+declares, rather than through a second service bound beside its own.
 
 ## 6. Target / codegen
 
@@ -222,10 +225,10 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[evaluator](./evaluator.md)** | HIR reference interpreter: `evaluate` entry, `Value` family (`TensorValue` / `TupleValue`), `register_eval` op registry, node-evaluation + `GridRegionExpr` + layout-domain rules. Logical reference oracle, no codegen / runtime |
 | **[visitor-registry](./visitor-registry.md)** | Derived-visitor dispatch pattern: `AnalysisRegistry`, per-class handler registration, four instances (`typeinfer` / `verify` / `codegen_<target>` / `cost`) with their Context / Visitor derivations |
 | **[semantic-analysis](./semantic-analysis.md)** | Static analysis service semantics: type propagation (relation-derived type behavior), access relation analysis, shard propagation (logical shape → layout domain, relation-driven propagation, output storage + mesh/layout compatibility). The registration mechanism itself is owned by visitor-registry |
-| **[analysis](./analysis.md)** | Fact layer: the polyhedral model of one HIR Function body (`TileGraph` / `extract`, authored-loop modelling, and the facts measured over a time relation), the per-stage `Analysis` service interface with `AtomFact`, and the authored-HIR roofline / footprint / timeline metrics |
+| **[analysis](./analysis.md)** | Fact layer: the polyhedral model of one HIR Function body (`TileGraph` / `extract`, authored-loop modelling, and the facts measured over a time relation), and the composed authored-HIR measurement — its analysis families, their owned Metadata records, and the narrow Target Facts each family declares |
 | **[visitor-mutator](./visitor-mutator.md)** | IR traversal / rewrite infrastructure: expr / stmt visitors, mutators, identity-preserving rewrite invariants, mixed stmt-expr traversal |
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
-| **[schedule](./schedule.md)** | Explicit Target-owned scheduling service: direct invocation protocol, shared options, result boundary, stable makespan report, and the schedule-tree construction / atom selection / scaffold emission stages a service composes its solve from |
+| **[schedule](./schedule.md)** | Explicit Target-owned scheduling service: direct invocation protocol, shared options, result boundary, stable makespan report, the schedule-tree construction / atom selection / scaffold emission stages a service composes its solve from, and the scheduling facts it projects (`AtomFact`, the per-level tile store, the per-operation candidates) |
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, immutable stage-service lookup, and admitted program topology levels |
 | **[codegen](./codegen.md)** | Emit / link pipeline and products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), emitter registry, dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
 | **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |

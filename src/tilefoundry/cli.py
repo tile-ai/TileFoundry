@@ -11,15 +11,15 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from tilefoundry.analysis import (
-    AnalysisError,
-    AnalysisOptions,
-    ExtractError,
-    TileGraph,
-    analyze,
-    extract,
-)
+from tilefoundry.analysis import AnalysisError, ExtractError, TileGraph, extract
+from tilefoundry.analysis.api import analyze
 from tilefoundry.inspection import PythonPrintOptions, as_script
+from tilefoundry.inspection.analysis_report import (
+    render_json,
+    render_text,
+    report,
+    selected_types,
+)
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -78,6 +78,10 @@ def read_dsl_spec() -> str:
     return read_spec("dsl")
 
 
+# The root analyses `analyze` can be asked for, in the order they are reported.
+_ANALYSES = ("compute-cost", "memory", "roofline", "timeline")
+
+
 def _split_source(source: str) -> tuple[Path, str | None]:
     path_text, separator, selector = source.partition(":")
     path = Path(path_text).expanduser().resolve()
@@ -117,18 +121,21 @@ def _detached_selection(module: Module, entry: str) -> Module:
     )
 
 
-def _select_ir(namespace: dict[str, object], selector: str | None) -> Module | Function:
+def _select_ir(namespace: dict[str, object], selector: str | None) -> Module:
     if selector is not None:
         root_name, *path = selector.split(".")
         selected = namespace.get(root_name)
         if selected is None:
             raise ValueError(f"selector {root_name!r} is not defined by the source")
         if not path:
-            if isinstance(selected, (Module, Function)):
+            if isinstance(selected, Module):
                 return selected
             raise TypeError(
-                f"selector {root_name!r} resolves to {type(selected).__name__}, "
-                "expected Module or Function"
+                f"selector {root_name!r} resolves to "
+                f"{type(selected).__name__}, expected a Module. A Function "
+                "carries neither the Target its numbers are measured against "
+                "nor the topology hierarchy they divide over; select the Module "
+                "that declares it."
             )
         if not isinstance(selected, Module):
             raise TypeError(
@@ -164,16 +171,23 @@ def _select_ir(namespace: dict[str, object], selector: str | None) -> Module | F
         names = ", ".join(sorted(module.name for module in modules))
         raise ValueError(f"source defines multiple Modules ({names}); add ':Module'")
     functions = _unique_values(namespace, Function)
-    if len(functions) == 1:
-        return functions[0]  # type: ignore[return-value]
-    if not functions:
-        raise ValueError("source defines no TileFoundry Module or HIR Function")
-    names = ", ".join(sorted(function.name for function in functions))
-    raise ValueError(f"source defines multiple Functions ({names}); add ':Function'")
+    if functions:
+        names = ", ".join(sorted(function.name for function in functions))
+        raise ValueError(
+            f"source defines no Module, only Functions ({names}). A Function "
+            "carries neither a Target nor a topology hierarchy; declare the "
+            "Module that owns it, or select one with ':Module.function'"
+        )
+    raise ValueError("source defines no TileFoundry Module")
 
 
-def load_authored_ir(source: str) -> Module | Function:
-    """Execute one authored file and resolve its optional IR selector."""
+def load_authored_ir(source: str) -> Module:
+    """Execute one authored file and resolve its optional IR selector.
+
+    The result is always a Module. A bare Function is rejected rather than
+    resolved: it declares neither the Target its numbers would be measured
+    against nor the topology hierarchy they divide over.
+    """
     path, selector = _split_source(source)
     captured_stdout = io.StringIO()
     with contextlib.redirect_stdout(captured_stdout):
@@ -207,27 +221,32 @@ def _grid_cta_count(ir: Module | Function) -> int | None:
     return next(iter(counts)) if len(counts) == 1 else None
 
 
-def run_authored_analysis(source: str, analyses: tuple[str, ...]) -> int:
-    """Load, type-infer, analyze, and print one authored HIR selection."""
-    ir = load_authored_ir(source)
-    selected = set(analyses)
-    result = analyze(
-        ir,
-        options=AnalysisOptions(
-            roofline="roofline" in selected,
-            footprint="footprint" in selected,
-            timeline="timeline" in selected,
-        ),
-    )
-    summary = "\n".join(f"# {line}" for line in result.summary_lines)
+def run_authored_analysis(
+    source: str, analyses: tuple[str, ...], *, as_json: bool = False
+) -> int:
+    """Analyse one authored HIR selection and print what was found.
+
+    One public call per requested root, because the operation takes one root at
+    a time. The renderings are composed from those results afterwards, so
+    requesting two analyses cannot change what either of them reports.
+    """
+    module = load_authored_ir(source)
+    function = module.entry_function()
+    results = [analyze(module, function, analysis=name) for name in analyses]
+    data = report(results)
+    if as_json:
+        sys.stdout.write(f"{render_json(data)}\n")
+        return 0
+    # The annotated IR and the report are two views of one run, so they choose
+    # what to show the same way: a dependency that ran unrequested is not
+    # commented into the source either.
     annotated = as_script(
-        result.ir,
+        module,
         options=PythonPrintOptions(
-            show_types=True,
-            comment_metadata_types=result.metadata_types,
+            show_types=True, comment_metadata_types=selected_types(results)
         ),
     )
-    sys.stdout.write(f"{summary}\n\n{annotated}")
+    sys.stdout.write(f"{render_text(data)}\n\n{annotated}")
     return 0
 
 
@@ -324,8 +343,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     analyze = commands.add_parser("analyze", help="type-check and analyze authored HIR")
     _add_source_argument(analyze)
-    for analysis in ("roofline", "footprint", "timeline"):
-        analyze.add_argument(f"--{analysis}", action="store_true", help=f"print {analysis}")
+    for analysis in _ANALYSES:
+        analyze.add_argument(
+            f"--{analysis}", action="store_true", help=f"run the {analysis} analysis"
+        )
+    analyze.add_argument(
+        "--json", action="store_true", help="print the report as JSON instead of text"
+    )
 
     schedule = commands.add_parser(
         "schedule",
@@ -389,12 +413,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     analyses = tuple(
-        name for name in ("roofline", "footprint", "timeline") if getattr(args, name)
+        name for name in _ANALYSES if getattr(args, name.replace("-", "_"))
     )
     if not analyses:
-        analyses = ("roofline", "footprint", "timeline")
+        analyses = _ANALYSES
     try:
-        return run_authored_analysis(args.source, analyses)
+        return run_authored_analysis(args.source, analyses, as_json=args.json)
     except (AnalysisError, VerifyError, OSError, TypeError, ValueError) as error:
         print(f"tilefoundry: error: {error}", file=sys.stderr)
         return 1

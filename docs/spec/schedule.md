@@ -135,7 +135,7 @@ class ScheduleReport:
   - The reported value MUST NOT be read as a proof that a solver optimised it. A
     stage MAY minimize the makespan as a solver objective, and a stage MAY
     instead compute it after the fact — as the nominal roofline estimate of the
-    decisions it recorded ([analysis §2.1](./analysis.md#21-atomfact)). `status`,
+    decisions it recorded (§5.1). `status`,
     `best_bound` and `gap` are what distinguish the two: a stage that did not
     prove optimality MUST NOT report `selected` as its own bound.
   - A feasible incumbent MUST be reportable even when optimality is unproven.
@@ -286,8 +286,7 @@ class KernelScheduleError(RuntimeError):
 its own extent and that extent **is** its tile: what the author wrote is what one
 hole computes, so no tile size is searched. The single choice per statement is
 which candidate atom granularises it; everything else is measured off `tg` and
-the stage's `Analysis` service
-([analysis §2.2](./analysis.md#22-analysis)).
+the scheduling facts projected for that stage (§5.2).
 
 ```python
 def select_atoms(tg: TileGraph, target: "Target | str | None" = None, stage: str = "cta") -> TileGraph: ...
@@ -304,9 +303,10 @@ class AtomSelectionError(RuntimeError):
     than its statement's own dimensions in order, a band count that does not
     match the statement count, or a `tg.parallel_dims` entry whose flag count
     does not match the statement's rank, MUST raise.
-  - The `Analysis` service MUST be selected from the resolved target at the
-    requested stage. A stage with no bound service, or one exposing no positive
-    `tile_capacity_bytes`, MUST raise `AtomSelectionError`.
+  - The scheduling facts MUST be projected from the resolved target at the
+    requested stage. A stage the target does not schedule, or one whose
+    `tile_capacity_bytes` is not positive, MUST raise `AtomSelectionError`
+    rather than let the projection failure escape.
   - An op the target's catalogue does not cover MUST be downgraded to "no
     candidates" rather than abort the run.
   - The pick MUST be the first candidate the catalogue's own hard filter left,
@@ -441,3 +441,111 @@ class EmitScaffoldError(RuntimeError):
     steady-state instances, and an epilogue instance, with the elided count
     stated — never the full iteration count: a real kernel's domain runs to
     hundreds of millions of points.
+
+## 5. Scheduling facts
+
+The polyhedral model is target-independent; the atom catalogue and the store a
+tile lives in are not. That store belongs to the **level**, not to the device: a
+tile at the AMX `core` level lives in that core's L1d, one at the CUDA `cta`
+level in shared memory. Both are obtained by projecting the Target
+([target §11](./target.md#11-target-facts-projection)), so a scheduling stage
+names the facts it needs and no stage calls into a target through a service
+object whose shape it must know.
+
+### 5.1 `AtomFact`
+
+```python
+class AtomFact:
+    """One candidate atom's facts, as the deciding stage consumes them.
+
+    Attributes:
+        shape: attribute; The atom's own M, N and K extents.
+        dtype: attribute; The atom's own a, b and c operand DTypes.
+        duration: attribute; Nominal roofline estimate for one instance, in ns.
+        compute_duration: attribute; The compute-side half of that estimate alone, in ns.
+        storage: attribute; Per-role fragment occupancy in bytes.
+        resource: attribute; Required thread-scope footprint, keyed by scope name.
+        is_async: attribute; True when the instruction is asynchronous.
+        atom: attribute; The target's own realized atom descriptor, carried through opaquely.
+    """
+
+    shape: tuple[int, int, int]
+    dtype: tuple[DType, DType, DType]
+    duration: float
+    compute_duration: float
+    storage: dict[str, int]
+    resource: dict[str, int]
+    is_async: bool
+    atom: object
+```
+
+- constraints:
+  - The structure MUST be immutable and MUST stay target-independent: `atom`
+    MUST be kept opaque, so a target package can enumerate its own catalogue
+    without this type knowing that catalogue's types.
+  - `shape` / `dtype` MUST mirror the atom's own shape and operand dtypes, so a
+    consumer can filter and granularise without unpacking `atom`.
+  - `duration` MUST be a nominal estimate in ns for **one** atom instance, and
+    `compute_duration` MUST be its compute-side half alone — for a consumer that
+    models the surrounding traffic itself and would otherwise charge memory
+    twice.
+  - `atom` MUST be the realized descriptor a later fill or codegen stage needs,
+    so that stage never re-resolves it from `shape` / `dtype`.
+
+### 5.2 `TileStoreFacts` and `AtomCandidateFacts`
+
+```python
+class TileStoreFacts:
+    """The store a tile of one scheduled level occupies.
+
+    Attributes:
+        stage: attribute; The topology level this capacity belongs to.
+        tile_capacity_bytes: attribute; Capacity of that level's store.
+    """
+
+    stage: str
+    tile_capacity_bytes: int
+
+class AtomCandidateQuery:
+    """Which operation's catalogue is being asked for, at which level.
+
+    Attributes:
+        stage: attribute; The topology level being scheduled.
+        op: attribute; The HIR Call whose candidates are wanted.
+    """
+
+    stage: str
+    op: "Call"
+
+class AtomCandidateFacts:
+    """The atoms one target admits for one operation.
+
+    Attributes:
+        candidates: attribute; Those atoms, in the order the target enumerated them.
+    """
+
+    candidates: tuple[AtomFact, ...]
+```
+
+- constraints:
+  - `TileStoreFacts` MUST be queried by stage name and projected once per solve:
+    the capacity is a property of the level and of the hardware, not of any one
+    operation. `tile_capacity_bytes` MUST be the capacity of the store belonging
+    to that level rather than of the whole device, and MUST be positive.
+  - `AtomCandidateFacts` MUST be queried per `(stage, op)` pair and MUST carry
+    only that operation's candidates. Two aggregates rather than one is
+    deliberate: bundling a per-level capacity into a per-operation projection
+    would give one type two meanings depending on how it was asked for.
+  - A projection MUST hard-filter the target's catalogue and MUST NOT rank it:
+    ordering is not a decision made here. The order it returns MUST be the
+    target's own enumeration order, so a consumer that ranks candidates sees the
+    same sequence every run.
+  - An empty `candidates` tuple MUST be a legitimate "no candidate covers this
+    operation" outcome rather than an error, and a projection MAY raise
+    `NotImplementedError` for an operation kind its catalogue does not cover.
+  - A stage the target does not schedule MUST be reported as that, and a
+    consumer MUST surface it as its own scheduling diagnostic rather than let a
+    projection failure escape.
+  - The capacity is a fact to record against a footprint, not a gate: nothing
+    MUST raise because a tile does not fit. A tile wider than its store still has
+    a schedule, only a worse one.

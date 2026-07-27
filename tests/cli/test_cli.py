@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import textwrap
 
 from tilefoundry import cli
@@ -74,14 +75,22 @@ def test_inspect_capabilities_rejects_an_uninstalled_cuda_target(tmp_path, capsy
 
 
 def test_analyze_selects_default_or_requested_analyses(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[str, ...]]] = []
-    monkeypatch.setattr(cli, "run_authored_analysis", lambda source, analyses: calls.append((source, analyses)))
+    calls: list[tuple[str, tuple[str, ...], bool]] = []
+    monkeypatch.setattr(
+        cli,
+        "run_authored_analysis",
+        lambda source, analyses, as_json=False: calls.append(
+            (source, analyses, as_json)
+        ),
+    )
 
     assert cli.main(["analyze", "model.py"]) is None
     assert cli.main(["analyze", "model.py", "--timeline"]) is None
+    assert cli.main(["analyze", "model.py", "--memory", "--json"]) is None
     assert calls == [
-        ("model.py", ("roofline", "footprint", "timeline")),
-        ("model.py", ("timeline",)),
+        ("model.py", ("compute-cost", "memory", "roofline", "timeline"), False),
+        ("model.py", ("timeline",), False),
+        ("model.py", ("memory",), True),
     ]
 
 
@@ -92,16 +101,62 @@ def test_analyze_prints_summary_types_and_selected_metadata(tmp_path, capsys) ->
 
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out.startswith("# analysis target=cuda analyses=roofline,memory,timeline")
+    assert captured.out.startswith(
+        "# analysis target=cuda module=Model function=main"
+    )
     assert "type=Tensor[" in captured.out
-    # The summary reads the whole-function records off the IR rather than
-    # recomputing them, and the annotated body carries the per-Call ones.
+    # Every reported line comes off a record; the annotated body carries the
+    # per-Call ones as comments.
     assert "# peak-footprint gmem=" in captured.out
     assert "# theoretical-bound=" in captured.out
     assert "# theoretical-makespan=" in captured.out
     assert "compute-cost flops=f32:" in captured.out
     assert "roofline bound=" in captured.out
     assert "timeline units=168 waves=2" in captured.out
+
+
+def test_analyze_reports_only_the_analyses_that_were_requested(tmp_path, capsys) -> None:
+    """A requested root pulls its dependencies in, so their records reach the IR
+    without having been asked for. Every view of the run shows what was
+    requested -- the report and the annotated source alike; the executed line
+    still names the whole closure that ran."""
+    path = _write_module(tmp_path)
+
+    assert cli.main(["analyze", f"{path}:Model", "--roofline"]) == 0
+
+    captured = capsys.readouterr()
+    assert "# analyses=roofline executed=compute-cost,memory,roofline" in captured.out
+    assert "# theoretical-bound=" in captured.out
+    assert "# peak-footprint" not in captured.out
+    assert "# theoretical-makespan" not in captured.out
+    # The annotated source is the other view, and it withholds the same records.
+    assert "roofline bound=" in captured.out
+    assert "memory peak=" not in captured.out
+    assert "compute-cost flops=" not in captured.out
+    assert "timeline units=" not in captured.out
+
+
+def test_analyze_json_and_text_report_the_same_conclusions(tmp_path, capsys) -> None:
+    """Both formats render one report, so neither can state something the other
+    does not."""
+    path = _write_module(tmp_path)
+
+    assert cli.main(["analyze", f"{path}:Model", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert cli.main(["analyze", f"{path}:Model"]) == 0
+    text = capsys.readouterr().out
+
+    assert payload["target"] == "cuda"
+    assert payload["function"] == "main"
+    assert payload["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
+    for level, value in payload["totals"]["traffic"].items():
+        assert f"{level}=r{value['read_bytes']}/w{value['write_bytes']}" in text
+    for item in payload["function_records"]["memory"]["footprint"]:
+        assert f"{item['level']}={item['peak_bytes']}" in text
+    assert (
+        f"by={payload['function_records']['roofline']['bound_by']}" in text
+    )
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tmp_path, capsys) -> None:

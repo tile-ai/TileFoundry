@@ -12,13 +12,13 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry import func
-from tilefoundry.analysis import Analysis, AtomFact
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul resolved dynamically
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import Schedule
+from tilefoundry.schedule.facts import AtomFact, TileStoreFacts
 from tilefoundry.target import AmxTarget, resolve_target
 from tilefoundry.target.amx.atoms import (
     AMX_REGISTERS,
@@ -28,6 +28,7 @@ from tilefoundry.target.amx.atoms import (
     NEON_FMLA_4x4x1_F32,
     candidate_atoms,
 )
+from tilefoundry.target.facts import TARGET_FACTS
 from tilefoundry.target.hardware import HARDWARE_SPECS
 
 
@@ -132,13 +133,13 @@ def test_a_core_extent_past_the_performance_core_count_is_rejected():
 
 
 def test_each_amx_level_service_is_bound_exactly_once():
-    """The core stage binds one Analysis and one Schedule service; a stage the
-    target does not serve raises."""
+    """The core stage binds one Schedule service; a stage the target does not
+    serve raises. Hardware facts are projected rather than served, so there is
+    no second service to bind."""
     target = AmxTarget()
-    assert target.service(Analysis, "core").stage == "core"
     assert target.service(Schedule, "core").stage == "core"
     with pytest.raises(ValueError, match="expected exactly one service"):
-        target.service(Analysis, "cta")
+        target.service(Schedule, "cta")
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +324,8 @@ def test_a_core_tile_is_bounded_by_the_l1d_not_by_the_register_files():
     core's L1d; the register files bound one atom instance instead, which the
     storage filter enforces rather than a per-tile capacity."""
     target = AmxTarget()
-    analysis = target.service(Analysis, "core")
-    assert analysis.tile_capacity_bytes == target.device.l1d_bytes_per_performance_core
+    facts = TARGET_FACTS.project(target, TileStoreFacts, "core")
+    assert facts.tile_capacity_bytes == target.device.l1d_bytes_per_performance_core
     assert target.architecture.accumulator_bytes < (
         target.device.l1d_bytes_per_performance_core
     )

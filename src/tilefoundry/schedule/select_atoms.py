@@ -22,7 +22,6 @@ from dataclasses import dataclass
 
 import isl
 
-from tilefoundry.analysis import Analysis, AtomFact
 from tilefoundry.analysis.poly import (
     AccessFootprint,
     AxisExtent,
@@ -34,7 +33,9 @@ from tilefoundry.analysis.poly import (
     time_extents,
 )
 from tilefoundry.target import Target, default_target, resolve_target
+from tilefoundry.target.facts import TARGET_FACTS, TargetFactsError
 
+from .facts import AtomCandidateFacts, AtomCandidateQuery, AtomFact, TileStoreFacts
 from .kernel_schedule import band_statement, schedule_bands, tile_bands
 
 # ns -> integer duration units. One atom's roofline estimate is floored at
@@ -87,39 +88,54 @@ class _Facts:
 # ---------------------------------------------------------------------------
 
 
-def _analysis_service(target: Target, stage: str) -> Analysis:
-    try:
-        return target.service(Analysis, stage)
-    except (TypeError, ValueError) as error:
-        raise AtomSelectionError(
-            f"select_atoms: target {target.name!r} binds no Analysis "
-            f"service at stage {stage!r}: {error}"
-        ) from error
+def _candidates_for(
+    unit: TileUnit, target: Target, stage: str
+) -> tuple[AtomFact, ...]:
+    """The atoms *target* admits for one statement, at *stage*.
 
-
-def _candidates_for(unit: TileUnit, analysis: Analysis) -> tuple[AtomFact, ...]:
-    """``analysis.candidate_atoms``, made robust to the statements the
-    target's catalogue was never meant to cover: an uncovered op is
-    downgraded to "no candidates" so it never aborts the whole run."""
+    An operation the target's catalogue was never meant to cover is downgraded
+    to "no candidates" rather than aborting the whole run: a statement with
+    nothing to pick from is a schedule with one fewer decision in it, not a
+    failure.
+    """
     try:
-        return tuple(analysis.candidate_atoms(unit.op))
+        facts = TARGET_FACTS.project(
+            target, AtomCandidateFacts, AtomCandidateQuery(stage=stage, op=unit.op)
+        )
     except NotImplementedError:
         return ()
+    # A target that does not schedule this level at all is a different failure
+    # from an operation it has no atoms for, and it reports itself as one of
+    # these rather than escaping as a bare projection error.
+    except (TargetFactsError, TypeError, ValueError) as error:
+        raise AtomSelectionError(
+            f"select_atoms: target {target.name!r} states no atom candidates "
+            f"at stage {stage!r}: {error}"
+        ) from error
+    return facts.candidates
 
 
-def _tile_capacity(analysis: Analysis) -> int:
-    """The store a tile of the level being decided lives in, read off that
-    level's own Analysis service. It is recorded against the footprint rather
-    than enforced: an atom that cannot hold its operands is filtered out of
-    ``candidate_atoms``, and a tile too wide for the store still has a
-    schedule, only a worse one."""
-    value = getattr(analysis, "tile_capacity_bytes", None)
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
-    raise AtomSelectionError(
-        f"select_atoms: stage {analysis.stage!r} exposes no tile-memory "
-        f"capacity ({type(analysis).__name__}.tile_capacity_bytes is {value!r})"
-    )
+def _tile_capacity(target: Target, stage: str) -> int:
+    """The store a tile of the level being decided lives in.
+
+    It is recorded against the footprint rather than enforced: an atom that
+    cannot hold its operands is filtered out of the candidates, and a tile too
+    wide for the store still has a schedule, only a worse one.
+    """
+    try:
+        facts = TARGET_FACTS.project(target, TileStoreFacts, stage)
+    except (TargetFactsError, TypeError, ValueError) as error:
+        raise AtomSelectionError(
+            f"select_atoms: target {target.name!r} states no tile-memory "
+            f"capacity at stage {stage!r}: {error}"
+        ) from error
+    capacity = facts.tile_capacity_bytes
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
+        raise AtomSelectionError(
+            f"select_atoms: stage {stage!r} states a tile-memory capacity of "
+            f"{capacity!r}, which is not a positive byte count"
+        )
+    return capacity
 
 
 def _atom_shape(name: str, rank: int, fact: AtomFact) -> tuple[int, ...]:
@@ -193,7 +209,7 @@ def _is_own_identity(dims: tuple[int, ...], extents: tuple[int, ...]) -> bool:
     )
 
 
-def _collect_facts(tg: TileGraph, analysis: Analysis) -> _Facts:
+def _collect_facts(tg: TileGraph, target: Target, stage: str) -> _Facts:
     bands = _band_of(tg)
     extents: dict[str, tuple[int, ...]] = {}
     coincident: dict[str, tuple[int, ...]] = {}
@@ -229,10 +245,12 @@ def _collect_facts(tg: TileGraph, analysis: Analysis) -> _Facts:
     return _Facts(
         extents=extents,
         coincident=coincident,
-        candidates={unit.name: _candidates_for(unit, analysis) for unit in tg.units},
+        candidates={
+            unit.name: _candidates_for(unit, target, stage) for unit in tg.units
+        },
         held=_held_by_statement(access_footprints(tg, time_maps)),
         distances=distances,
-        capacity=_tile_capacity(analysis),
+        capacity=_tile_capacity(target, stage),
     )
 
 
@@ -365,7 +383,7 @@ def select_atoms(
         )
     target = default_target() if target is None else resolve_target(target)
 
-    facts = _collect_facts(tg, _analysis_service(target, stage))
+    facts = _collect_facts(tg, target, stage)
     order = [unit.name for unit in tg.units]
     _check_precedence(tg, order)
 

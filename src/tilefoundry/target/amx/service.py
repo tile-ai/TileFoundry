@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.analysis import AtomFact, extract
-from tilefoundry.ir.core import Call
+from tilefoundry.analysis import extract
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule import ScheduleOptions, ScheduleReport, ScheduleResult
@@ -13,25 +12,6 @@ from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 # report is in ns, and the scale that converts them has no public accessor yet.
 from tilefoundry.schedule.select_atoms import _DURATION_SCALE, select_atoms
 from tilefoundry.target.base import Target
-
-from .atoms import candidate_atoms
-
-
-class _AmxCoreAnalysis:
-    stage = "core"
-
-    def __init__(self, target: "AmxTarget") -> None:
-        self._target = target
-
-    @property
-    def tile_capacity_bytes(self) -> int:
-        """A core-level tile's resident working set lives in that core's L1d.
-        The AMX register files bound one atom instance, not a tile, and do it
-        by filtering that atom out of ``candidate_atoms``."""
-        return self._target.device.l1d_bytes_per_performance_core
-
-    def candidate_atoms(self, op: Call) -> list[AtomFact]:
-        return candidate_atoms(op, self._target)
 
 
 class _AmxCoreSchedule:
@@ -98,4 +78,4 @@ def _project_report(
     )
 
 
-__all__ = ["_AmxCoreAnalysis", "_AmxCoreSchedule"]
+__all__ = ["_AmxCoreSchedule"]

@@ -39,14 +39,27 @@ would declare its context, rather than analysed or scheduled against a default
 comments, regardless of analysis flags. It never performs candidate search,
 layout enumeration, or automatic resharding.
 
-With no analysis flag, `analyze` runs roofline, footprint, and timeline. When
-one or more flags are present, it runs only the named analyses. The selected
-Module's resolved Target determines the hardware specification; there is no
-ordinary `--target` option.
+Each flag names one root analysis. With no flag, `analyze` runs all of them. The
+selected Module's resolved Target determines the hardware specification; there is
+no ordinary `--target` option.
 
-On success, stdout begins with the overall analysis summary followed by
-annotated HIR. On inference, verification, or analysis failure, stdout is empty
-and stderr reports the source location, binding where available, and reason.
+- constraints:
+  - `analyze` MUST invoke the public operation once per requested root, because
+    that operation takes one root per call
+    ([analysis §3](./analysis.md#3-composed-analysis)). Requesting two analyses
+    MUST NOT change what either reports.
+  - A selection MUST resolve to a Module. A bare Function MUST be rejected
+    naming the reason: it declares neither the Target its numbers are measured
+    against nor the topology hierarchy they divide over.
+  - `--json` MUST print the report as JSON instead of text. Both formats MUST
+    carry the same conclusions ([analysis §2](./analysis.md#2-authored-hir-metrics)).
+  - Output MUST report the analyses that were requested. A dependency that ran
+    because a requested root needed it MUST appear in the executed list and MUST
+    NOT have its own measurements reported.
+  - On success, text output begins with the `#`-headed report followed by
+    annotated HIR. On inference, verification, or analysis failure, stdout MUST
+    be empty and stderr MUST report the source location, binding where
+    available, and reason.
 
 ## Schedule
 

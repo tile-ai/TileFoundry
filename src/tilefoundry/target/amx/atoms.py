@@ -9,10 +9,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from tilefoundry.analysis.atom_facts import AtomFact
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.target import Target, resolve_target
 from tilefoundry.target.amx.spec import installed_architecture
 from tilefoundry.target.amx.target import AmxTarget

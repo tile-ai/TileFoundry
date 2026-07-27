@@ -194,10 +194,10 @@ def test_a_footprint_past_the_core_l1d_is_recorded_rather_than_refused():
 
 
 def test_a_stage_the_target_does_not_serve_is_named():
-    """The capacity and the catalogue both come off the level's own Analysis
-    service, so asking for a level the AMX target does not have is reported as
-    that, not as a missing fact."""
-    with pytest.raises(AtomSelectionError, match="binds no Analysis service at stage 'cta'"):
+    """The capacity and the catalogue are both projected for the level being
+    decided, so asking for a level the AMX target does not schedule is reported
+    as that rather than escaping as a bare projection failure."""
+    with pytest.raises(AtomSelectionError, match="at stage 'cta'"):
         select_atoms(_scheduled(), target=AmxTarget(), stage="cta")
 
 

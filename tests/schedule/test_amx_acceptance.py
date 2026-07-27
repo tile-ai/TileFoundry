@@ -24,12 +24,14 @@ import isl
 import pytest
 
 from tests.models.qwen3_1_7b import decoder_layer as qwen3
-from tilefoundry.analysis import Analysis, extract
+from tilefoundry.analysis import extract
+from tilefoundry.schedule.facts import TileStoreFacts
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import emit_scaffold
 from tilefoundry.schedule.select_atoms import select_atoms
 from tilefoundry.target import AmxTarget
 from tilefoundry.target.amx.atoms import AMX_FMA32_16x16x1_F32, NEON_FMLA_4x4x1_F32
+from tilefoundry.target.facts import TARGET_FACTS
 
 _STAGE = "core"
 _ATOM_SHAPES = {
@@ -151,7 +153,7 @@ def test_each_hole_reports_its_working_set_against_the_level_store(run):
     absent one -- but it does have to be a *number*, so each buffer is also
     checked against the most of it the whole kernel ever touches."""
     name, target, tg, solved, _ = run
-    capacity = target.service(Analysis, _STAGE).tile_capacity_bytes
+    capacity = TARGET_FACTS.project(target, TileStoreFacts, _STAGE).tile_capacity_bytes
     assert solved.decisions["capacity_bytes"] == capacity
     ceilings = _buffer_ceilings(tg)
     for stmt_name, stmt in solved.decisions["statements"].items():

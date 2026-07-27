@@ -17,13 +17,22 @@ from tilefoundry.analysis.facts import (
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
+from tilefoundry.schedule.facts import (
+    AtomCandidateFacts,
+    AtomCandidateQuery,
+    TileStoreFacts,
+)
 from tilefoundry.target.facts import register_target_facts
 
+from .atoms import candidate_atoms
 from .target import AmxTarget
 
 # The execution unit whose measured rate the roofline uses. NEON's rate belongs
 # to a different unit and would describe a different atom choice.
 _ROOFLINE_UNIT = "amx"
+
+# The one topology level AMX scheduling decides at.
+_SCHEDULED_STAGE = "core"
 
 
 def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchyFacts:
@@ -115,9 +124,56 @@ def parallel_capacity(
     )
 
 
+def tile_store(target: AmxTarget, query: object = None) -> TileStoreFacts:
+    """Where a tile of the queried level lives, and how much of it there is.
+
+    A core-level tile's resident working set lives in that core's L1d. The AMX
+    register files bound one atom instance rather than a tile, and they do it by
+    filtering that atom out of the catalogue.
+    """
+    if not isinstance(query, str) or not query:
+        raise TypeError(
+            f"a tile store must be queried by stage name, got {query!r}"
+        )
+    if query != _SCHEDULED_STAGE:
+        raise ValueError(
+            f"AmxTarget states no tile store for stage {query!r}; it schedules "
+            f"{_SCHEDULED_STAGE!r}"
+        )
+    return TileStoreFacts(
+        stage=query,
+        tile_capacity_bytes=target.device.l1d_bytes_per_performance_core,
+    )
+
+
+def atom_candidates(
+    target: AmxTarget, query: AtomCandidateQuery
+) -> AtomCandidateFacts:
+    """The atoms this target admits for one operation, in catalogue order."""
+    if not isinstance(query, AtomCandidateQuery):
+        raise TypeError(
+            "AmxTarget atom candidates need an AtomCandidateQuery, got "
+            f"{type(query).__name__}"
+        )
+    if query.stage != _SCHEDULED_STAGE:
+        raise ValueError(
+            f"AmxTarget enumerates no atoms for stage {query.stage!r}; it "
+            f"schedules {_SCHEDULED_STAGE!r}"
+        )
+    return AtomCandidateFacts(tuple(candidate_atoms(query.op, target)))
+
+
 register_target_facts(AmxTarget, MemoryHierarchyFacts, memory_hierarchy)
 register_target_facts(AmxTarget, ThroughputFacts, throughput)
 register_target_facts(AmxTarget, ParallelCapacityFacts, parallel_capacity)
+register_target_facts(AmxTarget, TileStoreFacts, tile_store)
+register_target_facts(AmxTarget, AtomCandidateFacts, atom_candidates)
 
 
-__all__ = ["memory_hierarchy", "parallel_capacity", "throughput"]
+__all__ = [
+    "atom_candidates",
+    "memory_hierarchy",
+    "parallel_capacity",
+    "throughput",
+    "tile_store",
+]

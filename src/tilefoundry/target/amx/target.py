@@ -51,18 +51,11 @@ class AmxTarget(Target):
         object.__setattr__(self, "device_id", device.id)
         object.__setattr__(self, "architecture_digest", architecture.digest)
         object.__setattr__(self, "device_digest", device.digest)
-        from tilefoundry.analysis import Analysis  # noqa: PLC0415
         from tilefoundry.schedule import Schedule  # noqa: PLC0415
 
-        from .service import _AmxCoreAnalysis, _AmxCoreSchedule  # noqa: PLC0415
+        from .service import _AmxCoreSchedule  # noqa: PLC0415
 
-        bind_services(
-            self,
-            (
-                (Analysis, "core", _AmxCoreAnalysis(self)),
-                (Schedule, "core", _AmxCoreSchedule(self)),
-            ),
-        )
+        bind_services(self, ((Schedule, "core", _AmxCoreSchedule(self)),))
 
     @property
     def arch(self) -> str:

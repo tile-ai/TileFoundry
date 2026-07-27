@@ -13,12 +13,12 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry import func
-from tilefoundry.analysis import AtomFact
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
 from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType
+from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.target import default_target
 from tilefoundry.target.cuda.atoms import candidate_atoms
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tilefoundry import func, module
 from tilefoundry.analysis import (
-    AnalysisOptions,
     ComputeCostMetadata,
     MemoryHierarchyFacts,
     MemoryMetadata,
@@ -15,11 +16,11 @@ from tilefoundry.analysis import (
     ThroughputFacts,
     TimelineMetadata,
 )
-from tilefoundry.analysis.analyzer import analyze as authored_analyze
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
+from tilefoundry.inspection.analysis_report import render_json, render_text, report
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import DType
@@ -395,35 +396,40 @@ def test_a_target_without_shared_capacity_says_so_in_the_same_shape() -> None:
     )
 
 
-def test_the_facade_renders_only_the_measurements_its_flags_selected() -> None:
-    """A selected root pulls its dependencies in, so their records land on the IR
-    whether or not their own flag was selected. What is rendered must follow the
-    flags: the roofline depends on the memory family, and selecting it must not
-    report the memory measurement as though it had been asked for."""
-    result = authored_analyze(
-        _CudaAdd, options=AnalysisOptions(roofline=True, footprint=False, timeline=False)
-    )
+def test_a_report_shows_the_requested_analyses_not_every_written_record() -> None:
+    """A requested root pulls its dependencies in, so their records land on the
+    IR without having been asked for. A report shows what was requested; the
+    dependency's records stay on the IR for whoever does ask."""
+    entry = _entry(_CudaAdd)
+    result = analyze(_CudaAdd, entry, analysis="roofline")
 
-    assert any(line.startswith("flops ") for line in result.summary_lines)
-    assert not any(line.startswith("traffic ") for line in result.summary_lines)
-    assert not any(
-        line.startswith("peak-footprint") for line in result.summary_lines
-    )
-    assert not any(line.startswith("advisory") for line in result.summary_lines)
-    assert not any(
-        line.startswith("theoretical-makespan") for line in result.summary_lines
-    )
-    # The dependency still ran, so its record is on the IR; only the rendering
-    # was withheld.
-    assert get_metadata(_entry(_CudaAdd), MemoryMetadata) is not None
+    data = report([result])
+
+    assert data["executed"] == ["compute-cost", "memory", "roofline"]
+    assert set(data["function_records"]) == {"roofline"}
+    assert get_metadata(entry, MemoryMetadata) is not None
 
 
-def test_the_facade_renders_the_memory_lines_when_that_flag_is_selected() -> None:
-    """The counterpart: with the flag set, the same records are reported."""
-    result = authored_analyze(
-        _CudaAdd, options=AnalysisOptions(roofline=False, footprint=True, timeline=False)
-    )
+def test_a_report_covers_every_analysis_it_was_given() -> None:
+    """Asking for two roots reports both, and each root's own records."""
+    entry = _entry(_CudaAdd)
+    results = [
+        analyze(_CudaAdd, entry, analysis=name) for name in ("memory", "timeline")
+    ]
 
-    assert any(line.startswith("traffic ") for line in result.summary_lines)
-    assert any(line.startswith("peak-footprint") for line in result.summary_lines)
-    assert not any(line.startswith("flops ") for line in result.summary_lines)
+    data = report(results)
+
+    assert data["requested"] == ["memory", "timeline"]
+    assert set(data["function_records"]) == {"memory", "timeline"}
+
+
+def test_json_and_text_render_the_same_report() -> None:
+    """Two formats over one structure cannot disagree about a conclusion."""
+    entry = _entry(_CudaAdd)
+    data = report([analyze(_CudaAdd, entry, analysis="roofline")])
+
+    payload = json.loads(render_json(data))
+    text = render_text(data)
+
+    assert payload == data
+    assert f"by={payload['function_records']['roofline']['bound_by']}" in text

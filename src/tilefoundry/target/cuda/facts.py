@@ -1,9 +1,9 @@
-"""What a CUDA target tells the analysis families.
+"""What a CUDA target tells the algorithms that ask it things.
 
-Each conversion answers exactly one family's question, so what an analysis can
-read is visible here rather than spread through the analyses themselves. Nothing
-in this module measures anything: it restates the installed hardware documents in
-the shape a family declared.
+Each conversion answers exactly one aggregate's question, so what a consumer can
+read is visible here rather than spread through the consumers themselves. Nothing
+in this module decides anything: it restates the installed hardware documents, and
+the target's own atom catalogue, in the shape the asking algorithm declared.
 """
 
 from __future__ import annotations
@@ -17,9 +17,18 @@ from tilefoundry.analysis.facts import (
     ParallelCapacityFacts,
     ThroughputFacts,
 )
+from tilefoundry.schedule.facts import (
+    AtomCandidateFacts,
+    AtomCandidateQuery,
+    TileStoreFacts,
+)
 from tilefoundry.target.facts import register_target_facts
 
+from .atoms import candidate_atoms
 from .target import CudaTarget
+
+# The one topology level CUDA scheduling decides at.
+_SCHEDULED_STAGE = "cta"
 
 
 def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarchyFacts:
@@ -104,9 +113,55 @@ def parallel_capacity(
     return ParallelCapacityFacts(topology="cta", parallel_units=target.device.sm_count)
 
 
+def tile_store(target: CudaTarget, query: object = None) -> TileStoreFacts:
+    """Where a tile of the queried level lives, and how much of it there is.
+
+    A CTA-level tile's resident working set lives in shared memory, whose
+    per-CTA capacity is a limit of the architecture rather than of the device.
+    """
+    if not isinstance(query, str) or not query:
+        raise TypeError(
+            f"a tile store must be queried by stage name, got {query!r}"
+        )
+    if query != _SCHEDULED_STAGE:
+        raise ValueError(
+            f"CudaTarget states no tile store for stage {query!r}; it schedules "
+            f"{_SCHEDULED_STAGE!r}"
+        )
+    return TileStoreFacts(
+        stage=query,
+        tile_capacity_bytes=target.architecture.shared_memory_per_cta_bytes,
+    )
+
+
+def atom_candidates(
+    target: CudaTarget, query: AtomCandidateQuery
+) -> AtomCandidateFacts:
+    """The atoms this target admits for one operation, in catalogue order."""
+    if not isinstance(query, AtomCandidateQuery):
+        raise TypeError(
+            "CudaTarget atom candidates need an AtomCandidateQuery, got "
+            f"{type(query).__name__}"
+        )
+    if query.stage != _SCHEDULED_STAGE:
+        raise ValueError(
+            f"CudaTarget enumerates no atoms for stage {query.stage!r}; it "
+            f"schedules {_SCHEDULED_STAGE!r}"
+        )
+    return AtomCandidateFacts(tuple(candidate_atoms(query.op, target)))
+
+
 register_target_facts(CudaTarget, MemoryHierarchyFacts, memory_hierarchy)
 register_target_facts(CudaTarget, ThroughputFacts, throughput)
 register_target_facts(CudaTarget, ParallelCapacityFacts, parallel_capacity)
+register_target_facts(CudaTarget, TileStoreFacts, tile_store)
+register_target_facts(CudaTarget, AtomCandidateFacts, atom_candidates)
 
 
-__all__ = ["memory_hierarchy", "parallel_capacity", "throughput"]
+__all__ = [
+    "atom_candidates",
+    "memory_hierarchy",
+    "parallel_capacity",
+    "throughput",
+    "tile_store",
+]

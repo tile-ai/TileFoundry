@@ -1,14 +1,12 @@
 # TileFoundry Spec — analysis (polyhedral model + per-stage target facts)
 
 This spec owns TileFoundry's fact layer: everything a later stage decides
-*over*, and nothing that decides anything itself. It has three surfaces:
+*over*, and nothing that decides anything itself. It has two surfaces:
 
 | Surface | Entry | What it states |
 |---|---|---|
 | Polyhedral model | `extract(hir) -> TileGraph` | one HIR `Function` body as isl domains, access relations and auto-inferred dependences — target-independent |
-| Per-stage target facts | `Analysis` (structural interface) | the atom candidates of one op and the tile store of one storage level, for one target at one stage |
 | Composed measurement | `analyze(module, function, analysis=...)` | one root analysis and its dependency closure, leaving typed Metadata on the IR |
-| Authored-HIR metrics | `analyze(ir) -> AnalysisResult` | the flag-selected entry the command line still uses, rendered from that Metadata |
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
 propagation — is owned by [semantic-analysis](./semantic-analysis.md), and the
@@ -19,8 +17,10 @@ rather than restating it.
 
 **Layering.** The decisions taken over these facts are owned by
 [schedule](./schedule.md#4-kernel-schedule-construction). The dependency is
-one-way: the schedule layer reads Analysis facts, and this layer MUST NOT
-import or otherwise depend on the schedule layer.
+one-way: the schedule layer reads this layer's facts, and this layer MUST NOT
+import or otherwise depend on the schedule layer. The atom catalogue and the
+store a tile lives in are the schedule layer's own inputs and are owned there
+([schedule §5](./schedule.md#5-scheduling-facts)).
 
 ## 1. Polyhedral model
 
@@ -306,149 +306,37 @@ rather than obtained from a scheduler.
     distance `0` there, and MUST NOT be otherwise. A statement with no
     self-dependence MUST have every dimension reported parallel.
 
-## 2. Per-stage target facts
+## 2. Authored-HIR metrics
 
-The polyhedral model is target-independent; the atom catalogue and the store a
-tile lives in are not. That store belongs to the **level**, not to the device: a
-tile at the AMX `core` level lives in that core's L1d, one at the CUDA `cta`
-level in shared memory.
-
-### 2.1 `AtomFact`
-
-```python
-class AtomFact:
-    """One candidate atom's facts, as the deciding stage consumes them.
-
-    Attributes:
-        shape: attribute; The atom's own M, N and K extents.
-        dtype: attribute; The atom's own a, b and c operand DTypes.
-        duration: attribute; Nominal roofline estimate for one instance, in ns.
-        compute_duration: attribute; The compute-side half of that estimate alone, in ns.
-        storage: attribute; Per-role fragment occupancy in bytes.
-        resource: attribute; Required thread-scope footprint, keyed by scope name.
-        is_async: attribute; True when the instruction is asynchronous.
-        atom: attribute; The target's own realized atom descriptor, carried through opaquely.
-    """
-
-    shape: tuple[int, int, int]
-    dtype: tuple[DType, DType, DType]
-    duration: float
-    compute_duration: float
-    storage: dict[str, int]
-    resource: dict[str, int]
-    is_async: bool
-    atom: object
-```
+The measurement entry is the composed operation (§3). What a human or a tool
+reads is a *rendering* of its semantic result and of the records it left on the
+IR ([inspection](./inspection.md)); the command line composes one call per
+requested analysis and renders the results together
+([cli §Analyze](./cli.md#analyze)).
 
 - constraints:
-  - The structure MUST be immutable and MUST stay target-independent: `atom`
-    MUST be kept opaque, so a target package can enumerate its own catalogue
-    without this type knowing that catalogue's types.
-  - `shape` / `dtype` MUST mirror the atom's own shape and operand dtypes, so a
-    consumer can filter and granularise without unpacking `atom`.
-  - `duration` MUST be a nominal estimate in ns for **one** atom instance, and
-    `compute_duration` MUST be its compute-side half alone — for a consumer that
-    models the surrounding traffic itself and would otherwise charge memory
-    twice.
-  - `atom` MUST be the realized descriptor a later fill or codegen stage needs,
-    so that stage never re-resolves it from `shape` / `dtype`.
+  - A rendering MUST NOT be a field of the semantic result, and an analysis MUST
+    NOT format one. A family that rendered its own text would be deciding
+    presentation, and two families would then disagree about it.
+  - A rendering MUST report what the caller *requested*. A requested analysis
+    pulls its dependencies in, so records reach the IR that nobody asked to see;
+    those records MUST stay on the IR and MUST NOT be reported. Which records an
+    analysis owns MUST be read from its registration (§3.1) rather than from a
+    second table.
+  - Every rendering of one run MUST make that selection through one shared
+    decision. A summary and an annotated program are two views of the same run,
+    and choosing separately is how one of them comes to show a dependency the
+    caller never asked about.
+  - A rendering MUST show only records that were actually written, so it never
+    reports a measurement that did not happen.
+  - Every reported quantity MUST come from a record, except a total that is the
+    exact sum of records that state it. A quantity that is not derivable that
+    way MUST be recorded by the analysis that computed it, not reassembled by a
+    renderer.
+  - Two formats over one report MUST carry the same conclusions. They MUST be
+    built from one intermediate structure rather than formatted independently.
 
-### 2.2 `Analysis`
-
-`Analysis` is the structural interface a Target binds for one stage, alongside
-that stage's `Schedule` ([target §1](./target.md#1-target)).
-
-```python
-class Analysis(Protocol):
-    """Report one stage's target-dependent facts.
-
-    Attributes:
-        stage: attribute; Exact Target service key for this implementation.
-        tile_capacity_bytes: attribute; Capacity of the store one tile of this level lives in.
-    """
-
-    stage: str
-    tile_capacity_bytes: int
-
-    def candidate_atoms(self, op: Call) -> list[AtomFact]: ...
-```
-
-- constraints:
-  - An implementation MUST be bound under `(Analysis, stage)` on the Target and
-    selected by `target.service(Analysis, stage)`; `stage` MUST equal that exact
-    key.
-  - `tile_capacity_bytes` MUST be the capacity of the store belonging to the
-    bound level, not the whole device, and MUST be a positive integer.
-  - `candidate_atoms` MUST hard-filter the target's catalogue and MUST NOT rank
-    it: ordering is not a decision this interface makes.
-  - `candidate_atoms` MAY return an empty list — a legitimate "no candidate
-    covers this op" outcome, not an error — and MAY raise `NotImplementedError`
-    for an op kind or target its catalogue does not cover.
-  - The capacity is a fact to record against a footprint, not a gate: an
-    implementation MUST NOT raise because a tile does not fit. A tile wider than
-    its store still has a schedule, only a worse one.
-
-## 3. Authored-HIR metrics
-
-`analyze(ir)` is the flag-selected authored-HIR entry the command line exposes
-([cli §Analyze](./cli.md#analyze)). It measures nothing of its own: it maps each
-selected flag onto one root selector, invokes the composed operation (§4) once
-per root, and renders the records those analyses left on the IR.
-
-```python
-class AnalysisOptions:
-    """Which analyses one flag-selected call runs.
-
-    Attributes:
-        roofline: attribute; Select the roofline root.
-        footprint: attribute; Select the memory root, which measures the footprint.
-        timeline: attribute; Select the timeline root.
-    """
-
-    roofline: bool = True
-    footprint: bool = True
-    timeline: bool = True
-
-class AnalysisResult:
-    """The annotated IR, a rendered summary, and the records that were written.
-
-    Attributes:
-        ir: attribute; The same IR object that was analyzed, now carrying metadata.
-        summary_lines: attribute; Rendered summary, one stable line per measured total.
-        metadata_types: attribute; The metadata record types this run attached.
-    """
-
-    ir: "Module"
-    summary_lines: tuple[str, ...]
-    metadata_types: tuple[type, ...]
-
-def analyze(ir: "Module", *, options: AnalysisOptions | None = None) -> AnalysisResult: ...
-```
-
-- constraints:
-  - `AnalysisOptions` and `AnalysisResult` MUST be immutable. `options=None`
-    MUST mean a fresh default `AnalysisOptions()` for that call, which selects
-    every analysis.
-  - Each selected flag MUST resolve to exactly one root selector, and the entry
-    MUST invoke the composed operation once per root. It MUST NOT compute any
-    quantity itself, so there is one implementation of every measurement and no
-    second reading of the same program.
-  - `summary_lines` MUST be rendered from the records on the IR. A total that no
-    record states MUST NOT appear, and a total a record does state MUST NOT be
-    recomputed here.
-  - What is rendered MUST follow the selected flags, not what is present on the
-    IR. A selected root pulls its dependencies in, so a record MAY be on the IR
-    without its own flag being selected; reporting it would present a
-    dependency's measurement as though the caller had asked for it. The
-    dependency's Metadata MUST still be left in place.
-  - `analyze` MUST accept a `Module` whose entry function is a HIR `Function`,
-    and MUST reject a bare `Function`: a Function carries neither the Target the
-    cost model measures against nor the topology hierarchy execution counts
-    divide over ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
-  - `AnalysisResult.ir` MUST be the same object that was passed in, annotated in
-    place.
-
-### 3.1 Metadata records
+### 2.1 Metadata records
 
 ```python
 class TrafficBytes:
@@ -600,7 +488,7 @@ class TimelineMetadata(IRMetadata):
   - The timeline is a modeled plan. It MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
 
-### 3.2 Analysis families
+### 2.2 Analysis families
 
 The first families are `compute-cost`, `memory`, `roofline`, and `timeline`.
 Each owns one record type and declares what it needs.
@@ -622,7 +510,7 @@ Each owns one record type and declares what it needs.
   - Logical work and lifetime MUST remain target-independent. Physical capacity,
     hierarchy relationships, and throughput comparisons are target-aware.
 
-### 3.3 Memory hierarchy facts
+### 2.3 Memory hierarchy facts
 
 ```python
 class MemoryRelationKind(Enum):
@@ -704,7 +592,7 @@ class MemoryHierarchyFacts:
     capacity MUST be recorded as an advisory and MUST NOT fail the call, because
     a working set larger than a cache still runs.
 
-## 4. Composed analysis
+## 3. Composed analysis
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
 operation. One call selects one root analysis by name; the operation resolves
@@ -756,7 +644,7 @@ def analyze(
     renderings of it and of the Metadata on the IR, and MUST NOT be fields of
     it.
 
-### 4.1 Analysis registration
+### 3.1 Analysis registration
 
 ```python
 class AnalysisAlgorithm:
