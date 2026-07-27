@@ -6,9 +6,7 @@ from dataclasses import dataclass, field
 
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target.base import Architecture, Device, Target, bind_services
-
-from .architecture import SM90
-from .device import H200SXM
+from tilefoundry.target.hardware.registry import check_compatible, select
 
 
 @dataclass(frozen=True, init=False)
@@ -16,35 +14,51 @@ class CudaTarget(Target):
     """CUDA target composed from one architecture and one device."""
 
     name: str = field(default="cuda", init=False)
-    architecture: Architecture = field(default_factory=SM90)
-    device: Device = field(default_factory=H200SXM)
+    architecture: Architecture = field(init=False)
+    device: Device = field(init=False)
+    # Identity and digest record where a value came from, not what it says, so
+    # they stay out of equality: two targets carrying identical facts must group
+    # together for codegen even when one was selected by ID and one supplied
+    # directly.
+    architecture_id: str | None = field(default=None, init=False, compare=False)
+    device_id: str | None = field(default=None, init=False, compare=False)
+    architecture_digest: str | None = field(default=None, init=False, compare=False)
+    device_digest: str | None = field(default=None, init=False, compare=False)
 
     def __init__(
         self,
-        architecture: Architecture | None = None,
-        device: Device | None = None,
+        architecture: Architecture | str | None = None,
+        device: Device | str | None = None,
         *,
         arch: str | None = None,
     ) -> None:
-        architecture = SM90() if architecture is None else architecture
-        device = H200SXM() if device is None else device
-        if not isinstance(architecture, Architecture):
-            raise TypeError(
-                f"CudaTarget.architecture must be an Architecture, got "
-                f"{type(architecture).__name__}"
-            )
-        if not isinstance(device, Device):
-            raise TypeError(
-                f"CudaTarget.device must be a Device, got {type(device).__name__}"
-            )
-        if arch is not None and arch != architecture.name:
+        from .spec import H200_SXM_ID, SM90_ID  # noqa: PLC0415
+
+        architecture = select(
+            SM90_ID if architecture is None else architecture,
+            Architecture,
+            role="CudaTarget.architecture",
+        )
+        device = select(
+            H200_SXM_ID if device is None else device,
+            Device,
+            role="CudaTarget.device",
+        )
+        architecture_id, device_id = architecture.id, device.id
+        if arch is not None and arch != architecture.value.name:
             raise ValueError(
                 f"CudaTarget: arch {arch!r} conflicts with architecture.name "
-                f"{architecture.name!r}"
+                f"{architecture.value.name!r}"
             )
+        if architecture_id is not None and device_id is not None:
+            check_compatible(architecture, device)
         object.__setattr__(self, "name", "cuda")
-        object.__setattr__(self, "architecture", architecture)
-        object.__setattr__(self, "device", device)
+        object.__setattr__(self, "architecture", architecture.value)
+        object.__setattr__(self, "device", device.value)
+        object.__setattr__(self, "architecture_id", architecture_id)
+        object.__setattr__(self, "device_id", device_id)
+        object.__setattr__(self, "architecture_digest", architecture.digest)
+        object.__setattr__(self, "device_digest", device.digest)
         from tilefoundry.analysis import Analysis  # noqa: PLC0415
         from tilefoundry.schedule import Schedule  # noqa: PLC0415
 
@@ -72,8 +86,8 @@ class CudaTarget(Target):
         """Return a per-CTA topology limit, if one exists.
 
         The CUDA grid is a launch shape, not an SM allocation.  Its static
-        extent is therefore deliberately unbounded here; fixed-wave analysis
-        applies ``compiler_policy_max_parallel_ctas`` separately.
+        extent is therefore deliberately unbounded here; a fixed-wave parallel
+        capacity is a scheduling policy applied separately.
         """
         if name == "cta":
             return None

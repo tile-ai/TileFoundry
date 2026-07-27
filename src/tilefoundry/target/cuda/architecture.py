@@ -1,4 +1,8 @@
-"""SM90 compilation capabilities."""
+"""SM90 compilation capabilities.
+
+Every value is built from the installed ``nvidia.sm90`` document; this module
+holds the shape of an SM90 value, never a copy of its numbers.
+"""
 
 from __future__ import annotations
 
@@ -10,23 +14,22 @@ from tilefoundry.target.base import Architecture
 
 @dataclass(frozen=True)
 class SM90(Architecture):
-    """SM90 compilation identity and structural capabilities."""
+    """SM90 compilation identity and structural capabilities.
 
-    name: str = "sm_90"
-    supported_compute_dtypes: tuple[DType, ...] = (
-        DType.f32,
-        DType.f16,
-        DType.bf16,
-        DType.fp8e4m3,
-    )
-    instruction_capabilities: tuple[str, ...] = (
-        "tensor_core",
-        "wgmma",
-        "tma",
-    )
-    max_threads_per_cta: int = 1024
-    max_threads_per_warp: int = 32
-    max_warps_per_cta: int = 32
+    The per-SM limits live here rather than on a device: they are properties
+    of the microarchitecture, so every product built on SM90 shares them.
+    """
+
+    name: str
+    supported_compute_dtypes: tuple[DType, ...]
+    instruction_capabilities: tuple[str, ...]
+    max_threads_per_cta: int
+    max_threads_per_warp: int
+    max_warps_per_cta: int
+    max_resident_ctas_per_sm: int
+    shared_memory_per_sm_bytes: int
+    shared_memory_per_cta_bytes: int
+    registers_per_sm_32bit: int
 
     def supports_compute_dtype(self, dtype: DType) -> bool:
         """Return whether SM90 has a compute instruction for ``dtype``."""

@@ -1,0 +1,71 @@
+[spec]
+schema = "tilefoundry.amx.architecture/v1"
+kind = "architecture"
+id = "apple.amx"
+
+[facts.identity.name]
+value = "apple_amx"
+unit = "name"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "Apple publishes no AMX documentation, so the architecture is described from a reverse-engineered reference"
+
+[facts.instruction.capabilities]
+value = ["amx_outer_product", "amx_resident_accumulator"]
+unit = "name"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "instruction families the AMX code path may select"
+
+[facts.instruction.compute_dtypes]
+value = ["f16", "f32"]
+unit = "name"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "dtypes with a modelled AMX compute instruction"
+
+[facts.compute.units_per_core]
+value = 1
+unit = "count"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "one AMX coprocessor issues for one core at a time"
+
+[facts.register.x_file]
+value = 512
+unit = "byte"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "eight 64-byte X registers, the staging file one operand lands in"
+
+[facts.register.y_file]
+value = 512
+unit = "byte"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "eight 64-byte Y registers, the staging file the other operand lands in"
+
+[facts.register.z_file]
+value = 4096
+unit = "byte"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "sixty-four 64-byte Z rows; the accumulator file an outer product lands in"
+
+[facts.geometry.f32_outer_product]
+value = "16x16"
+unit = "element"
+origin = "derived"
+source = "https://github.com/corsix/amx"
+conditions = "one FMA32 multiplies a 64-byte X operand by a 64-byte Y operand: 16 by 16 f32"
+
+[facts.geometry.f32_accumulator_tile]
+value = "32x32"
+unit = "element"
+origin = "derived"
+source = "https://github.com/corsix/amx"
+conditions = "4096 B of Z at 4 B per f32 is 1024 elements, which is 32 by 32"
+
+[facts.throughput.f32_instruction_peak]
+status = "unavailable"
+conditions = "Apple publishes no AMX instruction throughput; the measured sustained unit throughput on the device is used for the roofline instead."

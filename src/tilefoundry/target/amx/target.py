@@ -6,9 +6,7 @@ from dataclasses import dataclass, field
 
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target.base import Architecture, Device, Target, bind_services
-
-from .architecture import AppleAmx
-from .device import AppleM2Pro
+from tilefoundry.target.hardware.registry import check_compatible, select
 
 
 @dataclass(frozen=True, init=False)
@@ -16,28 +14,43 @@ class AmxTarget(Target):
     """AMX target composed from one architecture and one device."""
 
     name: str = field(default="amx", init=False)
-    architecture: Architecture = field(default_factory=AppleAmx)
-    device: Device = field(default_factory=AppleM2Pro)
+    architecture: Architecture = field(init=False)
+    device: Device = field(init=False)
+    # Identity and digest record where a value came from, not what it says, so
+    # they stay out of equality: two targets carrying identical facts must group
+    # together for codegen even when one was selected by ID and one supplied
+    # directly.
+    architecture_id: str | None = field(default=None, init=False, compare=False)
+    device_id: str | None = field(default=None, init=False, compare=False)
+    architecture_digest: str | None = field(default=None, init=False, compare=False)
+    device_digest: str | None = field(default=None, init=False, compare=False)
 
     def __init__(
         self,
-        architecture: Architecture | None = None,
-        device: Device | None = None,
+        architecture: Architecture | str | None = None,
+        device: Device | str | None = None,
     ) -> None:
-        architecture = AppleAmx() if architecture is None else architecture
-        device = AppleM2Pro() if device is None else device
-        if not isinstance(architecture, Architecture):
-            raise TypeError(
-                f"AmxTarget.architecture must be an Architecture, got "
-                f"{type(architecture).__name__}"
-            )
-        if not isinstance(device, Device):
-            raise TypeError(
-                f"AmxTarget.device must be a Device, got {type(device).__name__}"
-            )
+        from .spec import APPLE_AMX_ID, APPLE_M2_PRO_ID  # noqa: PLC0415
+
+        architecture = select(
+            APPLE_AMX_ID if architecture is None else architecture,
+            Architecture,
+            role="AmxTarget.architecture",
+        )
+        device = select(
+            APPLE_M2_PRO_ID if device is None else device,
+            Device,
+            role="AmxTarget.device",
+        )
+        if architecture.id is not None and device.id is not None:
+            check_compatible(architecture, device)
         object.__setattr__(self, "name", "amx")
-        object.__setattr__(self, "architecture", architecture)
-        object.__setattr__(self, "device", device)
+        object.__setattr__(self, "architecture", architecture.value)
+        object.__setattr__(self, "device", device.value)
+        object.__setattr__(self, "architecture_id", architecture.id)
+        object.__setattr__(self, "device_id", device.id)
+        object.__setattr__(self, "architecture_digest", architecture.digest)
+        object.__setattr__(self, "device_digest", device.digest)
         from tilefoundry.analysis import Analysis  # noqa: PLC0415
         from tilefoundry.schedule import Schedule  # noqa: PLC0415
 

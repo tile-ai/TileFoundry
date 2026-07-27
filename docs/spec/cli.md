@@ -144,10 +144,15 @@ address.
 ## Inspect Capabilities
 
 `inspect capabilities` resolves the target from the selected Module and prints
-the installed compact hardware capability record. It
-does not emit compiler operation coverage. Hardware facts identify their unit,
-qualification, source, and whether they are direct, derived, runtime queried,
-or unavailable.
+the installed compact hardware capability record. It does not emit compiler
+operation coverage. The record names both the architecture and the device
+document behind the target, each with its content digest, then every recorded
+fact by its path. A fact identifies its unit, the conditions it holds under,
+its source, and its origin — vendor-published, measured on the described host,
+cited from a reference, derived, or a reading no source states. A fact with no
+usable value is reported as unavailable rather than given a placeholder number.
+A target composed from a directly supplied value has no installed document to
+report, and the command says so instead of naming the resource it resembles.
 
 ## Help
 

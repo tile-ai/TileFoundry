@@ -64,7 +64,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import _expr_children
 from tilefoundry.target import CpuTarget, CudaTarget, Target
-from tilefoundry.target.cuda import SM90
+from tilefoundry.target.cuda.spec import H200_SXM_ID, SM90_ID
 
 # ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -978,25 +978,90 @@ def _target_str(target: Target) -> str:
     if isinstance(target, CpuTarget):
         return "CpuTarget()"
     if isinstance(target, CudaTarget):
-        architecture = target.architecture
-        if architecture == SM90():
-            return "CudaTarget()"
-        dtypes = ", ".join(
-            f"DType.{dtype.name}" for dtype in architecture.supported_compute_dtypes
-        )
-        if len(architecture.supported_compute_dtypes) == 1:
-            dtypes += ","
-        return (
-            "CudaTarget(architecture=SM90("
-            f"name={architecture.name!r}, "
-            f"supported_compute_dtypes=({dtypes}), "
-            f"instruction_capabilities={architecture.instruction_capabilities!r}, "
-            f"max_threads_per_cta={architecture.max_threads_per_cta}, "
-            f"max_threads_per_warp={architecture.max_threads_per_warp}, "
-            f"max_warps_per_cta={architecture.max_warps_per_cta}"
-            "))"
-        )
+        arguments = [
+            f"{role}={value}"
+            for role, value in (
+                ("architecture", _architecture_arg(target)),
+                ("device", _device_arg(target)),
+            )
+            if value is not None
+        ]
+        return f"CudaTarget({', '.join(arguments)})"
     raise TypeError(f"unsupported target for Python printing: {type(target).__name__}")
+
+
+def _architecture_arg(target: CudaTarget) -> str | None:
+    """The ``architecture=`` argument, or ``None`` when it is the default.
+
+    A resource selected from the installed namespace prints as its ID, which is
+    the authored surface. One supplied directly has no document behind it, so it
+    prints as the constructor that rebuilds the same value.
+    """
+    architecture = target.architecture
+    if target.architecture_id is not None:
+        if target.architecture_id == SM90_ID:
+            return None
+        return repr(target.architecture_id)
+    dtypes = ", ".join(
+        f"DType.{dtype.name}" for dtype in architecture.supported_compute_dtypes
+    )
+    if len(architecture.supported_compute_dtypes) == 1:
+        dtypes += ","
+    return (
+        "SM90("
+        f"name={architecture.name!r}, "
+        f"supported_compute_dtypes=({dtypes}), "
+        f"instruction_capabilities={architecture.instruction_capabilities!r}, "
+        f"max_threads_per_cta={architecture.max_threads_per_cta}, "
+        f"max_threads_per_warp={architecture.max_threads_per_warp}, "
+        f"max_warps_per_cta={architecture.max_warps_per_cta}, "
+        f"max_resident_ctas_per_sm={architecture.max_resident_ctas_per_sm}, "
+        f"shared_memory_per_sm_bytes={architecture.shared_memory_per_sm_bytes}, "
+        f"shared_memory_per_cta_bytes={architecture.shared_memory_per_cta_bytes}, "
+        f"registers_per_sm_32bit={architecture.registers_per_sm_32bit}"
+        ")"
+    )
+
+
+def _device_arg(target: CudaTarget) -> str | None:
+    """The ``device=`` argument, or ``None`` when it is the default."""
+    device = target.device
+    if target.device_id is not None:
+        if target.device_id == H200_SXM_ID:
+            return None
+        return repr(target.device_id)
+    flops = ", ".join(
+        f"(DType.{dtype.name}, {value})"
+        for dtype, value in device.dense_flops_per_second.items()
+    )
+    if len(device.dense_flops_per_second) == 1:
+        flops += ","
+    return (
+        "H200SXM("
+        f"name={device.name!r}, "
+        f"sm_count={device.sm_count}, "
+        f"hbm_capacity_bytes={device.hbm_capacity_bytes}, "
+        f"hbm_bandwidth_bytes_per_second={device.hbm_bandwidth_bytes_per_second}, "
+        f"_dense_flops=({flops})"
+        ")"
+    )
+
+
+def _cuda_target_imports(target: Target | None) -> tuple[str, ...]:
+    """Extra imports the emitted ``CudaTarget(...)`` argument text needs."""
+    if not isinstance(target, CudaTarget):
+        return ()
+    names = []
+    if target.architecture_id is None:
+        names.append("SM90")
+    if target.device_id is None:
+        names.append("H200SXM")
+    if not names:
+        return ()
+    return (
+        f"from tilefoundry.target.cuda import {', '.join(sorted(names))}",
+        "from tilefoundry.ir.types import DType",
+    )
 
 
 def _collect_all_meshes(fn: HirFunction) -> dict[int, Mesh]:
@@ -1029,8 +1094,7 @@ def _emit_header(
     lines.append("from tilefoundry import func")
     if target is not None:
         lines.append("from tilefoundry.target import CpuTarget, CudaTarget")
-        if isinstance(target, CudaTarget) and target.architecture != SM90():
-            lines.append("from tilefoundry.ir.types import DType")
+        lines.extend(_cuda_target_imports(target))
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
     lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")

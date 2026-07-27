@@ -14,7 +14,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.target import Target, resolve_target
-from tilefoundry.target.amx.device import AppleM2Pro
+from tilefoundry.target.amx.spec import installed_architecture
 from tilefoundry.target.amx.target import AmxTarget
 
 
@@ -33,17 +33,17 @@ class StorageLevel:
 
 
 # The X/Y/Z register files are AMX ISA geometry, not a per-part figure, so the
-# level they form is read once off the recorded device facts.
-_ISA = AppleM2Pro()
+# level they form is read once off the installed architecture.
+_ISA = installed_architecture()
 
 # An AMX operand is addressed as a register: A in X, B in Y, C in the Z
 # accumulator file, and one instance never reaches outside them.
 AMX_REGISTERS = StorageLevel(
     name="amx_xyz_registers",
     budget=(
-        ("a_bytes", _ISA.amx_staging_bytes),
-        ("b_bytes", _ISA.amx_staging_bytes),
-        ("c_bytes", _ISA.amx_accumulator_bytes),
+        ("a_bytes", _ISA.staging_bytes),
+        ("b_bytes", _ISA.staging_bytes),
+        ("c_bytes", _ISA.accumulator_bytes),
     ),
 )
 

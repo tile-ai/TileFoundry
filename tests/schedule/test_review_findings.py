@@ -16,7 +16,6 @@ from tilefoundry.schedule import ScheduleOptions
 from tilefoundry.target import CudaTarget
 from tilefoundry.target.base import Device
 from tilefoundry.target.cuda.allocation import _allocation_groups
-from tilefoundry.target.cuda.device import H200SXM
 from tilefoundry.target.cuda.planner import build_planning_problem
 from tilefoundry.target.cuda.projection import project_physical_fusion
 from tilefoundry.target.cuda.solver import PlanningSolution, _build_model, solve_planning_problem
@@ -109,7 +108,7 @@ class _CapacityDevice(Device):
         self.hbm_capacity_bytes = capacity
 
     def peak_for(self, dtype):
-        return H200SXM().peak_for(dtype)
+        return CudaTarget().device.peak_for(dtype)
 
 
 def _constant_problem(capacity: int):

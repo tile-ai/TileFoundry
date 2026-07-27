@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from tilefoundry.codegen.registry import group_functions_by_target
@@ -9,12 +11,11 @@ from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import Schedule
 from tilefoundry.target import (
-    H200SXM,
-    SM90,
     CpuTarget,
     CudaTarget,
     Target,
 )
+from tilefoundry.target.cuda.spec import installed_architecture as _installed_sm90
 
 
 def test_cuda_target_composes_fixed_architecture_and_device_facts() -> None:
@@ -22,9 +23,17 @@ def test_cuda_target_composes_fixed_architecture_and_device_facts() -> None:
 
     assert target.name == "cuda"
     assert target.arch == "sm_90"
-    assert target.architecture == SM90()
     assert target.topology_levels == ("cta", "thread")
-    assert target.device == H200SXM()
+    # A default target selects the installed documents by their stable IDs and
+    # keeps both the ID and the content digest it resolved.
+    assert (target.architecture_id, target.device_id) == (
+        "nvidia.sm90",
+        "nvidia.h200_sxm",
+    )
+    assert target.architecture_digest and target.device_digest
+    assert target == CudaTarget(
+        architecture="nvidia.sm90", device="nvidia.h200_sxm"
+    )
 
 
 def test_service_lookup_contract() -> None:
@@ -38,7 +47,7 @@ def test_service_lookup_contract() -> None:
 
     cuda = CudaTarget()
     assert cuda.service(Schedule, "cta").stage == "cta"
-    custom = CudaTarget(architecture=SM90(name="sm_90_custom"))
+    custom = CudaTarget(architecture=replace(_installed_sm90(), name="sm_90_custom"))
     assert custom.service(Schedule, "cta").stage == "cta"
 
     assert CudaTarget() == CudaTarget()
@@ -57,15 +66,28 @@ def test_static_topologies_use_target_resource_facts() -> None:
         target.validate_program_topology(Topology("thread", 1025))
 
 
-def test_h200_grid_and_parallelism_facts_are_separate() -> None:
-    device = H200SXM()
+def test_per_sm_limits_belong_to_the_architecture_not_the_device() -> None:
+    """A per-SM limit is a property of the microarchitecture, so every product
+    built on it shares the limit; the device only says how many SMs there are
+    and how fast its memory system runs."""
+    target = CudaTarget()
+    architecture, device = target.architecture, target.device
+
+    assert architecture.max_resident_ctas_per_sm == 32
+    assert architecture.shared_memory_per_sm_bytes == 228 * 1024
+    assert architecture.shared_memory_per_cta_bytes == 227 * 1024
+    assert architecture.registers_per_sm_32bit == 65_536
+    for moved in (
+        "max_resident_ctas_per_sm",
+        "shared_memory_per_sm_bytes",
+        "shared_memory_per_cta_bytes",
+        "registers_per_sm_32bit",
+    ):
+        assert not hasattr(device, moved)
 
     assert device.sm_count == 132
-    assert device.max_resident_ctas_per_sm == 32
-    assert device.compiler_policy_max_parallel_ctas == 132
-    assert device.shared_memory_per_sm_bytes == 228 * 1024
-    assert device.shared_memory_per_cta_bytes == 227 * 1024
-    assert device.registers_per_sm_32bit == 65_536
+    assert device.hbm_capacity_bytes == 141_000_000_000
+    assert device.hbm_bandwidth_bytes_per_second == 4_800_000_000_000
 
 
 def test_group_functions_by_target_fact_matching() -> None:
@@ -77,7 +99,7 @@ def test_group_functions_by_target_fact_matching() -> None:
         name="second",
         params=(),
         body=body,
-        target=CudaTarget(architecture=SM90(name="sm_90_alt")),
+        target=CudaTarget(architecture=replace(_installed_sm90(), name="sm_90_alt")),
     )
     with pytest.raises(ValueError, match="differing Target facts"):
         group_functions_by_target(

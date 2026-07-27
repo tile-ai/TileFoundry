@@ -1,0 +1,82 @@
+[spec]
+schema = "tilefoundry.cuda.architecture/v1"
+kind = "architecture"
+id = "nvidia.sm90"
+
+[facts.identity.name]
+value = "sm_90"
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "compilation architecture identity"
+
+[facts.instruction.capabilities]
+value = ["tensor_core", "wgmma", "tma"]
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-compatibility-guide/index.html"
+conditions = "instruction families the SM90 code path may select"
+
+[facts.instruction.compute_dtypes]
+value = ["f32", "f16", "bf16", "fp8e4m3"]
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "dtypes with an SM90 compute instruction; f4e2m1 and f8e8m0 are storage and scale types, not compute types"
+
+[facts.compute.max_threads_per_cta]
+value = 1024
+unit = "thread"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "SM90 CUDA programming limit"
+
+[facts.compute.max_threads_per_warp]
+value = 32
+unit = "thread"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "architectural warp width"
+
+[facts.compute.max_warps_per_cta]
+value = 32
+unit = "count"
+origin = "derived"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "1024 threads per CTA divided by the 32-thread warp width"
+
+[facts.compute.max_resident_ctas_per_sm]
+value = 32
+unit = "count"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "hardware maximum; resource usage can lower occupancy"
+
+[facts.memory.shared.per_sm]
+value = 233472
+unit = "byte"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "228 KiB maximum shared-memory capacity per SM; unified L1 and shared-memory configuration"
+
+[facts.memory.shared.per_cta]
+value = 232448
+unit = "byte"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "227 KiB maximum dynamic shared-memory allocation per CTA"
+
+[facts.memory.shared.bandwidth]
+status = "unavailable"
+conditions = "NVIDIA publishes no static shared-memory bandwidth to use for a roofline."
+
+[facts.memory.register.per_sm]
+value = 65536
+unit = "register"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
+conditions = "SM90 maximum 32-bit register-file capacity per SM"
+
+[facts.memory.register.bandwidth]
+status = "unavailable"
+conditions = "NVIDIA publishes no static register-file bandwidth to use for a roofline."

@@ -1,4 +1,8 @@
-"""Apple AMX compilation capabilities."""
+"""Apple AMX compilation capabilities.
+
+Every value is built from the installed ``apple.amx`` document; this module
+holds the shape of an AMX architecture value, never a copy of its numbers.
+"""
 
 from __future__ import annotations
 
@@ -10,18 +14,18 @@ from tilefoundry.target.base import Architecture
 
 @dataclass(frozen=True)
 class AppleAmx(Architecture):
-    """Apple AMX compilation identity and structural capabilities."""
+    """Apple AMX compilation identity and structural capabilities.
 
-    name: str = "apple_amx"
-    supported_compute_dtypes: tuple[DType, ...] = (
-        DType.f16,
-        DType.f32,
-    )
-    instruction_capabilities: tuple[str, ...] = (
-        "amx_outer_product",
-        "amx_resident_accumulator",
-    )
-    amx_units_per_core: int = 1
+    The register files live here rather than on a device: they are ISA
+    geometry, so every part carrying this coprocessor shares them.
+    """
+
+    name: str
+    supported_compute_dtypes: tuple[DType, ...]
+    instruction_capabilities: tuple[str, ...]
+    amx_units_per_core: int
+    staging_bytes: int
+    accumulator_bytes: int
 
     def supports_compute_dtype(self, dtype: DType) -> bool:
         """Return whether AMX has a compute instruction for ``dtype``."""

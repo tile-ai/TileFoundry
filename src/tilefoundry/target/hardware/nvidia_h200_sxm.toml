@@ -1,0 +1,67 @@
+[spec]
+schema = "tilefoundry.cuda.device/v1"
+kind = "device"
+id = "nvidia.h200_sxm"
+
+[compatibility]
+architectures = ["nvidia.sm90"]
+
+[facts.identity.name]
+value = "h200_sxm"
+unit = "name"
+origin = "vendor"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "product identity of the SXM package"
+
+[facts.compute.sm_count]
+value = 132
+unit = "count"
+origin = "vendor"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "H200 SXM"
+
+[facts.memory.hbm.capacity]
+value = 141000000000
+unit = "byte"
+origin = "vendor"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "141 GB, decimal"
+
+[facts.memory.hbm.bandwidth]
+value = 4800000000000
+unit = "byte/s"
+origin = "vendor"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "4.8 TB/s peak HBM3e bandwidth, decimal"
+
+[facts.memory.l2.bandwidth]
+status = "unavailable"
+conditions = "NVIDIA publishes no static L2 bandwidth to use for a roofline."
+
+[facts.throughput.f32]
+value = 67000000000000
+unit = "flop/s"
+origin = "vendor"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "67 TFLOP/s dense FP32"
+
+[facts.throughput.f16]
+value = 989500000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "dense peak; the published 1979 TFLOP/s sparse FP16 peak divided by two"
+
+[facts.throughput.bf16]
+value = 989500000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "dense peak; the published 1979 TFLOP/s sparse BF16 peak divided by two"
+
+[facts.throughput.fp8e4m3]
+value = 1979000000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/h200/"
+conditions = "dense peak; the published 3958 TFLOP/s sparse FP8 peak divided by two"

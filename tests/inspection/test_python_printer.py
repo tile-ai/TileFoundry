@@ -1,12 +1,17 @@
 """Inspection printer tests: round-trip, dump integration."""
 
 import os
+from dataclasses import replace
 from math import prod
 
 from tests.fixtures.demo_ir import build_demo
 from tests.fixtures.qwen3_attention_graph import build_qwen3_attention_main_2cta_headnorm
 from tilefoundry.dump import DumpFlags, FileDumper, current_scope, dump
 from tilefoundry.inspection import PythonPrintOptions, as_script
+from tilefoundry.inspection.python_printer import (
+    _cuda_target_imports,
+    _target_str,
+)
 from tilefoundry.ir.core import BindingMetadata, Call, Constant, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
@@ -14,6 +19,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.parser.hir_parser import parse_script
+from tilefoundry.target.cuda import CudaTarget
 
 
 def _structural_equal(a, b, path="") -> bool:
@@ -194,3 +200,59 @@ class TestPythonPrinterDump:
         assert isinstance(dumper, FileDumper)
         py_path = os.path.join(str(dumper.root), "demo.py")
         assert os.path.isfile(py_path)
+
+
+class TestPythonPrinterTargetRoundTrip:
+    """A printed target must rebuild the same target when the emitted source is
+    executed: both the architecture and the device side, whether each was
+    selected from the installed namespace or supplied directly."""
+
+    @staticmethod
+    def _rebuild(target):
+        """Execute just the target portion of the emitted header and value."""
+        source = "\n".join(
+            [
+                "from tilefoundry.target import CpuTarget, CudaTarget",
+                *_cuda_target_imports(target),
+                f"result = {_target_str(target)}",
+            ]
+        )
+        namespace: dict = {}
+        exec(compile(source, "<emitted>", "exec"), namespace)  # noqa: S102
+        return namespace["result"]
+
+    def test_installed_selection_prints_as_the_bare_default(self):
+        installed = CudaTarget()
+        assert _target_str(installed) == "CudaTarget()"
+        assert _cuda_target_imports(installed) == ()
+        assert self._rebuild(installed) == installed
+
+    def test_a_directly_supplied_architecture_round_trips(self):
+        target = CudaTarget(
+            architecture=replace(CudaTarget().architecture, name="sm_90_custom")
+        )
+        rebuilt = self._rebuild(target)
+        assert rebuilt == target
+        assert rebuilt.architecture.name == "sm_90_custom"
+
+    def test_a_directly_supplied_device_is_not_dropped(self):
+        """Deciding defaultness from the architecture alone would print this as
+        a bare ``CudaTarget()`` and lose the device outright."""
+        target = CudaTarget(
+            device=replace(CudaTarget().device, name="h200_custom", sm_count=64)
+        )
+        rebuilt = self._rebuild(target)
+        assert rebuilt == target
+        assert rebuilt.device.name == "h200_custom"
+        assert rebuilt.device.sm_count == 64
+
+    def test_both_sides_supplied_directly_round_trip_together(self):
+        installed = CudaTarget()
+        target = CudaTarget(
+            architecture=replace(installed.architecture, name="arch_custom"),
+            device=replace(installed.device, name="device_custom", sm_count=8),
+        )
+        rebuilt = self._rebuild(target)
+        assert rebuilt == target
+        assert rebuilt.architecture.name == "arch_custom"
+        assert rebuilt.device.name == "device_custom"

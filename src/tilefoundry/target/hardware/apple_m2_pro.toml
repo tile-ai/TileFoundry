@@ -1,0 +1,105 @@
+[spec]
+schema = "tilefoundry.amx.device/v1"
+kind = "device"
+id = "apple.m2_pro"
+
+[compatibility]
+architectures = ["apple.amx"]
+
+[facts.identity.name]
+value = "apple_m2_pro"
+unit = "name"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "sysctl machdep.cpu.brand_string reports Apple M2 Pro on the host"
+
+[facts.compute.amx_unit_count]
+value = 2
+unit = "count"
+origin = "estimated"
+source = "AMX f32 GEMM thread-scaling measurement on the host"
+conditions = "read off measured thread scaling of the same GEMM: 504.9, 767.8, 967.5 and 1108.3 GFLOP/s at 1, 2, 4 and 8 threads, saturating at 2.2 times one thread; Apple publishes no AMX unit count"
+
+[facts.compute.performance_core_count]
+value = 8
+unit = "count"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "sysctl hw.perflevel0.physicalcpu"
+
+[facts.compute.efficiency_core_count]
+value = 4
+unit = "count"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "sysctl hw.perflevel1.physicalcpu"
+
+[facts.memory.l1d.per_performance_core]
+value = 131072
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "128 KiB from sysctl hw.perflevel0.l1dcachesize; the unqualified hw.l1dcachesize reports the efficiency core's 64 KiB instead"
+
+[facts.memory.l1d.per_efficiency_core]
+value = 65536
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "64 KiB from sysctl hw.perflevel1.l1dcachesize"
+
+[facts.memory.l2.per_performance_cluster]
+value = 16777216
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "16 MiB from sysctl hw.perflevel0.l2cachesize; shared by the performance cluster, not private to a core"
+
+[facts.memory.l2.per_efficiency_cluster]
+value = 4194304
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "4 MiB from sysctl hw.perflevel1.l2cachesize; the unqualified hw.l2cachesize reports this efficiency value instead"
+
+[facts.memory.cache_line]
+value = 128
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "sysctl hw.cachelinesize"
+
+[facts.memory.unified.capacity]
+value = 34359738368
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "32 GiB from sysctl hw.memsize"
+
+[facts.memory.unified.bandwidth]
+value = 200000000000
+unit = "byte/s"
+origin = "vendor"
+source = "Apple M2 Pro product specification"
+conditions = "published 200 GB/s peak, decimal; not measured on this host"
+
+[facts.throughput.amx.f32]
+value = 504900000000
+unit = "flop/s"
+origin = "measured"
+source = "AMX f32 GEMM benchmark on the host"
+conditions = "504.9 GFLOP/s for one AMX unit; M=N=K=512 f32 GEMM with Z-resident accumulation, single thread, warmed, best of five rounds"
+
+[facts.throughput.neon.f32]
+value = 107700000000
+unit = "flop/s"
+origin = "measured"
+source = "NEON f32 GEMM benchmark on the host"
+conditions = "107.7 GFLOP/s for one performance core, single thread; M=N=K=512 f32 GEMM under a 4x16 micro-kernel, panels pre-packed so the figure is the atom issue rate and not a packing cost, warmed, best of five rounds; result exact against Accelerate cblas_sgemm"
+
+[facts.geometry.neon_f32_outer_product]
+value = "4x4"
+unit = "element"
+origin = "derived"
+source = "Arm A64 instruction set, FMLA (by element)"
+conditions = "four FMLA vD.4s, vN.4s, vM.s[i] over four accumulator registers are the smallest whole f32 outer product NEON issues"

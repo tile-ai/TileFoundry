@@ -179,7 +179,11 @@ the runtime then loads the `LinkedModule` into a `RuntimeModule`:
 The emit / link pipeline and its products (`LinkableFunction` /
 `LinkableModule` / `LinkedModule`) are owned by [codegen](./codegen.md).
 Target capability (the `Target` descriptors and the admitted program
-topology levels) is owned by [target](./target.md). The Python-side
+topology levels) is owned by [target](./target.md). The hardware numbers those
+descriptors stand on are not written in Python: they come from installed,
+source-attributed Architecture and Device documents resolved by stable ID, and
+a composed Target retains each document's ID and content digest
+([target §10](./target.md#10-installed-hardware-resources)). The Python-side
 `RuntimeModule` boundary (field semantics, ABI, launch rules) is owned
 by [runtime](./runtime.md).
 

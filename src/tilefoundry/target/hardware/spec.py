@@ -1,80 +1,65 @@
-"""Load and render compact, source-attributed hardware facts."""
+"""Resolve and render the installed hardware documents behind a target."""
 
 from __future__ import annotations
 
-import tomllib
-from importlib.resources import files
-from typing import Any
+from tilefoundry.target.hardware.envelope import (
+    HardwareDocument,
+    UnknownDocumentError,
+)
+from tilefoundry.target.hardware.registry import HARDWARE_SPECS
 
 
-def _load(name: str) -> dict[str, Any]:
-    resource = files("tilefoundry.target.hardware").joinpath(name)
-    return tomllib.loads(resource.read_text(encoding="utf-8"))
+def hardware_documents(target: object) -> tuple[HardwareDocument, HardwareDocument]:
+    """The architecture and device documents *target* was composed from.
 
-
-def load_h200_sxm_sm90() -> dict[str, Any]:
-    """Return the installed H200 SXM / SM90 hardware specification."""
-    return _load("h200_sxm_sm90.toml")
-
-
-def load_apple_m2_pro_amx() -> dict[str, Any]:
-    """Return the installed Apple M2 Pro / AMX hardware specification."""
-    return _load("apple_m2_pro_amx.toml")
-
-
-def load_hardware_spec(target: object) -> dict[str, Any]:
-    """Resolve an installed hardware spec for one exact authored target."""
-    from tilefoundry.target.amx import AmxTarget, AppleAmx, AppleM2Pro  # noqa: PLC0415
-    from tilefoundry.target.cuda import H200SXM, SM90, CudaTarget  # noqa: PLC0415
-
-    if (
-        isinstance(target, AmxTarget)
-        and type(target.device) is AppleM2Pro
-        and type(target.architecture) is AppleAmx
-    ):
-        return load_apple_m2_pro_amx()
-    if (
-        isinstance(target, CudaTarget)
-        and type(target.device) is H200SXM
-        and type(target.architecture) is SM90
-        and target.device.name == "h200_sxm"
-        and target.architecture.name == "sm_90"
-    ):
-        return load_h200_sxm_sm90()
-    device = getattr(getattr(target, "device", None), "name", "unknown")
-    architecture = getattr(getattr(target, "architecture", None), "name", "unknown")
-    raise ValueError(
-        "no installed authored-analysis hardware spec for "
-        f"device={device!r}, architecture={architecture!r}"
+    A target holding a resource that was supplied directly rather than
+    selected from the installed namespace has no document to report, and says
+    so rather than guessing which installed resource it resembles.
+    """
+    architecture_id = getattr(target, "architecture_id", None)
+    device_id = getattr(target, "device_id", None)
+    if architecture_id is None or device_id is None:
+        architecture = getattr(getattr(target, "architecture", None), "name", "unknown")
+        device = getattr(getattr(target, "device", None), "name", "unknown")
+        raise UnknownDocumentError(
+            "no installed hardware documents for "
+            f"device={device!r}, architecture={architecture!r}: this target was "
+            "composed from directly supplied values"
+        )
+    return (
+        HARDWARE_SPECS.document(architecture_id),
+        HARDWARE_SPECS.document(device_id),
     )
 
 
 def format_capabilities(
-    spec: dict[str, Any], *, grid_cta_count: int | None = None,
+    documents: tuple[HardwareDocument, HardwareDocument],
+    *,
+    grid_cta_count: int | None = None,
 ) -> str:
     """Format the stable, intentionally compact capabilities report."""
-    target = spec["target"]
+    architecture, device = documents
     lines = [
-        f"target: {target['name']}",
-        f"device: {target['device']}",
-        f"architecture: {target['architecture']}",
+        f"architecture: {architecture.id}",
+        f"  digest: {architecture.digest}",
+        f"device: {device.id}",
+        f"  digest: {device.digest}",
         f"grid_cta_count: {grid_cta_count if grid_cta_count is not None else 'unspecified'}",
         "facts:",
     ]
-    for name, fact in spec["facts"].items():
-        value = fact["value"]
-        rendered = str(value) if not fact["unit"] else f"{value} {fact['unit']}"
-        lines.append(f"  {name}: {rendered} [{fact['provenance']}]")
-        if fact["conditions"]:
-            lines.append(f"    conditions: {fact['conditions']}")
-        if fact["source"]:
-            lines.append(f"    source: {fact['source']}")
+    for document in (architecture, device):
+        for path in sorted(document.facts):
+            fact = document.facts[path]
+            if not fact.available:
+                lines.append(f"  {path}: unavailable")
+            else:
+                unit = f" {fact.unit}" if fact.unit and fact.unit != "name" else ""
+                lines.append(f"  {path}: {fact.value}{unit} [{fact.origin}]")
+            if fact.conditions:
+                lines.append(f"    conditions: {fact.conditions}")
+            if fact.source:
+                lines.append(f"    source: {fact.source}")
     return "\n".join(lines)
 
 
-__all__ = [
-    "format_capabilities",
-    "load_apple_m2_pro_amx",
-    "load_h200_sxm_sm90",
-    "load_hardware_spec",
-]
+__all__ = ["format_capabilities", "hardware_documents"]

@@ -27,7 +27,7 @@ from tilefoundry.schedule.kernel_schedule import KernelScheduleError, build_sche
 from tilefoundry.schedule.render import EmitScaffoldError, HoleContract, emit_scaffold
 from tilefoundry.schedule.select_atoms import AtomSelectionError, select_atoms
 from tilefoundry.target import CudaTarget
-from tilefoundry.target.hardware import format_capabilities, load_hardware_spec
+from tilefoundry.target.hardware import format_capabilities, hardware_documents
 
 _HELP_SPEC_TOPICS = {
     "cli": "cli",
@@ -364,7 +364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             sys.stdout.write(
                 format_capabilities(
-                    load_hardware_spec(target),
+                    hardware_documents(target),
                     grid_cta_count=_grid_cta_count(ir),
                 )
                 + "\n"

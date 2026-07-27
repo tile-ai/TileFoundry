@@ -640,13 +640,10 @@ def analyze(
     _validate_authored(functions)
     target = _target_for(ir)
     # This is intentionally a compiler policy, not CUDA's grid limit nor the
-    # hardware resident-CTA maximum.  The initial H200 policy is one active
-    # CTA per SM; a target can expose a tighter policy without changing IR.
-    capacity = (
-        getattr(target.device, "compiler_policy_max_parallel_ctas", target.device.sm_count)
-        if isinstance(target, CudaTarget)
-        else 1
-    )
+    # hardware resident-CTA maximum.  The initial policy is one active CTA per
+    # SM, so it reads the device's parallel-unit count; a tighter policy is a
+    # scheduling input rather than a hardware fact, and does not change the IR.
+    capacity = target.device.sm_count if isinstance(target, CudaTarget) else 1
     metrics_by_function: dict[int, _FunctionMetrics] = {}
 
     for fn in reversed(functions):

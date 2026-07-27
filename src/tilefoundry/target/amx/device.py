@@ -1,49 +1,38 @@
-"""Fixed Apple M2 Pro device facts.
+"""Apple M2 Pro device resources.
 
-Every value here is recorded with its provenance in
-``target/hardware/apple_m2_pro_amx.toml``.
+Every value is built from the installed ``apple.m2_pro`` document; this module
+holds the shape of the device value, never a copy of its numbers. The AMX
+register files are ISA geometry and belong to the architecture, not here.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from tilefoundry.ir.types import DType
 from tilefoundry.target.base import Device
 
-# Measured f32 throughput per execution unit, not a published peak: Apple states
-# neither an AMX nor a NEON instruction rate. See the TOML facts
-# `amx_f32_unit_throughput` and `neon_f32_core_throughput`.
-_UNIT_FLOPS = (
-    ("amx", ((DType.f32, 504_900_000_000),)),
-    ("neon", ((DType.f32, 107_700_000_000),)),
-)
-
 
 @dataclass(frozen=True)
 class AppleM2Pro(Device):
-    """One Apple M2 Pro package with fixed hardware facts and planner policy."""
+    """One Apple M2 Pro package: its cores, caches, memory, and unit rates."""
 
-    name: str = field(default="apple_m2_pro", init=False)
+    name: str
     # The parallel-unit count a makespan divides work over: the AMX units, not
     # the cores -- eight performance cores share two units.
-    sm_count: int = field(default=2, init=False)
-    performance_core_count: int = field(default=8, init=False)
-    efficiency_core_count: int = field(default=4, init=False)
-    l1d_bytes_per_performance_core: int = field(default=128 * 1024, init=False)
-    l1d_bytes_per_efficiency_core: int = field(default=64 * 1024, init=False)
-    l2_bytes_per_performance_cluster: int = field(default=16 * 1024 * 1024, init=False)
-    l2_bytes_per_efficiency_cluster: int = field(default=4 * 1024 * 1024, init=False)
-    cache_line_bytes: int = field(default=128, init=False)
-    unified_memory_capacity_bytes: int = field(default=32 * 1024**3, init=False)
-    unified_memory_bandwidth_bytes_per_second: int = field(
-        default=200_000_000_000, init=False
-    )
-    amx_staging_bytes: int = field(default=512, init=False)
-    amx_accumulator_bytes: int = field(default=4096, init=False)
-    _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...] = field(
-        default=_UNIT_FLOPS, init=False, repr=False
-    )
+    sm_count: int
+    performance_core_count: int
+    efficiency_core_count: int
+    l1d_bytes_per_performance_core: int
+    l1d_bytes_per_efficiency_core: int
+    l2_bytes_per_performance_cluster: int
+    l2_bytes_per_efficiency_cluster: int
+    cache_line_bytes: int
+    unified_memory_capacity_bytes: int
+    unified_memory_bandwidth_bytes_per_second: int
+    # Measured throughput per execution unit, not a published peak: Apple
+    # states neither an AMX nor a NEON instruction rate.
+    _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
 
     @property
     def unit_flops_per_second(self) -> dict[str, dict[DType, int]]:
