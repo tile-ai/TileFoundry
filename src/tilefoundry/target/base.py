@@ -52,6 +52,18 @@ class Target:
             )
         return matches[0]
 
+    def as_facts(self, facts_type: type, query: object = None) -> object:
+        """Project this target's specification into *facts_type*.
+
+        This converts what the target already knows; it does not analyze IR,
+        build a constraint model, solve, or export a plan. *query* is optional
+        and owned by the requesting algorithm: a hardware-only projection omits
+        it, while a program-dependent one passes its own private value.
+        """
+        from tilefoundry.target.facts import TARGET_FACTS  # noqa: PLC0415
+
+        return TARGET_FACTS.project(self, facts_type, query)
+
 
 def bind_services(target: Target, bindings: tuple[tuple[type, str, object], ...]) -> None:
     """Bind an immutable service table during target construction."""

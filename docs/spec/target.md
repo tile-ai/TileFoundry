@@ -15,11 +15,16 @@ class Target:
     _services: tuple[tuple[type, str, object], ...] = ()
 
     def service(self, interface: type, stage: str) -> object: ...
+
+    def as_facts(self, facts_type: type, query: object = None) -> object: ...
 ```
 
 - constraints:
   - `name` MUST be the stable backend identifier used for target resolution and
     codegen grouping.
+  - `as_facts` MUST project this target's specification into the immutable
+    aggregate a requesting algorithm declares, under the rules of
+    [§11](#11-target-facts-projection).
   - `_services` MUST be immutable and populated only by target construction.
     It MUST NOT participate in equality, hashing, or `repr`.
   - `service` MUST require a non-empty stage string and match the interface by
@@ -456,3 +461,58 @@ conditions = "No validated number."
   - Reporting the resources behind a target MUST name both documents and their
     digests. A target composed from a directly supplied value has no document to
     report and MUST say so rather than name the installed resource it resembles.
+
+## 11. Target Facts projection
+
+A target-aware algorithm declares the immutable aggregate of facts it needs; the
+Target package registers the conversion that builds it.
+[`Target.as_facts`](#1-target) is the one boundary between a hardware
+specification and an algorithm's own view of it, and delegates to this registry.
+
+```python
+class TargetFactsRegistry:
+    """Conversions from a concrete Target to an algorithm's Facts aggregate."""
+
+    def register(
+        self, target_type: type, facts_type: type, conversion: FactsConversion
+    ) -> None: ...
+
+    def project(
+        self, target: Target, facts_type: type, query: object = None
+    ) -> object: ...
+
+
+def register_target_facts(
+    target_type: type, facts_type: type, conversion: FactsConversion
+) -> None: ...
+```
+
+- constraints:
+  - A conversion MUST be registered under the exact
+    `(Target concrete type, Facts type)` pair. Resolution MUST use the target's
+    exact concrete type: a base-class registration MUST NOT serve a subclass,
+    because two targets sharing a base can describe different hardware, and a
+    Facts type MUST be identified by the class itself rather than by its name.
+  - A missing conversion MUST fail immediately. A target-aware algorithm MUST
+    NOT fall back to a default projection; only an algorithm explicitly declared
+    target-independent may run without Target Facts.
+  - A duplicate registration for one exact pair MUST fail, so a projection
+    cannot depend on import order.
+  - A Facts aggregate MUST be a frozen dataclass. The constraint MUST be checked
+    when the conversion is registered rather than trusted at each projection.
+    Aggregates MUST NOT inherit one universal Facts base.
+  - Every conversion MUST have the same call shape, `as_facts(FactsType,
+    query=None)`. `query` is owned by the requesting algorithm: a hardware-only
+    projection MUST require it to be absent, while a program-dependent one MAY
+    validate its own private query type. There MUST be no common query base and
+    no mandatory public program-view type.
+  - A conversion returning a value that is not an instance of the requested
+    Facts type MUST fail at the boundary, not inside the algorithm.
+  - Projection MUST be a read. It MUST NOT analyze IR, build a constraint model,
+    solve, export a plan, or mutate the Target, the IR, the registry, or runtime
+    state. It only converts what the specification already records.
+  - The registry MUST be generic: the common code MUST NOT import or name a
+    concrete target, architecture, or device class, so adding a backend adds a
+    registration rather than a branch.
+  - The hardware-specification registry (§10.2), the algorithm registry, and the
+    Target Facts registry MUST remain distinct module-level registries.
