@@ -80,6 +80,22 @@ def _algorithm(target: object, topology: str) -> ScheduleAlgorithm:
         raise ScheduleError(f"schedule: {error}") from None
 
 
+def _options(options: object | None) -> object:
+    """The common options every registered algorithm receives."""
+    # Importing through the package is safe at call time and keeps the public
+    # value type in its existing package boundary without an import cycle.
+    from . import ScheduleOptions  # noqa: PLC0415
+
+    if options is None:
+        return ScheduleOptions()
+    if not isinstance(options, ScheduleOptions):
+        raise ScheduleError(
+            "schedule: options must be ScheduleOptions, got "
+            f"{type(options).__name__}"
+        )
+    return options
+
+
 def schedule(
     module: Module,
     function: Function,
@@ -107,8 +123,9 @@ def schedule(
     target = module.resolve_target()
     level = _topology(module, topology)
     algorithm = _algorithm(target, topology)
+    resolved_options = _options(options)
 
-    plan = algorithm.solve(module, function, target, level, options)
+    plan = algorithm.solve(module, function, target, level, resolved_options)
     if not isinstance(plan, SchedulePlan):
         raise ScheduleError(
             f"schedule: the {topology!r} algorithm for "

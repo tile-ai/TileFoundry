@@ -22,6 +22,7 @@ from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- relu resolved dynamically
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.registry import DuplicateAlgorithmError
+from tilefoundry.schedule import ScheduleOptions
 from tilefoundry.schedule.api import ScheduleResult, schedule
 from tilefoundry.schedule.errors import ScheduleError
 from tilefoundry.schedule.plan import PlanVerificationError, SchedulePlan
@@ -72,6 +73,7 @@ class _WidgetPlan(SchedulePlan):
 
 
 _CALLS: list[tuple[str, int]] = []
+_OPTIONS: list[ScheduleOptions] = []
 
 
 @func
@@ -113,6 +115,8 @@ class Launched:
 @register_schedule(_WidgetTarget, "tile")
 def _solve_widget_tile(module, function, target, topology, options):
     _CALLS.append((topology.name, topology.size))
+    assert isinstance(options, ScheduleOptions)
+    _OPTIONS.append(options)
     return _WidgetPlan(level=topology.name, width=topology.size)
 
 
@@ -131,6 +135,7 @@ def _solve_widget_cta(module, function, target, topology, options):
 @pytest.fixture(autouse=True)
 def _clear_calls():
     _CALLS.clear()
+    _OPTIONS.clear()
 
 
 def test_schedule_returns_its_inputs_and_the_resolved_level():
@@ -152,6 +157,19 @@ def test_schedule_returns_its_inputs_and_the_resolved_level():
 
     assert result.plan.render() == "tile x4"
     assert json.loads(result.plan.to_json()) == {"level": "tile", "width": 4}
+
+
+def test_schedule_normalizes_options_before_the_algorithm_runs():
+    """Every scheduler receives one fresh common options value per default call."""
+    schedule(Widget, scale, topology="tile")
+    schedule(Widget, scale, topology="tile")
+
+    assert len(_OPTIONS) == 2
+    assert _OPTIONS[0] is not _OPTIONS[1]
+
+    with pytest.raises(ScheduleError, match="options must be ScheduleOptions"):
+        schedule(Widget, scale, topology="tile", options=object())
+    assert _CALLS == [("tile", 4), ("tile", 4)]
 
 
 def test_dispatch_is_exact_in_both_target_and_level():
