@@ -773,6 +773,26 @@ class Gelu(Op):
     `ReLU` / `Sigmoid` / `Tanh` group above, which commutes with `max` / `min`.
     typeinfer rejects any `Partial` operand with a `Reshard` remedy.
 
+##### Silu
+```python
+class Silu(Op):
+    """Sigmoid Linear Unit — ``x * sigmoid(x)`` as one op.
+
+    Attributes:
+        x: input; tensor the activation applies to elementwise.
+    """
+
+    x: Tensor
+```
+- constraints:
+  - Elementwise: the output type, shape, and layout are `x`'s.
+  - Fused rather than decomposed into `Sigmoid` + `Binary(MUL)`: the fused form
+    does not round the intermediate `sigmoid(x)` to `x`'s dtype, so at reduced
+    precision the two differ by up to ~1 ULP per element.
+  - `x * sigmoid(x)` has a minimum near `x = -1.278`, so SiLU is **not** monotone
+    and commutes with no reduction; typeinfer rejects any `Partial` operand with a
+    `Reshard` remedy, as `Gelu` does.
+
 ##### RMSNorm
 ```python
 class RMSNorm(Op):

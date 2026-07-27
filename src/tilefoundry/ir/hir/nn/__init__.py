@@ -8,6 +8,7 @@ from .relu import ReLU
 from .rms_norm import RMSNorm
 from .rope import RoPE
 from .sigmoid import Sigmoid
+from .silu import Silu
 from .softmax import SoftMax
 from .tanh import Tanh
 
@@ -20,6 +21,7 @@ __all__ = [
     "RMSNorm",
     "RoPE",
     "Sigmoid",
+    "Silu",
     "SoftMax",
     "Tanh",
 ]
