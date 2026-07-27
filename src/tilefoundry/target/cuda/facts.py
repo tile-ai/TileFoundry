@@ -220,9 +220,10 @@ def pipeline_facts(target: CudaTarget, query: PipelineFactsQuery) -> PipelineFac
 def partition_facts(target: CudaTarget, query: PartitionFactsQuery) -> PartitionFacts:
     """Project every rate, capacity, and position count before partitioning.
 
-    The parallel unit count is one active CTA per SM, the same compiler policy
-    the analysis layer is told; the rates and the capacity are the device's own.
-    After this call the partition holds numbers, not a target.
+    All of it is what the installed documents state: how many SMs the device has,
+    how fast and how large its memory is, and what it peaks at per dtype. How much
+    of that machine to occupy is the caller's to decide, so no policy is encoded
+    here. After this call the partition holds numbers, not a target.
     """
     if not isinstance(query, PartitionFactsQuery):
         raise TypeError(

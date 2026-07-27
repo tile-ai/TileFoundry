@@ -208,9 +208,12 @@ class CudaTarget(Target):
     ([schedule §5](./schedule.md#5-scheduling-facts)).
   - The partition projection MUST state the device's SM count as the parallel
     units, its HBM bandwidth and capacity, and its dense peak rate per DType
-    ([schedule §5.3](./schedule.md#53-partitionfacts)). The SM count is the same
-    one-active-CTA-per-SM compiler policy the analysis layer is told, not the
-    hardware resident-CTA maximum.
+    ([schedule §5.3](./schedule.md#53-partitionfacts)). Every one of those MUST be
+    a hardware fact as the installed documents state it. How much of the machine an
+    algorithm chooses to occupy is a compiler policy and belongs in
+    `ScheduleOptions` ([schedule §2.1](./schedule.md#21-scheduleoptions)); it MUST
+    NOT be projected here, because a Facts value that already encodes a policy
+    cannot be read as what the hardware is.
   - Static declared topology extents MUST be positive integers within their
     target resource limits. `Topology("cta", None)` MUST remain valid for the
     handwritten dynamic-launch compile path.

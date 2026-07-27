@@ -211,7 +211,7 @@ class PipelineSchedulePlan(SchedulePlan):
 
 ```python
 class PartitionSchedulePlan(SchedulePlan):
-    """Export one solved spatial partition."""
+    """State one solved spatial partition, in the deciding family's own terms."""
 
     topology: str
     target: TargetSpecRef
@@ -222,17 +222,20 @@ class PartitionSchedulePlan(SchedulePlan):
 ```
 
 - constraints:
-  - Each `SelectedPlacement` MUST carry the value it places, the concrete type it
-    was placed in, and its offset in the level being divided.
-  - Each `SelectedOperation` MUST carry the operation that runs, the placements on
-    each side of it, how many parallel positions it occupies, and its half-open
-    execution interval. An operation synthesized to connect two otherwise
-    unconnected placements MUST be one of these records and MUST NOT be reported
-    through a separate route or report channel.
+  - The plan MUST state the level it decided about and the identity of the
+    installed documents it decided against.
+  - The selection MUST be stated by the deciding family's own stable identities,
+    and those identities MUST be internally consistent: an operation MUST refer
+    only to placements the same plan carries.
   - `proof` MUST state the objective, the bound the solve established, and whether
     the two met. It is a result fact and MUST NOT become a generic report facade.
-  - A private candidate graph, a solver variable, or a solver-native value MUST
-    NOT appear in the exported plan.
+  - An operation the algorithm synthesized to connect two otherwise unconnected
+    placements MUST appear among `operations` and MUST NOT be reported through a
+    separate route or report channel.
+  - `verify` MUST reject an operation on a placement the plan does not carry, an
+    interval that ends before it starts, an unplaced root result, and a bound above
+    the stated objective, and MUST do so without invoking a solver.
+  - A solver variable or solver-native value MUST NOT appear in the exported plan.
   - The plan MUST NOT carry a rewritten program: a partition decides where work
     and its tensors go, and applying that decision to HIR is a separate operation
     the caller asks for.
