@@ -18,7 +18,8 @@ from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.registry import UnknownAlgorithmError
-from tilefoundry.schedule.facts import AtomFact, TileStoreFacts
+from tilefoundry.schedule.facts import AtomFact
+from tilefoundry.schedule.pipeline.facts import PipelineFacts, PipelineFactsQuery
 from tilefoundry.schedule.registry import SCHEDULES
 from tilefoundry.target import AmxTarget, resolve_target
 from tilefoundry.target.amx.atoms import (
@@ -327,8 +328,11 @@ def test_a_core_tile_is_bounded_by_the_l1d_not_by_the_register_files():
     core's L1d; the register files bound one atom instance instead, which the
     storage filter enforces rather than a per-tile capacity."""
     target = AmxTarget()
-    facts = TARGET_FACTS.project(target, TileStoreFacts, "core")
+    facts = TARGET_FACTS.project(
+        target, PipelineFacts, PipelineFactsQuery(topology="core", statements=())
+    )
     assert facts.tile_capacity_bytes == target.device.l1d_bytes_per_performance_core
+    assert facts.tile_capacity_scope == "core"
     assert target.architecture.accumulator_bytes < (
         target.device.l1d_bytes_per_performance_core
     )

@@ -3,18 +3,16 @@
 A `Target` is the immutable capability context compilation and the compiler
 algorithms read. Architecture describes compilation identity and instruction
 structure. Device describes fixed product resources. A target is a value that
-answers questions about hardware; it does not own the operations that ask.
+answers questions about hardware; it does not own the operations that ask, and it
+answers only by projecting the facts an asking algorithm declared.
 
 ## 1. `Target`
 
 ```python
 class Target:
-    """Identify a compilation backend and its private stage services."""
+    """Identify a compilation backend."""
 
     name: str
-    _services: tuple[tuple[type, str, object], ...] = ()
-
-    def service(self, interface: type, stage: str) -> object: ...
 
     def as_facts(self, facts_type: type, query: object = None) -> object: ...
 ```
@@ -24,17 +22,15 @@ class Target:
     codegen grouping.
   - `as_facts` MUST project this target's specification into the immutable
     aggregate a requesting algorithm declares, under the rules of
-    [§11](#11-target-facts-projection).
-  - `_services` MUST be immutable and populated only by target construction.
-    It MUST NOT participate in equality, hashing, or `repr`.
-  - `service` MUST require a non-empty stage string and match the interface by
-    object identity plus one exact stage string.
-  - Missing or duplicate matches MUST raise an actionable built-in error that
-    names the target, interface, and stage.
-  - A Target MUST NOT bind a scheduling service. Which algorithm schedules which
-    hardware at which level is declared by registration
-    ([schedule §1.1](./schedule.md#11-algorithm-registration)), not by a binding
-    on the target value.
+    [§11](#11-target-facts-projection). Projection MUST be the only way an
+    algorithm reads a target.
+  - A Target MUST carry no mutable state, no bound service table, and no
+    per-target registration. It is a value: two equal targets MUST be
+    interchangeable everywhere, so nothing about which code runs for a target MAY
+    be stored on the target.
+  - Which algorithm schedules which hardware at which level MUST be declared by
+    registration ([schedule §1.1](./schedule.md#11-algorithm-registration)),
+    keyed on the target's concrete type rather than on any target value.
   - Target values MUST NOT own code emission, linking, loading, or the public
     compile/build/jit entry points.
 
@@ -208,7 +204,7 @@ class CudaTarget(Target):
     ([schedule §5](./schedule.md#5-scheduling-facts)).
   - The partition projection MUST state the device's SM count as the parallel
     units, its HBM bandwidth and capacity, and its dense peak rate per DType
-    ([schedule §5.3](./schedule.md#53-partitionfacts)). Every one of those MUST be
+    ([schedule §5.2](./schedule.md#52-partitionfacts)). Every one of those MUST be
     a hardware fact as the installed documents state it. How much of the machine an
     algorithm chooses to occupy is a compiler policy and belongs in
     `ScheduleOptions` ([schedule §2.1](./schedule.md#21-scheduleoptions)); it MUST

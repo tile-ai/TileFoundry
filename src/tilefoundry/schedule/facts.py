@@ -1,21 +1,15 @@
-"""What the schedule layer asks a target for.
+"""What the schedule layer asks a target about one instruction.
 
-These aggregates are this layer's own vocabulary. The atom catalogue and the
-store a tile lives in are target-specific, but *asking* for them must not be: a
-scheduling stage names the facts it needs and the target package registers the
-conversion that supplies them, so no stage calls into a target through a service
-object it has to know the shape of.
-
-The store a tile occupies belongs to the level being scheduled rather than to the
-device -- an AMX tile at the ``core`` level lives in L1d, a CUDA one at the
-``cta`` level in shared memory -- which is why the stage is the query.
+An atom is target-specific, but *asking* for one must not be: an algorithm names
+the facts it needs and the target package registers the conversion that supplies
+them, so nothing reaches into a target through an object whose shape it has to
+know. Each algorithm family owns the rest of its own facts vocabulary.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.core import Call
 from tilefoundry.ir.types import DType
 
 
@@ -50,40 +44,4 @@ class AtomFact:
     atom: object
 
 
-@dataclass(frozen=True)
-class TileStoreFacts:
-    """The store a tile of one scheduled level occupies.
-
-    Projected once per solve, because the capacity is a property of the level
-    and of the hardware -- not of any one operation being scheduled.
-    """
-
-    stage: str
-    tile_capacity_bytes: int
-
-
-@dataclass(frozen=True)
-class AtomCandidateQuery:
-    """Which operation's catalogue is being asked for, at which level."""
-
-    stage: str
-    op: Call
-
-
-@dataclass(frozen=True)
-class AtomCandidateFacts:
-    """The atoms one target admits for one operation, in catalogue order.
-
-    Order is part of the answer: it is the order the target enumerated, and a
-    consumer that ranks candidates must see the same sequence every run.
-    """
-
-    candidates: tuple[AtomFact, ...]
-
-
-__all__ = [
-    "AtomCandidateFacts",
-    "AtomCandidateQuery",
-    "AtomFact",
-    "TileStoreFacts",
-]
+__all__ = ["AtomFact"]

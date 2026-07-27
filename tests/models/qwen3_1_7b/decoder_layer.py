@@ -19,7 +19,7 @@ MB, NB_INT, NB_HID = _loaded.MB, _loaded.NB_INT, _loaded.NB_HID
 NK_HID, NK_INT = _loaded.NK_HID, _loaded.NK_INT
 
 # IR Function nodes, not the callables ``Module.__getattr__`` returns: these are
-# what extract / build_schedule_tree / select_atoms take.
+# what extract / build_schedule_tree take.
 input_rms_norm = Qwen3_1_7B.lookup("input_rms_norm")
 self_attention = Qwen3_1_7B.lookup("self_attention")
 mlp = Qwen3_1_7B.lookup("mlp")

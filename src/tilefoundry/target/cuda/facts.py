@@ -20,12 +20,7 @@ from tilefoundry.analysis.facts import (
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
-from tilefoundry.schedule.facts import (
-    AtomCandidateFacts,
-    AtomCandidateQuery,
-    AtomFact,
-    TileStoreFacts,
-)
+from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.schedule.partition.facts import PartitionFacts, PartitionFactsQuery
 from tilefoundry.schedule.pipeline.facts import (
     PipelineFacts,
@@ -132,44 +127,6 @@ def parallel_capacity(
     return ParallelCapacityFacts(topology="cta", parallel_units=target.device.sm_count)
 
 
-def tile_store(target: CudaTarget, query: object = None) -> TileStoreFacts:
-    """Where a tile of the queried level lives, and how much of it there is.
-
-    The resident working set of a cooperating tile lives in shared memory, whose
-    per-CTA capacity is a limit of the architecture rather than of the device.
-    """
-    if not isinstance(query, str) or not query:
-        raise TypeError(
-            f"a tile store must be queried by stage name, got {query!r}"
-        )
-    if query != _PIPELINE_TOPOLOGY:
-        raise ValueError(
-            f"CudaTarget states no tile store for stage {query!r}; it schedules "
-            f"{_PIPELINE_TOPOLOGY!r}"
-        )
-    return TileStoreFacts(
-        stage=query,
-        tile_capacity_bytes=target.architecture.shared_memory_per_cta_bytes,
-    )
-
-
-def atom_candidates(
-    target: CudaTarget, query: AtomCandidateQuery
-) -> AtomCandidateFacts:
-    """The atoms this target admits for one operation, in catalogue order."""
-    if not isinstance(query, AtomCandidateQuery):
-        raise TypeError(
-            "CudaTarget atom candidates need an AtomCandidateQuery, got "
-            f"{type(query).__name__}"
-        )
-    if query.stage != _PIPELINE_TOPOLOGY:
-        raise ValueError(
-            f"CudaTarget enumerates no atoms for stage {query.stage!r}; it "
-            f"schedules {_PIPELINE_TOPOLOGY!r}"
-        )
-    return AtomCandidateFacts(tuple(candidate_atoms(query.op, target)))
-
-
 def pipeline_facts(target: CudaTarget, query: PipelineFactsQuery) -> PipelineFacts:
     """Project every instruction and capacity fact before pipeline solving.
 
@@ -251,18 +208,14 @@ def partition_facts(target: CudaTarget, query: PartitionFactsQuery) -> Partition
 register_target_facts(CudaTarget, MemoryHierarchyFacts, memory_hierarchy)
 register_target_facts(CudaTarget, ThroughputFacts, throughput)
 register_target_facts(CudaTarget, ParallelCapacityFacts, parallel_capacity)
-register_target_facts(CudaTarget, TileStoreFacts, tile_store)
-register_target_facts(CudaTarget, AtomCandidateFacts, atom_candidates)
 register_target_facts(CudaTarget, PipelineFacts, pipeline_facts)
 register_target_facts(CudaTarget, PartitionFacts, partition_facts)
 
 
 __all__ = [
-    "atom_candidates",
     "memory_hierarchy",
     "parallel_capacity",
     "partition_facts",
     "pipeline_facts",
     "throughput",
-    "tile_store",
 ]

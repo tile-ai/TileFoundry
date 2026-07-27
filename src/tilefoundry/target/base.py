@@ -1,4 +1,4 @@
-"""Immutable compilation target values and exact stage-service lookup."""
+"""Immutable compilation target values and their fact projections."""
 
 from __future__ import annotations
 
@@ -21,36 +21,15 @@ class Device:
 
 @dataclass(frozen=True)
 class Target:
-    """Identify a compilation backend and its private stage services."""
+    """Identify a compilation backend.
+
+    A target is a value: what it knows is its hardware, and the only way an
+    algorithm reads that is by naming the facts it wants. There is nothing
+    mutable on it and nothing registered against it, so two equal targets are
+    interchangeable everywhere.
+    """
 
     name: str
-    _services: tuple[tuple[type, str, object], ...] = field(
-        default=(), init=False, compare=False, hash=False, repr=False
-    )
-
-    def service(self, interface: type, stage: str) -> object:
-        """Return the exact service bound to ``(interface, stage)``."""
-        if not isinstance(interface, type):
-            raise TypeError(
-                f"{type(self).__name__}.service: interface must be a type, "
-                f"got {type(interface).__name__}"
-            )
-        if not isinstance(stage, str) or not stage:
-            raise ValueError(
-                f"{type(self).__name__}.service: stage must be a non-empty string, "
-                f"got {stage!r}"
-            )
-        matches = [
-            service
-            for bound_interface, bound_stage, service in self._services
-            if bound_interface is interface and bound_stage == stage
-        ]
-        if len(matches) != 1:
-            raise ValueError(
-                f"{self!r}: expected exactly one service for interface "
-                f"{interface.__name__!r} at stage {stage!r}, found {len(matches)}"
-            )
-        return matches[0]
 
     def as_facts(self, facts_type: type, query: object = None) -> object:
         """Project this target's specification into *facts_type*.
@@ -65,24 +44,6 @@ class Target:
         return TARGET_FACTS.project(self, facts_type, query)
 
 
-def bind_services(target: Target, bindings: tuple[tuple[type, str, object], ...]) -> None:
-    """Bind an immutable service table during target construction."""
-    seen: set[tuple[type, str]] = set()
-    for interface, stage, _service in bindings:
-        if not isinstance(interface, type):
-            raise TypeError("Target service interface must be a type")
-        if not isinstance(stage, str) or not stage:
-            raise ValueError("Target service stage must be a non-empty string")
-        key = (interface, stage)
-        if key in seen:
-            raise ValueError(
-                f"Target: duplicate service binding for "
-                f"({interface.__name__}, {stage!r})"
-            )
-        seen.add(key)
-    object.__setattr__(target, "_services", tuple(bindings))
-
-
 @dataclass(frozen=True)
 class CpuTarget(Target):
     """Identify the CPU host backend."""
@@ -90,4 +51,4 @@ class CpuTarget(Target):
     name: str = field(default="cpu", init=False)
 
 
-__all__ = ["Architecture", "CpuTarget", "Device", "Target", "bind_services"]
+__all__ = ["Architecture", "CpuTarget", "Device", "Target"]

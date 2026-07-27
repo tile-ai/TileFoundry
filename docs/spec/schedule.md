@@ -345,67 +345,6 @@ class PartitionSchedulePlan(SchedulePlan):
     one: a partition decides where work and its tensors go, and applying that
     decision to HIR is a separate operation the caller asks for.
 
-### 2.6 `ScheduleReport`
-
-`ScheduleReport` is the reusable objective summary: the part of an answer that
-does not depend on what was decided. An algorithm whose Plan states an objective
-carries one of these rather than restating the same fields in its own vocabulary.
-Algorithm-private operation rows, use decisions, candidate costs, and
-solver-native models are not report fields.
-
-```python
-class ScheduleReport:
-    """Summarize the selected objective and proof state.
-
-    Attributes:
-        root: attribute; Scheduled Function name.
-        target: attribute; Resolved Target name.
-        topology: attribute; The topology level the result was produced at.
-        status: attribute; Public solution status.
-        objective_name: attribute; Primary objective name.
-        unit: attribute; Unit of the primary objective and bound.
-        selected: attribute; Selected primary-objective value.
-        best_bound: attribute; Integer lower bound for the makespan objective.
-        gap: attribute; Relative optimality gap for the makespan objective.
-    """
-
-    root: str
-    target: str
-    topology: str
-    status: Literal["OPTIMAL", "FEASIBLE_NOT_PROVEN"]
-    objective_name: Literal["makespan"]
-    unit: Literal["ns"]
-    selected: int
-    best_bound: int
-    gap: float
-
-    def to_json(self) -> str: ...
-
-    def to_markdown(self) -> str: ...
-```
-
-- constraints:
-  - The structure MUST be immutable.
-  - `selected`, `best_bound`, and `gap` MUST describe the one `makespan`
-    objective in `ns`.
-  - `objective_name` is a fixed literal: every algorithm that reports an
-    objective reports the same one quantity, and the field names it rather than
-    selecting it.
-  - The reported value MUST NOT be read as a proof that a solver optimised it. An
-    algorithm MAY minimize the makespan as a solver objective, and an algorithm
-    MAY instead compute it after the fact — as the nominal roofline estimate of
-    the decisions it recorded (§5.1). `status`, `best_bound` and `gap` are what
-    distinguish the two: an algorithm that did not prove optimality MUST NOT
-    report `selected` as its own bound.
-  - A feasible incumbent MUST be reportable even when optimality is unproven.
-  - JSON and Markdown rendering MUST contain every public field and MUST NOT
-    expose algorithm-private solve state.
-  - When the report summarizes a CTA execution blueprint, its selected value
-    describes the modeled plan and MUST NOT be interpreted as a guarantee that
-    current lowering preserves the planned intervals, reserves physical SM
-    shares, promotes values to SRAM or registers, or proves runtime performance
-    or out-of-memory safety.
-
 ## 3. Constraint metadata
 
 Hard schedule constraints are represented by one stage-neutral
@@ -602,7 +541,9 @@ class EmitScaffoldError(RuntimeError):
 ## 5. Scheduling facts
 
 The polyhedral model is target-independent; the atom catalogue, the rates work is
-charged at, and the store a tile lives in are not. All of them are obtained by
+charged at, and the store a tile lives in are not. Each algorithm family declares
+the facts it needs as its own aggregate, so what one family asks for cannot become
+a shared vocabulary another family has to satisfy. All of them are obtained by
 projecting the Target ([target §11](./target.md#11-target-facts-projection)), so
 an algorithm names the facts it needs and never calls into a target through an
 object whose shape it must know.
@@ -655,65 +596,7 @@ class AtomFact:
   - `atom` MUST be the realized descriptor a later fill or codegen stage needs,
     so that stage never re-resolves it from `shape` / `dtype`.
 
-### 5.2 `TileStoreFacts` and `AtomCandidateFacts`
-
-```python
-class TileStoreFacts:
-    """The store a tile of one scheduled level occupies.
-
-    Attributes:
-        stage: attribute; The topology level this capacity belongs to.
-        tile_capacity_bytes: attribute; Capacity of that level's store.
-    """
-
-    stage: str
-    tile_capacity_bytes: int
-
-class AtomCandidateQuery:
-    """Which operation's catalogue is being asked for, at which level.
-
-    Attributes:
-        stage: attribute; The topology level being scheduled.
-        op: attribute; The HIR Call whose candidates are wanted.
-    """
-
-    stage: str
-    op: "Call"
-
-class AtomCandidateFacts:
-    """The atoms one target admits for one operation.
-
-    Attributes:
-        candidates: attribute; Those atoms, in the order the target enumerated them.
-    """
-
-    candidates: tuple[AtomFact, ...]
-```
-
-- constraints:
-  - `TileStoreFacts` MUST be queried by stage name and projected once per solve:
-    the capacity is a property of the level and of the hardware, not of any one
-    operation. `tile_capacity_bytes` MUST be the capacity of the store belonging
-    to that level rather than of the whole device, and MUST be positive.
-  - `AtomCandidateFacts` MUST be queried per `(stage, op)` pair and MUST carry
-    only that operation's candidates. Two aggregates rather than one is
-    deliberate: bundling a per-level capacity into a per-operation projection
-    would give one type two meanings depending on how it was asked for.
-  - A projection MUST hard-filter the target's catalogue and MUST NOT rank it:
-    ordering is not a decision made here. The order it returns MUST be the
-    target's own enumeration order, so a consumer that ranks candidates sees the
-    same sequence every run.
-  - An empty `candidates` tuple MUST be a legitimate "no candidate covers this
-    operation" outcome rather than an error, and a projection MAY raise
-    `NotImplementedError` for an operation kind its catalogue does not cover.
-  - A stage the target does not schedule MUST be reported as that, and a
-    consumer MUST surface it as its own scheduling diagnostic rather than let a
-    projection failure escape.
-  - The capacity is a fact to record against a footprint, not a gate: nothing
-    MUST raise because a tile does not fit. A tile wider than its store still has
-    a schedule, only a worse one.
-
-### 5.3 `PartitionFacts`
+### 5.2 `PartitionFacts`
 
 ```python
 class PartitionFactsQuery:

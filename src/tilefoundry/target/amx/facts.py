@@ -19,12 +19,7 @@ from tilefoundry.analysis.facts import (
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
-from tilefoundry.schedule.facts import (
-    AtomCandidateFacts,
-    AtomCandidateQuery,
-    AtomFact,
-    TileStoreFacts,
-)
+from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.schedule.pipeline.facts import (
     PipelineFacts,
     PipelineFactsQuery,
@@ -40,7 +35,7 @@ from .target import AmxTarget
 _ROOFLINE_UNIT = "amx"
 
 # The one topology level AMX scheduling decides at.
-_SCHEDULED_STAGE = "core"
+_PIPELINE_TOPOLOGY = "core"
 
 
 def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchyFacts:
@@ -132,45 +127,6 @@ def parallel_capacity(
     )
 
 
-def tile_store(target: AmxTarget, query: object = None) -> TileStoreFacts:
-    """Where a tile of the queried level lives, and how much of it there is.
-
-    A core-level tile's resident working set lives in that core's L1d. The AMX
-    register files bound one atom instance rather than a tile, and they do it by
-    filtering that atom out of the catalogue.
-    """
-    if not isinstance(query, str) or not query:
-        raise TypeError(
-            f"a tile store must be queried by stage name, got {query!r}"
-        )
-    if query != _SCHEDULED_STAGE:
-        raise ValueError(
-            f"AmxTarget states no tile store for stage {query!r}; it schedules "
-            f"{_SCHEDULED_STAGE!r}"
-        )
-    return TileStoreFacts(
-        stage=query,
-        tile_capacity_bytes=target.device.l1d_bytes_per_performance_core,
-    )
-
-
-def atom_candidates(
-    target: AmxTarget, query: AtomCandidateQuery
-) -> AtomCandidateFacts:
-    """The atoms this target admits for one operation, in catalogue order."""
-    if not isinstance(query, AtomCandidateQuery):
-        raise TypeError(
-            "AmxTarget atom candidates need an AtomCandidateQuery, got "
-            f"{type(query).__name__}"
-        )
-    if query.stage != _SCHEDULED_STAGE:
-        raise ValueError(
-            f"AmxTarget enumerates no atoms for stage {query.stage!r}; it "
-            f"schedules {_SCHEDULED_STAGE!r}"
-        )
-    return AtomCandidateFacts(tuple(candidate_atoms(query.op, target)))
-
-
 def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFacts:
     """Project the finite AMX instruction catalogue before solving.
 
@@ -179,7 +135,7 @@ def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFact
     """
     if not isinstance(query, PipelineFactsQuery):
         raise TypeError("AMX pipeline facts need a PipelineFactsQuery")
-    if query.topology != _SCHEDULED_STAGE:
+    if query.topology != _PIPELINE_TOPOLOGY:
         raise ValueError(f"AMX states no pipeline facts for {query.topology!r}")
     instructions: list[PipelineInstructionFacts] = []
     for statement_id, op in query.statements:
@@ -203,7 +159,7 @@ def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFact
         instructions.append(PipelineInstructionFacts(statement_id, candidates))
     return PipelineFacts(
         topology=query.topology,
-        tile_capacity_scope=_SCHEDULED_STAGE,
+        tile_capacity_scope=_PIPELINE_TOPOLOGY,
         tile_capacity_bytes=target.device.l1d_bytes_per_performance_core,
         max_threads_per_warp=1,
         instructions=tuple(instructions),
@@ -213,16 +169,12 @@ def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFact
 register_target_facts(AmxTarget, MemoryHierarchyFacts, memory_hierarchy)
 register_target_facts(AmxTarget, ThroughputFacts, throughput)
 register_target_facts(AmxTarget, ParallelCapacityFacts, parallel_capacity)
-register_target_facts(AmxTarget, TileStoreFacts, tile_store)
-register_target_facts(AmxTarget, AtomCandidateFacts, atom_candidates)
 register_target_facts(AmxTarget, PipelineFacts, pipeline_facts)
 
 
 __all__ = [
-    "atom_candidates",
     "memory_hierarchy",
     "parallel_capacity",
     "pipeline_facts",
     "throughput",
-    "tile_store",
 ]
