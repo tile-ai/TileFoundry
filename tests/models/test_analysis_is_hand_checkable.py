@@ -100,6 +100,25 @@ def test_the_mlp_costs_its_three_matrices() -> None:
     _holds(data["totals"]["flops"]["f32"], _mlp_matmul_flops(), "mlp")
 
 
+def test_a_tiled_mlp_costs_the_same_matmuls_as_the_untiled_one() -> None:
+    """Tiling reassociates a K reduction; it does not change the arithmetic.
+
+    So the same lower bound and the same elementwise allowance hold, and between
+    them they pin a loop nest from both sides. Measured, both sides were needed: the
+    loop trip counts were not being applied at all, which reported this kernel at a
+    thousandth of its cost, and a first attempt at applying them charged everything
+    the body could reach -- including values computed once before the loop, and the
+    whole of a preceding loop -- which reported it at thirty-four times.
+
+    The excess over the matmuls is real work here rather than round-off: the tiled
+    form accumulates into three buffers, which the untiled form does not do at all.
+    It stays inside the same one percent.
+    """
+    data = _analysed("tiled_mlp", None)
+
+    _holds(data["totals"]["flops"]["f32"], _mlp_matmul_flops(), "tiled_mlp")
+
+
 def test_the_attention_costs_its_projections_and_its_context() -> None:
     """The four projections plus two passes over a 1024-token context."""
     data = _analysed("self_attention", {"ctx_len": CTX})

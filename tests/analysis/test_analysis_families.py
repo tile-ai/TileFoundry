@@ -98,6 +98,18 @@ class _Allocated:
         return tf.add(source, tf.zeros(shape=(64,), dtype="f32"))
 
 
+@module(entry="main", target="cuda")
+class _BatchedOnTheRight:
+    topologies = (Topology("cta", 1),)
+
+    @func
+    def main(
+        token: Tensor[(1, 1, 4), "f32"],
+        blocks: Tensor[(5, 4, 3), "f32"],
+    ):
+        return tf.matmul(token, blocks)
+
+
 @func(target="cuda", topologies=(Topology("cta", 168),))
 def _wide_grid(source: Tensor[(1024,), "f32"]):
     return tf.add(source, source)
@@ -241,6 +253,23 @@ def test_a_call_no_mesh_placed_runs_once() -> None:
     assert record is not None
     assert record.execution_count == 1
     assert record.flops == (("f32", numel(call.type)),)
+
+
+def test_a_matmul_takes_its_batch_from_what_it_produced() -> None:
+    """Either operand may be the broadcast one, so the output decides the batch.
+
+    A block of a weight matrix multiplied by one token has its batch on the right:
+    reading the left gave a batch of one and charged a whole block loop's arithmetic
+    as a single tile's. The output's batch is what the call produced, and every batch
+    of it was computed.
+    """
+    entry = _BatchedOnTheRight.entry_function()
+    analyze(_BatchedOnTheRight, entry, analysis="compute-cost")
+
+    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    assert record is not None
+    # 5 batches of [1, 4] @ [4, 3]; the left operand states one batch.
+    assert record.flops == (("f32", 2 * 5 * 1 * 4 * 3),)
 
 
 def test_a_rotation_costs_both_of_the_tensors_it_rotates() -> None:

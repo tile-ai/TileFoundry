@@ -27,6 +27,7 @@ from .walk import (
     attach,
     bytes_by_storage,
     describe,
+    enclosing_trips,
     execution_count,
     postorder,
     reachable_functions,
@@ -97,12 +98,18 @@ def _call_record(
     module: Module,
     topologies: tuple[Topology, ...],
     totals: dict[int, _Totals],
+    trips: int = 1,
 ) -> ComputeCostMetadata:
     """The work record for one call site.
 
     A call into another Function costs what that Function costs. Its callee was
     measured first, so the totals are already there; their absence means the
     call graph is recursive or unresolved, which no amount of measuring fixes.
+
+    *trips* is how many times the loops around this call run it. Unlike the mesh
+    count it scales the traffic too, and for the opposite reason: a loop body's
+    operand types are the tile one trip touches, so the whole tensor is the tile
+    times the trips. A mesh's operand types are already the whole.
     """
     if isinstance(call.target, Function):
         child = totals.get(id(call.target))
@@ -110,15 +117,42 @@ def _call_record(
             raise AnalysisError(
                 f"{describe(call)}: recursive or unresolved Function call graph"
             )
-        return ComputeCostMetadata(child.flops, child.traffic, 1)
+        return _scaled(child.flops, child.traffic, trips)
     count = execution_count(call, fn, topologies)
     cost = _local_cost(call, module)
     return ComputeCostMetadata(
         flops=tuple(
-            sorted((dtype.name, value * count) for dtype, value in cost.flops.items())
+            sorted(
+                (dtype.name, value * count * trips)
+                for dtype, value in cost.flops.items()
+            )
         ),
-        traffic=_call_traffic(call, cost),
-        execution_count=count,
+        traffic=_scale_traffic(_call_traffic(call, cost), trips),
+        execution_count=count * trips,
+    )
+
+
+def _scale_traffic(
+    traffic: tuple[tuple[str, TrafficBytes], ...], trips: int
+) -> tuple[tuple[str, TrafficBytes], ...]:
+    if trips == 1:
+        return traffic
+    return tuple(
+        (level, TrafficBytes(value.read_bytes * trips, value.write_bytes * trips))
+        for level, value in traffic
+    )
+
+
+def _scaled(
+    flops: tuple[tuple[str, int], ...],
+    traffic: tuple[tuple[str, TrafficBytes], ...],
+    trips: int,
+) -> ComputeCostMetadata:
+    """A callee's totals, charged once per trip of the loops around the call."""
+    return ComputeCostMetadata(
+        flops=tuple((name, value * trips) for name, value in flops),
+        traffic=_scale_traffic(traffic, trips),
+        execution_count=trips,
     )
 
 
@@ -138,10 +172,13 @@ def analyze_compute_cost(
     for fn in reversed(reachable_functions(function)):
         flops: dict[str, int] = {}
         traffic: dict[str, TrafficBytes] = {}
+        trips = enclosing_trips(fn.body)
         for expr in postorder(fn.body):
             if not isinstance(expr, Call):
                 continue
-            record = _call_record(expr, fn, module, topologies, totals)
+            record = _call_record(
+                expr, fn, module, topologies, totals, trips.get(id(expr), 1)
+            )
             attach(expr, record)
             _accumulate(flops, traffic, record)
         totals[id(fn)] = _Totals(

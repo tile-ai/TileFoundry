@@ -75,12 +75,20 @@ def _elementwise(call: Call, ctx: CostContext, *, dtype: DType | None = None) ->
 
 @register_cost_evaluator(MatMul)
 def _matmul(call: Call, ctx: CostContext) -> Cost:
+    """One multiply and one add per multiply-accumulate, over every batch.
+
+    The batch comes from the output rather than from the left operand. Either side
+    may be the one that is broadcast: a block of a weight matrix multiplied by one
+    token has its batch on the right, and reading the left gave a batch of one --
+    the whole block loop's arithmetic charged as a single tile's. The output's batch
+    is what the call produced, and every batch of it was computed.
+    """
     lhs, rhs = _input_types(call, ctx)
     output = _output_type(call, ctx)
     if not all(isinstance(type, TensorType) for type in (lhs, rhs, output)):
         raise ValueError("MatMul cost requires tensor inputs and output")
     m, k, n = lhs.shape[-2], lhs.shape[-1], rhs.shape[-1]
-    batch = math.prod(lhs.shape[:-2])
+    batch = math.prod(output.shape[:-2])
     flops = 2 * batch * m * k * n
     return Cost({lhs.dtype: flops}, _traffic((lhs, rhs), output))
 

@@ -44,6 +44,85 @@ def children(expr: Expr) -> tuple[Expr, ...]:
             return ()
 
 
+def enclosing_trips(root: Expr | None) -> dict[int, int]:
+    """How many times each value under *root* is produced, by loop nesting.
+
+    A `GridRegionExpr` is one Expr standing for a loop, so a walk of the body visits
+    each of its calls once while the program runs them once per trip. Charging them
+    once is charging a tiled kernel for one tile: a K-loop over twenty-four blocks
+    and a column loop over a hundred and forty come back as a kernel doing a
+    two-thousandth of its arithmetic, which is not a small error in a compiler whose
+    subject is tiling.
+
+    Which values a loop repeats is not "everything the body reaches". The body reads
+    values defined before the loop -- a blocked weight, a normalised input -- and
+    those are computed once however many trips run. What repeats is what changes
+    between trips, and the IR says which those are: a value repeats exactly when it
+    depends on the loop's induction variable or on one of its carried arguments.
+
+    Getting that wrong is not a small overcount. Two loops in sequence are nested by
+    data dependence -- the second body reads the first loop's result -- so charging
+    everything the body reaches would multiply the first loop's arithmetic by the
+    second loop's trips as well, and a tiled MLP comes back thirty-four times its own
+    cost instead of a thousandth of it.
+
+    Keyed by `id`, like the rest of this module, because the body is an SSA DAG and a
+    value is the object that defines it. A value no loop repeats maps to one; the map
+    holds only what repeats, so a caller uses `.get(id(expr), 1)`.
+    """
+    if root is None:
+        return {}
+    trips: dict[int, int] = {}
+    for loop in postorder(root):
+        if not isinstance(loop, GridRegionExpr):
+            continue
+        count = _trip_count(loop)
+        if count == 1:
+            continue
+        for expr_id in _repeated_by(loop):
+            trips[expr_id] = trips.get(expr_id, 1) * count
+    return trips
+
+
+def _repeated_by(loop: GridRegionExpr) -> set[int]:
+    """The ids of the values *loop* recomputes on every trip.
+
+    A value depending on the induction variable or on a carried argument is a
+    different value each trip; one depending on neither is the same value every
+    trip, whatever else it is an operand of. Walked in definition order so a
+    dependence is known before its consumer is asked about.
+
+    Every yielded value is walked as well as the body, because a loop carrying two
+    accumulators keeps one chain under `body` and the other under `yield_values` --
+    walking only the body finds one of the two matmuls a tiled MLP performs and
+    charges the other once.
+    """
+    seeds = {id(loop.induction_var), *(id(carried) for carried in loop.carried_args)}
+    repeated: set[int] = set()
+    for root in (loop.body, *loop.yield_values):
+        for expr in postorder(root):
+            if id(expr) in seeds or any(
+                id(child) in repeated or id(child) in seeds for child in children(expr)
+            ):
+                repeated.add(id(expr))
+    return repeated
+
+
+def _trip_count(loop: GridRegionExpr) -> int:
+    """How many times *loop* runs, or one when its bounds are not numbers.
+
+    One rather than a guess: an extent still carrying a range has no trip count, and
+    inventing one would report a cost for a program nobody asked about. Asking about
+    a stated size is what resolves it.
+    """
+    start, extent, step = loop.start, loop.extent, loop.step
+    if not all(isinstance(value, int) for value in (start, extent, step)):
+        return 1
+    if step <= 0 or extent <= start:
+        return 1
+    return -(-(extent - start) // step)
+
+
 def postorder(root: Expr | None) -> tuple[Expr, ...]:
     """Every value reachable from *root*, operands before their consumer.
 
@@ -279,6 +358,7 @@ __all__ = [
     "children",
     "describe",
     "detach",
+    "enclosing_trips",
     "entry_function",
     "execution_count",
     "execution_domain",
