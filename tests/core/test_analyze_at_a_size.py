@@ -21,6 +21,7 @@ from tests.models.fixtures import h200_sxm
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.inspection.analysis_report import render_text, report
 from tilefoundry.ir.hir.specialize import residual_dims, variant_for
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
@@ -61,6 +62,54 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert result.function is not authored
     assert result.function.name == authored.name
     assert residual_dims(result.function) == ()
+
+
+def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
+    """Several analyses at one size report all of their conclusions, not one's.
+
+    Each analysis asked about a size builds the program itself, so each annotates a
+    rebuild of its own and no two share an object. A report that read one of them
+    would still list every family under `executed` while showing only that family's
+    numbers -- so the ones it dropped read as analyses with nothing to say.
+
+    The same assertion at a fixed shape cannot catch this: with nothing to rebuild,
+    every family annotates one object and reading any of them reads all of them.
+    """
+    module = _aimed()
+    authored = module.entry_function()
+
+    data = report([
+        analyze(module, authored, analysis=family, dims=DIMS) for family in FAMILIES
+    ])
+
+    assert data["executed"] == list(FAMILIES)
+    # compute-cost keeps no whole-function record; the other three each keep one.
+    assert set(data["function_records"]) == {"memory", "roofline", "timeline"}
+    assert data["totals"]["flops"], "the work totals summed to nothing"
+    text = render_text(data)
+    for expected in ("peak-footprint", "theoretical-bound", "theoretical-makespan"):
+        assert expected in text, f"{expected} is missing from the rendered report"
+
+
+def test_a_report_at_a_size_carries_the_per_call_records_of_every_family() -> None:
+    """The same for the per-Call rows, which are keyed by position rather than by
+    identity: two rebuilds share no Call object, so a report that matched them by
+    identity would find none of the second family's.
+
+    `compute-cost` and `timeline` because those are the two families that record on
+    Calls at all -- memory records a footprint over a whole function and has nothing
+    per Call to lose, so pairing it here would assert nothing.
+    """
+    module = _aimed()
+    authored = module.entry_function()
+
+    data = report([
+        analyze(module, authored, analysis=family, dims=DIMS)
+        for family in ("compute-cost", "timeline")
+    ])
+
+    families = {name for row in data["calls"] for name in row if name != "value"}
+    assert families == {"compute-cost", "timeline"}, families
 
 
 def test_without_a_size_the_call_is_what_it_was() -> None:

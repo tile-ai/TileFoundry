@@ -200,25 +200,76 @@ def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
             if selector not in executed:
                 executed.append(selector)
     target = first.module.resolve_target()
-    calls = []
-    for index, expr in enumerate(postorder(function.body)):
-        if not isinstance(expr, Call):
-            continue
-        records = _records_of(expr, selected)
-        if records:
-            calls.append({"value": _call_label(expr, index), **records})
     data = {
         "target": getattr(target, "name", type(target).__name__),
         "module": first.module.name,
         "function": function.name,
         "requested": [item.analysis for item in results],
         "executed": executed,
-        "function_records": _records_of(function, selected),
-        "calls": calls,
+        "function_records": _merged_function_records(results, selected),
+        "calls": _merged_call_records(results, selected),
     }
     if ComputeCostMetadata in selected:
-        data["totals"] = _work_totals(function)
+        data["totals"] = _work_totals(_costed_function(results))
     return data
+
+
+def _merged_function_records(
+    results: Sequence[AnalysisResult], selected: frozenset
+) -> dict[str, object]:
+    """Every result's own whole-function records, together.
+
+    An analysis records on the program it ran over, and an analysis asked about a
+    size builds that program itself -- so several analyses at one size hold several
+    rebuilds and annotate several objects. Reading one of them would report that one
+    analysis and silently drop the others, which is worse than refusing: the report
+    still names every analysis under `executed`, so the missing conclusions read as
+    analyses that had nothing to say rather than as conclusions nobody collected.
+    """
+    records: dict[str, object] = {}
+    for item in results:
+        records.update(_records_of(item.function, selected))
+    return records
+
+
+def _merged_call_records(
+    results: Sequence[AnalysisResult], selected: frozenset
+) -> list[dict[str, object]]:
+    """Every result's per-Call records, merged by position in the program.
+
+    Position is the correspondence, and it is sound here for the reason the results
+    were accepted at all: they are rebuilds of one program at one set of extents, so
+    they walk in the same order. Two rebuilds share no object, so identity is not
+    available and position is what is left.
+    """
+    labels: dict[int, str] = {}
+    merged: dict[int, dict[str, object]] = {}
+    for item in results:
+        for index, expr in enumerate(postorder(item.function.body)):
+            if not isinstance(expr, Call):
+                continue
+            records = _records_of(expr, selected)
+            if not records:
+                continue
+            merged.setdefault(index, {}).update(records)
+            labels.setdefault(index, _call_label(expr, index))
+    return [{"value": labels[index], **merged[index]} for index in sorted(merged)]
+
+
+def _costed_function(results: Sequence[AnalysisResult]) -> Function:
+    """The rebuild whose Calls carry the work records, for the totals to sum.
+
+    Named rather than assumed to be the first: the totals are the exact sum of those
+    records, so summing over a rebuild that does not carry them would report a
+    program doing no work.
+    """
+    for item in results:
+        if any(
+            get_metadata(expr, ComputeCostMetadata) is not None
+            for expr in postorder(item.function.body)
+        ):
+            return item.function
+    return results[0].function
 
 
 def _work_totals(function: Function) -> dict[str, object]:
