@@ -6,7 +6,7 @@ from dataclasses import fields, replace
 
 import pytest
 
-from tests.models.qwen3_5_30b_a3b.gqa_online import SMALL_CONTEXT_T, GqaOnline
+from tests.fixtures.gqa_online import SMALL_CONTEXT_T, GqaOnline
 from tilefoundry import func, module
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.errors import AnalysisError

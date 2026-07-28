@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.models.qwen3_5_30b_a3b.gqa_online import (
+from tests.fixtures.gqa_online import (
     MAX_CTX,
     NUM_SPLITS,
     SMALL_CONTEXT_T,

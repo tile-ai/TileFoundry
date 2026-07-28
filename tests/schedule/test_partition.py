@@ -32,6 +32,7 @@ from tilefoundry.schedule.partition import (
 )
 from tilefoundry.schedule.partition import problem as problem_module
 from tilefoundry.schedule.partition import solve as solve_module
+from tilefoundry.schedule.pipeline.problem import PipelineProblemError
 
 _SOLVER = ScheduleOptions(timeout_seconds=60, workers=8)
 
@@ -614,10 +615,6 @@ def test_a_problem_that_cannot_be_formed_is_a_schedule_failure() -> None:
     stated as a bare `ValueError` -- which is also what a caller passing nonsense
     gets, so a recorded limit and a caller's mistake were indistinguishable.
     """
-    from tilefoundry.schedule import ScheduleError
-    from tilefoundry.schedule.partition.problem import PartitionProblemError
-    from tilefoundry.schedule.pipeline.problem import PipelineProblemError
-
     for error in (PartitionProblemError, PipelineProblemError):
         assert issubclass(error, ScheduleError), error.__name__
         # Still a ValueError, so every existing caller keeps catching it.
