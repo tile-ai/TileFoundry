@@ -361,3 +361,53 @@ def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
     assert "outer=ShardLayout(" in printed
     reparsed = parse_script(printed)
     assert _structural_equal(fn, reparsed), f"round-trip mismatch:\n{printed}"
+
+
+def test_an_operation_with_no_operands_prints_a_parsable_call() -> None:
+    """``zeros`` is all attributes and no inputs, so an argument list built as
+    "operands, then attributes" opens with a comma and never parses back."""
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "\n"
+        "@func\n"
+        'def z(x: Tensor[(4,), "f32"]):\n'
+        '    seed = zeros(shape=(4,), dtype="f32")\n'
+        "    return add(x, seed)\n"
+    )
+    fn = parse_script(src)
+
+    printed = as_script(fn)
+
+    assert "zeros(shape=" in printed, printed
+    assert "(, " not in printed, printed
+    assert _structural_equal(fn, parse_script(printed))
+
+
+def test_a_loop_used_as_a_value_prints_the_name_its_carry_has() -> None:
+    """A ``for`` statement binds no name of its own. A loop with one carried
+    value, consumed by a later statement, has to render as that carry."""
+    src = (
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "\n"
+        "@func\n"
+        'def acc(x: Tensor[(4, 8), "f32"]):\n'
+        '    total = zeros(shape=(4, 8), dtype="f32")\n'
+        "    for i in tile(4):\n"
+        "        total = add(total, x)\n"
+        "    scaled = mul(total, x)\n"
+        "    return scaled\n"
+    )
+    fn = parse_script(src)
+
+    printed = as_script(fn)
+
+    assert "mul(total, x)" in printed, printed
+    # `_structural_equal` has no GridRegionExpr case, so re-printing is what
+    # holds this: a dangling reference does not survive being parsed back.
+    assert as_script(parse_script(printed)) == printed

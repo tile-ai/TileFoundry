@@ -751,6 +751,14 @@ def _emit_def(
         ):
             grid = expr.args[0]
             return _names[id(grid.carried_args[expr.target.index])]
+        if isinstance(expr, GridRegionExpr):
+            # A loop is emitted as a `for` statement, so it binds no name of
+            # its own: what it leaves behind is its carried values, under the
+            # names the carries already have.
+            carried = tuple(_names[id(carry)] for carry in expr.carried_args)
+            if len(carried) == 1:
+                return carried[0]
+            return "(" + ", ".join(carried) + ")"
         return _names[id(expr)]
 
     def _arg_ref(a) -> str:
@@ -843,11 +851,11 @@ def _emit_def(
                 attr_strs.append(f"{param.name}={value}")
             else:
                 attr_strs.append(f"{param.name}={value}")
-        call_str = f"{_op_name(target)}({args_str}"
-        if attr_strs:
-            call_str += ", " + ", ".join(attr_strs)
-        call_str += ")"
-        return call_str
+        # Positional operands and attributes are one argument list. An op with
+        # attributes and no operands -- zeros(shape=..., dtype=...) -- would
+        # otherwise be printed with a leading comma and not parse back.
+        arguments = [_arg_ref(arg) for arg in expr.args] + attr_strs
+        return f"{_op_name(target)}({', '.join(arguments)})"
 
     def _emit_inline_call(expr: Call, level: str) -> None:
         name = _names[id(expr)]
