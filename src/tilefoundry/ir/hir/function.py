@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from tilefoundry.ir.core import Expr, Var
+from tilefoundry.ir.core import Expr, Op, Var
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, Type, callable_type_for
+from tilefoundry.ir.types.dim import is_dim_expr
+from tilefoundry.ir.types.substitute import substitute_shape_dim
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
@@ -204,11 +207,39 @@ def elaborate(
     if cached is not None:
         return cached
 
+    instance = _elaborate_from_bound_types(callee, bound_types, ctx)
+    ctx.elaboration_cache[cache_key] = instance
+    return instance
+
+
+def _elaborate_from_bound_types(
+    callee: "Function",
+    bound_types: "list[Type] | tuple[Type, ...]",
+    ctx: TypeInferContext,
+    *,
+    dims: "Mapping[str, int] | None" = None,
+) -> "Function":
+    """Rebuild ``callee``'s body with its parameters at *bound_types*.
+
+    Shared by the two things that produce a concrete instance of a template:
+    a call site, which learns the parameter types from its arguments, and a
+    specialisation, which is told an extent for a dimension the source left as
+    a range. Both rebuild the same way, and duplicating that is how the two
+    would drift.
+
+    *dims*, when given, is also applied to the places a dimension appears that
+    are not reachable from any expression's type: a loop's own extent, step and
+    start, and the shape-valued attributes an operation carries. Rewriting only
+    the types would leave a loop still running over a symbol.
+    """
     new_params = tuple(
         Var(type=bt, name=p.name, is_const=p.is_const)
         for bt, p in zip(bound_types, callee.params)
     )
     subst = {id(old): new for old, new in zip(callee.params, new_params)}
+    # Identities handed to the type cache below, kept alive for as long as that
+    # cache is. See `_retyped`.
+    pinned: list[object] = []
 
     class _Elaborator(ExprMutator):
         """Rebuild ``callee.body`` under ``subst`` (memoized by node
@@ -243,14 +274,33 @@ def elaborate(
             args_changed = any(na is not oa for na, oa in zip(new_args, call_expr.args))
             new_target = call_expr.target
             if isinstance(call_expr.target, Function):
-                new_target = elaborate(
-                    call_expr.target, tuple(a.type for a in new_args), self.body_ctx,
-                    call=call_expr,
-                )
+                if dims is None:
+                    new_target = elaborate(
+                        call_expr.target, tuple(a.type for a in new_args),
+                        self.body_ctx, call=call_expr,
+                    )
+                else:
+                    # The callee's parameters are still ranges, and binding
+                    # concrete arguments against a range is a type mismatch.
+                    # It is the same choice of extent, so make it there too
+                    # rather than asking the ordinary call path to accept a
+                    # mixture it is right to reject.
+                    new_target = _specialize_callee(
+                        call_expr.target, dims, self.body_ctx, call_expr
+                    )
+                    # Typeinfer will key its elaboration cache on this
+                    # function's identity, and that cache outlives the rebuild
+                    # while nothing else keeps a short-lived callee alive: the
+                    # Call that referenced it is itself replaced a line later.
+                    # A freed address handed to the next callee is then a cache
+                    # hit for a function that no longer exists.
+                    pinned.append(new_target)
+            if dims is not None:
+                new_target = _substitute_op_dims(new_target, dims)
             if not args_changed and new_target is call_expr.target:
                 return call_expr
             rebuilt = dataclasses.replace(call_expr, args=new_args, target=new_target)
-            return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
+            return self._retyped(rebuilt)
 
         def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
             """Re-stamp the loop-phi ``carried_args`` from the rewritten
@@ -269,37 +319,129 @@ def elaborate(
                     subst[id(old_phi)] = new_phi
             new_body = self.visit(grid.body)
             new_yields = tuple(self.visit(y) for y in grid.yield_values)
+            # A loop states its own extent, step and start as shape entries.
+            # They hang off no expression, so the generic child walk never
+            # reaches them and a bound dimension would survive here.
+            bounds = (grid.extent, grid.step, grid.start)
+            if dims is None:
+                new_bounds = bounds
+            else:
+                new_bounds = tuple(substitute_shape_dim(b, dims) for b in bounds)
             unchanged = (
                 all(ni is oi for ni, oi in zip(new_init_args, grid.init_args))
                 and all(np_ is op for np_, op in zip(new_phis, grid.carried_args))
                 and new_body is grid.body
                 and all(ny is oy for ny, oy in zip(new_yields, grid.yield_values))
+                and new_bounds == bounds
             )
             if unchanged:
                 return grid
             rebuilt = dataclasses.replace(
                 grid, carried_args=new_phis, init_args=new_init_args,
                 body=new_body, yield_values=new_yields,
+                extent=new_bounds[0], step=new_bounds[1], start=new_bounds[2],
             )
-            return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
+            return self._retyped(rebuilt)
 
         def generic_visit(self, expr: Expr) -> Expr:
             rebuilt = super().generic_visit(expr)
             if rebuilt is expr:
                 return expr
+            return self._retyped(rebuilt)
+
+        def _retyped(self, rebuilt: Expr) -> Expr:
+            """*rebuilt* carrying the type its new children give it.
+
+            The node asked about is then thrown away -- the returned node is a
+            further copy of it -- while the type cache it just populated is
+            keyed on its identity and lives on for the whole rebuild. Holding a
+            reference is what stops that identity being handed to the next
+            node, which would otherwise read a type belonging to something
+            else. This is only reachable at all when many nodes change at once,
+            which is why substituting a dimension found it.
+            """
+            pinned.append(rebuilt)
             return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
 
-    body_ctx = TypeInferContext(module=ctx.module, elaboration_cache=ctx.elaboration_cache)
+    if dims is None:
+        body_ctx = TypeInferContext(
+            module=ctx.module, elaboration_cache=ctx.elaboration_cache
+        )
+    else:
+        # The shared cache is keyed on the callee's identity, and specialising
+        # builds a fresh callee for every nested call it rewrites. Those are
+        # short-lived, so an address freed by one can be handed to the next and
+        # the cache answers for a function that no longer exists.
+        body_ctx = TypeInferContext(module=ctx.module)
     new_body = _Elaborator(body_ctx).visit(callee.body)
-    instance = Function.build(
+    return Function.build(
         name=callee.name,
         params=new_params,
         body=new_body,
         return_type=new_body.type,
         specializations=callee.specializations,
     )
-    ctx.elaboration_cache[cache_key] = instance
-    return instance
+
+
+def _specialize_callee(
+    callee: "Function",
+    dims: "Mapping[str, int]",
+    ctx: TypeInferContext,
+    call: Call,
+) -> "Function":
+    """*callee* rebuilt at the same extents its caller was given.
+
+    A nested dispatch prototype is refused rather than guessed at: choosing
+    among its variants is a decision the caller has not stated, and picking
+    one here would bury that choice inside a rebuild.
+    """
+    from tilefoundry.ir.types.substitute import substitute_dims  # noqa: PLC0415
+
+    if callee.variants:
+        raise ValueError(
+            f"specialising through {call and callee.name!r}: the callee "
+            "dispatches on its own variants, which this rebuild does not choose"
+        )
+    if callee.body is None:
+        return callee
+    bound = tuple(substitute_dims(param.type, dims) for param in callee.params)
+    if all(new is param.type for new, param in zip(bound, callee.params)):
+        return callee
+    return _elaborate_from_bound_types(callee, bound, ctx, dims=dims)
+
+
+def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
+    """*target* with any shape-valued attribute rebuilt at the bound extents.
+
+    Which attributes those are is read off the operation rather than listed:
+    an attribute whose entries are all dimension expressions is a shape, and
+    an entry that is an ordinary integer substitutes to itself, so an
+    attribute that merely looks like one -- a permutation, a set of axes --
+    passes through untouched.
+    """
+    if isinstance(target, Function) or not isinstance(target, Op):
+        return target
+    changed: dict[str, object] = {}
+    for param in type(target).params():
+        if param.kind != "attribute":
+            continue
+        value = getattr(target, param.name, None)
+        if not isinstance(value, tuple) or not value:
+            continue
+        if not all(is_dim_expr(entry) for entry in value):
+            continue
+        rebuilt = tuple(substitute_shape_dim(entry, dims) for entry in value)
+        if rebuilt != value:
+            changed[param.name] = rebuilt
+    if not changed:
+        return target
+    attributes = {
+        param.name: getattr(target, param.name)
+        for param in type(target).params()
+        if param.kind == "attribute" and hasattr(target, param.name)
+    }
+    attributes.update(changed)
+    return type(target)(**attributes)
 
 
 @register_typeinfer(Function)
