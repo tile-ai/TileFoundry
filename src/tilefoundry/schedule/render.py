@@ -17,9 +17,6 @@ from __future__ import annotations
 
 import itertools
 import math
-import os
-import pathlib
-import tempfile
 from dataclasses import dataclass
 
 import isl
@@ -239,21 +236,9 @@ def _render_hole_call(
 
 
 def _print_to_str(node: "isl.ast_node", options: "isl.ast_print_options") -> str:
-    """``node`` printed as C through ``options``.
-
-    isl's printer only writes to a file, and it buffers until ``flush`` -- an
-    unflushed printer leaves a zero-byte file rather than raising. So the text
-    comes back through a temporary file, and the ``flush`` is what makes it
-    appear.
-    """
-    handle, path = tempfile.mkstemp(suffix=".c")
-    os.close(handle)
-    try:
-        printer = isl.printer.to_file_path(path).set_output_format(isl.format.C)
-        node.print(printer, options).flush()
-        return pathlib.Path(path).read_text(encoding="utf-8")
-    finally:
-        os.unlink(path)
+    """``node`` printed as C through ``options``."""
+    printer = isl.printer.to_str().set_output_format(isl.format.C)
+    return node.print(printer, options).get_str()
 
 
 def _build_skeleton(

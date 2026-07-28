@@ -9,7 +9,7 @@ description = "A tile-based, agentic platform for automatic high-performance pro
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "isl-python>=0.1.8",
+    "isl-python>=0.1.10",
     "jinja2>=3.0",
     "apache-tvm-ffi",
     "torch>=2.7",  # DType.f8e8m0 -> torch.float8_e8m0fnu, added in torch 2.7

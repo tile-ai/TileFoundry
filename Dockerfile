@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir torch==2.9.1 --index-url https://download.pytorch
 # tilefoundry runtime deps (mirrors pyproject.toml [project.dependencies]) plus CI tooling.
 # The tilefoundry package itself is NOT installed here; editable install happens at CI runtime.
 RUN pip install --no-cache-dir \
-        "isl-python>=0.1.8" \
+        "isl-python>=0.1.10" \
         "jinja2>=3.0" \
         apache-tvm-ffi \
         "graphviz>=0.20" \
