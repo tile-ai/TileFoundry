@@ -23,7 +23,7 @@ from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_json, render_text, report
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, numel
 from tilefoundry.ir.types.shard import Layout
 from tilefoundry.target import AmxTarget, CudaTarget
 from tilefoundry.target.facts import TARGET_FACTS
@@ -179,7 +179,14 @@ def _cost_of(function) -> ComputeCostMetadata:
 
 
 def test_compute_cost_reports_the_same_work_on_unrelated_targets() -> None:
-    """AC-1-1: the work count is a property of the program, not the machine."""
+    """AC-1-1: the work count is a property of the program, not the machine.
+
+    Both programs add two 256-element tensors, so both do 256 flops. The count
+    used to be four times that on either target -- the same four times, so the
+    equality above held while the number said the work of an unsharded add
+    depended on how many blocks the target declares, which is what this test
+    exists to deny.
+    """
     cuda_entry = _CudaAdd.entry_function()
     amx_entry = _AmxAdd.entry_function()
 
@@ -187,7 +194,7 @@ def test_compute_cost_reports_the_same_work_on_unrelated_targets() -> None:
     analyze(_AmxAdd, amx_entry, analysis="compute-cost")
 
     assert _cost_of(cuda_entry) == _cost_of(amx_entry)
-    assert _cost_of(cuda_entry).flops == (("f32", 1024),)
+    assert _cost_of(cuda_entry).flops == (("f32", 256),)
 
 
 def test_compute_cost_keeps_each_dtype_separate() -> None:
@@ -213,6 +220,27 @@ def test_compute_cost_scales_leaf_work_by_the_whole_execution_mesh() -> None:
     assert record is not None
     assert record.execution_count == 8
     assert record.flops == (("f32", 16),)
+
+
+def test_a_call_no_mesh_placed_runs_once() -> None:
+    """An unsharded type states the whole tensor, so nothing multiplies it.
+
+    The two readings of a tensor type are what makes this a real question. A
+    sharded type states the extent one point holds, so recovering the whole means
+    multiplying by the hierarchy -- which is what the test above measures. An
+    unsharded type already states the whole, and folding the hierarchy into it reads
+    the second as the first: an authored norm over `hidden` elements comes back
+    multiplied by every thread the target declares, in units the traffic beside it
+    is not counted in.
+    """
+    entry = _CudaAdd.entry_function()
+    analyze(_CudaAdd, entry, analysis="compute-cost")
+
+    call = _calls(entry)[-1]
+    record = get_metadata(call, ComputeCostMetadata)
+    assert record is not None
+    assert record.execution_count == 1
+    assert record.flops == (("f32", numel(call.type)),)
 
 
 def test_a_rotation_costs_both_of_the_tensors_it_rotates() -> None:

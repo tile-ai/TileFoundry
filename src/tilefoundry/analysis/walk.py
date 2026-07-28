@@ -179,6 +179,20 @@ def execution_count(
     the call produced; only when it carries no mesh do the inputs decide. The
     function's declared topologies are then folded in, and a value that
     contradicts the declaration is an error rather than an override.
+
+    A call no mesh placed anywhere runs once. That is not a special case, it is
+    what its operand types mean: a sharded type states the extent one point holds,
+    so multiplying it by the hierarchy recovers the whole, while an unsharded type
+    already states the whole. Folding the hierarchy into the second reads it as the
+    first, and the cost of one authored norm over two thousand elements comes back
+    multiplied by every thread on the machine -- work no program does, in units the
+    traffic beside it is not counted in, which then decides a memory-bound decode
+    step is compute-bound.
+
+    Replication is why the hierarchy is folded in at all: a value sharded across
+    threads and silent about blocks is held by every block, so those extents belong
+    in the count. A value on no mesh is not replicated across the hierarchy, it is
+    simply not laid across it.
     """
     domain = execution_domain(call.type)
     inputs = {
@@ -205,6 +219,9 @@ def execution_count(
                 f"{describe(call)}: value Mesh declares {topology.name}={previous}, "
                 f"but function {fn.name!r} declares {topology.name}={topology.size}"
             )
+    if not domain:
+        return 1
+    for topology in topologies:
         domain[topology.name] = topology.size
     return math.prod(domain.values())
 
