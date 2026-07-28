@@ -21,3 +21,10 @@ repos:
         entry: python scripts/spec_entropy_lint.py
         language: system
         files: ^src/.*\.py$
+      - id: no-machine-paths
+        name: no-machine-paths
+        entry: python scripts/no_machine_paths_lint.py
+        language: system
+        # Every text file a commit touches, not only source: the paths that have
+        # been committed by mistake arrived in scripts, tests, and markdown.
+        exclude_types: [binary]
