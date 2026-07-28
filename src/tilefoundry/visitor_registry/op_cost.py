@@ -21,6 +21,7 @@ from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.relu import ReLU
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
+from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
 from tilefoundry.ir.hir.nn.softmax import SoftMax
 from tilefoundry.ir.hir.nn.tanh import Tanh
@@ -36,6 +37,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import DType, TensorType, Type, numel, tensor_bytes
 
 from .contexts import Cost, CostContext
@@ -152,6 +154,22 @@ def _layer_norm(call: Call, ctx: CostContext) -> Cost:
     return Cost({DType.f32: 8 * numel(source)}, _traffic(_input_types(call, ctx), output))
 
 
+@register_cost_evaluator(RoPE)
+def _rope(call: Call, ctx: CostContext) -> Cost:
+    """Rotate q and k in place against the caches.
+
+    Each rotated element costs one multiply against the cosine, one against
+    the sine of its partner, and the add that combines them. The output is the
+    pair, so its element count already covers both q and k.
+    """
+    inputs = _input_types(call, ctx)
+    output = _output_type(call, ctx)
+    query = inputs[0]
+    if not isinstance(query, TensorType):
+        raise ValueError("RoPE cost requires a tensor query input")
+    return Cost({query.dtype: 3 * numel(output)}, _traffic(inputs, output))
+
+
 @register_cost_evaluator(TopK)
 def _topk(call: Call, ctx: CostContext) -> Cost:
     inputs = _input_types(call, ctx)
@@ -197,6 +215,13 @@ def _tuple_get_item(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(FullLike)
 def _full_like(call: Call, ctx: CostContext) -> Cost:
+    output = _output_type(call, ctx)
+    return Cost({}, tensor_bytes(output))
+
+
+@register_cost_evaluator(Zeros)
+def _zeros(call: Call, ctx: CostContext) -> Cost:
+    """Materialise a tensor of zeros: no arithmetic, one full write."""
     output = _output_type(call, ctx)
     return Cost({}, tensor_bytes(output))
 

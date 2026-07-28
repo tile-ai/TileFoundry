@@ -73,6 +73,31 @@ class _WeightedAdd:
         return tf.add(scaled, scaled)
 
 
+@module(entry="main", target="cuda")
+class _Rotated:
+    topologies = (Topology("cta", 1),)
+
+    @func
+    def main(
+        q: Tensor[(1, 4, 2, 8), "f32"],
+        k: Tensor[(1, 4, 2, 8), "f32"],
+        cos_cache: ConstTensor[(4, 8), "f32"],
+        sin_cache: ConstTensor[(4, 8), "f32"],
+        pos_ids: ConstTensor[(4,), "i32"],
+    ):
+        rotated, _ = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+        return rotated
+
+
+@module(entry="main", target="cuda")
+class _Allocated:
+    topologies = (Topology("cta", 1),)
+
+    @func
+    def main(source: Tensor[(64,), "f32"]):
+        return tf.add(source, tf.zeros(shape=(64,), dtype="f32"))
+
+
 @func(target="cuda", topologies=(Topology("cta", 168),))
 def _wide_grid(source: Tensor[(1024,), "f32"]):
     return tf.add(source, source)
@@ -188,6 +213,37 @@ def test_compute_cost_scales_leaf_work_by_the_whole_execution_mesh() -> None:
     assert record is not None
     assert record.execution_count == 8
     assert record.flops == (("f32", 16),)
+
+
+def test_a_rotation_costs_both_of_the_tensors_it_rotates() -> None:
+    """RoPE returns q and k together, so one call does two tensors' work:
+    each element takes a multiply by its cosine, a multiply by its partner's
+    sine, and the add between them."""
+    entry = _Rotated.entry_function()
+    analyze(_Rotated, entry, analysis="compute-cost")
+
+    call = next(
+        call for call in _calls(entry) if type(call.target).__name__ == "RoPE"
+    )
+    record = get_metadata(call, ComputeCostMetadata)
+    assert record is not None
+    # 1 * 4 * 2 * 8 elements in each of q and k, at three flops apiece.
+    assert record.flops == (("f32", 3 * 2 * 64),)
+
+
+def test_allocating_zeros_is_a_write_and_no_arithmetic() -> None:
+    entry = _Allocated.entry_function()
+    analyze(_Allocated, entry, analysis="compute-cost")
+
+    call = next(
+        call for call in _calls(entry) if type(call.target).__name__ == "Zeros"
+    )
+    record = get_metadata(call, ComputeCostMetadata)
+    assert record is not None
+    assert record.flops == ()
+    traffic = record.traffic_at("gmem")
+    assert traffic.write_bytes == 64 * 4
+    assert traffic.read_bytes == 0
 
 
 def test_a_call_into_a_function_costs_what_that_function_costs() -> None:
