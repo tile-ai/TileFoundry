@@ -25,6 +25,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
+import pytest
+
 from tests.models.loader import load_model
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -36,8 +38,15 @@ MODELS_ROOT = Path(__file__).parent
 Outcome = Literal["PASS", "BLOCKED"]
 
 
-class CorpusError(ValueError):
-    """A case describes something the corpus cannot resolve."""
+class CorpusError(Exception):
+    """A case describes something the corpus cannot resolve.
+
+    Deliberately not a `ValueError`. A blocked case absorbs one named failure
+    type as its expected result, and the complaints raised here -- a block that
+    started passing, a block that failed for another reason -- are the two
+    things that must never be absorbed. Sharing a base with a plausible
+    `expect` would let exactly those be recorded as the expectation.
+    """
 
 
 @dataclass(frozen=True)
@@ -76,12 +85,17 @@ class CapabilityGate:
     ) -> None:
         """Run *run* and hold it to what this gate claims about it.
 
-        A blocked case is a strict expectation in both directions. It has to
-        fail, and it has to fail for the stated reason -- a case that breaks
-        differently is not the limit anybody signed off on. And it has to keep
-        failing: a block that starts passing raises here rather than reporting
-        a quiet success, because the matrix is then describing a system nobody
-        has, and the only way that gets corrected is if it breaks the build.
+        A blocked case is a strict expectation in both directions, and the
+        expectation is the test result rather than a field in a report. The
+        stated failure is re-raised so the case is recorded as an expected
+        failure by the runner (see `expected_failure`), which is what makes an
+        unexpected success visible as one.
+
+        Two failures are not the expectation and must not be recorded as it: a
+        case that breaks for another reason is not the limit anybody signed off
+        on, and recording it as one hides a second defect behind the first; and
+        a block that starts passing means the matrix now describes a system
+        nobody has, which only gets corrected if it breaks the build.
         """
         if not self.blocked:
             run()
@@ -94,10 +108,24 @@ class CapabilityGate:
                     f"{label} is blocked on {self.reason!r}, but it failed "
                     f"with: {error}"
                 ) from error
-            return
+            raise
         raise CorpusError(
             f"{label} is recorded as blocked on {self.reason!r}, and it "
             "succeeded; the capability matrix is out of date"
+        )
+
+    def expected_failure(self, *, expect: type[BaseException]) -> tuple[object, ...]:
+        """The marks that make this gate's claim the case's own test result.
+
+        `strict` so an unexpected success is a failure rather than a quiet
+        pass, and `raises` so only the stated kind of failure counts: anything
+        else -- including this module's own complaint that the reason did not
+        match -- stays a plain failure instead of being absorbed as expected.
+        """
+        if not self.blocked:
+            return ()
+        return (
+            pytest.mark.xfail(reason=self.reason, raises=expect, strict=True),
         )
 
 

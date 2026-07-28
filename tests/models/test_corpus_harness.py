@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -260,13 +263,33 @@ def test_a_blocked_case_that_starts_working_breaks_the_build() -> None:
         gate.hold(lambda: None, expect=ValueError, label="case/x")
 
 
-def test_a_blocked_case_that_fails_as_stated_is_the_expectation() -> None:
+def test_a_blocked_case_that_fails_as_stated_re_raises_that_failure() -> None:
+    """The runner records the expectation, so the failure has to reach it.
+    Swallowing it here would report the case as a plain pass."""
     gate = CapabilityGate(outcome="BLOCKED", reason="no fp8 atom on this target")
 
     def fail() -> None:
         raise ValueError("no fp8 atom on this target, so nothing covers it")
 
-    gate.hold(fail, expect=ValueError, label="case/x")
+    with pytest.raises(ValueError, match="no fp8 atom"):
+        gate.hold(fail, expect=ValueError, label="case/x")
+
+
+def test_a_blocked_gate_marks_its_case_as_a_strict_expected_failure() -> None:
+    """`strict` so an unexpected success fails; `raises` so only the stated
+    kind of failure is absorbed and a wrong-reason CorpusError stays a
+    failure rather than passing for the expectation."""
+    gate = CapabilityGate(outcome="BLOCKED", reason="no fp8 atom on this target")
+
+    (mark,) = gate.expected_failure(expect=ValueError)
+
+    assert mark.kwargs["strict"] is True
+    assert mark.kwargs["raises"] is ValueError
+    assert mark.kwargs["reason"] == gate.reason
+
+
+def test_a_passing_gate_marks_nothing() -> None:
+    assert CapabilityGate().expected_failure(expect=ValueError) == ()
 
 
 def test_a_blocked_case_that_fails_differently_is_not_that_block() -> None:
@@ -310,3 +333,49 @@ def test_the_reference_entry_is_wired_to_the_function_it_names() -> None:
             f"{reference.entry!r}, which takes {len(entry.params)}"
         )
         assert callable(reference.oracle)
+
+
+_BLOCKED_CASE = '''
+import pytest
+from tests.models.corpus import CapabilityGate
+
+GATE = CapabilityGate(outcome="BLOCKED", reason="no fp8 atom on this target")
+
+
+@pytest.mark.parametrize(
+    "run",
+    [pytest.param({run}, marks=GATE.expected_failure(expect=ValueError))],
+)
+def test_case(run):
+    GATE.hold(run, expect=ValueError, label="case/x")
+'''
+
+
+def _outcome_of(tmp_path, run: str) -> str:
+    """Run one generated case under a real pytest and report how it came out."""
+    case = tmp_path / "test_generated_case.py"
+    case.write_text(_BLOCKED_CASE.format(run=run), encoding="utf-8")
+    completed = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "pytest", str(case), "-q", "-p", "no:randomly"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+    return completed.stdout
+
+
+def test_a_blocked_case_is_reported_as_an_expected_failure(tmp_path) -> None:
+    """Not merely "the test passed". The runner has to say xfail, or nobody
+    reading the output can tell a known limit from working code."""
+    output = _outcome_of(tmp_path, 'lambda: (_ for _ in ()).throw(ValueError("no fp8 atom on this target"))')
+
+    assert "1 xfailed" in output, output
+    assert "passed" not in output, output
+
+
+def test_a_blocked_case_that_succeeds_fails_the_run(tmp_path) -> None:
+    """The strict half: an unexpected success is not an unexpected pass."""
+    output = _outcome_of(tmp_path, "lambda: None")
+
+    assert "1 failed" in output, output
+    assert "xpassed" not in output, output

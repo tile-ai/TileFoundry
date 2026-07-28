@@ -25,20 +25,26 @@ from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 _SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0)
 
 
-def _cases() -> list[tuple[ModelCase, TargetFixture, FunctionCase]]:
+def _selected() -> list[tuple[ModelCase, TargetFixture, FunctionCase]]:
     fixture = ACCEPTANCE()
     return [(model, fixture, case) for model in CORPUS for case in model.schedule]
 
 
-def _identify(item: object) -> str:
-    if isinstance(item, ModelCase | TargetFixture):
-        return item.id
-    if isinstance(item, FunctionCase):
-        return item.function
-    return str(item)
+def _cases() -> list[object]:
+    """Each case carries its gate as its own expected result."""
+    return [
+        pytest.param(
+            model,
+            fixture,
+            case,
+            id=case.function,
+            marks=case.gate.expected_failure(expect=ScheduleError),
+        )
+        for model, fixture, case in _selected()
+    ]
 
 
-@pytest.mark.parametrize(("model", "fixture", "case"), _cases(), ids=_identify)
+@pytest.mark.parametrize(("model", "fixture", "case"), _cases())
 def test_every_selected_function_plans_or_says_what_stopped_it(
     model: ModelCase, fixture: TargetFixture, case: FunctionCase
 ) -> None:
@@ -68,7 +74,7 @@ def test_the_functions_no_partition_can_take_are_untested_not_blocked() -> None:
 def test_the_report_separates_what_ran_from_what_nobody_selected() -> None:
     fixture = ACCEPTANCE()
     collector = CoverageCollector()
-    for model, _, case in _cases():
+    for model, _, case in _selected():
         collector.record_gate(
             case.gate,
             model=model.id,

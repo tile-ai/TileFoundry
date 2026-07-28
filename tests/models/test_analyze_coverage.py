@@ -29,7 +29,7 @@ def _families(fixture: TargetFixture) -> tuple[str, ...]:
     return ANALYSES.selectors_for(type(fixture.target))
 
 
-def _cases() -> list[tuple[ModelCase, TargetFixture, FunctionCase, str]]:
+def _selected() -> list[tuple[ModelCase, TargetFixture, FunctionCase, str]]:
     fixture = ACCEPTANCE()
     return [
         (model, fixture, case, family)
@@ -39,19 +39,22 @@ def _cases() -> list[tuple[ModelCase, TargetFixture, FunctionCase, str]]:
     ]
 
 
-def _identify(item: object) -> str:
-    if isinstance(item, ModelCase):
-        return item.id
-    if isinstance(item, TargetFixture):
-        return item.id
-    if isinstance(item, FunctionCase):
-        return item.function
-    return str(item)
+def _cases() -> list[object]:
+    """Each case carries its gate as its own expected result."""
+    return [
+        pytest.param(
+            model,
+            fixture,
+            case,
+            family,
+            id=f"{case.function}-{family}",
+            marks=case.gate.expected_failure(expect=AnalysisError),
+        )
+        for model, fixture, case, family in _selected()
+    ]
 
 
-@pytest.mark.parametrize(
-    ("model", "fixture", "case", "family"), _cases(), ids=_identify
-)
+@pytest.mark.parametrize(("model", "fixture", "case", "family"), _cases())
 def test_every_selected_function_analyses_or_says_what_stopped_it(
     model: ModelCase,
     fixture: TargetFixture,
@@ -90,7 +93,7 @@ def test_the_report_states_the_matrix_the_registry_declares() -> None:
     record, so it says the same thing however the suite was distributed."""
     fixture = ACCEPTANCE()
     collector = CoverageCollector()
-    for model, _, case, family in _cases():
+    for model, _, case, family in _selected():
         collector.record_gate(
             case.gate,
             model=model.id,
