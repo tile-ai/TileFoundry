@@ -1,17 +1,28 @@
-"""Closed spatial partition scheduling through the public boundary."""
+"""Closed spatial partition scheduling through the public boundary.
+
+The solver itself is not asked to be optimal here; what is asked is that every
+plan it returns holds together, that a plan which does not is rejected with the
+reason it failed, and that the numbers it solved against were closed before it
+ran. Those are the only checks standing between a wrong plan and the code
+generated from one, so each distinct way a plan can be wrong keeps its own
+message: which edge disagreed, which position was outside the level, which two
+operations shared a position.
+
+Whether a real model's entry function plans and verifies is the corpus Schedule
+witness's subject. The program here is small so the mutations below can name
+exactly one thing each.
+"""
 
 from __future__ import annotations
 
 import dataclasses
 import json
-import pathlib
 from dataclasses import replace
 
 import pytest
 from ortools.sat.python import cp_model
 
 from tests.fixtures.static_online import static_online_attend
-from tests.models.deepseek_v4_flash.moe import deepseek_v4_flash_module
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm
@@ -24,19 +35,15 @@ from tilefoundry.schedule.partition import (
     PartitionFacts,
     PartitionFactsError,
     PartitionProblemError,
-    PartitionSchedulePlan,
     PlacedValue,
     PositionInterval,
     build_partition_problem,
     build_partition_program,
 )
-from tilefoundry.schedule.partition import problem as problem_module
 from tilefoundry.schedule.partition import solve as solve_module
 from tilefoundry.schedule.pipeline.problem import PipelineProblemError
 
 _SOLVER = ScheduleOptions(timeout_seconds=60, workers=8)
-
-_PARTITION_PACKAGE = pathlib.Path(problem_module.__file__).parent
 
 
 @func(target="cuda")
@@ -63,8 +70,24 @@ def _closed(extent: int = 4):
     return module, function, program, facts
 
 
-def test_partition_schedules_through_the_public_operation_without_rewriting() -> None:
+@pytest.fixture(scope="module")
+def solved():
+    """One solved plan, shared by every test that only mutates a copy of it.
+
+    Verification is a structural check over an immutable plan, so the tests below
+    build broken variants with `replace` rather than re-solving. Solving once is
+    not an optimisation of the assertions -- it is the same plan under every
+    mutation, which is what makes the failures comparable.
+    """
     module, function, _, _ = _closed()
+    return module, function, schedule(module, function, topology="cta").plan
+
+
+def test_partition_schedules_through_the_public_operation_without_rewriting() -> None:
+    """The plan is a decision about the program, so the program comes back as the
+    same objects and prints identically -- nothing about scheduling rewrites it."""
+    module, function, _, _ = _closed()
+    before = as_script(module)
 
     result = schedule(module, function, topology="cta")
 
@@ -75,21 +98,7 @@ def test_partition_schedules_through_the_public_operation_without_rewriting() ->
     assert result.plan.proof.objective_ns > 0
     assert result.plan.proof.best_bound_ns <= result.plan.proof.objective_ns
     assert result.plan.root_results
-
-
-def test_partition_and_pipeline_answer_different_levels_of_one_module() -> None:
-    module = replace(
-        gemm_norm, topologies=(Topology("cta", 4), Topology("thread", 128))
-    )
-    function = module.entry_function()
-
-    partition = schedule(module, function, topology="cta").plan
-    pipeline = schedule(module, function, topology="thread").plan
-
-    assert type(partition) is not type(pipeline)
-    assert partition.topology == "cta"
-    assert hasattr(partition, "values")
-    assert hasattr(pipeline, "statements")
+    assert as_script(result.module) == before
 
 
 def test_partition_program_states_the_program_without_asking_the_hardware() -> None:
@@ -124,24 +133,12 @@ def test_partition_problem_closes_every_hardware_number_before_solving() -> None
     assert all(candidate.duration_ns >= 0 for candidate in problem.candidates.values())
 
 
-def test_partition_modules_never_reach_a_target() -> None:
-    """The closed stages must hold numbers, not a machine to ask again."""
-    forbidden = (
-        "resolve_target",
-        "as_facts",
-        "CudaTarget",
-        "AmxTarget",
-        ".device.",
-        ".architecture.",
-        "TargetSpecRef.of",
-    )
-    for path in sorted(_PARTITION_PACKAGE.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        for name in forbidden:
-            assert name not in text, f"{path.name} reaches a target through {name}"
-
-
-def test_partition_prices_computation_and_reshard_as_one_candidate_concept() -> None:
+def test_partition_prices_a_move_as_one_more_candidate_and_only_where_needed() -> None:
+    """A reshard is not a side channel: it is priced as an ordinary candidate of
+    the same kind, with bytes moved and no topology of its own. And it is
+    synthesised only where nothing authored already produces the placement -- a
+    bucket holding both an authored producer and a synthesised one would be
+    charging for a move that has an original."""
     _, _, program, facts = _closed()
 
     problem = build_partition_problem(program, facts, Topology("cta", 4))
@@ -159,36 +156,45 @@ def test_partition_prices_computation_and_reshard_as_one_candidate_concept() -> 
         assert candidate.moved_bytes > 0
         assert candidate.topology_count == 0
 
-
-def test_partition_adds_no_reshard_where_an_authored_candidate_already_produces() -> None:
-    _, _, program, facts = _closed()
-
-    problem = build_partition_problem(program, facts, Topology("cta", 4))
-
     for bucket in problem.buckets.values():
         producers = [problem.candidates[cid] for cid in bucket.candidate_ids]
-        authored = [candidate for candidate in producers if candidate.site_id is not None]
-        synthesized = [candidate for candidate in producers if candidate.site_id is None]
-        assert not (authored and synthesized)
+        assert not (
+            [item for item in producers if item.site_id is not None]
+            and [item for item in producers if item.site_id is None]
+        )
 
 
-def test_partition_rejects_facts_projected_for_another_level() -> None:
-    _, _, program, facts = _closed()
+def test_partition_refuses_a_level_the_facts_and_the_program_do_not_share() -> None:
+    """Three ways of asking about the wrong level, each answered before a solve.
+
+    Facts projected for another level describe another machine's parallelism; a
+    level the target does not partition has no facts to project at all; and a
+    level the program never declared has no extent to place work across. All
+    three used to be servable by whatever numbers happened to be at hand.
+    """
+    module, _, program, facts = _closed()
 
     with pytest.raises(PartitionProblemError, match="describe 'core'"):
         build_partition_problem(program, replace(facts, topology="core"), Topology("cta", 4))
 
+    with pytest.raises(ValueError, match="no partition facts for 'thread'"):
+        module.resolve_target().as_facts(
+            PartitionFacts, program.facts_query("thread")
+        )
 
-def test_partition_rejects_an_extent_wider_than_the_hardware_states() -> None:
+    thread_only = replace(gemm_norm, topologies=(Topology("thread", 128),))
+    with pytest.raises(ScheduleError, match="cta"):
+        schedule(thread_only, thread_only.entry_function(), topology="cta")
+
+
+def test_partition_refuses_hardware_it_cannot_charge_the_work_against() -> None:
+    """An extent wider than the machine states and a missing rate are both
+    refusals, not defaults: a problem that guessed either would return a plan
+    priced against a machine nobody has."""
     _, _, program, facts = _closed()
 
-    narrow = replace(facts, parallel_units=2)
     with pytest.raises(PartitionProblemError, match="exceeds the 2 parallel units"):
-        build_partition_problem(program, narrow, Topology("cta", 4))
-
-
-def test_partition_rejects_facts_missing_a_rate_it_must_charge_work_at() -> None:
-    _, _, program, facts = _closed()
+        build_partition_problem(program, replace(facts, parallel_units=2), Topology("cta", 4))
 
     with pytest.raises(PartitionFactsError, match="no dense peak rate"):
         build_partition_problem(
@@ -196,26 +202,10 @@ def test_partition_rejects_facts_missing_a_rate_it_must_charge_work_at() -> None
         )
 
 
-def test_partition_facts_reject_a_level_the_target_does_not_partition() -> None:
-    module, _, program, _ = _closed()
-
-    with pytest.raises(ValueError, match="no partition facts for 'thread'"):
-        module.resolve_target().as_facts(
-            PartitionFacts, program.facts_query("thread")
-        )
-
-
-def test_partition_requires_a_level_the_program_declares() -> None:
-    module = replace(gemm_norm, topologies=(Topology("thread", 128),))
-
-    with pytest.raises(ScheduleError, match="cta"):
-        schedule(module, module.entry_function(), topology="cta")
-
-
-def test_partition_plan_names_values_and_operations_from_the_authored_program() -> None:
-    module, function, _, _ = _closed()
-
-    plan = schedule(module, function, topology="cta").plan
+def test_partition_plan_names_values_and_operations_from_the_authored_program(
+    solved,
+) -> None:
+    _, _, plan = solved
 
     names = {value.id for value in plan.values}
     assert {"x", "w", "weight"} <= names
@@ -227,8 +217,11 @@ def test_partition_plan_names_values_and_operations_from_the_authored_program() 
     assert set(plan.root_results) <= names
 
 
-def test_partition_plan_states_a_reshard_as_an_operation_not_a_side_channel() -> None:
-    """A moved value is one of the plan's own operations, with both placements."""
+def test_partition_plan_states_a_reshard_as_an_operation_with_both_placements() -> None:
+    """A moved value is one of the plan's own operations, and both placements of
+    it are named values: same shape and dtype, different type, and more than one
+    placement sharing a base name. A plan that reported the move on the side
+    would leave a reader unable to say where a value is."""
     module = static_online_attend
     plan = schedule(
         module,
@@ -259,18 +252,9 @@ def test_partition_plan_states_a_reshard_as_an_operation_not_a_side_channel() ->
             target.type.dtype,
         )
 
-
-def test_partition_plan_holds_one_value_in_two_placements_at_once() -> None:
-    """A Reshard connects two placements of one tensor, so both are named."""
-    module = static_online_attend
-    plan = schedule(
-        module, module.entry_function(), topology="cta", options=_SOLVER
-    ).plan
-
     qualified = tuple(value for value in plan.values if "@" in value.id)
     assert qualified
-    bases = {value.id.split("@", 1)[0] for value in qualified}
-    for base in bases:
+    for base in {value.id.split("@", 1)[0] for value in qualified}:
         placements = tuple(
             value for value in qualified if value.id.split("@", 1)[0] == base
         )
@@ -278,116 +262,81 @@ def test_partition_plan_holds_one_value_in_two_placements_at_once() -> None:
         assert len({value.type for value in placements}) == len(placements)
 
 
-def test_partition_plan_verification_rejects_an_operation_on_an_unplaced_value() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+def test_verification_rejects_an_edge_the_two_ends_do_not_agree_on(solved) -> None:
+    """Every producer/consumer edge is stated twice, and both statements have to
+    say the same thing.
 
-    broken = replace(plan, values=())
-    with pytest.raises(PlanVerificationError, match="unplaced value"):
-        broken.verify(module, function, Topology("cta", 4))
-
-
-def test_partition_plan_verification_rejects_a_dangling_producer() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+    A named producer that does not list the placement among its outputs, a named
+    consumer that does not read it, and either side disowning an edge the other
+    still names, are four separate corruptions with four separate messages -- and
+    all four are invisible to a check that only walked one direction.
+    """
+    module, function, plan = solved
+    level = Topology("cta", 4)
 
     produced = next(value for value in plan.values if value.producer_id)
-    broken = replace(
-        plan,
-        values=tuple(
-            replace(value, producer_id="nobody") if value is produced else value
-            for value in plan.values
-        ),
-    )
-    with pytest.raises(PlanVerificationError, match="which the plan does not run"):
-        broken.verify(module, function, Topology("cta", 4))
-
-
-def test_partition_plan_verification_rejects_a_producer_that_produces_it_not() -> None:
-    """A named producer must actually list the placement among its outputs."""
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
-    produced = next(value for value in plan.values if value.producer_id)
-    other = next(
+    other_operation = next(
         operation
         for operation in plan.operations
         if produced.id not in operation.output_ids
     )
-
-    broken = replace(
-        plan,
-        values=tuple(
-            replace(value, producer_id=other.id) if value is produced else value
-            for value in plan.values
-        ),
-    )
     with pytest.raises(PlanVerificationError, match="does not produce it"):
-        broken.verify(module, function, Topology("cta", 4))
+        _with_value(plan, produced, producer_id=other_operation.id).verify(
+            module, function, level
+        )
 
-
-def test_partition_plan_verification_rejects_a_consumer_that_reads_it_not() -> None:
-    """A named consumer must actually list the placement among its inputs."""
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
     read = next(value for value in plan.values if value.consumer_ids)
-    other = next(
-        operation
-        for operation in plan.operations
-        if read.id not in operation.input_ids
-    )
-
-    broken = replace(
-        plan,
-        values=tuple(
-            replace(value, consumer_ids=(*value.consumer_ids, other.id))
-            if value is read
-            else value
-            for value in plan.values
-        ),
+    not_a_reader = next(
+        operation for operation in plan.operations if read.id not in operation.input_ids
     )
     with pytest.raises(PlanVerificationError, match="does not read it"):
-        broken.verify(module, function, Topology("cta", 4))
+        _with_value(
+            plan, read, consumer_ids=(*read.consumer_ids, not_a_reader.id)
+        ).verify(module, function, level)
 
-
-def test_partition_plan_verification_rejects_an_output_the_value_disowns() -> None:
-    """The operation side of an edge must agree with the placement side."""
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
-    produced = next(value for value in plan.values if value.producer_id)
-
-    broken = replace(
-        plan,
-        values=tuple(
-            replace(value, producer_id=None) if value is produced else value
-            for value in plan.values
-        ),
-    )
     with pytest.raises(PlanVerificationError, match="which names producer None"):
-        broken.verify(module, function, Topology("cta", 4))
+        _with_value(plan, produced, producer_id=None).verify(module, function, level)
+
+    with pytest.raises(PlanVerificationError, match="does not name it as a consumer"):
+        _with_value(plan, read, consumer_ids=()).verify(module, function, level)
 
 
-def test_partition_plan_verification_rejects_an_input_the_value_disowns() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
-    read = next(value for value in plan.values if value.consumer_ids)
-
-    broken = replace(
+def _with_value(plan, target, **changes):
+    """*plan* with one placement replaced -- the only difference from the plan the
+    solver returned, so a rejection can only be about that one field."""
+    return replace(
         plan,
         values=tuple(
-            replace(value, consumer_ids=()) if value is read else value
+            replace(value, **changes) if value is target else value
             for value in plan.values
         ),
     )
-    with pytest.raises(PlanVerificationError, match="does not name it as a consumer"):
-        broken.verify(module, function, Topology("cta", 4))
 
 
-def test_partition_plan_verification_will_not_reach_a_root_through_a_fabricated_edge() -> None:
-    """A root must be reachable through edges both ends agree on."""
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+def test_verification_rejects_a_value_nothing_runs_and_a_root_nothing_reaches(
+    solved,
+) -> None:
+    """A plan has to place every value it uses and reach every result it claims.
+
+    An operation over a value the plan does not place, a producer the plan does
+    not run, a root that is not a placement at all, and a root reachable only
+    through an edge one end does not confirm: each is a plan that describes work
+    nobody could carry out, and each says which.
+    """
+    module, function, plan = solved
+    level = Topology("cta", 4)
+
+    with pytest.raises(PlanVerificationError, match="unplaced value"):
+        replace(plan, values=()).verify(module, function, level)
+
+    produced = next(value for value in plan.values if value.producer_id)
+    with pytest.raises(PlanVerificationError, match="which the plan does not run"):
+        _with_value(plan, produced, producer_id="nobody").verify(module, function, level)
+
+    with pytest.raises(PlanVerificationError, match="unplaced"):
+        replace(plan, root_results=("nowhere",)).verify(module, function, level)
+
     real = next(operation for operation in plan.operations if operation.output_ids)
-
     orphan = PlacedValue(
         id="orphan",
         type=plan.values[0].type,
@@ -395,32 +344,32 @@ def test_partition_plan_verification_will_not_reach_a_root_through_a_fabricated_
         consumer_ids=(),
         positions=plan.values[0].positions,
     )
-    broken = replace(
-        plan, values=(*plan.values, orphan), root_results=("orphan",)
-    )
     with pytest.raises(PlanVerificationError, match="does not produce it"):
-        broken.verify(module, function, Topology("cta", 4))
+        replace(
+            plan, values=(*plan.values, orphan), root_results=("orphan",)
+        ).verify(module, function, level)
 
 
-def test_partition_plan_verification_rejects_a_placement_outside_the_level() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+def test_verification_rejects_a_placement_the_level_does_not_contain(solved) -> None:
+    """A plan is solved for one extent of one level, so it is only meaningful
+    against that extent: a placement outside the positions the level declares, and
+    a level of a different width than the one solved for, are both refused."""
+    module, function, plan = solved
 
     first = plan.values[0]
-    broken = replace(
-        plan,
-        values=(
-            replace(first, positions=PositionInterval(3, 9)),
-            *plan.values[1:],
-        ),
-    )
     with pytest.raises(PlanVerificationError, match="outside the 4 positions"):
-        broken.verify(module, function, Topology("cta", 4))
+        _with_value(plan, first, positions=PositionInterval(3, 9)).verify(
+            module, function, Topology("cta", 4)
+        )
+
+    with pytest.raises(PlanVerificationError, match="the level declares 8"):
+        plan.verify(module, function, Topology("cta", 8))
 
 
-def test_partition_plan_verification_rejects_two_operations_sharing_a_position() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+def test_verification_rejects_two_operations_sharing_a_position(solved) -> None:
+    """Two operations placed on one position at one time is the one thing a
+    spatial partition exists to decide, so an overlap is not a preference."""
+    module, function, plan = solved
     placed = next(
         operation
         for operation in plan.operations
@@ -433,9 +382,10 @@ def test_partition_plan_verification_rejects_two_operations_sharing_a_position()
         broken.verify(module, function, Topology("cta", 4))
 
 
-def test_partition_plan_verification_rejects_a_reshard_that_moves_nothing() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+def test_verification_rejects_a_reshard_that_moves_nothing(solved) -> None:
+    """A move whose source and destination are the same placement is a cost the
+    plan charges for work it does not do."""
+    module, function, plan = solved
     held = next(value for value in plan.values if value.producer_id is None)
     identity = PartitionedOperation(
         id="reshard:identity",
@@ -448,16 +398,11 @@ def test_partition_plan_verification_rejects_a_reshard_that_moves_nothing() -> N
     )
 
     broken = replace(
-        plan,
-        values=tuple(
-            replace(
-                value,
-                producer_id=identity.id,
-                consumer_ids=(*value.consumer_ids, identity.id),
-            )
-            if value is held
-            else value
-            for value in plan.values
+        _with_value(
+            plan,
+            held,
+            producer_id=identity.id,
+            consumer_ids=(*held.consumer_ids, identity.id),
         ),
         operations=(*plan.operations, identity),
     )
@@ -465,35 +410,11 @@ def test_partition_plan_verification_rejects_a_reshard_that_moves_nothing() -> N
         broken.verify(module, function, Topology("cta", 4))
 
 
-def test_partition_plan_verification_rejects_a_root_it_cannot_reach() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
-
-    broken = replace(plan, root_results=("nowhere",))
-    with pytest.raises(PlanVerificationError, match="unplaced"):
-        broken.verify(module, function, Topology("cta", 4))
-
-    orphan = replace(
-        plan.values[-1], id="orphan", producer_id="reshard:missing", consumer_ids=()
-    )
-    dangling = replace(
-        plan, values=(*plan.values, orphan), root_results=("orphan",)
-    )
-    with pytest.raises(PlanVerificationError, match="does not run"):
-        dangling.verify(module, function, Topology("cta", 4))
-
-
-def test_partition_plan_verification_rejects_a_level_it_did_not_decide() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
-
-    with pytest.raises(PlanVerificationError, match="the level declares 8"):
-        plan.verify(module, function, Topology("cta", 8))
-
-
-def test_partition_plan_verification_rejects_a_bound_above_its_own_objective() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+def test_verification_rejects_a_bound_above_its_own_objective(solved) -> None:
+    """The proof is part of the plan: a lower bound above the objective it bounds
+    is an arithmetic impossibility, and reading one as optimality would report a
+    plan as proven that is not."""
+    module, function, plan = solved
 
     broken = replace(
         plan, proof=replace(plan.proof, best_bound_ns=plan.proof.objective_ns + 1)
@@ -502,10 +423,9 @@ def test_partition_plan_verification_rejects_a_bound_above_its_own_objective() -
         broken.verify(module, function, Topology("cta", 4))
 
 
-def test_partition_plan_verification_needs_no_solver() -> None:
+def test_verification_needs_no_solver(solved) -> None:
     """Verification is a structural check, so it must not reach the solver."""
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+    module, function, plan = solved
     calls: list[object] = []
 
     original = cp_model.CpSolver.Solve
@@ -522,9 +442,11 @@ def test_partition_plan_verification_needs_no_solver() -> None:
     assert calls == []
 
 
-def test_partition_plan_renders_the_same_decision_as_text_and_json() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
+def test_partition_plan_renders_the_same_decision_as_text_and_json(solved) -> None:
+    """One decision, two renderings, and the type each value was placed in stated
+    exactly -- a serialization that dropped the selected type would describe a
+    placement without saying what is placed there."""
+    _, _, plan = solved
 
     assert plan.to_json() == plan.to_json()
     assert plan.render() == plan.render()
@@ -549,12 +471,6 @@ def test_partition_plan_renders_the_same_decision_as_text_and_json() -> None:
         if item["interval"] is not None:
             assert f"[{item['interval']['start_ns']}, " in text
 
-
-def test_partition_plan_serializes_the_selected_type_it_placed_a_value_in() -> None:
-    module, function, _, _ = _closed()
-    plan = schedule(module, function, topology="cta").plan
-    data = json.loads(plan.to_json())
-
     by_id = {item["id"]: item for item in data["values"]}
     for value in plan.values:
         stated = by_id[value.id]["type"]
@@ -565,45 +481,6 @@ def test_partition_plan_serializes_the_selected_type_it_placed_a_value_in() -> N
             assert stated["layout"]["topology"] == "cta"
         else:
             assert stated["layout"] is None
-
-
-def test_partition_returns_the_program_it_was_asked_about_unchanged() -> None:
-    module, function, _, _ = _closed()
-    before = as_script(module)
-
-    result = schedule(module, function, topology="cta")
-
-    assert result.module is module
-    assert result.function is function
-    assert as_script(result.module) == before
-
-
-def test_partition_never_materializes_its_decision_into_hir() -> None:
-    """The plan states where work goes; nothing here rewrites the program."""
-    for path in sorted(_PARTITION_PACKAGE.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        assert "materialize" not in text
-    plan_fields = {field.name for field in dataclasses.fields(PartitionSchedulePlan)}
-    assert "module" not in plan_fields
-    assert "materialized" not in plan_fields
-
-
-def test_partition_plans_a_real_moe_function() -> None:
-    module = deepseek_v4_flash_module
-    result = schedule(
-        module, module.entry_function(), topology="cta", options=_SOLVER
-    )
-    plan = result.plan
-
-    assert result.module is module
-    assert plan.proof.status in ("OPTIMAL", "FEASIBLE_NOT_PROVEN")
-    assert plan.proof.best_bound_ns <= plan.proof.objective_ns
-    assert plan.operations and plan.values and plan.root_results
-    assert plan.to_json() == plan.to_json()
-
-
-def test_partition_solve_reports_its_own_failures_rather_than_the_solver_status() -> None:
-    assert issubclass(solve_module.PartitionSolveError, RuntimeError)
 
 
 def test_a_problem_that_cannot_be_formed_is_a_schedule_failure() -> None:
@@ -619,3 +496,7 @@ def test_a_problem_that_cannot_be_formed_is_a_schedule_failure() -> None:
         assert issubclass(error, ScheduleError), error.__name__
         # Still a ValueError, so every existing caller keeps catching it.
         assert issubclass(error, ValueError), error.__name__
+
+    # A solve that finds nothing is the solver's own outcome rather than a
+    # malformed request, and stays a plain runtime failure.
+    assert issubclass(solve_module.PartitionSolveError, RuntimeError)

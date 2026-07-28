@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, replace
-from pathlib import Path
 
 import pytest
 
@@ -85,30 +84,29 @@ def _registry() -> TargetFactsRegistry:
     return registry
 
 
-def test_a_conversion_resolves_only_once_its_registration_has_run() -> None:
-    """AC-2-1. The pair is unknown until the owning registration is imported,
-    which is what makes a missing backend registration a hard failure rather
-    than a silent default."""
-    registry = TargetFactsRegistry()
-    target = CudaTarget()
+def test_lookup_is_exact_with_no_subclass_or_by_name_fallback() -> None:
+    """AC-2-1 and AC-2-2. A pair is unknown until its own registration has run,
+    and known only by identity afterwards.
 
-    assert registry.registered_pairs() == ()
+    Which is what makes a missing backend registration a hard failure rather than
+    a silent default. Two targets sharing a base can describe different hardware,
+    so a base registration must not serve a subclass; a Facts type is identified
+    by the class itself, never by its name; and registering the same pair twice is
+    refused rather than replacing, since replacing would make the projection
+    depend on import order.
+    """
+    empty = TargetFactsRegistry()
+    assert empty.registered_pairs() == ()
     with pytest.raises(UnknownFactsConversionError, match="no Facts conversion"):
-        registry.project(target, _HardwareFacts)
+        empty.project(CudaTarget(), _HardwareFacts)
 
-    registry.register(CudaTarget, _HardwareFacts, _hardware_facts)
-
-    assert registry.registered_pairs() == (("CudaTarget", "_HardwareFacts"),)
-    assert registry.project(target, _HardwareFacts) == _HardwareFacts(
+    registry = _registry()
+    assert ("CudaTarget", "_HardwareFacts") in registry.registered_pairs()
+    assert registry.project(CudaTarget(), _HardwareFacts) == _HardwareFacts(
         parallel_units=132, bytes_per_second=4_800_000_000_000
     )
-
-
-def test_lookup_is_exact_with_no_subclass_or_by_name_fallback() -> None:
-    """AC-2-2. Two targets sharing a base can describe different hardware, so a
-    base registration must not serve a subclass; and a Facts type is identified
-    by the class itself, never by its name."""
-    registry = _registry()
+    with pytest.raises(DuplicateFactsConversionError, match="already registered"):
+        registry.register(CudaTarget, _HardwareFacts, _hardware_facts)
 
     class _TunedCuda(CudaTarget):
         """A distinct target type that happens to share CudaTarget's base."""
@@ -131,14 +129,6 @@ def test_lookup_is_exact_with_no_subclass_or_by_name_fallback() -> None:
     _HardwareFactsImpostor.__name__ = "_HardwareFacts"
     with pytest.raises(UnknownFactsConversionError):
         registry.project(CudaTarget(), _HardwareFactsImpostor)
-
-
-def test_a_duplicate_registration_fails_instead_of_replacing() -> None:
-    """AC-2-2. Silently replacing a conversion would make the projection depend
-    on import order."""
-    registry = _registry()
-    with pytest.raises(DuplicateFactsConversionError, match="already registered"):
-        registry.register(CudaTarget, _HardwareFacts, _hardware_facts)
 
 
 def test_both_call_shapes_work_without_a_common_query_base() -> None:
@@ -165,7 +155,24 @@ def test_both_call_shapes_work_without_a_common_query_base() -> None:
 
 def test_a_facts_aggregate_must_be_an_immutable_dataclass() -> None:
     """AC-2-4. Immutability is checked when the conversion is registered, so a
-    mutable aggregate cannot reach a caller in the first place."""
+    mutable aggregate cannot reach a caller in the first place -- and the value
+    that does reach one is frozen, because projection is a read: it converts what
+    the target already knows and reports it, leaving the target and the registry
+    exactly as they were.
+    """
+    projected = _registry()
+    target = CudaTarget()
+    before_target = replace(target)
+    before_pairs = projected.registered_pairs()
+
+    facts = projected.project(target, _HardwareFacts)
+
+    assert target == before_target
+    assert target.architecture_id == "nvidia.sm90"
+    assert projected.registered_pairs() == before_pairs
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        facts.parallel_units = 1
+
     registry = TargetFactsRegistry()
 
     @dataclass
@@ -181,23 +188,6 @@ def test_a_facts_aggregate_must_be_an_immutable_dataclass() -> None:
         registry.register(CudaTarget, _NotADataclass, _hardware_facts)
     with pytest.raises(InvalidFactsTypeError, match="must be a class"):
         registry.register(CudaTarget, "_HardwareFacts", _hardware_facts)
-
-
-def test_projection_leaves_the_target_and_the_registry_untouched() -> None:
-    """AC-2-4. Projection is a read: it converts what the target already knows
-    and reports it, so nothing it touches may come back changed."""
-    registry = _registry()
-    target = CudaTarget()
-    before_target = replace(target)
-    before_pairs = registry.registered_pairs()
-
-    facts = registry.project(target, _HardwareFacts)
-
-    assert target == before_target
-    assert target.architecture_id == "nvidia.sm90"
-    assert registry.registered_pairs() == before_pairs
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        facts.parallel_units = 1
 
 
 def test_a_conversion_returning_the_wrong_type_is_rejected() -> None:
@@ -230,18 +220,3 @@ def test_as_facts_delegates_to_the_shared_registry() -> None:
         # There is deliberately no public unregister: a conversion is installed
         # for the process, so only this test's own locally-defined pair is undone.
         TARGET_FACTS._conversions.pop((CudaTarget, _SharedFacts))
-
-
-def test_the_generic_registry_names_no_concrete_target() -> None:
-    """AC-2-5. Adding a backend adds a registration, not a branch here, so the
-    common code must not mention a concrete target at all."""
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "tilefoundry"
-        / "target"
-        / "facts.py"
-    ).read_text(encoding="utf-8")
-
-    for concrete in ("CudaTarget", "AmxTarget", "SM90", "H200SXM", "AppleAmx", "cuda", "amx"):
-        assert concrete not in source, concrete

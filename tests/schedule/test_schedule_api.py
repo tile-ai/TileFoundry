@@ -8,7 +8,8 @@ is answered before an algorithm is allowed to run.
 
 The target and the level names here are local to this file on purpose: the
 contract under test is that dispatch is exact, which is a statement about the
-lookup rather than about any particular machine's vocabulary.
+lookup rather than about any particular machine's vocabulary. What a real
+scheduler decides for a real model is the corpus Schedule witness's subject.
 """
 from __future__ import annotations
 
@@ -144,7 +145,9 @@ def test_schedule_returns_its_inputs_and_the_resolved_level():
     The Module and Function come back as the same objects: scheduling decides
     about a program rather than producing a new one. The topology comes back
     resolved, so the caller holds the extent the algorithm actually saw instead
-    of the name it asked by.
+    of the name it asked by. And every scheduler is handed one fresh common
+    options value per default call, so nothing an algorithm does to it can reach
+    the next call.
     """
     result = schedule(Widget, scale, topology="tile")
 
@@ -158,18 +161,9 @@ def test_schedule_returns_its_inputs_and_the_resolved_level():
     assert result.plan.render() == "tile x4"
     assert json.loads(result.plan.to_json()) == {"level": "tile", "width": 4}
 
-
-def test_schedule_normalizes_options_before_the_algorithm_runs():
-    """Every scheduler receives one fresh common options value per default call."""
     schedule(Widget, scale, topology="tile")
-    schedule(Widget, scale, topology="tile")
-
     assert len(_OPTIONS) == 2
     assert _OPTIONS[0] is not _OPTIONS[1]
-
-    with pytest.raises(ScheduleError, match="options must be ScheduleOptions"):
-        schedule(Widget, scale, topology="tile", options=object())
-    assert _CALLS == [("tile", 4), ("tile", 4)]
 
 
 def test_dispatch_is_exact_in_both_target_and_level():
@@ -178,7 +172,10 @@ def test_dispatch_is_exact_in_both_target_and_level():
     A level the target has no scheduler for is not served by the target's other
     levels, a target with no scheduler at all is not served by a target that has
     one, and a subclass does not inherit its base's registration -- two machines
-    that share a base can need different schedulers.
+    that share a base can need different schedulers. A missing pair is diagnosed
+    with what is available, and the matrix stays single-valued: registering the
+    same pair twice is refused rather than replacing, which would make dispatch
+    depend on import order.
     """
     with pytest.raises(ScheduleError, match="no 'tile' registered for _GadgetTarget"):
         schedule(Gadget, scale, topology="tile")
@@ -189,73 +186,39 @@ def test_dispatch_is_exact_in_both_target_and_level():
         schedule(WidgetPlus, scale, topology="tile")
 
     assert _CALLS == []
+    assert SCHEDULES.selectors_for(_WidgetTarget) == ("cta", "slot", "tile")
+    assert SCHEDULES.selectors_for(_GadgetTarget) == ()
 
-
-def test_registering_the_same_pair_twice_is_refused():
-    """The support matrix is what the registrations say, so it stays single-valued."""
     with pytest.raises(DuplicateAlgorithmError, match="'tile' is already registered"):
         register_schedule(_WidgetTarget, "tile")(_solve_widget_tile)
 
 
-def test_the_registry_reports_the_levels_it_serves():
-    """A missing pair is diagnosed with what is available, not just what failed."""
-    assert SCHEDULES.selectors_for(_WidgetTarget) == ("cta", "slot", "tile")
-    assert SCHEDULES.selectors_for(_GadgetTarget) == ()
-
-
-@pytest.mark.parametrize(
-    ("target_module", "level", "message"),
-    [
-        (Widget, "warp", "no topology named 'warp'"),
-        (Launched, "cta", "not known until launch"),
-        (Widget, "", "non-empty level name"),
-    ],
-)
-def test_an_unservable_request_fails_before_any_algorithm_runs(
-    target_module, level, message
-):
+def test_an_unservable_request_fails_before_any_algorithm_runs():
     """Resolution finishes first, so a refusal never has a partial solve behind it.
 
     A level the program does not declare and a level sized at launch are both
     answered from the declaration. The launch-provided case is the interesting
     one: the pair is registered and the level exists, and it still fails,
-    because placing work across a level means counting it.
+    because placing work across a level means counting it. An empty name is
+    refused rather than matched against anything, and options of the wrong type
+    are refused before an algorithm is handed them.
 
     A name that maps to two levels is not among these, because a Module cannot
     declare one twice -- ambiguity is refused where the hierarchy is written
     rather than where it is read.
     """
-    with pytest.raises(ScheduleError, match=message):
-        schedule(target_module, scale, topology=level)
+    for target_module, level, message in (
+        (Widget, "warp", "no topology named 'warp'"),
+        (Launched, "cta", "not known until launch"),
+        (Widget, "", "non-empty level name"),
+    ):
+        with pytest.raises(ScheduleError, match=message):
+            schedule(target_module, scale, topology=level)
+
+    with pytest.raises(ScheduleError, match="options must be ScheduleOptions"):
+        schedule(Widget, scale, topology="tile", options=object())
 
     assert _CALLS == []
-
-
-def test_a_hierarchy_cannot_name_one_level_twice():
-    """The declaration is single-valued, so no level name is ever ambiguous."""
-    with pytest.raises(ValueError, match="duplicate topology name"):
-
-        @module(entry="scale", target=_WidgetTarget())
-        class Doubled:
-            topologies = (Topology("tile", 4), Topology("tile", 8))
-            scale = scale
-
-
-def test_a_function_outside_the_module_is_not_scheduled():
-    """The Module is the execution domain, so the Function has to be part of it."""
-    with pytest.raises(ScheduleError, match="not a function of module 'Widget'"):
-        schedule(Widget, offset, topology="tile")
-
-    assert _CALLS == []
-
-
-def test_a_function_alone_is_not_an_execution_domain():
-    """A Function declares neither hardware nor a hierarchy, so it cannot stand in."""
-    with pytest.raises(TypeError, match="expected a Module"):
-        schedule(scale, scale, topology="tile")
-
-    with pytest.raises(TypeError, match="expected an hir.Function"):
-        schedule(Widget, Widget, topology="tile")
 
 
 def test_a_plan_that_does_not_hold_together_does_not_reach_the_caller():
@@ -270,22 +233,25 @@ def test_a_plan_that_does_not_hold_together_does_not_reach_the_caller():
     assert _CALLS == [("slot", 8)]
 
 
-def test_the_plan_base_promises_only_the_three_operations():
-    """The base names what a plan must do and nothing about what it contains.
+def test_the_module_is_the_execution_domain():
+    """A Function declares neither hardware nor a hierarchy, so it cannot stand in
+    for one, and a Function the Module does not contain is not part of the domain
+    being scheduled. The hierarchy itself is single-valued, so no level name is
+    ever ambiguous at the point of asking."""
+    with pytest.raises(ScheduleError, match="not a function of module 'Widget'"):
+        schedule(Widget, offset, topology="tile")
 
-    There is no shared schema and no way back from text: a plan is produced by
-    the algorithm that solved for it, so reading one in would mean trusting a
-    document to describe decisions nobody made.
-    """
-    assert not hasattr(SchedulePlan, "to_data")
-    assert not hasattr(SchedulePlan, "from_json")
-    assert not hasattr(SchedulePlan, "version")
+    with pytest.raises(TypeError, match="expected a Module"):
+        schedule(scale, scale, topology="tile")
 
-    base = SchedulePlan()
-    for call in (
-        lambda: base.verify(Widget, scale, Topology("tile", 4)),
-        base.to_json,
-        base.render,
-    ):
-        with pytest.raises(NotImplementedError):
-            call()
+    with pytest.raises(TypeError, match="expected an hir.Function"):
+        schedule(Widget, Widget, topology="tile")
+
+    with pytest.raises(ValueError, match="duplicate topology name"):
+
+        @module(entry="scale", target=_WidgetTarget())
+        class Doubled:
+            topologies = (Topology("tile", 4), Topology("tile", 8))
+            scale = scale
+
+    assert _CALLS == []

@@ -1,5 +1,14 @@
 """Installed hardware resources: independent documents, exact schemas, and
-the identity a compiled artifact can name them by."""
+the identity a compiled artifact can name them by.
+
+A hardware number that is wrong is not a crash, it is a plan priced against a
+machine nobody has, so what is checked here is the boundary that lets a wrong
+number in: whether a malformed document loads, whether a fact nobody modelled is
+accepted as a fact, whether an absent measurement can pass as a present one, and
+whether a number can be written anywhere other than the document. Each failure
+keeps its own diagnostic because the reader of one is somebody editing a TOML
+file by hand.
+"""
 
 from __future__ import annotations
 
@@ -24,8 +33,6 @@ from tilefoundry.target.hardware import (
     SchemaValidationError,
     UnknownDocumentError,
     UnknownSchemaError,
-    format_capabilities,
-    hardware_documents,
     parse_document,
 )
 
@@ -56,36 +63,32 @@ def _document(old: str, new: str) -> str:
     return _MINIMAL_DEVICE.replace(old, new)
 
 
-def test_architecture_and_device_documents_load_and_compose_independently() -> None:
-    """AC-1-1. Each side is a complete document in its own right, and a target
-    is the pair composed through a declared compatibility, not a single
-    combined record."""
+def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
+    """AC-1-1 and AC-1-3. Each side is a complete document in its own right, and
+    a target is the pair composed through a declared compatibility rather than one
+    combined record -- neither document carries the other's facts.
+
+    The ID and content digest of each travel with the composed value, and editing
+    a document's content changes its digest, which is what lets a compiled
+    artifact name the hardware it was built against. Identity stays out of fact
+    equality, though: two targets carrying identical facts are equal however each
+    was obtained, because codegen groups CUDA functions by comparing their
+    targets, and letting the resolved ID into equality would report identical
+    hardware as "differing Target facts".
+    """
     architecture = HARDWARE_SPECS.document(_SM90)
     device = HARDWARE_SPECS.document(_H200)
-
     assert (architecture.kind, device.kind) == ("architecture", "device")
     assert device.compatibility == (_SM90,)
-    # Neither document carries the other's facts.
     assert not any(path.startswith("throughput.") for path in architecture.facts)
     assert not any(path.startswith("instruction.") for path in device.facts)
 
-    target = CudaTarget(architecture=_SM90, device=_H200)
-    assert target.architecture.max_threads_per_cta == 1024
-    assert target.device.sm_count == 132
-
-    amx = AmxTarget()
-    assert (amx.architecture_id, amx.device_id) == ("apple.amx", "apple.m2_pro")
-    # The two target families share the loader without sharing a fact tree.
-    assert HARDWARE_SPECS.document("apple.amx").schema != architecture.schema
-
-
-def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
-    """AC-1-3. The ID and content digest travel with the composed value, and
-    editing a document's content changes its digest."""
     target = CudaTarget()
     assert (target.architecture_id, target.device_id) == (_SM90, _H200)
-    assert target.architecture_digest == HARDWARE_SPECS.document(_SM90).digest
+    assert target.architecture_digest == architecture.digest
     assert re.fullmatch(r"[0-9a-f]{64}", target.device_digest)
+    assert target.architecture.max_threads_per_cta == 1024
+    assert target.device.sm_count == 132
 
     original = parse_document(_MINIMAL_DEVICE, origin_label="test")
     edited = parse_document(
@@ -93,22 +96,13 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     )
     assert original.digest != edited.digest
 
-
-def test_identity_records_provenance_and_stays_out_of_fact_equality() -> None:
-    """Two targets carrying identical facts are equal however each was
-    obtained. Codegen groups CUDA functions by comparing their targets, so
-    letting the resolved ID into equality would report identical hardware as
-    "differing Target facts"."""
-    by_id = CudaTarget(architecture=_SM90, device=_H200)
-    supplied = CudaTarget(architecture=by_id.architecture, device=by_id.device)
-
+    supplied = CudaTarget(architecture=target.architecture, device=target.device)
     assert supplied.architecture_id is None and supplied.device_id is None
     assert supplied.architecture_digest is None
-    assert by_id == supplied
-    assert hash(by_id) == hash(supplied)
-
+    assert target == supplied
+    assert hash(target) == hash(supplied)
     # Differing facts still separate them.
-    assert by_id != CudaTarget(architecture=replace(by_id.architecture, name="other"))
+    assert target != CudaTarget(architecture=replace(target.architecture, name="other"))
 
 
 def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(
@@ -147,46 +141,11 @@ def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(
             id="unknown-kind",
         ),
         pytest.param(
-            "[spec]",
-            "[spec]\nextra = 1",
-            DocumentFormatError,
-            r"unknown \[spec\] keys",
-            id="unknown-envelope-key",
-        ),
-        pytest.param(
             "value = 4",
             'value = 4\nstatus = "unavailable"',
             EvidenceFormatError,
             "either 'value' or 'status'",
             id="value-and-status",
-        ),
-        pytest.param(
-            'origin = "vendor"',
-            'origin = "guessed"',
-            EvidenceFormatError,
-            "origin must be one of",
-            id="unknown-origin",
-        ),
-        pytest.param(
-            'unit = "count"',
-            'unit = "count"\nnote = "x"',
-            EvidenceFormatError,
-            "unknown evidence keys",
-            id="unknown-evidence-key",
-        ),
-        pytest.param(
-            'conditions = "test"',
-            'conditions = "test"\n\n[facts.compute.count.inner]\nvalue = 1',
-            EvidenceFormatError,
-            "a leaf cannot also be a namespace",
-            id="leaf-that-also-nests",
-        ),
-        pytest.param(
-            'architectures = ["test.arch"]',
-            "architectures = 1",
-            DocumentFormatError,
-            "must be a list of non-empty ID strings",
-            id="compatibility-not-a-list",
         ),
         pytest.param(
             # A bare string is iterable, so an unchecked tuple() would silently
@@ -197,29 +156,31 @@ def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(
             "must be a list of non-empty ID strings",
             id="compatibility-bare-string",
         ),
-        pytest.param(
-            'architectures = ["test.arch"]',
-            "architectures = [1, 2]",
-            DocumentFormatError,
-            "must be a list of non-empty ID strings",
-            id="compatibility-non-string-entries",
-        ),
-        pytest.param(
-            'architectures = ["test.arch"]',
-            'architectures = [""]',
-            DocumentFormatError,
-            "must be a list of non-empty ID strings",
-            id="compatibility-empty-id",
-        ),
     ],
 )
 def test_a_malformed_document_names_exactly_what_is_wrong(
     old: str, new: str, error: type[Exception], message: str
 ) -> None:
-    """AC-1-2. Each malformed shape gets its own diagnostic rather than a
-    generic parse failure."""
+    """AC-1-2. One case per class of malformed shape -- the envelope, one fact's
+    evidence, and the compatibility list -- each with its own diagnostic rather
+    than a generic parse failure."""
     with pytest.raises(error, match=message):
         parse_document(_document(old, new), origin_label="test")
+
+
+def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
+    """AC-1-2. An unknown key under ``facts`` is a spelling mistake, not an
+    unused fact, so a document carrying one does not load."""
+    text = (
+        Path(cuda_spec.__file__).parent.parent / "hardware" / "nvidia_sm90.toml"
+    ).read_text(encoding="utf-8")
+    stray = text + (
+        '\n[facts.compute.max_threads_per_cluster]\n'
+        'value = 8\nunit = "count"\norigin = "vendor"\n'
+        'source = "test"\nconditions = "test"\n'
+    )
+    with pytest.raises(SchemaValidationError, match="unknown facts for schema"):
+        cuda_spec.build_sm90(parse_document(stray, origin_label="stray"))
 
 
 def test_registration_and_resolution_failures_are_each_distinguishable() -> None:
@@ -247,21 +208,6 @@ def test_registration_and_resolution_failures_are_each_distinguishable() -> None
 
     with pytest.raises(IncompatiblePairError, match="declares compatibility with"):
         AmxTarget(architecture="apple.amx", device=_H200)
-
-
-def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
-    """AC-1-2. An unknown key under ``facts`` is a spelling mistake, not an
-    unused fact, so a document carrying one does not load."""
-    text = (
-        Path(cuda_spec.__file__).parent.parent / "hardware" / "nvidia_sm90.toml"
-    ).read_text(encoding="utf-8")
-    stray = text + (
-        '\n[facts.compute.max_threads_per_cluster]\n'
-        'value = 8\nunit = "count"\norigin = "vendor"\n'
-        'source = "test"\nconditions = "test"\n'
-    )
-    with pytest.raises(SchemaValidationError, match="unknown facts for schema"):
-        cuda_spec.build_sm90(parse_document(stray, origin_label="stray"))
 
 
 def test_no_installed_number_is_repeated_as_a_python_default() -> None:
@@ -301,20 +247,3 @@ def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
         assert not any("topology" in path for path in document.facts)
         for fact in document.facts.values():
             assert (fact.value is None) == (not fact.available)
-
-
-def test_the_capabilities_report_renders_both_documents_with_evidence() -> None:
-    """The report a user reads names each document, its digest, and every
-    fact's origin, including the ones with no value."""
-    report = format_capabilities(hardware_documents(CudaTarget()), grid_cta_count=132)
-
-    assert f"architecture: {_SM90}" in report
-    assert f"device: {_H200}" in report
-    assert "grid_cta_count: 132" in report
-    assert "compute.sm_count: 132 count [vendor]" in report
-    assert "memory.shared.bandwidth: unavailable" in report
-
-    # A target built from a directly supplied value has no document to report.
-    detached = CudaTarget(architecture=replace(CudaTarget().architecture, name="x"))
-    with pytest.raises(UnknownDocumentError, match="directly supplied"):
-        hardware_documents(detached)

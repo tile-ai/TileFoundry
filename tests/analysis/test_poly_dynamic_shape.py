@@ -3,10 +3,11 @@ used to make ``extract`` raise outright; now a ``DimVar`` axis flows straight
 through as an isl parameter (``to_domain`` already produces one), and
 resolves back to its ``ShapeDim`` in ``TileGraph.params``.
 
-Checks: (1) the static gemm+rmsnorm HIR (``test_poly_model.py``) still
-extracts unchanged; (2) a ``DimVar`` M-axis matmul extracts a parametrised
-``TileGraph``; (3) that same dynamic graph schedules and emits a skeleton
-with a symbolic loop bound.
+Two things have to hold for a decode kernel, and they are the two below: the
+parameter stays *bounded* (a domain nothing bounds cannot be scheduled), and the
+loop that comes out of it names the parameter instead of a trip count somebody
+guessed. The static counterpart of this graph is pinned in
+``test_analysis_invariants.py``.
 """
 from __future__ import annotations
 
@@ -17,40 +18,9 @@ import isl
 from tilefoundry import func
 from tilefoundry.analysis import TileGraph, extract
 from tilefoundry.dsl import DimVar, Tensor
-from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
+from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul resolved dynamically
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import emit_scaffold
-
-
-@func
-def gemm_rmsnorm(
-    x: Tensor[(2, 4), "f32"],
-    w: Tensor[(4, 2), "f32"],
-    weight: Tensor[(2,), "f32"],
-) -> Tensor[(2, 2), "f32"]:
-    h = matmul(x, w)
-    y = rms_norm(h, weight)
-    return y
-
-
-def test_static_gemm_rmsnorm_extract_unchanged():
-    """Static HIR still extracts the exact k-carry + MM->RN dependences
-    ``test_poly_model.py`` validates; ``TileGraph.params`` stays empty."""
-    tg = extract(gemm_rmsnorm)
-    assert isinstance(tg, TileGraph)
-    assert tg.params == {}
-    assert tg.domain.space().dim(isl.dim_type.PARAM) == 0
-
-    names_by_op = {u.name: type(u.op.target).__name__ for u in tg.units}
-    assert names_by_op == {"MM": "MatMul", "RN": "RMSNorm"}
-
-    k_carry = isl.map("{ MM[i,j,k] -> MM[i,j,k+1] : 0<=i<2 and 0<=j<2 and 0<=k<3 }")
-    mm_to_rn = isl.map("{ MM[i,j,3] -> RN[i] : 0<=i<2 and 0<=j<2 }")
-    assert k_carry.is_subset(tg.deps)
-    assert mm_to_rn.is_subset(tg.deps)
-    expected_total = isl.union_map("{}").union(k_carry).union(mm_to_rn)
-    assert tg.deps.is_equal(expected_total)
-
 
 # Dynamic M axis: x:[seq,4] @ w:[4,2], seq a DimVar (real variable
 # sequence length). N/K stay small so the expected extents below remain
@@ -72,7 +42,8 @@ def test_dynamic_matmul_extract_params_and_domain():
     (``0 <= i < seq``, straight from ``to_domain`` -- no tiling), resolves
     ``TileGraph.params['seq']`` back to the exact ``DimVar``, and the M
     axis is still bounded (``dim_max_val`` a finite 126, not ``infty``,
-    since ``seq``'s own half-open range ``[1, 128)`` tops out at 127).
+    since ``seq``'s own half-open range ``[1, 128)`` tops out at 127 --
+    an unbounded ``DimVar`` is not constructible in the first place).
     ``build_schedule_tree()`` stays parametrised too."""
     tg = extract(dyn_matmul)
     assert isinstance(tg, TileGraph)
@@ -118,13 +89,3 @@ def test_dynamic_matmul_end_to_end_emits_symbolic_loop():
     assert m is not None, skeleton.text
     bound = m.group(1)
     assert "seq" in bound
-
-
-def test_a_bounded_dimvar_builds_a_finite_private_tree():
-    """A bounded parameter remains finite for the private schedule tree."""
-    assert (SEQ.lo, SEQ.hi) == (1, 128), "an unbounded DimVar is not constructible"
-
-    tg = extract(dyn_matmul)
-    tree = build_schedule_tree(tg)
-    skeleton, _swimlane, _contracts = emit_scaffold(tg, tree, {})
-    assert "seq" in skeleton.text

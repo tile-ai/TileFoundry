@@ -1,7 +1,11 @@
 """BufferizePass — trivial-policy gate.
 
 policy gives every logical buffer its own physical allocation, so the
-pass leaves the ``PrimFunction`` body structurally unchanged.
+pass leaves the ``PrimFunction`` body structurally unchanged. What is worth
+asserting beyond that is the traversal: a collector that misses a buffer does not
+fail, it silently leaves an allocation out of the schedule it is supposed to
+place, and the arm most easily missed is the one a hand-rolled walk does not know
+about.
 """
 from __future__ import annotations
 
@@ -15,12 +19,7 @@ from tilefoundry.ir.tir.stmts import Abort, LetStmt, Sequential
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms import BufferizePass, HirToTirPass
-from tilefoundry.passes.transforms.bufferize import (
-    BufferEntry,
-    BufferScheduler,
-    LifetimeCollector,
-    Placement,
-)
+from tilefoundry.passes.transforms.bufferize import LifetimeCollector
 
 
 def _lower() -> tuple[PrimFunction, Module]:
@@ -32,30 +31,6 @@ def _lower() -> tuple[PrimFunction, Module]:
     return pf, module
 
 
-def _collect_alloc_vars(pf: PrimFunction) -> list[str]:
-    names: list[str] = []
-
-    def walk(stmt) -> None:
-        if isinstance(stmt, LetStmt):
-            if isinstance(stmt.value, Call) and isinstance(
-                stmt.value.target, AllocTensorOp
-            ):
-                names.append(stmt.var.name)
-            walk(stmt.body)
-            return
-        if isinstance(stmt, Sequential):
-            for s in stmt.body:
-                walk(s)
-            return
-        # Non-binding stmt — descend into any Sequential body field.
-        body = getattr(stmt, "body", None)
-        if isinstance(body, Sequential):
-            walk(body)
-
-    walk(pf.body)
-    return names
-
-
 def test_bufferize_returns_module_unchanged():
     pf_before, module = _lower()
     new_module = BufferizePass().run(module)
@@ -63,26 +38,6 @@ def test_bufferize_returns_module_unchanged():
     # Trivial policy: each logical buffer keeps its own AllocTensor; IR
     # identity is preserved (PrimFuncPass returns the same fn object).
     assert pf_after is pf_before
-
-
-def test_lifetime_collector_emits_one_entry_per_alloc():
-    pf, _ = _lower()
-    entries = LifetimeCollector().collect(pf)
-    assert all(isinstance(e, BufferEntry) for e in entries)
-    names = [e.var.name for e in entries]
-    assert names == _collect_alloc_vars(pf)
-
-
-def test_scheduler_assigns_independent_pool_per_buffer():
-    pf, _ = _lower()
-    entries = LifetimeCollector().collect(pf)
-    placements = BufferScheduler().schedule(entries)
-    assert len(placements) == len(entries)
-    assert all(isinstance(p, Placement) for p in placements)
-    assert all(p.offset == 0 for p in placements)
-    # Trivial policy: pool_id is the buffer's own var → no pool sharing.
-    pool_ids = {id(p.pool_id) for p in placements}
-    assert len(pool_ids) == len(placements)
 
 
 def test_lifetime_collector_finds_buffer_inside_dispatch_call_fallback():

@@ -82,15 +82,21 @@ def test_to_domain_same_name_conflicting_bounds_raises():
         to_domain((DimVar("S", 1, 8), DimVar("S", 1, 16)))
 
 
-def test_to_dim_decode():
-    assert to_dim(isl.pw_aff("{ [42] }"), {}) == 42
-    pa = isl.pw_aff("[P] -> { [P] }")
-    assert to_dim(pa, {"P": P}) is P
-    with pytest.raises(ValueError, match="no known ShapeDim"):
-        to_dim(pa, {})
-
-
 def test_round_trip_lossless_for_every_dim_kind():
+    """Encode every kind of ``ShapeDim`` into a domain and read it back out.
+
+    The decode side is asserted here rather than on its own, because what matters
+    is that it is the exact inverse: a constant comes back an ``int``, a parameter
+    comes back the very same ``DimVar`` object, and a parameter with no entry in
+    the map is refused instead of being invented as an opaque dim nothing can
+    resolve later.
+    """
+    assert to_dim(isl.pw_aff("{ [42] }"), {}) == 42
+    named = isl.pw_aff("[P] -> { [P] }")
+    assert to_dim(named, {"P": P}) is P
+    with pytest.raises(ValueError, match="no known ShapeDim"):
+        to_dim(named, {})
+
     dims = (
         128,
         P,

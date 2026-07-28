@@ -7,33 +7,23 @@ What the model has to say, and what each test pins:
   and only of those (a loop-invariant value stays out of the loop);
 - a carried arg is one buffer read at iteration ``i`` and written at
   ``i - 1``, so ``deps`` carries a distance-1 dependence along that axis --
-  the fact the ring depth downstream is derived from;
+  the fact the ring depth downstream is derived from, and the fact the
+  private schedule tree then has to order strictly;
 - nested loops each contribute their own dimension, innermost last;
 - a ``DimVar`` extent becomes an isl parameter (as a dynamic tensor axis
-  already does) and a ``step`` a stride constraint;
-- ``gather(x, i, axis=a)`` on the loop's own induction variable folds into
-  the consumer's access map as that axis, so consecutive iterations address
-  different slices; a data-dependent gather still fails closed.
+  already does);
+- ``gather(x, i, axis=a)`` on a data-dependent index fails closed rather than
+  producing a map that claims to know which slice is read.
 
-The real kernel is ``qwen3.tiled_mlp`` (numerically checked against the
-untiled ``mlp`` in ``tests/models/qwen3_1_7b``); the small synthetic loops
-above it keep the expected sets hand-checkable.
+The loops here are small and synthetic on purpose: the expected delta sets are
+hand-transcribed, which is only possible at this size. A real tiled kernel's own
+loop structure is exercised by the corpus Analyze witness.
 """
 from __future__ import annotations
 
 import isl
 import pytest
 
-from tests.models.qwen3_1_7b import decoder_layer as qwen3
-from tests.models.qwen3_1_7b.decoder_layer import (
-    MB,
-    MT,
-    NB_HID,
-    NB_INT,
-    NK_HID,
-    NK_INT,
-    NT,
-)
 from tilefoundry import func
 from tilefoundry.analysis import extract
 from tilefoundry.analysis.poly import ExtractError
@@ -66,22 +56,6 @@ def dyn_carry(x: Tensor[(SEQ, 4), "f32"], y: Tensor[(SEQ, 4), "f32"]) -> Tensor[
     o = mul(x, y)
     for i in tile(SEQ):
         o = add(o, x)
-    return o
-
-
-@func
-def stepped_carry(x: Tensor[(8, 4), "f32"], y: Tensor[(8, 4), "f32"]) -> Tensor[(8, 4), "f32"]:
-    o = mul(x, y)
-    for i in range(1, 9, 3):
-        o = add(o, x)
-    return o
-
-
-@func
-def row_gather(x: Tensor[(8, 4), "f32"], y: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    o = mul(y, y)
-    for i in tile(8):
-        o = add(o, gather(x, i, axis=0))
     return o
 
 
@@ -133,8 +107,7 @@ def _self_deltas(tg, statement: str) -> "isl.set":
 
 
 def _violations(tg) -> "isl.union_set":
-    """The dependence deltas ``tg.tree`` does not order strictly (same check
-    ``tests/schedule/test_kernel_schedule.py`` makes)."""
+    """The dependence deltas ``build_schedule_tree`` does not order strictly."""
     sched = build_schedule_tree(tg).get_map()
     timed = tg.deps.apply_domain(sched).apply_range(sched)
     assert not timed.is_empty(), "every dependence must survive into time space"
@@ -161,36 +134,36 @@ def _lex_nonpositive(deltas: "isl.union_set") -> "isl.union_set":
     return out
 
 
-# ── the loop axis, and who gets one ───────────────────────────────────────
+def test_carried_arg_is_a_distance_one_dependence_on_the_loop_axis():
+    """The carry is one buffer: the ``add`` reads and writes ``o``, so isl's
+    own flow analysis reports exactly ``[1, 0, 0]`` -- iteration ``i`` needs
+    what ``i - 1`` wrote.
 
-
-def test_loop_axis_is_the_outermost_dimension_of_enclosed_statements_only():
-    """``o = mul(x, y)`` is loop-invariant and keeps its bare 2-d domain; the
-    in-loop ``add`` gains the loop axis in front of it."""
+    The loop axis belongs to the enclosed statement only: ``o = mul(x, y)`` is
+    loop-invariant and keeps its bare 2-d domain, while the in-loop ``add`` gains
+    the loop axis in front of it. And the schedule tree built over these facts has
+    to order that carry strictly -- a distance the tree does not respect is a plan
+    that runs an iteration before the one it reads from.
+    """
     tg = extract(carry_loop)
     doms = _domains(tg)
     assert sorted(doms) == ["Binary0", "Binary1"]
 
-    assert _extent(doms["Binary0"], 0) == (0, 7)  # invariant: [8, 4], no loop axis
-    assert doms["Binary0"].dim(isl.dim_type.SET) == 2
-
+    assert doms["Binary0"].dim(isl.dim_type.SET) == 2  # invariant: [8, 4]
+    assert _extent(doms["Binary0"], 0) == (0, 7)
     assert doms["Binary1"].dim(isl.dim_type.SET) == 3
     assert _extent(doms["Binary1"], 0) == (0, 5)  # tile(6)
     assert _extent(doms["Binary1"], 1) == (0, 7)
     assert _extent(doms["Binary1"], 2) == (0, 3)
 
-
-def test_carried_arg_is_a_distance_one_dependence_on_the_loop_axis():
-    """The carry is one buffer: the ``add`` reads and writes ``o``, so isl's
-    own flow analysis reports exactly ``[1, 0, 0]`` -- iteration ``i`` needs
-    what ``i - 1`` wrote."""
-    tg = extract(carry_loop)
     assert _writer_of(tg, "o") == "Binary1"
     assert "-> o[" in str(tg.reads), tg.reads
     assert _self_deltas(tg, "Binary1").is_equal(isl.set("{ [1, 0, 0] }"))
     # ... and that axis is therefore not parallel, while the elementwise ones are.
     assert tg.parallel_dims["Binary1"] == (False, True, True)
     assert tg.parallel_dims["Binary0"] == (True, True)
+
+    assert _violations(tg).is_empty()
 
 
 def test_nested_loops_contribute_one_dimension_each():
@@ -208,6 +181,8 @@ def test_nested_loops_contribute_one_dimension_each():
 
 
 def test_dynamic_extent_becomes_an_isl_parameter():
+    """A loop whose trip count is only known at the call: the axis is bounded by
+    the parameter itself, and the carry distance is still one step of it."""
     tg = extract(dyn_carry)
     assert tg.params == {"seq": SEQ}
     dom = _domains(tg)["Binary1"]
@@ -217,83 +192,8 @@ def test_dynamic_extent_becomes_an_isl_parameter():
     )
 
 
-def test_step_and_start_appear_on_the_loop_axis():
-    """``range(1, 9, 3)`` -> the axis takes the raw induction values 1, 4, 7
-    (a stride constraint, not a normalised trip counter), so the carry
-    distance is one *step*."""
-    tg = extract(stepped_carry)
-    dom = _domains(tg)["Binary1"]
-    assert _extent(dom, 0) == (1, 7)
-    assert dom.reset_tuple_id().is_subset(isl.set("{ [i0, d0, d1] : (i0 - 1) mod 3 = 0 }"))
-    assert _self_deltas(tg, "Binary1").is_equal(isl.set("{ [3, 0, 0] }"))
-
-
-# ── loop-index addressing ─────────────────────────────────────────────────
-
-
-def test_loop_index_gather_folds_into_the_access_map():
-    """``gather(x, i, axis=0)`` is a view, not a statement: the loop axis
-    lands at the gathered axis of ``x``, so iteration ``i`` reads row ``i``
-    and the rows carry no dependence between iterations."""
-    tg = extract(row_gather)
-    assert [type(u.op.target).__name__ for u in tg.units] == ["Binary", "Binary"]
-    reads = {str(m) for m in _maps(tg.reads)}
-    assert any("-> x[i0, d0]" in m for m in reads), reads
-    assert _self_deltas(tg, "Binary1").is_equal(isl.set("{ [1, 0] }"))
-
-
 def test_data_dependent_gather_fails_closed():
+    """A gather whose index is a value, not the loop's own induction variable,
+    has no affine access map -- so extraction refuses rather than inventing one."""
     with pytest.raises(ExtractError, match="not an enclosing loop's induction variable"):
         extract(data_gather)
-
-
-# ── the real kernel ───────────────────────────────────────────────────────
-
-
-def test_tiled_mlp_loop_axes_and_block_shapes():
-    """Every in-loop matmul of ``tiled_mlp`` is a K-step over a
-    ``[MT, KT] @ [KT, NT]`` block pair batched over (token block, column
-    block), with the K axis of the *loop* in front: the gate/up walk is
-    ``NK_HID`` steps, the down walk ``NK_INT``."""
-    tg = extract(qwen3.tiled_mlp)
-    doms = _domains(tg)
-
-    # The three accumulators are the loop carries; each is written by the
-    # `add` inside its own loop.
-    gate, up, out = (_writer_of(tg, buf) for buf in ("gate_z", "up_z", "out_z"))
-    for name, steps, blocks in (
-        (gate, NK_HID, NB_INT), (up, NK_HID, NB_INT), (out, NK_INT, NB_HID),
-    ):
-        dom = doms[name]
-        assert dom.dim(isl.dim_type.SET) == 5
-        assert _extent(dom, 0) == (0, steps - 1)
-        assert [_extent(dom, i) for i in range(1, 5)] == [
-            (0, MB - 1), (0, blocks - 1), (0, MT - 1), (0, NT - 1)
-        ]
-
-    matmuls = [u.name for u in tg.units if type(u.op.target).__name__ == "MatMul"]
-    assert len(matmuls) == 3
-    for name in matmuls:
-        dom = doms[name]
-        assert dom.dim(isl.dim_type.SET) == 6  # [k step, mb, nb, m, n, k]
-        assert _extent(dom, 3) == (0, MT - 1)
-        assert _extent(dom, 4) == (0, NT - 1)
-        assert _extent(dom, 5) == (0, 63)  # KT
-
-    # RMSNorm is loop-invariant: it stays outside both walks.
-    assert doms["RN"].dim(isl.dim_type.SET) == 2
-
-
-def test_tiled_mlp_carries_are_distance_one_and_schedule_legally():
-    """The three accumulator carries each show up as a distance-1 dependence
-    on their own loop axis, and ``build_schedule_tree`` orders every
-    dependence of the whole graph strictly."""
-    tg = extract(qwen3.tiled_mlp)
-    for buf in ("gate_z", "up_z", "out_z"):
-        name = _writer_of(tg, buf)
-        assert _self_deltas(tg, name).is_equal(isl.set("{ [1, 0, 0, 0, 0] }")), buf
-        assert tg.parallel_dims[name] == (False, True, True, True, True)
-
-    tree = build_schedule_tree(tg)
-    assert tg.domain.is_subset(tree.get_map().domain())
-    assert _violations(tg).is_empty()

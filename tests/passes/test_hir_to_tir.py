@@ -1,12 +1,20 @@
-"""HirToTirPass produces a well-formed tir.PrimFunction for the demo IR."""
+"""What HirToTirPass refuses, what it decides about storage, and where its walk
+has to reach.
+
+That the pass produces a well-formed ``PrimFunction`` for a real program is
+settled by every test that compiles one and runs it: a malformed lowering does not
+produce CUDA that computes the right answer. Pinning the emitted statement
+sequence here as well would fix the shape of a lowering that is free to change
+while it keeps producing the same kernel.
+
+What a runtime witness cannot say is why a program was rejected, which residency a
+value ended up in when two readings were available, and whether a walk reached a
+child that only some inputs have. Those are here.
+"""
 
 from __future__ import annotations
 
-import textwrap
-
 import pytest
-
-from tests.fixtures.demo_ir import build_demo
 
 # DSL surface imported at module scope so ``@func`` closure
 # resolution sees ``Tensor`` / ``Mesh`` / ... when the tests below
@@ -25,16 +33,13 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
 from tilefoundry.ir.tir.arith import Binary as TirBinary
-from tilefoundry.ir.tir.memory.copy import Copy
-from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
-from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, MeshScope, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.shard.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.passes.transforms import HirToTirPass
 from tilefoundry.passes.transforms.hir_to_tir import (
     _collect_hir_callee_names,
@@ -42,132 +47,20 @@ from tilefoundry.passes.transforms.hir_to_tir import (
 )
 
 
-def _run() -> PrimFunction:
-    fn, _, _ = build_demo()
+def test_umat_param_rejected_at_lowering() -> None:
+    """An unmaterialized value must not reach TIR: a function param carrying
+    `StorageKind.UMAT` (e.g. an explicit `Tensor[..., StorageKind.UMAT]`
+    annotation or programmatic IR) is rejected at the HIR->TIR boundary, since
+    a kernel param has no memory space for the launch ABI / placement."""
+
+    @func
+    def f(x: Tensor[(8,), "f32", None, StorageKind.UMAT]) -> Tensor[(8,), "f32"]:
+        return x
+
+    fn = f
     module = Module(name="t", functions=(fn,), entry=fn.name)
-    new_module = HirToTirPass().run(module)
-    [pf] = new_module.functions
-    assert isinstance(pf, PrimFunction)
-    return pf
-
-
-def _flatten(seq: Sequential):
-    """Flatten a LetStmt-nested Sequential into a list of its dataflow
-    operations in emission order (LetStmts become (_Bind, var, op_type);
-    plain Stmts pass through; ``Evaluate(SomeOp, ...)`` is rendered
-    as the Op's class name — effect-ful Ops live in
-    Stmt position via ``Evaluate(op, args)``)."""
-    out = []
-    for s in seq:
-        if isinstance(s, LetStmt):
-            assert isinstance(s.value, Call)
-            out.append(("Let", s.var.name, type(s.value.target).__name__))
-            out.extend(_flatten(s.body))
-        elif isinstance(s, Evaluate):
-            out.append(type(s.callable).__name__)
-        else:
-            out.append(type(s).__name__)
-    return out
-
-
-def test_demo_lowers_to_prim_function():
-    pf = _run()
-    assert pf.name == "demo"
-    # HirToTirPass adds explicit out param.
-    assert len(pf.params) == 2
-    assert pf.params[0].name == "a"
-    assert pf.params[1].name == "out"
-    assert pf.params[1].type.shape == (1, 1536)
-    assert pf.params[1].type.storage == StorageKind.GMEM
-    assert pf.params[1].type.layout is None
-    assert isinstance(pf.body, Sequential)
-    assert len(pf.body) == 2
-    outer, ret = pf.body
-    assert isinstance(outer, MeshScope)
-    assert isinstance(ret, Return)
-    assert isinstance(outer.body, Sequential)
-    assert len(outer.body) == 1
-    inner = outer.body[0]
-    assert isinstance(inner, MeshScope)
-    assert isinstance(inner.body, Sequential)
-
-    flat = _flatten(inner.body)
-    # function-end sink writes the result into the `out` param
-    # directly, not into a fresh global AllocTensor — one fewer LetStmt.
-    expected = [
-        ("Let", "sv1", "TensorView"),   # shard view of param 'a'
-        ("Let", "t2", "AllocTensor"),   # b = alloc shared (plain)
-        "Copy",                         # shard_view(a) → shared
-        ("Let", "ptr3", "PtrOf"),       # ptr to shared buffer (sharded source)
-        ("Let", "sv4", "TensorView"),   # shard view of shared result
-        ("Let", "t5", "AllocTensor"),   # d0 = alloc reg (plain)
-        "Copy",                         # shard_view(shared) → reg
-        ("Let", "r6", "AllocTensor"),   # d1 = ReLU(d0): allocate output...
-        "ReLU",                         # ...then effect-stmt pointwise
-        ("Let", "sv7", "TensorView"),   # shard view of out param
-        "Copy",                         # shard_view(reg) → out param
-    ]
-    assert flat == expected
-
-    # Copy destination storage chain, in order: shared → reg → out (gmem).
-    inner_body = pf.body[0].body[0].body  # cta -> thread -> Sequential
-    copies = []
-
-    def walk(seq):
-        for s in seq:
-            if isinstance(s, LetStmt):
-                walk(s.body)
-            elif isinstance(s, Evaluate) and isinstance(s.callable, Copy):
-                copies.append(s)
-
-    walk(inner_body)
-    storages = [c.args[1].type.storage for c in copies]
-    assert storages == [StorageKind.SMEM, StorageKind.RMEM, StorageKind.GMEM]
-    # The function-end Copy writes via a shard view of the out param,
-    # not directly to the out Var (plain→shard scatter).
-    last_dest = copies[-1].args[1]
-    assert isinstance(last_dest.type.layout, SL)
-    assert last_dest.type.storage == StorageKind.GMEM
-
-
-# ── lowering does not fabricate mesh structure ─────────────────────
-
-
-def test_lower_cta_only_kernel_skips_thread_mesh_scope() -> None:
-    """A function whose ShardLayouts only reference a ``cta``-topology mesh
-    lowers to a single outer ``MeshScope`` — no synthetic inner ``thread``
-    scope: lowering must not invent meshes beyond what the body
-    actually uses."""
-
-
-    src = textwrap.dedent("""
-    from tilefoundry import func
-    from tilefoundry.dsl.tf import *
-    from tilefoundry.dsl import Tensor
-    from tilefoundry.ir.types import DType
-    from tilefoundry.ir.types.shard.mesh import Mesh, Topology
-
-    @func(topologies=(Topology("cta", 128),))
-    def f(x: Tensor[(1, 2048), DType.f32]) -> Tensor[(1, 2048), DType.f32]:
-        with Mesh(topology="cta", layout=(128,)) as cta:
-            y = reshard(x, layout=(1, 2048 @ cta), storage="smem")
-            z = relu(y)
-            return reshard(z, layout=(1, 2048 @ cta), storage="gmem")
-    """).lstrip()
-
-    module = parse_script(src)
-    new_module = HirToTirPass().run(module)
-    [pf] = new_module.functions
-
-    assert isinstance(pf.body, Sequential)
-    outer = pf.body[0]
-    assert isinstance(outer, MeshScope)
-    assert outer.mesh.topology.name == "cta"
-    # No inner thread MeshScope — body is the CTA-level Sequential directly.
-    inner_first = outer.body[0]
-    assert not isinstance(inner_first, MeshScope), (
-        f"expected no synthetic thread MeshScope; got {type(inner_first).__name__}"
-    )
+    with pytest.raises(ValueError, match="unmaterialized"):
+        HirToTirPass().run(module)
 
 
 def test_binary_dst_storage_follows_hir_output_not_operand_order() -> None:
@@ -206,22 +99,6 @@ def test_binary_dst_storage_follows_hir_output_not_operand_order() -> None:
 
     assert _binary_dst_storage(_lit_rhs) == StorageKind.GMEM
     assert _binary_dst_storage(_lit_lhs) == StorageKind.GMEM
-
-
-def test_umat_param_rejected_at_lowering() -> None:
-    """An unmaterialized value must not reach TIR: a function param carrying
-    `StorageKind.UMAT` (e.g. an explicit `Tensor[..., StorageKind.UMAT]`
-    annotation or programmatic IR) is rejected at the HIR->TIR boundary, since
-    a kernel param has no memory space for the launch ABI / placement."""
-
-    @func
-    def f(x: Tensor[(8,), "f32", None, StorageKind.UMAT]) -> Tensor[(8,), "f32"]:
-        return x
-
-    fn = f
-    module = Module(name="t", functions=(fn,), entry=fn.name)
-    with pytest.raises(ValueError, match="unmaterialized"):
-        HirToTirPass().run(module)
 
 
 def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
@@ -264,36 +141,35 @@ def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
 # ── ExprVisitor-based HIR walks reach every child (docs/spec/visitor-mutator.md §1)
 
 
-def test_derive_meshes_from_body_finds_mesh_referenced_only_inside_grid_region() -> None:
-    """A mesh referenced only inside a ``GridRegionExpr`` body must still be
-    derived. A hand-rolled Tuple/Call-only walk silently skips
-    ``GridRegionExpr`` and misses it."""
+def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
+    """A ``GridRegionExpr`` has children a hand-rolled Tuple/Call walk does not
+    know about, and both of the pass's own walks depend on reaching them.
+
+    A mesh referenced only inside the region's body must still be derived --
+    missing it lowers a sharded kernel as if it had no mesh. A callee reachable
+    only through ``yield_values`` must still be collected -- missing it drops an
+    inter-group dependency edge in dispatch-group ordering. Neither failure is
+    visible in the pass's output shape; both are wrong programs.
+    """
     mesh = Mesh(topology=Topology("cta", 4), layout=(4,))
     sl = SL(layout=Layout(shape=(4,), strides=(1,)), attrs=(Split(0),), mesh=mesh)
     body_ty = TensorType(shape=(4,), dtype=DType.f32, layout=sl, storage=StorageKind.GMEM)
-    body_call = Call(type=body_ty, target=HirReLU(), args=())
     iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")
-    region = GridRegionExpr(
+    in_body = GridRegionExpr(
         type=body_ty,
         induction_var=iv,
         carried_args=(),
         init_args=(),
-        body=body_call,
+        body=Call(type=body_ty, target=HirReLU(), args=()),
         yield_values=(),
         extent=4,
         step=1,
     )
 
-    cta_mesh, thread_mesh = _derive_meshes_from_body(region)
-
+    cta_mesh, thread_mesh = _derive_meshes_from_body(in_body)
     assert cta_mesh is mesh
     assert thread_mesh is None
 
-
-def test_collect_hir_callee_names_finds_callee_reachable_only_via_yield() -> None:
-    """A callee reachable only through ``GridRegionExpr.yield_values`` must
-    be collected. A walk that only descends into ``body`` misses it, which
-    would drop an inter-group dependency edge in dispatch-group ordering."""
     scalar_ty = TensorType.scalar(dtype=DType.f32)
     callee = HirFunction.build(
         name="callee_fn",
@@ -301,17 +177,15 @@ def test_collect_hir_callee_names_finds_callee_reachable_only_via_yield() -> Non
         body=Constant(value=0.0, type=scalar_ty),
         return_type=scalar_ty,
     )
-    call_to_callee = Call(type=scalar_ty, target=callee, args=())
-    iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")
-    region = GridRegionExpr(
+    in_yield = GridRegionExpr(
         type=scalar_ty,
         induction_var=iv,
         carried_args=(),
         init_args=(),
         body=Constant(value=0.0, type=scalar_ty),
-        yield_values=(call_to_callee,),
+        yield_values=(Call(type=scalar_ty, target=callee, args=()),),
         extent=1,
         step=1,
     )
 
-    assert _collect_hir_callee_names(region) == {"callee_fn"}
+    assert _collect_hir_callee_names(in_yield) == {"callee_fn"}

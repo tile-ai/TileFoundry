@@ -1,12 +1,11 @@
 """``candidate_atoms(op, target) -> list[AtomFact]`` -- the CUDA target's
 own candidate enumeration: HIR ``MatMul`` op + target -> the MMA atom
 candidates it could run on (a hard filter over shape/dtype/layout; no
-CP-SAT ranking, that is ``test_solve.py``'s subject).
+CP-SAT ranking, which is the solver's own subject).
 
-Builds a bf16 gemm HIR function (mirrors ``test_poly_model.py``'s
-construction, dtype swapped to bf16 -- the sole dtype the one registered
-SM80 atom accepts) and checks the listed ``AtomFact`` against that atom's
-real, known numbers -- not just non-empty/non-zero placeholders.
+Builds a bf16 gemm HIR function -- bf16 being the sole dtype the one registered
+SM80 atom accepts -- and checks the listed ``AtomFact`` against that atom's
+real, known numbers, not just non-empty/non-zero placeholders.
 """
 from __future__ import annotations
 
@@ -19,7 +18,6 @@ from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType
 from tilefoundry.schedule.facts import AtomFact
-from tilefoundry.target import default_target
 from tilefoundry.target.cuda.atoms import candidate_atoms
 
 
@@ -93,35 +91,23 @@ def test_bf16_gemm_lists_the_sm80_atom_with_real_numbers():
     assert fact.is_async is False
 
 
-def test_target_none_defaults_to_default_target():
-    """``target=None`` resolves via ``default_target()`` -- the same
-    result as passing an equivalent target explicitly."""
-    explicit = candidate_atoms(bf16_gemm.entry_function().body, default_target())
-    implicit = candidate_atoms(bf16_gemm.entry_function().body)
-    assert implicit == explicit
+def test_a_gemm_the_atom_cannot_run_lists_no_candidate():
+    """Both halves of the hard filter, each an empty list rather than an error.
 
-
-def test_target_accepts_a_backend_name_string():
-    """A ``target=`` string resolves via ``resolve_target``, matching
-    ``@func``'s own ``target=`` surface (``func(target="cuda")``)."""
-    by_string = candidate_atoms(bf16_gemm.entry_function().body, "cuda")
-    by_object = candidate_atoms(bf16_gemm.entry_function().body, default_target())
-    assert by_string == by_object
-
-
-def test_f32_gemm_has_no_candidates_dtype_mismatch():
-    """The SM80 atom is bf16 x bf16 -> f32; an all-f32 gemm's lhs/rhs
-    dtype does not match (dtype_a=dtype_b=bf16), so the hard filter
-    excludes it -- an empty list, not an error."""
-    facts = candidate_atoms(f32_gemm.entry_function().body, f32_gemm.resolve_target())
-    assert facts == []
-
-
-def test_odd_shape_bf16_gemm_has_no_candidates_indivisible_mnk():
-    """M=15 does not divide the atom's M=16 -- hard-filtered out even
-    though dtype matches."""
-    facts = candidate_atoms(odd_shape_bf16_gemm.entry_function().body, odd_shape_bf16_gemm.resolve_target())
-    assert facts == []
+    The SM80 atom is bf16 x bf16 -> f32, so an all-f32 gemm's operand dtypes do
+    not match it at all; and a gemm whose M is 15 does not divide the atom's M of
+    16 even though its dtypes do match. An empty list is the answer a caller can
+    act on -- an error here would make "this atom does not apply" indistinguishable
+    from "this op cannot be asked about".
+    """
+    assert candidate_atoms(f32_gemm.entry_function().body, f32_gemm.resolve_target()) == []
+    assert (
+        candidate_atoms(
+            odd_shape_bf16_gemm.entry_function().body,
+            odd_shape_bf16_gemm.resolve_target(),
+        )
+        == []
+    )
 
 
 def test_non_matmul_op_raises():

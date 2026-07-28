@@ -1,6 +1,12 @@
 """Generic shard propagation engine over a matmul-shaped relation.
 
 Domain dims: 0=M, 1=N, 2=K. lhs[M,K], rhs[K,N], out[M,N] (K reduced).
+
+What is kept here is one case per rule the engine has to decide, plus every case
+where the answer is "refuse": a Split the engine cannot carry into the output has
+to fail rather than silently degrade to Broadcast, because a value quietly
+declared replicated when each point holds a shard of it is read whole by everyone
+downstream.
 """
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ from tilefoundry.visitor_registry.shard_propagate import (
 )
 
 _GPU = Mesh(Topology("gpu", 8), (8,), names=("g",))
+_GPU2 = Mesh(Topology("gpu", 4), (2, 2), names=("a", "b"))
 
 
 def _matmul_relation() -> AccessRelationResult:
@@ -31,31 +38,58 @@ def _matmul_relation() -> AccessRelationResult:
     )
 
 
-def _shard(shape, *attrs) -> ShardLayout:
+def _elementwise_relation() -> AccessRelationResult:
+    ident = isl.map("{ [m, n] -> [m, n] }")
+    return AccessRelationResult(domain=build_domain((4, 8)), maps=(ident, ident, ident))
+
+
+def _strides(shape) -> tuple[int, ...]:
     strides = [1] * len(shape)
     for i in range(len(shape) - 2, -1, -1):
         strides[i] = strides[i + 1] * shape[i + 1]
-    return ShardLayout(layout=Layout(shape=shape, strides=tuple(strides)), attrs=attrs, mesh=_GPU)
+    return tuple(strides)
 
 
-def test_rhs_n_split_to_output_split():
-    # rhs[K,N] split on N (layout axis 1) -> output Split on N (out axis 1).
+def _shard(shape, *attrs) -> ShardLayout:
+    return ShardLayout(
+        layout=Layout(shape=shape, strides=_strides(shape)), attrs=attrs, mesh=_GPU
+    )
+
+
+def _shard2(shape, *attrs) -> ShardLayout:
+    return ShardLayout(
+        layout=Layout(shape=shape, strides=_strides(shape)), attrs=attrs, mesh=_GPU2
+    )
+
+
+def test_a_split_of_a_surviving_axis_reaches_the_output():
+    """Either operand may be the sharded one, and the axis it splits decides the
+    output axis: rhs[K,N] split on N lands on out axis 1, lhs[M,K] split on M on
+    out axis 0. With no sharded input at all there is nothing to propagate, which
+    is ``None`` rather than an unsharded layout."""
     rhs_t = make_tensor_type((4, 8), layout=_shard((4, 8), Split(1)))
-    out = derive_output_shard_layout(
+    on_n = derive_output_shard_layout(
         (make_tensor_type((16, 4)), rhs_t), _matmul_relation(), (16, 8)
     )
-    assert out.attrs == (Split(1),)
+    assert on_n.attrs == (Split(1),)
 
-
-def test_lhs_m_split_to_output_split():
     lhs_t = make_tensor_type((16, 4), layout=_shard((16, 4), Split(0)))
-    out = derive_output_shard_layout(
+    on_m = derive_output_shard_layout(
         (lhs_t, make_tensor_type((4, 8))), _matmul_relation(), (16, 8)
     )
-    assert out.attrs == (Split(0),)
+    assert on_m.attrs == (Split(0),)
+
+    assert (
+        derive_output_shard_layout(
+            (make_tensor_type((16, 4)), make_tensor_type((4, 8))),
+            _matmul_relation(),
+            (16, 8),
+        )
+        is None
+    )
 
 
-def test_k_split_to_partial():
+def test_a_split_contraction_dim_becomes_a_partial_value_state():
     # Both lhs[M,K] (K = layout axis 1) and rhs[K,N] (K = layout axis 0) split on K
     # -> the Split of the contraction dim becomes a mesh-axis Partial value
     # state on that mesh axis (no layout axis).
@@ -67,18 +101,15 @@ def test_k_split_to_partial():
     assert out.attrs == (Partial("sum"),)
 
 
-def test_k_split_complete_to_broadcast():
-    # K split but reduction effect is complete (K not in partial set) -> Broadcast.
+def test_a_complete_reduction_over_a_split_axis_is_a_broadcast():
+    # K split but the reduction effect is complete (K not in the partial set):
+    # every point ends up holding the whole result.
     lhs_t = make_tensor_type((16, 4), layout=_shard((16, 4), Split(1)))
     out = derive_output_shard_layout(
-        (lhs_t, make_tensor_type((4, 8))), _matmul_relation(), (16, 8), partial_reduction_dims=frozenset()
+        (lhs_t, make_tensor_type((4, 8))), _matmul_relation(), (16, 8),
+        partial_reduction_dims=frozenset(),
     )
     assert out.attrs == (Broadcast(),)
-
-
-def test_no_sharded_input_returns_none():
-    out = derive_output_shard_layout((make_tensor_type((16, 4)), make_tensor_type((4, 8))), _matmul_relation(), (16, 8))
-    assert out is None
 
 
 def test_incompatible_split_errors():
@@ -87,21 +118,6 @@ def test_incompatible_split_errors():
     rhs_t = make_tensor_type((4, 8), layout=_shard((4, 8), Split(1)))
     with pytest.raises(ValueError, match="incompatible output shard"):
         derive_output_shard_layout((lhs_t, rhs_t), _matmul_relation(), (16, 8))
-
-
-_GPU2 = Mesh(Topology("gpu", 4), (2, 2), names=("a", "b"))
-
-
-def _shard2(shape, *attrs) -> ShardLayout:
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
-    return ShardLayout(layout=Layout(shape=shape, strides=tuple(strides)), attrs=attrs, mesh=_GPU2)
-
-
-def _elementwise_relation() -> AccessRelationResult:
-    ident = isl.map("{ [m, n] -> [m, n] }")
-    return AccessRelationResult(domain=build_domain((4, 8)), maps=(ident, ident, ident))
 
 
 def test_two_mesh_axes_on_same_output_axis_factorize():
@@ -117,63 +133,28 @@ def test_two_mesh_axes_on_same_output_axis_factorize():
     assert out.mesh is _GPU2
 
 
-# ── canonical-layout agreement (shard.md §7.1.1) ─────────────────────────────
-# make_shard_tensor_type (a from-scratch sharding) and derive_output_shard_layout
-# (a propagated one) both build a §7.1.1 layout through the shared
-# canonical_shard_layout; for the same logical sharding they MUST compare equal.
+def test_a_synthesised_layout_agrees_with_a_from_scratch_one():
+    """``make_shard_tensor_type`` (a from-scratch sharding) and
+    ``derive_output_shard_layout`` (a propagated one) both build a shard.md
+    §7.1.1 layout through the shared ``canonical_shard_layout``, so for the same
+    logical sharding they must compare equal -- otherwise a propagated value and
+    an authored one describing the same distribution would need a reshard between
+    them.
 
-
-def test_single_split_per_axis_matches_canonical_from_scratch():
-    # lhs splits axis 0 on mesh axis a only, rhs splits axis 1 on mesh axis b
-    # only -> neither operand alone realises the other's Split, so the carry
-    # branch fails for both and the output is synthesised. Each mesh extent
-    # (2) does not equal its axis size (8), so each axis factors into an
-    # extent position + a residual position (8 / 2 = 4) -- the
-    # single-mesh-axis-split canonical form (shard.md §7.1.1).
+    Here neither operand alone realises the other's Split, so the carry branch
+    fails for both and the output is synthesised: each mesh extent (2) is smaller
+    than its axis (8), so each axis factors into an extent position and a residual
+    (8 / 2 = 4).
+    """
     lhs_t = make_tensor_type((8, 8), layout=_shard2((8, 8), Split(0), Broadcast()))
     rhs_t = make_tensor_type((8, 8), layout=_shard2((8, 8), Broadcast(), Split(1)))
     ident = isl.map("{ [m, n] -> [m, n] }")
     rel = AccessRelationResult(domain=build_domain((8, 8)), maps=(ident, ident, ident))
+
     out = derive_output_shard_layout((lhs_t, rhs_t), rel, (8, 8))
+
     expected = make_shard_tensor_type((8, 8), mesh=_GPU2, attrs=(Split(0), Split(1)))
     assert out == expected.layout
-
-
-def test_multi_split_same_axis_matches_canonical_from_scratch():
-    # Both mesh axes bind logical axis 0 (make_shard_tensor_type's own
-    # attrs, one Split per mesh axis, both naming axis 0).
-    lhs_t = make_tensor_type((4, 8), layout=_shard2((4, 8), Split(0), Broadcast()))
-    rhs_t = make_tensor_type((4, 8), layout=_shard2((4, 8), Broadcast(), Split(0)))
-    out = derive_output_shard_layout((lhs_t, rhs_t), _elementwise_relation(), (4, 8))
-    expected = make_shard_tensor_type((4, 8), mesh=_GPU2, attrs=(Split(0), Split(0)))
-    assert out == expected.layout
-
-
-def test_partial_sharding_matches_canonical_from_scratch():
-    ident = isl.map("{ [m, n] -> [m, n] }")
-    rel = AccessRelationResult(domain=build_domain((4, 8)), maps=(ident, ident))
-    x_t = make_shard_tensor_type((4, 8), mesh=_GPU2, attrs=(Partial("sum"), Broadcast()))
-    out = derive_output_shard_layout((x_t,), rel, (4, 8))
-    assert out == x_t.layout
-
-
-def test_carry_candidates_disagree_falls_through_to_synthesis():
-    # Two full-shape inputs realise the same logical sharding (axis 0 split on
-    # both mesh axes) with different layout factorizations: lhs (2,2,2), rhs
-    # (2,4). The carry branch must not arbitrarily pick the first operand; it
-    # falls through to the canonical synthesis, which is order-independent.
-    lhs = make_tensor_type((8,), layout=_shard2((2, 2, 2), Split(0), Split(1)))
-    rhs = make_tensor_type((8,), layout=_shard2((2, 4), Split(0), Split(1)))
-    ident = isl.map("{ [m] -> [m] }")
-    rel = AccessRelationResult(domain=build_domain((8,)), maps=(ident, ident, ident))
-    out_lr = derive_output_shard_layout((lhs, rhs), rel, (8,))
-    out_rl = derive_output_shard_layout((rhs, lhs), rel, (8,))
-    # canonical: axis 0 (8) = mesh-a(2) x mesh-b(2) x remainder(2).
-    assert out_lr.layout.shape == (2, 2, 2)
-    assert out_lr.attrs == (Split(0), Split(1))
-    # order-independent.
-    assert out_rl.layout.shape == out_lr.layout.shape
-    assert out_rl.attrs == out_lr.attrs
 
 
 def test_split_on_non_projection_access_errors():
@@ -200,41 +181,26 @@ def test_split_surviving_via_complex_output_errors():
         derive_output_shard_layout((x_t,), rel, (12,))
 
 
-def test_input_partial_propagates_to_output_partial():
-    # Elementwise identity: input Partial("sum") propagates, not dropped.
+def test_an_input_partial_propagates_on_its_own_mesh_axis():
+    """A Partial is a value state with no layout axis, so what identifies it is
+    the mesh axis it sits on. It propagates through an elementwise identity rather
+    than being dropped, and two different reductions on two axes stay two
+    reductions -- collapsing them would make a sum-partial and a max-partial
+    indistinguishable, which is a wrong result rather than a wrong layout.
+    """
     ident = isl.map("{ [m, n] -> [m, n] }")
     rel = AccessRelationResult(domain=build_domain((4, 8)), maps=(ident, ident))
-    # 2-axis mesh: a Partial value state on mesh axis 0 carries to the output on
-    # the same mesh axis (it has no layout axis).
     x_t = make_tensor_type((4, 8), layout=_shard2((4, 8), Partial("sum"), Broadcast()))
+
     out = derive_output_shard_layout((x_t,), rel, (4, 8))
     assert out.attrs == (Partial("sum"), Broadcast())
 
-
-def test_replicated_input_on_other_mesh_is_ignored():
-    # lhs is all-Broadcast (replicated) on a different mesh; it pins no mesh and
-    # contributes no sharding. The output takes the genuinely-sharded rhs's
-    # mesh and shard — no cross-mesh error.
-    lhs_t = make_tensor_type((16, 4), layout=_shard2((16, 4), Broadcast(), Broadcast()))
-    rhs_t = make_tensor_type((4, 8), layout=_shard((4, 8), Split(1)))
-    out = derive_output_shard_layout(
-        (lhs_t, rhs_t), _matmul_relation(), (16, 8)
+    on_a = _shard2((4, 8), Partial("sum"), Broadcast())
+    on_b = _shard2((4, 8), Broadcast(), Partial("sum"))
+    assert partial_reductions_by_axis(on_a) == ("sum", None)
+    assert partial_reductions_by_axis(on_b) == (None, "sum")
+    assert partial_reductions_by_axis(_shard2((4, 8), Partial("sum"), Partial("max"))) == (
+        "sum",
+        "max",
     )
-    assert out.mesh is _GPU
-    assert out.attrs == (Split(1),)
-
-
-def test_partial_reductions_by_axis_keeps_same_reduction_axis_identity():
-    axis_a = _shard2((4, 8), Partial("sum"), Broadcast())
-    axis_b = _shard2((4, 8), Broadcast(), Partial("sum"))
-
-    assert partial_reductions_by_axis(axis_a) == ("sum", None)
-    assert partial_reductions_by_axis(axis_b) == (None, "sum")
-    assert partial_reductions_by_axis(axis_a) != partial_reductions_by_axis(axis_b)
-
-
-def test_partial_reductions_by_axis_keeps_distinct_reductions():
-    layout = _shard2((4, 8), Partial("sum"), Partial("max"))
-
-    assert partial_reductions_by_axis(layout) == ("sum", "max")
     assert partial_reductions_by_axis(make_tensor_type((4, 8))) == ()

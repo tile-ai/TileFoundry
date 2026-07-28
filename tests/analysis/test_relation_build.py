@@ -41,16 +41,17 @@ def _relation(extents, out_dst):
     return AccessRelationResult(domain=domain, maps=(out_map,), param_map=param_map)
 
 
-def test_shape_from_relation_static():
-    rel = _relation((16, 8), "d0, d1")
-    assert shape_from_relation(rel) == (16, 8)
+def test_shape_from_relation_reads_static_dynamic_and_broadcast_axes():
+    """One projection, three kinds of axis: a static extent comes back as itself,
+    a dynamic axis resolves back to the same ``DimVar`` by parameter name (the
+    decode shape), and an output position that is a constant is a size-1 axis
+    rather than an axis of that constant's value."""
+    assert shape_from_relation(_relation((16, 8), "d0, d1")) == (16, 8)
 
-
-def test_shape_from_relation_dimvar_param():
     n = DimVar("N", 1, 64)
-    rel = _relation((16, n), "d0, d1")
-    # The dynamic axis resolves back to the same DimVar by parameter name.
-    assert shape_from_relation(rel) == (16, n)
+    assert shape_from_relation(_relation((16, n), "d0, d1")) == (16, n)
+
+    assert shape_from_relation(_relation((16, 8), "d0, 0")) == (16, 1)
 
 
 def test_shape_from_relation_composite_param():
@@ -60,12 +61,6 @@ def test_shape_from_relation_composite_param():
     # The opaque parameter minted for the composite expr resolves back to
     # the original DimExpr via relation.param_map.
     assert shape_from_relation(rel) == (quarter,)
-
-
-def test_shape_from_relation_broadcast_constant_axis():
-    # A constant output result is a size-1 axis.
-    rel = _relation((16, 8), "d0, 0")
-    assert shape_from_relation(rel) == (16, 1)
 
 
 def test_shape_from_relation_rank0():

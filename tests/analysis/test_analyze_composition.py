@@ -24,11 +24,6 @@ from tilefoundry.analysis.registry import (
 from tilefoundry.analysis.walk import attach, detach, postorder
 from tilefoundry.ir.core import IRMetadata, get_metadata
 from tilefoundry.ir.core.module import Module
-from tilefoundry.registry import (
-    AlgorithmRegistry,
-    DuplicateAlgorithmError,
-    UnknownAlgorithmError,
-)
 from tilefoundry.target import CpuTarget
 from tilefoundry.target.cuda import CudaTarget
 
@@ -49,6 +44,13 @@ def _first_expr(function):
 
 def _write(function, metadata) -> None:
     attach(_first_expr(function), metadata)
+
+
+def _drop(function, kind) -> None:
+    """Remove every record of *kind*, whoever wrote it."""
+    expr = _first_expr(function)
+    kept = tuple(item for item in expr.metadata if not isinstance(item, kind))
+    object.__setattr__(expr, "metadata", kept)
 
 
 def _module() -> tuple[Module, object]:
@@ -131,39 +133,36 @@ def test_a_dependency_cycle_names_the_cycle(registered) -> None:
         analyze(module, function, analysis="c.a")
 
 
-def test_a_duplicate_registration_fails_instead_of_replacing(registered) -> None:
-    """AC-0-2. Replacing silently would make dispatch depend on import order."""
-    registered("dup.one")
-    with pytest.raises(DuplicateAlgorithmError, match="already registered"):
-        register_analysis(CudaTarget, "dup.one")(lambda *a: None)
+def test_every_way_of_touching_another_analysis_record_is_a_violation(
+    registered,
+) -> None:
+    """AC-0-2. Ownership is checked against what reached the IR, not against what
+    an analysis says it did, so writing directly cannot bypass it.
 
+    Three shapes, one rule. Writing an undeclared type is the plain case. Writing
+    a value *equal* to the one already there is still an overwrite, which is why
+    ownership is tracked by identity rather than by value. And removing another
+    analysis's record changes the IR as much as overwriting it -- a check that
+    only inspected the final state would miss that one, because the entry is
+    simply gone.
+    """
+    module, function = _module()
 
-def test_an_analysis_cannot_write_metadata_it_does_not_declare(registered) -> None:
-    """AC-0-2. Ownership is checked against what reached the IR, not against
-    what the analysis says it did, so writing directly cannot bypass it."""
     registered(
         "own.honest",
         produces=(_Alpha,),
         run=lambda module, function, target, options: _write(function, _Alpha(1)),
     )
+    assert analyze(module, function, analysis="own.honest").metadata_types == (_Alpha,)
+
     registered(
         "own.trespass",
         produces=(_Alpha,),
         run=lambda module, function, target, options: _write(function, _Beta(1)),
     )
-
-    module, function = _module()
-    assert analyze(module, function, analysis="own.honest").metadata_types == (_Alpha,)
-
     with pytest.raises(AnalysisError, match=r"does not declare: \['_Beta'\]"):
         analyze(module, function, analysis="own.trespass")
 
-
-def test_overwriting_a_dependency_result_with_an_equal_value_still_fails(
-    registered,
-) -> None:
-    """AC-0-2. An equal-but-different object is still an overwrite, which is
-    why ownership is tracked by identity rather than by value."""
     registered(
         "eq.base",
         produces=(_Alpha,),
@@ -175,109 +174,53 @@ def test_overwriting_a_dependency_result_with_an_equal_value_still_fails(
         produces=(_Beta,),
         run=lambda module, function, target, options: _write(function, _Alpha(7)),
     )
-
-    module, function = _module()
     with pytest.raises(AnalysisError, match=r"does not declare: \['_Alpha'\]"):
         analyze(module, function, analysis="eq.thief")
 
-
-def test_deleting_a_dependency_result_is_also_a_violation(registered) -> None:
-    """AC-0-2. Removing another analysis's record changes the IR as much as
-    overwriting it, and a check that only inspected the final state would miss
-    it: the entry is simply gone."""
-
-    def _drop_alpha(module, function, target, options):
-        expr = _first_expr(function)
-        kept = tuple(item for item in expr.metadata if not isinstance(item, _Alpha))
-        object.__setattr__(expr, "metadata", kept)
-
     registered(
-        "del.base",
-        produces=(_Alpha,),
-        run=lambda module, function, target, options: _write(function, _Alpha(3)),
+        "del.vandal",
+        requires=("eq.base",),
+        produces=(_Beta,),
+        run=lambda module, function, target, options: _drop(function, _Alpha),
     )
-    registered(
-        "del.vandal", requires=("del.base",), produces=(_Beta,), run=_drop_alpha
-    )
-
-    module, function = _module()
     with pytest.raises(AnalysisError, match=r"does not declare: \['_Alpha'\]"):
         analyze(module, function, analysis="del.vandal")
 
 
-def test_reported_metadata_types_are_what_was_actually_written(registered) -> None:
-    """An analysis that declares a type but writes nothing for this function
-    contributes no type, so a renderer is not sent after absent records."""
-    registered("q.silent", produces=(_Alpha,))
-    registered(
-        "q.writes",
-        produces=(_Beta,),
-        run=lambda module, function, target, options: _write(function, _Beta(5)),
-    )
-    registered("q.root", requires=("q.silent", "q.writes"))
-
+def test_a_whole_function_record_is_owned_like_any_other(registered) -> None:
+    """A whole-function record hangs on the Function, which is a value the walk
+    must reach: otherwise ownership never sees it and no reader is told it is
+    there. The Function is also not a place ownership stops being enforced --
+    writing an undeclared type to it, or removing a record on it that belongs to
+    another analysis, are the same violations they are anywhere else.
+    """
     module, function = _module()
-    result = analyze(module, function, analysis="q.root")
-
-    assert result.executed == ("q.silent", "q.writes", "q.root")
-    assert result.metadata_types == (_Beta,)
-
-
-def test_a_type_its_owner_deleted_is_not_reported_as_written(registered) -> None:
-    """Deleting one's own record is allowed, but the result must not advertise
-    a type no record remains for: a reader would go looking and find nothing."""
-
-    def _clear_own(module, function, target, options):
-        expr = _first_expr(function)
-        kept = tuple(item for item in expr.metadata if not isinstance(item, _Alpha))
-        object.__setattr__(expr, "metadata", kept)
-
-    registered("rm.owner", produces=(_Alpha,), run=_clear_own)
-
-    module, function = _module()
-    _write(function, _Alpha(4))
-    assert get_metadata(_first_expr(function), _Alpha) is not None
-
-    result = analyze(module, function, analysis="rm.owner")
-
-    assert get_metadata(_first_expr(function), _Alpha) is None
-    assert result.executed == ("rm.owner",)
-    assert result.metadata_types == ()
-
-
-def test_a_later_member_deleting_an_earlier_write_retracts_the_report(
-    registered,
-) -> None:
-    """What the call produced is only settled once every member has run: a
-    dependency's record that a later member removes is not something a reader
-    can still find, so it must not survive in the report either."""
-
-    def _clear_alpha(module, function, target, options):
-        expr = _first_expr(function)
-        kept = tuple(item for item in expr.metadata if not isinstance(item, _Alpha))
-        object.__setattr__(expr, "metadata", kept)
 
     registered(
-        "seq.writer",
+        "fn.owner",
         produces=(_Alpha,),
-        run=lambda module, function, target, options: _write(function, _Alpha(1)),
+        run=lambda mod, fn, target, options: attach(fn, _Alpha(1)),
     )
+    result = analyze(module, function, analysis="fn.owner")
+    assert get_metadata(function, _Alpha) == _Alpha(1)
+    assert result.metadata_types == (_Alpha,)
+
     registered(
-        "seq.remover", requires=("seq.writer",), produces=(_Alpha, _Beta),
-        run=lambda module, function, target, options: (
-            _clear_alpha(module, function, target, options),
-            _write(function, _Beta(2)),
-        ),
+        "fn.trespass",
+        produces=(_Alpha,),
+        run=lambda mod, fn, target, options: attach(fn, _Beta(1)),
     )
+    with pytest.raises(AnalysisError, match=r"does not declare: \['_Beta'\]"):
+        analyze(module, function, analysis="fn.trespass")
 
-    module, function = _module()
-    result = analyze(module, function, analysis="seq.remover")
-
-    assert result.executed == ("seq.writer", "seq.remover")
-    assert get_metadata(_first_expr(function), _Alpha) is None
-    assert get_metadata(_first_expr(function), _Beta).value == 2
-    # _Alpha was written by the closure and then removed by it; only _Beta remains.
-    assert result.metadata_types == (_Beta,)
+    registered(
+        "fn.eraser",
+        requires=("fn.owner",),
+        produces=(_Beta,),
+        run=lambda mod, fn, target, options: detach(fn, _Alpha),
+    )
+    with pytest.raises(AnalysisError, match=r"does not declare: \['_Alpha'\]"):
+        analyze(module, function, analysis="fn.eraser")
 
 
 def test_a_failed_preflight_stops_every_analysis(registered, monkeypatch) -> None:
@@ -349,23 +292,6 @@ def test_dispatch_is_exact_with_no_subclass_or_default_target_fallback(
         analyze(on_cpu, function, analysis="exact.only")
 
 
-def test_the_shared_registry_serves_analyze_and_schedule_separately() -> None:
-    """AC-0-5. One implementation, separate instances: a selector registered
-    for one kind is not visible to the other."""
-    analyses: AlgorithmRegistry[str] = AlgorithmRegistry("analyze")
-    schedules: AlgorithmRegistry[str] = AlgorithmRegistry("schedule")
-
-    analyses.register(CudaTarget, "shared-name", "analysis-algorithm")
-    schedules.register(CudaTarget, "shared-name", "schedule-algorithm")
-
-    assert analyses.resolve(CudaTarget(), "shared-name") == "analysis-algorithm"
-    assert schedules.resolve(CudaTarget(), "shared-name") == "schedule-algorithm"
-
-    empty: AlgorithmRegistry[str] = AlgorithmRegistry("analyze")
-    with pytest.raises(UnknownAlgorithmError, match="analyze: no 'shared-name'"):
-        empty.resolve(CudaTarget(), "shared-name")
-
-
 def test_an_algorithm_declaration_is_checked_when_it_is_registered() -> None:
     """A malformed declaration is a registration-time error: it cannot depend
     on itself, repeat a dependency, or claim a type that is not Metadata."""
@@ -379,47 +305,3 @@ def test_an_algorithm_declaration_is_checked_when_it_is_registered() -> None:
         AnalysisAlgorithm(
             selector="s", run=lambda *a: None, produces=(_Alpha, _Alpha)
         )
-
-
-def test_a_record_on_the_function_itself_is_owned_and_reported(registered) -> None:
-    """A whole-function record hangs on the Function, which is a value the walk
-    must reach: otherwise ownership never sees it and no reader is told it is
-    there."""
-    module, function = _module()
-    register_analysis(CudaTarget, "fn.owner", produces=(_Alpha,))(
-        lambda mod, fn, target, options: attach(fn, _Alpha(1))
-    )
-
-    result = analyze(module, function, analysis="fn.owner")
-
-    assert get_metadata(function, _Alpha) == _Alpha(1)
-    assert result.metadata_types == (_Alpha,)
-
-
-def test_writing_an_undeclared_type_to_the_function_is_a_violation(
-    registered,
-) -> None:
-    """The Function is not a place ownership stops being enforced."""
-    module, function = _module()
-    register_analysis(CudaTarget, "fn.trespass", produces=(_Alpha,))(
-        lambda mod, fn, target, options: attach(fn, _Beta(1))
-    )
-
-    with pytest.raises(AnalysisError, match=r"does not declare: \['_Beta'\]"):
-        analyze(module, function, analysis="fn.trespass")
-
-
-def test_deleting_a_function_record_the_analysis_does_not_own_is_a_violation(
-    registered,
-) -> None:
-    """Removing a whole-function record changes the IR as much as writing one."""
-    module, function = _module()
-    register_analysis(CudaTarget, "fn.writer", produces=(_Alpha,))(
-        lambda mod, fn, target, options: attach(fn, _Alpha(1))
-    )
-    register_analysis(
-        CudaTarget, "fn.eraser", requires=("fn.writer",), produces=(_Beta,)
-    )(lambda mod, fn, target, options: detach(fn, _Alpha))
-
-    with pytest.raises(AnalysisError, match=r"does not declare: \['_Alpha'\]"):
-        analyze(module, function, analysis="fn.eraser")

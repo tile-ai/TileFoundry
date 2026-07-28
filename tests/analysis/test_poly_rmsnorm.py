@@ -1,9 +1,10 @@
 """``extract`` coverage for ``RMSNorm`` now that it carries a registered
 forward ``type_relation`` (``rms_norm.py``'s ``_rms_norm_type_relation``,
-modelled on ``SoftMax``'s -- see ``test_poly_softmax.py``) instead of a
-poly-private fallback: the domain is the batch axes only
-(``x.shape[:-1]``) and the reduced (last) axis is an existential range dim
-on the read/write maps, with ``weight`` read over that same range.
+modelled on ``SoftMax``'s) instead of a poly-private fallback: the domain is
+the batch axes only (``x.shape[:-1]``) and the reduced (last) axis is an
+existential range dim on the read/write maps, with ``weight`` read over that
+same range. This is the reduction relation every fused row-wise op is built to
+the shape of; ``SoftMax``'s own is pinned in ``test_analysis_invariants.py``.
 
 Sharding is resolved one level up, in ``extract``'s ``_local_type``, so the
 relation itself never sees a layout; the localization tests below cover that
@@ -74,6 +75,11 @@ def test_local_type_divides_the_split_axis_and_keeps_tensor_rank():
     reader and writer in different isl spaces and drops the dependence between
     them; ``split_target_axes`` names the *tensor* axis each mesh axis splits
     instead, which is what keeps the rank.
+
+    A non-leading split axis and an unsharded type are asserted beside it because
+    the helper has to answer all three: the axis the mesh names is divided, every
+    other axis is left whole, and a type with no layout at all comes back as the
+    very same object rather than a rebuilt copy of it.
     """
     x = make_shard_tensor_type((8, 16), mesh=_MESH, attrs=(Split(0),))
     assert len(x.layout.layout.shape) == 3  # the factored layout, not a typo
@@ -83,15 +89,8 @@ def test_local_type_divides_the_split_axis_and_keeps_tensor_rank():
     assert local.shape == (4, 16)
     assert len(local.shape) == len(x.shape)
 
+    trailing = make_shard_tensor_type((8, 16), mesh=_MESH, attrs=(Split(1),))
+    assert _local_type(trailing).shape == (8, 8)
 
-def test_local_type_divides_a_non_leading_split_axis():
-    x = make_shard_tensor_type((8, 16), mesh=_MESH, attrs=(Split(1),))
-
-    assert _local_type(x).shape == (8, 8)
-
-
-def test_local_type_passes_an_unsharded_type_through():
-    x = make_tensor_type((8, 16))
-
-    assert _local_type(x).shape == (8, 16)
-    assert _local_type(x) is x
+    plain = make_tensor_type((8, 16))
+    assert _local_type(plain) is plain

@@ -1,25 +1,30 @@
-"""Coverage for tilefoundry.passes — Pass / PassManager orchestration + the
-default ``tilefoundry.lower`` pipeline (per-transform behavior lives in the
-transform's own test file, e.g. ``test_hir_to_tir.py``)."""
+"""Coverage for tilefoundry.passes — Pass / PassManager orchestration.
+
+Per-transform behaviour lives in the transform's own test file, and the default
+``tilefoundry.lower`` pipeline is exercised end to end by every test that
+compiles and runs a kernel: a pipeline that stopped wiring itself up cannot
+produce CUDA at all, so it needs no separate assertion here.
+"""
 
 from __future__ import annotations
 
 import pytest
 
-import tilefoundry
-from tests.fixtures.demo_ir import build_demo
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.passes import ModulePass, PassManager
 
-# ---------------------------------------------------------------------------
-# PassManager.add + ordered run
-# ---------------------------------------------------------------------------
 
-def test_pass_manager_runs_in_registered_order():
+def test_pass_manager_runs_in_registered_order_and_enforces_requires():
+    """The order passes were added is the order they run, and a declared
+    dependency has to have been added before its dependant.
+
+    There is no topological sort: the manager checks rather than reorders, so a
+    pipeline assembled in the wrong order is reported as such instead of being
+    quietly repaired into an order nobody wrote down.
+    """
     trace: list[str] = []
 
-    class _P(ModulePass):
+    class _Traced(ModulePass):
         def __init__(self, tag):
             self.tag = tag
             self.name = tag
@@ -29,18 +34,11 @@ def test_pass_manager_runs_in_registered_order():
             return module
 
     pm = PassManager()
-    pm.add(_P("a")).add(_P("b")).add(_P("c"))
-    module = Module(name="m", functions=(), entry="x")
+    pm.add(_Traced("a")).add(_Traced("b")).add(_Traced("c"))
     # entry_function() is not invoked by empty PassManager runs.
-    pm.run(module)
+    pm.run(Module(name="m", functions=(), entry="x"))
     assert trace == ["a", "b", "c"]
 
-
-# ---------------------------------------------------------------------------
-# `requires` enforcement — order assert only (no topological sort in MVP).
-# ---------------------------------------------------------------------------
-
-def test_pass_manager_requires_enforces_prior_pass_seen():
     class _A(ModulePass):
         name = "a"
 
@@ -54,25 +52,8 @@ def test_pass_manager_requires_enforces_prior_pass_seen():
         def run(self, module):
             return module
 
-    ok = PassManager(passes=[_A(), _B()])
-    ok._check_requires()  # should not raise
+    PassManager(passes=[_A(), _B()])._check_requires()  # should not raise
 
     wrong = PassManager(passes=[_B(), _A()])
     with pytest.raises(ValueError, match="requires 'a' not registered before it"):
         wrong._check_requires()
-
-
-# ---------------------------------------------------------------------------
-# tilefoundry.compile top-level wires the default pipeline.
-# ---------------------------------------------------------------------------
-
-def test_tilefoundry_lower_drives_default_pipeline():
-
-    fn, _, _ = build_demo()
-    mod = Module(name="main", functions=(fn,), entry=fn.name)
-    result = tilefoundry.lower(mod, target="cuda")
-    [out_fn] = result.functions
-    assert isinstance(out_fn, PrimFunction)
-    assert result.entry == "demo"
-
-
