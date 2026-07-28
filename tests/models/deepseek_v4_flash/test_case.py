@@ -25,7 +25,13 @@ from tilefoundry.ir.types.substitute import DimSubstitutionError
 from tilefoundry.schedule import ScheduleOptions, schedule
 
 #: One case is one CP-SAT solve, so the budget is stated rather than inherited.
-_SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0)
+#: The first plan is the one this asks about -- that a plan exists and verifies --
+#: and the solver cannot prove a makespan optimal on this workload, so without
+#: stopping it improves the answer until the timeout and then reports the same
+#: verdict. That was 60 seconds of the suite for a question about existence.
+_SOLVER = ScheduleOptions(
+    timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True
+)
 
 
 def test_the_case_selects_every_function_the_description_defines():

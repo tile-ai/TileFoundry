@@ -43,6 +43,12 @@ from tilefoundry.schedule.partition import (
 from tilefoundry.schedule.partition import solve as solve_module
 from tilefoundry.schedule.pipeline.problem import PipelineProblemError
 
+#: The full budget, unlike everywhere else that only asks whether a plan verifies.
+#: This reads the plan: every placement sharing a base name must carry a distinct
+#: type. The first feasible plan does not satisfy that -- it reaches `gather` with
+#: four placements of which two have the same type, a redundant copy that improving
+#: the makespan removes. So stopping early here would assert against a plan the
+#: scheduler does not intend to hand anyone.
 _SOLVER = ScheduleOptions(timeout_seconds=60, workers=8)
 
 

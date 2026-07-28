@@ -31,7 +31,12 @@ from tilefoundry.target import CudaTarget
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT, "seq_len": 1}
 FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
-SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0)
+#: What is asked here is that a plan exists for the stated size and verifies against
+#: the program of that size. The solver cannot prove this makespan optimal, so left
+#: to run it spends the whole budget improving a plan whose verdict does not change.
+SOLVER = ScheduleOptions(
+    timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True
+)
 
 
 def _aimed():
