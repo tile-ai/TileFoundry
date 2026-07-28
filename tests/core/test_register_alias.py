@@ -1,18 +1,16 @@
-"""Tests for ``@register_alias`` — DSL surface alias schema.
+"""The op registry as a table: what a name resolves to, and how many things it
+may resolve to.
 
-Kinded sugar names (``add`` / ``sub`` / ...) resolve to a single alias
-schema; there are no per-name legacy Op classes. Each kinded sugar
-name has *exactly one* schema in the registry — the alias.
-
-These tests lock in:
-
-- alias schemas register with ``op_class=None`` and no legacy Op class;
-- the alias builder constructs the right kinded ``Binary`` / ``Unary`` op;
-- a bare / ``tf.*`` op-name in a ``@func`` body parses through the alias
-  builder to the kinded IR op.
+Kinded sugar names (``add`` / ``sub`` / ...) resolve to a single alias schema;
+there are no per-name legacy Op classes. Each kinded sugar name has *exactly
+one* schema in the registry — the alias — while a genuinely overloaded name may
+hold several. These are the boundaries a parse error cannot tell apart from a
+missing registration, so they are asserted on the table directly.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
@@ -21,36 +19,44 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.op_registry import (
     _first_schema,
+    _schemas_by_dialect_name,
     get_op_by_name,
     get_schemas,
+    iter_schema_names,
 )
+from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.pattern import Tensor as TensorPat
+from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.types import DType
+
+
+@pytest.fixture
+def clean_schema_registry():
+    """Registering into the process-wide table must not leak into other tests."""
+    snapshot = {k: list(v) for k, v in _schemas_by_dialect_name.items()}
+    yield
+    _schemas_by_dialect_name.clear()
+    _schemas_by_dialect_name.update(snapshot)
+
 
 # ── Registry shape ──────────────────────────────────────────────────────
 
 
 def test_kinded_alias_registers_one_schema_no_legacy_op() -> None:
-    """A kinded sugar name resolves to exactly one schema — the alias —
-    with ``op_class=None``, a callable builder, and no legacy Op class."""
+    """A kinded sugar name resolves to exactly one schema — the alias — with
+    ``op_class=None``, a callable builder, and no legacy Op class. The builder
+    constructs the kinded op and reuses the static ParamDef references for its
+    signature; a binary and a unary name stand for their whole families."""
     schemas = get_schemas("tf", "add")
     assert len(schemas) == 1
     assert schemas[0].op_class is None
-
-    s = _first_schema("tf", "add")
-    assert s is not None
-    assert s.op_class is None
-    assert callable(s.builder)
-
     assert get_op_by_name("add") is None
 
-
-def test_alias_builder_constructs_kinded_op() -> None:
-    """The alias builder constructs the right kinded op, reusing the
-    static ParamDef references for its signature — binary ``add`` and
-    unary ``neg``."""
     binary = _first_schema("tf", "add")
+    assert binary is not None and binary.op_class is None
+    assert callable(binary.builder)
     assert binary.signature == (Binary.lhs, Binary.rhs)
     add_inst = binary.builder()
     assert isinstance(add_inst, Binary)
@@ -64,18 +70,24 @@ def test_alias_builder_constructs_kinded_op() -> None:
     assert neg_inst.kind is UnaryKind.NEG
 
 
-def test_all_20_kinded_aliases_registered() -> None:
-    """All 16 binary + 4 unary surface aliases land in the registry."""
-    binary_names = (
-        "add", "sub", "mul", "div", "floor_div", "mod", "min", "max",
-        "cmp_eq", "cmp_ne", "cmp_lt", "cmp_le", "cmp_gt", "cmp_ge",
-        "logical_and", "logical_or",
-    )
-    unary_names = ("neg", "abs", "logical_not", "square")
-    for n in binary_names + unary_names:
-        s = _first_schema("tf", n)
-        assert s is not None, f"alias {n!r} not registered"
-        assert s.op_class is None, f"alias {n!r} should have op_class=None"
+def test_register_op_overload_and_iter_dedupe(clean_schema_registry) -> None:
+    """Multi-schema overloads append in registration order; iter dedupes names."""
+    class _DummyBase:
+        pass
+
+    @register_op(dialect="T", category="nn", name="testdup_relu")
+    class _A(_DummyBase):
+        x = ParamDef(kind="input")
+
+    @register_op(dialect="T", category="nn", name="testdup_relu")
+    class _B(_DummyBase):
+        src = ParamDef(kind="input", pattern=TensorPat)
+        dst = ParamDef(kind="input", pattern=TensorPat)
+
+    bucket = get_schemas("T", "testdup_relu")
+    assert [s.op_class for s in bucket] == [_A, _B]
+    names = list(iter_schema_names("T"))
+    assert names.count("testdup_relu") == 1
 
 
 # ── Parser end-to-end ──────────────────────────────────────────────────

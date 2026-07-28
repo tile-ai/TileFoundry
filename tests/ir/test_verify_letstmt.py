@@ -1,4 +1,10 @@
-"""Verify hard constraints on LetStmt."""
+"""Verify hard constraints on LetStmt.
+
+All three are conditions a lowering pass can produce while emitting perfectly
+plausible TIR: a rebound Var makes two distinct buffers one name, a declared type
+that disagrees with its value places a tensor in the wrong memory, and an
+allocation nested inside another expression has no defined lifetime.
+"""
 from __future__ import annotations
 
 import pytest
@@ -16,50 +22,31 @@ def _alloc_call(t: TensorType) -> Call:
     return Call(type=t, target=AllocTensor(tensor_type=t), args=())
 
 
-def test_letstmt_rejects_reused_var_nested():
-    """Binding the same Var object in an outer+inner Let must raise."""
-    v = Var(type=make_tensor_type((4,), storage="rmem"), name="v")
-    inner_let = LetStmt(
-        var=v,
-        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
-        body=Sequential(body=(Return(),)),
-    )
-    outer_let = LetStmt(
-        var=v,
-        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
-        body=Sequential(body=(inner_let,)),
-    )
-    pf = PrimFunction(
-        name="fn",
-        params=(),
-        body=Sequential(body=(outer_let,)),
-    )
-    with pytest.raises(VerifyError, match="fresh Var"):
-        verify_prim_function(pf)
+def _let(var: Var, value: Call) -> LetStmt:
+    return LetStmt(var=var, value=value, body=Sequential(body=(Return(),)))
 
 
-def test_letstmt_rejects_reused_var_sibling():
-    """Two sibling LetStmts in the same Sequential rebinding the
-    same Var instance must also raise — fresh-Var applies across the whole
+def _pf(*stmts) -> PrimFunction:
+    return PrimFunction(name="fn", params=(), body=Sequential(body=stmts))
+
+
+def test_letstmt_requires_a_fresh_var_anywhere_in_the_function():
+    """Binding the same Var object twice must raise whether the second binding is
+    nested inside the first or a sibling of it — fresh-Var applies across the whole
     function, not merely within the current lexical scope."""
-    v = Var(type=make_tensor_type((4,), storage="rmem"), name="v")
-    first_let = LetStmt(
+    rmem = make_tensor_type((4,), storage="rmem")
+    v = Var(type=rmem, name="v")
+
+    nested = LetStmt(
         var=v,
-        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
-        body=Sequential(body=(Return(),)),
-    )
-    second_let = LetStmt(
-        var=v,
-        value=_alloc_call(make_tensor_type((4,), storage="rmem")),
-        body=Sequential(body=(Return(),)),
-    )
-    pf = PrimFunction(
-        name="fn",
-        params=(),
-        body=Sequential(body=(first_let, second_let)),
+        value=_alloc_call(rmem),
+        body=Sequential(body=(_let(v, _alloc_call(rmem)),)),
     )
     with pytest.raises(VerifyError, match="fresh Var"):
-        verify_prim_function(pf)
+        verify_prim_function(_pf(nested))
+
+    with pytest.raises(VerifyError, match="fresh Var"):
+        verify_prim_function(_pf(_let(v, _alloc_call(rmem)), _let(v, _alloc_call(rmem))))
 
 
 def test_letstmt_rejects_type_mismatch():
@@ -67,42 +54,19 @@ def test_letstmt_rejects_type_mismatch():
     t_reg = make_tensor_type((4,), storage="rmem")
     t_shared = make_tensor_type((4,), DType.f32, storage="smem")
     v = Var(type=t_shared, name="v")  # declared shared
-    let = LetStmt(
-        var=v,
-        value=_alloc_call(t_reg),  # value type is reg
-        body=Sequential(body=(Return(),)),
-    )
-    pf = PrimFunction(
-        name="fn",
-        params=(),
-        body=Sequential(body=(let,)),
-    )
     with pytest.raises(VerifyError, match="!= value.type"):
-        verify_prim_function(pf)
+        verify_prim_function(_pf(_let(v, _alloc_call(t_reg))))  # value type is reg
 
 
 def test_letstmt_rejects_alloc_nested_in_other_expr():
     """Call(AllocTensor, ...) may only appear directly as
     LetStmt.value, never nested inside another Expr operand."""
-    # Build a PtrOf Call with an AllocTensor Call as its input — illegal.
-
     t_scalar = TensorType.scalar(DType.f32)
-    v = Var(type=t_scalar, name="v")
     # Illegal nesting: PtrOf(AllocTensor(...)).
     nested = Call(
         type=t_scalar,
         target=PtrOf(),
-        args=(Call(type=t_scalar, target=AllocTensor(tensor_type=t_scalar), args=()),),
-    )
-    let = LetStmt(
-        var=v,
-        value=nested,
-        body=Sequential(body=(Return(),)),
-    )
-    pf = PrimFunction(
-        name="fn",
-        params=(),
-        body=Sequential(body=(let,)),
+        args=(_alloc_call(t_scalar),),
     )
     with pytest.raises(VerifyError, match="AllocTensor"):
-        verify_prim_function(pf)
+        verify_prim_function(_pf(_let(Var(type=t_scalar, name="v"), nested)))

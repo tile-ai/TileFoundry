@@ -1,5 +1,10 @@
-"""Unit tests for ``shard_layout_local_shape``.
+"""``shard_layout_local_shape`` — which mesh axes divide a layout dim.
 
+The plain one-Split-per-axis case is asserted on every sharded op type
+(``tests/ops`` compares local extents). What is kept here is the two ways the
+answer is *not* "layout shape // mesh shape": several mesh axes splitting one
+layout dim, and mesh axes that own no layout dim at all. Getting either wrong
+sizes a register allocation.
 """
 
 from __future__ import annotations
@@ -15,29 +20,9 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 
 
-def test_seq2_canonical() -> None:
-    """seq_2 reshard ``(2 @ x, 12 @ y, 128 @ t)`` produces global
-    ``(2, 12, 128)`` → per-thread ``(1, 3, 4)``."""
-    mesh = Mesh(
-        Topology("thread", 8 * 32),
-        Layout(shape=(2, 4, 32), strides=(128, 32, 1)),
-        names=("x", "y", "t"),
-    )
-    sl = ShardLayout(
-        layout=Layout(shape=(2, 12, 128), strides=(1536, 128, 1)),
-        attrs=(Split(0), Split(1), Split(2)),
-        mesh=mesh,
-    )
-    assert shard_layout_local_shape(sl) == (1, 3, 4)
-
-
-def test_rmsnorm_single_axis_two_splits() -> None:
-    """rmsnorm: global ``(1, 1536)`` with two Splits on layout dim 1
-    (y=4, t=32 both splitting axis 1) — wait, that's the old
-    convention. Under new spec, layout.shape should be the
-    unsharded shape per attrs. A simple single-layout-dim case:
-    global ``(128,)`` with two mesh axes (y=4, t=32) both splitting
-    axis 0 → per-thread ``(1,)``."""
+def test_two_mesh_axes_splitting_one_layout_dim_divide_together() -> None:
+    """Global ``(128,)`` with two mesh axes (y=4, t=32) both splitting axis 0 →
+    per-thread ``(1,)``: the divisors compose rather than the last one winning."""
     mesh = Mesh(
         Topology("thread", 4 * 32),
         Layout(shape=(4, 32), strides=(32, 1)),
@@ -51,32 +36,30 @@ def test_rmsnorm_single_axis_two_splits() -> None:
     assert shard_layout_local_shape(sl) == (1,)
 
 
-def test_broadcast_does_not_divide() -> None:
+def test_broadcast_and_partial_do_not_divide_a_layout_dim() -> None:
+    """``Broadcast`` replicates and ``Partial`` is a mesh-axis value state; neither
+    owns a layout axis, so neither divides one — each shard keeps the full local
+    extent for those axes."""
     mesh = Mesh(
         Topology("thread", 2 * 4),
         Layout(shape=(2, 4), strides=(4, 1)),
         names=("x", "t"),
     )
-    sl = ShardLayout(
+    broadcast = ShardLayout(
         layout=Layout(shape=(4,), strides=(1,)),
         attrs=(Broadcast(), Split(0)),
         mesh=mesh,
     )
     # Only t (mesh axis 1, extent 4) splits layout dim 0.
-    assert shard_layout_local_shape(sl) == (1,)
+    assert shard_layout_local_shape(broadcast) == (1,)
 
-
-def test_partial_does_not_divide_layout_dim() -> None:
-    """``Partial`` is a mesh-axis value state with no layout axis: it does
-    NOT divide any layout dim (each shard keeps the full local shape)."""
-    mesh = Mesh(
-        topology=Topology("thread", 4),
-        layout=Layout(shape=(4,), strides=(1,)),
-        names=("t",),
-    )
-    sl = ShardLayout(
+    partial = ShardLayout(
         layout=Layout(shape=(8,), strides=(1,)),
         attrs=(Partial(),),
-        mesh=mesh,
+        mesh=Mesh(
+            topology=Topology("thread", 4),
+            layout=Layout(shape=(4,), strides=(1,)),
+            names=("t",),
+        ),
     )
-    assert shard_layout_local_shape(sl) == (8,)
+    assert shard_layout_local_shape(partial) == (8,)

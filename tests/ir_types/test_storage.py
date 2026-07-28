@@ -1,23 +1,14 @@
-"""``resolve_storage`` accepts canonical short names + ``StorageKind`` / ``None``
-and rejects legacy long aliases."""
+"""``resolve_storage`` rejects legacy long aliases.
+
+Every canonical short name is resolved on the model path (each parsed tensor
+annotation goes through it); a removed alias has no such witness, and accepting
+one again would silently place a tensor in the wrong memory.
+"""
 from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types.storage import StorageKind, resolve_storage
-
-
-def test_canonical_short_names_resolve() -> None:
-    expected = (
-        ("host", StorageKind.HOST),
-        ("gmem", StorageKind.GMEM),
-        ("smem", StorageKind.SMEM),
-        ("rmem", StorageKind.RMEM),
-        ("tmem", StorageKind.TMEM),
-    )
-    for name, kind in expected:
-        assert resolve_storage(name) is kind
-        assert str(kind) == name
+from tilefoundry.ir.types.storage import resolve_storage
 
 
 def test_legacy_long_aliases_rejected() -> None:

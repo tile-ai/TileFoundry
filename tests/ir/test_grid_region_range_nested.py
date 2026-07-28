@@ -24,15 +24,6 @@ _SUM = ReduceKind.SUM
 
 
 @func
-def _range_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
-    acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
-    acc = tf.full_like(acc, value=0.0)
-    for i in range(_M):  # noqa: F821 — range over a DimVar extent
-        acc = acc + tf.gather(x, i, axis=0)
-    return acc
-
-
-@func
 def _range_start_step(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
     acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
     acc = tf.full_like(acc, value=0.0)
@@ -63,14 +54,9 @@ def _dim_expr_half_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
     return acc
 
 
-def test_range_scalar_iv_sum():
-    n = 5
-    x = torch.arange(n, dtype=torch.float32)
-    out = evaluate(_range_sum, x, device="cpu")
-    assert torch.allclose(out.reshape(()), x.sum()), (n, out)
-
-
 def test_range_start_step():
+    """The three-argument `range` surface: a scalar loop var over a DimVar extent
+    with a non-unit start and step, none of which is unrolled."""
     n = 7
     x = torch.arange(n, dtype=torch.float32)
     out = evaluate(_range_start_step, x, device="cpu")

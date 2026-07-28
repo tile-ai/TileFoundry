@@ -50,7 +50,7 @@ def _child(mod: Module, name: str) -> Module:
     return next(child for child in mod.modules if child.name == name)
 
 
-def test_the_root_declaration_survives_the_round_trip() -> None:
+def test_the_root_declaration_and_its_functions_survive_the_round_trip() -> None:
     reparsed = parse_script(as_script(_Tree))
 
     assert isinstance(reparsed, Module)
@@ -58,36 +58,28 @@ def test_the_root_declaration_survives_the_round_trip() -> None:
     assert reparsed.entry == "forward"
     assert reparsed.target == CudaTarget()
     assert reparsed.topologies == (_CTA,)
-
-
-def test_every_owned_function_survives_in_declaration_order() -> None:
-    reparsed = parse_script(as_script(_Tree))
-
+    # Every owned function, in the order the printer emits (callees first).
     assert [fn.name for fn in reparsed.functions] == ["spare", "forward"]
     assert reparsed.entry_function().name == "forward"
 
 
-def test_each_nested_module_survives_with_its_own_entry() -> None:
+def test_each_nested_module_survives_with_its_own_context() -> None:
+    """A child's context is either declared or inherited, and the round trip must
+    not turn the second into the first: a copied-down target would freeze a child
+    that should follow whatever parent it is attached to."""
     reparsed = parse_script(as_script(_Tree))
 
     assert sorted(child.name for child in reparsed.modules) == ["inherits", "replaces"]
     assert _child(reparsed, "inherits").entry == "step"
     assert _child(reparsed, "replaces").entry_function().name == "step"
 
-
-def test_an_inherited_context_stays_inherited_rather_than_being_copied_down() -> None:
-    reparsed = parse_script(as_script(_Tree))
     inherits = _child(reparsed, "inherits")
-
     assert inherits.target is None
     assert inherits.topologies is None
     assert inherits.resolve_target() == CudaTarget()
     assert inherits.effective_topologies() == (_CTA,)
 
-
-def test_a_replaced_topology_hierarchy_survives_as_its_own_declaration() -> None:
-    replaces = _child(parse_script(as_script(_Tree)), "replaces")
-
+    replaces = _child(reparsed, "replaces")
     assert replaces.topologies == (_THREAD,)
     assert replaces.effective_topologies() == (_THREAD,)
 

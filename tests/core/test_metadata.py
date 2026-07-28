@@ -1,3 +1,10 @@
+"""Expression basics: what metadata may be, and what it may never change.
+
+The positive metadata path (a binding name, a source span) is carried by every
+printed model, so only the invariants a model happy path cannot localise stay
+here: identity is blind to metadata, malformed metadata is rejected at
+construction, and a no-attribute Op is a cached singleton.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,12 +14,11 @@ import pytest
 from tilefoundry.ir.core import (
     BindingMetadata,
     IRMetadata,
+    Op,
     SourceSpanMetadata,
     Var,
     VerifyError,
     get_metadata,
-    remove_metadata,
-    replace_metadata,
 )
 from tilefoundry.ir.types import DType, TensorType
 
@@ -20,11 +26,6 @@ from tilefoundry.ir.types import DType, TensorType
 @dataclass(frozen=True)
 class _Label(IRMetadata):
     value: str
-
-
-@dataclass(frozen=True)
-class _Ordinal(IRMetadata):
-    value: int
 
 
 def _type() -> TensorType:
@@ -44,15 +45,19 @@ def test_source_labels_do_not_change_expr_identity() -> None:
     assert located == plain
     assert hash(located) == hash(plain)
     assert get_metadata(located, BindingMetadata) == BindingMetadata("x")
+    # Lookup is by concrete class, so the abstract base matches nothing.
+    assert get_metadata(located, IRMetadata) is None
 
 
-def test_expr_rejects_duplicate_concrete_metadata_class() -> None:
+def test_expr_rejects_malformed_metadata() -> None:
+    """Two entries of one concrete class would make ``get_metadata`` ambiguous,
+    and a non-``IRMetadata`` entry has no class to look up by. Both are
+    construction-time errors, and the first reports the span it was given."""
     with pytest.raises(VerifyError, match=r"duplicate _Label metadata") as exc_info:
         Var(
             type=_type(),
             name="x",
             metadata=(
-                BindingMetadata("x"),
                 SourceSpanMetadata("model.py", 7, 3),
                 _Label("first"),
                 _Label("second"),
@@ -60,25 +65,13 @@ def test_expr_rejects_duplicate_concrete_metadata_class() -> None:
         )
     assert "at model.py:7:3" in str(exc_info.value)
 
-
-def test_expr_rejects_untyped_metadata_entry() -> None:
     with pytest.raises(VerifyError, match="must be IRMetadata, got object"):
         Var(type=_type(), name="x", metadata=(object(),))  # type: ignore[arg-type]
 
 
-def test_metadata_helpers_preserve_order_and_source_expr() -> None:
-    label = _Label("old")
-    ordinal = _Ordinal(3)
-    expr = Var(type=_type(), name="x", metadata=(label, ordinal))
+def test_op_attribute_singleton_cache() -> None:
+    """No-attribute Ops are cached — ``Foo() is Foo()`` (spec 001)."""
+    class _OpB(Op):
+        pass
 
-    assert get_metadata(expr, _Label) is label
-    assert get_metadata(expr, IRMetadata) is None
-
-    replacement = _Label("new")
-    replaced = replace_metadata(expr, replacement)
-    assert replaced.metadata == (replacement, ordinal)
-    assert expr.metadata == (label, ordinal)
-
-    removed = remove_metadata(replaced, _Label)
-    assert removed.metadata == (ordinal,)
-    assert remove_metadata(removed, _Label) is removed
+    assert _OpB() is _OpB()

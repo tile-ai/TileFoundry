@@ -6,7 +6,9 @@ the full per-operand derivation recipe); this module reads them off the
 realized ``MmaAtom`` (via ``make_atom``) and pins their structural invariants —
 shape, per-thread element count (= PTX register count per thread: 8 / 4 / 4),
 Split-axis extents, and reshard-typeinfer acceptance — so a change to the
-derived strides fails a test rather than silently miscompiling.
+derived strides fails a test rather than silently miscompiling. The thread scope
+these fragments require is checked at its use point, in
+``tests/parser/tir/test_mma_atom.py``.
 """
 from __future__ import annotations
 
@@ -25,39 +27,17 @@ B_FRAG_SHARD = _ATOM.B
 C_FRAG_SHARD = _ATOM.C
 
 
-# ── Construction smoke ───────────────────────────────────────────────────
-
-
-# ── Per-thread element count matches PTX mma fragment width ──────────────
-
-
-def test_a_per_thread_owns_8_bf16():
-    """Each lane holds 8 bf16 elements of A (4 b16x2 register pairs)."""
+def test_per_thread_element_counts_and_split_extents() -> None:
+    """Each lane holds 8 bf16 of A (4 b16x2 register pairs), 4 bf16 of B, and
+    4 f32 of C/D. The Split-axis rule is identical across operands, so A stands
+    for all three: every Split axis' tensor extent equals its mesh extent."""
     assert _per_thread_size(A_FRAG_SHARD) == 8
-
-
-def test_b_per_thread_owns_4_bf16():
-    """Each lane holds 4 bf16 elements of B (2 b16x2 register pairs)."""
     assert _per_thread_size(B_FRAG_SHARD) == 4
-
-
-def test_c_per_thread_owns_4_f32():
-    """Each lane holds 4 f32 elements of C/D."""
     assert _per_thread_size(C_FRAG_SHARD) == 4
-
-
-# ── Mesh axis attrs — every Split axis has the right extent ──────────────
-
-
-def test_a_split_axes_match_mesh_extents():
-    # Rule is identical across A/B/C operands; one representative covers it.
     _check_split_extents_match_mesh(A_FRAG_SHARD)
 
 
-# ── Reshard typeinfer accepts each rank-5 fragment ShardLayout ───────────
-
-
-def test_reshard_typeinfer_accepts_a_fragment():
+def test_reshard_typeinfer_accepts_a_fragment() -> None:
     # Rule is identical across A/B/C operands; one representative covers it.
     _assert_reshard_typeinfer_ok((16, 16), "bf16", A_FRAG_SHARD)
 

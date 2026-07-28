@@ -1,4 +1,12 @@
-"""``tilefoundry.ir.visitor`` — Expr / Stmt visitor + mutator contract."""
+"""``tilefoundry.ir.visitor`` — Expr / Stmt visitor + mutator contract.
+
+Every pass is written against these four guarantees, and a break in any of them
+shows up in a pass's output rather than at its cause: class-name dispatch, an
+untouched child stays *the same object* (so a pass rewriting one node cannot
+silently deep-copy the tree), binding-site Vars are never handed to a generic
+mutator, and a Stmt subclass missing from the rebuild tables is caught here
+instead of dropping statements downstream.
+"""
 
 from __future__ import annotations
 
@@ -67,8 +75,10 @@ def _eval_call(op: Op, *args: Expr) -> Evaluate:
 # ── ExprVisitor / ExprMutator ─────────────────────────────────────────────
 
 
-def test_expr_visitor_class_name_dispatch_and_mutator_identity() -> None:
-    """``visit_<ClassName>`` dispatch + plain ExprMutator preserves identity."""
+def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -> None:
+    """``visit_<ClassName>`` dispatch, in child order; a plain ExprMutator is the
+    identity; and replacing one Var rebuilds its containing Call while sharing the
+    siblings that were not touched."""
     visits = []
 
     class V(ExprVisitor[None]):
@@ -87,10 +97,6 @@ def test_expr_visitor_class_name_dispatch_and_mutator_identity() -> None:
     assert visits == [("Call", "_OpA"), ("Var", "x"), ("Constant", 1.0)]
     assert ExprMutator().visit(tree) is tree
 
-
-def test_expr_mutator_partial_change_shares_unchanged_branches() -> None:
-    """Replacing one Var rebuilds its containing Call but shares siblings
-    that were not touched."""
     x = _var("x")
     y = _var("y")
     sub = _call(_OpA(), x, y)
@@ -159,9 +165,11 @@ def _simple_for_body() -> For:
     )
 
 
-def test_stmt_visitor_recurses_children_without_descending_into_expr_fields() -> None:
-    """``StmtVisitor`` walks child Stmts only; embedded Expr fields are NOT
-    traversed (use ``StmtExprMutator`` for that)."""
+def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> None:
+    """``StmtVisitor`` walks child Stmts only — embedded Expr fields are NOT
+    traversed (use ``StmtExprMutator`` for that) — and replacing one
+    ``Evaluate(Copy)`` rebuilds the For body while sharing the untouched
+    ``Evaluate(Fill)`` sibling."""
     seen: list[str] = []
     visited_vars: list[str] = []
 
@@ -180,10 +188,6 @@ def test_stmt_visitor_recurses_children_without_descending_into_expr_fields() ->
     assert seen == ["For", "Copy", "Fill"]
     assert visited_vars == []
 
-
-def test_stmt_mutator_partial_change_shares_unchanged_siblings() -> None:
-    """Replacing one ``Evaluate(Copy)`` rebuilds the For body but shares
-    the untouched ``Evaluate(Fill)`` sibling."""
     s = _simple_for_body()
 
     class ReplaceCopy(StmtMutator):
@@ -234,9 +238,11 @@ def test_stmt_mutator_covers_all_subclasses_with_identity_invariant() -> None:
 # ── StmtExprMutator ──────────────────────────────────────────────────────
 
 
-def test_stmt_expr_mutator_rewrites_expr_fields_and_tuples() -> None:
+def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> None:
     """Rewrites scalar Expr fields (``For.stop``) and tuple Expr fields
-    (``Evaluate.args``) with partial-share semantics."""
+    (``Evaluate.args``) with partial-share semantics, and visits an ``Evaluate``
+    whose callable is a ``SymbolRef`` (an Expr leaf) without error — guarding
+    against a missing SymbolRef branch in the Expr child/rebuild tables."""
     s = _simple_for_body()
 
     class RewriteConst(StmtExprMutator):
@@ -249,39 +255,20 @@ def test_stmt_expr_mutator_rewrites_expr_fields_and_tuples() -> None:
 
     a, b, c = _var("a"), _var("b"), _var("c")
     ct = CallableType(return_type=UnitType(), parameters=(a.type, b.type, c.type))
-    call_stmt = Evaluate(callable=SymbolRef(name="callee", type=ct), args=(a, b, c))
+    ref = SymbolRef(name="callee", type=ct)
+    call_stmt = Evaluate(callable=ref, args=(a, b, c))
+
+    # A no-op mutator preserves identity of the whole Evaluate, SymbolRef included.
+    assert StmtExprMutator().visit_stmt(call_stmt) is call_stmt
 
     class ReplaceB(StmtExprMutator):
         def visit_Var(self, var):
             return _var("b2") if var.name == "b" else var
 
     out = ReplaceB().visit_stmt(call_stmt)
+    assert out.callable is ref          # SymbolRef leaf unchanged → shared
     assert out.args[0] is a and out.args[2] is c
     assert out.args[1] is not b
-
-
-def test_stmt_expr_mutator_handles_symbolref_callable_leaf() -> None:
-    """An ``Evaluate`` whose callable is a ``SymbolRef`` (an Expr leaf) is
-    visited without error: the SymbolRef round-trips while an embedded arg
-    rewrites. Guards against a missing SymbolRef branch in the Expr
-    child/rebuild tables."""
-    ct = CallableType(return_type=UnitType(), parameters=(_t(),))
-    ref = SymbolRef(name="callee", type=ct)
-    a = _var("a")
-    ev = Evaluate(callable=ref, args=(a,))
-
-    # No-op mutator visits the SymbolRef leaf without raising and preserves
-    # identity of the whole Evaluate.
-    assert StmtExprMutator().visit_stmt(ev) is ev
-
-    class ReplaceA(StmtExprMutator):
-        def visit_Var(self, var):
-            return _var("a2") if var.name == "a" else var
-
-    out = ReplaceA().visit_stmt(ev)
-    assert out is not ev
-    assert out.callable is ref          # SymbolRef leaf unchanged → shared
-    assert out.args[0] is not a
 
 
 # ── PrimFunction walk + rewrite ──────────────────────────────────────────

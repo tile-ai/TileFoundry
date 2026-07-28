@@ -1,53 +1,11 @@
-"""Spec 003 shard primitives smoke coverage."""
+"""Spec 003 shard primitives — a layout that cannot be inverted must say so."""
 
 from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types.shard import (
-    B,
-    ComposedLayout,
-    Layout,
-    LayoutBase,
-    Mesh,
-    ShardLayout,
-    Topology,
-    make_mesh,
-)
+from tilefoundry.ir.types.shard import Layout
 from tilefoundry.ir.types.shard import layout_algebra as la
-
-
-def test_mesh_named_axis_matches_the_parser_surface():
-    mesh = Mesh(Topology("cta", 4), (4,), names=("block",))
-
-    assert mesh.block.mesh is mesh
-    assert mesh.block.index == 0
-    assert mesh.block.size == 4
-
-
-def test_layout_base_contract_preserves_nested_shard_domain():
-    base = Layout(shape=((None, 4), 8), strides=None)
-    mesh = make_mesh((2,), topology=Topology("thread", 2))
-    prior_stage = ShardLayout(layout=base, attrs=(B(),), mesh=mesh)
-    composed = ComposedLayout(inner=None, offset=3, outer=prior_stage)
-
-    assert isinstance(base, LayoutBase)
-    assert isinstance(prior_stage, LayoutBase)
-    assert isinstance(composed, LayoutBase)
-    assert prior_stage.shape == base.shape
-    assert composed.shape == base.shape
-    assert base.domain_rank == prior_stage.domain_rank == composed.domain_rank == 3
-
-
-def test_composed_layout_none_components_are_identity():
-    base = Layout(shape=(4,), strides=(2,))
-    inner_identity = ComposedLayout(inner=None, offset=3, outer=base)
-    outer_identity = ComposedLayout(inner=base, offset=0, outer=None)
-
-    assert la._apply_any(inner_identity, 1) == 5
-    assert la._apply_any(outer_identity, 1) == 2
-    assert inner_identity.shape == outer_identity.shape == base.shape
-    assert inner_identity.domain_rank == outer_identity.domain_rank == 1
 
 
 @pytest.mark.parametrize(

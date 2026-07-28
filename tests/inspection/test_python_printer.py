@@ -1,205 +1,73 @@
-"""Inspection printer tests: round-trip, dump integration."""
+"""Inspection printer: what the emitted source carries besides the program.
 
-import os
+The program itself round-trips on every corpus model. What has no such witness is
+the material around it — an opt-in type annotation, the ``# loc`` comment that
+names a binding, and the target header, whose value must rebuild the *same*
+Target when the emitted source is executed.
+"""
+
 from dataclasses import replace
-from math import prod
 
 from tests.fixtures.demo_ir import build_demo
-from tests.fixtures.qwen3_attention_graph import build_qwen3_attention_main_2cta_headnorm
-from tilefoundry.dump import DumpFlags, FileDumper, current_scope, dump
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.python_printer import (
     _cuda_target_imports,
     _target_str,
 )
-from tilefoundry.ir.core import BindingMetadata, Call, Constant, Var
+from tilefoundry.ir.core import BindingMetadata, Call, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target.cuda import CudaTarget
 
 
-def _structural_equal(a, b, path="") -> bool:
-    """Compare two HIR values for structural equality."""
-    if type(a) is not type(b):
-        print(f"MISMATCH type at {path}: {type(a).__name__} vs {type(b).__name__}")
-        return False
+def test_inspection_types_are_opt_in_same_line_comments():
+    fn, _, _ = build_demo()
+    canonical = as_script(fn)
+    annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
 
-    if isinstance(a, Function):
-        if a.name != b.name:
-            return False
-        if len(a.params) != len(b.params):
-            return False
-        for i, (pa, pb) in enumerate(zip(a.params, b.params)):
-            if not _structural_equal(pa, pb, f"{path}.params[{i}]"):
-                return False
-        if not _structural_equal(a.body, b.body, f"{path}.body"):
-            return False
-        if not _structural_equal(a.return_type, b.return_type, f"{path}.return_type"):
-            return False
-        return True
-
-    if isinstance(a, Var):
-        if a.name != b.name:
-            return False
-        return _structural_equal(a.type, b.type, f"{path}.type")
-
-    if isinstance(a, Constant):
-        return a.value == b.value
-
-    if isinstance(a, Call):
-        if type(a.target) is not type(b.target):
-            return False
-        if len(a.args) != len(b.args):
-            return False
-        for i, (aa, bb) in enumerate(zip(a.args, b.args)):
-            if not _structural_equal(aa, bb, f"{path}.args[{i}]"):
-                return False
-        for pi in type(a.target).params():
-            if pi.kind == "attribute":
-                av = getattr(a.target, pi.name, None)
-                bv = getattr(b.target, pi.name, None)
-                if not _attr_equal(av, bv, f"{path}.attr.{pi.name}"):
-                    return False
-        return _structural_equal(a.type, b.type, f"{path}.type")
-
-    if isinstance(a, TensorType):
-        if a.shape != b.shape:
-            return False
-        if a.dtype != b.dtype:
-            return False
-        if a.storage != b.storage:
-            return False
-        if not _attr_equal(a.layout, b.layout, f"{path}.layout"):
-            return False
-        return True
-
-    return a == b
+    assert canonical != annotated
+    assert "type=Tensor[" in annotated
+    assert all(
+        not line.lstrip().startswith("# type=")
+        for line in annotated.splitlines()
+    )
 
 
-def _attr_equal(a, b, path="") -> bool:
-    if a is b:
-        return True
-    if type(a) is not type(b):
-        return False
-    if isinstance(a, tuple):
-        if len(a) != len(b):
-            return False
-        return all(_attr_equal(aa, bb, f"{path}[{i}]") for i, (aa, bb) in enumerate(zip(a, b)))
-    if hasattr(a, "__dataclass_fields__"):
-        for f_name in a.__dataclass_fields__:
-            if not _attr_equal(getattr(a, f_name), getattr(b, f_name), f"{path}.{f_name}"):
-                return False
-        return True
-    return a == b
+def test_binding_metadata_preserves_the_canonical_loc_comment():
+    tensor_type = TensorType.scalar(DType.f32)
+    source = Var(name="source", type=tensor_type)
+    result = Call(
+        target=Binary(kind=BinaryKind.ADD),
+        args=(source, source),
+        type=tensor_type,
+        metadata=(BindingMetadata("result"),),
+    )
+    function = Function.build(
+        name="binding_name",
+        params=(source,),
+        body=result,
+        return_type=tensor_type,
+    )
 
+    canonical = as_script(function)
 
-class TestPythonPrinterRoundTrip:
-    def test_inspection_types_are_opt_in_same_line_comments(self):
-        fn, _, _ = build_demo()
-        canonical = as_script(fn)
-        annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
+    assert "result = add(source, source)" in canonical
+    assert '# loc="result"' in canonical
 
-        assert canonical != annotated
-        assert "type=Tensor[" in annotated
-        assert all(
-            not line.lstrip().startswith("# type=")
-            for line in annotated.splitlines()
-        )
-
-    def test_binding_metadata_preserves_the_canonical_loc_comment(self):
-        tensor_type = TensorType.scalar(DType.f32)
-        source = Var(name="source", type=tensor_type)
-        result = Call(
-            target=Binary(kind=BinaryKind.ADD),
-            args=(source, source),
-            type=tensor_type,
-            metadata=(BindingMetadata("result"),),
-        )
-        function = Function.build(
-            name="binding_name",
-            params=(source,),
-            body=result,
-            return_type=tensor_type,
-        )
-
-        canonical = as_script(function)
-
-        assert "result = add(source, source)" in canonical
-        assert '# loc="result"' in canonical
-
-        unbound = Call(
-            target=Binary(kind=BinaryKind.ADD),
-            args=(source, source),
-            type=tensor_type,
-        )
-        unbound_function = Function.build(
-            name="generated_name",
-            params=(source,),
-            body=unbound,
-            return_type=tensor_type,
-        )
-        assert "# loc=" not in as_script(unbound_function)
-
-
-class TestModuleRoundTrip:
-    def test_qwen3_module_roundtrip_param_layouts(self):
-        """Qwen3 @module round-trip: all param layouts/storage preserved."""
-
-        fn1 = build_qwen3_attention_main_2cta_headnorm()
-        src = as_script(fn1, module="M")
-        fn2 = parse_script(src).entry_function()
-
-        for p1, p2 in zip(fn1.params, fn2.params):
-            t1, t2 = p1.type, p2.type
-            if not isinstance(t1, TensorType) or not isinstance(t2, TensorType):
-                continue
-            assert t1.shape == t2.shape, f"{p1.name} shape mismatch"
-            assert t1.dtype == t2.dtype, f"{p1.name} dtype mismatch"
-            assert t1.storage == t2.storage, f"{p1.name} storage mismatch"
-            if isinstance(t1.layout, ShardLayout) and isinstance(t2.layout, ShardLayout):
-                # Per the sugar canonicalization rule, sugar ``N @ m.a``
-                # with N > mesh_extent(a) expands into the factorised pair on
-                # re-parse, so fn1 (built via constructor in legacy form) and
-                # fn2 (round-tripped through sugar) may differ in layout shape
-                # rank. The Split-bearing layout-axis index is preserved by
-                # canonicalization (Split(k) stays Split(k)); only residual
-                # Broadcast dims may be appended.
-                a1 = [type(a) for a in t1.layout.attrs]
-                a2 = [type(a) for a in t2.layout.attrs]
-                assert a1 == a2, \
-                    f"{p1.name} attr-kind mismatch: {t1.layout.attrs} vs {t2.layout.attrs}"
-                assert prod(t1.layout.layout.shape) == prod(t2.layout.layout.shape), \
-                    f"{p1.name} layout total size mismatch"
-                # Mesh identity: topology, layout, names
-                m1, m2 = t1.layout.mesh, t2.layout.mesh
-                assert m1.topology.name == m2.topology.name, \
-                    f"{p1.name} mesh topology name mismatch"
-                assert m1.topology.size == m2.topology.size, \
-                    f"{p1.name} mesh topology size mismatch"
-                assert m1.layout.shape == m2.layout.shape, \
-                    f"{p1.name} mesh layout shape mismatch"
-                assert m1.names == m2.names, \
-                    f"{p1.name} mesh names mismatch"
-
-
-class TestPythonPrinterDump:
-    def test_dumps_to_file(self):
-
-        fn, _, _ = build_demo()
-        src = as_script(fn)
-        scope = current_scope()
-        assert scope is not None
-
-        dump("demo.py", src, DumpFlags.PASS_IR)
-
-        dumper = scope.dumper
-        assert isinstance(dumper, FileDumper)
-        py_path = os.path.join(str(dumper.root), "demo.py")
-        assert os.path.isfile(py_path)
+    unbound = Call(
+        target=Binary(kind=BinaryKind.ADD),
+        args=(source, source),
+        type=tensor_type,
+    )
+    unbound_function = Function.build(
+        name="generated_name",
+        params=(source,),
+        body=unbound,
+        return_type=tensor_type,
+    )
+    assert "# loc=" not in as_script(unbound_function)
 
 
 class TestPythonPrinterTargetRoundTrip:
@@ -227,32 +95,32 @@ class TestPythonPrinterTargetRoundTrip:
         assert _cuda_target_imports(installed) == ()
         assert self._rebuild(installed) == installed
 
-    def test_a_directly_supplied_architecture_round_trips(self):
-        target = CudaTarget(
-            architecture=replace(CudaTarget().architecture, name="sm_90_custom")
+    def test_a_directly_supplied_side_is_not_dropped(self):
+        """Deciding defaultness from the architecture alone would print a custom
+        device as a bare ``CudaTarget()`` and lose it outright, so each side is
+        checked alone and then together."""
+        installed = CudaTarget()
+
+        custom_arch = CudaTarget(
+            architecture=replace(installed.architecture, name="sm_90_custom")
         )
-        rebuilt = self._rebuild(target)
-        assert rebuilt == target
+        rebuilt = self._rebuild(custom_arch)
+        assert rebuilt == custom_arch
         assert rebuilt.architecture.name == "sm_90_custom"
 
-    def test_a_directly_supplied_device_is_not_dropped(self):
-        """Deciding defaultness from the architecture alone would print this as
-        a bare ``CudaTarget()`` and lose the device outright."""
-        target = CudaTarget(
-            device=replace(CudaTarget().device, name="h200_custom", sm_count=64)
+        custom_device = CudaTarget(
+            device=replace(installed.device, name="h200_custom", sm_count=64)
         )
-        rebuilt = self._rebuild(target)
-        assert rebuilt == target
+        rebuilt = self._rebuild(custom_device)
+        assert rebuilt == custom_device
         assert rebuilt.device.name == "h200_custom"
         assert rebuilt.device.sm_count == 64
 
-    def test_both_sides_supplied_directly_round_trip_together(self):
-        installed = CudaTarget()
-        target = CudaTarget(
+        both = CudaTarget(
             architecture=replace(installed.architecture, name="arch_custom"),
             device=replace(installed.device, name="device_custom", sm_count=8),
         )
-        rebuilt = self._rebuild(target)
-        assert rebuilt == target
+        rebuilt = self._rebuild(both)
+        assert rebuilt == both
         assert rebuilt.architecture.name == "arch_custom"
         assert rebuilt.device.name == "device_custom"

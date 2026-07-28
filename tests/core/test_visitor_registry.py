@@ -1,4 +1,11 @@
-"""``tilefoundry.visitor_registry`` — registry contract + canonical visitors."""
+"""``tilefoundry.visitor_registry`` — dispatch on the Op class, and what happens
+when nothing is registered for it.
+
+Every model run dispatches thousands of registered visits, so the positive path
+needs no separate witness. What a model cannot show is the shape of the *miss*:
+an unregistered structural Stmt must pass through, while an unregistered Op must
+raise rather than return a zero.
+"""
 
 from __future__ import annotations
 
@@ -6,41 +13,19 @@ import pytest
 
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.visitor_registry import typeinfer_registry
-from tilefoundry.visitor_registry.contexts import (
-    CostContext,
-    TypeInferContext,
-    VerifyContext,
-)
+from tilefoundry.visitor_registry.contexts import CostContext, VerifyContext
 from tilefoundry.visitor_registry.visitors import (
     CodegenVisitor,
     CostEvaluator,
-    TypeInferVisitor,
     VerifyVisitor,
 )
 
 
 def _t() -> TensorType:
     return TensorType.scalar(DType.f32)
-
-
-def test_typeinfer_visitor_dispatches_through_canonical_registry() -> None:
-    """``import tilefoundry.ir.hir`` populates ``typeinfer_registry``;
-    visitor dispatches Call → registered handler."""
-
-    assert typeinfer_registry.has(Binary)
-
-    a = Var(type=_t(), name="a")
-    b = Var(type=_t(), name="b")
-    out = TypeInferVisitor(TypeInferContext()).visit(
-        Call(type=_t(), target=Binary(kind=BinaryKind.ADD), args=(a, b))
-    )
-    assert out == _t()
 
 
 def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough() -> None:
