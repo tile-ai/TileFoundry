@@ -17,6 +17,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.clamp import Clamp
 from tilefoundry.ir.hir.math.softplus import Softplus
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.nn.gelu import Gelu
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.relu import ReLU
@@ -137,6 +138,11 @@ def _tanh(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(ReLU)
 def _relu(call: Call, ctx: CostContext) -> Cost:
+    return _elementwise(call, ctx)
+
+
+@register_cost_evaluator(Gelu)
+def _gelu(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
 
 

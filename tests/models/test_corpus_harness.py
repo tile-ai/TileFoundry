@@ -426,3 +426,9 @@ def test_a_package_that_states_no_case_is_refused() -> None:
             registry._case("_nothing_here")
     finally:
         del sys.modules[name]
+
+
+def test_an_ungated_case_hands_back_what_it_ran() -> None:
+    """A gate that ran a computation and dropped its value would gate only
+    whether it raised, and every caller judging the value would judge nothing."""
+    assert CapabilityGate().hold(lambda: 7, expect=ValueError, label="case/x") == 7

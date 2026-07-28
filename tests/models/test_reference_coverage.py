@@ -93,3 +93,30 @@ def test_the_report_shows_a_reference_row_per_model() -> None:
     for model, reference in _selected():
         rows = report[model.id]["targets"][fixture.id]["reference"]
         assert [row["case"] for row in rows] == [reference.id]
+
+
+@pytest.mark.skipif(_NEEDS_DEVICE, reason="references run at production dimensions")
+def test_a_wrong_result_would_fail_this_comparison() -> None:
+    """The comparison can fail, which the passing case above does not show.
+
+    It was silently not comparing at all: the gate ran the boundary and returned
+    nothing, so the value never reached an assertion and the row said PASS for a
+    reference that had only avoided raising. Asserting that a wrong answer is
+    rejected is the part that would have caught it, so it is asserted here rather
+    than left to the passing case to imply.
+    """
+    model, reference = _selected()[0]
+    drawn = reference.inputs()
+
+    got = reference.gate.hold(
+        lambda: _compared(_run(model, reference, drawn)),
+        expect=AssertionError,
+        label=reference.id,
+    )
+    assert got is not None, "an ungated boundary must hand back what it computed"
+
+    want = reference.oracle(drawn)
+    with pytest.raises(AssertionError):
+        torch.testing.assert_close(
+            (got * 1.01).float(), want.float(), atol=ATOL, rtol=RTOL
+        )

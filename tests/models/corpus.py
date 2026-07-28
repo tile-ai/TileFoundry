@@ -82,8 +82,16 @@ class CapabilityGate:
         *,
         expect: type[BaseException],
         label: str,
-    ) -> None:
-        """Run *run* and hold it to what this gate claims about it.
+    ) -> object:
+        """Run *run* and hold it to what this gate claims about it, returning it.
+
+        The value comes back because a caller that gates a computation usually
+        has to go on and judge it: running it and discarding the result gates
+        only whether it raised, which is a far weaker claim than the caller
+        means to make and reads identically at the call site.
+
+        A blocked case returns nothing, because it has nothing to return -- the
+        stated failure is re-raised below.
 
         A blocked case is a strict expectation in both directions, and the
         expectation is the test result rather than a field in a report. The
@@ -98,8 +106,7 @@ class CapabilityGate:
         nobody has, which only gets corrected if it breaks the build.
         """
         if not self.blocked:
-            run()
-            return
+            return run()
         try:
             run()
         except expect as error:
