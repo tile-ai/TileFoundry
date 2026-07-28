@@ -67,6 +67,39 @@ class CapabilityGate:
     def blocked(self) -> bool:
         return self.outcome == "BLOCKED"
 
+    def hold(
+        self,
+        run: Callable[[], object],
+        *,
+        expect: type[BaseException],
+        label: str,
+    ) -> None:
+        """Run *run* and hold it to what this gate claims about it.
+
+        A blocked case is a strict expectation in both directions. It has to
+        fail, and it has to fail for the stated reason -- a case that breaks
+        differently is not the limit anybody signed off on. And it has to keep
+        failing: a block that starts passing raises here rather than reporting
+        a quiet success, because the matrix is then describing a system nobody
+        has, and the only way that gets corrected is if it breaks the build.
+        """
+        if not self.blocked:
+            run()
+            return
+        try:
+            run()
+        except expect as error:
+            if self.reason not in str(error):
+                raise CorpusError(
+                    f"{label} is blocked on {self.reason!r}, but it failed "
+                    f"with: {error}"
+                ) from error
+            return
+        raise CorpusError(
+            f"{label} is recorded as blocked on {self.reason!r}, and it "
+            "succeeded; the capability matrix is out of date"
+        )
+
 
 @dataclass(frozen=True)
 class TargetFixture:

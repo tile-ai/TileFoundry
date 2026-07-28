@@ -46,15 +46,12 @@ def test_every_selected_function_plans_or_says_what_stopped_it(
     function = model.function(module, case)
     topology = fixture.level(case.topology)
 
-    if case.gate.blocked:
-        with pytest.raises(ScheduleError) as raised:
-            schedule(module, function, topology=topology.name, options=_SOLVER)
-        assert case.gate.reason in str(raised.value)
-        return
+    def run() -> None:
+        result = schedule(module, function, topology=topology.name, options=_SOLVER)
+        result.plan.verify(module, function, topology)
+        assert result.plan.to_json() == result.plan.to_json()
 
-    result = schedule(module, function, topology=topology.name, options=_SOLVER)
-    result.plan.verify(module, function, topology)
-    assert result.plan.to_json() == result.plan.to_json()
+    case.gate.hold(run, expect=ScheduleError, label=case.id)
 
 
 def test_the_functions_no_partition_can_take_are_untested_not_blocked() -> None:

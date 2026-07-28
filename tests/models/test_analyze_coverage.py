@@ -61,15 +61,11 @@ def test_every_selected_function_analyses_or_says_what_stopped_it(
     module = model.build_for(fixture)
     function = model.function(module, case)
 
-    if case.gate.blocked:
-        with pytest.raises(AnalysisError) as raised:
-            analyze(module, function, analysis=family)
-        assert case.gate.reason in str(raised.value), (
-            f"{case.id} is blocked on {case.gate.reason!r} but failed with "
-            f"{raised.value}"
-        )
-    else:
-        analyze(module, function, analysis=family)
+    case.gate.hold(
+        lambda: analyze(module, function, analysis=family),
+        expect=AnalysisError,
+        label=f"{case.id}/{family}",
+    )
 
 
 

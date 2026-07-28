@@ -18,14 +18,31 @@ has no answer to rather than something it answers badly.
 
 from __future__ import annotations
 
-from tests.models.corpus import MODELS_ROOT, FunctionCase, ModelCase
+from tests.models.corpus import (
+    MODELS_ROOT,
+    FunctionCase,
+    ModelCase,
+    ReferenceCase,
+)
 from tests.models.qwen3_1_7b.config import REAL as QWEN3_1_7B_SHAPE
+from tests.models.qwen3_1_7b.reference import (
+    decoder_layer_inputs,
+    decoder_layer_oracle,
+)
 
 QWEN3_1_7B = ModelCase(
     id="qwen3_1_7b",
     source=MODELS_ROOT / "qwen3_1_7b" / "model" / "decoder_layer.py",
     entry="Qwen3_1_7B",
     namespace={"config": QWEN3_1_7B_SHAPE},
+    reference=ReferenceCase(
+        id="qwen3_1_7b/reference/decoder_layer",
+        boundary="one complete decoder layer, at production dimensions",
+        entry="decoder_layer",
+        inputs=decoder_layer_inputs,
+        oracle=decoder_layer_oracle,
+        problem_sizes=("cold-decode",),
+    ),
     analyze=(
         FunctionCase(
             id="qwen3_1_7b/analyze/input_rms_norm", function="input_rms_norm"

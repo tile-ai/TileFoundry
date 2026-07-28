@@ -248,3 +248,65 @@ def test_a_target_fixture_binds_only_what_it_was_given() -> None:
     assert isinstance(bound, Module)
     assert bound.effective_topologies() == (Topology("cta", 4),)
     assert built.topologies is None
+
+
+def test_a_blocked_case_that_starts_working_breaks_the_build() -> None:
+    """The direction that matters. A skip rots quietly; a block that begins
+    passing has to fail here, because that is the only thing that makes anyone
+    correct the matrix."""
+    gate = CapabilityGate(outcome="BLOCKED", reason="no fp8 atom on this target")
+
+    with pytest.raises(CorpusError, match="succeeded; the capability matrix"):
+        gate.hold(lambda: None, expect=ValueError, label="case/x")
+
+
+def test_a_blocked_case_that_fails_as_stated_is_the_expectation() -> None:
+    gate = CapabilityGate(outcome="BLOCKED", reason="no fp8 atom on this target")
+
+    def fail() -> None:
+        raise ValueError("no fp8 atom on this target, so nothing covers it")
+
+    gate.hold(fail, expect=ValueError, label="case/x")
+
+
+def test_a_blocked_case_that_fails_differently_is_not_that_block() -> None:
+    """A case that breaks for another reason is not the limit anybody signed
+    off on, and recording it as one hides a second defect behind the first."""
+    gate = CapabilityGate(outcome="BLOCKED", reason="no fp8 atom on this target")
+
+    def fail() -> None:
+        raise ValueError("the module has no entry function")
+
+    with pytest.raises(CorpusError, match="but it failed with"):
+        gate.hold(fail, expect=ValueError, label="case/x")
+
+
+def test_a_passing_case_reports_its_own_failure_unchanged() -> None:
+    """Nothing swallows a failure the matrix did not predict."""
+    def fail() -> None:
+        raise ValueError("cost evaluation blew up")
+
+    with pytest.raises(ValueError, match="cost evaluation blew up"):
+        CapabilityGate().hold(fail, expect=ValueError, label="case/x")
+
+
+def test_the_reference_entry_is_wired_to_the_function_it_names() -> None:
+    """M2 runs the oracle; M1 makes sure there is one and that it fits.
+
+    The arity check is the part that rots otherwise: a parameter added to the
+    model would leave the reference silently calling the wrong shape until
+    somebody ran it."""
+    for model in CORPUS:
+        reference = model.reference
+        assert reference is not None, f"{model.id} declares no reference"
+        assert reference.boundary.strip(), f"{reference.id} states no boundary"
+        assert reference.entry in model.inventory()
+
+        built = model.build()
+        entry = built.lookup(reference.entry)
+        drawn = reference.inputs()
+        assert len(drawn.args) == len(entry.params), (
+            f"{reference.id} draws {len(drawn.args)} arguments for "
+            f"{reference.entry!r}, which takes {len(entry.params)}"
+        )
+        assert callable(reference.oracle)
