@@ -239,12 +239,19 @@ class Module:
         rather than matching a name: a name is shared by anything anybody chose
         to call the same, so answering by name would admit a function from
         another module, which is what asking about ownership exists to prevent.
+
+        The strict question is identity, never equality. A Function compares by
+        structure, so a copy of one of these is equal to it and is not one of
+        them -- and admitting a copy would mean this Module answering for a
+        program it does not contain, which is what these two answers exist to
+        keep apart. A function that really is a specialisation says so through
+        the record above rather than by resembling its origin.
         """
         for owned in self.functions:
-            if function is owned or function == owned:
+            if function is owned:
                 return True
             for variant in getattr(owned, "variants", ()):
-                if function is variant or function == variant:
+                if function is variant:
                     return True
         if not derived:
             return False

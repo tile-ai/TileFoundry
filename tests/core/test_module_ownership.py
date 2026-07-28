@@ -114,3 +114,32 @@ def test_provenance_is_not_part_of_what_makes_a_function_what_it_is() -> None:
     derived = specialize_function(GqaOnline.entry_function(), DIMS)
     assert origin_of(derived) is not None
     assert origin_of(GqaOnline.entry_function()) is None
+
+
+def test_a_copy_of_an_owned_function_is_not_owned() -> None:
+    """A Function compares by structure, so a copy is equal to the original and
+    is not the original. Answering ownership by equality lets the public
+    boundary analyse a program the Module does not contain."""
+    module = replace(
+        GqaOnline, target=CudaTarget(), topologies=(Topology("cta", 8),)
+    )
+    owned = module.lookup("_ctx_partials")
+    clone = replace(owned)
+
+    assert clone is not owned
+    assert clone == owned
+    assert not module.owns(clone)
+    assert not module.owns(clone, derived=True)
+
+    with pytest.raises(AnalysisError, match="is not a function of module"):
+        analyze(module, clone, analysis="compute-cost")
+
+
+def test_a_copy_of_a_variant_is_not_owned_either() -> None:
+    """The same rule at the level a specialisation is reached through."""
+    prototype = GqaOnline.entry_function()
+    clone = replace(prototype.variants[0])
+
+    assert clone == prototype.variants[0]
+    assert not GqaOnline.owns(clone)
+    assert not GqaOnline.owns(clone, derived=True)
