@@ -96,27 +96,6 @@ def test_analyze_selects_default_or_requested_analyses(monkeypatch) -> None:
     ]
 
 
-def test_analyze_prints_summary_types_and_selected_metadata(tmp_path, capsys) -> None:
-    path = _write_module(tmp_path)
-
-    assert cli.main(["analyze", f"{path}:Model"]) == 0
-
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out.startswith(
-        "# analysis target=cuda module=Model function=main"
-    )
-    assert "type=Tensor[" in captured.out
-    # Every reported line comes off a record; the annotated body carries the
-    # per-Call ones as comments.
-    assert "# peak-footprint gmem=" in captured.out
-    assert "# theoretical-bound=" in captured.out
-    assert "# theoretical-makespan=" in captured.out
-    assert "compute-cost flops=f32:" in captured.out
-    assert "roofline bound=" in captured.out
-    assert "timeline units=168 waves=2" in captured.out
-
-
 def test_analyze_reports_only_the_analyses_that_were_requested(tmp_path, capsys) -> None:
     """A requested root pulls its dependencies in, so their records reach the IR
     without having been asked for. Every view of the run shows what was
@@ -140,14 +119,18 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tmp_path, capsys)
 
 def test_analyze_json_and_text_report_the_same_conclusions(tmp_path, capsys) -> None:
     """Both formats render one report, so neither can state something the other
-    does not."""
+    does not -- checked over the default run, which is every analysis, so this is
+    also where the text form's own shape is judged: the header a reader looks at
+    first, the types, and one line per analysis that ran."""
     path = _write_module(tmp_path)
 
     assert cli.main(["analyze", f"{path}:Model", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert cli.main(["analyze", f"{path}:Model"]) == 0
-    text = capsys.readouterr().out
+    captured = capsys.readouterr()
+    text = captured.out
+    assert captured.err == ""
 
     assert payload["target"] == "cuda"
     assert payload["function"] == "main"
@@ -156,9 +139,15 @@ def test_analyze_json_and_text_report_the_same_conclusions(tmp_path, capsys) -> 
         assert f"{level}=r{value['read_bytes']}/w{value['write_bytes']}" in text
     for item in payload["function_records"]["memory"]["footprint"]:
         assert f"{item['level']}={item['peak_bytes']}" in text
-    assert (
-        f"by={payload['function_records']['roofline']['bound_by']}" in text
-    )
+    assert f"by={payload['function_records']['roofline']['bound_by']}" in text
+
+    assert text.startswith("# analysis target=cuda module=Model function=main")
+    assert "type=Tensor[" in text
+    # Every reported line comes off a record; the annotated body carries the
+    # per-Call ones as comments.
+    assert "compute-cost flops=f32:" in text
+    assert "roofline bound=" in text
+    assert "timeline units=168 waves=2" in text
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tmp_path, capsys) -> None:

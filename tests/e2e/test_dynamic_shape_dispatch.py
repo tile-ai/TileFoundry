@@ -47,26 +47,6 @@ def _build_runtime_module():
     return tilefoundry.compile(Dispatch, target="cuda")
 
 
-def test_entry_dispatch_variant_a_square_matches_torch() -> None:
-    rm = _build_runtime_module()
-    x = torch.tensor([1.0, 2.0], dtype=torch.float32, device="cuda")
-    out = torch.empty_like(x)
-    rm(x, out)
-    torch.cuda.synchronize()
-    expected = x * x
-    assert torch.allclose(out, expected, rtol=0, atol=0)
-
-
-def test_entry_dispatch_variant_b_double_matches_torch() -> None:
-    rm = _build_runtime_module()
-    x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0], dtype=torch.float32, device="cuda")
-    out = torch.empty_like(x)
-    rm(x, out)
-    torch.cuda.synchronize()
-    expected = x + x
-    assert torch.allclose(out, expected, rtol=0, atol=0)
-
-
 def test_entry_dispatch_both_variants_in_one_session() -> None:
     """Both dispatch arms run through the same compiled binary in
     sequence. Verifies that the dispatch entry routes each call to its

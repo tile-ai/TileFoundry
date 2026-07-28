@@ -27,6 +27,11 @@ from tilefoundry.target.cuda import CudaTarget
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 
+#: How far the twin follows the loop. Two steps is what it takes for one step to
+#: read the previous one's output; the remaining steps only fill the window, and
+#: running the runtime side over all of them buys the same fact per step.
+TWINNED_STEPS = 2
+
 EXPECTED_PREPARED_KEYS = {
     "table",
     "final_norm_weight",
@@ -216,32 +221,43 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
         assert "forward" not in vars(type(candidate)), name
 
 
-def test_generate_two_steps(config, twins):
-    """Two decode steps through the shared ``generate`` loop, with state held
-    entirely by the caller and threaded functionally in and out.
+def test_the_generate_loop_threads_state_and_stops_at_the_window(config, twins):
+    """The decode loop over enough steps to fill the window, from three angles a
+    single run answers at once.
 
-    The cache each step reads is the context before its token, and what a step
-    hands back is that context with one position appended -- so the loop's own
-    threading is what makes the second step read the first one's output.
+    State is held entirely by the caller and threaded functionally in and out, so
+    the cache each step reads is the context before its token: what a step hands
+    back is that context with one position appended, which is what makes the
+    second step read the first one's output. Past the window the caller stops
+    growing it -- eviction is a policy applied to a tensor, which is why the
+    description carries a range and not a fixed capacity, and why it is visible
+    here rather than buried in a write index. And the twin runs the same loop:
+    checked over the steps both sides take, so a runtime kernel that broke the
+    threading would disagree with the evaluator rather than merely look plausible.
     """
     semantic, runtime = twins
-    ids = torch.tensor([1, 2, 3], dtype=torch.int64, device="cuda")
+    steps = config.window + 2
+    ids = torch.arange(steps, dtype=torch.int64, device="cuda") % config.vocab
     seed_ctx = semantic.init_caches(device="cuda")[0].shape[1]
 
-    reference_logits, reference_caches = generate(semantic, ids, 2, device="cuda")
-    candidate_logits, candidate_caches = generate(runtime, ids, 2, device="cuda")
+    reference_logits, reference_caches = generate(semantic, ids, steps, device="cuda")
+    candidate_logits, candidate_caches = generate(runtime, ids, TWINNED_STEPS, device="cuda")
 
-    assert len(candidate_logits) == len(reference_logits) == 2
+    assert len(reference_logits) == steps
+    assert len(candidate_logits) == TWINNED_STEPS
     report = check(
-        lambda: (candidate_logits, candidate_caches),
-        lambda: (reference_logits, reference_caches),
+        lambda: candidate_logits,
+        lambda: reference_logits[:TWINNED_STEPS],
         (),
     )
     assert report.passed, dict(report.metrics)
-
-    assert reference_caches[0].shape[1] == seed_ctx + 2
     for step, logits in enumerate(reference_logits):
         assert torch.isfinite(logits.float()).all(), step
+
+    # The window is a capacity: the context stops at what the layer can attend.
+    assert reference_caches[0].shape[1] == config.max_ctx
+    assert config.max_ctx == config.window - 1
+    assert candidate_caches[0].shape[1] == seed_ctx + TWINNED_STEPS
 
     for model in (semantic, runtime):
         caches = model.init_caches(device="cuda")
@@ -252,24 +268,6 @@ def test_generate_two_steps(config, twins):
         assert next_caches[0].shape[1] == caches[0].shape[1] + 1, type(model).__name__
         assert torch.equal(next_caches[0][:, :seed_ctx], caches[0])
         assert next_caches[0][:, seed_ctx:].float().any()
-
-
-def test_the_window_is_where_the_caller_stops_growing_the_cache(config, twins):
-    """Enough steps to fill the window: the context stops at what the layer can
-    attend, and the kernels never see a longer one.
-
-    Which is the whole reason the description carries a range and not a fixed
-    capacity -- eviction is a policy the caller applies to a tensor, so it is
-    visible here rather than buried in a write index.
-    """
-    semantic, _runtime = twins
-    steps = config.window + 2
-    ids = torch.arange(steps, dtype=torch.int64, device="cuda") % config.vocab
-
-    _logits, caches = generate(semantic, ids, steps, device="cuda")
-
-    assert caches[0].shape[1] == config.max_ctx
-    assert config.max_ctx == config.window - 1
 
 
 def test_structure_mismatch_rejected(config, twins):

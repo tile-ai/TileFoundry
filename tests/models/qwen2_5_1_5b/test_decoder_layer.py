@@ -1,19 +1,22 @@
-"""Qwen2.5-1.5B decode step: resolve a kernel by name, evaluate vs HF.
+"""What the complete-decoder Reference does not judge about one Qwen2.5-1.5B layer.
 
-cpu + f32 oracle (no CUDA on this box — every ``device=`` below is ``"cpu"``).
-Each test resolves one kernel from the ``Qwen3_1_7B`` module (mirroring
-the convention every model package here shares) and checks it against the
-corresponding Hugging Face ``Qwen3DecoderLayer`` submodule(s).
+The corpus Reference runs the whole 28-layer decoder through the Evaluator and
+compares it against Hugging Face, so the layer, its attention, its MLP and its norms
+are all measured there -- through the same public entry a user comes in by, at
+production dimensions, against a real oracle. Component tests of those would repeat
+that comparison at less scope, which is why they are gone; `test_decoder.py` holds
+the stack-level witness and `tests/models/test_reference_coverage.py` the corpus one.
 
-The kernels that read the KV cache carry ``ctx_len`` as a range, so they are
-specialised at the length the drawn step uses before being evaluated: an extent
-is what counting elements needs, and a range is not one. The kernels that do not
-read the cache carry no range and are evaluated as authored.
+What that Reference genuinely cannot say is what the step hands *back*. A decode step
+returns the state its caller advances, and the Reference compares only the value. A
+step that computed the right output and the wrong cache entry would pass every
+comparison and then decode the next token from a corrupted context.
 
-Arguments come from ``reference.py``'s drawn step rather than being assembled
-here, so the parameter order is stated once and a signature change cannot leave
-one test agreeing with a stale order.
+It also cannot say that the tiled rewrite is the same program: `tiled_mlp` is the loop
+nest a tiled target wants, and nothing about the decoder's output distinguishes it
+from `mlp`, because it is only ever reached when somebody selects it.
 """
+
 from __future__ import annotations
 
 import torch
@@ -41,37 +44,6 @@ def _one_token(seed=1):
     return layer, torch.randn(1, SEQ, HIDDEN, device=DEV) * 0.1
 
 
-def test_input_rms_norm_evaluate():
-    """input_rms_norm vs HF `input_layernorm`."""
-    layer, x = _one_token()
-
-    with torch.no_grad():
-        ref = layer.input_layernorm(x)
-    out = evaluate(model.input_rms_norm, x, layer.input_layernorm.weight, device=DEV)
-
-    torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
-
-
-def test_mlp_evaluate():
-    """mlp (post_attention_layernorm + dense SwiGLU) vs HF."""
-    layer, x = _one_token()
-    mlp = layer.mlp
-
-    with torch.no_grad():
-        ref = mlp(layer.post_attention_layernorm(x))
-
-    out = evaluate(
-        model.mlp,
-        x,
-        layer.post_attention_layernorm.weight,
-        config.linear_weight(mlp.gate_proj),
-        config.linear_weight(mlp.up_proj),
-        config.linear_weight(mlp.down_proj),
-        device=DEV,
-    )
-    torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
-
-
 def test_tiled_mlp_matches_untiled_mlp():
     """tiled_mlp (the K-loop / column-block rewrite of `mlp`) against `mlp`
     itself on the same inputs: the loop tiling only reassociates the K
@@ -93,50 +65,6 @@ def test_tiled_mlp_matches_untiled_mlp():
 
     torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
-
-
-def test_self_attention_evaluate():
-    """self_attention (input_layernorm + self_attn: GQA + RoPE + per-head
-    q_norm/k_norm over the cache and the new token) vs HF's own attention at the
-    decoded position."""
-    drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(model.self_attention, {"ctx_len": drawn.ctx_len})
-    # self_attention takes the layer's arguments up to w_o; the MLP's four come
-    # after it in decoder_layer's signature.
-    out, _, _ = evaluate(fn, *drawn.args[:-4], device=DEV)
-
-    cfg = config.build_hf_config()
-    total = drawn.ctx_len + SEQ
-    cos, sin = config.rope_caches(cfg, total, device=DEV)
-    positions = torch.arange(total, device=DEV)
-    mask = torch.where(
-        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
-    ).view(1, 1, total, total)
-    sequence = torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1)
-    with torch.no_grad():
-        normed = drawn.layer.input_layernorm(sequence)
-        ref, _ = drawn.layer.self_attn(
-            normed,
-            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
-            attention_mask=mask,
-        )
-
-    torch.testing.assert_close(
-        out.float(), ref[:, -SEQ:, :].float(), atol=ATOL, rtol=RTOL
-    )
-
-
-def test_decoder_layer_evaluate():
-    """Full decoder_layer (self_attention + residual + mlp + residual) vs the
-    complete HF `Qwen3DecoderLayer.forward` at the decoded position, at two
-    context lengths."""
-    for ctx_len in CTX_LENGTHS:
-        drawn = reference.decode_step_inputs(ctx_len=ctx_len, device=DEV)
-        fn = specialize_concretely(model.decoder_layer, {"ctx_len": ctx_len})
-        out, _, _ = evaluate(fn, *drawn.args, device=DEV)
-
-        want = reference.decode_step_oracle(drawn)
-        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
 
 
 def test_decoder_layer_returns_the_cache_entry_to_append():

@@ -1,16 +1,21 @@
-"""``tilefoundry.jit()`` API — input validation + cache key + end-to-end (nvcc)."""
+"""``tilefoundry.jit()``: what a caller can observe about it.
 
-import hashlib
+Two things, and the rest is gone for stated reasons. What compiling really does is
+witnessed by `tests/e2e/`, which builds kernels with nvcc and runs them; repeating a
+compile here bought a second compile and no second fact, and it was one of the
+slowest cases in the suite. The cache key's structure went with it -- the key is
+private, and what a caller can observe is that a second `jit` of the same program
+hands back the same module and that clearing makes it stop doing so.
+
+What is left is the part no end-to-end test can localise: which inputs are refused,
+and that the cache is a cache rather than something that merely returns an answer.
+"""
+
 
 import pytest
 
-from tests.fixtures.demo_canonical import build_demo_canonical
 from tests.fixtures.demo_ir import build_demo
 from tilefoundry import jit
-from tilefoundry.compile import _canonical_module_text, _jit_cache_key_payload
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.types.shard.mesh import Topology
-from tilefoundry.runtime.module import RuntimeModule
 
 
 def test_jit_rejects_non_ir_inputs_and_unknown_targets() -> None:
@@ -27,58 +32,6 @@ def test_jit_rejects_non_ir_inputs_and_unknown_targets() -> None:
         jit(fn, target="vulkan")
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         jit(fn, target="cuda", foo=1)
-
-
-def test_cache_key_is_deterministic_and_topology_target_sensitive() -> None:
-    """Same IR → same payload; different topology / target → different payload."""
-
-
-    fn = build_demo_canonical()
-    t1, target1, opts1 = _jit_cache_key_payload(fn)
-    t2, target2, opts2 = _jit_cache_key_payload(build_demo_canonical())
-    assert (t1, target1) == (t2, target2)
-    assert hashlib.sha256(f"{t1}\0{target1}\0{opts1}".encode()).hexdigest() \
-        == hashlib.sha256(f"{t2}\0{target2}\0{opts2}".encode()).hexdigest()
-
-    # Different topologies surface in canonical module text.
-    fn_a, _, _ = build_demo()
-    mod1 = Module(name=fn_a.name, functions=(fn_a,), entry=fn_a.name,
-                  topologies=(Topology("cta", 128),))
-    mod2 = Module(name=fn_a.name, functions=(fn_a,), entry=fn_a.name,
-                  topologies=(Topology("cta", 64),))
-    assert _canonical_module_text(mod1) != _canonical_module_text(mod2)
-
-    # Different target → different options text.
-    _, _, opts_cuda = _jit_cache_key_payload(fn_a, target="cuda")
-    _, _, opts_hip = _jit_cache_key_payload(fn_a, target="hip")
-    assert opts_cuda != opts_hip
-
-
-def test_cache_key_uses_inherited_topologies_not_only_declared_ones() -> None:
-    """An inheriting child must not collide with an identical child whose owner
-    declares a different hierarchy: the key reads the effective hierarchy."""
-    fn_a, _, _ = build_demo()
-    child_a = Module(name=fn_a.name, functions=(fn_a,), entry=fn_a.name)
-    child_b = Module(name=fn_a.name, functions=(fn_a,), entry=fn_a.name)
-    owner_a = Module(name="owner", functions=(), entry=fn_a.name,
-                     modules=(child_a,), topologies=(Topology("cta", 128),))
-    owner_b = Module(name="owner", functions=(), entry=fn_a.name,
-                     modules=(child_b,), topologies=(Topology("cta", 64),))
-
-    inheriting, other = owner_a.modules[0], owner_b.modules[0]
-    assert inheriting.topologies is None and other.topologies is None
-    assert _canonical_module_text(inheriting) != _canonical_module_text(other)
-
-
-# ── compile-backed end-to-end ───────────────────────────────────────────
-
-
-def test_jit_compiles_function_to_runtime_module() -> None:
-    """``jit(fn)`` → ``RuntimeModule`` (callable)."""
-    fn, _, _ = build_demo()
-    rt = jit(fn, target="cuda")
-    assert isinstance(rt, RuntimeModule) and callable(rt)
-
 
 def test_jit_caches_and_clears() -> None:
     """Same IR → same RuntimeModule; ``cache_clear()`` evicts."""
