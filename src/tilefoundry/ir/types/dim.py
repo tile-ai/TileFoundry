@@ -51,17 +51,41 @@ class DimVar(Op, metaclass=_DimVarMeta):
     hi = ParamDef(kind="attribute", annotation=int)
 
     # Dim arithmetic sugar, so a DSL annotation can write ``CTX_LEN + 1``.
+    #
+    # The whole set is here rather than the two that happened to be needed
+    # first. A dimension the source can only add to and divide is a dimension
+    # whose other derivations have to be given their own names, and a derived
+    # extent with its own name is a second thing the caller must know how to
+    # compute.
     def __add__(self, other):
         return _dim_binop(DimAdd, self, other)
 
     def __radd__(self, other):
         return _dim_binop(DimAdd, other, self)
 
+    def __sub__(self, other):
+        return _dim_binop(DimSub, self, other)
+
+    def __rsub__(self, other):
+        return _dim_binop(DimSub, other, self)
+
+    def __mul__(self, other):
+        return _dim_binop(DimMul, self, other)
+
+    def __rmul__(self, other):
+        return _dim_binop(DimMul, other, self)
+
     def __floordiv__(self, other):
         return _dim_binop(DimFloorDiv, self, other)
 
     def __rfloordiv__(self, other):
         return _dim_binop(DimFloorDiv, other, self)
+
+    def __mod__(self, other):
+        return _dim_binop(DimMod, self, other)
+
+    def __rmod__(self, other):
+        return _dim_binop(DimMod, other, self)
 
 
 def _dim_binop(op_cls, a, b):

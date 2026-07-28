@@ -9,6 +9,7 @@ import ast
 from typing import Any, Callable, Literal
 
 from tilefoundry.ir.core import VerifyError
+from tilefoundry.ir.types.dim import is_dim_expr
 
 DivMode = Literal["true", "floor"]
 
@@ -141,9 +142,15 @@ def eval_static(
         case ast.BinOp(left=left_node, op=op, right=right_node) if ast.BinOp in allowed_nodes:
             left = ev(left_node)
             right = ev(right_node)
-            if not (isinstance(left, (int, float)) and isinstance(right, (int, float))):
+            numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
+            # Arithmetic over a dimension is not static, and refusing it here is
+            # what forces a derived extent to be given its own name: a block
+            # length that is simply `ctx_len // splits` cannot be written, so it
+            # becomes a second dynamic dimension and the caller has to know how
+            # to compute it. The operators build the dimension expression.
+            if not numeric and not (is_dim_expr(left) and is_dim_expr(right)):
                 raise VerifyError(
-                    f"static BinOp requires numeric operands, got "
+                    f"static BinOp requires numeric or dimension operands, got "
                     f"{type(left).__name__} / {type(right).__name__}"
                 )
             return _apply_binop(op, left, right, div=div)

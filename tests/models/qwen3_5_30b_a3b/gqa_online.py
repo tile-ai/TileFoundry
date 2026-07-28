@@ -70,10 +70,11 @@ NUM_SPLITS = NUM_CTA
 S = DimVar("seq_len", 1, MAX_SEQ + 1)   # [1, 5) = 1..4
 C = DimVar("ctx_len", 1, MAX_CTX + 1)   # [1, 262145) = 1..262144
 # Per-split context block (context-on-CTA): C is cut into NUM_SPLITS blocks, so
-# the block length is ctx_len / NUM_SPLITS. A named DimVar lets it appear in the
-# reshape target (a bare dim arithmetic expression cannot); the concrete extent
-# is inferred from the runtime tensor at reshape.
-CBLK = DimVar("ctx_blk", 1, MAX_CTX // NUM_SPLITS + 1)
+# the block length is the context length over the number of splits. It is that
+# expression rather than a name of its own, because a second named dimension
+# would be a second thing every caller has to know how to compute -- and the
+# only dimension this model is dynamic in is its context length.
+CBLK = C // NUM_SPLITS
 
 _D = HEAD_DIM
 _HQ = NUM_Q_HEADS
