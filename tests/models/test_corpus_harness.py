@@ -18,7 +18,8 @@ from tests.models.corpus import (
     TargetFixture,
 )
 from tests.models.fixtures import apple_m2_pro, h200_sxm
-from tests.models.registry import CORPUS, QWEN3_1_7B, case
+from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
+from tests.models.registry import CORPUS, case
 from tests.models.report import CoverageCollector, build_report, render_report
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.facts import ParallelCapacityFacts
@@ -387,3 +388,41 @@ def test_a_blocked_case_that_succeeds_fails_the_run(tmp_path) -> None:
 
     assert "1 failed" in output, output
     assert "xpassed" not in output, output
+
+
+def test_being_listed_is_what_puts_a_model_in_the_corpus() -> None:
+    """Every named package states a case, and every case names its own package.
+
+    The list is written out rather than read off the filesystem, so this checks
+    the two ways that can go wrong: a package named and not ready, and a case
+    whose id points at something a reader cannot go and open.
+    """
+    from tests.models.registry import MODELS  # noqa: PLC0415
+
+    assert MODELS, "the corpus names no models"
+    assert [model.id for model in CORPUS] == list(MODELS)
+    for model in CORPUS:
+        assert (MODELS_ROOT / model.id).is_dir(), (
+            f"{model.id} is in the corpus and has no package"
+        )
+        assert model.reference is not None, f"{model.id} declares no reference"
+
+
+def test_a_package_that_states_no_case_is_refused() -> None:
+    """Silence is not emptiness.
+
+    A listed package contributing nothing would read as a model with nothing to
+    select, which is a different fact from a model that is not there yet.
+    """
+    import sys  # noqa: PLC0415
+    import types  # noqa: PLC0415
+
+    from tests.models import registry  # noqa: PLC0415
+
+    name = "tests.models._nothing_here.case"
+    sys.modules[name] = types.ModuleType(name)
+    try:
+        with pytest.raises(TypeError, match="must state CASE"):
+            registry._case("_nothing_here")
+    finally:
+        del sys.modules[name]

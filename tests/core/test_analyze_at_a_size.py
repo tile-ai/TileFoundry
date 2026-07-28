@@ -17,8 +17,8 @@ from dataclasses import replace
 import pytest
 
 from tests.models.fixtures import h200_sxm
+from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tests.models.qwen3_5_30b_a3b.gqa_online import MAX_CTX, GqaOnline
-from tests.models.registry import QWEN3_1_7B
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.ir.hir.specialize import residual_dims, variant_for

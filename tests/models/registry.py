@@ -1,13 +1,18 @@
-"""Which models the corpus contains, and which of their functions are tested.
+"""Which models the corpus contains.
 
-One list, read by the tests that run the cases and by the report that says what
-ran. A model appears here once; what is not selected here is untested, and the
+One list of names, and each model's own package states what is selected from it.
+A model appears here once; what its package does not select is untested, and the
 report derives that from the model's own function inventory rather than from a
 second list somebody has to remember to update.
 
-Every gate below states a limit that was measured, not one that was expected.
-A gate is a claim about today: if the limit it names is lifted and the case
-starts passing, the case fails until this list is corrected, so the matrix
+The names are written out rather than discovered from the filesystem. A directory
+appearing in the corpus because it exists would make "in the corpus" an accident
+of layout, and a model half-written would join it silently. Naming it here is the
+act of putting it in.
+
+Every gate in those packages states a limit that was measured, not one that was
+expected. A gate is a claim about today: if the limit it names is lifted and the
+case starts passing, the case fails until the package is corrected, so the matrix
 cannot quietly drift into describing a system nobody has.
 
 Analyze selects every function a model defines. Schedule cannot: the device-wide
@@ -31,142 +36,42 @@ part of the question rather than a refinement of it.
 
 from __future__ import annotations
 
-from tests.models.corpus import (
-    MODELS_ROOT,
-    FunctionCase,
-    ModelCase,
-    ReferenceCase,
-    SizedCase,
-)
-from tests.models.qwen2_5_1_5b.config import REAL as QWEN2_5_1_5B_SHAPE
-from tests.models.qwen2_5_1_5b.reference import (
-    decoder_step_inputs as qwen2_5_decoder_step_inputs,
-)
-from tests.models.qwen2_5_1_5b.reference import (
-    decoder_step_oracle as qwen2_5_decoder_step_oracle,
-)
-from tests.models.qwen2_5_1_5b.reference import (
-    run_decoder_step as qwen2_5_run_decoder_step,
-)
-from tests.models.qwen3_1_7b.config import REAL as QWEN3_1_7B_SHAPE
-from tests.models.qwen3_1_7b.reference import (
-    CTX_LEN as QWEN3_1_7B_CTX_LEN,
-)
-from tests.models.qwen3_1_7b.reference import (
-    decoder_step_inputs,
-    decoder_step_oracle,
-    run_decoder_step,
+import importlib
+
+from tests.models.corpus import ModelCase
+
+#: The models in the corpus, by package name under `tests/models/`.
+MODELS: tuple[str, ...] = (
+    "qwen3_1_7b",
+    "qwen2_5_1_5b",
 )
 
-#: The context length the cache-reading functions are asked about at. A decode
-#: kernel's cost is dominated by the cache it streams, so the length is stated
-#: rather than minimised: analysing at the shortest context that type-checks
-#: would report a cost profile no deployment has.
-ANALYZED_AT = {"ctx_len": 1024}
 
-QWEN3_1_7B = ModelCase(
-    id="qwen3_1_7b",
-    source=MODELS_ROOT / "qwen3_1_7b" / "model" / "decoder_layer.py",
-    entry="Qwen3_1_7B",
-    namespace={"config": QWEN3_1_7B_SHAPE},
-    reference=ReferenceCase(
-        id="qwen3_1_7b/reference/full_decoder_decode",
-        boundary=(
-            "one decode step of the complete decoder -- every layer in order, "
-            "the residual threaded between them and the final norm closing the "
-            "stack -- at production dimensions"
-        ),
-        inputs=decoder_step_inputs,
-        oracle=decoder_step_oracle,
-        runner=run_decoder_step,
-        problem_sizes=(f"decode/ctx_len={QWEN3_1_7B_CTX_LEN}",),
-    ),
-    analyze=(
-        FunctionCase(
-            id="qwen3_1_7b/analyze/input_rms_norm", function="input_rms_norm"
-        ),
-        FunctionCase(
-            id="qwen3_1_7b/analyze/self_attention",
-            function="self_attention",
-            dims=ANALYZED_AT,
-        ),
-        FunctionCase(id="qwen3_1_7b/analyze/mlp", function="mlp"),
-        FunctionCase(id="qwen3_1_7b/analyze/tiled_mlp", function="tiled_mlp"),
-        FunctionCase(
-            id="qwen3_1_7b/analyze/decoder_layer",
-            function="decoder_layer",
-            dims=ANALYZED_AT,
-        ),
-    ),
-    schedule=(
-        FunctionCase(
-            id="qwen3_1_7b/schedule/decoder_layer",
-            function="decoder_layer",
-            topology="cta",
-            dims=ANALYZED_AT,
-        ),
-    ),
-    sized=(
-        SizedCase(
-            id="qwen3_1_7b/sized/decoder_layer",
-            function="decoder_layer",
-            dims={"ctx_len": 1024},
-        ),
-    ),
-)
+def _case(package: str) -> ModelCase:
+    """The `CASE` the named package states.
 
-QWEN2_5_1_5B = ModelCase(
-    id="qwen2_5_1_5b",
-    source=MODELS_ROOT / "qwen2_5_1_5b" / "model" / "decoder_layer.py",
-    entry="Qwen2_5_1_5B",
-    namespace={"config": QWEN2_5_1_5B_SHAPE},
-    reference=ReferenceCase(
-        id="qwen2_5_1_5b/reference/full_decoder_decode",
-        boundary=(
-            "one decode step of the complete decoder -- every layer in order, "
-            "the residual threaded between them and the final norm closing the "
-            "stack -- at production dimensions"
-        ),
-        inputs=qwen2_5_decoder_step_inputs,
-        oracle=qwen2_5_decoder_step_oracle,
-        runner=qwen2_5_run_decoder_step,
-        problem_sizes=(f"decode/ctx_len={QWEN3_1_7B_CTX_LEN}",),
-    ),
-    analyze=(
-        FunctionCase(
-            id="qwen2_5_1_5b/analyze/input_rms_norm", function="input_rms_norm"
-        ),
-        FunctionCase(
-            id="qwen2_5_1_5b/analyze/self_attention",
-            function="self_attention",
-            dims=ANALYZED_AT,
-        ),
-        FunctionCase(id="qwen2_5_1_5b/analyze/mlp", function="mlp"),
-        FunctionCase(id="qwen2_5_1_5b/analyze/tiled_mlp", function="tiled_mlp"),
-        FunctionCase(
-            id="qwen2_5_1_5b/analyze/decoder_layer",
-            function="decoder_layer",
-            dims=ANALYZED_AT,
-        ),
-    ),
-    schedule=(
-        FunctionCase(
-            id="qwen2_5_1_5b/schedule/decoder_layer",
-            function="decoder_layer",
-            topology="cta",
-            dims=ANALYZED_AT,
-        ),
-    ),
-    sized=(
-        SizedCase(
-            id="qwen2_5_1_5b/sized/decoder_layer",
-            function="decoder_layer",
-            dims=ANALYZED_AT,
-        ),
-    ),
-)
+    Imported by name, so a package that is listed and states none fails loudly
+    here rather than being skipped -- being listed is what puts a model in the
+    corpus, and a listed model contributing nothing would read as a model with
+    nothing to select.
+    """
+    module = importlib.import_module(f"tests.models.{package}.case")
+    case = getattr(module, "CASE", None)
+    if not isinstance(case, ModelCase):
+        raise TypeError(
+            f"tests.models.{package}.case must state CASE as a ModelCase, "
+            f"got {type(case).__name__}"
+        )
+    if case.id != package:
+        raise ValueError(
+            f"tests.models.{package}.case states id {case.id!r}; a model's case "
+            f"id must be the package that holds it, so a report row names "
+            f"something a reader can go and open"
+        )
+    return case
 
-CORPUS: tuple[ModelCase, ...] = (QWEN3_1_7B, QWEN2_5_1_5B)
+
+CORPUS: tuple[ModelCase, ...] = tuple(_case(package) for package in MODELS)
 
 
 def case(model_id: str) -> ModelCase:
@@ -178,4 +83,4 @@ def case(model_id: str) -> ModelCase:
     raise KeyError(f"no model case {model_id!r} in the corpus; it holds {known}")
 
 
-__all__ = ["CORPUS", "QWEN2_5_1_5B", "QWEN3_1_7B", "case"]
+__all__ = ["CORPUS", "MODELS", "case"]
