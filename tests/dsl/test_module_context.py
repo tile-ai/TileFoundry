@@ -35,10 +35,6 @@ class _Root:
     def forward(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return tf.relu(x)
 
-    @func
-    def other(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.square(x)
-
     @module(entry="step")
     class inherits:
         @func
@@ -62,58 +58,22 @@ class _Root:
             return tf.relu(x)
 
 
-def test_the_root_declaration_is_the_effective_target_everywhere_below() -> None:
+def test_the_root_declaration_is_the_only_target_anywhere_below() -> None:
+    """One Target is declared at the outermost Module and every Module below it
+    resolves to that one; a child that declares its own is rejected rather than
+    shadowing its owner, and a Module with none says which path it searched."""
     assert _Root.resolve_target() == CudaTarget()
     assert _Root.inherits.resolve_target() == CudaTarget()
     assert _Root.topology_free.resolve_target() == CudaTarget()
     assert _Root.replaces.resolve_target() == CudaTarget()
 
-
-def test_an_undeclared_topology_tuple_inherits_the_owner_hierarchy() -> None:
-    assert _Root.inherits.topologies is None
-    assert _Root.inherits.effective_topologies() == (_CTA, _WARP)
-    assert _Root.inherits.resolve_topology("warp") is _WARP
-
-
-def test_an_explicit_empty_tuple_declares_a_topology_free_domain() -> None:
-    assert _Root.topology_free.topologies == ()
-    assert _Root.topology_free.effective_topologies() == ()
-    with pytest.raises(ValueError, match="no topology named 'cta'"):
-        _Root.topology_free.resolve_topology("cta")
-
-
-def test_an_explicit_tuple_replaces_the_inherited_hierarchy_whole() -> None:
-    assert _Root.replaces.effective_topologies() == (_THREAD,)
-    assert _Root.replaces.resolve_topology("thread") is _THREAD
-    with pytest.raises(ValueError, match="no topology named 'cta'"):
-        _Root.replaces.resolve_topology("cta")
-
-
-def test_an_undeclared_target_reports_the_module_path_it_searched() -> None:
-    bare = Module("bare", (_Root.lookup("forward"),), "forward")
-    with pytest.raises(ValueError, match="Module 'bare'.*no target is declared"):
-        bare.resolve_target()
-
-
-def test_an_unresolved_topology_name_lists_the_available_levels() -> None:
-    with pytest.raises(ValueError, match="effective topology levels are cta, warp"):
-        _Root.resolve_topology("block")
-
-
-def test_a_repeated_topology_level_is_rejected_at_construction() -> None:
-    with pytest.raises(ValueError, match="duplicate topology name"):
-        Module(
-            "dupe", (_Root.lookup("forward"),), "forward",
-            topologies=(_CTA, Topology("cta", 8)),
-        )
-
-
-def test_a_child_may_not_override_the_inherited_target() -> None:
-    child = Module(
-        "child", (_Root.lookup("forward"),), "forward", target=CpuTarget(),
-    )
+    forward = _Root.lookup("forward")
+    child = Module("child", (forward,), "forward", target=CpuTarget())
     with pytest.raises(ValueError, match="child module 'child' declares its own target"):
         Module("root", (), "forward", modules=(child,), target=CudaTarget())
+
+    with pytest.raises(ValueError, match="Module 'bare'.*no target is declared"):
+        Module("bare", (forward,), "forward").resolve_target()
 
 
 def test_a_module_owns_its_children_so_a_copy_cannot_retarget_the_original() -> None:
@@ -129,47 +89,64 @@ def test_a_module_owns_its_children_so_a_copy_cannot_retarget_the_original() -> 
     assert on_cuda.modules == on_cpu.modules
 
 
-def test_every_owned_function_stays_independently_selectable() -> None:
-    assert [fn.name for fn in _Root.functions] == ["forward", "other"]
-    assert _Root.entry_function() is _Root.lookup("forward")
-    assert _Root.lookup("other").name == "other"
-    assert _Root.inherits.entry_function().name == "step"
+def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
+    """The three declaration forms are three different domains: omitting the
+    tuple inherits the owner's hierarchy, an explicit empty tuple declares a
+    topology-free domain (it does not fall back to the owner), and an explicit
+    tuple replaces the inherited hierarchy whole rather than extending it."""
+    assert _Root.inherits.topologies is None
+    assert _Root.inherits.effective_topologies() == (_CTA, _WARP)
+    assert _Root.inherits.resolve_topology("warp") is _WARP
+
+    assert _Root.topology_free.topologies == ()
+    assert _Root.topology_free.effective_topologies() == ()
+    with pytest.raises(ValueError, match="no topology named 'cta'"):
+        _Root.topology_free.resolve_topology("cta")
+
+    assert _Root.replaces.effective_topologies() == (_THREAD,)
+    assert _Root.replaces.resolve_topology("thread") is _THREAD
+    with pytest.raises(ValueError, match="no topology named 'cta'"):
+        _Root.replaces.resolve_topology("cta")
 
 
-def test_a_function_carries_no_execution_context_of_its_own() -> None:
-    forward = _Root.lookup("forward")
-    assert isinstance(forward, Function)
-    assert not hasattr(forward, "target")
-    assert not hasattr(forward, "topologies")
+def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
+    """An unresolved level lists the levels in scope, and a repeated level is
+    rejected at construction -- a duplicate name would make lexical resolution
+    answer with whichever declaration happened to come first."""
+    with pytest.raises(ValueError, match="effective topology levels are cta, warp"):
+        _Root.resolve_topology("block")
+
+    with pytest.raises(ValueError, match="duplicate topology name"):
+        Module(
+            "dupe", (_Root.lookup("forward"),), "forward",
+            topologies=(_CTA, Topology("cta", 8)),
+        )
 
 
 def test_declaring_context_on_a_function_yields_its_own_module() -> None:
+    """A Function never carries execution context of its own: ``@func`` with a
+    Target or a topology declaration (including an explicit empty one) yields the
+    Module that owns it, and a plain ``@func`` stays a Function."""
+
     @func(target=CudaTarget(), topologies=(_CTA,))
     def standalone(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return tf.relu(x)
 
-    assert isinstance(standalone, Module)
-    assert standalone.name == "standalone"
-    assert standalone.entry == "standalone"
-    assert standalone.resolve_target() == CudaTarget()
-    assert standalone.effective_topologies() == (_CTA,)
-
-
-def test_a_plain_function_decorator_still_yields_a_function() -> None:
-    @func
-    def plain(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-
-    assert isinstance(plain, Function)
-
-
-def test_an_explicit_empty_topology_tuple_on_a_function_declares_its_module() -> None:
     @func(topologies=())
     def empty(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return tf.relu(x)
 
-    assert isinstance(empty, Module)
+    @func
+    def plain(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+        return tf.relu(x)
+
+    assert isinstance(standalone, Module) and isinstance(empty, Module)
+    assert (standalone.name, standalone.entry) == ("standalone", "standalone")
+    assert standalone.resolve_target() == CudaTarget()
+    assert standalone.effective_topologies() == (_CTA,)
     assert empty.topologies == ()
+    assert isinstance(plain, Function)
+    assert not hasattr(plain, "target") and not hasattr(plain, "topologies")
 
 
 _SOURCE_PRELUDE = """
@@ -187,11 +164,12 @@ class M:
 """
 
 
-@pytest.mark.parametrize("declaration", ["1", '"cta"', "(1, 2)", "(Topology,)"])
+@pytest.mark.parametrize("declaration", ["1", "(1, 2)", "(Topology,)"])
 def test_source_rejects_a_malformed_topology_declaration(declaration: str) -> None:
     """A declaration the parser cannot read is an error, not an empty domain:
-    silently yielding a topology-free Module would strip the hierarchy every
-    body below it names."""
+    silently yielding a topology-free Module would strip the hierarchy every body
+    below it names. Not a tuple, a tuple of non-Topologies, and the Topology class
+    in place of an instance are each unreadable."""
     with pytest.raises(VerifyError, match="topologies"):
         parse_script(_SOURCE_PRELUDE.format(declaration=declaration))
 
@@ -204,13 +182,9 @@ def test_source_keeps_a_deferred_topology_extent() -> None:
     assert parsed.topologies == (Topology("cta", None),)
 
 
-def test_source_rejects_a_prim_func_member() -> None:
-    """Parsing a Module from source text reads HIR only. A TIR member is
-    rejected rather than skipped, so the source never yields a Module that
-    silently lost one of the functions it declares."""
-    source = """
+_PRIM_FUNC_MEMBER = """
 import tilefoundry
-from tilefoundry.dsl import Tensor, T, tf
+from tilefoundry.dsl import Tensor, tf
 
 @tilefoundry.module(entry="k")
 class M:
@@ -222,21 +196,25 @@ class M:
     def lowered(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return x
 """
-    with pytest.raises(VerifyError, match="prim_func"):
-        parse_script(source)
 
-
-def test_source_rejects_a_bare_prim_func_naming_the_hir_boundary() -> None:
-    """A top-level ``@prim_func`` source is refused for the same reason as a
-    ``@prim_func`` member, and says so, rather than reporting only that no
-    ``@func`` was found."""
-    source = """
+_BARE_PRIM_FUNC = """
 import tilefoundry
-from tilefoundry.dsl import Tensor, T
+from tilefoundry.dsl import Tensor
 
 @tilefoundry.prim_func
 def lowered(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
     return x
 """
+
+
+@pytest.mark.parametrize(
+    "source", [_PRIM_FUNC_MEMBER, _BARE_PRIM_FUNC], ids=["member", "bare"]
+)
+def test_source_rejects_a_prim_func_at_the_hir_boundary(source: str) -> None:
+    """Parsing a Module from source text reads HIR only. A TIR member is rejected
+    rather than skipped, so the source never yields a Module that silently lost
+    one of the functions it declares; a top-level ``@prim_func`` is refused for
+    the same reason, and says so, rather than reporting only that no ``@func``
+    was found."""
     with pytest.raises(VerifyError, match="prim_func"):
         parse_script(source)

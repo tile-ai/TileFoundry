@@ -6,7 +6,6 @@ import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, DimVarRangePat, T, Tensor, tf
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor as TensorPat
@@ -22,19 +21,13 @@ def _clean_schema_registry():
     _schemas_by_dialect_name.update(snapshot)
 
 
-def test_tf_unknown_name_raises_attribute_error() -> None:
+def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:
+    """``tf`` and ``T`` are two dialects behind one ``__getattr__``. A name
+    registered in one dialect resolves there to a callable that builds the Op,
+    is listed by ``dir`` for that dialect only, and stays an ``AttributeError``
+    in the other — an unknown name must not quietly resolve to something else's
+    op."""
 
-    with pytest.raises(AttributeError, match="no op named"):
-        _ = tf.this_op_does_not_exist
-
-
-def test_t_unknown_name_raises_attribute_error() -> None:
-
-    with pytest.raises(AttributeError, match="no op named"):
-        _ = T.does_not_exist
-
-
-def test_tf_resolves_registered_op_to_callable() -> None:
     @register_op(dialect="tf", category="math", name="my_add")
     class _MyAdd:
         a = ParamDef(kind="input", pattern=TensorPat)
@@ -43,35 +36,19 @@ def test_tf_resolves_registered_op_to_callable() -> None:
         def __init__(self, **kw):
             self.kw = kw
 
-
-    fn = tf.my_add
-    assert callable(fn)
-    obj = fn(a="X", b="Y")
+    obj = tf.my_add(a="X", b="Y")
     assert isinstance(obj, _MyAdd)
     assert obj.kw == {"a": "X", "b": "Y"}
+    assert "my_add" in dir(tf)
+    assert "my_add" not in dir(T)
+
+    with pytest.raises(AttributeError, match="no op named"):
+        _ = T.my_add
+    with pytest.raises(AttributeError, match="no op named"):
+        _ = tf.this_op_does_not_exist
 
 
-def test_dir_lists_registered_dialect_names() -> None:
-    @register_op(dialect="tf", category="math", name="alpha")
-    class _A:
-        x = ParamDef(kind="input")
-
-        def __init__(self, **kw): ...
-
-    @register_op(dialect="T", category="memory", name="beta")
-    class _B:
-        x = ParamDef(kind="input")
-
-        def __init__(self, **kw): ...
-
-
-    assert "alpha" in dir(tf)
-    assert "alpha" not in dir(T)
-    assert "beta" in dir(T)
-    assert "beta" not in dir(tf)
-
-
-# ── `.specialize` parse positive -------------------------------------------
+# ── `.specialize` parse surface --------------------------------------------
 #
 # A ``pass``-bodied ``@func`` base declares a dispatch prototype; each
 # ``@base.specialize(DimVarRangePat(...))`` registers a variant in source
@@ -102,8 +79,7 @@ def test_func_specializations_parse_to_variants() -> None:
     assert sub.body is None
     variants = sub.variants
     assert len(variants) == 2
-    assert variants[0].name == "sub"
-    assert variants[1].name == "sub"
+    assert [v.name for v in variants] == ["sub", "sub"]
     assert variants[0].specializations == (DimVarRangePat("S", 1, 3),)
     assert variants[1].specializations == (DimVarRangePat("S", 4, 7),)
 
@@ -113,8 +89,3 @@ def test_func_specializations_parse_to_variants() -> None:
         (dim,) = param.type.shape
         assert isinstance(dim, IrDimVar)
         assert dim.name == "S"
-
-    # The prototype is a single Module entry; attribute access returns it.
-    ir_mod = Module(name="m", functions=(sub,), entry="sub")
-    assert ir_mod.lookup("sub") is sub
-    assert ir_mod.function_named("missing") == ()

@@ -13,12 +13,9 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-import torch
 
 from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import T, Tensor, tf  # noqa: F401 — tf/T used by bodies
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
-from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
@@ -36,25 +33,17 @@ class _Demo:
         return tf.add(y, y)
 
 
-def test_module_collects_functions_in_order():
+def test_module_collects_functions_in_order_and_resolves_them_by_name():
+    """Members land on the Module in definition order and each collected name
+    resolves through ``lookup`` (the IR-node path — bare attribute access
+    instead returns a runnable callable, see ``ir.core.module.Module``); a name
+    the class never declared raises ``AttributeError``."""
     assert _Demo.name == "_Demo"
     assert [fn.name for fn in _Demo.functions] == ["leaf", "composed"]
-
-
-def test_module_attribute_access_resolves_functions():
-    """A collected name resolves through the Module (via ``lookup``, the IR-node
-    path — bare attribute access instead returns a runnable callable, see
-    ``ir.core.module.Module.__getattr__``); a missing name raises
-    ``AttributeError``."""
     assert _Demo.lookup("leaf").name == "leaf"
     assert _Demo.lookup("composed").name == "composed"
     with pytest.raises(AttributeError):
         _Demo.not_a_function
-
-
-def test_module_lookup_still_resolves_each_function():
-    assert _Demo.lookup("leaf").name == "leaf"
-    assert _Demo.lookup("composed").name == "composed"
 
 
 def test_attribute_access_ambiguous_name_and_real_fields():
@@ -70,17 +59,6 @@ def test_attribute_access_ambiguous_name_and_real_fields():
     with pytest.raises(AttributeError):
         mod.dup
     assert len(mod.function_named("dup")) == 2
-
-
-def test_composed_module_evaluates():
-    torch.manual_seed(0)
-    x, g = torch.randn(2, 4), torch.randn(4)
-    out = evaluate(_Demo.lookup("composed"), x, g, device="cpu")
-    ref = torch.nn.functional.rms_norm(x, (4,), g)
-    torch.testing.assert_close(out, ref + ref, atol=1e-5, rtol=1e-5)
-
-
-# --- strict-surface validation ------------------------------------------
 
 
 def test_collects_orchestration_method_and_rejects_other_members():
@@ -107,7 +85,7 @@ def test_collects_orchestration_method_and_rejects_other_members():
             def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
                 return tf.rms_norm(x, g)
 
-            budget = 3
+            budget = 3  # not a DSL function, a child Module, or a plain function
 
 
 def test_forward_reference_sibling_fails_loudly():

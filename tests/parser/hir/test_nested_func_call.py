@@ -1,16 +1,11 @@
-"""Nested ``@func`` call support.
+"""Nested ``@func`` call boundary.
 
-Locks the DSL surface for nested ``@func`` → ``@func`` calls, the
-``@register_typeinfer(Function)`` arg-contract handler, and the
-viewer's inline-expansion of ``Call(target=hir.Function)``:
-
-1. **Parser** produces ``Call(target=hir.Function, args=...)`` for a
-   nested ``@func`` call site (no fixture-only inline fallback, no
-   placeholder Op).
-2. **TypeInfer** validates arg count + each arg's type against the
-   callee's parameter types, and returns the callee's
-   ``return_type``.
-3. **Viewer** inline-expands the callee subgraph into the caller graph.
+A nested ``@func`` → ``@func`` call parses to ``Call(target=hir.Function)`` and
+``@register_typeinfer(Function)`` checks the arg contract against the callee's
+parameters. The real-model corpus exercises the positive path (a decoder layer
+calling its submodules, printed, re-imported and evaluated); what it does not
+exercise is a malformed call site, and re-elaboration of a call chain for a
+sharded argument.
 
 No GPU, no codegen, no runtime.
 """
@@ -21,65 +16,19 @@ import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor
-from tilefoundry.dsl.tf import (  # noqa: F401 — binds bare ``add``, ``mul``
-    add,
-    mul,
-)
+from tilefoundry.dsl.tf import add  # noqa: F401 — binds bare ``add``
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.core.expr import Call
-from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.function import elaborate
 from tilefoundry.ir.types import make_shard_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Split
-
-# ---------------------------------------------------------------------------
-# Fixtures — two ``@func``s where the outer one calls the inner one.
-# ---------------------------------------------------------------------------
-
 
 N = DimVar("N", 1, 64)
 
 
 @func
 def _inner_double(x: Tensor[(N,), "f32"]) -> Tensor[(N,), "f32"]:
-    return add(x, x)  # noqa: F821 — bound via ``from tilefoundry.dsl.tf import *``
-
-
-@func
-def _outer_call_inner(x: Tensor[(N,), "f32"]) -> Tensor[(N,), "f32"]:
-    return _inner_double(x)
-
-
-# ---------------------------------------------------------------------------
-# Parser produces ``Call(target=hir.Function)``.
-# ---------------------------------------------------------------------------
-
-
-def test_parser_emits_call_with_hir_function_target() -> None:
-    outer_ir = _outer_call_inner
-    body = outer_ir.body
-    # The outer body is the call expression directly (single-return form).
-    assert isinstance(body, Call)
-    assert isinstance(body.target, HirFunction), (
-        f"expected Call.target to be hir.Function, got "
-        f"{type(body.target).__name__}"
-    )
-    # The callee is the same canonical Function instance the inner
-    # ``@func`` produced (no clone, no surrogate).
-    inner_ir = _inner_double
-    assert body.target is inner_ir
-
-
-# ---------------------------------------------------------------------------
-# TypeInfer threads callee return_type and enforces arg contract.
-# ---------------------------------------------------------------------------
-
-
-def test_call_type_matches_callee_return_type() -> None:
-    outer_ir = _outer_call_inner
-    inner_ir = _inner_double
-    assert outer_ir.body.type == inner_ir.return_type
+    return add(x, x)  # noqa: F821 — bound via ``from tilefoundry.dsl.tf import add``
 
 
 def test_arity_mismatch_rejected_at_parse_time() -> None:
@@ -90,6 +39,17 @@ def test_arity_mismatch_rejected_at_parse_time() -> None:
         @func
         def _bad_arity(x: Tensor[(N,), "f32"]) -> Tensor[(N,), "f32"]:
             return _inner_double(x, x)  # type: ignore[call-arg]  # noqa: F841
+
+
+def test_arg_type_mismatch_rejected_at_typeinfer() -> None:
+    # Callee declares ``Tensor[(N,), "f32"]`` but caller passes
+    # ``Tensor[(N,), "bf16"]`` — typeinfer must surface the
+    # parameter-type mismatch.
+    with pytest.raises(VerifyError, match="type mismatch"):
+
+        @func
+        def _bad_dtype(x: Tensor[(N,), "bf16"]) -> Tensor[(N,), "f32"]:
+            return _inner_double(x)  # noqa: F841
 
 
 def test_wildcard_chain_reelaborates_nested_call_target() -> None:
@@ -115,14 +75,3 @@ def test_wildcard_chain_reelaborates_nested_call_target() -> None:
     assert tgt is not mid
     assert tgt.params[0].type == x_split
     assert tgt.body.type == x_split
-
-
-def test_arg_type_mismatch_rejected_at_typeinfer() -> None:
-    # Callee declares ``Tensor[(N,), "f32"]`` but caller passes
-    # ``Tensor[(N,), "bf16"]`` — typeinfer must surface the
-    # parameter-type mismatch.
-    with pytest.raises(VerifyError, match="type mismatch"):
-
-        @func
-        def _bad_dtype(x: Tensor[(N,), "bf16"]) -> Tensor[(N,), "f32"]:
-            return _inner_double(x)  # noqa: F841

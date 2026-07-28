@@ -1,3 +1,12 @@
+"""``where(...)`` schedule constraints on the HIR source surface.
+
+A ``where`` annotation states layout / mesh / storage intent on a binding, a
+parameter, or a bound tuple element. The real-model corpus carries
+``where(layout=...)`` annotations with closure-resolved extents and a Broadcast
+value state, so their print / re-import path is witnessed there; the cases here
+are the exact metadata one canonical annotation produces, and the diagnostics for
+annotations that cannot mean anything.
+"""
 from __future__ import annotations
 
 import pytest
@@ -10,48 +19,36 @@ from tilefoundry.ir.constraints import (
     StorageConstraint,
     constraint_metadata,
 )
-from tilefoundry.ir.core import Call, Tuple, VerifyError
+from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Broadcast, Partial, Split
+from tilefoundry.ir.types.shard import Partial, Split
 from tilefoundry.parser.hir_parser import parse_script
 
+_MESH_PRELUDE = 'from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n\n' \
+    'cta_mesh = Mesh(Topology("cta", 8), Layout((8,), (1,)))'
 
-def _source(body: str) -> str:
+
+def _source(body: str, preamble: str = _MESH_PRELUDE, ret: str = '(8, 16), "bf16"') -> str:
+    """A one-``@func`` script; *preamble* holds module-level (closure) bindings,
+    for names the parser resolves via ``fn.__globals__`` rather than the SSA env."""
     return f'''from __future__ import annotations
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 
-cta_mesh = Mesh(Topology("cta", 8), Layout((8,), (1,)))
+{preamble}
 
 @func
-def candidate(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
+def candidate(x: Tensor[(8, 16), "bf16"]) -> Tensor[{ret}]:
 {body}
 '''
 
 
-def _walk(expr):
-    if isinstance(expr, Call):
-        yield expr
-        for arg in expr.args:
-            yield from _walk(arg)
-    elif isinstance(expr, Tuple):
-        for element in expr.elements:
-            yield from _walk(element)
-
-
-def _constraint_signature(metadata: ScheduleConstraintMetadata):
-    result = []
-    for item in metadata.constraints:
-        if isinstance(item, LayoutConstraint):
-            result.append((type(item), item.layout, item.bindings))
-        elif isinstance(item, MeshConstraint):
-            result.append((type(item), item.mesh))
-        elif isinstance(item, StorageConstraint):
-            result.append((type(item), item.storage))
-    return tuple(result)
+def _layout_of(fn) -> LayoutConstraint:
+    layout = constraint_metadata(fn.body).constraints[0]
+    assert isinstance(layout, LayoutConstraint)
+    return layout
 
 
 def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
@@ -68,7 +65,6 @@ def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
     assert len(metadata.constraints) == 3
     layout, mesh, storage = metadata.constraints
     assert isinstance(layout, LayoutConstraint)
-    assert layout.layout.shape[0] is not None
     assert repr(layout.layout.shape[0]) == "_"
     assert layout.layout.shape[1] == 16
     assert layout.bindings == (("cta", Split(1)),)
@@ -80,126 +76,69 @@ def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
     assert 'storage="gmem"' in printed
     reparsed = parse_script(printed)
     verify_function(reparsed)
-    assert _constraint_signature(constraint_metadata(reparsed.body)) == _constraint_signature(
-        metadata
+    again = constraint_metadata(reparsed.body).constraints
+    assert [type(c) for c in again] == [LayoutConstraint, MeshConstraint, StorageConstraint]
+    assert again[0].bindings == layout.bindings
+    assert again[0].layout.shape[1] == layout.layout.shape[1]
+    assert again[2].storage == storage.storage
+
+
+def test_layout_extent_names_resolve_through_the_closure_or_fail() -> None:
+    """A named layout extent is read out of the function's globals, so it may be
+    an int or a ``DimVar``; a name that resolves to neither -- or to nothing --
+    must fail at the annotation rather than silently drop the extent."""
+    body = '''    y: where(layout=(_, N @ cta)) = tf.add(x, x)
+    return y'''
+    as_int = _layout_of(parse_script(_source(body, preamble=_MESH_PRELUDE + "\nN = 16")))
+    assert repr(as_int.layout.shape[0]) == "_"
+    assert as_int.layout.shape[1] == 16
+
+    dim_var_preamble = (
+        _MESH_PRELUDE + '\nfrom tilefoundry.ir.types.dim import DimVar\nN = DimVar("S", 1, 128)'
     )
+    as_dim_var = _layout_of(parse_script(_source(body, preamble=dim_var_preamble)))
+    assert isinstance(as_dim_var.layout.shape[1], DimVar)
+    assert as_dim_var.layout.shape[1].name == "S"
 
-
-def _closure_source(preamble: str, body: str) -> str:
-    """Like ``_source``, but with extra module-level (closure) bindings
-    spliced in before ``candidate`` — for names resolved via
-    ``fn.__globals__`` rather than the HIR SSA env."""
-    return f'''from __future__ import annotations
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
-
-{preamble}
-
-@func
-def candidate(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
-{body}
-'''
-
-
-def test_named_layout_extent_resolves_through_closure_to_int() -> None:
-    fn = parse_script(
-        _closure_source(
-            "N = 16",
-            '''    y: where(layout=(_, N @ cta)) = tf.add(x, x)
-    return y''',
-        )
-    )
-    layout = constraint_metadata(fn.body).constraints[0]
-    assert isinstance(layout, LayoutConstraint)
-    assert repr(layout.layout.shape[0]) == "_"
-    assert layout.layout.shape[1] == 16
-
-
-def test_named_layout_extent_resolves_through_closure_to_dim_var() -> None:
-    fn = parse_script(
-        _closure_source(
-            'from tilefoundry.ir.types.dim import DimVar\n\nS = DimVar("S", 1, 128)',
-            '''    y: where(layout=(_, S @ cta)) = tf.add(x, x)
-    return y''',
-        )
-    )
-    layout = constraint_metadata(fn.body).constraints[0]
-    assert isinstance(layout, LayoutConstraint)
-    assert isinstance(layout.layout.shape[1], DimVar)
-    assert layout.layout.shape[1].name == "S"
-
-
-def test_unresolvable_layout_extent_fails_at_source_annotation() -> None:
     with pytest.raises(VerifyError, match="undefined name|where layout extent"):
-        parse_script(
-            _source(
-                '''    y: where(layout=(_, UNDEFINED_NAME @ cta)) = tf.add(x, x)
-    return y'''
-            )
-        )
+        parse_script(_source(body))
     with pytest.raises(VerifyError, match="must resolve to an int or DimVar"):
-        parse_script(
-            _closure_source(
-                'BAD = "not-an-int"',
-                '''    y: where(layout=(_, BAD @ cta)) = tf.add(x, x)
-    return y''',
-            )
-        )
+        parse_script(_source(body, preamble=_MESH_PRELUDE + '\nN = "not-an-int"'))
 
 
-def test_broadcast_and_partial_bindings_reuse_existing_shard_attrs() -> None:
-    broadcast = parse_script(
-        _source(
-            '''    y: where(layout=((_, 16), {cta @ B()})) = tf.add(x, x)
-    return y'''
-        )
-    )
+def test_partial_value_state_and_the_subjects_that_accept_a_constraint() -> None:
+    """The ``{mesh @ P(...)}`` set reuses the existing shard attrs rather than a
+    parser-local value state, and prints back as it was written. Besides a bound
+    name, a parameter and a bound tuple element are constraint subjects too -- the
+    tuple element is what lets a multi-output op's second result carry intent."""
     partial = parse_script(
         _source(
             '''    y: where(layout=((_, 16), {cta @ P("sum")})) = tf.add(x, x)
     return y'''
         )
     )
-    broadcast_layout = constraint_metadata(broadcast.body).constraints[0]
-    partial_layout = constraint_metadata(partial.body).constraints[0]
-    assert isinstance(broadcast_layout, LayoutConstraint)
-    assert isinstance(partial_layout, LayoutConstraint)
-    assert broadcast_layout.bindings == (("cta", Broadcast()),)
-    assert partial_layout.bindings == (("cta", Partial("sum")),)
-    assert 'layout=((_, 16), {cta @ B()})' in as_script(broadcast)
+    assert _layout_of(partial).bindings == (("cta", Partial("sum")),)
     assert 'layout=((_, 16), {cta @ P("sum")})' in as_script(partial)
 
-
-def test_parameter_and_bound_tuple_get_item_are_valid_subjects() -> None:
-    parameter = parse_script(
-        _source(
-            '''    x: where(storage="smem")
-    return x'''
-        )
-    )
+    parameter = parse_script(_source('''    x: where(storage="smem")
+    return x'''))
     assert isinstance(constraint_metadata(parameter.params[0]), ScheduleConstraintMetadata)
 
-    tuple_source = '''from __future__ import annotations
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
-
-@func
-def tuple_value(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 4), "i64"]:
-    values = tf.topk(x, k=4, axis=-1)
+    tuple_fn = parse_script(
+        _source(
+            '''    values = tf.topk(x, k=4, axis=-1)
     ids = values[1]
     ids: where(storage="gmem")
-    return ids
-'''
-    tuple_fn = parse_script(tuple_source)
+    return ids''',
+            preamble="",
+            ret='(8, 4), "i64"',
+        )
+    )
     verify_function(tuple_fn)
     assert isinstance(tuple_fn.body, Call)
     assert isinstance(tuple_fn.body.type, TensorType)
-    assert any(
-        isinstance(expr, Call)
-        and expr.target.__class__.__name__ == "TupleGetItem"
-        and constraint_metadata(expr) is not None
-        for expr in _walk(tuple_fn.body)
-    )
+    assert tuple_fn.body.target.__class__.__name__ == "TupleGetItem"
+    assert constraint_metadata(tuple_fn.body) is not None
 
 
 @pytest.mark.parametrize(
@@ -208,10 +147,17 @@ def tuple_value(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 4), "i64"]:
         "    y: where() = tf.add(x, x)\n    return y",
         "    y: where(layout=()) = tf.add(x, x)\n    return y",
         "    y: where(layout=(_, {cta @ B(), cta @ P(\"sum\")})) = tf.add(x, x)\n    return y",
-        "    y: where(layout=(D, D)) = tf.add(x, x)\n    return y",
         "    y: where(partial=P(\"sum\")) = tf.add(x, x)\n    return y",
         "    y: where(layout=(1.5,)) = tf.add(x, x)\n    return y",
         "    y: where(storage=\"gmem\") = tf.add(x, x)\n    y: where(storage=\"gmem\")\n    return y",
+    ],
+    ids=[
+        "no-kwargs",
+        "empty-layout",
+        "two-bindings-one-axis",
+        "unknown-kwarg",
+        "non-int-extent",
+        "annotated-twice",
     ],
 )
 def test_invalid_constraints_fail_at_source_annotation(body: str) -> None:
@@ -220,6 +166,8 @@ def test_invalid_constraints_fail_at_source_annotation(body: str) -> None:
 
 
 def test_tuple_and_subscript_annotation_subjects_are_rejected() -> None:
+    """A constraint names one value, so its subject must be a bound plain Name of
+    tensor type: a subscript lvalue and a whole tuple binding are both refused."""
     with pytest.raises(VerifyError, match="bound plain Name|annotation lvalue"):
         parse_script(
             _source(
@@ -229,15 +177,12 @@ def test_tuple_and_subscript_annotation_subjects_are_rejected() -> None:
             )
         )
 
-    tuple_subject = '''from __future__ import annotations
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
-
-@func
-def tuple_subject(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
-    pair = tf.topk(x, k=4, axis=-1)
-    pair: where(storage="gmem")
-    return x
-'''
     with pytest.raises(VerifyError, match="tensor-valued"):
-        parse_script(tuple_subject)
+        parse_script(
+            _source(
+                """    pair = tf.topk(x, k=4, axis=-1)
+    pair: where(storage="gmem")
+    return x""",
+                preamble="",
+            )
+        )

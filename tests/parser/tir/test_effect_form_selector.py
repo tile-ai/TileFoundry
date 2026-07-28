@@ -1,9 +1,9 @@
 """Trailing-underscore effect-form selector (parser.md §1.3/§4.6) on the real
 ``@prim_func`` path.
 
-``dispatch.resolve_callable`` implements the ``foo_`` convention, but only
-``tests/core/test_op_registry.py`` exercised it directly before this — the
-actual parser never routed a callee through it. This locks the selector
+``dispatch.resolve_callable`` implements the ``foo_`` convention, but the actual
+parser never routed a callee through it, so the convention had no witness on the
+real parser path before this test. This locks the selector
 against the real ``_TirBodyVisitor`` entry point: a bare ``copy_(...)`` call,
 unresolved through the closure, strips the trailing underscore and resolves
 `Copy` through the T-dialect registry directly, producing the same

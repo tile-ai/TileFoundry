@@ -4,10 +4,14 @@ Covers:
 - ``T.cuda.mma.atom(op=...)`` builds an ``MmaAtom`` exposing A/B/C layout
   contracts (the pinned fragment shards) and a required thread scope;
 - in a ``@prim_func`` body, ``op = ...`` / ``atom = ...`` are compile-time
-  static bindings — no ``LetStmt`` is emitted — and a module-level alias is
-  the same value;
-- ``atom.A`` (a fragment layout) used to alloc a register tensor is checked
-  at the use point against the enclosing mesh scope.
+  static bindings — no ``LetStmt`` is emitted;
+- ``atom.A`` (a fragment layout) used to alloc a register tensor is checked at
+  the use point against the enclosing mesh scope. That check is
+  ``mesh_scope_matches_required_scope``, which matches on thread participation
+  (program level + static lane count + the exact required thread-value layout
+  shape and strides) and ignores binding-var names, axis names and mesh
+  identity; the cases below are its accept/reject categories seen through the
+  surface that uses it.
 """
 from __future__ import annotations
 
@@ -23,27 +27,47 @@ from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.storage import StorageKind
 
 # Module-level pre-instantiated alias (equivalent to building it inline).
-_OP = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
-_ATOM = T.cuda.mma.atom(op=_OP)
+_ATOM = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
 
 
-# --- namespace resolution + descriptors ---------------------------------
+def _alloc_frag_kernel(topology, mesh_layout, names=()):
+    """A kernel that allocs a fragment via `atom.A` inside the given scope."""
+    def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
+        atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
+        with Mesh(topology, mesh_layout, names=names) as warp:  # noqa: F841
+            frag = T.alloc_tensor(  # noqa: F841
+                TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A,
+                           storage=StorageKind.RMEM)
+            )
+    return kernel
 
 
-def test_atom_builder_exposes_layout_contract_and_scope() -> None:
+def _first_alloc_layout(prim_fn) -> ShardLayout:
+    """Pull the ShardLayout off the single alloc'd fragment inside the kernel's
+    mesh scope."""
+    mesh_scope = next(s for s in prim_fn.body.body if isinstance(s, MeshScope))
+    let = next(s for s in mesh_scope.body.body if isinstance(s, LetStmt))
+    return let.var.type.layout
+
+
+def test_a_valid_scope_takes_the_atom_contract_as_is() -> None:
+    """A/B/C and ``required_scope`` are the atom's contracts, canonical across
+    builds — the resolver returns the same fragment objects rather than rebinding
+    them to a caller mesh. A valid (4,8)/(1,4) thread(32) scope passes the
+    use-point check whatever its axes are named, and the alloc'd fragment carries
+    the atom's own layout unchanged."""
     atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
     assert isinstance(atom, MmaAtom)
-    # A/B/C are the atom's layout contracts (the pinned fragment shards),
-    # returned as-is — not rebound to any caller mesh. A second build shares
-    # the same shard objects (the resolver returns the canonical fragments).
-    assert atom.A is _ATOM.A
-    assert atom.B is _ATOM.B
-    assert atom.C is _ATOM.C
-    # required_scope is the thread participation contract (32 lanes as (4,8)).
+    assert (atom.A, atom.B, atom.C) == (_ATOM.A, _ATOM.B, _ATOM.C)
     assert atom.required_scope is _ATOM.required_scope
 
-
-# --- compile-time static binding in a @prim_func body -------------------
+    kernel = prim_func(target="cuda")(
+        _alloc_frag_kernel(
+            Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4)),
+            names=("warp", "lane"),
+        )
+    )
+    assert _first_alloc_layout(kernel) is _ATOM.A
 
 
 def test_infunc_op_and_atom_emit_no_letstmt() -> None:
@@ -60,83 +84,31 @@ def test_infunc_op_and_atom_emit_no_letstmt() -> None:
     assert kernel.body.body == ()
 
 
-# --- atom.A use-point scope check (check, not bind) ---------------------
-#
-# `atom.A` is returned as-is (the atom's layout contract). The parser checks at
-# the use point that the enclosing mesh scope can host the atom — structurally,
-# independent of binding/axis names. The match is the same predicate `T.mma`
-# verify reuses.
-
-
-def _first_alloc_layout(prim_fn) -> ShardLayout:
-    """Pull the ShardLayout off the single alloc'd fragment inside the kernel's
-    mesh scope."""
-    mesh_scope = next(s for s in prim_fn.body.body if isinstance(s, MeshScope))
-    let = next(s for s in mesh_scope.body.body if isinstance(s, LetStmt))
-    return let.var.type.layout
-
-
-def _alloc_frag_kernel(topology, mesh_layout):
-    """A kernel that allocs a fragment via `atom.A` inside the given scope."""
-    def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
-        atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
-        with Mesh(topology, mesh_layout) as warp:  # noqa: F841
-            frag = T.alloc_tensor(  # noqa: F841
-                TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A,
-                           storage=StorageKind.RMEM)
-            )
-    return kernel
-
-
-def test_atom_A_in_valid_warp_scope_returns_layout_as_is() -> None:
-    """A valid (4,8)/(1,4) thread(32) scope passes the check; `atom.A` is the
-    atom's contract layout, returned unchanged (no rebind)."""
-    kernel = prim_func(target="cuda")(
-        _alloc_frag_kernel(
-            Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))
-        )
-    )
-    assert _first_alloc_layout(kernel) is _ATOM.A
-
-
-def test_atom_A_rejects_flat_32_scope() -> None:
-    """A flat (32,) scope cannot host the 2-axis (4,8) fragment → reject."""
+@pytest.mark.parametrize(
+    ("topology", "layout"),
+    [
+        (Topology("thread", 32), Layout(shape=(32,), strides=(1,))),
+        (Topology("thread", 32), Layout(shape=(4, 8), strides=(8, 1))),
+        (Topology("cta", 32), Layout(shape=(4, 8), strides=(1, 4))),
+        (Topology("thread", 64), Layout(shape=(8, 8), strides=(1, 8))),
+        (Topology("thread", 64), Layout(shape=(4, 8), strides=(1, 4))),
+    ],
+    ids=[
+        "flat-32-lanes",
+        "wrong-lane-order",
+        "cta-not-thread",
+        "wrong-lane-count",
+        "inconsistent-mesh",
+    ],
+)
+def test_a_scope_that_cannot_host_the_fragment_is_rejected(topology, layout) -> None:
+    """Five distinct ways a scope fails the thread-participation match: a flat
+    (32,) scope cannot host the 2-axis (4,8) fragment; the right shape in the
+    wrong lane order is a different thread-value decomposition; a `cta` scope is
+    not a warp scope however it is shaped; 64 lanes do not match a 32-lane atom;
+    and a thread(64) topology carrying a 32-element layout is malformed."""
     with pytest.raises(VerifyError, match="required thread scope"):
-        prim_func(target="cuda")(
-            _alloc_frag_kernel(
-                Topology("thread", 32), Layout(shape=(32,), strides=(1,))
-            )
-        )
-
-
-def test_atom_A_rejects_cta_scope() -> None:
-    """A `cta` scope (even with a (4,8) layout) is not a warp scope → reject."""
-    with pytest.raises(VerifyError, match="required thread scope"):
-        prim_func(target="cuda")(
-            _alloc_frag_kernel(
-                Topology("cta", 32), Layout(shape=(4, 8), strides=(1, 4))
-            )
-        )
-
-
-def test_atom_A_rejects_wrong_thread_count() -> None:
-    """A 64-lane thread scope does not match the 32-lane atom → reject."""
-    with pytest.raises(VerifyError, match="required thread scope"):
-        prim_func(target="cuda")(
-            _alloc_frag_kernel(
-                Topology("thread", 64), Layout(shape=(8, 8), strides=(1, 8))
-            )
-        )
-
-
-def test_atom_A_rejects_inconsistent_thread_mesh() -> None:
-    """A thread(64) topology carrying a 32-element layout is malformed → reject."""
-    with pytest.raises(VerifyError, match="required thread scope"):
-        prim_func(target="cuda")(
-            _alloc_frag_kernel(
-                Topology("thread", 64), Layout(shape=(4, 8), strides=(1, 4))
-            )
-        )
+        prim_func(target="cuda")(_alloc_frag_kernel(topology, layout))
 
 
 def test_atom_A_outside_mesh_scope_is_rejected() -> None:

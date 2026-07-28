@@ -1,82 +1,28 @@
-"""DSL parsing — happy-path uses the real ``@func`` decorator (returns ``hir.Function``).
+"""Tuple-literal inputs on the DSL call surface.
 
-Negative / error-diagnostic tests live in ``tests/parser/test_errors.py``
-where dynamic source-string + ``pytest.raises`` is the natural fit.
+An op input is normally a single value; ``insert_slice.offsets`` is the one
+param kind that declares a per-axis tuple literal instead. The pair of tests
+below is that opening and its containment: the declaring param parses the
+literal to a core ``Tuple`` of rank-0 scalars, and any other tensor input keeps
+rejecting one.
+
+The typical op-call shapes (``relu(x)`` / ``add(a, b)`` / ``matmul(a, b)`` and
+the ``tf.<op>`` namespace form) are exercised by the real-model corpus, which
+prints, re-imports and evaluates them. Error diagnostics for the wider DSL
+surface live in ``test_parse_errors.py``.
 """
 
 from __future__ import annotations
 
+import pytest
+
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.core import Call, Tuple
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.hir.nn.relu import ReLU
+from tilefoundry.ir.core import Call, Tuple, VerifyError
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType
-
-# ── Typical op shapes via real @func authoring ───────────────────────────
-
-
-@func
-def _relu_call(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
-    return relu(x)
-
-
-@func
-def _add_call(
-    a: Tensor[(8,), "f32"], b: Tensor[(8,), "f32"],
-) -> Tensor[(8,), "f32"]:
-    return add(a, b)
-
-
-@func
-def _matmul_call(
-    a: Tensor[(4, 8), "f32"], b: Tensor[(8, 16), "f32"],
-) -> Tensor[(4, 16), "f32"]:
-    return matmul(a, b)
-
-
-def test_parse_typical_op_call_shapes() -> None:
-    """``relu(x)`` / ``add(a, b)`` / ``matmul(a, b)`` parse to the
-    expected ``Call(target=Op, args=...)`` IR shape."""
-    body = _relu_call.body
-    assert isinstance(body, Call) and isinstance(body.target, ReLU)
-
-    body = _add_call.body
-    assert isinstance(body, Call) and isinstance(body.target, Binary)
-    assert body.target.kind is BinaryKind.ADD
-    assert len(body.args) == 2
-
-    body = _matmul_call.body
-    assert isinstance(body, Call) and isinstance(body.target, MatMul)
-
-
-# ── Namespace callee form (``tf.add(...)`` / ``T.copy(...)``) ───────────
-
-
-from tilefoundry.dsl import tf  # noqa: E402  -- test fixture closure capture
-from tilefoundry.ir.core.kinds import BinaryKind  # noqa: E402
-from tilefoundry.ir.hir.math.binary import Binary  # noqa: E402
-
-
-@func
-def _tf_namespace_add(
-    a: Tensor[(8,), "f32"], b: Tensor[(8,), "f32"],
-) -> Tensor[(8,), "f32"]:
-    return tf.add(a, b)
-
-
-def test_parse_tf_namespace_attribute_callee() -> None:
-    """``tf.add(a, b)`` parses to the same kinded ``Binary`` Call as
-    the bare ``add(a, b)`` form."""
-    body = _tf_namespace_add.body
-    assert isinstance(body, Call) and isinstance(body.target, Binary)
-    assert body.target.kind is BinaryKind.ADD
-    assert len(body.args) == 2
-
-
-# ── insert_slice rank-N per-axis offset tuple surface ────────────────────
+from tilefoundry.parser.hir_parser import parse_script
 
 
 @func
@@ -105,11 +51,6 @@ def test_tuple_input_rejected_for_non_offsets_param() -> None:
     """Containment: the tuple-literal input path is open ONLY for a param that
     declares it (``insert_slice.offsets``). A tuple literal bound to any other
     op's plain tensor input keeps the pre-existing rejection."""
-    import pytest  # noqa: PLC0415
-
-    from tilefoundry.ir.core import VerifyError  # noqa: PLC0415
-    from tilefoundry.parser.hir_parser import parse_script  # noqa: PLC0415
-
     bad = """
 from tilefoundry import func
 from tilefoundry.dsl.tf import *

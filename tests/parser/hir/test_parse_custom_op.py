@@ -1,12 +1,10 @@
 """Custom Op parse integration — a real ``@func`` calls a registered op.
 
 The registration/dispatch mechanics for ``@register_op`` (registry +
-schema landing, bare-name ``resolve_op`` lookup) live in
-``tests/core/test_custom_op_register.py``. This file exercises the
-parser end of that contract: a custom op registered via
+schema landing, bare-name ``resolve_op`` lookup) are the registry's own
+contract. This file exercises the parser end of it: a custom op registered via
 ``@register_op`` is callable from a real ``@func`` body and resolves to
-the custom ``Op`` class as the parsed ``Call`` target on
-````.
+the custom ``Op`` class as the parsed ``Call`` target.
 """
 
 from __future__ import annotations
