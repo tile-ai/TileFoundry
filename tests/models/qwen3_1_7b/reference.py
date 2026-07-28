@@ -116,13 +116,107 @@ def appended_cache_oracle(inputs: DecodeStepInputs) -> tuple[torch.Tensor, torch
     )
 
 
+
+
+@dataclass(frozen=True)
+class DecoderStepInputs:
+    """One drawn step of the complete decoder, and the stack behind it."""
+
+    model: object
+    ctx_len: int
+    hidden_ctx: torch.Tensor
+    hidden_new: torch.Tensor
+    caches: list
+    weights: list
+    cos_cache: torch.Tensor
+    sin_cache: torch.Tensor
+    pos_ids: torch.Tensor
+    scale: torch.Tensor
+
+    @property
+    def args(self) -> tuple:
+        """What `run_decoder_step` passes on, for the wiring check to count."""
+        return (
+            self.hidden_new, self.cos_cache, self.sin_cache, self.pos_ids,
+            self.scale, self.weights, self.caches,
+        )
+
+
+def decoder_step_inputs(*, ctx_len: int = CTX_LEN, device: str = "cuda"):
+    """One decode step of the complete decoder, over a *ctx_len*-token context.
+
+    The whole stack, so the drawn problem is per layer: each layer's weights and
+    each layer's own cache, in layer order. Built from a decoder whose layers are
+    the production count, because layer order and the residual thread between
+    layers are the things this boundary exists to observe.
+    """
+    model = config.build_hf_decoder(seed=WEIGHT_SEED, device=device)
+    torch.manual_seed(ACTIVATION_SEED)
+    drawn = torch.randn(1, ctx_len + 1, config.REAL.hidden, device=device) * 0.1
+    hidden_ctx, hidden_new = drawn[:, :ctx_len], drawn[:, ctx_len:]
+
+    cfg = config.build_hf_config()
+    cos_cache, sin_cache = config.rope_caches(cfg, config.REAL.max_pos, device=device)
+    return DecoderStepInputs(
+        model=model,
+        ctx_len=ctx_len,
+        hidden_ctx=hidden_ctx,
+        hidden_new=hidden_new,
+        caches=config.decoder_context_kv(model, hidden_ctx, device=device),
+        weights=[_layer_weights(layer) for layer in model.layers],
+        cos_cache=cos_cache,
+        sin_cache=sin_cache,
+        pos_ids=torch.tensor([ctx_len], device=device, dtype=torch.int32),
+        scale=torch.full(
+            (1, 1, 1, 1), model.layers[0].self_attn.scaling, device=device
+        ),
+    )
+
+
+def _layer_weights(layer) -> tuple:
+    """One layer's weights, in the order its decode step takes them."""
+    attention, mlp = layer.self_attn, layer.mlp
+    return (
+        layer.input_layernorm.weight,
+        config.linear_weight(attention.q_proj),
+        config.linear_weight(attention.k_proj),
+        config.linear_weight(attention.v_proj),
+        attention.q_norm.weight,
+        attention.k_norm.weight,
+        config.linear_weight(attention.o_proj),
+        layer.post_attention_layernorm.weight,
+        config.linear_weight(mlp.gate_proj),
+        config.linear_weight(mlp.up_proj),
+        config.linear_weight(mlp.down_proj),
+    )
+
+
+def run_decoder_step(inputs: DecoderStepInputs):
+    """The complete decoder over *inputs*, through the Evaluator."""
+    from tests.models.qwen3_1_7b.decoder import build_decoder  # noqa: PLC0415
+
+    decoder = build_decoder().bind_final_norm(inputs.model.norm.weight)
+    return decoder.forward(*inputs.args)
+
+
+def decoder_step_oracle(inputs: DecoderStepInputs) -> torch.Tensor:
+    """What Hugging Face's own stack produces for the same drawn step."""
+    return config.decoder_decode_reference(
+        inputs.model, inputs.hidden_ctx, inputs.hidden_new
+    )
+
+
 __all__ = [
     "ACTIVATION_SEED",
     "CTX_LEN",
     "DEVICE",
     "WEIGHT_SEED",
     "DecodeStepInputs",
+    "DecoderStepInputs",
     "appended_cache_oracle",
     "decode_step_inputs",
     "decode_step_oracle",
+    "decoder_step_inputs",
+    "decoder_step_oracle",
+    "run_decoder_step",
 ]

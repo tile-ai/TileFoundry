@@ -174,11 +174,28 @@ class ReferenceCase:
 
     id: str
     boundary: str
-    entry: str
     inputs: Callable[..., object]
     oracle: Callable[..., object]
+    entry: str | None = None
+    runner: Callable[..., object] | None = None
     problem_sizes: tuple[str, ...] = ()
     gate: CapabilityGate = field(default_factory=CapabilityGate)
+
+    def __post_init__(self) -> None:
+        """Exactly one way of saying what runs.
+
+        `entry` names one Function of the model's own Module, which is checkable
+        against that Function's parameters. `runner` is for a boundary that is not
+        one Function -- a whole decoder is a tree of them, walked by an
+        orchestration method -- and then the arity of a single signature is not a
+        thing to check. Neither stated leaves the reference describing nothing;
+        both stated leaves two answers to what ran.
+        """
+        if (self.entry is None) == (self.runner is None):
+            raise ValueError(
+                f"{self.id}: state exactly one of entry (one Function of the "
+                f"model's Module) or runner (a boundary that is not one Function)"
+            )
 
 
 @dataclass(frozen=True)

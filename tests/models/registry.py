@@ -43,8 +43,9 @@ from tests.models.qwen3_1_7b.reference import (
     CTX_LEN as QWEN3_1_7B_CTX_LEN,
 )
 from tests.models.qwen3_1_7b.reference import (
-    decode_step_inputs,
-    decode_step_oracle,
+    decoder_step_inputs,
+    decoder_step_oracle,
+    run_decoder_step,
 )
 
 #: The context length the cache-reading functions are asked about at. A decode
@@ -59,11 +60,15 @@ QWEN3_1_7B = ModelCase(
     entry="Qwen3_1_7B",
     namespace={"config": QWEN3_1_7B_SHAPE},
     reference=ReferenceCase(
-        id="qwen3_1_7b/reference/decoder_layer",
-        boundary="one decode step of a complete decoder layer, at production dimensions",
-        entry="decoder_layer",
-        inputs=decode_step_inputs,
-        oracle=decode_step_oracle,
+        id="qwen3_1_7b/reference/full_decoder_decode",
+        boundary=(
+            "one decode step of the complete decoder -- every layer in order, "
+            "the residual threaded between them and the final norm closing the "
+            "stack -- at production dimensions"
+        ),
+        inputs=decoder_step_inputs,
+        oracle=decoder_step_oracle,
+        runner=run_decoder_step,
         problem_sizes=(f"decode/ctx_len={QWEN3_1_7B_CTX_LEN}",),
     ),
     analyze=(

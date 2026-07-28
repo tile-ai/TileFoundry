@@ -323,8 +323,17 @@ def test_the_reference_entry_is_wired_to_the_function_it_names() -> None:
         reference = model.reference
         assert reference is not None, f"{model.id} declares no reference"
         assert reference.boundary.strip(), f"{reference.id} states no boundary"
-        assert reference.entry in model.inventory()
+        assert callable(reference.oracle)
 
+        if reference.entry is None:
+            # A boundary that is not one Function says how it runs instead, and
+            # there is no single signature to measure the drawn arguments against.
+            assert callable(reference.runner), (
+                f"{reference.id} names no entry function and no runner"
+            )
+            continue
+
+        assert reference.entry in model.inventory()
         built = model.build()
         entry = built.lookup(reference.entry)
         drawn = reference.inputs()
@@ -332,7 +341,6 @@ def test_the_reference_entry_is_wired_to_the_function_it_names() -> None:
             f"{reference.id} draws {len(drawn.args)} arguments for "
             f"{reference.entry!r}, which takes {len(entry.params)}"
         )
-        assert callable(reference.oracle)
 
 
 _BLOCKED_CASE = '''
