@@ -33,8 +33,20 @@ def _selected() -> list[tuple[ModelCase, ReferenceCase]]:
 
 
 def _cases() -> list[object]:
+    """Every selected reference, each carrying its own gate's expectation.
+
+    A blocked reference re-raises the failure its gate states, so without the mark
+    the runner records a plain failure and the block reads as a defect. `AssertionError`
+    is the kind, because that is what a comparison that does not hold raises and a
+    blocked reference states its limit the same way.
+    """
     return [
-        pytest.param(model, reference, id=reference.id.replace("/", "-"))
+        pytest.param(
+            model,
+            reference,
+            id=reference.id.replace("/", "-"),
+            marks=reference.gate.expected_failure(expect=AssertionError),
+        )
         for model, reference in _selected()
     ]
 
@@ -74,14 +86,20 @@ def test_each_model_matches_its_oracle(model: ModelCase, reference: ReferenceCas
     torch.testing.assert_close(got.float(), want.float(), atol=ATOL, rtol=RTOL)
 
 
-def test_the_report_shows_a_reference_row_per_model() -> None:
-    """What ran appears under `Reference`, named by its boundary's own case id."""
+def test_the_report_shows_every_reference_boundary_under_its_model() -> None:
+    """What ran appears under `Reference`, named by its boundary's own case id.
+
+    One row per *model*, and a model described by several Modules contributes one
+    reference row per boundary to that single row. Asserted as the whole set rather
+    than one boundary at a time, so a model whose second boundary silently stopped
+    being reported fails here.
+    """
     fixture = ACCEPTANCE()
     collector = CoverageCollector()
     for model, reference in _selected():
         collector.record_gate(
             reference.gate,
-            model=model.id,
+            model=model.model,
             target=fixture.id,
             kind="reference",
             case=reference.id,
@@ -90,9 +108,13 @@ def test_the_report_shows_a_reference_row_per_model() -> None:
 
     report = build_report(collector, CORPUS)
 
+    expected: dict[str, list[str]] = {}
     for model, reference in _selected():
-        rows = report[model.id]["targets"][fixture.id]["reference"]
-        assert [row["case"] for row in rows] == [reference.id]
+        expected.setdefault(model.model, []).append(reference.id)
+
+    for model_id, boundaries in expected.items():
+        rows = report[model_id]["targets"][fixture.id]["reference"]
+        assert [row["case"] for row in rows] == boundaries
 
 
 @pytest.mark.skipif(_NEEDS_DEVICE, reason="references run at production dimensions")
@@ -105,7 +127,13 @@ def test_a_wrong_result_would_fail_this_comparison() -> None:
     rejected is the part that would have caught it, so it is asserted here rather
     than left to the passing case to imply.
     """
-    model, reference = _selected()[0]
+    # An ungated one, named as such rather than taken by position: a blocked
+    # reference has no value to hand back, so this would be asserting nothing.
+    model, reference = next(
+        (model, reference)
+        for model, reference in _selected()
+        if not reference.gate.blocked
+    )
     drawn = reference.inputs()
 
     got = reference.gate.hold(

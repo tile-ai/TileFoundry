@@ -72,13 +72,20 @@ def test_every_selected_function_plans_or_says_what_stopped_it(
 
 def test_the_functions_no_partition_can_take_are_untested_not_blocked() -> None:
     """The algorithm admits one function per module, so the others were never
-    selected. Reporting them as blocked would claim they were tried."""
+    selected. Reporting them as blocked would claim they were tried.
+
+    Counted rather than merely non-empty: every function of the Module except its
+    entry has to appear, so a Module whose leaves stopped being reported fails here
+    and a Module whose only function is its entry -- which has no leaves to report
+    -- is not made to invent one.
+    """
     for model in CORPUS:
         module = model.build()
         entry = module.entry_function().name
+        untested = model.untested("schedule", module)
         assert model.selected("schedule") == (entry,)
-        assert entry not in model.untested("schedule")
-        assert model.untested("schedule")
+        assert entry not in untested
+        assert len(untested) == len(model.inventory(module)) - 1
 
 
 def test_the_report_separates_what_ran_from_what_nobody_selected() -> None:
@@ -87,7 +94,7 @@ def test_the_report_separates_what_ran_from_what_nobody_selected() -> None:
     for model, _, case in _selected():
         collector.record_gate(
             case.gate,
-            model=model.id,
+            model=model.model,
             target=fixture.id,
             kind="schedule",
             case=case.id,

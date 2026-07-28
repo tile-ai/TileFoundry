@@ -162,7 +162,7 @@ def test_a_case_that_cannot_be_resolved_says_so() -> None:
 
 def test_the_registry_resolves_its_own_ids() -> None:
     assert case("qwen3_1_7b") is QWEN3_1_7B
-    with pytest.raises(KeyError, match="no model case 'nope'"):
+    with pytest.raises(KeyError, match="no case 'nope'"):
         case("nope")
 
 
@@ -319,10 +319,21 @@ def test_the_reference_entry_is_wired_to_the_function_it_names() -> None:
 
     The arity check is the part that rots otherwise: a parameter added to the
     model would leave the reference silently calling the wrong shape until
-    somebody ran it."""
+    somebody ran it.
+
+    The requirement is per *model*, not per Module: a model described by several
+    Modules must be held to an oracle somewhere, and a Module whose own boundary is
+    measured in its package's tests rather than here says so at its case. Requiring
+    one on every Module would push a boundary into the harness for the sake of the
+    count, which is how a harness ends up running an oracle nobody wanted."""
+    declared = {model.model for model in CORPUS if model.reference is not None}
+    missing = {model.model for model in CORPUS} - declared
+    assert not missing, f"these models declare no reference at all: {sorted(missing)}"
+
     for model in CORPUS:
         reference = model.reference
-        assert reference is not None, f"{model.id} declares no reference"
+        if reference is None:
+            continue
         assert reference.boundary.strip(), f"{reference.id} states no boundary"
         assert callable(reference.oracle)
 
@@ -395,17 +406,20 @@ def test_being_listed_is_what_puts_a_model_in_the_corpus() -> None:
 
     The list is written out rather than read off the filesystem, so this checks
     the two ways that can go wrong: a package named and not ready, and a case
-    whose id points at something a reader cannot go and open.
+    whose model points at something a reader cannot go and open.
+
+    A package may state several cases, one per Module it selects from, so what has
+    to match the list is the set of models the cases name -- in order, because the
+    order the report is read in is the order the list is written in.
     """
     from tests.models.registry import MODELS  # noqa: PLC0415
 
     assert MODELS, "the corpus names no models"
-    assert [model.id for model in CORPUS] == list(MODELS)
+    assert list(dict.fromkeys(model.model for model in CORPUS)) == list(MODELS)
     for model in CORPUS:
-        assert (MODELS_ROOT / model.id).is_dir(), (
-            f"{model.id} is in the corpus and has no package"
+        assert (MODELS_ROOT / model.model).is_dir(), (
+            f"{model.model} is in the corpus and has no package"
         )
-        assert model.reference is not None, f"{model.id} declares no reference"
 
 
 def test_a_package_that_states_no_case_is_refused() -> None:
@@ -422,8 +436,8 @@ def test_a_package_that_states_no_case_is_refused() -> None:
     name = "tests.models._nothing_here.case"
     sys.modules[name] = types.ModuleType(name)
     try:
-        with pytest.raises(TypeError, match="must state CASE"):
-            registry._case("_nothing_here")
+        with pytest.raises(TypeError, match="must state CASES"):
+            registry._cases("_nothing_here")
     finally:
         del sys.modules[name]
 

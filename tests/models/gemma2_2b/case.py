@@ -103,4 +103,8 @@ CASE = ModelCase(
     ),
 )
 
-__all__ = ["ANALYZED_AT", "CASE"]
+#: What the registry collects from this package. This model is one Module, so
+#: there is one case, and it names itself as its own model.
+CASES = (CASE,)
+
+__all__ = ["ANALYZED_AT", "CASE", "CASES"]

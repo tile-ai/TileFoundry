@@ -5,6 +5,10 @@ A model appears here once; what its package does not select is untested, and the
 report derives that from the model's own function inventory rather than from a
 second list somebody has to remember to update.
 
+A package states one case per Module it selects from -- one for most models, three
+for a hybrid stack whose token mixers are separate Modules. Every case names its
+package as its model, so the report is one row per model regardless.
+
 The names are written out rather than discovered from the filesystem. A directory
 appearing in the corpus because it exists would make "in the corpus" an accident
 of layout, and a model half-written would join it silently. Naming it here is the
@@ -47,43 +51,67 @@ MODELS: tuple[str, ...] = (
     "gemma2_2b",
     "minicpm3_4b",
     "deepseek_v4_flash",
+    "qwen3_5_35b_a3b",
+    "kimi_linear_48b_a3b",
 )
 
 
-def _case(package: str) -> ModelCase:
-    """The `CASE` the named package states.
+def _cases(package: str) -> tuple[ModelCase, ...]:
+    """The `CASES` the named package states, one per Module it selects from.
 
     Imported by name, so a package that is listed and states none fails loudly
     here rather than being skipped -- being listed is what puts a model in the
     corpus, and a listed model contributing nothing would read as a model with
     nothing to select.
+
+    A model whose kernels live in more than one Module states more than one case,
+    because a Module is the execution domain of the functions it owns and analysis
+    selects functions of one Module. Every one of them names *this* package as its
+    model, so the report stays one row per model however many Modules that took.
     """
     module = importlib.import_module(f"tests.models.{package}.case")
-    case = getattr(module, "CASE", None)
-    if not isinstance(case, ModelCase):
+    cases = getattr(module, "CASES", None)
+    if not isinstance(cases, tuple) or not cases:
         raise TypeError(
-            f"tests.models.{package}.case must state CASE as a ModelCase, "
-            f"got {type(case).__name__}"
+            f"tests.models.{package}.case must state CASES as a non-empty tuple "
+            f"of ModelCase, got {type(cases).__name__}"
         )
-    if case.id != package:
-        raise ValueError(
-            f"tests.models.{package}.case states id {case.id!r}; a model's case "
-            f"id must be the package that holds it, so a report row names "
-            f"something a reader can go and open"
-        )
-    return case
+    for case in cases:
+        if not isinstance(case, ModelCase):
+            raise TypeError(
+                f"tests.models.{package}.case states a "
+                f"{type(case).__name__} in CASES, not a ModelCase"
+            )
+        if case.model != package:
+            raise ValueError(
+                f"tests.models.{package}.case states a case whose model is "
+                f"{case.model!r}; every case a package states must name that "
+                f"package as its model, so a report row names something a reader "
+                f"can go and open"
+            )
+    return cases
 
 
-CORPUS: tuple[ModelCase, ...] = tuple(_case(package) for package in MODELS)
+CORPUS: tuple[ModelCase, ...] = tuple(
+    case for package in MODELS for case in _cases(package)
+)
 
 
-def case(model_id: str) -> ModelCase:
-    """The one model case called *model_id*."""
+def case(case_id: str) -> ModelCase:
+    """The one case called *case_id*."""
     for model in CORPUS:
-        if model.id == model_id:
+        if model.id == case_id:
             return model
     known = ", ".join(model.id for model in CORPUS)
-    raise KeyError(f"no model case {model_id!r} in the corpus; it holds {known}")
+    raise KeyError(f"no case {case_id!r} in the corpus; it holds {known}")
 
 
-__all__ = ["CORPUS", "MODELS", "case"]
+def cases_of(model_id: str) -> tuple[ModelCase, ...]:
+    """Every case the model called *model_id* states, in the order it states them."""
+    found = tuple(model for model in CORPUS if model.model == model_id)
+    if not found:
+        raise KeyError(f"no model {model_id!r} in the corpus; it holds {MODELS}")
+    return found
+
+
+__all__ = ["CORPUS", "MODELS", "case", "cases_of"]

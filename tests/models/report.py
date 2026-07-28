@@ -107,18 +107,30 @@ def build_report(
 ) -> dict[str, object]:
     """Group what ran under `model -> target -> reference / analyze / schedule`.
 
-    `untested` is computed per model from its built inventory, so it answers "what
-    did nobody look at" rather than "what did somebody remember to list".
+    One row per model, not per Module. A model described by several Modules -- a
+    hybrid stack's two token mixers and its expert block are three execution
+    domains -- still answers one question, "does this model work on this machine",
+    and splitting it into three rows would answer that three times and count one
+    model as three.
+
+    `untested` is computed per model from its built inventories, so it answers
+    "what did nobody look at" rather than "what did somebody remember to list".
     """
     report: dict[str, object] = {}
     by_model: dict[str, list[CaseResult]] = {}
     for result in collector.results:
         by_model.setdefault(result.model, []).append(result)
 
-    for model in corpus:
-        inventory = model.inventory()
+    models: dict[str, list[ModelCase]] = {}
+    for case in corpus:
+        models.setdefault(case.model, []).append(case)
+
+    for model_id, cases in models.items():
+        inventory = tuple(
+            dict.fromkeys(name for case in cases for name in case.inventory())
+        )
         targets: dict[str, object] = {}
-        for result in by_model.get(model.id, ()):
+        for result in by_model.get(model_id, ()):
             targets.setdefault(
                 result.target,
                 {
@@ -130,7 +142,7 @@ def build_report(
             )
         for name, section in targets.items():
             executed = [
-                result for result in by_model.get(model.id, ()) if result.target == name
+                result for result in by_model.get(model_id, ()) if result.target == name
             ]
             section["reference"] = [
                 _row(result) for result in executed if result.kind == "reference"
@@ -146,7 +158,7 @@ def build_report(
                 section[kind]["untested"] = [
                     function for function in inventory if function not in covered
                 ]
-        report[model.id] = {"inventory": list(inventory), "targets": targets}
+        report[model_id] = {"inventory": list(inventory), "targets": targets}
     return report
 
 

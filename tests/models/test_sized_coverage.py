@@ -21,6 +21,8 @@ from tests.models.registry import CORPUS
 from tests.models.report import CoverageCollector, build_report
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.specialize import dim_vars_reached
 
 
 def _selected() -> list[tuple[ModelCase, TargetFixture, SizedCase]]:
@@ -57,11 +59,35 @@ def test_each_model_is_asked_at_a_size_or_says_what_stops_it(
     )
 
 
-def test_every_model_is_asked_this_question() -> None:
+def test_every_model_with_an_open_dimension_is_asked_this_question() -> None:
     """A model that answered it and a model that cannot both have to appear.
-    Silence would read as the question never having been put."""
+    Silence would read as the question never having been put.
+
+    Asked only of the models the question applies to, and which those are is
+    measured rather than declared: a Module is asked at a size when some function
+    of it was authored over a range, so the models required to state a `sized` case
+    are exactly the ones whose functions reach a `DimVar`. A recurrent mixer whose
+    state is fixed-size reaches none -- there is no context length to ask it about,
+    which is what a fixed-size state means and not a capability it lacks.
+    """
     for model in CORPUS:
-        assert model.sized, f"{model.id} states nothing about being asked at a size"
+        module = model.build()
+        open_dims = {
+            name
+            for function in module.functions
+            if isinstance(function, Function)
+            for name in dim_vars_reached(function)
+        }
+        if not open_dims:
+            assert not model.sized, (
+                f"{model.id} states a sized case but leaves no dimension open, so "
+                f"the extent it names is not a dimension the model has"
+            )
+            continue
+        assert model.sized, (
+            f"{model.id} leaves {sorted(open_dims)} open and states nothing about "
+            f"being asked at a size"
+        )
 
 
 def test_the_report_keeps_this_apart_from_analysis() -> None:
@@ -78,7 +104,7 @@ def test_the_report_keeps_this_apart_from_analysis() -> None:
     for model, _, case in _selected():
         collector.record_gate(
             case.gate,
-            model=model.id,
+            model=model.model,
             target=fixture.id,
             kind="sized",
             case=case.id,
@@ -88,7 +114,7 @@ def test_the_report_keeps_this_apart_from_analysis() -> None:
         for case in model.analyze:
             collector.record_gate(
                 case.gate,
-                model=model.id,
+                model=model.model,
                 target=fixture.id,
                 kind="analyze",
                 case=case.id,

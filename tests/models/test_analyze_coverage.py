@@ -101,7 +101,7 @@ def test_the_report_states_the_matrix_the_registry_declares() -> None:
     for model, _, case, family in _selected():
         collector.record_gate(
             case.gate,
-            model=model.id,
+            model=model.model,
             target=fixture.id,
             kind="analyze",
             case=f"{case.id}/{family}",

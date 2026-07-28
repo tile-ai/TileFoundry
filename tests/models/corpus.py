@@ -246,11 +246,19 @@ class SizedCase:
 
 @dataclass(frozen=True)
 class ModelCase:
-    """One model, described once, for every kind of test.
+    """One Module of one model, described once, for every kind of test.
 
     `source` is re-executed on every `build()`; `namespace` is what that source
     is parameterised by. `entry` names the attribute the source leaves the Module
     in.
+
+    `id` names this Module's boundary and `model` names the model it belongs to.
+    They differ only for a model whose kernels live in more than one Module -- a
+    hybrid stack's two token mixers are different kernels, not one kernel
+    configured twice, and a Module is the execution domain of the functions it
+    owns, so they cannot be one case. The report groups by `model`, so a model
+    stays one row however many Modules it took to describe. A model with one
+    Module states nothing: `model` defaults to `id`.
     """
 
     id: str
@@ -261,6 +269,11 @@ class ModelCase:
     analyze: tuple[FunctionCase, ...] = ()
     schedule: tuple[FunctionCase, ...] = ()
     sized: tuple[SizedCase, ...] = ()
+    model: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.model:
+            object.__setattr__(self, "model", self.id)
 
     def build(self) -> Module:
         """A Module nothing else holds a reference to.
