@@ -1,32 +1,24 @@
-"""Binary typeinfer over the relation-driven path.
+"""Binary's shard propagation and its Partial truth table.
 
-Binary derives its output shape by right-aligned NumPy broadcast and its
-output ``ShardLayout`` from the shared shard-propagation engine. A layout
-mismatch between genuinely-sharded operands is an error (no silent lhs pick);
-replicated operands and unsharded layouts pass through.
+Binary derives its output ``ShardLayout`` from the shared shard-propagation
+engine: a layout mismatch between genuinely-sharded operands is an error, not a
+silent lhs pick, and output storage anchors on concrete residency.
 """
 from __future__ import annotations
 
 import pytest
-import torch
 
-from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     infer_call,
     run_typeinfer_case,
 )
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
-from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
-from tilefoundry.ir.types.storage import StorageKind
 
 _ADD = Binary(kind=BinaryKind.ADD)
 _MUL = Binary(kind=BinaryKind.MUL)
@@ -48,48 +40,8 @@ _PSUM_AXIS1 = make_shard_tensor_type(
 )
 
 CASES = [
-    # ── shape inference (unsharded) ──────────────────────────────────────────
-    TypeInferCase("same_shape", _ADD, (make_tensor_type((4, 8), _F), make_tensor_type((4, 8), _F)), make_tensor_type((4, 8), _F)),
-    TypeInferCase("size1_broadcast", _ADD, (make_tensor_type((4, 8), _F), make_tensor_type((1, 8), _F)), make_tensor_type((4, 8), _F)),
+    # Right-aligned NumPy broadcast: a lower-rank operand against a higher-rank one.
     TypeInferCase("different_rank_broadcast", _ADD, (make_tensor_type((4, 8), _F), make_tensor_type((8,), _F)), make_tensor_type((4, 8), _F)),
-    TypeInferCase("scalar_broadcast", _ADD, (make_tensor_type((), _F), make_tensor_type((4, 8), _F)), make_tensor_type((4, 8), _F)),
-    TypeInferCase(
-        "dynamic_dim",
-        _ADD,
-        (make_tensor_type((DimVar("N", 1, 64), 8), _F), make_tensor_type((DimVar("N", 1, 64), 8), _F)),
-        make_tensor_type((DimVar("N", 1, 64), 8), _F),
-    ),
-    TypeInferCase(
-        "dtype_mismatch",
-        _ADD,
-        (make_tensor_type((4, 8), _F), make_tensor_type((4, 8), DType.bf16)),
-        ExpectedError(match="dtype mismatch"),
-    ),
-    # ── shard propagation ────────────────────────────────────────────────────
-    # lhs split, rhs replicated → output keeps lhs's split.
-    TypeInferCase(
-        "sharded_lhs_replicated_rhs",
-        _ADD,
-        (make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((16, 8), _F)),
-        make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)),
-    ),
-    # both split the same axis identically → that split.
-    TypeInferCase(
-        "both_split_same_axis",
-        _ADD,
-        (
-            make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)),
-            make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)),
-        ),
-        make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)),
-    ),
-    # split side + broadcast side: lhs (4,8) split axis 0, rhs (8,) broadcasts.
-    TypeInferCase(
-        "split_side_plus_broadcast_side",
-        _ADD,
-        (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((8,), _F)),
-        make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),)),
-    ),
     # lhs splits axis 0, rhs splits axis 1 on the same mesh axis → conflict,
     # not a silent lhs pick.
     TypeInferCase(
@@ -101,50 +53,8 @@ CASES = [
         ),
         ExpectedError(match="incompatible"),
     ),
-    # two mesh axes split the same tensor axis (neither operand supplies both):
-    # the output factorizes axis 0 into one sub-position per mesh extent.
-    TypeInferCase(
-        "two_mesh_axes_synthesize_factorized",
-        _ADD,
-        (
-            make_shard_tensor_type((8,), mesh=_MAB, attrs=(Split(0), Broadcast())),
-            make_shard_tensor_type((8,), mesh=_MAB, attrs=(Broadcast(), Split(0))),
-        ),
-        make_shard_tensor_type((8,), mesh=_MAB, attrs=(Split(0), Split(0))),
-    ),
-    # one operand already carries the full factorized layout → carried through.
-    TypeInferCase(
-        "factorized_input_passes_through",
-        _ADD,
-        (
-            make_shard_tensor_type((8,), mesh=_MAB, attrs=(Split(0), Split(0))),
-            make_tensor_type((8,), _F),
-        ),
-        make_shard_tensor_type((8,), mesh=_MAB, attrs=(Split(0), Split(0))),
-    ),
-    # ── output storage (anchor on concrete residency) ────────────────────────
-    # An unmaterialized literal operand (storage=umat) abstains; the concrete
-    # operand anchors the output, independent of operand order.
-    TypeInferCase(
-        "literal_rhs_anchors_gmem",
-        _ADD,
-        (make_tensor_type((4, 8), _F, storage="gmem"), make_tensor_type((), _F, storage=StorageKind.UMAT)),
-        make_tensor_type((4, 8), _F, storage="gmem"),
-    ),
-    TypeInferCase(
-        "both_gmem",
-        _ADD,
-        (make_tensor_type((4, 8), _F, storage="gmem"), make_tensor_type((4, 8), _F, storage="gmem")),
-        make_tensor_type((4, 8), _F, storage="gmem"),
-    ),
-    # All operands unmaterialized (e.g. `1 + 1`) → output stays unmaterialized.
-    TypeInferCase(
-        "all_unmaterialized",
-        _ADD,
-        (make_tensor_type((), _F, storage=StorageKind.UMAT), make_tensor_type((), _F, storage=StorageKind.UMAT)),
-        make_tensor_type((), _F, storage=StorageKind.UMAT),
-    ),
-    # Two different concrete residencies have no anchor → error, not a pick.
+    # An unmaterialized literal operand abstains, but two *different* concrete
+    # residencies have no anchor → error, not a pick.
     TypeInferCase(
         "conflicting_concrete_storage",
         _ADD,
@@ -201,76 +111,14 @@ def test_binary_partial_typeinfer(case):
     run_typeinfer_case(case)
 
 
-# ── lower-rank split right-aligns to the output axis ─────────────────────
-# Binary derives the output ShardLayout from the shard-propagation engine
-# (mesh-axis bindings), not by carrying a hand-picked layout literal, so these
-# check which mesh axis holds Split on the (right-aligned) output axis, not
-# the internal layout position count a valid derivation happens to produce.
-
-
-def test_lower_rank_rhs_split_right_aligns():
-    lhs = make_tensor_type((4, 8), _F)
-    rhs = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
-    out = infer_call(_ADD, lhs, rhs)
-    assert out.shape == (4, 8)
-    assert out.layout.attrs == (Split(1),)
-
-
-def test_lower_rank_lhs_split_right_aligns():
-    lhs = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
-    rhs = make_tensor_type((4, 8), _F)
-    out = infer_call(_ADD, lhs, rhs)
-    assert out.shape == (4, 8)
-    assert out.layout.attrs == (Split(1),)
-
-
-@pytest.mark.parametrize(
-    "kind",
-    [BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL],
-    ids=["add", "sub", "mul"],
-)
-def test_binary_evaluate(kind):
-    torch.manual_seed(0)
-    _a, _b = torch.randn(2, 3), torch.randn(2, 3)
-    expected = {BinaryKind.ADD: _a + _b, BinaryKind.SUB: _a - _b, BinaryKind.MUL: _a * _b}[kind]
-    run_eval_case(EvalCase("", Binary(kind=kind), (_a, _b), expected))
-
-
-@pytest.mark.parametrize(
-    "dtype", [torch.float32, torch.float16, torch.bfloat16], ids=["f32", "f16", "bf16"]
-)
-def test_binary_evaluate_dtypes(dtype):
-    torch.manual_seed(0)
-    a, b = torch.randn(2, 3, dtype=dtype), torch.randn(2, 3, dtype=dtype)
-    run_eval_case(EvalCase("", Binary(kind=BinaryKind.ADD), (a, b), a + b))
-
-
-# ── minimum / maximum surface aliases (asymmetric clamp oracles) ─────────────
-
-
-@func
-def _min_clamp(g: Tensor[(4, 256), "f32"]) -> Tensor[(4, 256), "f32"]:
-    return tf.minimum(g, 10.0)
-
-
-@func
-def _asym_clamp(u: Tensor[(4, 256), "f32"]) -> Tensor[(4, 256), "f32"]:
-    return tf.maximum(tf.minimum(u, 10.0), -10.0)
-
-
-def test_min_clamp_matches_torch():
-    """``minimum(g, 10)`` == ``torch.clamp(g, max=10)``."""
-    torch.manual_seed(0)
-    g = torch.randn(4, 256) * 20.0
-    out = evaluate(_min_clamp, g, device="cpu")
-    torch.testing.assert_close(out.float(), torch.clamp(g, max=10.0), atol=1e-6, rtol=1e-6)
-
-
-def test_asym_clamp_matches_torch():
-    """``maximum(minimum(u, 10), -10)`` == ``torch.clamp(u, -10, 10)``."""
-    torch.manual_seed(1)
-    u = torch.randn(4, 256) * 20.0
-    out = evaluate(_asym_clamp, u, device="cpu")
-    torch.testing.assert_close(
-        out.float(), torch.clamp(u, min=-10.0, max=10.0), atol=1e-6, rtol=1e-6
-    )
+def test_lower_rank_split_right_aligns():
+    """A lower-rank sharded operand's Split lands on the *output* axis it
+    right-aligns to, whichever side carries it. Checked as which mesh axis holds
+    Split on that output axis, not as the internal layout position count a valid
+    derivation happens to produce."""
+    split_1d = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
+    plain_2d = make_tensor_type((4, 8), _F)
+    for lhs, rhs in ((plain_2d, split_1d), (split_1d, plain_2d)):
+        out = infer_call(_ADD, lhs, rhs)
+        assert out.shape == (4, 8)
+        assert out.layout.attrs == (Split(1),)

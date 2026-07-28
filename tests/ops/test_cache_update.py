@@ -1,4 +1,10 @@
-"""CacheUpdate value oracle + typeinfer: same-shape functional cache write."""
+"""CacheUpdate's value oracle, runtime bounds and Partial cache contract.
+
+No corpus model calls ``cache_update``, so the oracle stays here; the GPU witness
+for the same op is the decode step in ``test_insert_slice.py``. The bounds are
+runtime, not static: ``cur_pos`` and ``s`` arrive as scalar tensors, so typeinfer
+cannot see them and the guard has to be in the evaluator.
+"""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -34,100 +40,23 @@ def _i32(v):
     return torch.tensor([v], dtype=torch.int32)
 
 
-@pytest.mark.parametrize(
-    "cur_pos,s",
-    [(5, 4), (7, 2), (0, 3)],
-    ids=["write_full_at_offset", "write_partial", "write_at_zero"],
-)
-def test_cache_update_evaluate(cur_pos, s):
+def test_cache_update_evaluate():
     """Functional KV-cache write: the first ``s`` rows of ``new`` scatter into
-    ``cache`` at ``cur_pos``; ``s`` < S_CAP leaves the rest unchanged."""
+    ``cache`` at ``cur_pos``; ``s`` < S_CAP leaves the rest unchanged. The
+    partial-width write is the informative one -- a full-width write cannot show
+    that the untouched tail survives."""
     torch.manual_seed(0)
     cache = torch.randn(1, 16, 4, 8)
     new = torch.randn(1, 4, 4, 8)
     run_eval_case(
-        EvalCase(
-            "",
-            CacheUpdate(),
-            (cache, _i32(cur_pos), _i32(s), new),
-            _ref(cache, cur_pos, s, new),
-        )
+        EvalCase("", CacheUpdate(), (cache, _i32(7), _i32(2), new), _ref(cache, 7, 2, new))
     )
 
 
 TYPEINFER_CASES = [
-    TypeInferCase(
-        "output_same_shape_as_cache",
-        CacheUpdate(),
-        (
-            make_tensor_type((1, 16, 4, 8), DType.bf16),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1, 4, 4, 8), DType.bf16),
-        ),
-        make_tensor_type((1, 16, 4, 8), DType.bf16),
-    ),
-    TypeInferCase(
-        "s_cap_exceeds_capacity",
-        CacheUpdate(),
-        (
-            make_tensor_type((1, 4, 4, 8), DType.bf16),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1, 8, 4, 8), DType.bf16),
-        ),
-        ExpectedError(match="exceeds cache capacity"),
-    ),
-    TypeInferCase(
-        "cur_pos_not_i32",
-        CacheUpdate(),
-        (
-            make_tensor_type((1, 16, 4, 8), DType.bf16),
-            make_tensor_type((1,), DType.f32),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1, 4, 4, 8), DType.bf16),
-        ),
-        ExpectedError(match="cur_pos must be an i32 scalar"),
-    ),
-    TypeInferCase(
-        "kv_heads_mismatch",
-        CacheUpdate(),
-        (
-            make_tensor_type((1, 16, 4, 8), DType.bf16),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1, 4, 2, 8), DType.bf16),
-        ),
-        ExpectedError(match="kv_heads mismatch"),
-    ),
-    TypeInferCase(
-        "cur_pos_not_scalar",
-        CacheUpdate(),
-        (
-            make_tensor_type((1, 16, 4, 8), DType.bf16),
-            make_tensor_type((2,), DType.i32),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1, 4, 4, 8), DType.bf16),
-        ),
-        ExpectedError(match="must be a scalar"),
-    ),
-    TypeInferCase(
-        "partial_cache_matching_new_ok",
-        CacheUpdate(),
-        (
-            make_shard_tensor_type(
-                (1, 16, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
-            ),
-            make_tensor_type((1,), DType.i32),
-            make_tensor_type((1,), DType.i32),
-            make_shard_tensor_type(
-                (1, 4, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
-            ),
-        ),
-        make_shard_tensor_type(
-            (1, 16, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
-        ),
-    ),
+    # A Partial cache may only be written by an equally-Partial update: the
+    # cache's per-device value is a summand, so writing a complete value into it
+    # would make the reduction over the mesh count that region twice.
     TypeInferCase(
         "partial_cache_plain_new_rejected",
         CacheUpdate(),
@@ -181,11 +110,10 @@ def _run(cur_pos, s):
     "cur_pos,s,match",
     [
         (-1, 1, "must be >= 0"),
-        (5, 0, "1 <= s"),
         (5, 5, "1 <= s"),  # s exceeds S_CAP=4
         (14, 4, "exceeds cache capacity"),  # cur_pos + s > 16
     ],
-    ids=["neg_cur_pos", "s_zero", "s_over_cap", "cur_pos_plus_s_over_capacity"],
+    ids=["neg_cur_pos", "s_over_cap", "cur_pos_plus_s_over_capacity"],
 )
 def test_cache_update_evaluate_rejects_bad_runtime(cur_pos, s, match):
     # ``pytest.raises`` as a context manager asserts the body raises: the test

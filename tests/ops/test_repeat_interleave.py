@@ -1,15 +1,13 @@
-"""RepeatInterleave typeinfer: the named axis grows by ``repeats``.
+"""RepeatInterleave's fail-closed boundaries.
 
-The growing axis invalidates the input layout, so a sharded layout is not
-carried: an unsharded or fully-replicated input yields an unsharded output, and
-a genuinely-sharded input fails closed rather than emit a stale layout.
+The growing axis invalidates the input layout, so a genuinely-sharded input
+fails closed rather than emit a stale layout, and an out-of-range axis is named
+rather than normalized.
 """
 from __future__ import annotations
 
 import pytest
-import torch
 
-from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -18,25 +16,12 @@ from tests.ops.typeinfer_utils import (
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
+from tilefoundry.ir.types.shard.shard_layout import Split
 
 _F = DType.f32
 _M = make_mesh((4,))
 
 CASES = [
-    TypeInferCase(
-        "unsharded_grows_axis",
-        RepeatInterleave(repeats=2, axis=1),
-        (make_tensor_type((4, 8), _F),),
-        make_tensor_type((4, 16), _F),
-    ),
-    # a fully-replicated input is logically plain -> unsharded output.
-    TypeInferCase(
-        "replicated_drops_to_none",
-        RepeatInterleave(repeats=2, axis=1),
-        (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Broadcast(),)),),
-        make_tensor_type((4, 16), _F),
-    ),
     # a genuine sharding cannot be re-expressed across the repeat -> fail closed.
     TypeInferCase(
         "sharded_fails_closed",
@@ -56,9 +41,3 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_repeat_interleave_typeinfer(case):
     run_typeinfer_case(case)
-
-
-@pytest.mark.parametrize("op", [RepeatInterleave(repeats=2, axis=0)], ids=["rep2"])
-def test_repeat_interleave_evaluate(op):
-    x = torch.tensor([1.0, 2.0, 3.0])
-    run_eval_case(EvalCase("", op, (x,), torch.repeat_interleave(x, 2, dim=0)))

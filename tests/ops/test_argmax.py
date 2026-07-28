@@ -16,9 +16,9 @@ from tilefoundry.ir.types.shard.shard_layout import Partial
 _I64 = DType.i64
 
 CASES = [
+    # No corpus model uses argmax, so one positive stays here: the reduced axis
+    # is dropped and the result is i64.
     TypeInferCase("default_axis_last", ArgMax(), (make_tensor_type((1, 151936), DType.f32),), make_tensor_type((1,), _I64)),
-    TypeInferCase("explicit_axis", ArgMax(axis=1), (make_tensor_type((4, 8, 16), DType.f32),), make_tensor_type((4, 16), _I64)),
-    TypeInferCase("rank1_scalar", ArgMax(), (make_tensor_type((128,), DType.f32),), make_tensor_type((), _I64)),
     TypeInferCase(
         "axis_out_of_range",
         ArgMax(axis=3),

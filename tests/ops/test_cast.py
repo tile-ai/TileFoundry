@@ -1,15 +1,13 @@
-"""Cast typeinfer: dtype changes; shape / storage / layout pass through. A
-sharded input keeps its ShardLayout (Cast's relation is the identity)."""
+"""Cast's sharded layout and its low-precision boundary: a sharded input keeps
+its ShardLayout (Cast's relation is the identity), fp8 round-trips through the
+evaluator, and a sub-byte destination dtype is refused there."""
 from __future__ import annotations
 
 import pytest
 import torch
 
-from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
-    TypeInferCase,
     infer_call,
-    run_typeinfer_case,
 )
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -21,26 +19,6 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
 from tilefoundry.parser.hir_parser import parse_script
 
 _M = make_mesh((4,))
-
-CASES = [
-    TypeInferCase(
-        name="unsharded_dtype_change",
-        op=Cast(dtype=DType.bf16),
-        inputs=(make_tensor_type((4, 8), DType.f32),),
-        expected=make_tensor_type((4, 8), DType.bf16),
-    ),
-    TypeInferCase(
-        name="rank0",
-        op=Cast(dtype=DType.f32),
-        inputs=(make_tensor_type((), DType.i32),),
-        expected=make_tensor_type((), DType.f32),
-    ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_cast_typeinfer(case):
-    run_typeinfer_case(case)
 
 
 def test_cast_carries_sharded_layout():
@@ -54,14 +32,6 @@ def test_cast_carries_sharded_layout():
     assert out.dtype == DType.bf16
     assert out.shape == (16, 8)
     assert out.layout == sl  # identity relation -> same ShardLayout
-
-
-def test_cast_evaluate():
-    torch.manual_seed(0)
-    x = torch.randn(2, 3)
-    run_eval_case(
-        EvalCase("to_bf16", Cast(dtype=DType.bf16), (x,), x.to(torch.bfloat16), atol=2e-2, rtol=2e-2)
-    )
 
 
 # ── low-precision Cast boundary (fp8e4m3 / f8e8m0 evaluator; f4e2m1 declared) ──

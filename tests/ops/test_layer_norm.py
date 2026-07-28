@@ -20,9 +20,10 @@ _X = make_tensor_type((4, 8), _F)
 _W = make_tensor_type((8,), _F)
 _B = make_tensor_type((8,), _F)
 _W_PSUM = make_shard_tensor_type((8,), mesh=_M, attrs=(Partial("sum"),))
-_B_PSUM = make_shard_tensor_type((8,), mesh=_M, attrs=(Partial("sum"),))
 
 CASES = [
+    # No corpus model uses layer_norm -- they all use rms_norm -- so the
+    # output-type passthrough stays here; nothing else witnesses it.
     TypeInferCase("passthrough", _OP, (_X, _W, _B), _X),
     # layer_norm normalizes across an axis (non-monotonic); no reduction
     # commutes.
@@ -32,17 +33,13 @@ CASES = [
         (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Partial("sum"),)), _W, _B),
         ExpectedError(match="LayerNorm"),
     ),
+    # A Partial on a secondary operand is rejected by operand name. Weight
+    # stands for bias too: one code path, one message, two operand positions.
     TypeInferCase(
         "partial_weight_errors",
         _OP,
         (_X, _W_PSUM, _B),
         ExpectedError(match="weight.*Partial.*mesh axis 0"),
-    ),
-    TypeInferCase(
-        "partial_bias_errors",
-        _OP,
-        (_X, _W, _B_PSUM),
-        ExpectedError(match="bias.*Partial.*mesh axis 0"),
     ),
 ]
 

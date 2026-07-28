@@ -1,14 +1,19 @@
 """Async ``cp.async`` staging ops: ``copy_async`` / ``cp_async_commit`` /
 ``cp_async_wait``.
 
-Covers the contract:
-- the three ops type-infer to ``UnitType`` and parse via the ``T`` surface;
+No corpus model stages through ``cp.async``, so this file is the whole witness
+for the op family. It keeps the parts a passing program cannot show:
+
 - ``CopyAsync`` verify requires an smem destination, a gmem source, and a
   matching dtype; ``CpAsyncWait.n`` must be a non-negative int;
 - codegen forwards ``CopyAsync`` to the runtime ``ops::copy_async`` entry and
   emits the group fences for commit / wait;
 - on GPU, a ``copy_async -> commit -> wait`` staging of a Split gmem source
   into a full shared tile reproduces the input (matches a synchronous copy).
+
+The three ops' ``UnitType`` results and the accepted verify are not asserted
+separately: the module below parses the ``T`` surface, types it and verifies it
+on the way to being lowered and run, so an unsound one fails there.
 """
 from __future__ import annotations
 
@@ -17,36 +22,17 @@ import torch
 
 import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 — trigger emitter autodiscovery
-from tests.ops.typeinfer_utils import infer_call
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncCommit, CpAsyncWait
+from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncWait
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.ir.types import DType, TensorType, UnitType, make_tensor_type
+from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.shard.shard_layout import Broadcast
 from tilefoundry.ir.types.storage import StorageKind
-
-# ── typeinfer ────────────────────────────────────────────────────────────────
-
-
-def test_copy_async_typeinfers_to_unit() -> None:
-    gmem = make_tensor_type((128, 4), DType.f32, storage=StorageKind.GMEM)
-    smem = make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM)
-    assert isinstance(infer_call(CopyAsync(), gmem, smem), UnitType)
-
-
-def test_fence_ops_typeinfer_to_unit() -> None:
-    # The commit / wait fences carry no operands; call the registered typeinfer
-    # handler directly (the operand-driven harness needs at least one input).
-    from tilefoundry.visitor_registry import typeinfer_registry  # noqa: PLC0415
-
-    assert isinstance(typeinfer_registry.lookup(CpAsyncCommit)(None, None), UnitType)
-    assert isinstance(typeinfer_registry.lookup(CpAsyncWait)(None, None), UnitType)
-
 
 # ── verify ───────────────────────────────────────────────────────────────────
 
@@ -68,15 +54,6 @@ def _wait_pf(n: int) -> PrimFunction:
         name="fn",
         params=(),
         body=Sequential(body=(Evaluate(callable=CpAsyncWait(n=n), args=()), Return())),
-    )
-
-
-def test_verify_accepts_gmem_to_smem_same_dtype() -> None:
-    verify_prim_function(
-        _copy_async_pf(
-            make_tensor_type((128, 4), DType.f32, storage=StorageKind.GMEM),
-            make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM),
-        )
     )
 
 

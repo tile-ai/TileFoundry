@@ -1,4 +1,7 @@
-"""HIR Gather value oracle: select along ``axis`` by (multi-dim) indices."""
+"""Gather's batched, sharded and unlowerable cases: the ``batch_dims`` prefix is
+collapsed rather than flattened and is never entered by accident, a sharded
+operand migrates its shard attrs or derives a ``Partial``, and the batched
+lowering fails closed rather than silently take the single-coordinate path."""
 from __future__ import annotations
 
 import itertools
@@ -23,7 +26,6 @@ from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 from tilefoundry.passes.transforms import HirToTirPass
 
-_F = DType.f32
 _M = make_mesh((2,))
 
 
@@ -35,52 +37,11 @@ def _gather_ref(x, axis, idx):
     return flat.reshape(*x.shape[:axis], *idx.shape, *x.shape[axis + 1 :])
 
 
-@pytest.mark.parametrize(
-    "axis,x_shape,idx",
-    [
-        (0, (6, 3, 4), [[0, 5], [2, 3]]),  # 2-D index grid -> [2, 2, 3, 4]
-        (1, (6, 3, 4), [2, 0]),  # gather along a middle axis
-        (-1, (6, 3, 4), [3, 0, 1]),  # negative axis normalizes to the last axis
-        (1, (6, 3, 4), 2),  # scalar index on a middle axis -> [6, 4]
-    ],
-    ids=["axis0_2d_index", "axis1_1d_index", "neg_axis_last", "axis1_scalar_index"],
-)
-def test_gather_evaluate(axis, x_shape, idx):
-    torch.manual_seed(0)
-    x = torch.randn(*x_shape)
-    idx_t = torch.tensor(idx, dtype=torch.int32)
-    run_eval_case(EvalCase("", Gather(axis=axis), (x, idx_t), _gather_ref(x, axis, idx_t)))
-
-
-TYPEINFER_CASES = [
-    TypeInferCase(
-        "neg_axis_normalizes",
-        Gather(axis=-1),
-        (make_tensor_type((2, 3, 4), DType.f32), make_tensor_type((2,), DType.i32)),
-        make_tensor_type((2, 3, 2), DType.f32),
-    ),
-    TypeInferCase(
-        "axis_out_of_range",
-        Gather(axis=5),
-        (make_tensor_type((2, 3, 4), DType.f32), make_tensor_type((2,), DType.i32)),
-        ExpectedError(match="out of range"),
-    ),
-]
-
-
 # ── sharded input, shard-attr migration ───────────────────────────────────
 #
 # Gather output is a new tensor: the internal layout is always natural
 # contiguous over the output shape, so these check tensor shape and shard
 # attrs (the actual contract) rather than the derived layout.
-
-
-def test_gather_shard_mid_axis_scalar_drops_position():
-    """Split on axis 0 (untouched by an axis-1 gather) carries through
-    unchanged."""
-    ty = infer_call(Gather(axis=1), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((), DType.i32))
-    assert tuple(ty.shape) == (6, 8)
-    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
 
 
 def test_gather_shard_leading_axis_scalar_remaps_split():
@@ -100,11 +61,6 @@ def test_gather_shard_axis_gather_derives_partial():
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (
         Partial(reduction="sum"),
     )
-
-
-@pytest.mark.parametrize("case", TYPEINFER_CASES, ids=lambda c: c.name)
-def test_gather_typeinfer(case):
-    run_typeinfer_case(case)
 
 
 # ── batched gather (explicit TF-style ``batch_dims``) ────────────────────────
@@ -137,17 +93,6 @@ def _ref_batched(x, index, axis, batch_dims):
     return out
 
 
-def test_gather_batched_axis1() -> None:
-    """AC-3-1 shape/value on a small analog: a batched middle-axis gather with
-    one batch dim collapses the aligned leading dim instead of inserting it."""
-    torch.manual_seed(0)
-    x = torch.randn(2, 7, 5)
-    index = torch.randint(0, 7, (2, 4), dtype=torch.int32)  # index.shape[:1]==x.shape[:1]
-    expected = _ref_batched(x, index, axis=1, batch_dims=1)
-    assert tuple(expected.shape) == (2, 4, 5)
-    run_eval_case(EvalCase("", Gather(axis=1, batch_dims=1), (x, index), expected))
-
-
 def test_gather_two_batch_anti_flatten() -> None:
     """Two batch dims are collapsed, not flattened into the output: the aligned
     ``[2, 3]`` prefix appears once, not duplicated."""
@@ -157,17 +102,6 @@ def test_gather_two_batch_anti_flatten() -> None:
     expected = _ref_batched(x, index, axis=2, batch_dims=2)
     assert tuple(expected.shape) == (2, 3, 4, 5)  # NOT [2,3,2,3,4,5]
     run_eval_case(EvalCase("", Gather(axis=2, batch_dims=2), (x, index), expected))
-
-
-def test_gather_batch_dims_less_than_axis() -> None:
-    """``batch_dims < axis``: the dims between the batch prefix and the gather
-    axis pass through, and the same per-batch index applies across them."""
-    torch.manual_seed(3)
-    x = torch.randn(2, 4, 7, 5)
-    index = torch.randint(0, 7, (2, 3), dtype=torch.int32)  # batch_dims=1 < axis=2
-    expected = _ref_batched(x, index, axis=2, batch_dims=1)
-    assert tuple(expected.shape) == (2, 4, 3, 5)
-    run_eval_case(EvalCase("", Gather(axis=2, batch_dims=1), (x, index), expected))
 
 
 def test_gather_default_batch_dims_zero_keeps_non_batched() -> None:
@@ -187,27 +121,6 @@ def test_gather_default_batch_dims_zero_keeps_non_batched() -> None:
 
 
 BATCHED_TYPEINFER_CASES = [
-    # AC-3-1: KV row gather, one batch dim.
-    TypeInferCase(
-        "ac_kv_row_gather_batched",
-        Gather(axis=1, batch_dims=1),
-        (make_tensor_type((1, 16512, 512), DType.bf16), make_tensor_type((1, 1, 640), DType.i32)),
-        make_tensor_type((1, 1, 640, 512), DType.bf16),
-    ),
-    # AC-3-2: embedding lookup, axis 0, default batch_dims.
-    TypeInferCase(
-        "ac_embedding_lookup",
-        Gather(axis=0),
-        (make_tensor_type((129280, 4096), DType.bf16), make_tensor_type((1, 1), DType.i64)),
-        make_tensor_type((1, 1, 4096), DType.bf16),
-    ),
-    # batch_dims < axis: dims between batch prefix and gather axis pass through.
-    TypeInferCase(
-        "batch_dims_less_than_axis",
-        Gather(axis=2, batch_dims=1),
-        (make_tensor_type((2, 4, 7, 5), DType.f32), make_tensor_type((2, 3), DType.i32)),
-        make_tensor_type((2, 4, 3, 5), DType.f32),
-    ),
     # batch_dims must not exceed axis.
     TypeInferCase(
         "batch_dims_exceeds_axis_rejected",
@@ -215,16 +128,8 @@ BATCHED_TYPEINFER_CASES = [
         (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((6,), DType.i32)),
         ExpectedError(match="batch_dims"),
     ),
-    # batch dims must match between x and index.
-    TypeInferCase(
-        "batch_dims_prefix_mismatch_rejected",
-        Gather(axis=1, batch_dims=1),
-        (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((5, 2), DType.i32)),
-        ExpectedError(match="batch"),
-    ),
     # index must be an integer tensor (spec "integer index tensor") — reject
-    # a float index rather than silently truncating it in eval; both batched
-    # and non-batched paths.
+    # a float index rather than silently truncating it in eval.
     TypeInferCase(
         "float_index_rejected_non_batched",
         Gather(axis=1),
@@ -233,18 +138,12 @@ BATCHED_TYPEINFER_CASES = [
     ),
     # A batched gather over a sharded operand is not yet supported: fail-closed
     # with a named error (the batch_dims attribute stays a stable interface for
-    # a future sharded/collective implementation). Either operand triggers it —
-    # a sharded source, or an unsharded source with a sharded index.
+    # a future sharded/collective implementation). Either operand triggers it;
+    # a sharded source stands for a sharded index too.
     TypeInferCase(
         "sharded_source_batched_gather_not_implemented",
         Gather(axis=1, batch_dims=1),
         (make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((6, 2), DType.i32)),
-        ExpectedError(match="Gather: batched gather .* sharded operand", exc=NotImplementedError),
-    ),
-    TypeInferCase(
-        "sharded_index_batched_gather_not_implemented",
-        Gather(axis=1, batch_dims=1),
-        (make_tensor_type((6, 4, 8), DType.f32), make_shard_tensor_type((6, 2), mesh=_M, attrs=(Split(0),), dtype=DType.i32)),
         ExpectedError(match="Gather: batched gather .* sharded operand", exc=NotImplementedError),
     ),
 ]

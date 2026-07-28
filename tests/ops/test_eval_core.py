@@ -1,8 +1,10 @@
-"""Evaluator core mechanics: node walking, memoization, function-call and
-loop-carry semantics, constant materialization, and the layout-view helpers.
+"""Evaluator core mechanics: function-call binding, SSA identity, loop carry and
+scalar-constant materialization.
 
-Op-level value oracles live in the per-op ``tests/ops/test_<op>.py`` files;
-this file exercises the walker itself on small parsed programs.
+Op-level value oracles live in the model References, which run whole decoders
+through this same walker; what a real model's shape cannot make visible is kept
+here on small parsed programs -- two params that are structurally equal, and a
+carry whose init comes from the IR rather than from a first iteration.
 """
 from __future__ import annotations
 
@@ -17,16 +19,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType, TensorType
 
 _DEV = "cpu"
-
-
-@func
-def _add(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return add(a, b)
-
-
-def test_single_binary_add_matches_torch():
-    a, b = torch.randn(4), torch.randn(4)
-    assert torch.allclose(evaluate(_add, a, b, device=_DEV), a + b)
 
 
 @func
@@ -99,13 +91,3 @@ def test_multi_carry_accumulator():
     a, b = torch.randn(4), torch.randn(4)
     out = evaluate(_carry_two, a, b, device=_DEV)
     assert torch.allclose(out, (a + 2 * b) + (b + 2 * a))
-
-
-@func
-def _zeros_fn(x: Tensor[(2, 3), "f32"]) -> Tensor[(2, 3), "f32"]:
-    return add(x, zeros((2, 3), "f32"))
-
-
-def test_zeros():
-    x = torch.randn(2, 3)
-    assert torch.allclose(evaluate(_zeros_fn, x, device=_DEV), x)

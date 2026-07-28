@@ -13,7 +13,7 @@ import pytest
 
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TypeInferContext
@@ -129,21 +129,3 @@ def run_typeinfer_case(case: TypeInferCase) -> None:
             infer_call(case.op, *case.inputs)
         return
     assert_type(infer_call(case.op, *case.inputs), case.expected)
-
-
-# ─── combination builders ────────────────────────────────────────────────────
-#
-# The storage tiers an op test sweeps over. Op files combine these with their
-# own SHAPES and LAYOUTS to enumerate input TensorTypes without hand-writing
-# every combination.
-STORAGES: tuple[str, ...] = ("gmem", "smem", "rmem")
-
-
-def tensor_grid(shape, dtype, *, layouts=(None,), storages=STORAGES):
-    """All ``TensorType`` combinations of *layouts* × *storages* for a fixed
-    ``shape`` / ``dtype`` — the ``LAYOUTS × STORAGES`` axis of an op's matrix."""
-    return [
-        make_tensor_type(shape, dtype, layout=layout, storage=storage)
-        for layout in layouts
-        for storage in storages
-    ]

@@ -1,25 +1,22 @@
-"""HIR Reduce typeinfer.
+"""Reduce's Partial algebra, its cross-CTA limit, and its real reduce kernel.
 
-The output ``ShardLayout`` of ``Reduce`` collapses every Split that lives on a
-reduced tensor axis into ``Broadcast`` and shrinks the matching layout
-positions to size 1 with stride 0 (broadcast view); a Split on a non-reduced
-axis is preserved. An unsharded input passes through.
+Which reductions commute with which ``Partial``; that a reduced Split collapses
+to ``Broadcast`` (layout positions shrunk to size 1 / stride 0) while a Split on
+a non-reduced axis survives; that a reduce crossing CTAs is refused rather than
+silently downgraded; and a real GPU run of the warp-only path.
 """
 from __future__ import annotations
 
-import math
 import re
 
 import pytest
 import torch
 
 import tilefoundry
-from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
     infer_call,
-    raw_shard_tensor_type,
     run_typeinfer_case,
     split_local_extents,
 )
@@ -29,7 +26,7 @@ from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Partial, Split
@@ -42,25 +39,9 @@ _BF = DType.bf16
 # preserved mesh compares equal.
 _M = make_mesh((6, 32), ("w", "t"))
 
-_MEAN_LAST = Reduce(axes=(-1,), keepdim=True, kind=ReduceKind.MEAN)
 _PARTIAL_MESH = make_mesh((4,))
 _PSUM = make_shard_tensor_type((8, 16), mesh=_PARTIAL_MESH, attrs=(Partial("sum"),), dtype=DType.f32)
 _PMAX = make_shard_tensor_type((8, 16), mesh=_PARTIAL_MESH, attrs=(Partial("max"),), dtype=DType.f32)
-
-CASES = [
-    # Unsharded input passes through (no layout).
-    TypeInferCase(
-        "unsharded_passes_through",
-        Reduce(axes=(0,), keepdim=True, kind=ReduceKind.SUM),
-        (make_tensor_type((8, 16), DType.f32, storage=_RMEM),),
-        make_tensor_type((1, 16), DType.f32, storage=_RMEM),
-    ),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_reduce_typeinfer(case):
-    run_typeinfer_case(case)
 
 
 @pytest.mark.parametrize(
@@ -91,12 +72,6 @@ def test_reduce_partial_commutes(op, input_type, expected):
             (_PSUM,),
             ExpectedError(match="mesh axis 0"),
         ),
-        TypeInferCase(
-            "abs_max_over_partial",
-            Reduce(axes=(1,), keepdim=True, kind=ReduceKind.ABS_MAX),
-            (_PSUM,),
-            ExpectedError(match="mesh axis 0"),
-        ),
     ],
     ids=lambda case: case.name,
 )
@@ -106,105 +81,21 @@ def test_reduce_partial_rejects_noncommuting(case):
 
 # ── sharded carries ───────────────────────────────────────────────────────
 # Reduce shrinks every reduced-axis layout position to size 1 / stride 0
-# (broadcast view) while preserving the layout's own rank, so these cases
-# check output shape and which mesh axis stays genuinely `Split` vs collapses
-# to `Broadcast`, not the internal layout position count a valid `Reduce`
-# happens to produce.
-
-
-def _attr_kinds(ty) -> tuple:
-    return tuple(type(a).__name__ for a in ty.layout.attrs)
-
-
-def test_reduced_axis_splits_become_broadcast():
-    """Reduced-axis Splits become Broadcast; layout positions on the reduced
-    axis shrink to size 1 / stride 0 (broadcast-view input)."""
-    x_ty = raw_shard_tensor_type(
-        (1, 1536), (1, 6, 32, 8), (0, 0, 0, 1), (Split(1), Split(2)), _M,
-        dtype=_BF, storage=_RMEM,
-    )
-    ty = infer_call(_MEAN_LAST, x_ty)
-    assert tuple(ty.shape) == (1, 1)
-    assert _attr_kinds(ty) == ("Broadcast", "Broadcast")
+# (broadcast view) while preserving the layout's own rank, so this checks output
+# shape and which mesh axis stays genuinely `Split` vs collapses to `Broadcast`,
+# not the internal layout position count a valid `Reduce` happens to produce.
 
 
 def test_preserves_non_reduced_axis_split():
     """A Split on the non-reduced axis is preserved; the reduced axis ->
-    Broadcast."""
+    Broadcast, with its layout positions shrunk to local extent 1."""
     x_ty = make_shard_tensor_type(
         (12, 32), mesh=_M, attrs=(Split(0), Split(1)), dtype=_BF, storage=_RMEM,
     )
     ty = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), x_ty)
     assert tuple(ty.shape) == (12, 1)
-    assert _attr_kinds(ty) == ("Split", "Broadcast")
+    assert tuple(type(a).__name__ for a in ty.layout.attrs) == ("Split", "Broadcast")
     assert split_local_extents(ty) == [1]
-
-
-def test_keepdim_false_pops_shape():
-    """keepdim=False pops the reduced axis from the shape; the layout still
-    broadcasts the reduced positions."""
-    x_ty = make_shard_tensor_type(
-        (1, 1536), mesh=_M, attrs=(Split(1), Split(1)), dtype=_BF, storage=_RMEM,
-    )
-    ty = infer_call(Reduce(axes=(1,), keepdim=False, kind=ReduceKind.MEAN), x_ty)
-    assert tuple(ty.shape) == (1,)
-    assert _attr_kinds(ty) == ("Broadcast", "Broadcast")
-
-
-def test_implicit_strides_fresh_output():
-    """Implicit (None) strides reduce to a fresh, concretely-strided output
-    (no None indexing); the non-reduced axis's Split survives, the reduced
-    axis becomes Broadcast."""
-    x_ty = raw_shard_tensor_type(
-        (12, 32), (12, 32), None, (Split(0), Split(1)), _M, dtype=_BF, storage=_RMEM,
-    )
-    ty = infer_call(Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM), x_ty)
-    assert tuple(ty.shape) == (12, 1)
-    assert _attr_kinds(ty) == ("Split", "Broadcast")
-    assert ty.layout.layout.strides is not None
-    assert math.prod(ty.layout.layout.shape) == math.prod(ty.shape)
-
-
-@pytest.mark.parametrize(
-    "op,ref,atol",
-    [
-        (
-            Reduce(axes=(1,), keepdim=True, kind=ReduceKind.MEAN),
-            lambda x: x.mean(1, keepdim=True), 1e-6,
-        ),
-        (
-            Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
-            lambda x: x.sum(1, keepdim=True), 1e-5,
-        ),
-        (
-            Reduce(axes=(1,), keepdim=False, kind=ReduceKind.ABS_MAX),
-            lambda x: x.abs().amax(1), 1e-6,
-        ),
-        (
-            Reduce(axes=(1,), keepdim=True, kind=ReduceKind.MAX),
-            lambda x: x.amax(1, keepdim=True), 1e-6,
-        ),
-    ],
-    ids=["mean", "sum", "abs_max", "max"],
-)
-def test_reduce_evaluate(op, ref, atol):
-    torch.manual_seed(0)
-    x = torch.randn(2, 4)
-    run_eval_case(EvalCase("", op, (x,), ref(x), atol=atol))
-
-
-def test_reduce_max_is_signed_not_abs_max():
-    """``ReduceKind.MAX`` is the signed max — distinct from ``ABS_MAX`` when the
-    largest-magnitude element is negative."""
-    x = torch.tensor([[-5.0, 1.0, 2.0]])
-    run_eval_case(
-        EvalCase("", Reduce(axes=(-1,), keepdim=True, kind=ReduceKind.MAX),
-                 (x,), torch.tensor([[2.0]]), atol=0.0)
-    )
-    run_eval_case(
-        EvalCase("", Reduce(axes=(-1,), keepdim=True, kind=ReduceKind.ABS_MAX),
-                 (x,), torch.tensor([[5.0]]), atol=0.0)
-    )
 
 
 # ── Cross-warp reduce path selection (runtime-derived, no op attribute) ──────

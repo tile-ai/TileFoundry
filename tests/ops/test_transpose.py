@@ -9,18 +9,12 @@ indexing layout positions with the tensor-axis permutation directly.
 """
 from __future__ import annotations
 
-import pytest
-import torch
-
-from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
-    TypeInferCase,
     infer_call,
     raw_shard_tensor_type,
-    run_typeinfer_case,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
@@ -35,18 +29,11 @@ _M = make_mesh((1, 128, 8, 32), ("cluster", "cta", "warp", "lane"))
 _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 
-CASES = [
-    # unsharded: shape permutes, layout passes through.
-    TypeInferCase("unsharded", _T10, (make_tensor_type((4, 8), DType.f32),), make_tensor_type((8, 4), DType.f32)),
-]
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_transpose_typeinfer(case):
-    run_typeinfer_case(case)
-
 
 # ── sharded carries ───────────────────────────────────────────────────────
+# The unsharded permutation and its value oracle are what the corpus decoders
+# transpose for on every tiled matmul, so the model References carry them. The
+# factorized-layout cases below are what no model builds.
 # Transpose is a view: it reorders layout positions by owning tensor axis
 # rather than recomputing a fresh canonical layout, so its output strides are
 # a permutation of the input's, not necessarily C-order. These cases check
@@ -83,14 +70,3 @@ def test_implicit_strides_no_crash():
     assert tuple(ty.shape) == (8, 16)
     assert isinstance(ty.layout, ShardLayout)
     assert ty.layout.attrs == (Split(1), *_B4[1:])
-
-
-@pytest.mark.parametrize(
-    "shape,perm",
-    [((2, 3, 4), (2, 1, 0)), ((1, 5, 3, 8), (0, 2, 1, 3))],
-    ids=["perm_reverse", "perm_head_to_front"],
-)
-def test_transpose_evaluate(shape, perm):
-    torch.manual_seed(0)
-    x = torch.randn(*shape)
-    run_eval_case(EvalCase("", Transpose(perm=perm), (x,), x.permute(*perm)))
