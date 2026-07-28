@@ -23,12 +23,21 @@ from tilefoundry.analysis.poly import (
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule.kernel_schedule import band_statement, schedule_bands
 
+from ..errors import ScheduleError
 from .facts import PipelineFacts
 from .program import PipelineProgram
 
 
-class PipelineProblemError(ValueError):
-    """The program and projected facts cannot form a finite schedule problem."""
+class PipelineProblemError(ScheduleError):
+    """The program and projected facts cannot form a finite schedule problem.
+
+    A scheduling failure, and reachable as one: a caller asking this
+    layer to schedule something catches what the layer raises, and a
+    capability that cannot be scheduled is recorded against that. Sitting
+    outside `ScheduleError` made a limit of this algorithm unstateable
+    except as a bare `ValueError`, which is also what a caller passing
+    nonsense gets -- so the two could not be told apart.
+    """
 
 
 @dataclass(frozen=True)

@@ -10,8 +10,8 @@ from dataclasses import replace
 import pytest
 from ortools.sat.python import cp_model
 
+from tests.fixtures.static_online import static_online_attend
 from tests.models.deepseek_v4_flash.moe import deepseek_v4_flash_module
-from tests.models.qwen3_5_30b_a3b.static_online import qwen_static_online
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm
@@ -228,7 +228,7 @@ def test_partition_plan_names_values_and_operations_from_the_authored_program() 
 
 def test_partition_plan_states_a_reshard_as_an_operation_not_a_side_channel() -> None:
     """A moved value is one of the plan's own operations, with both placements."""
-    module = qwen_static_online
+    module = static_online_attend
     plan = schedule(
         module,
         module.entry_function(),
@@ -261,7 +261,7 @@ def test_partition_plan_states_a_reshard_as_an_operation_not_a_side_channel() ->
 
 def test_partition_plan_holds_one_value_in_two_placements_at_once() -> None:
     """A Reshard connects two placements of one tensor, so both are named."""
-    module = qwen_static_online
+    module = static_online_attend
     plan = schedule(
         module, module.entry_function(), topology="cta", options=_SOLVER
     ).plan
@@ -603,3 +603,22 @@ def test_partition_plans_a_real_moe_function() -> None:
 
 def test_partition_solve_reports_its_own_failures_rather_than_the_solver_status() -> None:
     assert issubclass(solve_module.PartitionSolveError, RuntimeError)
+
+
+def test_a_problem_that_cannot_be_formed_is_a_schedule_failure() -> None:
+    """The algorithms' own failures are reachable as `ScheduleError`.
+
+    A caller asks this layer to schedule something and catches what the layer
+    raises; a capability the layer cannot serve is recorded against the same
+    type. While these sat outside it, a limit of an algorithm could only be
+    stated as a bare `ValueError` -- which is also what a caller passing nonsense
+    gets, so a recorded limit and a caller's mistake were indistinguishable.
+    """
+    from tilefoundry.schedule import ScheduleError
+    from tilefoundry.schedule.partition.problem import PartitionProblemError
+    from tilefoundry.schedule.pipeline.problem import PipelineProblemError
+
+    for error in (PartitionProblemError, PipelineProblemError):
+        assert issubclass(error, ScheduleError), error.__name__
+        # Still a ValueError, so every existing caller keeps catching it.
+        assert issubclass(error, ValueError), error.__name__

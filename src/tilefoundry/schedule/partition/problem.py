@@ -44,6 +44,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
 
+from ..errors import ScheduleError
 from .facts import PartitionFacts
 from .program import (
     OperationSite,
@@ -58,8 +59,16 @@ from .program import (
 PlacementRelation = Literal["SAME_INTERVAL", "CONTAINED"]
 
 
-class PartitionProblemError(ValueError):
-    """The program and projected facts cannot form a finite partition problem."""
+class PartitionProblemError(ScheduleError):
+    """The program and projected facts cannot form a finite partition problem.
+
+    A scheduling failure, and reachable as one: a caller asking this
+    layer to schedule something catches what the layer raises, and a
+    capability that cannot be scheduled is recorded against that. Sitting
+    outside `ScheduleError` made a limit of this algorithm unstateable
+    except as a bare `ValueError`, which is also what a caller passing
+    nonsense gets -- so the two could not be told apart.
+    """
 
 
 @dataclass(frozen=True)
