@@ -1,0 +1,250 @@
+"""The properties every model-driven test relies on the corpus to hold."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from tests.models.corpus import (
+    MODELS_ROOT,
+    CapabilityGate,
+    CorpusError,
+    FunctionCase,
+    ModelCase,
+    TargetFixture,
+)
+from tests.models.fixtures import apple_m2_pro, h200_sxm
+from tests.models.registry import CORPUS, QWEN3_1_7B, case
+from tests.models.report import CoverageCollector, build_report, render_report
+from tilefoundry.analysis import analyze
+from tilefoundry.analysis.facts import ParallelCapacityFacts
+from tilefoundry.ir.core import Call
+from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.types.shard import Topology
+
+
+def _analysis_records(function) -> int:
+    """How many analysis records hang off the calls in *function*'s body."""
+    authored = {"SourceSpanMetadata", "BindingMetadata"}
+    total = 0
+
+    def walk(expr, depth: int = 0) -> None:
+        nonlocal total
+        if expr is None or depth > 64:
+            return
+        if isinstance(expr, Call):
+            total += sum(
+                1
+                for record in expr.metadata
+                if type(record).__name__ not in authored
+            )
+        for attribute in ("args", "elements"):
+            for child in getattr(expr, attribute, ()) or ():
+                walk(child, depth + 1)
+        walk(getattr(expr, "body", None), depth + 1)
+
+    walk(function.body)
+    return total
+
+
+def test_a_build_shares_nothing_with_the_build_before_it() -> None:
+    first = QWEN3_1_7B.build()
+    second = QWEN3_1_7B.build()
+
+    assert first is not second
+    assert first.lookup("mlp") is not second.lookup("mlp")
+
+
+def test_analysing_one_build_leaves_the_next_build_clean() -> None:
+    """The property `replace` cannot give: analyses annotate Calls in place."""
+    fixture = h200_sxm()
+    analysed = QWEN3_1_7B.build_for(fixture)
+    assert _analysis_records(analysed.lookup("mlp")) == 0
+
+    analyze(analysed, analysed.lookup("mlp"), analysis="compute-cost")
+    assert _analysis_records(analysed.lookup("mlp")) > 0
+
+    fresh = QWEN3_1_7B.build_for(fixture)
+    assert _analysis_records(fresh.lookup("mlp")) == 0
+
+
+def test_binding_a_target_does_not_reach_the_next_build() -> None:
+    fixture = h200_sxm()
+    bound = QWEN3_1_7B.build_for(fixture)
+    assert bound.resolve_target() is fixture.target
+    assert bound.effective_topologies() == fixture.topologies
+
+    unbound = QWEN3_1_7B.build()
+    assert unbound.target is None
+    assert unbound.topologies is None
+
+
+def test_one_model_answers_to_more_than_one_machine_in_one_run() -> None:
+    """A case is target-free, so the same model can be asked twice."""
+    cuda = QWEN3_1_7B.build_for(h200_sxm())
+    amx = QWEN3_1_7B.build_for(apple_m2_pro())
+
+    assert cuda.resolve_target() is not amx.resolve_target()
+    assert cuda.lookup("mlp") is not amx.lookup("mlp")
+
+
+def test_the_model_source_states_no_machine() -> None:
+    """Which hardware a model runs on is the fixture's to say, not the model's."""
+    for model in CORPUS:
+        built = model.build()
+        assert built.target is None, f"{model.id} binds a Target in its source"
+        assert built.topologies is None, f"{model.id} binds topologies in its source"
+
+
+def test_fixtures_take_their_extents_from_the_hardware_documents() -> None:
+    cuda = h200_sxm()
+    amx = apple_m2_pro()
+
+    assert cuda.level("cta").size == cuda.target.as_facts(
+        ParallelCapacityFacts
+    ).parallel_units
+    assert amx.level("core").size == amx.target.as_facts(
+        ParallelCapacityFacts
+    ).parallel_units
+    assert cuda.level("thread").size <= cuda.target.topology_limit("thread")
+
+
+def test_a_fixture_rejects_a_level_it_does_not_declare() -> None:
+    with pytest.raises(CorpusError, match="declares no 'warp' level"):
+        h200_sxm().level("warp")
+
+
+def test_untested_functions_come_from_the_built_model_not_a_written_list() -> None:
+    inventory = QWEN3_1_7B.inventory()
+    assert set(QWEN3_1_7B.selected("schedule")) < set(inventory)
+
+    untested = QWEN3_1_7B.untested("schedule")
+    assert set(untested) == set(inventory) - set(QWEN3_1_7B.selected("schedule"))
+    assert "tiled_mlp" in untested
+
+    grown = replace(
+        QWEN3_1_7B,
+        schedule=(*QWEN3_1_7B.schedule, FunctionCase(id="x", function="tiled_mlp")),
+    )
+    assert "tiled_mlp" not in grown.untested("schedule")
+
+
+def test_a_blocked_capability_must_say_why() -> None:
+    with pytest.raises(CorpusError, match="must state why"):
+        CapabilityGate(outcome="BLOCKED")
+    with pytest.raises(CorpusError, match="states no reason"):
+        CapabilityGate(outcome="PASS", reason="unused")
+
+    blocked = CapabilityGate(outcome="BLOCKED", reason="no fp8 atom on this target")
+    assert blocked.blocked
+    assert not CapabilityGate().blocked
+
+
+def test_a_case_that_cannot_be_resolved_says_so() -> None:
+    missing = ModelCase(
+        id="missing",
+        source=MODELS_ROOT / "qwen3_1_7b" / "model" / "decoder_layer.py",
+        entry="NotThere",
+        namespace={"config": QWEN3_1_7B.namespace["config"]},
+    )
+    with pytest.raises(CorpusError, match="defines no 'NotThere'"):
+        missing.build()
+
+    built = QWEN3_1_7B.build()
+    with pytest.raises(CorpusError, match="must resolve to exactly one"):
+        QWEN3_1_7B.function(built, FunctionCase(id="x", function="nope"))
+
+
+def test_the_registry_resolves_its_own_ids() -> None:
+    assert case("qwen3_1_7b") is QWEN3_1_7B
+    with pytest.raises(KeyError, match="no model case 'nope'"):
+        case("nope")
+
+
+def test_the_report_groups_model_then_target_then_kind() -> None:
+    collector = CoverageCollector()
+    fixture = h200_sxm()
+    collector.record(
+        model=QWEN3_1_7B.id,
+        target=fixture.id,
+        kind="reference",
+        case="qwen3_1_7b/reference/decoder",
+        status="PASS",
+    )
+    collector.record(
+        model=QWEN3_1_7B.id,
+        target=fixture.id,
+        kind="analyze",
+        case="qwen3_1_7b/analyze/mlp",
+        function="mlp",
+        status="PASS",
+    )
+    collector.record(
+        model=QWEN3_1_7B.id,
+        target=fixture.id,
+        kind="schedule",
+        case="qwen3_1_7b/schedule/self_attention",
+        function="self_attention",
+        status="BLOCKED",
+        reason="no atom covers this operation yet",
+    )
+
+    report = build_report(collector, CORPUS)
+    section = report["qwen3_1_7b"]["targets"]["h200_sxm"]
+
+    assert [row["case"] for row in section["reference"]] == [
+        "qwen3_1_7b/reference/decoder"
+    ]
+    assert [row["function"] for row in section["analyze"]["tested"]] == ["mlp"]
+    assert "mlp" not in section["analyze"]["untested"]
+    assert "decoder_layer" in section["analyze"]["untested"]
+    assert section["schedule"]["tested"][0]["status"] == "BLOCKED"
+    assert section["schedule"]["tested"][0]["reason"]
+
+    text = render_report(report)
+    assert "qwen3_1_7b" in text
+    assert "h200_sxm" in text
+    assert "untested" in text
+
+
+def test_an_unrun_function_is_untested_and_never_blocked() -> None:
+    """Nobody selected it, so the report must not claim a limit stopped it."""
+    collector = CoverageCollector()
+    report = build_report(collector, CORPUS)
+    assert report["qwen3_1_7b"]["targets"] == {}
+
+    collector.record(
+        model=QWEN3_1_7B.id,
+        target="h200_sxm",
+        kind="analyze",
+        case="qwen3_1_7b/analyze/mlp",
+        function="mlp",
+        status="PASS",
+    )
+    section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"]["h200_sxm"]
+    statuses = {row["status"] for row in section["analyze"]["tested"]}
+    assert statuses == {"PASS"}
+    assert "tiled_mlp" in section["analyze"]["untested"]
+
+
+def test_a_result_nobody_can_act_on_is_rejected() -> None:
+    collector = CoverageCollector()
+    with pytest.raises(ValueError, match="without a reason"):
+        collector.record(
+            model="m", target="t", kind="analyze", case="c", status="FAIL"
+        )
+
+
+def test_a_target_fixture_binds_only_what_it_was_given() -> None:
+    built = QWEN3_1_7B.build()
+    fixture = TargetFixture(
+        id="probe",
+        target=h200_sxm().target,
+        topologies=(Topology("cta", 4),),
+    )
+    bound = fixture.bind(built)
+
+    assert isinstance(bound, Module)
+    assert bound.effective_topologies() == (Topology("cta", 4),)
+    assert built.topologies is None
