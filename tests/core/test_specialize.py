@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from tests.models.qwen3_5_30b_a3b.gqa_online import (
     MAX_CTX,
@@ -10,6 +11,7 @@ from tests.models.qwen3_5_30b_a3b.gqa_online import (
     SMALL_CONTEXT_T,
     GqaOnline,
 )
+from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
     is_concrete,
@@ -132,3 +134,77 @@ def test_a_function_with_nothing_to_bind_is_returned_unchanged() -> None:
     concrete = specialize_function(ENTRY, STEADY)
 
     assert specialize_function(concrete, {"ctx_len": SMALL_CONTEXT_T}) is concrete
+
+
+def _reshape_targets(fn) -> list[tuple]:
+    """Every `new_shape` an operation states anywhere *fn* reaches."""
+    found: list[tuple] = []
+    seen: set[int] = set()
+
+    def walk(expr, depth: int = 0) -> None:
+        if expr is None or depth > 256 or id(expr) in seen:
+            return
+        seen.add(id(expr))
+        target = getattr(expr, "target", None)
+        if target is not None and type(target).__name__ == "Reshape":
+            found.append(tuple(target.new_shape))
+        if isinstance(target, type(ENTRY)):
+            walk(target.body, depth + 1)
+        for name in ("args", "elements", "init_args", "yield_values"):
+            for child in getattr(expr, name, ()) or ():
+                walk(child, depth + 1)
+        walk(getattr(expr, "body", None), depth + 1)
+
+    walk(fn.body)
+    return found
+
+
+def test_a_derived_extent_reaches_the_operation_that_states_it() -> None:
+    """At the split strategy the block length is the context over the splits.
+    Nothing supplies it, and it has to arrive inside the callee's own reshape."""
+    concrete = specialize_function(ENTRY, STEADY)
+    block = SMALL_CONTEXT_T // NUM_SPLITS
+
+    targets = _reshape_targets(concrete)
+    assert targets, "no reshape reached; the walk found nothing to check"
+    assert any(block in shape for shape in targets), (
+        f"no reshape states the derived block length {block}: {targets}"
+    )
+    assert all(
+        isinstance(extent, int) for shape in targets for extent in shape
+    ), f"a reshape still states a range: {targets}"
+
+
+def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
+    """The witness that shapes cannot give. Substituting an extent must not
+    change what the program means, so the prototype -- which picks its
+    implementation from the arguments it was handed -- and the function
+    specialised for those same arguments have to agree on the answer.
+
+    A small context keeps this runnable on a CPU; the size is in the first
+    strategy's range, and the assertion below is that both routes choose it.
+    """
+    context = 32
+    dims = {"ctx_len": context, "seq_len": 1}
+
+    torch.manual_seed(0)
+    q = torch.randn(1, 1, 32, 128, dtype=torch.bfloat16)
+    k = torch.randn(1, context, 4, 128, dtype=torch.bfloat16)
+    v = torch.randn(1, context, 4, 128, dtype=torch.bfloat16)
+
+    # What the evaluator would pick, decided the way it decides: the one
+    # pattern that admits the context length the arguments actually carry.
+    admitted = [
+        variant
+        for variant in ENTRY.variants
+        if variant.specializations[0].match(context)
+    ]
+    assert len(admitted) == 1
+    assert variant_for(ENTRY, dims) is admitted[0]
+
+    expected = evaluate(ENTRY, q, k, v, device="cpu")
+    got = evaluate(specialize_function(ENTRY, dims), q, k, v, device="cpu")
+
+    assert got.shape == expected.shape
+    assert got.dtype == expected.dtype
+    torch.testing.assert_close(got.float(), expected.float(), atol=0, rtol=0)

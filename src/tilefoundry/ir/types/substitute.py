@@ -107,7 +107,14 @@ def substitute_shape_dim(entry: object, bindings: Mapping[str, int]) -> object:
         args = tuple(substitute_shape_dim(arg, bindings) for arg in entry.args)
         if args == tuple(entry.args):
             return entry
-        return simplify_dim(type(entry.target), args)
+        folded = simplify_dim(type(entry.target), args)
+        # Folding yields a wrapped integer. A tensor type canonicalises those
+        # back to plain integers in its shape, but an operation's shape-valued
+        # attribute is not a type and would keep the wrapper -- leaving one
+        # entry of a shape a different kind of thing from its neighbours.
+        if isinstance(folded, Constant) and isinstance(folded.value, int):
+            return int(folded.value)
+        return folded
     return entry
 
 
