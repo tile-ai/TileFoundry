@@ -4,7 +4,7 @@ Phase 0 "打样": second of four planned dense/near-dense models (Qwen3-1.7B,
 Qwen2.5-1.5B, MiniCPM3, Gemma-2) authored against the same three-file
 template (``config.py`` + ``model/decoder_layer.py`` + ``test_decoder_layer.py``,
 mirroring ``tests/models/qwen3_1_7b/``, itself mirroring
-``tests/models/qwen3_5_30b_a3b/``), run on macOS with no CUDA: **cpu + f32
+the layout every model package here shares), run on macOS with no CUDA: **cpu + f32
 only**.
 
 Pins the value oracle and the model contract every component test in this

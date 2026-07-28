@@ -2,7 +2,7 @@
 
 cpu + f32 oracle (no CUDA on this box — every ``device=`` below is ``"cpu"``).
 Each test resolves one kernel from the ``Qwen3_1_7B`` module (mirroring
-``tests/models/qwen3_5_30b_a3b/test_qwen3_module.py``) and checks it against the
+the convention every model package here shares) and checks it against the
 corresponding Hugging Face ``Qwen3DecoderLayer`` submodule(s).
 
 The kernels that read the KV cache carry ``ctx_len`` as a range, so they are

@@ -2,7 +2,7 @@
 ``config`` name -- not importable on its own, load it with
 ``tests.models.loader.load_model`` (see ``../decoder_layer.py``).
 
-Companion to ``tests/models/qwen3_5_30b_a3b/qwen3_module.py``: same
+Companion to ``tests/models/qwen3_5_35b_a3b/model/``: same
 ``@module class`` authoring style (each kernel is a named ``@func`` method; the
 decorator returns the ``tilefoundry.ir.core.module.Module`` that the class name
 binds directly to -- ``Qwen3_1_7B.lookup("self_attention")`` resolves one kernel
@@ -22,14 +22,15 @@ position each. Appending the second to the first is the caller's step, not the
 kernel's, and that is what keeps every shape here expressed in ``ctx_len``
 alone: a kernel returning the grown cache would have an axis of ``ctx_len + 1``,
 and a sum of a range and a constant cannot feed the matmul that would consume it
-(the constraint ``qwen3_5_30b_a3b/common.py`` splits its attention across two
-Functions to avoid).
+(the constraint that makes a step return its own entry rather than the grown
+cache).
 
 That split is also why attention here is an online softmax rather than one
 ``softmax`` over a concatenated score row. The new token has to attend to itself
 as well as to the cache, and the two score groups live in differently shaped
 tensors; each is reduced to its own ``(max, sum, weighted values)`` partial and
-the partials are merged by the same log-sum-exp rescale ``gqa_online.py``'s
+the partials are merged by the same log-sum-exp rescale
+``tests/fixtures/gqa_online.py``'s
 combine kernel uses. No mask is needed: a single query at the end of the
 context may attend every position there is.
 

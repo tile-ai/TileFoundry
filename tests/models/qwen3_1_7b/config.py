@@ -4,7 +4,8 @@ package compares against.
 Phase 0 "打样": the first of four planned dense/near-dense models (Qwen3-1.7B,
 Qwen2.5-1.5B, MiniCPM3, Gemma-2) authored against this same three-file
 template (``config.py`` + ``model/decoder_layer.py`` + ``test_decoder_layer.py``,
-mirroring ``tests/models/qwen3_5_30b_a3b/``), run on macOS with no CUDA:
+mirroring the layout every model package here shares), run on macOS with no
+CUDA:
 **cpu + f32 only**.
 
 Pins the value oracle and the model contract every component test in this
@@ -14,7 +15,7 @@ package shares:
   from a ``Qwen3Config`` at (approximately) the Qwen3-1.7B dimensions, random
   weights at a fixed seed),
 - the model dimensions (GQA 16 query / 8 key-value heads; a dense SwiGLU MLP
-  — no MoE router/gather, unlike the ``qwen3_5_30b_a3b`` sibling package),
+  — no MoE router/gather, unlike the ``qwen3_5_35b_a3b`` sibling package),
 - the decode contract: one token per step (``seq_len`` is 1), the active
   context length ``ctx_len`` as the single dynamic dimension, and the KV cache
   passed as explicit tensors in and out — Hugging Face's ``past_key_values`` is

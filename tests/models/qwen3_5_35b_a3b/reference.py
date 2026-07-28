@@ -1,0 +1,464 @@
+"""The executable semantics one Qwen3.5-35B-A3B decode step is held to.
+
+Inputs and oracle are one pair on purpose. The oracle is a Hugging Face layer
+with random weights, so a factory that returned only tensors would leave the
+reference free to score them against a differently initialised layer. What each
+``*_step`` returns therefore carries both: the arguments the evaluator is called
+with, and the module those arguments were drawn from.
+
+Everything is seeded. The same call returns the same weights and the same
+activations, so a disagreement is a disagreement about the compiler rather than
+about which random draw each side happened to get.
+
+Two things are deliberate about *how* the oracle is built.
+
+**No Hugging Face cache object is constructed, on either side.** The step's
+prior state is assembled as plain tensors, and the oracle's value is taken from a
+forward over the whole sequence with the last position kept. Causality is what
+makes the second equal a cached one-token step: the last position's output
+depends on exactly the context before it. A reference that borrowed Hugging
+Face's caching would be checking one cache implementation against another.
+
+**Nothing is built that a boundary does not need.** A published MoE block holds
+256 experts and is 3.2 GB in f32; a whole decoder layer is 3.3 GB, and the
+published stack is forty of them. So a mixer boundary is given the mixer and its
+norm and no MoE block at all, only the layer and MoE boundaries build a layer, and
+everything is cached module-scoped so a worker builds each thing once. The
+measured reason is in ``hf_layer``. There is no whole-model instantiation
+anywhere in this package.
+
+What is *not* covered here is listed in ``test_provenance.py`` rather than left
+to be inferred.
+"""
+from __future__ import annotations
+
+import functools
+from dataclasses import dataclass
+
+import torch
+import torch.nn.functional as F
+
+from tests.models.qwen3_5_35b_a3b import config
+
+#: The oracle's device. Every builder takes one; this is what the tests pass.
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+#: Seeds, named so a change to either is a visible change to the reference.
+WEIGHT_SEED = 0
+ACTIVATION_SEED = 1
+
+#: The context length a case is drawn at unless it states another. Small enough
+#: to keep the oracle's full-sequence forward cheap, and coprime with both head
+#: counts and with the convolution kernel, so an index arithmetic error cannot
+#: coincide with a boundary.
+CTX_LEN = 25
+
+
+@functools.lru_cache(maxsize=None)
+def hf_layer(block_type: str, device: str = DEVICE, whole_layer: bool = False):
+    """The Hugging Face module a boundary of *block_type* is compared against.
+
+    ``whole_layer`` picks how much of the layer is built, and it is a memory
+    decision with a measured reason. A whole ``Qwen3_5MoeDecoderLayer`` is 3.3 GB
+    in f32, essentially all of it the 256-expert MoE block; the mixer boundaries
+    never touch that block, and building it for them put 3.2 GB in every parallel
+    worker and ran a 140 GB device out of memory once the rest of the suite was
+    alongside. So a mixer boundary gets the mixer and its norm, and only the two
+    boundaries that genuinely span a layer get a layer.
+
+    The two are *not* interchangeable: their parameters are drawn in construction
+    order, and the orders differ, so the same seed gives different weights. Each
+    boundary therefore takes both its arguments and its oracle from one object,
+    which is what the ``*_step`` factories return.
+
+    Cached per (type, device, extent). Safe to share -- eval mode, nothing writes.
+    """
+    if whole_layer:
+        return config.build_hf_decoder_layer(
+            block_type, seed=WEIGHT_SEED, device=device
+        )
+    return config.build_hf_mixer(block_type, seed=WEIGHT_SEED, device=device)
+
+
+@functools.lru_cache(maxsize=None)
+def rope_caches(device: str = DEVICE):
+    """cos / sin caches covering every position a step may be decoded at."""
+    return config.rope_caches(total=config.REAL.max_ctx + 1, device=device)
+
+
+def drawn_hidden(ctx_len: int, device: str = DEVICE):
+    """A context of *ctx_len* tokens and the one token decoded after it."""
+    torch.manual_seed(ACTIVATION_SEED)
+    drawn = torch.randn(1, ctx_len + 1, config.REAL.hidden, device=device) * 0.1
+    return drawn[:, :ctx_len], drawn[:, ctx_len:]
+
+
+def moe_weights(layer) -> tuple:
+    """*layer*'s MoE block weights, in the order ``moe`` takes them.
+
+    Hugging Face keeps the two SwiGLU halves in one ``gate_up_proj`` tensor, rows
+    ``[:intermediate]`` the gate and ``[intermediate:]`` the up projection -- one
+    ``F.linear`` then a chunk. Splitting them here is weight preprocessing, the
+    same kind as transposing a projection, and it belongs on this side.
+    """
+    block = layer.mlp
+    width = config.REAL.moe_intermediate
+    gate_up = block.experts.gate_up_proj
+    return (
+        config.norm_gamma(layer.post_attention_layernorm),
+        config.matrix_weight(block.gate.weight),
+        gate_up[:, :width, :].contiguous(),
+        gate_up[:, width:, :].contiguous(),
+        block.experts.down_proj.contiguous(),
+        config.matrix_weight(block.shared_expert.gate_proj.weight),
+        config.matrix_weight(block.shared_expert.up_proj.weight),
+        config.matrix_weight(block.shared_expert.down_proj.weight),
+        config.matrix_weight(block.shared_expert_gate.weight),
+    )
+
+
+def moe_oracle(layer, hidden) -> torch.Tensor:
+    """What Hugging Face's own post-norm + MoE block produce for *hidden*."""
+    with torch.no_grad():
+        return layer.mlp(layer.post_attention_layernorm(hidden))
+
+
+# ── full attention ──────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class FullStep:
+    """One drawn full-attention decode step, and the layer behind it."""
+
+    layer: object
+    ctx_len: int
+    hidden_ctx: torch.Tensor
+    hidden_new: torch.Tensor
+    k_cache: torch.Tensor
+    v_cache: torch.Tensor
+    mixer_args: tuple
+    moe_args: tuple
+
+    @property
+    def args(self) -> tuple:
+        """What the mixer's own entry function takes, in its order."""
+        return (self.hidden_new, *self.mixer_args)
+
+
+def context_kv(layer, hidden, device: str = DEVICE):
+    """The KV cache *layer* would hold for *hidden*, as explicit tensors.
+
+    Built by running the layer's own norm, projections, key norm and rotary
+    embedding over the context -- not approximately what its cache would hold,
+    but the same tensors through the same modules in the same order.
+
+    Returned in the kernels' ``[1, ctx_len, kv_heads, head_dim]`` layout, not
+    Hugging Face's head-major one.
+    """
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: PLC0415
+        apply_rotary_pos_emb,
+    )
+
+    shape = config.REAL
+    length = hidden.shape[1]
+    cos, sin = rope_caches(device)
+    attention = layer.self_attn
+    with torch.no_grad():
+        normed = layer.input_layernorm(hidden)
+        heads = (1, length, shape.n_kv_heads, shape.head_dim)
+        key = attention.k_norm(attention.k_proj(normed).view(heads)).transpose(1, 2)
+        value = attention.v_proj(normed).view(heads).transpose(1, 2)
+        _query, key = apply_rotary_pos_emb(
+            key, key, cos[:length].unsqueeze(0), sin[:length].unsqueeze(0)
+        )
+    return key.transpose(1, 2).contiguous(), value.transpose(1, 2).contiguous()
+
+
+def full_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
+              whole_layer: bool = False) -> FullStep:
+    """One deterministic full-attention decode step over a *ctx_len* context.
+
+    ``whole_layer`` builds the complete decoder layer, which is what the layer and
+    MoE boundaries need; the mixer boundary leaves it off and pays neither the
+    memory nor the build. ``moe_args`` is empty unless it is set, because without
+    the block there are no weights to state.
+    """
+    layer = hf_layer("full_attention", device, whole_layer)
+    attention = layer.self_attn
+    hidden_ctx, hidden_new = drawn_hidden(ctx_len, device)
+    k_cache, v_cache = context_kv(layer, hidden_ctx, device)
+    cos, sin = rope_caches(device)
+    return FullStep(
+        layer=layer,
+        ctx_len=ctx_len,
+        hidden_ctx=hidden_ctx,
+        hidden_new=hidden_new,
+        k_cache=k_cache,
+        v_cache=v_cache,
+        mixer_args=(
+            config.norm_gamma(layer.input_layernorm),
+            config.linear_weight(attention.q_proj),
+            config.linear_weight(attention.k_proj),
+            config.linear_weight(attention.v_proj),
+            config.norm_gamma(attention.q_norm),
+            config.norm_gamma(attention.k_norm),
+            cos,
+            sin,
+            # The token being decoded sits immediately after the context.
+            torch.tensor([ctx_len], device=device, dtype=torch.int32),
+            k_cache,
+            v_cache,
+            torch.full((1, 1, 1, 1), attention.scaling, device=device),
+            config.linear_weight(attention.o_proj),
+        ),
+        moe_args=moe_weights(layer) if whole_layer else (),
+    )
+
+
+def _whole_sequence(step) -> torch.Tensor:
+    return torch.cat([step.hidden_ctx, step.hidden_new], dim=1)
+
+
+def full_mixer_oracle(step: FullStep) -> torch.Tensor:
+    """Hugging Face's own attention output at the decoded position.
+
+    The whole sequence under a causal mask, last position kept. The mask exists
+    only because Hugging Face's attention needs one for a multi-position
+    forward; the kernel under test needs none, which is the point -- a single
+    query at the end of the context may attend every position there is.
+    """
+    cos, sin = rope_caches(step.hidden_new.device.type)
+    total = step.ctx_len + 1
+    positions = torch.arange(total, device=step.hidden_new.device)
+    mask = torch.where(
+        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
+    ).view(1, 1, total, total)
+    with torch.no_grad():
+        normed = step.layer.input_layernorm(_whole_sequence(step))
+        out, _ = step.layer.self_attn(
+            normed,
+            position_embeddings=(cos[:total].unsqueeze(0), sin[:total].unsqueeze(0)),
+            attention_mask=mask,
+        )
+    return out[:, -1:, :]
+
+
+def full_layer_oracle(step: FullStep) -> torch.Tensor:
+    """The complete Hugging Face decoder layer at the decoded position."""
+    cos, sin = rope_caches(step.hidden_new.device.type)
+    total = step.ctx_len + 1
+    positions = torch.arange(total, device=step.hidden_new.device)
+    mask = torch.where(
+        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
+    ).view(1, 1, total, total)
+    with torch.no_grad():
+        out = step.layer(
+            _whole_sequence(step),
+            position_embeddings=(cos[:total].unsqueeze(0), sin[:total].unsqueeze(0)),
+            attention_mask=mask,
+        )
+    return out[:, -1:, :]
+
+
+def run_full_attention_step(step: FullStep):
+    """The full-attention mixer over *step*, through the Evaluator.
+
+    A runner rather than a named entry function, even though the boundary is one
+    Function: it carries ``ctx_len`` as a range, and counting elements needs an
+    extent. So it is resolved at the length the drawn step uses first, and what is
+    evaluated is that resolved function.
+    """
+    from tests.models.qwen3_5_35b_a3b import full_attention as hir  # noqa: PLC0415
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
+    from tilefoundry.ir.hir.specialize import specialize_concretely  # noqa: PLC0415
+
+    function = specialize_concretely(hir.full_attention, {"ctx_len": step.ctx_len})
+    return evaluate(function, *step.args, device=step.hidden_new.device.type)
+
+
+def appended_cache_oracle(step: FullStep) -> tuple[torch.Tensor, torch.Tensor]:
+    """The cache the step's caller should hold afterwards.
+
+    Built the same way the input cache was, over the context with the decoded
+    token appended: the kernel's returned key and value are correct exactly when
+    appending them reproduces this.
+    """
+    return context_kv(step.layer, _whole_sequence(step), step.hidden_new.device.type)
+
+
+# ── linear attention (Gated DeltaNet) ───────────────────────────────────
+
+
+@dataclass(frozen=True)
+class LinearStep:
+    """One drawn Gated DeltaNet decode step, and the layer behind it."""
+
+    layer: object
+    ctx_len: int
+    hidden_ctx: torch.Tensor
+    hidden_new: torch.Tensor
+    conv_state: torch.Tensor
+    recurrent_state: torch.Tensor
+    mixer_args: tuple
+    moe_args: tuple
+
+    @property
+    def args(self) -> tuple:
+        """What the mixer's own entry function takes, in its order."""
+        return (self.hidden_new, *self.mixer_args)
+
+
+def gdn_state(layer, hidden) -> tuple[torch.Tensor, torch.Tensor]:
+    """The state the Gated DeltaNet holds after *hidden*, as explicit tensors.
+
+    Assembled out of the mixer's own modules and its own delta-rule function --
+    ``in_proj_qkv``, ``conv1d``, ``in_proj_b``, ``in_proj_a`` and
+    ``torch_chunk_gated_delta_rule`` -- in the order its ``forward`` applies
+    them, with the ``Cache`` bookkeeping left out. That is the same construction
+    the KV-cache layers get: state built by running the module over the context,
+    not state copied out of a cache object.
+
+    Two tensors come back:
+
+    - the ``kernel - 1`` columns of the projection's output that the next
+      position's causal convolution still needs. Hugging Face stores ``kernel``
+      of them and drops the oldest on use; this drops it now.
+    - the recurrent matrix after the context. Obtained from the chunked delta
+      rule, which is the path a multi-position forward takes, so it is the same
+      state the oracle's own forward passes through the decoded position.
+    """
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: PLC0415
+        torch_chunk_gated_delta_rule,
+    )
+
+    shape = config.REAL
+    mixer = layer.linear_attn
+    length = hidden.shape[1]
+    window = shape.gdn_conv_context
+    with torch.no_grad():
+        normed = layer.input_layernorm(hidden)
+        projected = mixer.in_proj_qkv(normed).transpose(1, 2)
+        conv_state = (
+            projected[:, :, -window:]
+            if length >= window
+            else F.pad(projected, (window - length, 0))
+        )
+        # padding=kernel-1 on both sides, first `length` outputs kept: the
+        # causal ones. Hugging Face's own prefill path, verbatim.
+        convolved = F.silu(mixer.conv1d(projected)[:, :, :length]).transpose(1, 2)
+        query, key, value = torch.split(
+            convolved,
+            [shape.gdn_key_dim, shape.gdn_key_dim, shape.gdn_value_dim],
+            dim=-1,
+        )
+        query = query.reshape(1, length, -1, shape.gdn_head_k_dim)
+        key = key.reshape(1, length, -1, shape.gdn_head_k_dim)
+        value = value.reshape(1, length, -1, shape.gdn_head_v_dim)
+        query = query.repeat_interleave(shape.gdn_v_per_k, dim=2)
+        key = key.repeat_interleave(shape.gdn_v_per_k, dim=2)
+        beta = mixer.in_proj_b(normed).sigmoid()
+        decay = -mixer.A_log.float().exp() * F.softplus(
+            mixer.in_proj_a(normed).float() + mixer.dt_bias
+        )
+        _out, recurrent = torch_chunk_gated_delta_rule(
+            query, key, value, g=decay, beta=beta,
+            initial_state=None, output_final_state=True,
+            use_qk_l2norm_in_kernel=True,
+        )
+    return conv_state.contiguous(), recurrent.contiguous()
+
+
+def linear_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
+                whole_layer: bool = False) -> LinearStep:
+    """One deterministic Gated DeltaNet decode step over a *ctx_len* context.
+
+    ``whole_layer`` as in ``full_step``.
+    """
+    layer = hf_layer("linear_attention", device, whole_layer)
+    mixer = layer.linear_attn
+    hidden_ctx, hidden_new = drawn_hidden(ctx_len, device)
+    conv_state, recurrent_state = gdn_state(layer, hidden_ctx)
+    return LinearStep(
+        layer=layer,
+        ctx_len=ctx_len,
+        hidden_ctx=hidden_ctx,
+        hidden_new=hidden_new,
+        conv_state=conv_state,
+        recurrent_state=recurrent_state,
+        mixer_args=(
+            config.norm_gamma(layer.input_layernorm),
+            config.linear_weight(mixer.in_proj_qkv),
+            config.linear_weight(mixer.in_proj_z),
+            config.linear_weight(mixer.in_proj_b),
+            config.linear_weight(mixer.in_proj_a),
+            # nn.Conv1d keeps a singleton in-channel axis a depthwise
+            # convolution never uses; the kernel takes [channels, kernel].
+            mixer.conv1d.weight.squeeze(1).contiguous(),
+            mixer.A_log,
+            mixer.dt_bias,
+            conv_state,
+            recurrent_state,
+            # `Qwen3_5MoeRMSNormGated` scales by its weight directly, not by
+            # 1 + weight the way the layer-level norms do.
+            mixer.norm.weight,
+            config.linear_weight(mixer.out_proj),
+        ),
+        moe_args=moe_weights(layer) if whole_layer else (),
+    )
+
+
+def linear_mixer_oracle(step: LinearStep) -> torch.Tensor:
+    """Hugging Face's own Gated DeltaNet output at the decoded position.
+
+    A cache-free forward over the whole sequence, last position kept. The mixer
+    is causal, so that position sees exactly the context before it -- the same
+    argument the attention oracle rests on, for a mixer with a different kind of
+    state.
+    """
+    with torch.no_grad():
+        out = step.layer.linear_attn(
+            step.layer.input_layernorm(_whole_sequence(step)), cache_params=None
+        )
+    return out[:, -1:, :]
+
+
+def linear_layer_oracle(step: LinearStep) -> torch.Tensor:
+    """The complete Hugging Face decoder layer at the decoded position."""
+    with torch.no_grad():
+        out = step.layer(_whole_sequence(step), position_embeddings=None)
+    return out[:, -1:, :]
+
+
+def advanced_state_oracle(step: LinearStep) -> tuple[torch.Tensor, torch.Tensor]:
+    """The state the step's caller should hold afterwards.
+
+    Built the same way the input state was, over the context with the decoded
+    token appended.
+    """
+    return gdn_state(step.layer, _whole_sequence(step))
+
+
+__all__ = [
+    "ACTIVATION_SEED",
+    "CTX_LEN",
+    "DEVICE",
+    "WEIGHT_SEED",
+    "FullStep",
+    "LinearStep",
+    "advanced_state_oracle",
+    "appended_cache_oracle",
+    "context_kv",
+    "drawn_hidden",
+    "full_layer_oracle",
+    "full_mixer_oracle",
+    "full_step",
+    "gdn_state",
+    "hf_layer",
+    "linear_layer_oracle",
+    "linear_mixer_oracle",
+    "linear_step",
+    "moe_oracle",
+    "moe_weights",
+    "rope_caches",
+    "run_full_attention_step",
+]

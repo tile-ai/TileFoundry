@@ -1,0 +1,132 @@
+"""Qwen3.5-35B-A3B's full-attention decode step against Hugging Face's own.
+
+The kernel carries ``ctx_len`` as a range, so it is specialised at the length the
+drawn step uses before being evaluated: an extent is what counting elements
+needs, and a range is not one.
+
+Arguments come from ``reference.py``'s drawn step rather than being assembled
+here, so the parameter order is stated once and a signature change cannot leave
+one test agreeing with a stale order.
+"""
+from __future__ import annotations
+
+import torch
+
+from tests.models.qwen3_5_35b_a3b import config, reference
+from tests.models.qwen3_5_35b_a3b import full_attention as hir
+from tilefoundry.evaluator import evaluate
+from tilefoundry.ir.hir.specialize import specialize_concretely
+
+DEV = reference.DEVICE
+ATOL = RTOL = 2e-5
+
+#: Measured on an H200, f32. Mixer output: 3.28e-06 at ctx_len 25 (reference
+#: maximum magnitude 4.44) and 2.80e-06 at 41 (3.78). Cache entries: key
+#: 1.07e-06 / 9.65e-07, value 1.67e-06 / 1.91e-06. The bounds carry about half
+#: again as headroom -- enough that f32 reassociation on another device does not
+#: fail them, tight enough that a semantic change cannot hide under them.
+MEASURED_MIXER_MAX_ABS_DIFF = 5e-06
+MEASURED_CACHE_MAX_ABS_DIFF = 3e-06
+
+#: Two lengths, so a kernel that only works at the length it was authored
+#: against cannot pass. Neither divides either head count, and neither is a
+#: multiple of the other.
+CTX_LENGTHS = (25, 41)
+
+
+def test_full_attention_matches_hugging_face():
+    """full_attention (input_layernorm + `Qwen3_5MoeAttention`: GQA, per-head
+    q_norm/k_norm, partial RoPE and the output gate, over the cache and the new
+    token) vs HF's own attention at the decoded position, at two lengths."""
+    for ctx_len in CTX_LENGTHS:
+        step = reference.full_step(ctx_len=ctx_len, device=DEV)
+        function = specialize_concretely(hir.full_attention, {"ctx_len": ctx_len})
+        out, _key, _value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
+
+        want = reference.full_mixer_oracle(step)
+        difference = (out.float() - want.float()).abs().max().item()
+        assert difference <= MEASURED_MIXER_MAX_ABS_DIFF, (ctx_len, difference)
+        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+
+
+def test_the_step_returns_the_cache_entry_to_append():
+    """The step's returned key and value are this token's cache entry: appending
+    them to the cache it was given reproduces the cache a context one token
+    longer would have produced.
+
+    Checked against a rebuilt cache rather than against the step's own inputs, so
+    a step that returned its inputs unchanged would fail.
+    """
+    step = reference.full_step(device=DEV)
+    function = specialize_concretely(hir.full_attention, {"ctx_len": step.ctx_len})
+    _out, key, value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
+
+    want_key, want_value = reference.appended_cache_oracle(step)
+    grown_key = torch.cat([step.k_cache, key], dim=1)
+    grown_value = torch.cat([step.v_cache, value], dim=1)
+
+    assert tuple(grown_key.shape) == tuple(want_key.shape)
+    for grown, want in ((grown_key, want_key), (grown_value, want_value)):
+        difference = (grown.float() - want.float()).abs().max().item()
+        assert difference <= MEASURED_CACHE_MAX_ABS_DIFF, difference
+        torch.testing.assert_close(grown.float(), want.float(), atol=ATOL, rtol=RTOL)
+
+
+def test_only_the_leading_rotary_dims_carry_a_position():
+    """``partial_rotary_factor`` is 0.25, and this measures that it is.
+
+    Two positions, one tensor: the entries past ``rotary_dim`` must be bit-equal
+    between them, and the entries before it must not be. A kernel that rotated
+    the whole head would fail the first; one that rotated nothing would fail the
+    second. Asserted against the position embedding rather than against the
+    configuration field, so it is the behaviour that is checked.
+    """
+    shape = config.REAL
+    cos, sin = reference.rope_caches(DEV)
+    torch.manual_seed(3)
+    x = torch.randn(1, 1, shape.n_q_heads, shape.head_dim, device=DEV)
+
+    turned = [
+        evaluate(
+            hir.partial_rope, x, cos, sin,
+            torch.tensor([position], device=DEV, dtype=torch.int32), device=DEV,
+        )
+        for position in (7, 19)
+    ]
+    tail = [item[..., shape.rotary_dim:] for item in turned]
+    head = [item[..., : shape.rotary_dim] for item in turned]
+
+    assert torch.equal(tail[0], tail[1])
+    torch.testing.assert_close(tail[0].float(), x[..., shape.rotary_dim:].float(),
+                               atol=ATOL, rtol=RTOL)
+    assert (head[0] - head[1]).abs().max().item() > 1e-2
+
+
+def test_the_output_gate_is_applied():
+    """Half of ``q_proj``'s fan-out never reaches a score, and this measures that
+    it reaches the output instead.
+
+    The gate is a sigmoid, so it lies strictly between 0 and 1: an implementation
+    that ignored it would be uniformly larger, and one that applied it twice
+    uniformly smaller. Both are caught by comparing against Hugging Face with the
+    gate's own weights perturbed -- if the answer did not move, the gate is not
+    being read.
+    """
+    step = reference.full_step(device=DEV)
+    function = specialize_concretely(hir.full_attention, {"ctx_len": step.ctx_len})
+    out, _key, _value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
+
+    shape = config.REAL
+    weights = list(step.mixer_args)
+    # w_qg is [1, hidden, 2 * heads * head_dim] with the gate interleaved per
+    # head; zeroing the gate half sends every gate to sigmoid(0) = 1/2.
+    gated = weights[1].clone().reshape(1, shape.hidden, shape.n_q_heads, 2 * shape.head_dim)
+    gated[..., shape.head_dim:] = 0.0
+    weights[1] = gated.reshape(1, shape.hidden, 2 * shape.q_proj).contiguous()
+    ungated, _key, _value = evaluate(function, step.hidden_new, *weights, device=DEV)
+
+    moved = (out.float() - ungated.float()).abs().max().item()
+    assert moved > 100 * ATOL, (
+        f"neutralising the output gate moved the answer by only {moved}, so this "
+        f"boundary does not distinguish a kernel that ignores the gate"
+    )
