@@ -8,6 +8,7 @@ import dataclasses
 import io
 import runpy
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -23,7 +24,7 @@ from tilefoundry.inspection.analysis_report import (
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.schedule import ScheduleError, schedule
+from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget
 from tilefoundry.target.hardware import format_capabilities, hardware_documents
 
@@ -300,11 +301,31 @@ def run_schedule(
     *,
     as_json: bool = False,
     dims: Mapping[str, int] | None = None,
+    solver_timeout: float | None = None,
+    solver_workers: int | None = None,
+    first_plan: bool = False,
 ) -> int:
-    """Schedule one authored Module through the public Schedule operation."""
+    """Schedule one authored Module through the public Schedule operation.
+
+    The solver's budget is stated here rather than left to the library default
+    because two things about it are the caller's to decide and neither is visible
+    from inside. The worker count: the default lets the solver size itself to the
+    machine, and several solvers each doing that on one machine oversubscribe it
+    until none returns an answer, which looks like the model being unschedulable and
+    is not. And whether the best plan is wanted at all: the search keeps improving
+    until its limit, so a caller who needs a plan rather than the best one otherwise
+    waits out the whole budget for an answer it had early.
+    """
     ir = load_authored_ir(source)
     function = _entry_function(ir)
-    result = schedule(ir, function, topology=topology, dims=dims)
+    options = None
+    if solver_timeout is not None or solver_workers is not None or first_plan:
+        options = ScheduleOptions(stop_at_first_solution=first_plan)
+        if solver_timeout is not None:
+            options = replace(options, timeout_seconds=solver_timeout)
+        if solver_workers is not None:
+            options = replace(options, workers=solver_workers)
+    result = schedule(ir, function, topology=topology, dims=dims, options=options)
     sys.stdout.write((result.plan.to_json() if as_json else result.plan.render()) + "\n")
     return 0
 
@@ -355,6 +376,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="bind one dimension the model left open, for example ctx_len=1024",
     )
     schedule.add_argument("--json", action="store_true", help="print the selected plan as JSON")
+    schedule.add_argument(
+        "--solver-timeout",
+        type=float,
+        metavar="SECONDS",
+        help="how long the solver may search before it reports no answer",
+    )
+    schedule.add_argument(
+        "--solver-workers",
+        type=int,
+        metavar="COUNT",
+        help=(
+            "how many search workers the solver may use; the default lets it "
+            "size itself to the machine, which oversubscribes when several "
+            "schedules run at once"
+        ),
+    )
+    schedule.add_argument(
+        "--first-plan",
+        action="store_true",
+        help="stop at the first plan that satisfies the constraints instead of "
+        "searching the whole budget for the best one",
+    )
 
     inspect = commands.add_parser("inspect", help="inspect installed target facts")
     inspect_commands = inspect.add_subparsers(dest="inspect_command", required=True)
@@ -397,6 +440,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.topology,
                 as_json=args.json,
                 dims=parse_dims(args.dim),
+                solver_timeout=args.solver_timeout,
+                solver_workers=args.solver_workers,
+                first_plan=args.first_plan,
             )
         except (
             ExtractError,

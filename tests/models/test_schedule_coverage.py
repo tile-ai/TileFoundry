@@ -22,7 +22,15 @@ from tests.models.report import CoverageCollector, build_report
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 
 #: One case is one CP-SAT solve, so the budget is stated rather than inherited.
-_SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0)
+#:
+#: `stop_at_first_solution`, because what these cases assert is that a plan exists
+#: and that it verifies -- not that it is the best plan. Without it the search keeps
+#: improving a makespan it cannot prove optimal until the limit, so every solve costs
+#: the whole budget: measured, twenty-eight of these each spent its full sixty
+#: seconds. The timeout stays as the bound on a search that has found nothing yet.
+_SOLVER = ScheduleOptions(
+    timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True
+)
 
 
 def _selected() -> list[tuple[ModelCase, TargetFixture, FunctionCase]]:

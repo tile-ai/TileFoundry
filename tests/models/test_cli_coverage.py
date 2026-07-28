@@ -30,10 +30,47 @@ from tilefoundry.inspection import as_script
 
 _ANALYSES = ("--compute-cost", "--memory", "--roofline", "--timeline")
 
+#: The same solver budget the in-process schedule witnesses use, stated to the CLI
+#: rather than left to the library default.
+#:
+#: The default worker count lets the solver size itself to the machine; with the suite
+#: running several of these at once that oversubscribes it and none of them returns an
+#: incumbent, which looks like a model that cannot be scheduled and is not -- measured:
+#: which models failed changed from run to run.
+#:
+#: `--first-plan` because what this asks is whether the CLI can schedule the printed
+#: model at all. Searching for the best plan spends the whole budget on every one of
+#: these, which is time bought for an answer no assertion here reads.
+_SOLVER_ARGS = ("--solver-timeout=60", "--solver-workers=4", "--first-plan")
 
-def _dim_args(case) -> list[str]:
-    """The `--dim` arguments for *case*'s stated extents, if it states any."""
-    return [f"--dim={name}={extent}" for name, extent in (case.dims or {}).items()]
+
+def _dims_of(model: ModelCase) -> dict[str, int]:
+    """Every extent *model* states, across all its cases.
+
+    The CLI is given the printed module, and what it analyses is that module's
+    entry function -- so the extents it needs are the ones the model states
+    anywhere, not the ones one case happens to state. Reading them off a single
+    case worked only while the case that stated them was also the last one listed,
+    which is a coincidence of ordering rather than a fact about the model.
+
+    A model states one set of extents; a case that disagreed about the same
+    dimension would make "the length the CLI is asked about" two answers, so that
+    is refused here rather than resolved.
+    """
+    dims: dict[str, int] = {}
+    for case in (*model.analyze, *model.schedule, *model.sized):
+        for name, extent in (case.dims or {}).items():
+            if dims.setdefault(name, extent) != extent:
+                raise AssertionError(
+                    f"{model.id} states {name}={dims[name]} and {name}={extent}; "
+                    f"one model states one extent per dimension"
+                )
+    return dims
+
+
+def _dim_args(model: ModelCase) -> list[str]:
+    """The `--dim` arguments for every extent *model* states."""
+    return [f"--dim={name}={extent}" for name, extent in _dims_of(model).items()]
 
 
 def _source_for(model: ModelCase, fixture: TargetFixture, directory) -> str:
@@ -58,7 +95,7 @@ def test_the_printed_model_is_source_the_cli_can_import(model, tmp_path) -> None
     has no form anyone can pass around, however well it analyses in memory."""
     source = _source_for(model, ACCEPTANCE(), tmp_path)
 
-    assert cli.main(["analyze", source, "--compute-cost", *_dim_args(model.analyze[-1])]) == 0
+    assert cli.main(["analyze", source, "--compute-cost", *_dim_args(model)]) == 0
 
 
 @pytest.mark.parametrize("model", _models(), ids=_identify)
@@ -67,7 +104,7 @@ def test_every_analysis_the_cli_offers_runs_on_a_real_model(
 ) -> None:
     source = _source_for(model, ACCEPTANCE(), tmp_path)
 
-    assert cli.main(["analyze", source, *_ANALYSES, *_dim_args(model.analyze[-1])]) == 0
+    assert cli.main(["analyze", source, *_ANALYSES, *_dim_args(model)]) == 0
     assert capsys.readouterr().out.strip()
 
 
@@ -77,7 +114,7 @@ def test_the_cli_reports_a_real_model_as_json(model, tmp_path, capsys) -> None:
 
     assert (
         cli.main(
-            ["analyze", source, "--compute-cost", "--json", *_dim_args(model.analyze[-1])]
+            ["analyze", source, "--compute-cost", "--json", *_dim_args(model)]
         )
         == 0
     )
@@ -101,7 +138,8 @@ def test_the_cli_schedules_a_real_model_at_a_declared_level(
                 source,
                 "--topology",
                 fixture.level(case.topology).name,
-                *_dim_args(case),
+                *_dim_args(model),
+                *_SOLVER_ARGS,
             ]
         )
         == 0

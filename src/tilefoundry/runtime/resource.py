@@ -14,6 +14,22 @@ AliasValue = Union[str, "tuple[str, ...]"]
 AliasMap = Mapping[str, AliasValue]
 
 
+def _resolved_device(device: str) -> str:
+    """A device string with a bare ``"cuda"`` pinned to the current device.
+
+    ``safetensors`` reads the string itself and takes bare ``"cuda"`` as index 0,
+    while every torch spelling of it -- ``.cuda()``, ``device="cuda"``, a
+    ``torch.device`` context -- means whichever device the process has selected.
+    On a machine with one card those agree; on a machine with several, the same word
+    lands on two of them and a tensor loaded here cannot be compared against one
+    computed anywhere else. Resolving it once here makes the word mean what torch
+    means by it. An index the caller wrote is left alone.
+    """
+    if device != "cuda" or not torch.cuda.is_available():
+        return device
+    return f"cuda:{torch.cuda.current_device()}"
+
+
 def _alias_lookup(alias: AliasMap, prefix: str, name: str) -> "AliasValue | None":
     qualified = f"{prefix}{name}"
     if qualified in alias:
@@ -148,7 +164,11 @@ class SafetensorsResource:
         shard = self._index()[raw_key]  # KeyError propagates the raw key
         handle = self._handles.get(shard)
         if handle is None:
-            handle = safe_open(str(Path(self._ckpt_dir) / shard), framework="pt", device=self._device)
+            handle = safe_open(
+                str(Path(self._ckpt_dir) / shard),
+                framework="pt",
+                device=_resolved_device(self._device),
+            )
             self._handles[shard] = handle
         return handle.get_tensor(raw_key)
 

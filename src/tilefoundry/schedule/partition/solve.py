@@ -937,6 +937,7 @@ def solve_partition_problem(
         solver.parameters.max_time_in_seconds = options.timeout_seconds
         solver.parameters.num_search_workers = options.workers
         solver.parameters.random_seed = options.random_seed
+        solver.parameters.stop_after_first_solution = options.stop_at_first_solution
         status = solver.Solve(state.model)
         if status == cp_model.INFEASIBLE:
             raise PartitionSolveError(

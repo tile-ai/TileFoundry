@@ -18,11 +18,21 @@ from .plan import PlanVerificationError, SchedulePlan
 
 @dataclass(frozen=True)
 class ScheduleOptions:
-    """Solver runtime and debug controls, independent of which algorithm runs."""
+    """Solver runtime and debug controls, independent of which algorithm runs.
+
+    `stop_at_first_solution` asks for a plan rather than the best plan. The search
+    minimises a makespan, so on a model it cannot prove optimal for it keeps
+    improving until the time limit -- which makes `timeout_seconds` the runtime of
+    every solve rather than a limit that rarely fires. A caller that needs a plan to
+    exist and to verify, and not to be optimal, says so here and gets the first
+    feasible one. The time limit still applies: a model with no solution found yet
+    is still bounded, so this cannot turn a slow search into an unbounded one.
+    """
 
     timeout_seconds: float = 60.0
     workers: int = 0
     random_seed: int = 0
+    stop_at_first_solution: bool = False
     debug_dump_dir: Path | None = None
 
 

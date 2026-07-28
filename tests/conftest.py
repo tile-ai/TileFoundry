@@ -22,6 +22,10 @@ All tests run by default; there is no marker-based skipping. Tests that
 need nvcc or a CUDA device will fail (not skip) on a machine that lacks
 them.
 
+On a machine with more than one CUDA device, each xdist worker is given one of
+them round-robin (see ``_spread_workers_across_devices``). Nothing in the tests
+names a device index, so ``"cuda"`` means whichever one the worker was given.
+
 ``test_results/`` is gitignored.
 """
 from __future__ import annotations
@@ -72,6 +76,36 @@ def _dump_relpath(nodeid: str, worker_id: str) -> Path:
         return Path(file_stem)
     leaf = test_name if worker_id == "master" else f"{test_name}__{worker_id}"
     return Path(file_stem) / leaf
+
+
+def _spread_workers_across_devices() -> None:
+    """Give each xdist worker one CUDA device, round-robin.
+
+    Every worker defaulting to device 0 puts the whole suite's model weights on one
+    card while the others idle: measured, eight workers held 6 to 33 GB each on one
+    140 GB device and the production-sized decoder References ran it out of memory.
+    The models under test are real ones, so the fix is to use the machine that is
+    there rather than to shrink them.
+
+    Called at import so it lands before any test touches CUDA. `set_device` rather
+    than `CUDA_VISIBLE_DEVICES`, because the environment variable is read when the
+    driver initialises and a worker process has already imported torch by now.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker is None or not worker.startswith("gw"):
+        return
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError:
+        return
+    if not torch.cuda.is_available():
+        return
+    count = torch.cuda.device_count()
+    if count > 1:
+        torch.cuda.set_device(int(worker[2:]) % count)
+
+
+_spread_workers_across_devices()
 
 
 @pytest.fixture(autouse=True)

@@ -101,12 +101,15 @@ class ScheduleOptions:
         timeout_seconds: attribute; Wall-clock budget for the underlying solver.
         workers: attribute; Solver worker count, where zero selects the solver default.
         random_seed: attribute; Deterministic solver tie-break seed.
+        stop_at_first_solution: attribute; Accept the first result satisfying the
+            constraints instead of searching the budget for the best one.
         debug_dump_dir: attribute; Directory for algorithm-private artifacts, or None.
     """
 
     timeout_seconds: float = 60.0
     workers: int = 0
     random_seed: int = 0
+    stop_at_first_solution: bool = False
     debug_dump_dir: Path | None = None
 ```
 
@@ -114,6 +117,13 @@ class ScheduleOptions:
   - The structure MUST be immutable.
   - `debug_dump_dir` MUST affect artifact emission only and MUST NOT change the
     selected result.
+  - `stop_at_first_solution` MUST change which satisfying result is selected and
+    MUST NOT change what counts as one: a result accepted under it MUST satisfy
+    every constraint a result accepted without it satisfies, so a plan obtained
+    this way is verifiable on the same terms.
+  - `stop_at_first_solution` MUST NOT lift `timeout_seconds`. An algorithm that has
+    found no satisfying result yet stays bounded by it, so the option cannot turn a
+    bounded search into an unbounded one.
 
 ### 2.2 `ScheduleResult`
 

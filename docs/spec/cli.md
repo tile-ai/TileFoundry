@@ -12,7 +12,8 @@ tilefoundry analyze model.py[:Module[.child_module...][.function]]
     [--roofline] [--footprint] [--timeline] [--dim NAME=EXTENT ...]
 
 tilefoundry schedule model.py[:Module[.child_module...][.function]] --topology LEVEL [--json]
-    [--dim NAME=EXTENT ...]
+    [--dim NAME=EXTENT ...] [--solver-timeout SECONDS] [--solver-workers COUNT]
+    [--first-plan]
 
 tilefoundry inspect capabilities model.py[:Module[.child_module...][.function]]
 
@@ -106,6 +107,21 @@ Target, MUST be rejected -- `schedule` does not resolve an omission to a default
     operation decided.
   - `--dim NAME=EXTENT` MUST behave as it does for `analyze`, passed through as
     the operation's `dims` ([schedule §2.2](./schedule.md#2-public-operation)).
+  - `--solver-timeout SECONDS` and `--solver-workers COUNT` MUST state the search
+    budget the operation is given, and either omitted MUST leave that part of the
+    budget at the operation's own default. A solver that sizes itself to the
+    machine is the right default for one schedule and the wrong one for several at
+    once, so the caller running several MUST be able to say so; a budget that
+    cannot be stated is a configuration nobody can reproduce.
+  - `--first-plan` MUST ask for the first plan that satisfies the constraints
+    rather than the best one within the budget, and MUST NOT lift the time limit:
+    a search that has found nothing yet stays bounded by it. Omitted, the search
+    MUST run as the operation's default does. The distinction is the caller's
+    because a search that cannot prove its objective optimal spends its whole
+    budget improving, so a caller who needs a plan and not the best plan otherwise
+    pays the full budget for an answer it already had.
+  - A search that ends without an answer MUST be reported as the search ending
+    without one, and MUST NOT be reported as the selection having no schedule.
   - Output MUST be the Plan's own rendering: its `render()` by default, its
     `to_json()` under `--json`. The command MUST NOT impose a shape across
     algorithms, because two algorithms deciding different things have nothing to
