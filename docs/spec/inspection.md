@@ -143,11 +143,21 @@ MUST round-trip: `print → parse → structural_equal` holds over
   parser §1.5 value-state form, and preserve `Partial.reduction` plus the
   attrs-position mesh axis in the underlying IR
 
-**Display-only** — the rendering of a function with a `DimVar` parameter (a
-`DimVar` shape entry prints as its bare name, without its envelope bounds),
-and therefore of any dispatch prototype and its `.specialize` variants
-(§2.6). A display-only rendering is human-readable and MUST NOT be used as a
-`parse_script` validation artifact.
+**Display-only** — the rendering of a function with a `DimVar` parameter, and
+therefore of any dispatch prototype and its `.specialize` variants (§2.6). A
+display-only rendering is human-readable and MUST NOT be used as a
+`parse_script` validation artifact: it is held to importing, not to
+`structural_equal`.
+
+A `DimVar` shape entry prints as its bare name, and a shape-valued op attribute
+holding one MUST print it the same way rather than as its repr. The rendering
+MUST therefore also emit, once, a declaration binding each such name to the
+`DimVar` it stands for, with the envelope bounds it was declared with. Without
+those declarations the printed source names something nothing defines and cannot
+be imported at all, which is a weaker artifact than display-only is meant to be
+-- the whole point of printing a program is that somebody can be handed the file.
+The bounds are not recoverable from the name, so they are restated rather than
+inferred.
 
 ## 3. Viewer
 

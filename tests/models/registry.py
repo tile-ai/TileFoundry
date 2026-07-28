@@ -15,18 +15,24 @@ partition algorithm decides the launch, so it admits only the module entry
 function, and selecting a leaf for it would be selecting something the algorithm
 has no answer to rather than something it answers badly.
 
-`sized` is a third question, asked separately because it has a different answer:
-whether the model can be analysed at a context length of the caller's choosing.
-A model authored as one fixed shape answers every other question here and cannot
-answer this one, and the two facts must not be collapsed -- a working analysis
-recorded as broken, or a missing capability recorded as nothing at all.
+`sized` is a third question, asked separately because a model can answer the
+others without answering it: whether it can be analysed at a context length of
+the caller's choosing. A model authored as one fixed shape analyses and schedules
+perfectly well and has no context length to state, and the two facts must not be
+collapsed -- a working analysis recorded as broken, or a missing capability
+recorded as nothing at all. It stays its own row once a model answers both, so
+there is somewhere to record the next model that answers only one.
+
+A case that names `dims` is asking about the model at those extents. A model that
+leaves a dimension open cannot be asked about without them at all -- counting
+elements needs a number and a range is not one -- so for those the extents are
+part of the question rather than a refinement of it.
 """
 
 from __future__ import annotations
 
 from tests.models.corpus import (
     MODELS_ROOT,
-    CapabilityGate,
     FunctionCase,
     ModelCase,
     ReferenceCase,
@@ -34,9 +40,18 @@ from tests.models.corpus import (
 )
 from tests.models.qwen3_1_7b.config import REAL as QWEN3_1_7B_SHAPE
 from tests.models.qwen3_1_7b.reference import (
-    decoder_layer_inputs,
-    decoder_layer_oracle,
+    CTX_LEN as QWEN3_1_7B_CTX_LEN,
 )
+from tests.models.qwen3_1_7b.reference import (
+    decode_step_inputs,
+    decode_step_oracle,
+)
+
+#: The context length the cache-reading functions are asked about at. A decode
+#: kernel's cost is dominated by the cache it streams, so the length is stated
+#: rather than minimised: analysing at the shortest context that type-checks
+#: would report a cost profile no deployment has.
+ANALYZED_AT = {"ctx_len": 1024}
 
 QWEN3_1_7B = ModelCase(
     id="qwen3_1_7b",
@@ -45,23 +60,27 @@ QWEN3_1_7B = ModelCase(
     namespace={"config": QWEN3_1_7B_SHAPE},
     reference=ReferenceCase(
         id="qwen3_1_7b/reference/decoder_layer",
-        boundary="one complete decoder layer, at production dimensions",
+        boundary="one decode step of a complete decoder layer, at production dimensions",
         entry="decoder_layer",
-        inputs=decoder_layer_inputs,
-        oracle=decoder_layer_oracle,
-        problem_sizes=("cold-decode",),
+        inputs=decode_step_inputs,
+        oracle=decode_step_oracle,
+        problem_sizes=(f"decode/ctx_len={QWEN3_1_7B_CTX_LEN}",),
     ),
     analyze=(
         FunctionCase(
             id="qwen3_1_7b/analyze/input_rms_norm", function="input_rms_norm"
         ),
         FunctionCase(
-            id="qwen3_1_7b/analyze/self_attention", function="self_attention"
+            id="qwen3_1_7b/analyze/self_attention",
+            function="self_attention",
+            dims=ANALYZED_AT,
         ),
         FunctionCase(id="qwen3_1_7b/analyze/mlp", function="mlp"),
         FunctionCase(id="qwen3_1_7b/analyze/tiled_mlp", function="tiled_mlp"),
         FunctionCase(
-            id="qwen3_1_7b/analyze/decoder_layer", function="decoder_layer"
+            id="qwen3_1_7b/analyze/decoder_layer",
+            function="decoder_layer",
+            dims=ANALYZED_AT,
         ),
     ),
     schedule=(
@@ -69,6 +88,7 @@ QWEN3_1_7B = ModelCase(
             id="qwen3_1_7b/schedule/decoder_layer",
             function="decoder_layer",
             topology="cta",
+            dims=ANALYZED_AT,
         ),
     ),
     sized=(
@@ -76,10 +96,6 @@ QWEN3_1_7B = ModelCase(
             id="qwen3_1_7b/sized/decoder_layer",
             function="decoder_layer",
             dims={"ctx_len": 1024},
-            gate=CapabilityGate(
-                outcome="BLOCKED",
-                reason="no dimension named ['ctx_len']",
-            ),
         ),
     ),
 )

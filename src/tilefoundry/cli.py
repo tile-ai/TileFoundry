@@ -9,7 +9,7 @@ import io
 import runpy
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from tilefoundry.analysis import AnalysisError, ExtractError
 from tilefoundry.analysis.api import analyze
@@ -219,8 +219,35 @@ def _grid_cta_count(ir: Module | Function) -> int | None:
     return next(iter(counts)) if len(counts) == 1 else None
 
 
+def parse_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
+    """``NAME=EXTENT`` arguments as the mapping the operations take.
+
+    ``None`` when nothing was stated, which is not the same as an empty mapping:
+    a caller who stated no size is asking about the program as authored, while an
+    empty mapping is a caller who meant to choose sizes and named none.
+    """
+    if not stated:
+        return None
+    dims: dict[str, int] = {}
+    for entry in stated:
+        name, _, extent = entry.partition("=")
+        if not name or not extent:
+            raise ValueError(f"--dim takes NAME=EXTENT, got {entry!r}")
+        try:
+            dims[name] = int(extent)
+        except ValueError:
+            raise ValueError(
+                f"--dim {name}: extent must be an integer, got {extent!r}"
+            ) from None
+    return dims
+
+
 def run_authored_analysis(
-    source: str, analyses: tuple[str, ...], *, as_json: bool = False
+    source: str,
+    analyses: tuple[str, ...],
+    *,
+    as_json: bool = False,
+    dims: Mapping[str, int] | None = None,
 ) -> int:
     """Analyse one authored HIR selection and print what was found.
 
@@ -230,7 +257,9 @@ def run_authored_analysis(
     """
     module = load_authored_ir(source)
     function = module.entry_function()
-    results = [analyze(module, function, analysis=name) for name in analyses]
+    results = [
+        analyze(module, function, analysis=name, dims=dims) for name in analyses
+    ]
     data = report(results)
     if as_json:
         sys.stdout.write(f"{render_json(data)}\n")
@@ -257,11 +286,17 @@ def _entry_function(ir: Module | Function) -> Function:
     return function
 
 
-def run_schedule(source: str, topology: str, *, as_json: bool = False) -> int:
+def run_schedule(
+    source: str,
+    topology: str,
+    *,
+    as_json: bool = False,
+    dims: Mapping[str, int] | None = None,
+) -> int:
     """Schedule one authored Module through the public Schedule operation."""
     ir = load_authored_ir(source)
     function = _entry_function(ir)
-    result = schedule(ir, function, topology=topology)
+    result = schedule(ir, function, topology=topology, dims=dims)
     sys.stdout.write((result.plan.to_json() if as_json else result.plan.render()) + "\n")
     return 0
 
@@ -285,6 +320,12 @@ def build_parser() -> argparse.ArgumentParser:
             f"--{analysis}", action="store_true", help=f"run the {analysis} analysis"
         )
     analyze.add_argument(
+        "--dim",
+        action="append",
+        metavar="NAME=EXTENT",
+        help="bind one dimension the model left open, for example ctx_len=1024",
+    )
+    analyze.add_argument(
         "--json", action="store_true", help="print the report as JSON instead of text"
     )
 
@@ -298,6 +339,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="LEVEL",
         help="declared topology level to schedule (for example cta)",
+    )
+    schedule.add_argument(
+        "--dim",
+        action="append",
+        metavar="NAME=EXTENT",
+        help="bind one dimension the model left open, for example ctx_len=1024",
     )
     schedule.add_argument("--json", action="store_true", help="print the selected plan as JSON")
 
@@ -337,7 +384,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     if args.command == "schedule":
         try:
-            return run_schedule(args.source, args.topology, as_json=args.json)
+            return run_schedule(
+                args.source,
+                args.topology,
+                as_json=args.json,
+                dims=parse_dims(args.dim),
+            )
         except (
             ExtractError,
             ScheduleError,
@@ -354,7 +406,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not analyses:
         analyses = _ANALYSES
     try:
-        return run_authored_analysis(args.source, analyses, as_json=args.json)
+        return run_authored_analysis(
+            args.source, analyses, as_json=args.json, dims=parse_dims(args.dim)
+        )
     except (AnalysisError, VerifyError, OSError, TypeError, ValueError) as error:
         print(f"tilefoundry: error: {error}", file=sys.stderr)
         return 1

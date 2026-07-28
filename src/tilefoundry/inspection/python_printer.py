@@ -38,6 +38,7 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.specialize import dim_vars_reached
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -312,6 +313,32 @@ def _shape_tuple(shape: tuple) -> str:
     if len(rendered) == 1:
         return f"({rendered[0]},)"
     return "(" + ", ".join(rendered) + ")"
+
+
+def _attr_tuple_str(value: tuple) -> str:
+    """Render an attribute's tuple value as a Python tuple literal.
+
+    A shape-valued attribute -- `new_shape`, a tile's extents -- can hold a
+    `DimVar` or dim arithmetic, and the tuple's own `str` would render those as
+    dataclass reprs. Printing them the way the annotations do keeps one program
+    described one way, and keeps the printed source importable: the declaration
+    the header emits binds the name, not the repr.
+    """
+    rendered = tuple(
+        shape_entry_str(entry) if _is_dim_entry(entry) else repr(entry)
+        for entry in value
+    )
+    if len(rendered) == 1:
+        return f"({rendered[0]},)"
+    return "(" + ", ".join(rendered) + ")"
+
+
+def _is_dim_entry(entry: object) -> bool:
+    """Whether *entry* is a dimension rather than a plain attribute value."""
+    return isinstance(entry, (DimVar, Constant)) or (
+        isinstance(entry, Call)
+        and isinstance(entry.target, (DimConst, *_DIM_INFIX_OPS, *_DIM_FUNC_OPS))
+    )
 
 
 def _shard_attr_str(attr) -> str:
@@ -848,7 +875,7 @@ def _emit_def(
                 sl_str = _shard_layout_str(value, indent=indent_here + "        ")
                 attr_strs.append(f"{param.name}={sl_str}")
             elif isinstance(value, tuple):
-                attr_strs.append(f"{param.name}={value}")
+                attr_strs.append(f"{param.name}={_attr_tuple_str(value)}")
             else:
                 attr_strs.append(f"{param.name}={value}")
         # Positional operands and attributes are one argument list. An op with
@@ -1093,6 +1120,7 @@ def _emit_header(
     *,
     for_module: bool = False,
     target: "Target | None" = None,
+    dim_vars: "dict[str, object] | None" = None,
 ) -> list[str]:
     """Import header + mesh-prelude shared by ``hir_function_to_python`` and
     ``_module_to_python`` — the only source for the imports/mesh-defs a
@@ -1114,7 +1142,18 @@ def _emit_header(
     lines.append(")")
     if fn.variants:
         lines.append("from tilefoundry.ir.core.pattern import DimVarRangePat")
+    if dim_vars:
+        lines.append("from tilefoundry.ir.types.dim import DimVar")
     lines.append("")
+
+    # Every dimension the program leaves open, declared with the bounds it was
+    # declared with. Shapes print a dimension as its name, so without these the
+    # printed source names something nothing defines -- and the bounds are not
+    # recoverable from the name, so they have to be restated rather than guessed.
+    if dim_vars:
+        for name, var in dim_vars.items():
+            lines.append(f'{name} = DimVar("{var.name}", {var.lo}, {var.hi})')
+        lines.append("")
 
     # Mesh definitions, emitted only when sugar is viable (mesh has named axes).
     if any(m.names for m in meshes.values()):
@@ -1167,7 +1206,9 @@ def hir_function_to_python(
     indent = "    "
     meshes = _collect_all_meshes(fn)
     mesh_map = _mesh_name_map(meshes)
-    lines = _emit_header(fn, meshes, mesh_map, indent)
+    lines = _emit_header(
+        fn, meshes, mesh_map, indent, dim_vars=dim_vars_reached(fn)
+    )
     lines.extend(_emit_decorated_defs(fn, mesh_map, indent, options or PythonPrintOptions()))
     return "\n".join(lines) + "\n"
 
@@ -1298,8 +1339,14 @@ def _module_to_python(
         meshes.update(_collect_all_meshes(fn))
     mesh_map = _mesh_name_map(meshes)
 
+    # Every function's dimensions, not just the entry's: a leaf can be the only
+    # one that names a dimension, and the header is emitted once for all of them.
+    dim_vars: dict[str, object] = {}
+    for fn in functions:
+        dim_vars.update(dim_vars_reached(fn))
     lines = _emit_header(
         entry, meshes, mesh_map, indent4, for_module=True, target=root.target,
+        dim_vars=dim_vars,
     )
     tensor_names = "ConstTensor, Tensor" if any(
         param.is_const for fn in functions for param in fn.params

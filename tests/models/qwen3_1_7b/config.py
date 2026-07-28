@@ -15,9 +15,10 @@ package shares:
   weights at a fixed seed),
 - the model dimensions (GQA 16 query / 8 key-value heads; a dense SwiGLU MLP
   — no MoE router/gather, unlike the ``qwen3_5_30b_a3b`` sibling package),
-- the static single-shot-prefill contract (a fixed ``S_CAP``-token sequence,
-  no KV cache, no dynamic ``DimVar`` — Phase 0 validates op-composition
-  correctness, not context-length scaling), and
+- the decode contract: one token per step (``seq_len`` is 1), the active
+  context length ``ctx_len`` as the single dynamic dimension, and the KV cache
+  passed as explicit tensors in and out — Hugging Face's ``past_key_values`` is
+  never constructed, on either side of the comparison, and
 - the component -> HF-submodule map.
 
 Component HIR ``@func``s live in ``model/decoder_layer.py``, over this module's
@@ -39,7 +40,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Qwen3Shape:
-    """One decoder layer's shape, plus the sequence length and dtype every
+    """One decoder layer's shape, plus the context envelope and dtype every
     kernel in this package is authored at."""
 
     hidden: int
@@ -52,7 +53,7 @@ class Qwen3Shape:
     attention_bias: bool
     vocab: int
     max_pos: int
-    s_cap: int
+    max_ctx: int
     dt: str
 
     @property
@@ -69,12 +70,13 @@ class Qwen3Shape:
         return self.n_kv_heads * self.head_dim
 
 
-# ``s_cap`` is static: no KV cache, no dynamic dims -- a single-shot prefill
-# oracle (``cur_pos`` is always 0). Op semantics are length-agnostic, but atom
-# matching is not: an atom's row granularity has to divide the op's row count,
-# and at 4 every matmul here fails that (``4 % 16 != 0`` against the AMX outer
-# product) and lists no candidate. 64 is a length that keeps the numerical
-# oracle cheap and still divides both modelled granularities.
+# One token per step, so the only dynamic dimension is the context the step
+# reads. ``max_ctx`` is the largest context the kernels are authored for; it
+# matches ``max_pos`` because a position beyond the rotary cache has no
+# embedding to gather, so a longer context would be unrepresentable rather than
+# merely slow.
+SEQ_LEN = 1
+
 REAL = Qwen3Shape(
     hidden=2048,
     head_dim=128,
@@ -86,7 +88,7 @@ REAL = Qwen3Shape(
     attention_bias=False,
     vocab=151936,
     max_pos=32768,
-    s_cap=64,
+    max_ctx=32768,
     dt="f32",
 )
 
@@ -161,23 +163,62 @@ def rope_caches(cfg, max_pos, device="cpu", dtype=None):
     return cos, sin
 
 
-def causal_mask(seq, device="cpu", dtype=None):
-    """Additive causal mask ``[1, 1, seq, seq]``: 0 where query ``i`` may
-    attend key ``j`` (``j <= i``), ``-inf`` otherwise.
+def context_kv(layer, hidden_ctx, device="cpu"):
+    """The KV cache for *hidden_ctx*, as the explicit tensors a decode step takes.
 
-    Unlike the ``qwen3_5_30b_a3b`` sibling's ``additive_causal_mask`` /
-    ``decode_attn_mask`` (which both take a ``cur_pos`` — prior KV-cache
-    length), this package has no KV cache: every token attends only within
-    the same ``S_CAP`` tile, i.e. ``cur_pos`` is always 0.
+    Built by running the layer's own norm, projections and rotary embedding over
+    the context — no ``Cache`` object is constructed. What comes out is bitwise
+    identical to what Hugging Face's own cache would hold after a prefill of the
+    same hidden states, which is what makes it a reference rather than a
+    re-derivation: keys are post-rotary (a stored key belongs to the position it
+    was written at) and values are post-projection.
+
+    Returned in the kernels' ``[1, ctx_len, n_kv_heads, head_dim]`` layout, not
+    Hugging Face's head-major one.
+    """
+    import torch  # noqa: PLC0415
+    from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb  # noqa: PLC0415
+
+    cfg = build_hf_config()
+    attn = layer.self_attn
+    ctx = hidden_ctx.shape[1]
+    cos, sin = rope_caches(cfg, ctx, device=device)
+    with torch.no_grad():
+        normed = layer.input_layernorm(hidden_ctx)
+        heads = (1, ctx, cfg.num_key_value_heads, cfg.head_dim)
+        k = attn.k_norm(attn.k_proj(normed).view(heads)).transpose(1, 2)
+        v = attn.v_proj(normed).view(heads).transpose(1, 2)
+        # apply_rotary_pos_emb rotates a query/key pair; only the key is wanted.
+        _, k = apply_rotary_pos_emb(k, k, cos.unsqueeze(0), sin.unsqueeze(0))
+    return k.transpose(1, 2).contiguous(), v.transpose(1, 2).contiguous()
+
+
+def decode_reference(layer, hidden_ctx, hidden_new, device="cpu"):
+    """Hugging Face's output for *hidden_new* decoded after *hidden_ctx*.
+
+    Runs the layer once over the whole sequence under a causal mask and keeps the
+    last position. Causality makes that position's output depend on exactly the
+    context before it, so this equals a cached one-token step to floating-point
+    rounding while touching none of the caching machinery -- the alternative
+    would be to hand Hugging Face a ``past_key_values``, and then the reference
+    would share the mechanism the kernels are supposed to be checked against.
     """
     import torch  # noqa: PLC0415
 
-    q_pos = torch.arange(seq, device=device).unsqueeze(1)
-    k_pos = torch.arange(seq, device=device).unsqueeze(0)
-    mask = torch.where(k_pos <= q_pos, 0.0, float("-inf"))
-    if dtype is not None:
-        mask = mask.to(dtype)
-    return mask.view(1, 1, seq, seq)
+    cfg = build_hf_config()
+    total = hidden_ctx.shape[1] + hidden_new.shape[1]
+    cos, sin = rope_caches(cfg, total, device=device)
+    positions = torch.arange(total, device=device)
+    mask = torch.where(
+        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
+    ).view(1, 1, total, total)
+    with torch.no_grad():
+        out = layer(
+            torch.cat([hidden_ctx, hidden_new], dim=1),
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
+            attention_mask=mask,
+        )
+    return out[:, hidden_ctx.shape[1] :, :]
 
 
 def linear_weight(linear):

@@ -53,8 +53,18 @@ def test_every_selected_function_plans_or_says_what_stopped_it(
     topology = fixture.level(case.topology)
 
     def run() -> None:
-        result = schedule(module, function, topology=topology.name, options=_SOLVER)
-        result.plan.verify(module, function, topology)
+        result = schedule(
+            module,
+            function,
+            topology=topology.name,
+            options=_SOLVER,
+            dims=None if case.dims is None else dict(case.dims),
+        )
+        # The plan is verified against the function it was made for, which at a
+        # chosen size is the one the result carries rather than the one asked
+        # about: verifying against a function still holding a range would check
+        # the plan against a program nothing planned.
+        result.plan.verify(module, result.function, topology)
         assert result.plan.to_json() == result.plan.to_json()
 
     case.gate.hold(run, expect=ScheduleError, label=case.id)

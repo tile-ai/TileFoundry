@@ -27,6 +27,7 @@ from tilefoundry.analysis.registry import ANALYSES
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.specialize import origin_of
 
 
 def _traffic(traffic: tuple[tuple[str, TrafficBytes], ...]) -> dict[str, dict[str, int]]:
@@ -143,17 +144,49 @@ def selected_types(
     return tuple(order)
 
 
+def _same_program(candidate: object, function: object) -> bool:
+    """Whether *candidate* and *function* are the same program at the same size.
+
+    The same object, or two rebuilds of one function at one size: same recorded
+    origin, same parameter types, same return type. Nothing else is compared,
+    because nothing else can be -- and nothing else has to be, since a rebuild is
+    settled by the function it came from and the extents it was given.
+    """
+    if candidate is function:
+        return True
+    origin = origin_of(candidate)
+    if origin is None or origin is not origin_of(function):
+        return False
+    return (
+        tuple(param.type for param in candidate.params)
+        == tuple(param.type for param in function.params)
+        and candidate.return_type == function.return_type
+    )
+
+
 def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
-    """One report over every analysis run against one function.
+    """One report over every analysis run against one program.
 
     Only the record types the calls actually wrote are read, so a renderer is
     never sent looking for records that are not there.
+
+    The results have to describe the same program. Usually that is one object,
+    but an analysis asked about a size builds the program at that size, so
+    several analyses at one size hold several rebuilds and share no object.
+    Those are accepted when they were rebuilt from the same function and came
+    out with the same signature: the origin is stamped only by the specialiser,
+    so it cannot be claimed by something that was not derived, and the signature
+    carries the extents, so two rebuilds at different sizes still differ.
+
+    Structural equality would be the obvious test and is not available: an
+    operation carries no equality, so two rebuilds of one program are never
+    equal however identical they are.
     """
     if not results:
         raise ValueError("an analysis report needs at least one result")
     first = results[0]
     function = first.function
-    if any(item.function is not function for item in results):
+    if any(not _same_program(item.function, function) for item in results):
         raise ValueError(
             "an analysis report covers one function; these results cover several"
         )

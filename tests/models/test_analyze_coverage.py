@@ -65,7 +65,12 @@ def test_every_selected_function_analyses_or_says_what_stopped_it(
     function = model.function(module, case)
 
     case.gate.hold(
-        lambda: analyze(module, function, analysis=family),
+        lambda: analyze(
+            module,
+            function,
+            analysis=family,
+            dims=None if case.dims is None else dict(case.dims),
+        ),
         expect=AnalysisError,
         label=f"{case.id}/{family}",
     )

@@ -3,12 +3,12 @@
 Its own question, and its own row in the report. A model authored as one fixed
 shape analyses and schedules perfectly well and has no context length to state.
 Recording that under analysis would call a working thing broken; leaving it out
-would hide that the model is not yet the shape the corpus is moving towards.
+would hide that the model is not the shape the corpus is moving towards.
 
-The blocked cases here are the record of that gap. Each one runs, has to fail,
-and has to fail for the reason the registry states -- so when a model is
-rewritten to be dynamic, its case starts passing and the build breaks until
-somebody corrects the matrix. That is the point of writing it down.
+A gate here is a claim about today in both directions. A blocked case has to
+fail, and for the stated reason, so a model rewritten to be dynamic breaks the
+build until the matrix is corrected. An ungated case has to succeed, so a model
+that loses the capability breaks it the same way.
 """
 
 from __future__ import annotations
@@ -65,8 +65,14 @@ def test_every_model_is_asked_this_question() -> None:
 
 
 def test_the_report_keeps_this_apart_from_analysis() -> None:
-    """The same model is a pass under one heading and a block under the other,
-    which is the whole reason they are two headings."""
+    """Being asked at a size is reported under its own heading, whatever the
+    answer is.
+
+    The two headings exist so the answers can differ, and they still have to be
+    two headings when they agree: a model that analyses and that can be asked at
+    a length has answered two questions, and collapsing them once they match
+    would leave nowhere to record the next model that answers only one.
+    """
     fixture = ACCEPTANCE()
     collector = CoverageCollector()
     for model, _, case in _selected():
@@ -92,9 +98,9 @@ def test_the_report_keeps_this_apart_from_analysis() -> None:
     section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"][fixture.id]
 
     assert {row["status"] for row in section["analyze"]["tested"]} == {"PASS"}
-    blocked = {
-        row["function"]: row["reason"]
-        for row in section["sized"]["tested"]
-        if row["status"] == "BLOCKED"
-    }
-    assert blocked == {"decoder_layer": "no dimension named ['ctx_len']"}
+    sized = {row["function"]: row["status"] for row in section["sized"]["tested"]}
+    assert sized == {"decoder_layer": "PASS"}
+    # Distinct headings, not one heading reported twice: the sized row names the
+    # function it asked about and does not carry the analyses' rows with it.
+    assert section["sized"]["tested"] is not section["analyze"]["tested"]
+    assert len(section["sized"]["tested"]) == 1

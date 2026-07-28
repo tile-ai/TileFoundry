@@ -79,7 +79,7 @@ def test_analyze_selects_default_or_requested_analyses(monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
         "run_authored_analysis",
-        lambda source, analyses, as_json=False: calls.append(
+        lambda source, analyses, as_json=False, dims=None: calls.append(
             (source, analyses, as_json)
         ),
     )

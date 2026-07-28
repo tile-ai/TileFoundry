@@ -1,45 +1,49 @@
-"""Qwen3-1.7B dense decoder layer: resolve a kernel by name, evaluate vs HF.
+"""Qwen3-1.7B decode step: resolve a kernel by name, evaluate vs HF.
 
-Phase 0 cpu + f32 oracle (no CUDA on this box — every ``device=`` below is
-``"cpu"``). Each test resolves one kernel from the ``Qwen3_1_7B`` module
-(mirroring ``tests/models/qwen3_5_30b_a3b/test_qwen3_module.py``) and checks it
-against the corresponding Hugging Face ``Qwen3DecoderLayer`` submodule(s).
-Inputs are built fresh inside each test from the shared ``config`` fixtures —
-no module-level static tensors.
+cpu + f32 oracle (no CUDA on this box — every ``device=`` below is ``"cpu"``).
+Each test resolves one kernel from the ``Qwen3_1_7B`` module (mirroring
+``tests/models/qwen3_5_30b_a3b/test_qwen3_module.py``) and checks it against the
+corresponding Hugging Face ``Qwen3DecoderLayer`` submodule(s).
+
+The kernels that read the KV cache carry ``ctx_len`` as a range, so they are
+specialised at the length the drawn step uses before being evaluated: an extent
+is what counting elements needs, and a range is not one. The kernels that do not
+read the cache carry no range and are evaluated as authored.
+
+Arguments come from ``reference.py``'s drawn step rather than being assembled
+here, so the parameter order is stated once and a signature change cannot leave
+one test agreeing with a stale order.
 """
 from __future__ import annotations
 
 import torch
 
-from tests.models.qwen3_1_7b import config
+from tests.models.qwen3_1_7b import config, reference
 from tests.models.qwen3_1_7b import decoder_layer as qwen3
 from tilefoundry.evaluator import evaluate
+from tilefoundry.ir.hir.specialize import specialize_concretely
 
 HIDDEN = config.REAL.hidden
-S_CAP = config.REAL.s_cap
+SEQ = config.SEQ_LEN
 
 DEV = "cpu"
 ATOL = RTOL = 2e-4
 
+#: Two lengths, so a kernel that only works at the length it was authored
+#: against cannot pass. Neither divides the key/value head count.
+CTX_LENGTHS = (24, 40)
 
-def _fixtures():
-    """A fresh HF layer + its RoPE caches / causal mask / attention scale, all
-    on cpu. ``pos_ids`` is ``0..S_CAP-1`` — there is no prior KV-cache context
-    in this package, so ``cur_pos`` is always 0 (see ``config.causal_mask``)."""
+
+def _one_token(seed=1):
+    """A fresh HF layer and one token's hidden states."""
     layer = config.build_hf_layer(seed=0, device=DEV)
-    cfg = config.build_hf_config()
-    cos_cache, sin_cache = config.rope_caches(cfg, S_CAP, device=DEV)
-    pos_ids = torch.arange(S_CAP, device=DEV, dtype=torch.int32)
-    mask = config.causal_mask(S_CAP, device=DEV)
-    scale = torch.full((1, 1, 1, 1), layer.self_attn.scaling, device=DEV)
-    return layer, cos_cache, sin_cache, pos_ids, mask, scale
+    torch.manual_seed(seed)
+    return layer, torch.randn(1, SEQ, HIDDEN, device=DEV) * 0.1
 
 
 def test_input_rms_norm_evaluate():
     """input_rms_norm vs HF `input_layernorm`."""
-    layer, *_ = _fixtures()
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
+    layer, x = _one_token()
 
     with torch.no_grad():
         ref = layer.input_layernorm(x)
@@ -48,47 +52,10 @@ def test_input_rms_norm_evaluate():
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
 
-def test_self_attention_evaluate():
-    """self_attention (input_layernorm + self_attn: GQA + RoPE +
-    per-head q_norm/k_norm) vs HF, over a plain causal mask (cur_pos == 0,
-    no prior KV-cache context in this package)."""
-    layer, cos_cache, sin_cache, pos_ids, mask, scale = _fixtures()
-    attn = layer.self_attn
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
-
-    cos = cos_cache[pos_ids.long()].unsqueeze(0)
-    sin = sin_cache[pos_ids.long()].unsqueeze(0)
-    with torch.no_grad():
-        h = layer.input_layernorm(x)
-        ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
-
-    out = evaluate(
-        qwen3.self_attention,
-        x,
-        layer.input_layernorm.weight,
-        config.linear_weight(attn.q_proj),
-        config.linear_weight(attn.k_proj),
-        config.linear_weight(attn.v_proj),
-        attn.q_norm.weight,
-        attn.k_norm.weight,
-        cos_cache,
-        sin_cache,
-        pos_ids,
-        mask,
-        scale,
-        config.linear_weight(attn.o_proj),
-        device=DEV,
-    )
-    torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
-
-
 def test_mlp_evaluate():
     """mlp (post_attention_layernorm + dense SwiGLU) vs HF."""
-    layer, *_ = _fixtures()
+    layer, x = _one_token()
     mlp = layer.mlp
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
 
     with torch.no_grad():
         ref = mlp(layer.post_attention_layernorm(x))
@@ -106,14 +73,12 @@ def test_mlp_evaluate():
 
 
 def test_tiled_mlp_matches_untiled_mlp():
-    """tiled_mlp (the K-loop / 32x32-block rewrite of `mlp`) against `mlp`
+    """tiled_mlp (the K-loop / column-block rewrite of `mlp`) against `mlp`
     itself on the same inputs: the loop tiling only reassociates the K
     reduction, so the two must agree to f32 round-off. Also checked against
     HF, so a bug shared by both rewrites cannot hide."""
-    layer, *_ = _fixtures()
+    layer, x = _one_token()
     mlp = layer.mlp
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
     weights = (
         layer.post_attention_layernorm.weight,
         config.linear_weight(mlp.gate_proj),
@@ -130,38 +95,66 @@ def test_tiled_mlp_matches_untiled_mlp():
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
 
+def test_self_attention_evaluate():
+    """self_attention (input_layernorm + self_attn: GQA + RoPE + per-head
+    q_norm/k_norm over the cache and the new token) vs HF's own attention at the
+    decoded position."""
+    drawn = reference.decode_step_inputs(device=DEV)
+    fn = specialize_concretely(qwen3.self_attention, {"ctx_len": drawn.ctx_len})
+    # self_attention takes the layer's arguments up to w_o; the MLP's four come
+    # after it in decoder_layer's signature.
+    out, _, _ = evaluate(fn, *drawn.args[:-4], device=DEV)
+
+    cfg = config.build_hf_config()
+    total = drawn.ctx_len + SEQ
+    cos, sin = config.rope_caches(cfg, total, device=DEV)
+    positions = torch.arange(total, device=DEV)
+    mask = torch.where(
+        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
+    ).view(1, 1, total, total)
+    sequence = torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1)
+    with torch.no_grad():
+        normed = drawn.layer.input_layernorm(sequence)
+        ref, _ = drawn.layer.self_attn(
+            normed,
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
+            attention_mask=mask,
+        )
+
+    torch.testing.assert_close(
+        out.float(), ref[:, -SEQ:, :].float(), atol=ATOL, rtol=RTOL
+    )
+
+
 def test_decoder_layer_evaluate():
     """Full decoder_layer (self_attention + residual + mlp + residual) vs the
-    complete HF `Qwen3DecoderLayer.forward`."""
-    layer, cos_cache, sin_cache, pos_ids, mask, scale = _fixtures()
-    attn, mlp = layer.self_attn, layer.mlp
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
+    complete HF `Qwen3DecoderLayer.forward` at the decoded position, at two
+    context lengths."""
+    for ctx_len in CTX_LENGTHS:
+        drawn = reference.decode_step_inputs(ctx_len=ctx_len, device=DEV)
+        fn = specialize_concretely(qwen3.decoder_layer, {"ctx_len": ctx_len})
+        out, _, _ = evaluate(fn, *drawn.args, device=DEV)
 
-    cos = cos_cache[pos_ids.long()].unsqueeze(0)
-    sin = sin_cache[pos_ids.long()].unsqueeze(0)
-    with torch.no_grad():
-        ref = layer(x, position_embeddings=(cos, sin), attention_mask=mask)
+        want = reference.decode_step_oracle(drawn)
+        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
 
-    out = evaluate(
-        qwen3.decoder_layer,
-        x,
-        layer.input_layernorm.weight,
-        config.linear_weight(attn.q_proj),
-        config.linear_weight(attn.k_proj),
-        config.linear_weight(attn.v_proj),
-        attn.q_norm.weight,
-        attn.k_norm.weight,
-        cos_cache,
-        sin_cache,
-        pos_ids,
-        mask,
-        scale,
-        config.linear_weight(attn.o_proj),
-        layer.post_attention_layernorm.weight,
-        config.linear_weight(mlp.gate_proj),
-        config.linear_weight(mlp.up_proj),
-        config.linear_weight(mlp.down_proj),
-        device=DEV,
-    )
-    torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
+
+def test_decoder_layer_returns_the_cache_entry_to_append():
+    """The step's returned key and value are this token's cache entry: appending
+    them to the cache it was given reproduces the cache a context one token
+    longer would have produced.
+
+    Checked against a rebuilt cache rather than against the step's own inputs,
+    so a step that returned its inputs unchanged would fail.
+    """
+    drawn = reference.decode_step_inputs(device=DEV)
+    fn = specialize_concretely(qwen3.decoder_layer, {"ctx_len": drawn.ctx_len})
+    _, k_new, v_new = evaluate(fn, *drawn.args, device=DEV)
+
+    want_k, want_v = reference.appended_cache_oracle(drawn)
+    grown_k = torch.cat([drawn.k_cache, k_new], dim=1)
+    grown_v = torch.cat([drawn.v_cache, v_new], dim=1)
+
+    assert tuple(grown_k.shape) == tuple(want_k.shape)
+    torch.testing.assert_close(grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL)
+    torch.testing.assert_close(grown_v.float(), want_v.float(), atol=ATOL, rtol=RTOL)

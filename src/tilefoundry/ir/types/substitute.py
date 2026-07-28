@@ -38,9 +38,20 @@ def dim_vars_in(value: object) -> tuple[str, ...]:
     name nobody uses is a caller who believes they specialised something, and
     silently substituting nothing would let them keep believing it.
     """
-    found: dict[str, None] = {}
+    return tuple(dim_vars_by_name(value))
+
+
+def dim_vars_by_name(value: object) -> dict[str, "DimVar"]:
+    """Every distinct `DimVar` reachable from *value*, by name, first-seen first.
+
+    The declarations themselves, for a caller that needs to restate them rather
+    than only check whether they are there -- printing a program back as source
+    has to emit the bounds a name was declared with, and a name alone cannot say
+    what they were.
+    """
+    found: dict[str, "DimVar"] = {}
     _collect(value, found)
-    return tuple(found)
+    return found
 
 
 def _layout_types() -> tuple[type, ...]:
@@ -51,7 +62,7 @@ def _layout_types() -> tuple[type, ...]:
     return (Layout, ComposedLayout, ShardLayout)
 
 
-def _collect(value: object, found: dict[str, None]) -> None:
+def _collect(value: object, found: dict[str, "DimVar"]) -> None:
     if isinstance(value, TensorType):
         for entry in value.shape:
             _collect(entry, found)
@@ -65,7 +76,7 @@ def _collect(value: object, found: dict[str, None]) -> None:
             _collect(field, found)
         return
     if isinstance(value, DimVar):
-        found[value.name] = None
+        found[value.name] = value
         return
     if isinstance(value, tuple):
         for entry in value:
@@ -76,7 +87,7 @@ def _collect(value: object, found: dict[str, None]) -> None:
             _collect(arg, found)
 
 
-def _collect_layout(layout: object, found: dict[str, None]) -> None:
+def _collect_layout(layout: object, found: dict[str, "DimVar"]) -> None:
     if layout is None:
         return
     Layout, ComposedLayout, ShardLayout = _layout_types()
@@ -235,6 +246,7 @@ def has_symbolic_dims(value: object) -> bool:
 
 __all__ = [
     "DimSubstitutionError",
+    "dim_vars_by_name",
     "dim_vars_in",
     "has_symbolic_dims",
     "substitute_dims",

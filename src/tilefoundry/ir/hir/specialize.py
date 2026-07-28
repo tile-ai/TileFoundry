@@ -16,7 +16,7 @@ from collections.abc import Mapping
 
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.types.substitute import (
-    dim_vars_in,
+    dim_vars_by_name,
     has_symbolic_dims,
     substitute_dims,
 )
@@ -216,27 +216,34 @@ def residual_dims(fn: Function) -> tuple[str, ...]:
     block length the caller never mentions -- and a scan that stopped at the
     signature would call such a function concrete while it still holds a range.
     """
-    found: dict[str, None] = {}
+    return tuple(dim_vars_reached(fn))
+
+
+def dim_vars_reached(fn: Function) -> dict[str, object]:
+    """The declarations behind `residual_dims`, by name.
+
+    Same traversal, keeping the `DimVar` rather than only its name, for a caller
+    that has to restate the bounds a dimension was declared with.
+    """
+    found: dict[str, object] = {}
     _walk_function(fn, found, set())
-    return tuple(found)
+    return found
 
 
-def _walk_function(fn: Function, found: dict[str, None], seen: set[int]) -> None:
+def _walk_function(fn: Function, found: dict[str, object], seen: set[int]) -> None:
     if id(fn) in seen:
         return
     seen.add(id(fn))
     for param in fn.params:
-        for name in dim_vars_in(param.type):
-            found[name] = None
-    for name in dim_vars_in(fn.return_type):
-        found[name] = None
+        found.update(dim_vars_by_name(param.type))
+    found.update(dim_vars_by_name(fn.return_type))
     for variant in fn.variants:
         _walk_function(variant, found, seen)
     if fn.body is not None:
         _walk(fn.body, found, seen)
 
 
-def _walk(expr: object, found: dict[str, None], seen: set[int], depth: int = 0) -> None:
+def _walk(expr: object, found: dict[str, object], seen: set[int], depth: int = 0) -> None:
     from tilefoundry.ir.types.substitute import _collect  # noqa: PLC0415
 
     if expr is None or depth > 256:
@@ -257,7 +264,7 @@ def _walk(expr: object, found: dict[str, None], seen: set[int], depth: int = 0) 
     _walk(getattr(expr, "body", None), found, seen, depth + 1)
 
 
-def _collect_entries(value: object, found: dict[str, None]) -> None:
+def _collect_entries(value: object, found: dict[str, object]) -> None:
     from tilefoundry.ir.types.substitute import _collect  # noqa: PLC0415
 
     if isinstance(value, tuple):
@@ -275,6 +282,7 @@ def is_concrete(fn: Function) -> bool:
 __all__ = [
     "PROVENANCE",
     "SpecializationError",
+    "dim_vars_reached",
     "is_concrete",
     "origin_of",
     "residual_dims",

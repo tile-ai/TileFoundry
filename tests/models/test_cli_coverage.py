@@ -10,7 +10,10 @@ only artifact anyone can hand to somebody else.
 
 The source is produced from a Target-bound build, so the file states its own
 machine and topology levels and the CLI has to read them back rather than be
-told.
+told. The one thing the file cannot state is the size to ask about: a model
+authored for decode leaves its context length open on purpose, so the length
+travels as a `--dim` argument, taken from the same registry entry the in-process
+tests use rather than written out again here.
 """
 
 from __future__ import annotations
@@ -26,6 +29,11 @@ from tilefoundry import cli
 from tilefoundry.inspection import as_script
 
 _ANALYSES = ("--compute-cost", "--memory", "--roofline", "--timeline")
+
+
+def _dim_args(case) -> list[str]:
+    """The `--dim` arguments for *case*'s stated extents, if it states any."""
+    return [f"--dim={name}={extent}" for name, extent in (case.dims or {}).items()]
 
 
 def _source_for(model: ModelCase, fixture: TargetFixture, directory) -> str:
@@ -50,7 +58,7 @@ def test_the_printed_model_is_source_the_cli_can_import(model, tmp_path) -> None
     has no form anyone can pass around, however well it analyses in memory."""
     source = _source_for(model, ACCEPTANCE(), tmp_path)
 
-    assert cli.main(["analyze", source, "--compute-cost"]) == 0
+    assert cli.main(["analyze", source, "--compute-cost", *_dim_args(model.analyze[-1])]) == 0
 
 
 @pytest.mark.parametrize("model", _models(), ids=_identify)
@@ -59,7 +67,7 @@ def test_every_analysis_the_cli_offers_runs_on_a_real_model(
 ) -> None:
     source = _source_for(model, ACCEPTANCE(), tmp_path)
 
-    assert cli.main(["analyze", source, *_ANALYSES]) == 0
+    assert cli.main(["analyze", source, *_ANALYSES, *_dim_args(model.analyze[-1])]) == 0
     assert capsys.readouterr().out.strip()
 
 
@@ -67,7 +75,12 @@ def test_every_analysis_the_cli_offers_runs_on_a_real_model(
 def test_the_cli_reports_a_real_model_as_json(model, tmp_path, capsys) -> None:
     source = _source_for(model, ACCEPTANCE(), tmp_path)
 
-    assert cli.main(["analyze", source, "--compute-cost", "--json"]) == 0
+    assert (
+        cli.main(
+            ["analyze", source, "--compute-cost", "--json", *_dim_args(model.analyze[-1])]
+        )
+        == 0
+    )
     assert json.loads(capsys.readouterr().out)
 
 
@@ -81,7 +94,18 @@ def test_the_cli_schedules_a_real_model_at_a_declared_level(
     case = model.schedule[0]
     source = _source_for(model, fixture, tmp_path)
 
-    assert cli.main(["schedule", source, "--topology", fixture.level(case.topology).name]) == 0
+    assert (
+        cli.main(
+            [
+                "schedule",
+                source,
+                "--topology",
+                fixture.level(case.topology).name,
+                *_dim_args(case),
+            ]
+        )
+        == 0
+    )
     assert capsys.readouterr().out.strip()
 
 

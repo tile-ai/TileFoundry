@@ -9,9 +9,10 @@ grammar productions remain in the [parser specification](./parser.md).
 
 ```text
 tilefoundry analyze model.py[:Module[.child_module...][.function]]
-    [--roofline] [--footprint] [--timeline]
+    [--roofline] [--footprint] [--timeline] [--dim NAME=EXTENT ...]
 
 tilefoundry schedule model.py[:Module[.child_module...][.function]] --topology LEVEL [--json]
+    [--dim NAME=EXTENT ...]
 
 tilefoundry inspect capabilities model.py[:Module[.child_module...][.function]]
 
@@ -53,6 +54,21 @@ no ordinary `--target` option.
     against nor the topology hierarchy they divide over.
   - `--json` MUST print the report as JSON instead of text. Both formats MUST
     carry the same conclusions ([analysis §2](./analysis.md#2-authored-hir-metrics)).
+  - `--dim NAME=EXTENT` MUST bind one dimension the selection leaves open, and
+    MUST be repeatable to bind several. It MUST be passed through as the
+    operation's `dims` ([analysis §2.2](./analysis.md#2-authored-hir-metrics));
+    the CLI MUST NOT specialise the selection itself, because then what it
+    printed would be about a program the operation never saw.
+  - A `--dim` argument that is not `NAME=EXTENT`, or whose extent is not an
+    integer, MUST be rejected naming which argument and why.
+  - With no `--dim`, the selection MUST be analysed as authored. A selection that
+    leaves a dimension open MUST then fail naming the dimension: counting
+    elements requires an extent, and a range is not one.
+  - Every requested analysis MUST be reported together even when each was run at
+    the stated extents, which builds one program per analysis. The report MUST
+    accept those as one program when they were rebuilt from the same function
+    with the same resulting signature, and MUST refuse results rebuilt at
+    different extents.
   - Output MUST report the analyses that were requested. A dependency that ran
     because a requested root needed it MUST appear in the executed list and MUST
     NOT have its own measurements reported.
@@ -82,6 +98,8 @@ Target, MUST be rejected -- `schedule` does not resolve an omission to a default
   - The command MUST call the public operation once and MUST NOT compose the
     algorithm's stages itself, so what it prints cannot drift from what the
     operation decided.
+  - `--dim NAME=EXTENT` MUST behave as it does for `analyze`, passed through as
+    the operation's `dims` ([schedule §2.2](./schedule.md#2-public-operation)).
   - Output MUST be the Plan's own rendering: its `render()` by default, its
     `to_json()` under `--json`. The command MUST NOT impose a shape across
     algorithms, because two algorithms deciding different things have nothing to
