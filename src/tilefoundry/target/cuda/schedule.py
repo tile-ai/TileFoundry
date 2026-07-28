@@ -52,7 +52,15 @@ def _options(topology: str, options: object | None) -> ScheduleOptions:
 
 
 def _entry_function(topology: str, module: Module, function: Function) -> None:
-    if function is not module.entry_function():
+    """Refuse a leaf: these algorithms decide the whole launch.
+
+    Matched by name rather than by object. A module's function names are
+    unique, a variant carries its prototype's name, and a function specialised
+    to one size carries it too -- all of those are the entry, and the public
+    boundary has already established that this function belongs to this module.
+    Comparing objects would refuse the entry at a chosen size.
+    """
+    if function.name != module.entry_function().name:
         raise ScheduleError(
             f"{topology} schedule requires the module entry function, got "
             f"{function.name!r}"

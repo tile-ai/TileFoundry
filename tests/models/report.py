@@ -23,10 +23,10 @@ from typing import Literal
 
 from tests.models.corpus import CapabilityGate, ModelCase
 
-Kind = Literal["reference", "analyze", "schedule"]
+Kind = Literal["reference", "analyze", "schedule", "sized"]
 Status = Literal["PASS", "BLOCKED", "FAIL"]
 
-_KINDS: tuple[Kind, ...] = ("reference", "analyze", "schedule")
+_KINDS: tuple[Kind, ...] = ("reference", "analyze", "schedule", "sized")
 
 
 @dataclass(frozen=True)
@@ -125,6 +125,7 @@ def build_report(
                     "reference": [],
                     "analyze": {"tested": [], "untested": []},
                     "schedule": {"tested": [], "untested": []},
+                    "sized": {"tested": [], "untested": []},
                 },
             )
         for name, section in targets.items():
@@ -134,7 +135,7 @@ def build_report(
             section["reference"] = [
                 _row(result) for result in executed if result.kind == "reference"
             ]
-            for kind in ("analyze", "schedule"):
+            for kind in ("analyze", "schedule", "sized"):
                 rows = [_row(result) for result in executed if result.kind == kind]
                 section[kind]["tested"] = rows
                 covered = {

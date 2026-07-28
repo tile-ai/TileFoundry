@@ -11,6 +11,7 @@ it and of the Metadata left on the IR, not fields of it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from tilefoundry.analysis.errors import AnalysisError
@@ -20,6 +21,7 @@ from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
 from tilefoundry.registry import UnknownAlgorithmError
 
 
@@ -32,6 +34,12 @@ class AnalysisResult:
     wrote onto the IR, in execution order, rather than what the closure declares
     it can produce: an analysis that matched nothing contributes no type, so a
     renderer is not sent looking for records that are not there.
+
+    ``module`` is the Module the call was made against. ``function`` is the
+    function the records were written onto, which is the one passed in unless an
+    extent was chosen for it -- then it is the concrete function derived from
+    that input, because that is what was measured and what carries the results.
+    A reader looking for the records has to be given the function that has them.
     """
 
     module: Module
@@ -88,6 +96,7 @@ def analyze(
     *,
     analysis: str,
     options: object | None = None,
+    dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult:
     """Run *analysis* and everything it depends on over *function*.
 
@@ -95,6 +104,17 @@ def analyze(
     measures against and the topology hierarchy execution counts divide over,
     so a Function is analysed as part of the Module that owns it rather than on
     its own.
+
+    *dims* states an extent for each dimension the function declares as a
+    range. An analysis counts elements and compares them against a machine, and
+    neither has an answer for a range, so a function authored for many context
+    lengths is analysed at one of them: the variant covering that length is
+    resolved and its ranges substituted. What is analysed is then that concrete
+    function, and the result says so.
+
+    The function passed in must still be one this Module owns -- a prototype or
+    one of its variants. Substitution happens after that, so nothing loosens
+    which programs a Module will answer for.
     """
     if not isinstance(module, Module):
         raise TypeError(
@@ -105,7 +125,7 @@ def analyze(
         raise TypeError(
             f"analyze: expected an hir.Function, got {type(function).__name__}"
         )
-    if function not in module.functions:
+    if not module.owns(function):
         raise AnalysisError(
             f"analyze: {function.name!r} is not a function of module "
             f"{module.name!r}"
@@ -114,6 +134,11 @@ def analyze(
         raise AnalysisError(
             f"analyze: analysis must be a non-empty selector, got {analysis!r}"
         )
+    if dims is not None:
+        try:
+            function = specialize_concretely(function, dims)
+        except SpecializationError as error:
+            raise AnalysisError(f"analyze: {error}") from None
 
     target = module.resolve_target()
     closure = _closure(target, analysis)

@@ -421,11 +421,24 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
     """
     if isinstance(target, Function) or not isinstance(target, Op):
         return target
+    from tilefoundry.ir.types.shard.layout import LayoutBase  # noqa: PLC0415
+    from tilefoundry.ir.types.substitute import (  # noqa: PLC0415
+        substitute_layout_dims,
+    )
+
     changed: dict[str, object] = {}
     for param in type(target).params():
         if param.kind != "attribute":
             continue
         value = getattr(target, param.name, None)
+        # A layout states the shape it describes, so an authored one -- the
+        # target of a reshard -- holds the dimension too, and it is not a tuple
+        # of extents this loop would otherwise recognise.
+        if isinstance(value, LayoutBase):
+            rebuilt_layout = substitute_layout_dims(value, dims)
+            if rebuilt_layout is not value:
+                changed[param.name] = rebuilt_layout
+            continue
         if not isinstance(value, tuple) or not value:
             continue
         if not all(is_dim_expr(entry) for entry in value):

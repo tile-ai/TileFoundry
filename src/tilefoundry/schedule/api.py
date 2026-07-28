@@ -14,10 +14,12 @@ without a partial solve to explain.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.registry import UnknownAlgorithmError
@@ -31,9 +33,13 @@ from .registry import SCHEDULES, ScheduleAlgorithm
 class ScheduleResult:
     """What one public Schedule call decided, and what it decided it against.
 
-    The Module and Function are the same objects that were passed in. Scheduling
-    is a decision about a program, not a rewrite of one, so there is nothing
-    here that the caller would have to diff against its own input to recognise.
+    Scheduling is a decision about a program, not a rewrite of one, so the
+    Module is the one that was passed in.
+
+    The Function is too, unless an extent was chosen for it -- then it is the
+    concrete function derived from that input, because that is the program the
+    plan was solved for and the one the plan can be verified against. A caller
+    handed back its own symbolic input would have a plan it could not check.
     """
 
     module: Module
@@ -102,8 +108,20 @@ def schedule(
     *,
     topology: str,
     options: object | None = None,
+    dims: "Mapping[str, int] | None" = None,
 ) -> ScheduleResult:
-    """Solve *function* at the *topology* level of *module*'s hierarchy."""
+    """Solve *function* at the *topology* level of *module*'s hierarchy.
+
+    *dims* states an extent for each dimension the function declares as a
+    range. A solver lays work across a level by counting it and holds a tile
+    against a capacity in bytes, so a function authored for many context lengths
+    is solved at one of them: the variant covering that length is resolved and
+    its ranges substituted, and the plan is a plan for that size.
+
+    The function passed in must still be one this Module owns -- a prototype or
+    one of its variants. Substitution happens after that, so nothing loosens
+    which programs a Module will answer for.
+    """
     if not isinstance(module, Module):
         raise TypeError(
             f"schedule: expected a Module, got {type(module).__name__}. A "
@@ -114,11 +132,16 @@ def schedule(
         raise TypeError(
             f"schedule: expected an hir.Function, got {type(function).__name__}"
         )
-    if function not in module.functions:
+    if not module.owns(function):
         raise ScheduleError(
             f"schedule: {function.name!r} is not a function of module "
             f"{module.name!r}"
         )
+    if dims is not None:
+        try:
+            function = specialize_concretely(function, dims)
+        except SpecializationError as error:
+            raise ScheduleError(f"schedule: {error}") from None
 
     target = module.resolve_target()
     level = _topology(module, topology)

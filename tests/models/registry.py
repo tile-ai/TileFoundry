@@ -14,15 +14,23 @@ Analyze selects every function a model defines. Schedule cannot: the device-wide
 partition algorithm decides the launch, so it admits only the module entry
 function, and selecting a leaf for it would be selecting something the algorithm
 has no answer to rather than something it answers badly.
+
+`sized` is a third question, asked separately because it has a different answer:
+whether the model can be analysed at a context length of the caller's choosing.
+A model authored as one fixed shape answers every other question here and cannot
+answer this one, and the two facts must not be collapsed -- a working analysis
+recorded as broken, or a missing capability recorded as nothing at all.
 """
 
 from __future__ import annotations
 
 from tests.models.corpus import (
     MODELS_ROOT,
+    CapabilityGate,
     FunctionCase,
     ModelCase,
     ReferenceCase,
+    SizedCase,
 )
 from tests.models.qwen3_1_7b.config import REAL as QWEN3_1_7B_SHAPE
 from tests.models.qwen3_1_7b.reference import (
@@ -61,6 +69,17 @@ QWEN3_1_7B = ModelCase(
             id="qwen3_1_7b/schedule/decoder_layer",
             function="decoder_layer",
             topology="cta",
+        ),
+    ),
+    sized=(
+        SizedCase(
+            id="qwen3_1_7b/sized/decoder_layer",
+            function="decoder_layer",
+            dims={"ctx_len": 1024},
+            gate=CapabilityGate(
+                outcome="BLOCKED",
+                reason="no dimension named ['ctx_len']",
+            ),
         ),
     ),
 )

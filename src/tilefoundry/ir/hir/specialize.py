@@ -138,6 +138,40 @@ def specialize_function(
     )
 
 
+def specialize_concretely(fn: Function, dims: Mapping[str, int]) -> Function:
+    """*fn* at the stated extents, with nothing left as a range.
+
+    The stricter half of `specialize_function`, for callers that go on to run
+    something over the result. Partial binding is useful when the choices are
+    still being made one at a time; it is useless to anything that has to count
+    elements, so a dimension left unbound is refused here rather than surfacing
+    later as an extent that is not a number.
+    """
+    if not isinstance(dims, Mapping) or not dims:
+        raise SpecializationError(
+            f"specialising {fn.name!r} needs a non-empty mapping of dimension "
+            f"names to extents, got {dims!r}"
+        )
+    for name, extent in dims.items():
+        if not isinstance(name, str) or not name:
+            raise SpecializationError(
+                f"specialising {fn.name!r}: {name!r} is not a dimension name"
+            )
+        if isinstance(extent, bool) or not isinstance(extent, int):
+            raise SpecializationError(
+                f"specialising {fn.name!r}: dimension {name!r} takes an integer "
+                f"extent, got {extent!r}"
+            )
+    concrete = specialize_function(fn, dims)
+    residual = residual_dims(concrete)
+    if residual:
+        raise SpecializationError(
+            f"{fn.name!r} still states {list(residual)} as ranges after binding "
+            f"{sorted(dims)}; every dimension has to be given an extent"
+        )
+    return concrete
+
+
 def residual_dims(fn: Function) -> tuple[str, ...]:
     """Every dimension still stated as a range anywhere *fn* reaches.
 
@@ -207,6 +241,7 @@ __all__ = [
     "SpecializationError",
     "is_concrete",
     "residual_dims",
+    "specialize_concretely",
     "specialize_function",
     "variant_for",
 ]

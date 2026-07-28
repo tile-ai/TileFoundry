@@ -183,13 +183,41 @@ class ReferenceCase:
 
 @dataclass(frozen=True)
 class FunctionCase:
-    """One function of one model, selected to be analysed or scheduled."""
+    """One function of one model, selected to be analysed or scheduled.
+
+    `dims` states an extent for each dimension the function was authored to
+    leave open, which is how a model written for decode is asked about at one
+    context length. A model with no open dimension states none, and that is not
+    the same as a model that has one and cannot be asked -- see `SizedCase`.
+    """
 
     id: str
     function: str
     problem_sizes: tuple[str, ...] = ()
     gate: CapabilityGate = field(default_factory=CapabilityGate)
     topology: str | None = None
+    dims: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class SizedCase:
+    """Whether a model can be asked about at a context length it chooses.
+
+    A separate capability from analysis itself, and separately reportable. A
+    model authored as a single fixed shape analyses perfectly well and has no
+    context length to state; recording that as a failure of analysis would call
+    a working thing broken, and leaving it out would hide that the model is not
+    the shape the corpus is moving towards.
+
+    So it is its own row: the gate says whether this model can be asked at a
+    size, and the reason says what stops it.
+    """
+
+    id: str
+    function: str
+    dims: Mapping[str, int]
+    topology: str | None = None
+    gate: CapabilityGate = field(default_factory=CapabilityGate)
 
 
 @dataclass(frozen=True)
@@ -208,6 +236,7 @@ class ModelCase:
     reference: ReferenceCase | None = None
     analyze: tuple[FunctionCase, ...] = ()
     schedule: tuple[FunctionCase, ...] = ()
+    sized: tuple[SizedCase, ...] = ()
 
     def build(self) -> Module:
         """A Module nothing else holds a reference to.
@@ -279,5 +308,6 @@ __all__ = [
     "ModelCase",
     "Outcome",
     "ReferenceCase",
+    "SizedCase",
     "TargetFixture",
 ]

@@ -220,6 +220,35 @@ class Module:
             )
         return matches[0]
 
+    def owns(self, function: object, *, derived: bool = False) -> bool:
+        """Whether *function* belongs to this Module's execution domain.
+
+        A specialisation variant counts: it is one of the module's own
+        functions, reached through the prototype that dispatches to it rather
+        than listed alongside it, and it is what anything working at one chosen
+        size has in its hands.
+
+        A function rebuilt from one of these -- the same program with a size
+        chosen for it -- does not, by default. It is a new object, and the only
+        thing that could recognise it is its name, which would also accept a
+        same-named function from somewhere else entirely. The public boundary
+        therefore asks the strict question before it rebuilds anything.
+
+        `derived=True` accepts by name, for a precondition inside an algorithm
+        that runs after that boundary. Such a check guards against a caller
+        reaching in directly; re-deriving provenance the boundary already
+        established is not its job, and refusing the program it was handed
+        would be.
+        """
+        names = {owned.name for owned in self.functions}
+        for owned in self.functions:
+            if function is owned or function == owned:
+                return True
+            for variant in getattr(owned, "variants", ()):
+                if function is variant or function == variant:
+                    return True
+        return derived and getattr(function, "name", None) in names
+
     def entry_function(self) -> ModuleFunction:
         matches = self.function_named(self.entry)
         if not matches:

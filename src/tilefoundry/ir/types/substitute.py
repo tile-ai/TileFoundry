@@ -43,10 +43,22 @@ def dim_vars_in(value: object) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _layout_types() -> tuple[type, ...]:
+    """The layout descriptors, imported at call time to avoid a cycle."""
+    from .shard.layout import ComposedLayout, Layout  # noqa: PLC0415
+    from .shard.shard_layout import ShardLayout  # noqa: PLC0415
+
+    return (Layout, ComposedLayout, ShardLayout)
+
+
 def _collect(value: object, found: dict[str, None]) -> None:
     if isinstance(value, TensorType):
         for entry in value.shape:
             _collect(entry, found)
+        # A layout restates the shape it describes, and a sharded one restates
+        # it per position. A scan that read only the shape would call a type
+        # concrete while its layout still held the range.
+        _collect_layout(value.layout, found)
         return
     if isinstance(value, TupleType):
         for field in value.fields:
@@ -55,9 +67,33 @@ def _collect(value: object, found: dict[str, None]) -> None:
     if isinstance(value, DimVar):
         found[value.name] = None
         return
+    if isinstance(value, tuple):
+        for entry in value:
+            _collect(entry, found)
+        return
     if isinstance(value, Call) and isinstance(value.target, _DIM_OP_TYPES):
         for arg in value.args:
             _collect(arg, found)
+
+
+def _collect_layout(layout: object, found: dict[str, None]) -> None:
+    if layout is None:
+        return
+    Layout, ComposedLayout, ShardLayout = _layout_types()
+    if isinstance(layout, ShardLayout):
+        # The mesh states machine positions, which are not derived from the
+        # program's sizes, so it holds no dimension of the program.
+        _collect_layout(layout.layout, found)
+        return
+    if isinstance(layout, ComposedLayout):
+        _collect_layout(layout.outer, found)
+        _collect_layout(layout.inner, found)
+        _collect(layout.offset, found)
+        return
+    if isinstance(layout, Layout):
+        _collect(layout.shape, found)
+        if layout.strides is not None:
+            _collect(layout.strides, found)
 
 
 def substitute_dims(value: Type, bindings: Mapping[str, int]) -> Type:
@@ -70,12 +106,13 @@ def substitute_dims(value: Type, bindings: Mapping[str, int]) -> Type:
     """
     if isinstance(value, TensorType):
         shape = tuple(substitute_shape_dim(entry, bindings) for entry in value.shape)
-        if shape == value.shape:
+        layout = substitute_layout_dims(value.layout, bindings)
+        if shape == value.shape and layout is value.layout:
             return value
         return TensorType(
             shape=shape,
             dtype=value.dtype,
-            layout=value.layout,
+            layout=layout,
             storage=value.storage,
         )
     if isinstance(value, TupleType):
@@ -84,6 +121,61 @@ def substitute_dims(value: Type, bindings: Mapping[str, int]) -> Type:
             return value
         return TupleType(fields=fields)
     return value
+
+
+def substitute_layout_dims(layout: object, bindings: Mapping[str, int]) -> object:
+    """*layout* with its bound dimensions replaced.
+
+    A layout restates the shape it describes, so leaving it behind produces a
+    type whose shape is a number and whose layout is still a range -- concrete
+    to anything that reads the shape, and not to anything that reads the layout.
+    The mesh is untouched: it states machine positions, which no program size
+    derives from.
+    """
+    if layout is None:
+        return layout
+    Layout, ComposedLayout, ShardLayout = _layout_types()
+    if isinstance(layout, ShardLayout):
+        inner = substitute_layout_dims(layout.layout, bindings)
+        if inner is layout.layout:
+            return layout
+        return ShardLayout(layout=inner, attrs=layout.attrs, mesh=layout.mesh)
+    if isinstance(layout, ComposedLayout):
+        outer = substitute_layout_dims(layout.outer, bindings)
+        inner = substitute_layout_dims(layout.inner, bindings)
+        offset = substitute_shape_dim(layout.offset, bindings)
+        if (
+            outer is layout.outer
+            and inner is layout.inner
+            and offset == layout.offset
+        ):
+            return layout
+        return ComposedLayout(inner=inner, offset=offset, outer=outer)
+    if isinstance(layout, Layout):
+        shape = _substitute_nested(layout.shape, bindings)
+        strides = (
+            None
+            if layout.strides is None
+            else _substitute_nested(layout.strides, bindings)
+        )
+        if shape == layout.shape and strides == layout.strides:
+            return layout
+        return Layout(shape=shape, strides=strides)
+    return layout
+
+
+def _substitute_nested(entries: tuple, bindings: Mapping[str, int]) -> tuple:
+    """A possibly nested tuple of shape entries, substituted throughout.
+
+    A layout's shape is hierarchical, so an entry may itself be a tuple; and it
+    may be `None`, which states an axis whose extent this layout does not fix.
+    """
+    return tuple(
+        _substitute_nested(entry, bindings)
+        if isinstance(entry, tuple)
+        else (None if entry is None else substitute_shape_dim(entry, bindings))
+        for entry in entries
+    )
 
 
 def substitute_shape_dim(entry: object, bindings: Mapping[str, int]) -> object:
@@ -146,5 +238,6 @@ __all__ = [
     "dim_vars_in",
     "has_symbolic_dims",
     "substitute_dims",
+    "substitute_layout_dims",
     "substitute_shape_dim",
 ]

@@ -555,7 +555,7 @@ def build_partition_program(module: Module, function: Function) -> PartitionProg
             f"partition program: root must be a HIR Function, got "
             f"{type(function).__name__}"
         )
-    if not any(member is function for member in module.functions):
+    if not module.owns(function, derived=True):
         raise PartitionProgramError(
             f"{function.name!r} is not a function of module {module.name!r}"
         )

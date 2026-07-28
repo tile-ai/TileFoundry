@@ -32,7 +32,7 @@ class PipelineProgram:
 
 def build_pipeline_program(module: Module, function: Function) -> PipelineProgram:
     """Extract and tree one function without attaching schedule state to analysis."""
-    if function not in module.functions:
+    if not module.owns(function, derived=True):
         raise ValueError(
             f"pipeline program: {function.name!r} is not owned by module {module.name!r}"
         )
