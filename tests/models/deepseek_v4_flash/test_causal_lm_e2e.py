@@ -155,9 +155,9 @@ def _node_inputs(semantic, config):
     ids = torch.tensor([1, 2, 3], dtype=torch.int64, device="cuda")
     caches = semantic.init_caches(device="cuda")
     root_args = semantic.prepare_inputs_for_generation(ids, 0, caches, device="cuda")
-    token_ids, cos, sin, cur_pos, s, past, mask, scale, ones = root_args
+    token_ids, cos, sin, past, scale, ones = root_args
     hidden = semantic.embed(token_ids)
-    attention_args = (hidden, cos, sin, cur_pos, s, past[0], mask, scale, ones)
+    attention_args = (hidden, cos, sin, past[0], scale, ones)
     return {
         "attention": attention_args,
         "moe": (hidden, token_ids),
@@ -218,9 +218,15 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
 
 def test_generate_two_steps(config, twins):
     """Two decode steps through the shared ``generate`` loop, with state held
-    entirely by the caller and threaded functionally in and out."""
+    entirely by the caller and threaded functionally in and out.
+
+    The cache each step reads is the context before its token, and what a step
+    hands back is that context with one position appended -- so the loop's own
+    threading is what makes the second step read the first one's output.
+    """
     semantic, runtime = twins
     ids = torch.tensor([1, 2, 3], dtype=torch.int64, device="cuda")
+    seed_ctx = semantic.init_caches(device="cuda")[0].shape[1]
 
     reference_logits, reference_caches = generate(semantic, ids, 2, device="cuda")
     candidate_logits, candidate_caches = generate(runtime, ids, 2, device="cuda")
@@ -233,9 +239,7 @@ def test_generate_two_steps(config, twins):
     )
     assert report.passed, dict(report.metrics)
 
-    occupied = (reference_caches[0].float().abs().sum(dim=(0, 2, 3)) > 0)
-    assert int(occupied.sum()) == 2
-    assert bool(occupied[0]) and bool(occupied[1])
+    assert reference_caches[0].shape[1] == seed_ctx + 2
     for step, logits in enumerate(reference_logits):
         assert torch.isfinite(logits.float()).all(), step
 
@@ -243,9 +247,29 @@ def test_generate_two_steps(config, twins):
         caches = model.init_caches(device="cuda")
         args = model.prepare_inputs_for_generation(ids, 0, caches, device="cuda")
         _, next_caches = model(*args)
-        assert next_caches[0] is not caches[0]
-        assert not caches[0].float().any(), type(model).__name__
-        assert next_caches[0].float().any()
+        # A step appends: the context it was given comes back unchanged with one
+        # more position after it, and that position is this token's own latent.
+        assert next_caches[0].shape[1] == caches[0].shape[1] + 1, type(model).__name__
+        assert torch.equal(next_caches[0][:, :seed_ctx], caches[0])
+        assert next_caches[0][:, seed_ctx:].float().any()
+
+
+def test_the_window_is_where_the_caller_stops_growing_the_cache(config, twins):
+    """Enough steps to fill the window: the context stops at what the layer can
+    attend, and the kernels never see a longer one.
+
+    Which is the whole reason the description carries a range and not a fixed
+    capacity -- eviction is a policy the caller applies to a tensor, so it is
+    visible here rather than buried in a write index.
+    """
+    semantic, _runtime = twins
+    steps = config.window + 2
+    ids = torch.arange(steps, dtype=torch.int64, device="cuda") % config.vocab
+
+    _logits, caches = generate(semantic, ids, steps, device="cuda")
+
+    assert caches[0].shape[1] == config.max_ctx
+    assert config.max_ctx == config.window - 1
 
 
 def test_structure_mismatch_rejected(config, twins):

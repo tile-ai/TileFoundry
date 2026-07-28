@@ -34,16 +34,13 @@ class DeepseekV4DecoderLayer:
     attention = attention_module
     moe = moe_module
 
-    def forward(
-        self, hidden, cos_pos, sin_pos, cur_pos, s, kv_cache0, attn_mask, scale,
-        ones_head_dim, token_ids,
-    ):
+    def forward(self, hidden, cos_pos, sin_pos, kv_cache, scale, ones_head_dim, token_ids):
         attn_in = self.pre_attn_rms_norm(hidden)
-        attn_out, kv_cache1 = self.attention(
-            attn_in, cos_pos, sin_pos, cur_pos, s, kv_cache0, attn_mask, scale, ones_head_dim,
+        attn_out, kv_new = self.attention(
+            attn_in, cos_pos, sin_pos, kv_cache, scale, ones_head_dim,
         )
         h1 = self.residual_add(hidden, attn_out)
         moe_in = self.pre_moe_rms_norm(h1)
         moe_out = self.moe(moe_in, token_ids)
         out = self.residual_add(h1, moe_out)
-        return out, kv_cache1
+        return out, kv_new

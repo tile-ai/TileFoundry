@@ -40,16 +40,15 @@ def _rope_cos_sin(position: int, *, device):
     return cos, sin
 
 
-def _decode_attn_mask(step: int, *, device):
-    """Additive mask ``(1, 1, 1, config.window)`` bf16 for decode step *step*;
-    masks not-yet-written slots while the window is filling, none once it has
-    wrapped (order doesn't matter to softmax)."""
-    import torch  # noqa: PLC0415
+#: How many positions the caller may keep: a query attends ``window``
+#: positions counting its own, so the context it is handed is one shorter.
+MAX_CTX = config.window - 1
 
-    mask = torch.zeros(config.window, dtype=torch.bfloat16, device=device)
-    if step < config.window - 1:
-        mask[step + 1 :] = float("-inf")
-    return mask.view(1, 1, 1, config.window)
+#: The context length the decode loop starts from. A decode step reads a
+#: context, so there is one; producing it from a prompt is a prefill, which
+#: this package does not state, so it is drawn at a fixed seed instead.
+SEED_CTX_LEN = 1
+SEED_CTX_SEED = 20260728
 
 
 @module(entry="lm_head")
@@ -85,28 +84,43 @@ class DeepseekV4ForCausalLM:
 
     layers = decoder_layers
 
-    def forward(
-        self, token_ids, cos_pos, sin_pos, cur_pos, s, past_key_values, attn_mask, scale,
-        ones_head_dim,
-    ):
+    def forward(self, token_ids, cos_pos, sin_pos, past_key_values, scale, ones_head_dim):
+        """One decode step of the whole model, per-layer cache in and out.
+
+        Each layer hands back its own one-position KV latent; appending it and
+        dropping what falls out of the window is the caller's step, and this
+        root is the caller. Keeping it here rather than inside a kernel is what
+        lets every shape below be expressed in ``ctx_len`` alone.
+        """
+        import torch  # noqa: PLC0415
+
         hidden = self.embed(token_ids)
         new_caches = []
         for i in range(config.n_layers):
             layer = getattr(self, f"layer{i}")
-            hidden, new_cache = layer(
-                hidden, cos_pos, sin_pos, cur_pos, s, past_key_values[i], attn_mask, scale,
-                ones_head_dim, token_ids,
+            hidden, kv_new = layer(
+                hidden, cos_pos, sin_pos, past_key_values[i], scale, ones_head_dim, token_ids,
             )
-            new_caches.append(new_cache)
+            grown = torch.cat([past_key_values[i], kv_new], dim=1)
+            new_caches.append(grown[:, -MAX_CTX:] if grown.shape[1] > MAX_CTX else grown)
         normed = self.final_rms_norm(hidden)
         logits = self.lm_head(normed)
         return logits, tuple(new_caches)
 
     def init_caches(self, device="cuda", mesh=None):
+        """The per-layer context the decode loop starts from, drawn at a fixed
+        seed so every caller of this model starts from the same one."""
         import torch  # noqa: PLC0415
 
+        generator = torch.Generator(device=device).manual_seed(SEED_CTX_SEED)
         return tuple(
-            torch.zeros(1, config.window, 1, config.head_dim, dtype=torch.bfloat16, device=device)
+            (
+                torch.randn(
+                    1, SEED_CTX_LEN, 1, config.head_dim,
+                    generator=generator, device=device, dtype=torch.float32,
+                )
+                * 0.1
+            ).to(torch.bfloat16)
             for _ in range(config.n_layers)
         )
 
@@ -115,17 +129,14 @@ class DeepseekV4ForCausalLM:
 
         ids = input_ids.reshape(-1)
         token_ids = ids[step].reshape(1).to(device=device, dtype=torch.int64)
-        cur_pos = torch.tensor([step % config.window], device=device, dtype=torch.int32)
-        s = torch.tensor([1], device=device, dtype=torch.int32)
-        cos, sin = _rope_cos_sin(step, device=device)
+        # The step's own absolute position: the seed context occupies the ones
+        # before it, and rotation is what ties a key to the position it was
+        # written at.
+        cos, sin = _rope_cos_sin(SEED_CTX_LEN + step, device=device)
         cos_pos = cos.view(1, 1, 1, config.rope_half)
         sin_pos = sin.view(1, 1, 1, config.rope_half)
-        attn_mask = _decode_attn_mask(step, device=device)
         scale = torch.full(
             (1, 1, 1, 1), config.head_dim ** -0.5, device=device, dtype=torch.bfloat16,
         )
         ones_head_dim = torch.ones(config.head_dim, device=device, dtype=torch.bfloat16)
-        return (
-            token_ids, cos_pos, sin_pos, cur_pos, s, past_key_values, attn_mask, scale,
-            ones_head_dim,
-        )
+        return (token_ids, cos_pos, sin_pos, past_key_values, scale, ones_head_dim)

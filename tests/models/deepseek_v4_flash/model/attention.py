@@ -2,6 +2,35 @@
 MLA): ``DeepseekV4Attention`` builds ``mla_kv_update`` and ``mla_attend`` at
 *config*'s dimensions (a free name, injected by ``tests.models.loader``).
 
+Decode, one token per step. The step's own token count is the literal 1, so the
+only dimension carried as a range is the context the step reads: ``ctx_len``,
+the length of the KV cache handed in. This layer type is sliding attention, so
+that range is bounded by the window rather than by the position embedding: a
+query attends ``window`` positions counting itself, and a longer cache is a
+context this layer cannot attend rather than one it attends slowly.
+
+The cache is explicit tensors in and out, and the two directions are not the
+same tensor. ``mla_attend`` reads the context *before* this token -- ``ctx_len``
+positions, read-only -- and ``mla_kv_update`` produces this token's own KV
+latent, one position, for the caller to append and to evict from at the window
+edge. A kernel returning the grown cache would have an axis of ``ctx_len + 1``,
+and a sum of a range and a constant cannot feed the matmul that consumes it.
+
+That split is why attention here is an online softmax rather than one
+``softmax`` over the cache: the new token attends itself as well as the cache,
+the two score groups live in differently shaped tensors, and the per-head
+attention sink is a third group of one denominator-only column. Each is reduced
+to its own ``(max, sum, weighted values)`` partial and the partials are merged
+by a log-sum-exp rescale, in f32 -- what a real decode kernel accumulates in,
+and what makes a 512-wide dot product mean anything in a bf16 model. No mask is
+needed: a single query at the end of the context may attend every position it
+was given, which is what makes the window the caller's eviction policy instead
+of a row of masked-out slots the kernel scores anyway.
+
+MQA: one shared ``head_dim``-wide KV latent (``n_kv_heads == 1``) read as both
+key and value, so the value carries the key's rotation and the output's rope
+slice is un-rotated at the query's own position afterwards.
+
 RoPE uses DeepSeek's interleaved-pairs convention (view-as-complex on
 adjacent dims), not ``tilefoundry.dsl.tf.rope``'s rotate-half, so it is built
 here from ``tf.slice``/``tf.reshape``/``tf.concat`` primitives instead.
@@ -15,6 +44,13 @@ from tests.models.deepseek_v4_flash.config import (
 )
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, ReduceKind, Tensor, tf
+from tilefoundry.ir.types.dim import DimVar
+
+# The active context length: the only range this model carries. DimVar bounds
+# are half-open [lo, hi), so the exclusive upper bound is the window itself --
+# a query attends `window` positions counting its own. The lower bound is 1: a
+# step with no prior context is a prefill, not a decode step.
+C = DimVar("ctx_len", 1, config.window)
 
 
 @module(entry="mla_attend")
@@ -26,11 +62,9 @@ class DeepseekV4Attention:
         w_kv: ConstTensor[(config.dim, config.head_dim), "bf16"],
         cos_pos: Tensor[(1, 1, 1, config.rope_half), "f32"],
         sin_pos: Tensor[(1, 1, 1, config.rope_half), "f32"],
-        kv_cache0: Tensor[(1, config.window, 1, config.head_dim), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        s: Tensor[(1,), "i32"],
-    ) -> Tensor[(1, config.window, 1, config.head_dim), "bf16"]:
-        # MQA: one shared head_dim-wide KV latent (n_kv_heads == 1).
+    ) -> Tensor[(1, 1, 1, config.head_dim), "bf16"]:
+        # This token's own KV latent, one position: what the caller appends to
+        # the cache it passed `mla_attend`.
         kv = tf.matmul(hidden, w_kv)
         kv_n = tf.rms_norm(kv, gamma_kv)
         kv_4d = tf.reshape(kv_n, new_shape=(1, 1, 1, config.head_dim))
@@ -76,8 +110,7 @@ class DeepseekV4Attention:
         kv_o1 = tf.reshape(kv_o1, new_shape=(1, 1, 1, config.rope_half, 1))
         kv_interleaved = tf.concat(kv_o0, kv_o1, axis=-1)
         kv_rope_out = tf.reshape(kv_interleaved, new_shape=(1, 1, 1, config.rope_dim))
-        kv_final = tf.concat(kv_nope_q, kv_rope_out, axis=-1)
-        return tf.cache_update(kv_cache0, cur_pos, s, kv_final)
+        return tf.concat(kv_nope_q, kv_rope_out, axis=-1)
 
     @mla_kv_update.converter("w_kv")
     def _(
@@ -108,9 +141,9 @@ class DeepseekV4Attention:
         ones_head_dim: Tensor[(config.head_dim,), "bf16"],
         cos_pos: Tensor[(1, 1, 1, config.rope_half), "f32"],
         sin_pos: Tensor[(1, 1, 1, config.rope_half), "f32"],
-        kv_cache: Tensor[(1, config.window, 1, config.head_dim), "bf16"],
-        attn_mask: Tensor[(1, 1, 1, config.window), "bf16"],
-        attn_sink: ConstTensor[(1, config.n_heads, 1, 1), "bf16"],
+        kv_cache: Tensor[(1, C, 1, config.head_dim), "bf16"],
+        kv_new: Tensor[(1, 1, 1, config.head_dim), "bf16"],
+        attn_sink: ConstTensor[(1, 1, config.n_heads, 1), "f32"],
         scale: Tensor[(1, 1, 1, 1), "bf16"],
         w_o_a: ConstTensor[(config.o_groups, config.wo_a_in, config.o_lora_rank), "bf16"],
         w_o_b: ConstTensor[(config.wo_a_out, config.dim), "bf16"],
@@ -156,48 +189,72 @@ class DeepseekV4Attention:
         q_rope_out = tf.reshape(q_interleaved, new_shape=(1, 1, config.n_heads, config.rope_dim))
         q_final = tf.concat(q_nope, q_rope_out, axis=-1)
 
-        # MQA repeat_interleave to n_heads; kv_cache serves as both K and V (no separate V projection).
-        k_b = tf.repeat_interleave(kv_cache, repeats=config.n_heads, axis=2)
-        q_h = tf.transpose(q_final, perm=(0, 2, 1, 3))
-        k_h = tf.transpose(k_b, perm=(0, 2, 1, 3))
-        q_s = tf.mul(q_h, scale)
-        k_t = tf.transpose(k_h, perm=(0, 1, 3, 2))
-        scores = tf.add(tf.matmul(q_s, k_t), attn_mask)
-
-        # attn_sink: an extra denominator-only softmax column, sliced back off before the P@V matmul.
-        scores_ext = tf.concat(scores, attn_sink, axis=-1)
-        probs_ext = tf.softmax(scores_ext, axis=-1)
-        probs = tf.slice(
-            probs_ext,
-            begin=(0, 0, 0, 0),
-            end=(1, config.n_heads, 1, config.window),
-            strides=(1, 1, 1, 1),
+        # MQA repeat_interleave to n_heads, for the cache and the new token
+        # alike; the KV latent serves as both K and V (no separate V projection).
+        k_ctx = tf.cast(
+            tf.reshape(
+                tf.transpose(
+                    tf.repeat_interleave(kv_cache, repeats=config.n_heads, axis=2),
+                    perm=(0, 2, 1, 3),
+                ),
+                new_shape=(1, 1, config.n_heads, C, config.head_dim),
+            ),
+            dtype="f32",
         )
-        ctx = tf.matmul(probs, k_h)
+        k_new = tf.cast(
+            tf.repeat_interleave(kv_new, repeats=config.n_heads, axis=2), dtype="f32"
+        )
+        q_s = tf.cast(tf.mul(q_final, scale), dtype="f32")
+
+        # Two score groups -- one over the cache, one over the token itself --
+        # plus the sink's denominator-only column, merged by log-sum-exp
+        # against their joint max.
+        q_e = tf.reshape(q_s, new_shape=(1, 1, config.n_heads, 1, config.head_dim))
+        score_ctx = tf.reduce(tf.mul(q_e, k_ctx), axes=(-1,), keepdim=True, kind="sum")
+        score_new = tf.reduce(tf.mul(q_s, k_new), axes=(-1,), keepdim=True, kind="sum")
+        peak = tf.max(
+            tf.max(
+                tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
+            ),
+            attn_sink,
+        )
+        peak_e = tf.reshape(peak, new_shape=(1, 1, config.n_heads, 1, 1))
+        p_ctx = tf.exp(tf.sub(score_ctx, peak_e))
+        p_new = tf.exp(tf.sub(score_new, peak))
+        p_sink = tf.exp(tf.sub(attn_sink, peak))
+        total = tf.add(
+            tf.add(tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum"), p_new),
+            p_sink,
+        )
+        weighted = tf.add(
+            tf.reduce(tf.mul(p_ctx, k_ctx), axes=(-2,), keepdim=False, kind="sum"),
+            tf.mul(p_new, k_new),
+        )
+        ctx = tf.cast(tf.div(weighted, total), dtype="bf16")
 
         # Inverse-RoPE: conjugate angle (signs flipped vs. the forward rotation above).
         ctx_nope = tf.slice(
             ctx,
             begin=(0, 0, 0, 0),
-            end=(1, config.n_heads, 1, config.nope_dim),
+            end=(1, 1, config.n_heads, config.nope_dim),
             strides=(1, 1, 1, 1),
         )
         ctx_rope_in = tf.slice(
             ctx,
             begin=(0, 0, 0, config.nope_dim),
-            end=(1, config.n_heads, 1, config.head_dim),
+            end=(1, 1, config.n_heads, config.head_dim),
             strides=(1, 1, 1, 1),
         )
         ctx_r0 = tf.slice(
             ctx_rope_in,
             begin=(0, 0, 0, 0),
-            end=(1, config.n_heads, 1, config.rope_dim),
+            end=(1, 1, config.n_heads, config.rope_dim),
             strides=(1, 1, 1, 2),
         )
         ctx_r1 = tf.slice(
             ctx_rope_in,
             begin=(0, 0, 0, 1),
-            end=(1, config.n_heads, 1, config.rope_dim),
+            end=(1, 1, config.n_heads, config.rope_dim),
             strides=(1, 1, 1, 2),
         )
         ctx_r0_f32 = tf.cast(ctx_r0, dtype="f32")
@@ -206,16 +263,14 @@ class DeepseekV4Attention:
         ctx_o1_f32 = tf.sub(tf.mul(ctx_r1_f32, cos_pos), tf.mul(ctx_r0_f32, sin_pos))
         ctx_o0 = tf.cast(ctx_o0_f32, dtype="bf16")
         ctx_o1 = tf.cast(ctx_o1_f32, dtype="bf16")
-        ctx_o0 = tf.reshape(ctx_o0, new_shape=(1, config.n_heads, 1, config.rope_half, 1))
-        ctx_o1 = tf.reshape(ctx_o1, new_shape=(1, config.n_heads, 1, config.rope_half, 1))
+        ctx_o0 = tf.reshape(ctx_o0, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
+        ctx_o1 = tf.reshape(ctx_o1, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
         ctx_interleaved = tf.concat(ctx_o0, ctx_o1, axis=-1)
         ctx_rope_out = tf.reshape(
-            ctx_interleaved, new_shape=(1, config.n_heads, 1, config.rope_dim),
+            ctx_interleaved, new_shape=(1, 1, config.n_heads, config.rope_dim),
         )
         ctx_final = tf.concat(ctx_nope, ctx_rope_out, axis=-1)
-
-        attn_out_heads_last = tf.transpose(ctx_final, perm=(0, 2, 1, 3))
-        o_flat = tf.reshape(attn_out_heads_last, new_shape=(1, 1, config.q_proj))
+        o_flat = tf.reshape(ctx_final, new_shape=(1, 1, config.q_proj))
 
         # Grouped low-rank O projection: o_flat's last axis is a contiguous
         # o_groups*wo_a_in run, reshaped to (o_groups, 1, 1, wo_a_in) and
@@ -278,10 +333,10 @@ class DeepseekV4Attention:
     @mla_attend.converter("attn_sink")
     def _(
         attn_sink_raw: ConstTensor[(config.n_heads,), "f32"],
-    ) -> Tensor[(1, config.n_heads, 1, 1), "bf16"]:
-        # Per-head scalar logit, reshaped to broadcast against the scores this concats onto.
-        reshaped = tf.reshape(attn_sink_raw, new_shape=(1, config.n_heads, 1, 1))
-        return tf.cast(reshaped, dtype="bf16")
+    ) -> Tensor[(1, 1, config.n_heads, 1), "f32"]:
+        # Per-head scalar logit, reshaped to broadcast against the per-head
+        # partials it is merged with; f32, which is what the merge runs in.
+        return tf.reshape(attn_sink_raw, new_shape=(1, 1, config.n_heads, 1))
 
     @mla_attend.converter("w_o_a")
     def _(
@@ -317,13 +372,15 @@ class DeepseekV4Attention:
         )
         return tf.transpose(dequant, perm=(1, 0))
 
-    def forward(
-        self, hidden, cos_pos, sin_pos, cur_pos, s, kv_cache0, attn_mask, scale, ones_head_dim,
-    ):
-        """Decode-step attention: ``mla_kv_update`` then ``mla_attend`` --
-        cache in, cache out, no hidden state."""
-        kv_cache1 = self.mla_kv_update(hidden, cos_pos, sin_pos, kv_cache0, cur_pos, s)
+    def forward(self, hidden, cos_pos, sin_pos, kv_cache, scale, ones_head_dim):
+        """Decode-step attention: ``mla_kv_update`` then ``mla_attend``.
+
+        *kv_cache* is the ``ctx_len`` positions before this token, read-only.
+        What comes back beside the output is this token's own one-position KV
+        latent, for the caller to append.
+        """
+        kv_new = self.mla_kv_update(hidden, cos_pos, sin_pos)
         out = self.mla_attend(
-            hidden, ones_head_dim, cos_pos, sin_pos, kv_cache1, attn_mask, scale,
+            hidden, ones_head_dim, cos_pos, sin_pos, kv_cache, kv_new, scale,
         )
-        return out, kv_cache1
+        return out, kv_new

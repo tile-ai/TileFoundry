@@ -44,6 +44,9 @@ from tests.models.corpus import ModelCase
 MODELS: tuple[str, ...] = (
     "qwen3_1_7b",
     "qwen2_5_1_5b",
+    "gemma2_2b",
+    "minicpm3_4b",
+    "deepseek_v4_flash",
 )
 
 

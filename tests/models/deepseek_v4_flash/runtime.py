@@ -123,7 +123,6 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
     rope_dim = config.rope_dim
     kv_quant_blocks = config.kv_quant_blocks
     n_heads = config.n_heads
-    window = config.window
     o_groups = config.o_groups
     o_lora_rank = config.o_lora_rank
     wo_a_in = config.wo_a_in
@@ -133,7 +132,7 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
     @runtime_module(sem)
     class DeepseekV4AttentionRT:
         @runtime_func
-        def mla_kv_update(self, hidden, gamma_kv, w_kv, cos_pos, sin_pos, kv_cache0, cur_pos, s):
+        def mla_kv_update(self, hidden, gamma_kv, w_kv, cos_pos, sin_pos):
             kv = torch.matmul(hidden, w_kv)
             kv_n = _rms_norm(kv, gamma_kv)
             kv_4d = kv_n.reshape(1, 1, 1, head_dim)
@@ -156,19 +155,12 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             kv_o0 = (kv_r0f * cos_pos - kv_r1f * sin_pos).to(_BF16)
             kv_o1 = (kv_r0f * sin_pos + kv_r1f * cos_pos).to(_BF16)
             kv_rope_out = torch.stack((kv_o0, kv_o1), dim=-1).reshape(1, 1, 1, rope_dim)
-            kv_final = torch.cat((kv_nope_q, kv_rope_out), dim=-1)
-
-            # functional cache write: returns a new tensor, never mutates kv_cache0 in place.
-            cur_pos_i = int(cur_pos.reshape(-1)[0].item())
-            s_i = int(s.reshape(-1)[0].item())
-            out = kv_cache0.clone()
-            out[:, cur_pos_i : cur_pos_i + s_i] = kv_final[:, :s_i].to(out.dtype)
-            return out
+            return torch.cat((kv_nope_q, kv_rope_out), dim=-1)
 
         @runtime_func
         def mla_attend(
             self, hidden, gamma_q_lora, w_q_a, w_q_b, ones_head_dim, cos_pos, sin_pos,
-            kv_cache, attn_mask, attn_sink, scale, w_o_a, w_o_b,
+            kv_cache, kv_new, attn_sink, scale, w_o_a, w_o_b,
         ):
             q_lat = _rms_norm(torch.matmul(hidden, w_q_a), gamma_q_lora)
             q_full = torch.matmul(q_lat, w_q_b)
@@ -184,17 +176,16 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             q_rope_out = torch.stack((q_o0, q_o1), dim=-1).reshape(1, 1, n_heads, rope_dim)
             q_final = torch.cat((q_nope, q_rope_out), dim=-1)
 
-            k_b = torch.repeat_interleave(kv_cache, n_heads, dim=2)
-            q_h = q_final.permute(0, 2, 1, 3).contiguous()
-            k_h = k_b.permute(0, 2, 1, 3).contiguous()
-            q_s = q_h * scale
-            k_t = k_h.permute(0, 1, 3, 2).contiguous()
-            scores = torch.matmul(q_s, k_t) + attn_mask
-
-            scores_ext = torch.cat((scores, attn_sink), dim=-1)
-            probs_ext = torch.softmax(scores_ext.float(), dim=-1).to(_BF16)
-            probs = probs_ext[..., :window]
-            ctx = torch.matmul(probs, k_h)
+            # The cache and the new token as one score row: a decode step
+            # attends every position it was given, so no mask. The sink is one
+            # more logit in the denominator, dropped before the P@V matmul.
+            kv_all = torch.cat((kv_cache, kv_new), dim=1)
+            k_h = torch.repeat_interleave(kv_all, n_heads, dim=2).permute(0, 2, 1, 3)
+            q_s = (q_final * scale).permute(0, 2, 1, 3)
+            scores = torch.matmul(q_s.float(), k_h.float().transpose(2, 3))
+            sink = attn_sink.permute(0, 2, 1, 3).expand(1, n_heads, 1, 1)
+            probs = torch.softmax(torch.cat((scores, sink), dim=-1), dim=-1)[..., :-1]
+            ctx = torch.matmul(probs, k_h.float()).to(_BF16).permute(0, 2, 1, 3)
 
             ctx_nope = ctx[..., :nope_dim]
             ctx_rope_in = ctx[..., nope_dim:]
@@ -202,11 +193,9 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             ctx_r0f, ctx_r1f = ctx_r0.float(), ctx_r1.float()
             ctx_o0 = (ctx_r0f * cos_pos + ctx_r1f * sin_pos).to(_BF16)
             ctx_o1 = (ctx_r1f * cos_pos - ctx_r0f * sin_pos).to(_BF16)
-            ctx_rope_out = torch.stack((ctx_o0, ctx_o1), dim=-1).reshape(1, n_heads, 1, rope_dim)
+            ctx_rope_out = torch.stack((ctx_o0, ctx_o1), dim=-1).reshape(1, 1, n_heads, rope_dim)
             ctx_final = torch.cat((ctx_nope, ctx_rope_out), dim=-1)
-
-            attn_out_heads_last = ctx_final.permute(0, 2, 1, 3).contiguous()
-            o_flat = attn_out_heads_last.reshape(1, 1, q_proj)
+            o_flat = ctx_final.reshape(1, 1, q_proj)
 
             o_grouped = o_flat.reshape(o_groups, 1, 1, wo_a_in)
             w_o_a_grouped = w_o_a.reshape(o_groups, 1, wo_a_in, o_lora_rank)
