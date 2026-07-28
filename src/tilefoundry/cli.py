@@ -233,6 +233,14 @@ def parse_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
         name, _, extent = entry.partition("=")
         if not name or not extent:
             raise ValueError(f"--dim takes NAME=EXTENT, got {entry!r}")
+        # Repeating the flag states another dimension, not another value for one
+        # already stated. Two extents for one dimension is a request with no
+        # answer, and taking the last would silently pick one of them.
+        if name in dims:
+            raise ValueError(
+                f"--dim {name} was given twice, as {dims[name]} and {extent}; "
+                f"a dimension takes one extent"
+            )
         try:
             dims[name] = int(extent)
         except ValueError:

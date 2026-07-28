@@ -27,7 +27,7 @@ from tilefoundry.analysis.registry import ANALYSES
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.specialize import origin_of
+from tilefoundry.ir.hir.specialize import bound_dims_of, origin_of
 
 
 def _traffic(traffic: tuple[tuple[str, TrafficBytes], ...]) -> dict[str, dict[str, int]]:
@@ -147,21 +147,23 @@ def selected_types(
 def _same_program(candidate: object, function: object) -> bool:
     """Whether *candidate* and *function* are the same program at the same size.
 
-    The same object, or two rebuilds of one function at one size: same recorded
-    origin, same parameter types, same return type. Nothing else is compared,
-    because nothing else can be -- and nothing else has to be, since a rebuild is
-    settled by the function it came from and the extents it was given.
+    The same object, or two rebuilds of one function at one size: the same
+    recorded origin and the same recorded extents. A rebuild is settled by those
+    two, so they are what is compared.
+
+    The extents are compared because the resulting signature does not imply them.
+    A dimension can occur only in a loop bound or a body operation's attribute,
+    and then two different sizes rebuild into two different programs whose
+    parameters and return type are identical -- so a comparison that read the
+    signature would report measurements of two sizes as one.
     """
     if candidate is function:
         return True
     origin = origin_of(candidate)
     if origin is None or origin is not origin_of(function):
         return False
-    return (
-        tuple(param.type for param in candidate.params)
-        == tuple(param.type for param in function.params)
-        and candidate.return_type == function.return_type
-    )
+    dims = bound_dims_of(candidate)
+    return dims is not None and dims == bound_dims_of(function)
 
 
 def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
@@ -173,10 +175,11 @@ def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
     The results have to describe the same program. Usually that is one object,
     but an analysis asked about a size builds the program at that size, so
     several analyses at one size hold several rebuilds and share no object.
-    Those are accepted when they were rebuilt from the same function and came
-    out with the same signature: the origin is stamped only by the specialiser,
-    so it cannot be claimed by something that was not derived, and the signature
-    carries the extents, so two rebuilds at different sizes still differ.
+    Those are accepted when they were rebuilt from the same function at the same
+    recorded extents. Both are stamped only by the specialiser, so neither can be
+    claimed by something that was not derived, and the extents are compared
+    directly rather than read off the resulting signature -- a dimension occurring
+    only inside the body leaves the signature unchanged at every size.
 
     Structural equality would be the obvious test and is not available: an
     operation carries no equality, so two rebuilds of one program are never

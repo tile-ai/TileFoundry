@@ -61,14 +61,20 @@ no ordinary `--target` option.
     printed would be about a program the operation never saw.
   - A `--dim` argument that is not `NAME=EXTENT`, or whose extent is not an
     integer, MUST be rejected naming which argument and why.
+  - Repeating `--dim` states another dimension. One dimension stated twice MUST
+    be rejected naming that dimension, whether or not the two extents agree; the
+    later occurrence MUST NOT win, because both came from the caller and choosing
+    between them silently answers a request that has no answer.
   - With no `--dim`, the selection MUST be analysed as authored. A selection that
     leaves a dimension open MUST then fail naming the dimension: counting
     elements requires an extent, and a range is not one.
   - Every requested analysis MUST be reported together even when each was run at
     the stated extents, which builds one program per analysis. The report MUST
-    accept those as one program when they were rebuilt from the same function
-    with the same resulting signature, and MUST refuse results rebuilt at
-    different extents.
+    accept those as one program when they were rebuilt from the same function at
+    the same extents, and MUST refuse results rebuilt at different extents. The
+    comparison MUST read the recorded extents and MUST NOT infer them from the
+    resulting signature: a dimension occurring only in a loop bound or a body
+    operation's attribute leaves the signature identical at every extent.
   - Output MUST report the analyses that were requested. A dependency that ran
     because a requested root needed it MUST appear in the executed list and MUST
     NOT have its own measurements reported.

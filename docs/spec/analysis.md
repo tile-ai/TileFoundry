@@ -646,9 +646,15 @@ def analyze(
     none and more than one MUST both fail.
   - When `dims` is stated, `AnalysisResult.function` MUST be the concrete Function
     the records were written onto, derived from the Function the caller supplied,
-    and MUST record that Function as the one it was specialised from.
-    `AnalysisResult.module` MUST remain the Module the caller supplied. A reader
-    given the symbolic input would find no records on it.
+    and MUST record both that Function as the one it was specialised from and the
+    extents it was specialised at. `AnalysisResult.module` MUST remain the Module
+    the caller supplied. A reader given the symbolic input would find no records
+    on it.
+  - The recorded extents MUST be what identifies which size a derived Function is
+    at. They MUST NOT be inferred from its signature: a dimension occurring only
+    in a loop bound, a body operation's attribute, or a nested callee leaves the
+    signature identical at every extent, so two sizes would be indistinguishable
+    to anything comparing signatures.
   - The operation MUST resolve the root's full transitive dependency closure,
     order it so every dependency precedes its dependants, and execute each
     member exactly once per call. `executed` MUST report that order, so a shared

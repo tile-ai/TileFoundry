@@ -40,21 +40,44 @@ class SpecializationError(ValueError):
 #: accident.
 PROVENANCE = "_specialized_from"
 
+#: The extents a derived function was built at, recorded beside its origin.
+#:
+#: The origin alone does not say which size was chosen, and neither does the
+#: resulting signature: a dimension can occur only in a loop bound or a body
+#: operation's attribute, so two different sizes of one function can be rebuilt
+#: into two different programs whose parameters and return type are identical.
+#: Anything asking whether two derived functions are the same program has to
+#: compare the bindings themselves, so they are written down here rather than
+#: inferred from what the rebuild happened to change.
+BOUND_DIMS = "_specialized_dims"
 
-def _record_provenance(derived: Function, origin: Function) -> None:
-    """Note that *derived* is *origin* at a chosen size.
+
+def _record_provenance(
+    derived: Function, origin: Function, dims: Mapping[str, int]
+) -> None:
+    """Note that *derived* is *origin* at *dims*.
 
     Written through `object.__setattr__` because a Function is frozen; this is
     the same authoring-phase mutation `seal` and `add_variant` use, and it does
     not participate in equality, so two functions specialised from different
     origins are still equal when they are the same program.
+
+    The extents are stored sorted by name, so one set of bindings has one
+    representation and two records can be compared directly rather than each
+    caller having to canonicalise first.
     """
     object.__setattr__(derived, PROVENANCE, origin)
+    object.__setattr__(derived, BOUND_DIMS, tuple(sorted(dims.items())))
 
 
 def origin_of(function: object) -> Function | None:
     """The function *function* was specialised from, if it was."""
     return getattr(function, PROVENANCE, None)
+
+
+def bound_dims_of(function: object) -> tuple[tuple[str, int], ...] | None:
+    """The extents *function* was specialised at, if it was, sorted by name."""
+    return getattr(function, BOUND_DIMS, None)
 
 
 def variant_for(fn: Function, dims: Mapping[str, int]) -> Function:
@@ -169,7 +192,7 @@ def specialize_function(
     derived = _elaborate_from_bound_types(
         chosen, bound, ctx if ctx is not None else TypeInferContext(), dims=dims
     )
-    _record_provenance(derived, chosen)
+    _record_provenance(derived, chosen, dims)
     return derived
 
 
@@ -280,8 +303,10 @@ def is_concrete(fn: Function) -> bool:
 
 
 __all__ = [
+    "BOUND_DIMS",
     "PROVENANCE",
     "SpecializationError",
+    "bound_dims_of",
     "dim_vars_reached",
     "is_concrete",
     "origin_of",
