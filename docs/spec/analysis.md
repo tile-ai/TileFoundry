@@ -615,12 +615,40 @@ def analyze(
     *,
     analysis: str,
     options: object | None = None,
+    dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult: ...
 ```
 
 - constraints:
   - One call MUST select exactly one root analysis. A caller wanting several
     roots MUST call the operation once per root.
+  - The Function MUST be one the Module owns: one it declares, or a
+    specialization variant of one it declares
+    ([core-ir §1](./core-ir.md#1-module)). A Function derived by specialising one
+    of these MUST be refused, so that ownership is settled before anything is
+    rebuilt.
+  - `dims` states one extent per dimension the Function declares as a range. An
+    analysis counts elements and holds them against a machine, and neither has an
+    answer for a range, so a Function stating a range MUST be analysed at a
+    chosen size rather than as authored.
+  - `dims=None` MUST behave as a call that states no size: the Function is
+    analysed as authored, and `AnalysisResult.function` MUST be the object the
+    caller supplied.
+  - When `dims` is stated it MUST be non-empty; every key MUST name a dimension
+    the Function declares as a range; every value MUST be an integer inside that
+    dimension's declared bounds; every dimension the Function selects a variant
+    on MUST be given a value; and no dimension MAY remain a range after
+    substitution. Each of these MUST fail with an Analysis domain error. A stated
+    `dims` MUST NOT be silently ignored, including when the Function declares no
+    range at all.
+  - Variant resolution and substitution MUST happen after the ownership check and
+    before any algorithm runs. Exactly one variant MUST cover the stated size;
+    none and more than one MUST both fail.
+  - When `dims` is stated, `AnalysisResult.function` MUST be the concrete Function
+    the records were written onto, derived from the Function the caller supplied,
+    and MUST record that Function as the one it was specialised from.
+    `AnalysisResult.module` MUST remain the Module the caller supplied. A reader
+    given the symbolic input would find no records on it.
   - The operation MUST resolve the root's full transitive dependency closure,
     order it so every dependency precedes its dependants, and execute each
     member exactly once per call. `executed` MUST report that order, so a shared

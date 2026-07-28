@@ -21,6 +21,7 @@ def schedule(
     *,
     topology: str,
     options: ScheduleOptions | None = None,
+    dims: Mapping[str, int] | None = None,
 ) -> ScheduleResult: ...
 ```
 
@@ -28,6 +29,27 @@ def schedule(
   - The caller MUST supply the Module, the Function, and one non-empty topology
     level name. Nothing about the request MAY be inferred from layouts,
     constraints, or the shape of the program.
+  - The Function MUST be one the Module owns: one it declares, or a
+    specialization variant of one it declares
+    ([core-ir §1](./core-ir.md#1-module)). A Function derived by specialising one
+    of these MUST be refused, so that ownership is settled before anything is
+    rebuilt.
+  - `dims` states one extent per dimension the Function declares as a range. A
+    solver places work across a level by counting it and holds a tile against a
+    capacity in bytes, so a Function stating a range MUST be solved at a chosen
+    size rather than as authored.
+  - `dims=None` MUST behave as a call that states no size: the Function is
+    solved as authored.
+  - When `dims` is stated it MUST be non-empty; every key MUST name a dimension
+    the Function declares as a range; every value MUST be an integer inside that
+    dimension's declared bounds; every dimension the Function selects a variant
+    on MUST be given a value; and no dimension MAY remain a range after
+    substitution. Each of these MUST fail with a Schedule domain error. A stated
+    `dims` MUST NOT be silently ignored, including when the Function declares no
+    range at all.
+  - Variant resolution and substitution MUST happen after the ownership check
+    and before the algorithm runs. Exactly one variant MUST cover the stated
+    size; none and more than one MUST both fail.
   - The Target MUST come from `module.resolve_target()`
     ([core-ir §1](./core-ir.md#1-module)); a call MUST NOT override it and MUST
     NOT fall back to a default Target when no Module in the owner chain declares
@@ -116,10 +138,17 @@ class ScheduleResult:
 
 - constraints:
   - The structure MUST be immutable.
-  - `module` and `function` MUST be the same objects the caller supplied.
-    Scheduling decides about a program; it MUST NOT return a rewritten one in
-    their place. An algorithm whose decision *is* a rewritten program MUST carry
-    that program in its own Plan.
+  - `module` MUST be the same object the caller supplied. Scheduling decides
+    about a program; it MUST NOT return a rewritten Module in its place. An
+    algorithm whose decision *is* a rewritten program MUST carry that program in
+    its own Plan.
+  - When the call states no `dims`, `function` MUST be the same object the
+    caller supplied.
+  - When the call states `dims`, `function` MUST be the concrete Function the
+    plan was solved for, derived from the Function the caller supplied. It MUST
+    record that Function as the one it was specialised from, and the plan MUST
+    verify against it. A caller returned its own symbolic input would hold a
+    plan it cannot check.
   - `topology` MUST be the level as the Module declares it, not a normalized copy.
 
 ### 2.3 `SchedulePlan`

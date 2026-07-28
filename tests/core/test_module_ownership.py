@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import pytest
 
@@ -11,7 +11,17 @@ from tilefoundry import func, module
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.dsl import Tensor, Topology, tf
-from tilefoundry.ir.hir.specialize import variant_for
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.specialize import (
+    PROVENANCE,
+    origin_of,
+    specialize_function,
+    variant_for,
+)
+from tilefoundry.schedule.partition.program import (
+    PartitionProgramError,
+    build_partition_program,
+)
 from tilefoundry.target import CudaTarget
 
 DIMS = {"ctx_len": SMALL_CONTEXT_T, "seq_len": 1}
@@ -68,3 +78,39 @@ def test_analysing_a_function_from_elsewhere_is_still_refused() -> None:
 
     with pytest.raises(AnalysisError, match="is not a function of module"):
         analyze(aimed, _Other.entry_function(), analysis="compute-cost")
+
+
+def test_a_same_named_stranger_cannot_reach_an_algorithm_directly() -> None:
+    """The precondition inside an algorithm follows a recorded origin, not a
+    name. A name is shared by anything anybody chose to call the same, so
+    answering by name would let a function from elsewhere in through the door
+    the public boundary guards."""
+    stranger = replace(
+        _Other.entry_function(), name=GqaOnline.entry_function().name
+    )
+
+    assert stranger.name == GqaOnline.entry_function().name
+    assert not GqaOnline.owns(stranger)
+    assert not GqaOnline.owns(stranger, derived=True)
+
+    with pytest.raises(PartitionProgramError, match="is not a function of module"):
+        build_partition_program(GqaOnline, stranger)
+
+
+def test_a_genuinely_derived_function_does_reach_it() -> None:
+    derived = specialize_function(GqaOnline.entry_function(), DIMS)
+
+    assert origin_of(derived) is variant_for(GqaOnline.entry_function(), DIMS)
+    assert not GqaOnline.owns(derived)
+    assert GqaOnline.owns(derived, derived=True)
+
+
+def test_provenance_is_not_part_of_what_makes_a_function_what_it_is() -> None:
+    """Where a function came from is recorded on it, not built into it. If it
+    were a field, two functions specialised from different places would stop
+    being equal even when they are the same program."""
+    assert PROVENANCE not in {field.name for field in fields(Function)}
+
+    derived = specialize_function(GqaOnline.entry_function(), DIMS)
+    assert origin_of(derived) is not None
+    assert origin_of(GqaOnline.entry_function()) is None

@@ -11,6 +11,9 @@ from tests.models.qwen3_5_30b_a3b.gqa_online import (
     SMALL_CONTEXT_T,
     GqaOnline,
 )
+from tilefoundry import func, module
+from tilefoundry.dsl import Tensor, Topology, tf
+from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- names resolved dynamically
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
@@ -19,9 +22,11 @@ from tilefoundry.ir.hir.specialize import (
     specialize_function,
     variant_for,
 )
+from tilefoundry.ir.types.dim import DimVar
 
 ENTRY = GqaOnline.entry_function()
 STEADY = {"ctx_len": SMALL_CONTEXT_T, "seq_len": 1}
+_LOOP_CTX = DimVar("loop_ctx", 1, 4097)
 
 
 def test_the_model_is_dynamic_in_its_context_length_alone() -> None:
@@ -208,3 +213,40 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     assert got.shape == expected.shape
     assert got.dtype == expected.dtype
     torch.testing.assert_close(got.float(), expected.float(), atol=0, rtol=0)
+
+
+@module(entry="main", target="cuda")
+class _LoopOnly:
+    """A context length that appears nowhere in the signature.
+
+    The loop scans it. Nothing about the parameters or the return says how long
+    it is, which is what makes this the case a signature-driven rebuild misses.
+    """
+
+    topologies = (Topology("cta", 1),)
+
+    @func
+    def main(x: Tensor[(8,), "f32"]):
+        total = tf.zeros(shape=(8,), dtype="f32")
+        for _ in tile(_LOOP_CTX):
+            total = tf.add(total, x)
+        return total
+
+
+def test_a_dimension_only_the_body_uses_is_still_substituted() -> None:
+    """Whether to rebuild follows where the dimension occurs, not whether the
+    signature moved. Deciding it from the parameters returns this function
+    untouched -- shaped correctly, and still scanning a range."""
+    authored = _LoopOnly.entry_function()
+    assert residual_dims(authored) == ("loop_ctx",)
+    assert all(
+        isinstance(extent, int)
+        for param in authored.params
+        for extent in param.type.shape
+    ), "the signature is already concrete, which is the point"
+
+    concrete = specialize_function(authored, {"loop_ctx": 512})
+
+    assert concrete is not authored
+    assert residual_dims(concrete) == ()
+    assert is_concrete(concrete)

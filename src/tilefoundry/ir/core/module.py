@@ -229,25 +229,27 @@ class Module:
         size has in its hands.
 
         A function rebuilt from one of these -- the same program with a size
-        chosen for it -- does not, by default. It is a new object, and the only
-        thing that could recognise it is its name, which would also accept a
-        same-named function from somewhere else entirely. The public boundary
-        therefore asks the strict question before it rebuilds anything.
+        chosen for it -- does not, by default. The public boundary asks the
+        strict question before it rebuilds anything, so nothing that reaches an
+        algorithm through it needs a weaker one.
 
-        `derived=True` accepts by name, for a precondition inside an algorithm
-        that runs after that boundary. Such a check guards against a caller
-        reaching in directly; re-deriving provenance the boundary already
-        established is not its job, and refusing the program it was handed
-        would be.
+        `derived=True` also accepts a function that records one of these as the
+        function it was specialised from, for a precondition inside an algorithm
+        that a caller may also reach directly. It follows that recorded origin
+        rather than matching a name: a name is shared by anything anybody chose
+        to call the same, so answering by name would admit a function from
+        another module, which is what asking about ownership exists to prevent.
         """
-        names = {owned.name for owned in self.functions}
         for owned in self.functions:
             if function is owned or function == owned:
                 return True
             for variant in getattr(owned, "variants", ()):
                 if function is variant or function == variant:
                     return True
-        return derived and getattr(function, "name", None) in names
+        if not derived:
+            return False
+        origin = getattr(function, "_specialized_from", None)
+        return origin is not None and self.owns(origin)
 
     def entry_function(self) -> ModuleFunction:
         matches = self.function_named(self.entry)

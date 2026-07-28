@@ -29,6 +29,34 @@ class SpecializationError(ValueError):
     """A function cannot be specialised as asked."""
 
 
+#: Where a derived function came from, recorded on the function itself.
+#:
+#: A rebuilt function is a new object, so the only thing about it that looks
+#: familiar is its name -- and a name is shared by anything anybody chose to
+#: call the same. Ownership answered by name would therefore accept a function
+#: from another module entirely, which is the opposite of what asking about
+#: ownership is for. The origin is stamped here instead, by the one function
+#: that produces a derived instance, so a caller cannot arrive holding it by
+#: accident.
+PROVENANCE = "_specialized_from"
+
+
+def _record_provenance(derived: Function, origin: Function) -> None:
+    """Note that *derived* is *origin* at a chosen size.
+
+    Written through `object.__setattr__` because a Function is frozen; this is
+    the same authoring-phase mutation `seal` and `add_variant` use, and it does
+    not participate in equality, so two functions specialised from different
+    origins are still equal when they are the same program.
+    """
+    object.__setattr__(derived, PROVENANCE, origin)
+
+
+def origin_of(function: object) -> Function | None:
+    """The function *function* was specialised from, if it was."""
+    return getattr(function, PROVENANCE, None)
+
+
 def variant_for(fn: Function, dims: Mapping[str, int]) -> Function:
     """The one implementation of *fn* that covers *dims*.
 
@@ -130,12 +158,19 @@ def specialize_function(
             f"{sorted(present)}"
         )
 
-    bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
-    if all(new is old.type for new, old in zip(bound, chosen.params)):
+    # Whether to rebuild is decided by where the dimension occurs, not by
+    # whether the signature moved. A loop extent, an operation's shape
+    # attribute, a return type, a callee -- a dimension in any of those is one
+    # to substitute, and a function whose parameters happen not to mention it
+    # would otherwise be handed back still holding a range.
+    if not set(dims) & set(residual_dims(chosen)):
         return chosen
-    return _elaborate_from_bound_types(
+    bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
+    derived = _elaborate_from_bound_types(
         chosen, bound, ctx if ctx is not None else TypeInferContext(), dims=dims
     )
+    _record_provenance(derived, chosen)
+    return derived
 
 
 def specialize_concretely(fn: Function, dims: Mapping[str, int]) -> Function:
@@ -238,8 +273,10 @@ def is_concrete(fn: Function) -> bool:
 
 
 __all__ = [
+    "PROVENANCE",
     "SpecializationError",
     "is_concrete",
+    "origin_of",
     "residual_dims",
     "specialize_concretely",
     "specialize_function",
