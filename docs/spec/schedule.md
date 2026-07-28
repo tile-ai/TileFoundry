@@ -197,9 +197,22 @@ class PipelineSchedulePlan(SchedulePlan):
 - constraints:
   - `target` MUST record architecture and device IDs with their content digests.
   - Each `ScheduledStatement` MUST carry one stable ID, selected instruction,
-    tile, resource assignment, and a half-open interval.
+    tile, resource assignment, a half-open interval, the bytes it holds, and
+    whether the level's tile store holds them.
+  - `ScheduledStatement.footprint_bytes` MUST count each buffer the statement
+    touches at the ring depth that buffer was given, so it states what the
+    statement occupies once the pipeline is deep enough to run.
+  - `ScheduledStatement.fits_capacity` MUST record `footprint_bytes` against the
+    tile capacity the level states. A statement that does not fit MUST still
+    appear in the plan: the plan states what the program costs on the target,
+    and a solve MUST NOT drop or shrink a statement to make a plan fit.
   - Each `ScheduledBuffer` MUST carry one stable ID, storage, positive ring
     depth, and typed producer and consumer statement IDs.
+  - `ScheduledBuffer.ring_depth` MUST be derived from the dependence distance
+    the buffer carries under the extents of each statement holding it, so that
+    a buffer whose value survives into a later tile is given enough slots to
+    keep the earlier tile alive. A buffer that carries no dependence MUST be
+    given one slot.
   - Each `KernelHole` MUST reference one stable statement ID and expose tuple
     inputs, tuple outputs, and serialized ISL relations. It MUST NOT expose an
     opaque HIR operation reference.

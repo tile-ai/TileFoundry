@@ -18,7 +18,14 @@ from .solve import PipelineSolution
 
 @dataclass(frozen=True)
 class ScheduledStatement:
-    """One selected instruction and its half-open execution interval."""
+    """One selected instruction and its half-open execution interval.
+
+    `footprint_bytes` already counts the rings its buffers were given, and
+    `fits_capacity` says whether the level's tile store holds that. A statement
+    that does not fit is still scheduled and still reported, because the plan's
+    job is to say what this program costs on this machine, not to hide the
+    parts of it that are expensive.
+    """
 
     id: str
     instruction: str
@@ -26,6 +33,8 @@ class ScheduledStatement:
     resources: tuple[tuple[str, int], ...]
     start: int
     end: int
+    footprint_bytes: int
+    fits_capacity: bool
 
 
 @dataclass(frozen=True)
@@ -117,6 +126,8 @@ def export_pipeline_plan(
             resources=by_id[unit.name].resources,
             start=by_id[unit.name].start,
             end=by_id[unit.name].end,
+            footprint_bytes=by_id[unit.name].footprint_bytes,
+            fits_capacity=by_id[unit.name].fits_capacity,
         )
         for unit in program.units
     )
