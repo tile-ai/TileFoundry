@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from tests.models.corpus import FunctionCase, ModelCase, TargetFixture
+from tests.models.coverage_artifact import declare
 from tests.models.fixtures import ACCEPTANCE
 from tests.models.registry import CORPUS
 from tests.models.report import CoverageCollector, build_report
@@ -54,8 +55,16 @@ def _cases() -> list[object]:
 
 @pytest.mark.parametrize(("model", "fixture", "case"), _cases())
 def test_every_selected_function_plans_or_says_what_stopped_it(
-    model: ModelCase, fixture: TargetFixture, case: FunctionCase
+    model: ModelCase, fixture: TargetFixture, case: FunctionCase, record_property
 ) -> None:
+    declare(
+        record_property,
+        model=model.model,
+        target=fixture.id,
+        kind="schedule",
+        case=case.id,
+        function=case.function,
+    )
     module = model.build_for(fixture)
     function = model.function(module, case)
     topology = fixture.level(case.topology)

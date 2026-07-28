@@ -58,6 +58,11 @@ SOURCE_REVISION = "59d61f3ce65a6d9863b86d2e96597125219dc754"
 #: ``FIELDS_DIGEST`` below, over the fields this package depends on.
 SOURCE_SHA256 = "5e4d7f74fec2f360eb9cfbfcd6ec0c4c76e684d3a11caaed259d9fd9bfbc7944"
 
+#: sha256 of ``text_config.json`` as it is checked in beside this module. The
+#: re-serialisation is what makes the digest above not apply to it, and a subtree
+#: nobody hashed is a subtree that can be edited without anything noticing.
+LOCAL_SHA256 = "4893a05b080e069c5e70debe1477ef0085d5427b7cde6e71bb9e08bccda44117"
+
 #: The path the shape is read from.
 TEXT_CONFIG_PATH = Path(__file__).parent / "text_config.json"
 

@@ -34,11 +34,26 @@ from dataclasses import dataclass
 from tests.models import decode_oracle as oracle
 
 # ── Qwen3-1.7B dimensions ────────────────────────────────────────────────
-# Public Qwen3-1.7B config.json values (https://huggingface.co/Qwen/Qwen3-1.7B):
+# Every dimension below comes from the published configuration, pinned so the claim
+# is checkable rather than quoted. It had been quoted, and one of the numbers was
+# wrong: `max_position_embeddings` was written here as 32768 where the published
+# file says 40960, which nothing could have caught while the source was named only
+# by repository.
+#
+#: Where the dimensions come from.
+SOURCE_URL = "https://huggingface.co/Qwen/Qwen3-1.7B/blob/main/config.json"
+#: The commit the values were read at. A full sha rather than a branch, because a
+#: branch names whatever it points at today and that is the thing being pinned
+#: against.
+SOURCE_REVISION = "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+#: sha256 of that file as fetched.
+SOURCE_SHA256 = "1ddb5b89ebc90dcb417a45c213d818577e65976454d29385c8f6140771d95197"
+#
 # hidden_size=2048, num_attention_heads=16, num_key_value_heads=8, head_dim=128,
-# intermediate_size=6144, rms_norm_eps=1e-6, rope_theta=1e6,
-# max_position_embeddings=32768. Fields the model does not pin (attention_bias)
-# fall back to the ``Qwen3Config`` default, which is also ``False``.
+# intermediate_size=6144, rms_norm_eps=1e-6, rope_theta=1e6, vocab_size=151936,
+# num_hidden_layers=28, max_position_embeddings=40960. Fields the model does not
+# pin (attention_bias) fall back to the ``Qwen3Config`` default, which is also
+# ``False``.
 
 
 @dataclass(frozen=True)
@@ -91,8 +106,8 @@ REAL = Qwen3Shape(
     rope_theta=1_000_000.0,
     attention_bias=False,
     vocab=151936,
-    max_pos=32768,
-    max_ctx=32768,
+    max_pos=40960,
+    max_ctx=40960,
     n_layers=28,
     dt="f32",
 )

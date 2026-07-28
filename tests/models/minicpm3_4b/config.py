@@ -99,6 +99,18 @@ import torch
 
 from tests.models import decode_oracle as oracle
 
+# Every dimension below comes from the published configuration, pinned so the claim
+# is checkable rather than quoted. Checked: the values in the docstring above agree
+# with the file at this revision, `max_position_embeddings` included.
+#
+#: Where the dimensions come from.
+SOURCE_URL = "https://huggingface.co/openbmb/MiniCPM3-4B/blob/main/config.json"
+#: The commit the values were read at. A full sha rather than a branch, because a
+#: branch names whatever it points at today.
+SOURCE_REVISION = "d6b14ddaefdb11c624dd75c3c779549bc90b08cb"
+#: sha256 of that file as fetched.
+SOURCE_SHA256 = "cf1d08cb7c1815c676e685bd6ce94eb8b85a57d53871e6e159ee8c650717d98a"
+
 
 @dataclass(frozen=True)
 class MiniCPM3Shape:

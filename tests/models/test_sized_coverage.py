@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from tests.models.corpus import ModelCase, SizedCase, TargetFixture
+from tests.models.coverage_artifact import declare
 from tests.models.fixtures import ACCEPTANCE
 from tests.models.registry import CORPUS
 from tests.models.report import CoverageCollector, build_report
@@ -45,8 +46,16 @@ def _cases() -> list[object]:
 
 @pytest.mark.parametrize(("model", "fixture", "case"), _cases())
 def test_each_model_is_asked_at_a_size_or_says_what_stops_it(
-    model: ModelCase, fixture: TargetFixture, case: SizedCase
+    model: ModelCase, fixture: TargetFixture, case: SizedCase, record_property
 ) -> None:
+    declare(
+        record_property,
+        model=model.model,
+        target=fixture.id,
+        kind="sized",
+        case=case.id,
+        function=case.function,
+    )
     module = model.build_for(fixture)
     function = module.lookup(case.function)
 

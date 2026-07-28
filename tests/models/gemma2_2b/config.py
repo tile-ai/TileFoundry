@@ -60,8 +60,28 @@ from dataclasses import dataclass
 
 from tests.models import decode_oracle as oracle
 
-
 # ── Gemma-2-2B dimensions ────────────────────────────────────────────────
+#: Where the dimensions come from.
+SOURCE_URL = "https://huggingface.co/google/gemma-2-2b/blob/main/config.json"
+#: Why there is no revision and no digest for it, measured rather than assumed.
+#:
+#: The repository is gated. Fetching the file unauthenticated returns "Access to
+#: model google/gemma-2-2b is restricted. You must have access to it and be
+#: authenticated to access it. Please log in." -- 125 bytes of prose, not a
+#: configuration. So a digest could only be of something else, and a digest of
+#: something else is worse than none: it looks like a pin.
+#:
+#: What stands in for it is stated and checkable without the network: every field
+#: below equals the installed `transformers.Gemma2Config()` default, and
+#: `test_provenance.py` holds it to that. That is a weaker claim -- it says the
+#: dimensions match the library's idea of this model rather than the model's own
+#: published file -- and it is written down as weaker rather than presented as a pin.
+SOURCE_UNPINNED_REASON = (
+    "google/gemma-2-2b is a gated repository: an unauthenticated fetch of "
+    "config.json returns an access-restricted message rather than the file, so no "
+    "digest of the published configuration can be taken here. The dimensions are "
+    "held to the installed transformers Gemma2Config defaults instead."
+)
 # Public google/gemma-2-2b config.json == `transformers.Gemma2Config()` defaults
 # (checked field by field against the installed transformers): hidden_size=2304,
 # num_hidden_layers=26, num_attention_heads=8, num_key_value_heads=4,

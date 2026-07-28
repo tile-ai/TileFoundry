@@ -8,6 +8,17 @@ from pathlib import Path
 
 from transformers import AutoConfig
 
+#: The file this package's dimensions are read from, and its digest.
+#:
+#: The provenance here is the artifact rather than a URL: the configuration is
+#: checked in beside this module, so what has to be pinned is the file itself, and a
+#: digest of a file in the repository is verifiable by anyone with the repository.
+#: No public repository is named because none was read -- naming one would suggest a
+#: fetch that never happened.
+SOURCE_FILE = "config.json"
+#: sha256 of that file as checked in.
+SOURCE_SHA256 = "52b5a1aa87606cb5be4f3158d706594edb1c4ce97ce6b1cd6079f15df075d7f5"
+
 # Sourced from the modeling code, not config.json: the KV-cache fp8 fake-quant
 # block and the e4m3 grid it quantizes onto (hf_attention_ref._fake_quant_fp8_block).
 KV_QUANT_BLOCK = 64

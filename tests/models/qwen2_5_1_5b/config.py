@@ -45,15 +45,23 @@ from dataclasses import dataclass
 
 from tests.models import decode_oracle as oracle
 
-
 # ── Qwen2.5-1.5B dimensions ──────────────────────────────────────────────
-# Public Qwen2.5-1.5B config.json values (https://huggingface.co/Qwen/Qwen2.5-1.5B):
+# Every dimension below comes from the published configuration, pinned so the claim
+# is checkable rather than quoted. It had been quoted, and `max_position_embeddings`
+# was written here as 32768 -- the `Qwen2Config` dataclass default -- where the
+# published file says 131072. Agreeing with a library default is not the same fact
+# as agreeing with the model.
+#
+#: Where the dimensions come from.
+SOURCE_URL = "https://huggingface.co/Qwen/Qwen2.5-1.5B/blob/main/config.json"
+#: The commit the values were read at.
+SOURCE_REVISION = "8faed761d45a263340a0528343f099c05c9a4323"
+#: sha256 of that file as fetched.
+SOURCE_SHA256 = "0e8c8aa86468aba09c9d32157ff4bc2301c7e6c50e4398960425b2ea71e66f77"
+#
 # hidden_size=1536, num_attention_heads=12, num_key_value_heads=2, head_dim=128,
-# intermediate_size=8960, rms_norm_eps=1e-6, rope_theta=1e6,
-# max_position_embeddings=32768. Everything below matches those exactly;
-# ``REAL.vocab`` / ``REAL.max_pos`` already equal the ``Qwen2Config`` dataclass
-# defaults (confirmed against the installed ``transformers`` package) and
-# are kept explicit only for parity with the ``qwen3_1_7b`` template.
+# intermediate_size=8960, rms_norm_eps=1e-6, rope_theta=1e6, vocab_size=151936,
+# num_hidden_layers=28, max_position_embeddings=131072.
 @dataclass(frozen=True)
 class Qwen25Shape:
     """One decoder layer's shape, plus the context envelope and dtype every
@@ -100,8 +108,8 @@ REAL = Qwen25Shape(
     rms_eps=1e-06,
     rope_theta=1000000.0,
     vocab=151936,
-    max_pos=32768,
-    max_ctx=32768,
+    max_pos=131072,
+    max_ctx=131072,
     n_layers=28,
     dt='f32',
 )

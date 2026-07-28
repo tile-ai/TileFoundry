@@ -17,6 +17,7 @@ import pytest
 import torch
 
 from tests.models.corpus import ModelCase, ReferenceCase
+from tests.models.coverage_artifact import declare
 from tests.models.fixtures import ACCEPTANCE
 from tests.models.registry import CORPUS
 from tests.models.report import CoverageCollector, build_report
@@ -71,7 +72,17 @@ def _compared(got) -> torch.Tensor:
 
 @pytest.mark.skipif(_NEEDS_DEVICE, reason="references run at production dimensions")
 @pytest.mark.parametrize(("model", "reference"), _cases())
-def test_each_model_matches_its_oracle(model: ModelCase, reference: ReferenceCase) -> None:
+def test_each_model_matches_its_oracle(
+    model: ModelCase, reference: ReferenceCase, record_property
+) -> None:
+    declare(
+        record_property,
+        model=model.model,
+        target=ACCEPTANCE().id,
+        kind="reference",
+        case=reference.id,
+        function=reference.entry or reference.id.rsplit("/", 1)[-1],
+    )
     drawn = reference.inputs()
 
     got = reference.gate.hold(

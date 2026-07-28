@@ -24,7 +24,11 @@ from typing import Literal
 from tests.models.corpus import CapabilityGate, ModelCase
 
 Kind = Literal["reference", "analyze", "schedule", "sized"]
-Status = Literal["PASS", "BLOCKED", "FAIL"]
+#: `SKIPPED` is not a fourth flavour of blocked. A case a machine could not run --
+#: no CUDA, no compiler -- says nothing about the capability, and recording it as
+#: BLOCKED would put it in the same column as a limit somebody measured and signed
+#: off on. The distinction is the whole reason this report exists.
+Status = Literal["PASS", "BLOCKED", "FAIL", "SKIPPED"]
 
 _KINDS: tuple[Kind, ...] = ("reference", "analyze", "schedule", "sized")
 
@@ -42,7 +46,7 @@ class CaseResult:
     reason: str = ""
 
     def __post_init__(self) -> None:
-        if self.status in ("BLOCKED", "FAIL") and not self.reason.strip():
+        if self.status in ("BLOCKED", "FAIL", "SKIPPED") and not self.reason.strip():
             raise ValueError(
                 f"{self.case!r} is {self.status} without a reason; a result "
                 "nobody can act on is not a result"
@@ -126,9 +130,13 @@ def build_report(
         models.setdefault(case.model, []).append(case)
 
     for model_id, cases in models.items():
+        built = [(case, case.build()) for case in cases]
         inventory = tuple(
-            dict.fromkeys(name for case in cases for name in case.inventory())
+            dict.fromkeys(
+                name for case, module in built for name in case.inventory(module)
+            )
         )
+        sizeable = _sizeable(built)
         targets: dict[str, object] = {}
         for result in by_model.get(model_id, ()):
             targets.setdefault(
@@ -137,7 +145,7 @@ def build_report(
                     "reference": [],
                     "analyze": {"tested": [], "untested": []},
                     "schedule": {"tested": [], "untested": []},
-                    "sized": {"tested": [], "untested": []},
+                    "sized": {"tested": [], "untested": [], "not_applicable": []},
                 },
             )
         for name, section in targets.items():
@@ -155,11 +163,38 @@ def build_report(
                     for result in executed
                     if result.kind == kind and result.function
                 }
+                # Being asked at a size is only a question for a function that left
+                # a dimension open. The others have no context length to state, and
+                # calling that untested would report a capability nobody is missing
+                # -- the same collapse the `sized` heading exists to prevent.
+                askable = inventory if kind != "sized" else sizeable
                 section[kind]["untested"] = [
-                    function for function in inventory if function not in covered
+                    function for function in askable if function not in covered
                 ]
+                if kind == "sized":
+                    section[kind]["not_applicable"] = [
+                        function for function in inventory if function not in sizeable
+                    ]
         report[model_id] = {"inventory": list(inventory), "targets": targets}
     return report
+
+
+def _sizeable(built) -> tuple[str, ...]:
+    """The functions that leave a dimension open, across a model's Modules.
+
+    Measured from the functions rather than declared, so a kernel rewritten to carry
+    a range starts being a `sized` question without anyone updating a list, and one
+    rewritten to a fixed shape stops being one.
+    """
+    from tilefoundry.ir.hir.function import Function  # noqa: PLC0415
+    from tilefoundry.ir.hir.specialize import dim_vars_reached  # noqa: PLC0415
+
+    names: list[str] = []
+    for _case, module in built:
+        for function in module.functions:
+            if isinstance(function, Function) and dim_vars_reached(function):
+                names.append(function.name)
+    return tuple(dict.fromkeys(names))
 
 
 def _row(result: CaseResult) -> dict[str, object]:
