@@ -1,4 +1,4 @@
-"""The complete Qwen3-1.7B decoder, one decode step, against Hugging Face's own
+"""The complete Qwen2.5-1.5B decoder, one decode step, against Hugging Face's own
 28-layer stack.
 
 Its own test because it is its own claim. Every layer here is the layer
@@ -9,7 +9,7 @@ end, and each layer reading its own cache rather than another layer's. A
 per-layer comparison passes whether or not any of that holds.
 
 Production dimensions mean the real 28 layers and the real hidden size, which is
-5.3 GiB of f32 parameters. That is a CUDA-sized test, and CUDA is where model
+4.6 GiB of f32 parameters. That is a CUDA-sized test, and CUDA is where model
 completeness is accepted, so it skips rather than shrinks when there is no device
 -- a smaller stack would be a different claim wearing this test's name.
 """
@@ -18,8 +18,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.models.qwen3_1_7b import config
-from tests.models.qwen3_1_7b.decoder import build_decoder
+from tests.models.qwen2_5_1_5b import config
+from tests.models.qwen2_5_1_5b.decoder import build_decoder
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the complete decoder at production dimensions"
@@ -60,10 +60,12 @@ def _draw(ctx_len=CTX_LEN):
         (
             layer.input_layernorm.weight,
             config.linear_weight(layer.self_attn.q_proj),
+            layer.self_attn.q_proj.bias,
             config.linear_weight(layer.self_attn.k_proj),
+            layer.self_attn.k_proj.bias,
             config.linear_weight(layer.self_attn.v_proj),
-            layer.self_attn.q_norm.weight,
-            layer.self_attn.k_norm.weight,
+            layer.self_attn.v_proj.bias,
+
             config.linear_weight(layer.self_attn.o_proj),
             layer.post_attention_layernorm.weight,
             config.linear_weight(layer.mlp.gate_proj),

@@ -17,6 +17,7 @@ decoder_layer = Qwen2_5_1_5B.lookup("decoder_layer")
 input_rms_norm = Qwen2_5_1_5B.lookup("input_rms_norm")
 mlp = Qwen2_5_1_5B.lookup("mlp")
 self_attention = Qwen2_5_1_5B.lookup("self_attention")
+tiled_mlp = Qwen2_5_1_5B.lookup("tiled_mlp")
 
 __all__ = [
     "Qwen2_5_1_5B",
@@ -24,4 +25,5 @@ __all__ = [
     "input_rms_norm",
     "mlp",
     "self_attention",
+    "tiled_mlp",
 ]

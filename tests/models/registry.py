@@ -38,6 +38,16 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
+from tests.models.qwen2_5_1_5b.config import REAL as QWEN2_5_1_5B_SHAPE
+from tests.models.qwen2_5_1_5b.reference import (
+    decoder_step_inputs as qwen2_5_decoder_step_inputs,
+)
+from tests.models.qwen2_5_1_5b.reference import (
+    decoder_step_oracle as qwen2_5_decoder_step_oracle,
+)
+from tests.models.qwen2_5_1_5b.reference import (
+    run_decoder_step as qwen2_5_run_decoder_step,
+)
 from tests.models.qwen3_1_7b.config import REAL as QWEN3_1_7B_SHAPE
 from tests.models.qwen3_1_7b.reference import (
     CTX_LEN as QWEN3_1_7B_CTX_LEN,
@@ -105,7 +115,58 @@ QWEN3_1_7B = ModelCase(
     ),
 )
 
-CORPUS: tuple[ModelCase, ...] = (QWEN3_1_7B,)
+QWEN2_5_1_5B = ModelCase(
+    id="qwen2_5_1_5b",
+    source=MODELS_ROOT / "qwen2_5_1_5b" / "model" / "decoder_layer.py",
+    entry="Qwen2_5_1_5B",
+    namespace={"config": QWEN2_5_1_5B_SHAPE},
+    reference=ReferenceCase(
+        id="qwen2_5_1_5b/reference/full_decoder_decode",
+        boundary=(
+            "one decode step of the complete decoder -- every layer in order, "
+            "the residual threaded between them and the final norm closing the "
+            "stack -- at production dimensions"
+        ),
+        inputs=qwen2_5_decoder_step_inputs,
+        oracle=qwen2_5_decoder_step_oracle,
+        runner=qwen2_5_run_decoder_step,
+        problem_sizes=(f"decode/ctx_len={QWEN3_1_7B_CTX_LEN}",),
+    ),
+    analyze=(
+        FunctionCase(
+            id="qwen2_5_1_5b/analyze/input_rms_norm", function="input_rms_norm"
+        ),
+        FunctionCase(
+            id="qwen2_5_1_5b/analyze/self_attention",
+            function="self_attention",
+            dims=ANALYZED_AT,
+        ),
+        FunctionCase(id="qwen2_5_1_5b/analyze/mlp", function="mlp"),
+        FunctionCase(id="qwen2_5_1_5b/analyze/tiled_mlp", function="tiled_mlp"),
+        FunctionCase(
+            id="qwen2_5_1_5b/analyze/decoder_layer",
+            function="decoder_layer",
+            dims=ANALYZED_AT,
+        ),
+    ),
+    schedule=(
+        FunctionCase(
+            id="qwen2_5_1_5b/schedule/decoder_layer",
+            function="decoder_layer",
+            topology="cta",
+            dims=ANALYZED_AT,
+        ),
+    ),
+    sized=(
+        SizedCase(
+            id="qwen2_5_1_5b/sized/decoder_layer",
+            function="decoder_layer",
+            dims=ANALYZED_AT,
+        ),
+    ),
+)
+
+CORPUS: tuple[ModelCase, ...] = (QWEN3_1_7B, QWEN2_5_1_5B)
 
 
 def case(model_id: str) -> ModelCase:
@@ -117,4 +178,4 @@ def case(model_id: str) -> ModelCase:
     raise KeyError(f"no model case {model_id!r} in the corpus; it holds {known}")
 
 
-__all__ = ["CORPUS", "QWEN3_1_7B", "case"]
+__all__ = ["CORPUS", "QWEN2_5_1_5B", "QWEN3_1_7B", "case"]

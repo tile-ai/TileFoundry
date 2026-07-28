@@ -15,9 +15,10 @@ package shares:
   random weights at a fixed seed),
 - the model dimensions (GQA 12 query / 2 key-value heads; a dense SwiGLU MLP
   — no MoE router/gather),
-- the static single-shot-prefill contract (a fixed ``REAL.s_cap``-token sequence,
-  no KV cache, no dynamic ``DimVar`` — Phase 0 validates op-composition
-  correctness, not context-length scaling), and
+- the decode contract: one token per step (``seq_len`` is 1), the active context
+  length ``ctx_len`` as the single dynamic dimension, and the KV cache passed as
+  explicit tensors in and out — Hugging Face's ``past_key_values`` is never
+  constructed, on either side of the comparison, and
 - the component -> HF-submodule map.
 
 Component HIR ``@func``s live in ``model/decoder_layer.py`` (the ``@module
@@ -42,6 +43,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tests.models import decode_oracle as oracle
+
 
 # ── Qwen2.5-1.5B dimensions ──────────────────────────────────────────────
 # Public Qwen2.5-1.5B config.json values (https://huggingface.co/Qwen/Qwen2.5-1.5B):
@@ -53,7 +56,7 @@ from dataclasses import dataclass
 # are kept explicit only for parity with the ``qwen3_1_7b`` template.
 @dataclass(frozen=True)
 class Qwen25Shape:
-    """One decoder layer's shape, plus the sequence length and dtype every
+    """One decoder layer's shape, plus the context envelope and dtype every
     kernel in this package is authored at."""
 
     hidden: int
@@ -65,7 +68,8 @@ class Qwen25Shape:
     rope_theta: float
     vocab: int
     max_pos: int
-    s_cap: int
+    max_ctx: int
+    n_layers: int
     dt: str
 
     @property
@@ -82,6 +86,11 @@ class Qwen25Shape:
         return self.n_kv_heads * self.head_dim
 
 
+# One token per step, so the only dynamic dimension is the context the step
+# reads. ``max_ctx`` matches ``max_pos``: a position beyond the rotary cache has
+# no embedding to gather, so a longer context is unrepresentable rather than slow.
+SEQ_LEN = 1
+
 REAL = Qwen25Shape(
     hidden=1536,
     head_dim=128,
@@ -92,7 +101,8 @@ REAL = Qwen25Shape(
     rope_theta=1000000.0,
     vocab=151936,
     max_pos=32768,
-    s_cap=4,
+    max_ctx=32768,
+    n_layers=28,
     dt='f32',
 )
 
@@ -109,8 +119,12 @@ COMPONENT_HF_SUBMODULES = {
 }
 
 
-def build_hf_config():
-    """Build a ``Qwen2Config`` at the Qwen2.5-1.5B dimensions (one decoder layer)."""
+def build_hf_config(*, layers: int = 1):
+    """Build a ``Qwen2Config`` at the Qwen2.5-1.5B dimensions.
+
+    ``layers`` defaults to one, which is what a component test needs. The
+    complete-decoder reference asks for ``REAL.n_layers`` instead.
+    """
     from transformers import Qwen2Config  # noqa: PLC0415
 
     return Qwen2Config(
@@ -121,7 +135,7 @@ def build_hf_config():
         intermediate_size=REAL.intermediate,
         rms_norm_eps=REAL.rms_eps,
         rope_theta=REAL.rope_theta,
-        num_hidden_layers=1,
+        num_hidden_layers=layers,
         vocab_size=REAL.vocab,
         max_position_embeddings=REAL.max_pos,
     )
@@ -133,18 +147,11 @@ def build_hf_layer(seed=0, device="cpu", dtype=None):
     ``device`` defaults to ``"cpu"`` (no CUDA on this box — every caller in
     this package either omits ``device`` or passes ``"cpu"`` explicitly).
     """
-    import torch  # noqa: PLC0415
     from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer  # noqa: PLC0415
 
-    cfg = build_hf_config()
-    torch.manual_seed(seed)
-    layer = Qwen2DecoderLayer(cfg, layer_idx=0).to(device).eval()
-    with torch.no_grad():
-        for p in layer.parameters():
-            p.normal_(0.0, 0.05)
-    if dtype is not None:
-        layer = layer.to(dtype)
-    return layer
+    return oracle.randomised(
+        lambda: Qwen2DecoderLayer(build_hf_config(), layer_idx=0), seed, device, dtype
+    )
 
 
 def rope_caches(cfg, max_pos, device="cpu", dtype=None):
@@ -153,34 +160,79 @@ def rope_caches(cfg, max_pos, device="cpu", dtype=None):
     Row ``p`` is the rotary embedding for absolute position ``p``, so gathering
     by ``pos_ids`` reproduces the cos / sin the HF attention applies.
     """
-    import torch  # noqa: PLC0415
     from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding  # noqa: PLC0415
 
-    rotary = Qwen2RotaryEmbedding(cfg).to(device)
-    position_ids = torch.arange(max_pos, device=device).unsqueeze(0)
-    ref = torch.zeros(1, max_pos, cfg.hidden_size, device=device)
-    cos, sin = rotary(ref, position_ids)
-    cos, sin = cos[0], sin[0]
-    if dtype is not None:
-        cos, sin = cos.to(dtype), sin.to(dtype)
-    return cos, sin
+    return oracle.rope_caches(Qwen2RotaryEmbedding, cfg, max_pos, device, dtype)
 
 
-def causal_mask(seq, device="cpu", dtype=None):
-    """Additive causal mask ``[1, 1, seq, seq]``: 0 where query ``i`` may
-    attend key ``j`` (``j <= i``), ``-inf`` otherwise.
+def _key_value_of(layer, normed):
+    """*layer*'s pre-rotary key and its value, head-major.
 
-    There is no KV cache in this package: every token attends only within the
-    same ``REAL.s_cap`` tile, i.e. ``cur_pos`` is always 0.
+    The one step of the oracle that is Qwen2's own, and it differs from Qwen3 in
+    both directions: there is no per-head norm on the key, and the projections
+    carry a bias -- which needs no handling here only because it is inside the
+    ``nn.Linear`` this calls.
     """
-    import torch  # noqa: PLC0415
+    attention = layer.self_attn
+    heads = (1, normed.shape[1], REAL.n_kv_heads, REAL.head_dim)
+    key = attention.k_proj(normed).view(heads).transpose(1, 2)
+    value = attention.v_proj(normed).view(heads).transpose(1, 2)
+    return key, value
 
-    q_pos = torch.arange(seq, device=device).unsqueeze(1)
-    k_pos = torch.arange(seq, device=device).unsqueeze(0)
-    mask = torch.where(k_pos <= q_pos, 0.0, float("-inf"))
-    if dtype is not None:
-        mask = mask.to(dtype)
-    return mask.view(1, 1, seq, seq)
+
+def _apply_rotary():
+    from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb  # noqa: PLC0415
+
+    return apply_rotary_pos_emb
+
+
+def context_kv(layer, hidden_ctx, device="cpu"):
+    """The KV cache *layer* would hold for *hidden_ctx*, as explicit tensors."""
+    cos, sin = rope_caches(build_hf_config(), hidden_ctx.shape[1], device=device)
+    return oracle.context_kv(
+        layer, hidden_ctx, cos, sin,
+        key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
+    )
+
+
+def decode_reference(layer, hidden_ctx, hidden_new, device="cpu"):
+    """Hugging Face's output for *hidden_new* decoded after *hidden_ctx*."""
+    total = hidden_ctx.shape[1] + hidden_new.shape[1]
+    cos, sin = rope_caches(build_hf_config(), total, device=device)
+    return oracle.decode_reference([layer], hidden_ctx, hidden_new, cos, sin)
+
+
+def build_hf_decoder(seed=0, device="cpu", dtype=None):
+    """The complete ``REAL.n_layers``-layer decoder stack, random at a fixed seed.
+
+    Built for its layers and its final norm; the token embedding is not part of
+    what this returns, because the decoder's boundary is hidden states in and
+    hidden states out.
+    """
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2Model  # noqa: PLC0415
+
+    return oracle.randomised(
+        lambda: Qwen2Model(build_hf_config(layers=REAL.n_layers)), seed, device, dtype
+    )
+
+
+def decoder_context_kv(model, hidden_ctx, device="cpu"):
+    """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
+    cos, sin = rope_caches(build_hf_config(), hidden_ctx.shape[1], device=device)
+    return oracle.stack_context_kv(
+        model.layers, hidden_ctx, cos, sin,
+        key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
+    )
+
+
+def decoder_decode_reference(model, hidden_ctx, hidden_new):
+    """The decoder stack's output for *hidden_new* decoded after *hidden_ctx*."""
+    device = hidden_ctx.device.type
+    total = hidden_ctx.shape[1] + hidden_new.shape[1]
+    cos, sin = rope_caches(build_hf_config(), total, device=device)
+    return oracle.decode_reference(
+        model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.norm
+    )
 
 
 def linear_weight(linear):

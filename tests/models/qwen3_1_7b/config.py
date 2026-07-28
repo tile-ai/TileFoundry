@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tests.models import decode_oracle as oracle
+
 # ── Qwen3-1.7B dimensions ────────────────────────────────────────────────
 # Public Qwen3-1.7B config.json values (https://huggingface.co/Qwen/Qwen3-1.7B):
 # hidden_size=2048, num_attention_heads=16, num_key_value_heads=8, head_dim=128,
@@ -137,18 +139,11 @@ def build_hf_layer(seed=0, device="cpu", dtype=None):
     ``device`` defaults to ``"cpu"`` (no CUDA on this box — every caller in
     this package either omits ``device`` or passes ``"cpu"`` explicitly).
     """
-    import torch  # noqa: PLC0415
     from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer  # noqa: PLC0415
 
-    cfg = build_hf_config()
-    torch.manual_seed(seed)
-    layer = Qwen3DecoderLayer(cfg, layer_idx=0).to(device).eval()
-    with torch.no_grad():
-        for p in layer.parameters():
-            p.normal_(0.0, 0.05)
-    if dtype is not None:
-        layer = layer.to(dtype)
-    return layer
+    return oracle.randomised(
+        lambda: Qwen3DecoderLayer(build_hf_config(), layer_idx=0), seed, device, dtype
+    )
 
 
 def rope_caches(cfg, max_pos, device="cpu", dtype=None):
@@ -157,83 +152,44 @@ def rope_caches(cfg, max_pos, device="cpu", dtype=None):
     Row ``p`` is the rotary embedding for absolute position ``p``, so gathering
     by ``pos_ids`` reproduces the cos / sin the HF attention applies.
     """
-    import torch  # noqa: PLC0415
     from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding  # noqa: PLC0415
 
-    rotary = Qwen3RotaryEmbedding(cfg).to(device)
-    position_ids = torch.arange(max_pos, device=device).unsqueeze(0)
-    ref = torch.zeros(1, max_pos, cfg.hidden_size, device=device)
-    cos, sin = rotary(ref, position_ids)
-    cos, sin = cos[0], sin[0]
-    if dtype is not None:
-        cos, sin = cos.to(dtype), sin.to(dtype)
-    return cos, sin
+    return oracle.rope_caches(Qwen3RotaryEmbedding, cfg, max_pos, device, dtype)
+
+
+def _key_value_of(layer, normed):
+    """*layer*'s pre-rotary key and its value, head-major.
+
+    The one step of the oracle that is Qwen3's own: the key is normalised per
+    head, and no projection carries a bias.
+    """
+    attention = layer.self_attn
+    heads = (1, normed.shape[1], REAL.n_kv_heads, REAL.head_dim)
+    key = attention.k_norm(attention.k_proj(normed).view(heads)).transpose(1, 2)
+    value = attention.v_proj(normed).view(heads).transpose(1, 2)
+    return key, value
+
+
+def _apply_rotary():
+    from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb  # noqa: PLC0415
+
+    return apply_rotary_pos_emb
 
 
 def context_kv(layer, hidden_ctx, device="cpu"):
-    """The KV cache for *hidden_ctx*, as the explicit tensors a decode step takes.
-
-    Built by running the layer's own norm, projections and rotary embedding over
-    the context — no ``Cache`` object is constructed. What comes out is bitwise
-    identical to what Hugging Face's own cache would hold after a prefill of the
-    same hidden states, which is what makes it a reference rather than a
-    re-derivation: keys are post-rotary (a stored key belongs to the position it
-    was written at) and values are post-projection.
-
-    Returned in the kernels' ``[1, ctx_len, n_kv_heads, head_dim]`` layout, not
-    Hugging Face's head-major one.
-    """
-    import torch  # noqa: PLC0415
-    from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb  # noqa: PLC0415
-
-    cfg = build_hf_config()
-    attn = layer.self_attn
-    ctx = hidden_ctx.shape[1]
-    cos, sin = rope_caches(cfg, ctx, device=device)
-    with torch.no_grad():
-        normed = layer.input_layernorm(hidden_ctx)
-        heads = (1, ctx, cfg.num_key_value_heads, cfg.head_dim)
-        k = attn.k_norm(attn.k_proj(normed).view(heads)).transpose(1, 2)
-        v = attn.v_proj(normed).view(heads).transpose(1, 2)
-        # apply_rotary_pos_emb rotates a query/key pair; only the key is wanted.
-        _, k = apply_rotary_pos_emb(k, k, cos.unsqueeze(0), sin.unsqueeze(0))
-    return k.transpose(1, 2).contiguous(), v.transpose(1, 2).contiguous()
+    """The KV cache *layer* would hold for *hidden_ctx*, as explicit tensors."""
+    cos, sin = rope_caches(build_hf_config(), hidden_ctx.shape[1], device=device)
+    return oracle.context_kv(
+        layer, hidden_ctx, cos, sin,
+        key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
+    )
 
 
 def decode_reference(layer, hidden_ctx, hidden_new, device="cpu"):
-    """Hugging Face's output for *hidden_new* decoded after *hidden_ctx*.
-
-    Runs the layer once over the whole sequence under a causal mask and keeps the
-    last position. Causality makes that position's output depend on exactly the
-    context before it, so this equals a cached one-token step to floating-point
-    rounding while touching none of the caching machinery -- the alternative
-    would be to hand Hugging Face a ``past_key_values``, and then the reference
-    would share the mechanism the kernels are supposed to be checked against.
-    """
-    import torch  # noqa: PLC0415
-
-    cfg = build_hf_config()
+    """Hugging Face's output for *hidden_new* decoded after *hidden_ctx*."""
     total = hidden_ctx.shape[1] + hidden_new.shape[1]
-    cos, sin = rope_caches(cfg, total, device=device)
-    positions = torch.arange(total, device=device)
-    mask = torch.where(
-        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
-    ).view(1, 1, total, total)
-    with torch.no_grad():
-        out = layer(
-            torch.cat([hidden_ctx, hidden_new], dim=1),
-            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
-            attention_mask=mask,
-        )
-    return out[:, hidden_ctx.shape[1] :, :]
-
-
-def linear_weight(linear):
-    """HF ``nn.Linear.weight`` ``[out, in]`` -> kernel matmul layout
-    ``[1, in, out]`` (the kernel convention is ``x[1,S,in] @ w[1,in,out]``,
-    the transpose/pack "weight preprocessing" the task calls for happening in
-    test code, not in the kernel)."""
-    return linear.weight.t().unsqueeze(0).contiguous()
+    cos, sin = rope_caches(build_hf_config(), total, device=device)
+    return oracle.decode_reference([layer], hidden_ctx, hidden_new, cos, sin)
 
 
 def build_hf_decoder(seed=0, device="cpu", dtype=None, shape: Qwen3Shape = REAL):
@@ -246,98 +202,38 @@ def build_hf_decoder(seed=0, device="cpu", dtype=None, shape: Qwen3Shape = REAL)
     separately from ``build_hf_layer``: layer order, the final norm, and the
     residual thread between layers are only observable here.
     """
-    import torch  # noqa: PLC0415
     from transformers.models.qwen3.modeling_qwen3 import Qwen3Model  # noqa: PLC0415
 
-    cfg = build_hf_config(shape, layers=shape.n_layers)
-    torch.manual_seed(seed)
-    model = Qwen3Model(cfg).to(device).eval()
-    with torch.no_grad():
-        for parameter in model.parameters():
-            parameter.normal_(0.0, 0.05)
-    if dtype is not None:
-        model = model.to(dtype)
-    return model
-
-
-def layer_inputs_over_context(model, hidden_ctx):
-    """Each layer's own input hidden states for *hidden_ctx*, in layer order.
-
-    Layer ``i``'s cache is built from what layer ``i`` reads, which is what
-    layers ``0..i-1`` produced -- so the context has to be run through the stack
-    to know it. Captured with forward-pre-hooks rather than by asking the model
-    to keep a cache, so the decode contract holds here too: nothing on either
-    side of the comparison constructs a ``past_key_values``.
-    """
-    import torch  # noqa: PLC0415
-
-    captured: list = [None] * len(model.layers)
-
-    def record(index):
-        def hook(_module, args, kwargs):
-            hidden = kwargs.get("hidden_states", args[0] if args else None)
-            captured[index] = hidden.detach()
-            return None
-        return hook
-
-    handles = [
-        layer.register_forward_pre_hook(record(index), with_kwargs=True)
-        for index, layer in enumerate(model.layers)
-    ]
-    try:
-        total = hidden_ctx.shape[1]
-        cos, sin = rope_caches(build_hf_config(), total, device=hidden_ctx.device.type)
-        positions = torch.arange(total, device=hidden_ctx.device)
-        mask = torch.where(
-            positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
-        ).view(1, 1, total, total).to(hidden_ctx.dtype)
-        with torch.no_grad():
-            _run_layers(model, hidden_ctx, cos, sin, mask)
-    finally:
-        for handle in handles:
-            handle.remove()
-    return captured
-
-
-def _run_layers(model, hidden, cos, sin, mask):
-    """*hidden* through every layer and the final norm, cache-free."""
-    for layer in model.layers:
-        hidden = layer(
-            hidden,
-            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
-            attention_mask=mask,
-        )
-    return model.norm(hidden)
+    return oracle.randomised(
+        lambda: Qwen3Model(build_hf_config(shape, layers=shape.n_layers)),
+        seed, device, dtype,
+    )
 
 
 def decoder_context_kv(model, hidden_ctx, device="cpu"):
     """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
-    return [
-        context_kv(layer, layer_input, device=device)
-        for layer, layer_input in zip(
-            model.layers, layer_inputs_over_context(model, hidden_ctx)
-        )
-    ]
+    cos, sin = rope_caches(build_hf_config(), hidden_ctx.shape[1], device=device)
+    return oracle.stack_context_kv(
+        model.layers, hidden_ctx, cos, sin,
+        key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
+    )
 
 
 def decoder_decode_reference(model, hidden_ctx, hidden_new):
-    """The decoder stack's output for *hidden_new* decoded after *hidden_ctx*.
-
-    The whole sequence through every layer and the final norm, last position
-    kept -- the same construction the single-layer reference uses, for the same
-    reason, and equally free of Hugging Face's caching machinery.
-    """
-    import torch  # noqa: PLC0415
-
+    """The decoder stack's output for *hidden_new* decoded after *hidden_ctx*."""
     device = hidden_ctx.device.type
     total = hidden_ctx.shape[1] + hidden_new.shape[1]
     cos, sin = rope_caches(build_hf_config(), total, device=device)
-    positions = torch.arange(total, device=hidden_ctx.device)
-    mask = torch.where(
-        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
-    ).view(1, 1, total, total).to(hidden_ctx.dtype)
-    with torch.no_grad():
-        out = _run_layers(
-            model, torch.cat([hidden_ctx, hidden_new], dim=1), cos, sin, mask
-        )
-    return out[:, hidden_ctx.shape[1] :, :]
+    return oracle.decode_reference(
+        model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.norm
+    )
+
+
+def linear_weight(linear):
+    """HF ``nn.Linear.weight`` ``[out, in]`` -> kernel matmul layout
+    ``[1, in, out]`` (the kernel convention is ``x[1,S,in] @ w[1,in,out]``,
+    the transpose/pack "weight preprocessing" the task calls for happening in
+    test code, not in the kernel)."""
+    return linear.weight.t().unsqueeze(0).contiguous()
+
+
