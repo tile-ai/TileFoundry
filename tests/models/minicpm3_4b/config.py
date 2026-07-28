@@ -43,9 +43,10 @@ and the up-projected value ``[1, heads, ctx, v_head_dim]``.
 The explicit tensors hold exactly that, which is what makes the oracle
 reproducible without a ``Cache`` object: ``_key_value_of`` runs the same
 projections in the same order and reaches the same tensors HF would have handed
-to ``update``, measured rather than argued -- ``test_decoder_layer.py``'s cache
-test compares the grown cache against a rebuild over a context one token longer,
-and the agreement is exact (0.0), not merely inside tolerance.
+to ``update``. Measured rather than argued, and end to end rather than against a
+transcription of HF's internals: a decode step reading these tensors reproduces
+the last position of a full-sequence causal forward to 3e-7, which a cache
+holding anything else -- the latent, say -- could not do at any tolerance.
 
 Two consequences of that choice worth stating. The key's head dim (96) and the
 value's (64) differ, so the two caches are not the same shape. And
@@ -55,9 +56,18 @@ broadcast left in the model is the shared rotary slice of K, inside the step.
 
 ── Dimensions ──────────────────────────────────────────────────────────────
 
-``MiniCPM3Config()``'s own defaults, which are the ``openbmb/MiniCPM3-4B``
-checkpoint's ``config.json`` values -- read off a constructed config rather than
-assumed: ``hidden_size=2560``, ``intermediate_size=6400``,
+``MiniCPM3Config()``'s own defaults, read off a constructed config rather than
+assumed. Those defaults are the ``openbmb/MiniCPM3-4B`` values on upstream's own
+say-so, not on an inference from the numbers: ``configuration_minicpm3.py``
+carries ``@auto_docstring(checkpoint="openbmb/MiniCPM3-4B")`` over the class and
+"Defaults match the ``openbmb/MiniCPM3-4B`` checkpoint" over the field block. No
+checkpoint is downloaded here; nothing in this package needs one, because the
+weights are random at a fixed seed and only the shape has to be the real one.
+
+Note the floor: ``minicpm3`` first ships in ``transformers`` 5.13.0 and is absent
+from 5.12.x, which is what this repo's dependency currently names as its minimum.
+
+``hidden_size=2560``, ``intermediate_size=6400``,
 ``num_attention_heads=40``, ``num_key_value_heads=40``,
 ``num_hidden_layers=62``, ``q_lora_rank=768``, ``kv_lora_rank=256``,
 ``qk_nope_head_dim=64``, ``qk_rope_head_dim=32``, ``v_head_dim=64``,
@@ -269,8 +279,7 @@ def _key_value_of(layer, normed):
     Broadcasting the rotary slice before rotating rather than after -- HF
     rotates the one shared head then expands -- is the same values either way:
     the rotation depends on position, not on head, so it commutes with a
-    broadcast along the head axis. Measured, not assumed: the cache test's
-    agreement is exact.
+    broadcast along the head axis.
     """
     attention = layer.self_attn
     ctx = normed.shape[1]

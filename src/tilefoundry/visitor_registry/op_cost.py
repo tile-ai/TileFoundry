@@ -29,12 +29,14 @@ from tilefoundry.ir.hir.nn.tanh import Tanh
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.cast import Cast
+from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.gather import Gather
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -144,6 +146,29 @@ def _relu(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(Gelu)
 def _gelu(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
+
+
+@register_cost_evaluator(Concat)
+def _concat(call: Call, ctx: CostContext) -> Cost:
+    """A concatenation places its inputs side by side and computes nothing.
+
+    Every input element is read once and written once, so the traffic is the
+    inputs plus the output -- unlike a slice, which reads only what it keeps.
+    """
+    return Cost({}, _traffic(_input_types(call, ctx), _output_type(call, ctx)))
+
+
+@register_cost_evaluator(Slice)
+def _slice(call: Call, ctx: CostContext) -> Cost:
+    """A slice selects elements and computes none.
+
+    Its traffic is what it actually moves -- the selected region, not the tensor
+    it came from -- so the cost is read off the output rather than the input. A
+    model that splits a wide projection into unequal parts does that once per
+    part, and charging each one for the whole projection would report a kernel
+    reading its input as many times as it has pieces.
+    """
+    return Cost({}, tensor_bytes(_output_type(call, ctx)) * 2)
 
 
 @register_cost_evaluator(SoftMax)

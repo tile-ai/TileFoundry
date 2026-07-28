@@ -1,49 +1,49 @@
-"""MiniCPM3-4B single decoder layer: pull a kernel by attribute, evaluate vs
-HF. Phase 0 cpu + f32 oracle (no CUDA on this box — every ``device=`` below
-is ``"cpu"``). Each test resolves one kernel from the ``MiniCPM3_4B`` module
-(mirroring ``tests/models/qwen3_1_7b/test_model/decoder_layer.py``) and checks
-it against the corresponding Hugging Face ``MiniCPM3DecoderLayer``
-submodule(s). Inputs are built fresh inside each test from the shared
-``common`` fixtures — no module-level static tensors.
+"""MiniCPM3-4B decode step: resolve a kernel by name, evaluate vs HF.
+
+cpu + f32. Each test resolves one kernel from the ``MiniCPM3_4B`` module and
+checks it against the corresponding Hugging Face ``MiniCPM3DecoderLayer``
+submodule(s).
+
+The kernels that read the KV cache carry ``ctx_len`` as a range, so they are
+specialised at the length the drawn step uses before being evaluated: an extent
+is what counting elements needs, and a range is not one. The kernels that do not
+read the cache carry no range and are evaluated as authored.
+
+Arguments come from ``reference.py``'s drawn step rather than being assembled
+here, so the parameter order is stated once and a signature change cannot leave
+one test agreeing with a stale order.
 """
 from __future__ import annotations
 
 import torch
 
-from tests.models.minicpm3_4b import config
+from tests.models import decode_oracle as oracle
+from tests.models.minicpm3_4b import config, reference
 from tests.models.minicpm3_4b import minicpm3_4b as model
 from tilefoundry.evaluator import evaluate
+from tilefoundry.ir.hir.specialize import specialize_concretely
 
 HIDDEN = config.REAL.hidden
-S_CAP = config.REAL.s_cap
+SEQ = config.SEQ_LEN
 
 DEV = "cpu"
 ATOL = RTOL = 2e-4
 
+#: Two lengths, so a kernel that only works at the length it was authored
+#: against cannot pass. Neither is a multiple of the head count.
+CTX_LENGTHS = (24, 40)
 
-def _fixtures():
-    """A fresh HF layer + its RoPE caches / causal mask / attention scale /
-    residual scale, all on cpu. ``pos_ids`` is ``0..S_CAP-1`` — there is no
-    prior KV-cache context in this package, so ``cur_pos`` is always 0 (see
-    ``config.causal_mask``). ``residual_scale`` is read directly off the HF
-    layer's own precomputed ``scale_depth / sqrt(num_hidden_layers)``, not
-    re-derived from config fields, so this test has no independent copy of
-    that formula to drift out of sync."""
+
+def _one_token(seed=1):
+    """A fresh HF layer and one token's hidden states."""
     layer = config.build_hf_layer(seed=0, device=DEV)
-    cfg = config.build_hf_config()
-    cos_cache, sin_cache = config.rope_caches(cfg, S_CAP, device=DEV)
-    pos_ids = torch.arange(S_CAP, device=DEV, dtype=torch.int32)
-    mask = config.causal_mask(S_CAP, device=DEV)
-    scale = torch.full((1, 1, 1, 1), layer.self_attn.scaling, device=DEV)
-    residual_scale = torch.full((1, 1, 1), layer.residual_scale, device=DEV)
-    return layer, cos_cache, sin_cache, pos_ids, mask, scale, residual_scale
+    torch.manual_seed(seed)
+    return layer, torch.randn(1, SEQ, HIDDEN, device=DEV) * 0.1
 
 
 def test_input_rms_norm_evaluate():
     """input_rms_norm vs HF `input_layernorm`."""
-    layer, *_ = _fixtures()
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
+    layer, x = _one_token()
 
     with torch.no_grad():
         ref = layer.input_layernorm(x)
@@ -52,48 +52,10 @@ def test_input_rms_norm_evaluate():
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
 
-def test_mla_attention_evaluate():
-    """mla_attention (input_layernorm + MLA self_attn: low-rank Q, shared
-    low-rank KV latent, rope-slice-only RoPE, MQA-shared k_rope) vs HF, over
-    a plain causal mask (cur_pos == 0, no prior KV-cache context)."""
-    layer, cos_cache, sin_cache, pos_ids, mask, scale, _ = _fixtures()
-    attn = layer.self_attn
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
-
-    cos = cos_cache[pos_ids.long()].unsqueeze(0)
-    sin = sin_cache[pos_ids.long()].unsqueeze(0)
-    with torch.no_grad():
-        h = layer.input_layernorm(x)
-        ref, _ = attn(h, position_embeddings=(cos, sin), attention_mask=mask)
-
-    out = evaluate(
-        model.mla_attention,
-        x,
-        layer.input_layernorm.weight,
-        config.linear_weight(attn.q_a_proj),
-        attn.q_a_layernorm.weight,
-        config.linear_weight(attn.q_b_proj),
-        config.linear_weight(attn.kv_a_proj_with_mqa),
-        attn.kv_a_layernorm.weight,
-        config.linear_weight(attn.kv_b_proj),
-        cos_cache,
-        sin_cache,
-        pos_ids,
-        mask,
-        scale,
-        config.linear_weight(attn.o_proj),
-        device=DEV,
-    )
-    torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
-
-
 def test_mlp_evaluate():
     """mlp (post_attention_layernorm + dense SwiGLU) vs HF."""
-    layer, *_ = _fixtures()
+    layer, x = _one_token()
     mlp = layer.mlp
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
 
     with torch.no_grad():
         ref = mlp(layer.post_attention_layernorm(x))
@@ -110,42 +72,67 @@ def test_mlp_evaluate():
     torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
 
+def test_mla_attention_evaluate():
+    """mla_attention (input_layernorm + MLA self_attn: low-rank Q, shared
+    low-rank KV latent, rotary-slice-only RoPE, MQA-shared k_rope, online softmax
+    over the cache and the token) vs HF's own attention at the decoded position.
+    """
+    drawn = reference.decode_step_inputs(device=DEV)
+    fn = specialize_concretely(model.mla_attention, {"ctx_len": drawn.ctx_len})
+    # mla_attention takes the layer's arguments up to w_o; the MLP's four and the
+    # residual scale come after it in decoder_layer's signature.
+    out, _, _ = evaluate(fn, *drawn.args[:-5], device=DEV)
+
+    cfg = config.build_hf_config()
+    total = drawn.ctx_len + SEQ
+    cos, sin = config.rope_caches(cfg, total, device=DEV)
+    sequence = torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1)
+    with torch.no_grad():
+        normed = drawn.layer.input_layernorm(sequence)
+        ref, _ = drawn.layer.self_attn(
+            normed,
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
+            attention_mask=oracle.causal_mask(total, DEV, sequence.dtype),
+        )
+
+    torch.testing.assert_close(
+        out.float(), ref[:, -SEQ:, :].float(), atol=ATOL, rtol=RTOL
+    )
+
+
 def test_decoder_layer_evaluate():
     """Full decoder_layer (mla_attention + scale_depth residual + mlp +
-    scale_depth residual) vs the complete HF `MiniCPM3DecoderLayer.forward`
-    — the scale_depth residual scaling is the one place this decoder_layer
-    diverges structurally from the Qwen3-1.7B sibling (plain-add residual)."""
-    layer, cos_cache, sin_cache, pos_ids, mask, scale, residual_scale = _fixtures()
-    attn, mlp = layer.self_attn, layer.mlp
-    torch.manual_seed(1)
-    x = torch.randn(1, S_CAP, HIDDEN, device=DEV) * 0.1
+    scale_depth residual) vs the complete HF `MiniCPM3DecoderLayer.forward` at
+    the decoded position, at two context lengths."""
+    for ctx_len in CTX_LENGTHS:
+        drawn = reference.decode_step_inputs(ctx_len=ctx_len, device=DEV)
+        fn = specialize_concretely(model.decoder_layer, {"ctx_len": ctx_len})
+        out, _, _ = evaluate(fn, *drawn.args, device=DEV)
 
-    cos = cos_cache[pos_ids.long()].unsqueeze(0)
-    sin = sin_cache[pos_ids.long()].unsqueeze(0)
-    with torch.no_grad():
-        ref = layer(x, attention_mask=mask, position_embeddings=(cos, sin))
+        want = reference.decode_step_oracle(drawn)
+        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
 
-    out = evaluate(
-        model.decoder_layer,
-        x,
-        layer.input_layernorm.weight,
-        config.linear_weight(attn.q_a_proj),
-        attn.q_a_layernorm.weight,
-        config.linear_weight(attn.q_b_proj),
-        config.linear_weight(attn.kv_a_proj_with_mqa),
-        attn.kv_a_layernorm.weight,
-        config.linear_weight(attn.kv_b_proj),
-        cos_cache,
-        sin_cache,
-        pos_ids,
-        mask,
-        scale,
-        config.linear_weight(attn.o_proj),
-        layer.post_attention_layernorm.weight,
-        config.linear_weight(mlp.gate_proj),
-        config.linear_weight(mlp.up_proj),
-        config.linear_weight(mlp.down_proj),
-        residual_scale,
-        device=DEV,
-    )
-    torch.testing.assert_close(out.float(), ref.float(), atol=ATOL, rtol=RTOL)
+
+def test_decoder_layer_returns_the_cache_entry_to_append():
+    """The step's returned key and value are this token's cache entry: appending
+    them to the cache it was given reproduces the cache a context one token
+    longer would have produced.
+
+    For MLA that is the claim the whole cache design rests on -- the entry is the
+    assembled per-head key and the up-projected value, which is what Hugging
+    Face's own cache holds (see ``config.py``). Checked against a rebuilt cache
+    rather than against the step's own inputs, so a step that returned its inputs
+    unchanged would fail.
+    """
+    drawn = reference.decode_step_inputs(device=DEV)
+    fn = specialize_concretely(model.decoder_layer, {"ctx_len": drawn.ctx_len})
+    _, k_new, v_new = evaluate(fn, *drawn.args, device=DEV)
+
+    want_k, want_v = reference.appended_cache_oracle(drawn)
+    grown_k = torch.cat([drawn.k_cache, k_new], dim=1)
+    grown_v = torch.cat([drawn.v_cache, v_new], dim=1)
+
+    assert tuple(grown_k.shape) == tuple(want_k.shape)
+    assert tuple(grown_v.shape) == tuple(want_v.shape)
+    torch.testing.assert_close(grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL)
+    torch.testing.assert_close(grown_v.float(), want_v.float(), atol=ATOL, rtol=RTOL)
