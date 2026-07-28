@@ -29,16 +29,26 @@ def lint():
     return _lint()
 
 
+# The sample paths are assembled from fragments rather than written out, so this
+# file states no machine path itself. The checker reads source text, so a literal
+# here would make the guard report its own test data -- and marking those lines
+# exempt would instead stop the checker being exercised on them at all. Assembling
+# keeps both: the source is clean, the values fed in are the real thing.
+_HOME = "/" + "home"
+_USERS = "/" + "Users"
+_SCRATCH = "/" + "data3" + "/shared"
+_CONDA = "/miniconda3/envs/top/bin/python"
+
 #: Shapes that have really been committed by mistake, one per kind.
 CAUGHT = [
-    'CKPT_DIR = "/data3/shared/someone/Qwen3.5-35B-A3B"',
-    '_PREPARED_DIR_CACHE = "/data3/shared/someone/tf-prepared"',
-    "cd /home/someone/zqh/TileFoundry-poc-sched",
-    "PY=/home/someone/miniconda3/envs/top/bin/python",
-    '  `/home/someone/miniconda3/envs/top/bin/python`',
-    'BASE = "/Users/someone/envs/dev"',
+    f'CKPT_DIR = "{_SCRATCH}/someone/Qwen3.5-35B-A3B"',
+    f'_PREPARED_DIR_CACHE = "{_SCRATCH}/someone/tf-prepared"',
+    f"cd {_HOME}/someone/zqh/TileFoundry-poc-sched",
+    f"PY={_HOME}/someone{_CONDA}",
+    f"  `{_HOME}/someone{_CONDA}`",
+    f'BASE = "{_USERS}/someone/envs/dev"',
     # The fallback form: configurable-looking, hardcoded for everyone else.
-    'os.environ.get("TF_CKPT", "/data3/shared/someone/prepared")',
+    f'os.environ.get("TF_CKPT", "{_SCRATCH}/someone/prepared")',
 ]
 
 #: Shapes that resemble the above and are not machine-specific.
@@ -49,8 +59,8 @@ ALLOWED = [
     'shard = "model-00001-of-00001.safetensors"',
     "from tilefoundry.ir.types.shard import Layout",
     'doc = "/usr/share/doc"',
-    'note = "put it under /home/<you>/checkouts"',
-    "# see /home/someone/notes.md  # no-machine-path: allow",
+    f'note = "put it under {_HOME}/<you>/checkouts"',
+    f"# see {_HOME}/someone/notes.md  # no-machine-path: allow",
 ]
 
 
@@ -76,14 +86,14 @@ def test_a_path_that_only_looks_like_one_is_left_alone(lint, tmp_path, line) -> 
 def test_the_exit_status_and_the_report_name_the_line(lint, tmp_path, capsys) -> None:
     """The hook's own contract: non-zero, and enough on stdout to go fix it."""
     target = tmp_path / "leaky.py"
-    target.write_text('a = 1\nCKPT = "/data3/shared/someone/prepared"\n', encoding="utf-8")
+    target.write_text(f'a = 1\nCKPT = "{_SCRATCH}/someone/prepared"\n', encoding="utf-8")
 
     status = lint.main([str(target)])
 
     assert status == 1
     out = capsys.readouterr().out
     assert f"{target}:2:" in out
-    assert "/data3/shared/someone" in out
+    assert f"{_SCRATCH}/someone" in out
 
 
 def test_a_clean_file_passes(lint, tmp_path, capsys) -> None:

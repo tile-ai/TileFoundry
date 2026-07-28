@@ -54,6 +54,7 @@ class Qwen3Shape:
     vocab: int
     max_pos: int
     max_ctx: int
+    n_layers: int
     dt: str
 
     @property
@@ -89,6 +90,7 @@ REAL = Qwen3Shape(
     vocab=151936,
     max_pos=32768,
     max_ctx=32768,
+    n_layers=28,
     dt="f32",
 )
 
@@ -105,8 +107,13 @@ COMPONENT_HF_SUBMODULES = {
 }
 
 
-def build_hf_config(shape: Qwen3Shape = REAL):
-    """Build a ``Qwen3Config`` at *shape*'s dimensions (one decoder layer)."""
+def build_hf_config(shape: Qwen3Shape = REAL, *, layers: int = 1):
+    """Build a ``Qwen3Config`` at *shape*'s dimensions.
+
+    ``layers`` defaults to one, which is what a component test needs: a single
+    layer's submodules, with none of the cost of instantiating the rest. The
+    complete-model reference asks for ``shape.n_layers`` instead.
+    """
     from transformers import Qwen3Config  # noqa: PLC0415
 
     return Qwen3Config(
@@ -118,7 +125,7 @@ def build_hf_config(shape: Qwen3Shape = REAL):
         rms_norm_eps=shape.rms_eps,
         rope_theta=shape.rope_theta,
         attention_bias=shape.attention_bias,
-        num_hidden_layers=1,
+        num_hidden_layers=layers,
         vocab_size=shape.vocab,
         max_position_embeddings=shape.max_pos,
     )
@@ -227,3 +234,110 @@ def linear_weight(linear):
     the transpose/pack "weight preprocessing" the task calls for happening in
     test code, not in the kernel)."""
     return linear.weight.t().unsqueeze(0).contiguous()
+
+
+def build_hf_decoder(seed=0, device="cpu", dtype=None, shape: Qwen3Shape = REAL):
+    """The complete ``shape.n_layers``-layer decoder stack, random at a fixed seed.
+
+    A ``Qwen3Model`` is built for its layers and its final norm; its token
+    embedding is not part of what this returns, because the decoder's boundary is
+    hidden states in and hidden states out. Stacking one layer's verified
+    behaviour is not the same as the stack behaving, which is why this exists
+    separately from ``build_hf_layer``: layer order, the final norm, and the
+    residual thread between layers are only observable here.
+    """
+    import torch  # noqa: PLC0415
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3Model  # noqa: PLC0415
+
+    cfg = build_hf_config(shape, layers=shape.n_layers)
+    torch.manual_seed(seed)
+    model = Qwen3Model(cfg).to(device).eval()
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.normal_(0.0, 0.05)
+    if dtype is not None:
+        model = model.to(dtype)
+    return model
+
+
+def layer_inputs_over_context(model, hidden_ctx):
+    """Each layer's own input hidden states for *hidden_ctx*, in layer order.
+
+    Layer ``i``'s cache is built from what layer ``i`` reads, which is what
+    layers ``0..i-1`` produced -- so the context has to be run through the stack
+    to know it. Captured with forward-pre-hooks rather than by asking the model
+    to keep a cache, so the decode contract holds here too: nothing on either
+    side of the comparison constructs a ``past_key_values``.
+    """
+    import torch  # noqa: PLC0415
+
+    captured: list = [None] * len(model.layers)
+
+    def record(index):
+        def hook(_module, args, kwargs):
+            hidden = kwargs.get("hidden_states", args[0] if args else None)
+            captured[index] = hidden.detach()
+            return None
+        return hook
+
+    handles = [
+        layer.register_forward_pre_hook(record(index), with_kwargs=True)
+        for index, layer in enumerate(model.layers)
+    ]
+    try:
+        total = hidden_ctx.shape[1]
+        cos, sin = rope_caches(build_hf_config(), total, device=hidden_ctx.device.type)
+        positions = torch.arange(total, device=hidden_ctx.device)
+        mask = torch.where(
+            positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
+        ).view(1, 1, total, total).to(hidden_ctx.dtype)
+        with torch.no_grad():
+            _run_layers(model, hidden_ctx, cos, sin, mask)
+    finally:
+        for handle in handles:
+            handle.remove()
+    return captured
+
+
+def _run_layers(model, hidden, cos, sin, mask):
+    """*hidden* through every layer and the final norm, cache-free."""
+    for layer in model.layers:
+        hidden = layer(
+            hidden,
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
+            attention_mask=mask,
+        )
+    return model.norm(hidden)
+
+
+def decoder_context_kv(model, hidden_ctx, device="cpu"):
+    """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
+    return [
+        context_kv(layer, layer_input, device=device)
+        for layer, layer_input in zip(
+            model.layers, layer_inputs_over_context(model, hidden_ctx)
+        )
+    ]
+
+
+def decoder_decode_reference(model, hidden_ctx, hidden_new):
+    """The decoder stack's output for *hidden_new* decoded after *hidden_ctx*.
+
+    The whole sequence through every layer and the final norm, last position
+    kept -- the same construction the single-layer reference uses, for the same
+    reason, and equally free of Hugging Face's caching machinery.
+    """
+    import torch  # noqa: PLC0415
+
+    device = hidden_ctx.device.type
+    total = hidden_ctx.shape[1] + hidden_new.shape[1]
+    cos, sin = rope_caches(build_hf_config(), total, device=device)
+    positions = torch.arange(total, device=hidden_ctx.device)
+    mask = torch.where(
+        positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
+    ).view(1, 1, total, total).to(hidden_ctx.dtype)
+    with torch.no_grad():
+        out = _run_layers(
+            model, torch.cat([hidden_ctx, hidden_new], dim=1), cos, sin, mask
+        )
+    return out[:, hidden_ctx.shape[1] :, :]
