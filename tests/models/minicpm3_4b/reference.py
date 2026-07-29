@@ -23,6 +23,7 @@ import torch
 
 from tests.models import dense_decode
 from tests.models.minicpm3_4b import config
+from tests.models.minicpm3_4b.model import MiniCPM3_4B_Decoder
 
 DEVICE = dense_decode.DenseDecode.device
 CTX_LEN = dense_decode.DenseDecode.ctx_len
@@ -61,10 +62,6 @@ def _residual_scale(layer, device: str) -> tuple:
     return (torch.full((1, 1, 1), layer.residual_scale, device=device),)
 
 
-def _build_decoder():
-    from tests.models.minicpm3_4b.decoder import build_decoder  # noqa: PLC0415
-
-    return build_decoder()
 
 
 
@@ -82,7 +79,7 @@ SPEC = dense_decode.DenseDecode(
     config=config,
     layer_weights=layer_weights,
     attention_weights=7,
-    build_decoder=_build_decoder,
+    build_decoder=MiniCPM3_4B_Decoder.cloned,
     trailing=_residual_scale,
     stack_step_class=DecoderStepInputs,
 )

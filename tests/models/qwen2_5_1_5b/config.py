@@ -2,7 +2,7 @@
 
 Phase 0 "打样": second of four planned dense/near-dense models (Qwen3-1.7B,
 Qwen2.5-1.5B, MiniCPM3, Gemma-2) authored against the same three-file
-template (``config.py`` + ``model/decoder_layer.py`` + ``test_decoder_layer.py``,
+template (``config.py`` + ``model.py`` + ``test_decoder_layer.py``,
 mirroring ``tests/models/qwen3_1_7b/``, itself mirroring
 the layout every model package here shares), run on macOS with no CUDA: **cpu + f32
 only**.
@@ -21,14 +21,14 @@ package shares:
   constructed, on either side of the comparison, and
 - the component -> HF-submodule map.
 
-Component HIR ``@func``s live in ``model/decoder_layer.py`` (the ``@module
-class`` authoring style, per ``qwen3_1_7b/model/decoder_layer.py``); this
+Component HIR ``@func``s live in ``model.py`` (the ``@module
+class`` authoring style, per ``qwen3_1_7b/model.py``); this
 module only holds the shared dims, the HF layer / rope-cache / causal-mask
 builders, and the weight-layout helper, so every test file composes them
 rather than duplicating the description.
 
 Two structural differences from the ``qwen3_1_7b`` sibling (see
-``model/decoder_layer.py`` docstring for the HIR-level detail):
+``model.py`` docstring for the HIR-level detail):
 
 - Qwen2 attention has no per-head ``q_norm`` / ``k_norm``: HF
   ``Qwen2Attention`` applies RoPE directly to the raw ``q_proj`` /
@@ -117,7 +117,7 @@ REAL = Qwen25Shape(
 # ── Component -> HF submodule map ───────────────────────────────────────
 # Each component's HIR is validated against these submodules of a single
 # ``Qwen2DecoderLayer``. ``self_attention`` and ``mlp`` each fuse their
-# preceding RMSNorm (see ``model/decoder_layer.py`` docstring), so their HF
+# preceding RMSNorm (see ``model.py`` docstring), so their HF
 # comparison composes the norm + block rather than the block alone.
 COMPONENT_HF_SUBMODULES = {
     "input_rms_norm": ("input_layernorm",),

@@ -268,11 +268,11 @@ def run_full_attention_step(step: FullStep):
     extent. So it is resolved at the length the drawn step uses first, and what is
     evaluated is that resolved function.
     """
-    from tests.models.qwen3_5_35b_a3b import full_attention as hir  # noqa: PLC0415
+    from tests.models.qwen3_5_35b_a3b.model import Qwen3_5FullAttention  # noqa: PLC0415
     from tilefoundry.evaluator import evaluate  # noqa: PLC0415
     from tilefoundry.ir.hir.specialize import specialize_concretely  # noqa: PLC0415
 
-    function = specialize_concretely(hir.full_attention, {"ctx_len": step.ctx_len})
+    function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": step.ctx_len})
     return evaluate(function, *step.args, device=step.hidden_new.device.type)
 
 

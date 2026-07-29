@@ -10,9 +10,9 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from tests.models.deepseek_v4_flash.causal_lm import load_causal_lm
-from tests.models.deepseek_v4_flash.config import DSV4Config
+from tests.models.deepseek_v4_flash.config import TINY
 from tests.models.deepseek_v4_flash.hf_alias import hf_alias
+from tests.models.deepseek_v4_flash.model import build_deepseek_v4_flash
 from tests.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
 from tests.models.generation import generate
 from tilefoundry.evaluator.value import to_torch_dtype
@@ -124,12 +124,14 @@ def _dequant_blocks(weight, scale):
 
 @pytest.fixture(scope="module")
 def config():
-    return DSV4Config.tiny()
+    return TINY
 
 
 @pytest.fixture(scope="module")
 def semantic(config):
-    return load_causal_lm(config)
+    """The whole tree at the small shape: the size this end-to-end path is
+    affordable at, named rather than derived."""
+    return build_deepseek_v4_flash(config)
 
 
 @pytest.fixture(scope="module")
@@ -228,8 +230,8 @@ def test_the_generate_loop_threads_state_and_stops_at_the_window(config, twins):
 
     State is held entirely by the caller and threaded functionally in and out, so
     the cache each step reads is the context before its token: what a step hands
-    back is that context with one position appended, which is what makes the
-    second step read the first one's output. Past the window the caller stops
+    back is that token's own position, and the caller appending it is what makes
+    the second step read the first one's output. Past the window the caller stops
     growing it -- eviction is a policy applied to a tensor, which is why the
     description carries a range and not a fixed capacity, and why it is visible
     here rather than buried in a write index. And the twin runs the same loop:
@@ -263,9 +265,12 @@ def test_the_generate_loop_threads_state_and_stops_at_the_window(config, twins):
     for model in (semantic, runtime):
         caches = model.init_caches(device="cuda")
         args = model.prepare_inputs_for_generation(ids, 0, caches, device="cuda")
-        _, next_caches = model(*args)
-        # A step appends: the context it was given comes back unchanged with one
-        # more position after it, and that position is this token's own latent.
+        _, fresh = model(*args)
+        # A step hands back one position per layer -- this token's own latent --
+        # and appending it leaves the context it was given unchanged with that
+        # position after it.
+        assert fresh[0].shape[1] == 1, type(model).__name__
+        next_caches = model.append_cache(caches, fresh)
         assert next_caches[0].shape[1] == caches[0].shape[1] + 1, type(model).__name__
         assert torch.equal(next_caches[0][:, :seed_ctx], caches[0])
         assert next_caches[0][:, seed_ctx:].float().any()

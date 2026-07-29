@@ -37,13 +37,12 @@ def _identify(model) -> str:
 @pytest.mark.parametrize("model", _models_with_an_open_dimension(), ids=_identify)
 def test_every_analysis_answers_at_the_largest_context(model) -> None:
     """All four families, at the model's declared ceiling rather than a sample."""
-    module = model.build_for(ACCEPTANCE())
     case = model.sized[0]
-    function = module.lookup(case.function)
-    ceiling = {name: model.namespace["config"].max_ctx for name in case.dims}
+    selected, function = model.resolve(model.build_for(ACCEPTANCE()), case.selector)
+    ceiling = dict(case.ceiling)
 
     for family in _FAMILIES:
-        result = analyze(module, function, analysis=family, dims=ceiling)
+        result = analyze(selected, function, analysis=family, dims=ceiling)
         assert result.function is not function, (
             "asking at a size builds the program at that size"
         )
@@ -65,10 +64,9 @@ def test_the_largest_context_is_reasoned_about_and_not_allocated(model) -> None:
     cost of specialising the function alone exceeds it -- the proxy fails there
     while the property holds, which is the wrong way round.
     """
-    module = model.build_for(ACCEPTANCE())
     case = model.sized[0]
-    function = module.lookup(case.function)
-    ceiling = {name: model.namespace["config"].max_ctx for name in case.dims}
+    selected, function = model.resolve(model.build_for(ACCEPTANCE()), case.selector)
+    ceiling = dict(case.ceiling)
 
     def reads(result) -> int:
         record = get_metadata(result.function, MemoryMetadata)
@@ -77,10 +75,10 @@ def test_the_largest_context_is_reasoned_about_and_not_allocated(model) -> None:
 
     tracemalloc.start()
     try:
-        short = analyze(module, function, analysis="memory", dims=dict(case.dims))
+        short = analyze(selected, function, analysis="memory", dims=dict(case.dims))
         _, peak_short = tracemalloc.get_traced_memory()
         tracemalloc.reset_peak()
-        full = analyze(module, function, analysis="memory", dims=ceiling)
+        full = analyze(selected, function, analysis="memory", dims=ceiling)
         _, peak_full = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()

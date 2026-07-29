@@ -101,10 +101,17 @@ chain and is not copied onto each Module or Function.
 - Each entry of `modules` is named by the attribute it is attached under —
   torch / HuggingFace checkpoint-naming semantics: assigning a child to
   `self.self_attn` in a class body names that child `self_attn` in the tree,
-  independent of the child's own `name`. `mod.renamed(name)` returns a copy
-  of `mod` under a different `name` — one definition addressable as N
-  distinct instances (e.g. N identical decoder layers, each built fresh and
-  renamed by index).
+  independent of the child's own `name`.
+- `mod.cloned()` returns an independent copy: its functions, their bodies, its
+  children, and every `Call` targeting one of them are copies, with internal
+  `Call.target`s redirected to the copy. The immutable context around the node —
+  its owner, `target` and `topologies` — MUST stay shared, since those are not
+  part of it. `mod.renamed(name)` is that copy under a different `name`.
+  Copying rather than sharing is required, not an optimisation to skip: an
+  analysis records its result on the IR it measured, in place, so two nodes
+  holding one Function would report one measurement under two names. This is
+  what lets one definition become N distinct instances (N decoder layers, each
+  renamed by index) and one prototype serve any number of independent builds.
 - `methods` collects plain Python functions (orchestration methods, e.g.
   `forward` / `init_caches`; full collection rule in
   [parser §2.7](./parser.md#27-module-authoring-surface)). A function name,
@@ -159,6 +166,27 @@ entries — so name resolution is always single-valued.
   beginning with `_` are never functions, modules, or methods and resolve by
   normal attribute rules. This lets a module read like the model it mirrors —
   `decoder.layer0.attention(...)`.
+
+### 1.2 Selecting a node by path
+
+A caller that names one kernel of a tree needs the kernel *and* the execution
+domain it belongs to: a `Function` carries neither the Target its numbers are
+measured against nor the topology hierarchy they divide over, so a bare function
+is not a thing a cost can be stated about.
+
+`select(module, path)` resolves a dotted `path` relative to `module` and returns a
+`Module`. Each segment MUST name a child module, except that the last MAY instead
+name one of the reached module's own functions — which returns that module
+re-entried at it, carrying the Target and topology hierarchy it resolved through
+its owners. An empty `path` is `module` itself. An empty *segment* MUST be
+refused: dropping it would make two different paths name one node.
+
+`function_selectors(module)` returns every HIR function in `module`'s tree paired
+with the path that names it, in source order, parents before children. The paths
+are the ones `select` resolves, so a name is qualified by the children it was
+reached through — two child modules may each define a `moe`, and an unqualified
+name would make them one entry. A `PrimFunction` is not one of these: it is an
+implementation of a function rather than a function of the model.
 
 ## 2. `Expr`
 

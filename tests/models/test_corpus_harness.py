@@ -58,10 +58,12 @@ def test_a_build_shares_nothing_with_the_build_before_it() -> None:
 
     assert first is not second
     assert first.lookup("mlp") is not second.lookup("mlp")
+    assert first.lookup("mlp") is not QWEN3_1_7B.prototype.lookup("mlp")
 
 
 def test_analysing_one_build_leaves_the_next_build_clean() -> None:
-    """The property `replace` cannot give: analyses annotate Calls in place."""
+    """The property `replace` cannot give: analyses annotate Calls in place. The
+    prototype stays clean too, since it outlives every build taken from it."""
     fixture = h200_sxm()
     analysed = QWEN3_1_7B.build_for(fixture)
     assert _analysis_records(analysed.lookup("mlp")) == 0
@@ -71,6 +73,22 @@ def test_analysing_one_build_leaves_the_next_build_clean() -> None:
 
     fresh = QWEN3_1_7B.build_for(fixture)
     assert _analysis_records(fresh.lookup("mlp")) == 0
+    assert _analysis_records(QWEN3_1_7B.prototype.lookup("mlp")) == 0
+
+
+def test_a_stack_analyses_one_layer_without_marking_its_neighbour() -> None:
+    """Adjacent layers of the real stack hold different Functions, so a record
+    written on one lands nowhere near the other."""
+    from tests.models.qwen3_1_7b.model import Qwen3_1_7B_Decoder  # noqa: PLC0415
+
+    stack = h200_sxm().bind(Qwen3_1_7B_Decoder.cloned())
+    first, second = stack.modules[0], stack.modules[1]
+    assert first.lookup("mlp") is not second.lookup("mlp")
+
+    analyze(first, first.lookup("mlp"), analysis="compute-cost")
+
+    assert _analysis_records(first.lookup("mlp")) > 0
+    assert _analysis_records(second.lookup("mlp")) == 0
 
 
 def test_binding_a_target_does_not_reach_the_next_build() -> None:
@@ -129,7 +147,7 @@ def test_untested_functions_come_from_the_built_model_not_a_written_list() -> No
 
     grown = replace(
         QWEN3_1_7B,
-        schedule=(*QWEN3_1_7B.schedule, FunctionCase(id="x", function="tiled_mlp")),
+        schedule=(*QWEN3_1_7B.schedule, FunctionCase(id="x", selector="tiled_mlp")),
     )
     assert "tiled_mlp" not in grown.untested("schedule")
 
@@ -146,18 +164,30 @@ def test_a_blocked_capability_must_say_why() -> None:
 
 
 def test_a_case_that_cannot_be_resolved_says_so() -> None:
-    missing = ModelCase(
-        id="missing",
-        source=MODELS_ROOT / "qwen3_1_7b" / "model" / "decoder_layer.py",
-        entry="NotThere",
-        namespace={"config": QWEN3_1_7B.namespace["config"]},
-    )
-    with pytest.raises(CorpusError, match="defines no 'NotThere'"):
-        missing.build()
+    """The four ways a case can name something it cannot be measured at: a
+    prototype that is not a Module, a name no Module defines, a path that stops at
+    a child Module, and a path with an empty segment.
+
+    The last two are refusals rather than conveniences. A path stopping at a child
+    would resolve to whatever that child nominates as its default step, answering a
+    question nobody asked; and dropping an empty segment would make two different
+    paths name one node.
+    """
+    not_a_module = ModelCase(id="missing", prototype=QWEN3_1_7B.prototype.lookup("mlp"))
+    with pytest.raises(CorpusError, match="prototype is a Function, not a Module"):
+        not_a_module.build()
 
     built = QWEN3_1_7B.build()
     with pytest.raises(CorpusError, match="must resolve to exactly one"):
-        QWEN3_1_7B.function(built, FunctionCase(id="x", function="nope"))
+        QWEN3_1_7B.resolve(built, "nope")
+
+    nested = case("kimi_linear_48b_a3b")
+    tree = nested.build()
+    assert nested.resolve(tree, "moe.moe")[1].name == "moe"
+    with pytest.raises(CorpusError, match="names the child Module 'moe'"):
+        nested.resolve(tree, "moe")
+    with pytest.raises(CorpusError, match="empty segment"):
+        nested.resolve(tree, "moe..moe")
 
 
 def test_the_registry_resolves_its_own_ids() -> None:

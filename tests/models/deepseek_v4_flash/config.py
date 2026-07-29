@@ -157,6 +157,11 @@ class DSV4Config:
 HF_CONFIG = AutoConfig.from_pretrained(Path(__file__).parent)
 REAL = DSV4Config.from_hf_config(HF_CONFIG)
 
+#: The same model at a shape small enough to build and run end to end. Stated
+#: here beside `REAL`, so the two shapes this model is asked about are read from
+#: one place rather than constructed at each call site.
+TINY = DSV4Config.tiny()
+
 #: The layer the attention description is authored at: the first sliding-window
 #: one, which is the layer type that carries no compressor.
 SLIDING_LAYER = HF_CONFIG.layer_types.index("sliding_attention")
@@ -287,6 +292,7 @@ __all__ = [
     "KV_QUANT_BLOCK",
     "REAL",
     "SLIDING_LAYER",
+    "TINY",
     "DSV4Config",
     "build_hf_attention",
     "context_kv",

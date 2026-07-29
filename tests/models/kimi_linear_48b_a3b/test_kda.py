@@ -8,7 +8,7 @@ that it executes, that its state is shaped and typed the way the decode contract
 requires, and that the two properties which are true by construction rather than
 by transcription really hold.
 
-That distinction is the point. A file of shape assertions labelled as if it were
+That distinction is the point. A file of config assertions labelled as if it were
 a correctness suite would be exactly the substitution of a convenient proxy for
 the real property that this package is trying not to make.
 """
@@ -18,11 +18,11 @@ import pytest
 import torch
 
 from tests.models.kimi_linear_48b_a3b import case, config, reference
-from tests.models.kimi_linear_48b_a3b import submodules as kimi
+from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B
 from tilefoundry.evaluator import evaluate
 
 DEV = "cpu"
-SHAPE = config.REAL
+CONFIG = config.REAL
 
 
 def _kda_args(seed: int = 0, device: str = DEV):
@@ -78,7 +78,7 @@ def test_a_block_for_another_reason_would_not_be_accepted():
 
 
 def test_kda_state_carries_no_ctx_len():
-    """Every KDA parameter and result is a fixed shape.
+    """Every KDA parameter and result is a fixed config.
 
     This is the contract claim the module docstring makes, checked rather than
     asserted in prose: a KDA layer's recurrent state is not a growing per-position
@@ -86,7 +86,7 @@ def test_kda_state_carries_no_ctx_len():
     dynamic dimension hiding in the state would be a different claim about the
     decode contract than the one recorded.
     """
-    signature = kimi.kda_attention.type
+    signature = KimiLinear48BA3B.kda.lookup("kda_attention").type
     for parameter in signature.parameters:
         assert "ctx_len" not in str(parameter)
     assert "ctx_len" not in str(signature.return_type)
@@ -101,25 +101,25 @@ def test_kda_state_and_window_shapes_are_the_published_ones():
     reads `linear_attn_config.head_dim`, which is 128.
     """
     out, state, conv_q, conv_k, conv_v = evaluate(
-        kimi.kda_attention, *_kda_args(), device=DEV
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args(), device=DEV
     )
 
-    assert tuple(out.shape) == (1, config.SEQ_LEN, SHAPE.hidden)
-    assert tuple(state.shape) == (1, SHAPE.kda_heads, SHAPE.kda_head_dim, SHAPE.kda_head_dim)
+    assert tuple(out.shape) == (1, config.SEQ_LEN, CONFIG.hidden_size)
+    assert tuple(state.shape) == (1, CONFIG.kda_num_heads, CONFIG.kda_head_dim, CONFIG.kda_head_dim)
     for window in (conv_q, conv_k, conv_v):
-        assert tuple(window.shape) == (1, SHAPE.short_conv - 1, SHAPE.kda_proj)
-    assert SHAPE.kda_head_dim == 128 != SHAPE.hidden // SHAPE.n_heads
+        assert tuple(window.shape) == (1, CONFIG.short_conv_kernel_size - 1, CONFIG.kda_proj)
+    assert CONFIG.kda_head_dim == 128 != CONFIG.hidden_size // CONFIG.num_attention_heads
 
 
 def test_kda_executes_and_stays_finite():
     """The kernel runs end to end and produces finite numbers.
 
     Not a correctness claim. It rules out the failure modes that would make the
-    blocked reference impossible to lift later -- a malformed graph, a shape that
+    blocked reference impossible to lift later -- a malformed graph, a config that
     only type-checks symbolically, an exp or softplus that overflows on ordinary
     inputs -- without pretending to check what the numbers are.
     """
-    out, state, *windows = evaluate(kimi.kda_attention, *_kda_args(), device=DEV)
+    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args(), device=DEV)
 
     assert torch.isfinite(out).all()
     assert torch.isfinite(state).all()
@@ -137,12 +137,12 @@ def test_short_conv_window_shifts_by_exactly_one_position():
     convolution of kernel 4 needs its caller to hold. Measured exact (0.0).
     """
     torch.manual_seed(1)
-    window = SHAPE.short_conv - 1
-    x = torch.randn(1, config.SEQ_LEN, SHAPE.kda_proj) * 0.05
-    conv_w = torch.randn(SHAPE.short_conv, SHAPE.kda_proj) * 0.05
-    state = torch.randn(1, window, SHAPE.kda_proj) * 0.05
+    window = CONFIG.short_conv_kernel_size - 1
+    x = torch.randn(1, config.SEQ_LEN, CONFIG.kda_proj) * 0.05
+    conv_w = torch.randn(CONFIG.short_conv_kernel_size, CONFIG.kda_proj) * 0.05
+    state = torch.randn(1, window, CONFIG.kda_proj) * 0.05
 
-    _out, next_state = evaluate(kimi.short_conv, x, conv_w, state, device=DEV)
+    _out, next_state = evaluate(KimiLinear48BA3B.kda.lookup("short_conv"), x, conv_w, state, device=DEV)
 
     want = torch.cat([state, x], dim=1)[:, 1:]
     assert (next_state - want).abs().max().item() == 0.0
@@ -153,15 +153,15 @@ def test_kda_state_is_load_bearing():
 
     Weak on purpose -- with no oracle this cannot say the state is used
     *correctly* -- but it does rule out a kernel that accepted the state and
-    ignored it, which is the failure a shape check cannot see and which would make
+    ignored it, which is the failure a config check cannot see and which would make
     every other assertion in this file pass.
     """
     args = _kda_args()
-    base_out, base_state, *_ = evaluate(kimi.kda_attention, *args, device=DEV)
+    base_out, base_state, *_ = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *args, device=DEV)
 
     perturbed = list(args)
     perturbed[20] = args[20] + 1.0
-    other_out, other_state, *_ = evaluate(kimi.kda_attention, *perturbed, device=DEV)
+    other_out, other_state, *_ = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *perturbed, device=DEV)
 
     assert (other_out - base_out).abs().max().item() > 1e-3
     assert (other_state - base_state).abs().max().item() > 1e-3

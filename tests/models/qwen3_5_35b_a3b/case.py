@@ -19,11 +19,10 @@ stated at its case; it is compared against Hugging Face in `test_moe.py`.
 
 Two things this deliberately does not state at all:
 
-- **No decoder-layer case.** The layer is a tree whose children are injected, and
-  a fresh mixer per build is what keeps two layers from sharing one execution
-  domain. `namespace` holds values, so it cannot express "a new one each time".
-  The layer's own composition -- the two residuals, and the MoE reading the mixer's
-  output -- is measured in `test_decoder_layer.py`.
+- **No decoder-layer case.** Each published layer type is its own class holding
+  its own mixer, so there are two of them and no single case names the layer.
+  Their composition -- the two residuals, and the MoE reading the mixer's output --
+  is measured in `test_decoder_layer.py` across both types.
 - **No multi-token-prediction case.** `mtp_num_hidden_layers` is 1 and the
   installed transformers implements no head for it, so there is no oracle; a
   reference would be this repository's reading of a config compared against this
@@ -33,13 +32,17 @@ Two things this deliberately does not state at all:
 from __future__ import annotations
 
 from tests.models.corpus import (
-    MODELS_ROOT,
     FunctionCase,
     ModelCase,
     ReferenceCase,
     SizedCase,
 )
 from tests.models.qwen3_5_35b_a3b.config import REAL as SHAPE
+from tests.models.qwen3_5_35b_a3b.model import (
+    Qwen3_5FullAttention,
+    Qwen3_5LinearAttention,
+    Qwen3_5MoE,
+)
 from tests.models.qwen3_5_35b_a3b.reference import (
     CTX_LEN,
     full_mixer_oracle,
@@ -48,8 +51,6 @@ from tests.models.qwen3_5_35b_a3b.reference import (
     linear_step,
     run_full_attention_step,
 )
-
-_MODEL = MODELS_ROOT / "qwen3_5_35b_a3b" / "model"
 
 #: The context length the cache-reading function is asked about at. A decode
 #: kernel's cost is dominated by the cache it streams, so the length is stated
@@ -63,9 +64,7 @@ ANALYZED_AT = {"ctx_len": 1024}
 #: the case that carries the package's name.
 CASE = ModelCase(
     id="qwen3_5_35b_a3b",
-    source=_MODEL / "linear_attention.py",
-    entry="Qwen3_5LinearAttention",
-    namespace={"config": SHAPE},
+    prototype=Qwen3_5LinearAttention,
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/linear_attention_decode",
         boundary=(
@@ -82,18 +81,18 @@ CASE = ModelCase(
     ),
     analyze=(
         FunctionCase(
-            id="qwen3_5_35b_a3b/analyze/linear_attention", function="linear_attention"
+            id="qwen3_5_35b_a3b/analyze/linear_attention", selector="linear_attention"
         ),
-        FunctionCase(id="qwen3_5_35b_a3b/analyze/conv_step", function="conv_step"),
-        FunctionCase(id="qwen3_5_35b_a3b/analyze/delta_step", function="delta_step"),
+        FunctionCase(id="qwen3_5_35b_a3b/analyze/conv_step", selector="conv_step"),
+        FunctionCase(id="qwen3_5_35b_a3b/analyze/delta_step", selector="delta_step"),
         FunctionCase(
-            id="qwen3_5_35b_a3b/analyze/l2_normalise", function="l2_normalise"
+            id="qwen3_5_35b_a3b/analyze/l2_normalise", selector="l2_normalise"
         ),
     ),
     schedule=(
         FunctionCase(
             id="qwen3_5_35b_a3b/schedule/linear_attention",
-            function="linear_attention",
+            selector="linear_attention",
             topology="cta",
         ),
     ),
@@ -109,9 +108,7 @@ CASE = ModelCase(
 FULL_ATTENTION_CASE = ModelCase(
     id="qwen3_5_35b_a3b_full_attention",
     model="qwen3_5_35b_a3b",
-    source=_MODEL / "full_attention.py",
-    entry="Qwen3_5FullAttention",
-    namespace={"config": SHAPE},
+    prototype=Qwen3_5FullAttention,
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/full_attention_decode",
         boundary=(
@@ -130,20 +127,20 @@ FULL_ATTENTION_CASE = ModelCase(
     analyze=(
         FunctionCase(
             id="qwen3_5_35b_a3b/analyze/full_attention",
-            function="full_attention",
+            selector="full_attention",
             dims=ANALYZED_AT,
         ),
         FunctionCase(
-            id="qwen3_5_35b_a3b/analyze/partial_rope", function="partial_rope"
+            id="qwen3_5_35b_a3b/analyze/partial_rope", selector="partial_rope"
         ),
         FunctionCase(
-            id="qwen3_5_35b_a3b/analyze/partial_rope_kv", function="partial_rope_kv"
+            id="qwen3_5_35b_a3b/analyze/partial_rope_kv", selector="partial_rope_kv"
         ),
     ),
     schedule=(
         FunctionCase(
             id="qwen3_5_35b_a3b/schedule/full_attention",
-            function="full_attention",
+            selector="full_attention",
             topology="cta",
             dims=ANALYZED_AT,
         ),
@@ -151,8 +148,9 @@ FULL_ATTENTION_CASE = ModelCase(
     sized=(
         SizedCase(
             id="qwen3_5_35b_a3b/sized/full_attention",
-            function="full_attention",
+            selector="full_attention",
             dims=ANALYZED_AT,
+            ceiling={"ctx_len": SHAPE.max_ctx},
         ),
     ),
 )
@@ -164,9 +162,7 @@ FULL_ATTENTION_CASE = ModelCase(
 MOE_CASE = ModelCase(
     id="qwen3_5_35b_a3b_moe",
     model="qwen3_5_35b_a3b",
-    source=_MODEL / "moe.py",
-    entry="Qwen3_5MoE",
-    namespace={"config": SHAPE},
+    prototype=Qwen3_5MoE,
     #: No harness reference. Drawing one means building a whole decoder layer for
     #: its block -- 805 million parameters, 3.3 GB in f32, essentially all of it the
     #: 256 experts -- which is by a wide margin the most expensive draw in this
@@ -176,18 +172,18 @@ MOE_CASE = ModelCase(
     #: contributes here is the block's analysis and schedule coverage and its
     #: function inventory.
     analyze=(
-        FunctionCase(id="qwen3_5_35b_a3b/analyze/moe", function="moe"),
-        FunctionCase(id="qwen3_5_35b_a3b/analyze/routing", function="routing"),
+        FunctionCase(id="qwen3_5_35b_a3b/analyze/moe", selector="moe"),
+        FunctionCase(id="qwen3_5_35b_a3b/analyze/routing", selector="routing"),
         FunctionCase(
-            id="qwen3_5_35b_a3b/analyze/routed_experts", function="routed_experts"
+            id="qwen3_5_35b_a3b/analyze/routed_experts", selector="routed_experts"
         ),
         FunctionCase(
-            id="qwen3_5_35b_a3b/analyze/shared_expert", function="shared_expert"
+            id="qwen3_5_35b_a3b/analyze/shared_expert", selector="shared_expert"
         ),
     ),
     schedule=(
         FunctionCase(
-            id="qwen3_5_35b_a3b/schedule/moe", function="moe", topology="cta"
+            id="qwen3_5_35b_a3b/schedule/moe", selector="moe", topology="cta"
         ),
     ),
     #: One token through a router; nothing here is authored over a context.

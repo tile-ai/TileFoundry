@@ -25,7 +25,7 @@ import pytest
 import torch
 
 from tests.models.gemma2_2b import config, reference
-from tests.models.gemma2_2b.decoder import build_decoder
+from tests.models.gemma2_2b.model import Gemma2_2B_Decoder
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the complete decoder at production dimensions"
@@ -65,12 +65,26 @@ def _decoder(drawn, gamma_final=None):
     """The decoder tree, closed by *gamma_final* or by the model's own norm."""
     if gamma_final is None:
         gamma_final = config.rms_gamma(drawn.model.norm)
-    return build_decoder().bind_final_norm(gamma_final)
+    return Gemma2_2B_Decoder.cloned().bind_final_norm(gamma_final)
+
+
+def test_the_embedding_matches_hugging_face(drawn) -> None:
+    """The root's `embed` gathers the row `Gemma2Model.embed_tokens` would, scale
+    and all: the oracle is the HF module, so a plain gather lands 48 times too
+    small. Last row of the table, so a wrong axis cannot land on it."""
+    decoder = Gemma2_2B_Decoder.cloned()
+    token_ids = torch.tensor([config.REAL.vocab - 1], device=DEV, dtype=torch.int64)
+
+    out = decoder.embed(drawn.model.embed_tokens.weight, token_ids)
+
+    with torch.no_grad():
+        want = drawn.model.embed_tokens(token_ids).reshape(1, 1, config.REAL.hidden)
+    torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
 
 
 def test_the_complete_decoder_matches_hugging_face(drawn, want) -> None:
     """Every layer, in order, plus the final norm."""
-    out, entries = _decoder(drawn).forward(*drawn.args)
+    out, entries = _decoder(drawn).decode_hidden(*drawn.args)
 
     assert len(entries) == config.REAL.n_layers
     torch.testing.assert_close(out.float(), want, atol=ATOL, rtol=RTOL)
@@ -82,15 +96,16 @@ def test_every_layer_returns_its_own_cache_entry(drawn) -> None:
 
     Checked for all 26 rather than one, because the failure this catches is a
     layer reading or writing a neighbour's cache, which no single layer's test
-    can see.
+    can see. The appending is the root's own ``append_cache``, which is what a
+    decode loop calls, so this observes that method rather than a copy of it.
     """
-    _out, entries = _decoder(drawn).forward(*drawn.args)
+    decoder = _decoder(drawn)
+    _out, entries = decoder.decode_hidden(*drawn.args)
 
+    grown = decoder.append_cache(drawn.caches, entries)
     grown_context = torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1)
     expected = config.decoder_context_kv(drawn.model, grown_context, device=DEV)
-    for index, ((k_new, v_new), (want_k, want_v)) in enumerate(zip(entries, expected)):
-        grown_k = torch.cat([drawn.caches[index][0], k_new], dim=1)
-        grown_v = torch.cat([drawn.caches[index][1], v_new], dim=1)
+    for index, ((grown_k, grown_v), (want_k, want_v)) in enumerate(zip(grown, expected)):
         torch.testing.assert_close(
             grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL, msg=f"layer {index} keys"
         )
@@ -119,7 +134,7 @@ def test_a_stack_that_is_wrongly_ordered_is_caught(drawn, want, description) -> 
     broken_weights, broken_caches = _STACK_ERRORS[description](
         drawn.weights, drawn.caches
     )
-    out, _entries = _decoder(drawn).forward(
+    out, _entries = _decoder(drawn).decode_hidden(
         drawn.hidden_new, drawn.cos_cache, drawn.sin_cache, drawn.pos_ids,
         drawn.scale, broken_weights, broken_caches,
     )
@@ -136,7 +151,7 @@ def test_a_wrong_final_norm_is_caught(drawn, want) -> None:
     it is also a different tensor from the right one, so it stands in for a norm
     that is not the model's own at all.
     """
-    out, _entries = _decoder(drawn, drawn.model.norm.weight).forward(*drawn.args)
+    out, _entries = _decoder(drawn, drawn.model.norm.weight).decode_hidden(*drawn.args)
 
     _assert_far_from(out, want, "wrong final norm")
 

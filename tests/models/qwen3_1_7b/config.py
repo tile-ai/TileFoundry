@@ -3,7 +3,7 @@ package compares against.
 
 Phase 0 "打样": the first of four planned dense/near-dense models (Qwen3-1.7B,
 Qwen2.5-1.5B, MiniCPM3, Gemma-2) authored against this same three-file
-template (``config.py`` + ``model/decoder_layer.py`` + ``test_decoder_layer.py``,
+template (``config.py`` + ``model.py`` + ``test_decoder_layer.py``,
 mirroring the layout every model package here shares), run on macOS with no
 CUDA:
 **cpu + f32 only**.
@@ -22,7 +22,7 @@ package shares:
   never constructed, on either side of the comparison, and
 - the component -> HF-submodule map.
 
-Component HIR ``@func``s live in ``model/decoder_layer.py``, over this module's
+Component HIR ``@func``s live in ``model.py``, over this module's
 ``REAL`` shape; ``decoder_layer.py`` binds the two together. This module holds
 only the shape, the HF layer / rope-cache / causal-mask builders, and the
 weight-layout helper.
@@ -115,7 +115,7 @@ REAL = Qwen3Shape(
 # ── Component -> HF submodule map ───────────────────────────────────────
 # Each component's HIR is validated against these submodules of a single
 # ``Qwen3DecoderLayer``. ``self_attention`` and ``mlp`` each fuse their
-# preceding RMSNorm (see ``model/decoder_layer.py`` docstring), so their HF
+# preceding RMSNorm (see ``model.py`` docstring), so their HF
 # comparison composes the norm + block rather than the block alone.
 COMPONENT_HF_SUBMODULES = {
     "input_rms_norm": ("input_layernorm",),

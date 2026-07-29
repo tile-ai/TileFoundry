@@ -20,6 +20,7 @@ from tests.models.coverage_artifact import declare
 from tests.models.fixtures import ACCEPTANCE
 from tests.models.registry import CORPUS
 from tests.models.report import CoverageCollector, build_report
+from tilefoundry.ir.core.module import select
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 
 #: One case is one CP-SAT solve, so the budget is stated rather than inherited.
@@ -46,7 +47,7 @@ def _cases() -> list[object]:
             model,
             fixture,
             case,
-            id=case.function,
+            id=case.selector,
             marks=case.gate.expected_failure(expect=ScheduleError),
         )
         for model, fixture, case in _selected()
@@ -63,15 +64,16 @@ def test_every_selected_function_plans_or_says_what_stopped_it(
         target=fixture.id,
         kind="schedule",
         case=case.id,
-        function=case.function,
+        function=case.selector,
     )
-    module = model.build_for(fixture)
-    function = model.function(module, case)
+    # The selected Module, not the root it was reached through: a plan divides a
+    # function over the topology budget of the domain that owns it.
+    selected, function = model.resolve(model.build_for(fixture), case.selector)
     topology = fixture.level(case.topology)
 
     def run() -> None:
         result = schedule(
-            module,
+            selected,
             function,
             topology=topology.name,
             options=_SOLVER,
@@ -81,28 +83,45 @@ def test_every_selected_function_plans_or_says_what_stopped_it(
         # chosen size is the one the result carries rather than the one asked
         # about: verifying against a function still holding a range would check
         # the plan against a program nothing planned.
-        result.plan.verify(module, result.function, topology)
+        result.plan.verify(selected, result.function, topology)
         assert result.plan.to_json() == result.plan.to_json()
 
     case.gate.hold(run, expect=ScheduleError, label=case.id)
 
 
 def test_the_functions_no_partition_can_take_are_untested_not_blocked() -> None:
-    """The algorithm admits one function per module, so the others were never
-    selected. Reporting them as blocked would claim they were tried.
+    """The algorithm admits one function per execution Module, so the others were
+    never selected. Reporting them as blocked would claim they were tried.
 
-    Counted rather than merely non-empty: every function of the Module except its
-    entry has to appear, so a Module whose leaves stopped being reported fails here
-    and a Module whose only function is its entry -- which has no leaves to report
-    -- is not made to invent one.
+    One per Module rather than one per case: a case may name a whole tree, and each
+    Module in it is its own execution domain with its own entry. Checked against
+    what each Module declares, so a selector that named a leaf instead of an entry
+    fails here rather than being scheduled and refused later.
+
+    Counted rather than merely non-empty: every function in the tree except those
+    entries has to appear, so a Module whose leaves stopped being reported fails,
+    and a Module defining only its own entry is not made to invent leaves.
     """
     for model in CORPUS:
         module = model.build()
-        entry = module.entry_function().name
+        chosen = model.selected("schedule")
+        owners = []
+        for selector in chosen:
+            *path, name = selector.split(".")
+            owner = select(module, ".".join(path))
+            assert owner.entry == name, (
+                f"{model.id}: schedule selects {selector!r}, but Module "
+                f"{owner.name!r} declares {owner.entry!r} as its entry"
+            )
+            owners.append(owner.name)
+        assert len(set(owners)) == len(chosen), (
+            f"{model.id}: {len(chosen)} schedule cases over {len(set(owners))} "
+            f"execution Modules; one Module admits one entry"
+        )
+
         untested = model.untested("schedule", module)
-        assert model.selected("schedule") == (entry,)
-        assert entry not in untested
-        assert len(untested) == len(model.inventory(module)) - 1
+        assert not set(chosen) & set(untested)
+        assert len(untested) == len(model.inventory(module)) - len(chosen)
 
 
 def test_the_report_separates_what_ran_from_what_nobody_selected() -> None:
@@ -115,7 +134,7 @@ def test_the_report_separates_what_ran_from_what_nobody_selected() -> None:
             target=fixture.id,
             kind="schedule",
             case=case.id,
-            function=case.function,
+            function=case.selector,
         )
 
     section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"][fixture.id]

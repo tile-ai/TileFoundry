@@ -1,15 +1,7 @@
 from __future__ import annotations
 
-from tests.models.deepseek_v4_flash.moe import (
-    DIM,
-    MOE_INTER,
-    N_ACT,
-    N_ROUTED,
-    deepseek_v4_flash_module,
-    deepseek_v4_flash_moe,
-    moe_experts_core,
-    moe_topk,
-)
+from tests.models.deepseek_v4_flash.config import REAL
+from tests.models.deepseek_v4_flash.model import deepseek_v4_flash_module
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.constraints import LayoutConstraint, constraint_metadata
 from tilefoundry.ir.core import Call, Tuple
@@ -42,7 +34,16 @@ def _calls(fn):
     return tuple(expr for expr in _walk(fn.body) if isinstance(expr, Call))
 
 
+#: The real model's shapes, read off the config the block is authored at.
+DIM = REAL.dim
+MOE_INTER = REAL.moe_inter
+N_ACT = REAL.n_act
+N_ROUTED = REAL.n_routed
+
+
 def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
+    deepseek_v4_flash_moe = deepseek_v4_flash_module.lookup("deepseek_v4_flash_moe")
+
     assert deepseek_v4_flash_module.resolve_target() == CudaTarget()
     assert tuple(
         (topology.name, topology.size)
@@ -75,6 +76,10 @@ def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
 
 
 def test_routed_path_is_ordinary_batched_dataflow() -> None:
+    deepseek_v4_flash_moe = deepseek_v4_flash_module.lookup("deepseek_v4_flash_moe")
+    moe_experts_core = deepseek_v4_flash_module.lookup("moe_experts_core")
+    moe_topk = deepseek_v4_flash_module.lookup("moe_topk")
+
     op_types = {type(call.target) for call in _calls(moe_experts_core)}
     assert {Gather, MatMul}.issubset(op_types)
     assert any(type(call.target).__name__ == "Cast" for call in _calls(moe_experts_core))

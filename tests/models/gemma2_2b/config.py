@@ -18,7 +18,7 @@ which states the construction once for the whole corpus. Two things are Gemma-2'
 own and stay here: :func:`_key_value_of`, how its attention turns normed hidden
 states into a key and a value, and which ``apply_rotary_pos_emb`` rotates them.
 
-Four things Gemma-2 does that the Qwen siblings do not, all confirmed against
+Six things Gemma-2 does that the Qwen siblings do not, all confirmed against
 the installed ``transformers`` (5.14.1) rather than taken from documentation:
 
 - ``Gemma2RMSNorm.forward`` computes ``normed * (1.0 + weight)``, not
@@ -33,6 +33,12 @@ the installed ``transformers`` (5.14.1) rather than taken from documentation:
 - attention logits are soft-capped: ``attn_logit_softcapping *
   tanh(scores / attn_logit_softcapping)``, applied to the raw scaled scores.
 - the MLP activation is ``gelu_pytorch_tanh``, not SwiGLU's ``silu``.
+- the token embedding is scaled: ``Gemma2TextScaledWordEmbedding`` multiplies the
+  gathered row by ``hidden_size ** 0.5`` (48.0 at 2304), so the embedding is not
+  a plain gather.
+- the *output* logits are soft-capped too, at a different cap from attention's:
+  ``final_logit_softcapping`` 30.0 against ``attn_logit_softcapping`` 50.0.
+  Both are pinned below, so the kernel and this oracle read one number.
 
 Two traps in the Hugging Face side, both load-bearing:
 
@@ -88,7 +94,7 @@ SOURCE_UNPINNED_REASON = (
 # head_dim=256 (explicit — NOT hidden_size // num_attention_heads == 288, so
 # unlike the Qwen siblings REAL.q_proj != REAL.hidden here),
 # intermediate_size=9216, rms_norm_eps=1e-6, query_pre_attn_scalar=256,
-# attn_logit_softcapping=50.0, sliding_window=4096,
+# attn_logit_softcapping=50.0, final_logit_softcapping=30.0, sliding_window=4096,
 # hidden_activation="gelu_pytorch_tanh", max_position_embeddings=8192,
 # vocab_size=256000. rope_parameters resolves (rope_parameters=None default) to
 # {"rope_theta": 10000.0, "rope_type": "default"} — plain RoPE,
@@ -108,6 +114,8 @@ class Gemma2Shape:
     attention_bias: bool
     query_pre_attn_scalar: int
     attn_softcap: float
+    #: The cap on the *output* logits, which is not the cap on attention's.
+    final_logit_softcap: float
     sliding_window: int
     vocab: int
     max_pos: int
@@ -119,6 +127,12 @@ class Gemma2Shape:
     def gqa_group(self) -> int:
         """Query heads sharing one key/value head."""
         return self.n_q_heads // self.n_kv_heads
+
+    @property
+    def embed_scale(self) -> float:
+        """What ``Gemma2TextScaledWordEmbedding`` multiplies the gathered row by,
+        derived the way ``Gemma2Model.__init__`` derives it: ``hidden_size ** 0.5``."""
+        return self.hidden ** 0.5
 
     @property
     def q_proj(self) -> int:
@@ -144,6 +158,7 @@ REAL = Gemma2Shape(
     attention_bias=False,
     query_pre_attn_scalar=256,
     attn_softcap=50.0,
+    final_logit_softcap=30.0,
     sliding_window=4096,
     vocab=256000,
     max_pos=8192,
@@ -157,7 +172,7 @@ REAL = Gemma2Shape(
 # ── Component -> HF submodule map ───────────────────────────────────────
 # `self_attention` / `mlp` are pure blocks here (no fused norm, unlike the Qwen
 # siblings) — Gemma-2 sandwiches both with norms on both sides, so fusing either
-# would be one-sided. See `model/decoder_layer.py`'s docstring. Their tests
+# would be one-sided. See `model.py`'s docstring. Their tests
 # apply the HF norm in plain torch before calling the kernel, which is why the
 # norm does not appear in their entry here.
 COMPONENT_HF_SUBMODULES = {
@@ -206,6 +221,7 @@ def build_hf_config(*, layers: int = 1):
         attention_bias=REAL.attention_bias,
         query_pre_attn_scalar=REAL.query_pre_attn_scalar,
         attn_logit_softcapping=REAL.attn_softcap,
+        final_logit_softcapping=REAL.final_logit_softcap,
         sliding_window=REAL.sliding_window,
         hidden_activation="gelu_pytorch_tanh",
         num_hidden_layers=layers,

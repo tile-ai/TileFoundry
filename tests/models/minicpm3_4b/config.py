@@ -20,14 +20,16 @@ Latent Attention (MLA)** model: queries are a low-rank down/up projection
 ``kv_b_proj``) that up-projects to one distinct (nope, value) pair *per query
 head*, and RoPE applies only to a narrow rotary slice (``qk_rope_head_dim=32``)
 carved out of the query/key head dim -- the "nope" (no positional encoding)
-slice never rotates. See ``model/decoder_layer.py`` for the op-level breakdown.
+slice never rotates. See ``model.py`` for the op-level breakdown.
 
 MiniCPM3 also scales each residual branch by ``scale_depth /
 sqrt(num_hidden_layers)`` (a muP-style depth scaling MiniCPM calls
-``scale_depth``) instead of adding the branch directly. ``scale_emb``
-(input-embedding scale) and ``dim_model_base`` (``logits_scaling``, applied
-before the LM head) both live outside the decoder's boundary -- hidden states in,
-hidden states out -- so neither is needed here.
+``scale_depth``) instead of adding the branch directly. Two more scalars sit at
+the model's two ends, which is where the root's ``embed`` and ``lm_head`` apply
+them: ``scale_emb`` multiplies the gathered embedding row
+(``MiniCPM3ScaledWordEmbedding``), and ``logits_scaling`` -- ``hidden_size /
+dim_model_base``, as ``MiniCPM3Config`` derives it -- divides the hidden state
+before the head.
 
 ── What the explicit KV cache holds, and why ────────────────────────────────
 
@@ -71,7 +73,8 @@ from 5.12.x, which is what this repo's dependency currently names as its minimum
 ``num_attention_heads=40``, ``num_key_value_heads=40``,
 ``num_hidden_layers=62``, ``q_lora_rank=768``, ``kv_lora_rank=256``,
 ``qk_nope_head_dim=64``, ``qk_rope_head_dim=32``, ``v_head_dim=64``,
-``rms_norm_eps=1e-5``, ``scale_depth=1.4``, ``vocab_size=73448``,
+``rms_norm_eps=1e-5``, ``scale_depth=1.4``, ``scale_emb=12``,
+``dim_model_base=256``, ``vocab_size=73448``,
 ``max_position_embeddings=32768``.
 
 Three of those need a note:
@@ -135,7 +138,15 @@ class MiniCPM3Shape:
     max_ctx: int
     n_layers: int
     scale_depth: float
+    scale_emb: int
+    dim_model_base: int
     dt: str
+
+    @property
+    def logits_scaling(self) -> float:
+        """What the hidden state is divided by before the LM head, derived the way
+        ``MiniCPM3Config.logits_scaling`` derives it: ``hidden / dim_model_base``."""
+        return self.hidden / self.dim_model_base
 
     @property
     def qk_head_dim(self) -> int:
@@ -186,13 +197,15 @@ REAL = MiniCPM3Shape(
     max_ctx=32768,
     n_layers=62,
     scale_depth=1.4,
+    scale_emb=12,
+    dim_model_base=256,
     dt='f32',
 )
 
 # ── Component -> HF submodule map ───────────────────────────────────────
 # Each component's HIR is validated against these submodules of a single
 # ``MiniCPM3DecoderLayer``. ``mla_attention`` and ``mlp`` each fuse their
-# preceding RMSNorm (see ``model/decoder_layer.py`` docstring), so their HF
+# preceding RMSNorm (see ``model.py`` docstring), so their HF
 # comparison composes the norm + block rather than the block alone.
 COMPONENT_HF_SUBMODULES = {
     "input_rms_norm": ("input_layernorm",),
@@ -230,6 +243,8 @@ def build_hf_config(*, layers: int = 1):
         qk_rope_head_dim=REAL.qk_rope_head_dim,
         v_head_dim=REAL.v_head_dim,
         scale_depth=REAL.scale_depth,
+        scale_emb=REAL.scale_emb,
+        dim_model_base=REAL.dim_model_base,
         vocab_size=REAL.vocab,
         max_position_embeddings=REAL.max_pos,
     )

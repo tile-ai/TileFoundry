@@ -30,7 +30,7 @@ from dataclasses import dataclass
 import torch
 
 from tests.models.deepseek_v4_flash import config as shape
-from tests.models.deepseek_v4_flash.attention import build_attention
+from tests.models.deepseek_v4_flash.model import DeepseekV4Attention
 from tilefoundry.runtime import DictResource
 
 #: The model is bf16 with an fp8 KV cache; the oracle is asked in the dtype the
@@ -123,11 +123,11 @@ def attention_step_inputs(*, ctx_len: int = CTX_LEN, device: str = DEVICE) -> De
 def run_attention_step(inputs: DecodeStepInputs):
     """The attention submodule over *inputs*, through the Evaluator.
 
-    A freshly loaded module every call, weights bound by name from the drawn
+    A freshly copied module every call, weights bound by name from the drawn
     step: the description under test is the one the checkpoint pipeline binds
     into, not a second copy that takes its weights positionally.
     """
-    loaded = build_attention().load(DictResource(inputs.weights))
+    loaded = DeepseekV4Attention.cloned().load(DictResource(inputs.weights))
     return loaded.forward(*inputs.args)
 
 

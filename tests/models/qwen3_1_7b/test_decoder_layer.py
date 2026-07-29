@@ -22,7 +22,7 @@ from __future__ import annotations
 import torch
 
 from tests.models.qwen3_1_7b import config, reference
-from tests.models.qwen3_1_7b import decoder_layer as qwen3
+from tests.models.qwen3_1_7b.model import Qwen3_1_7B
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import specialize_concretely
 
@@ -56,8 +56,8 @@ def test_tiled_mlp_matches_untiled_mlp():
 
     with torch.no_grad():
         ref = mlp(layer.post_attention_layernorm(x))
-    untiled = evaluate(qwen3.mlp, x, *weights, device=TILED_DEV)
-    tiled = evaluate(qwen3.tiled_mlp, x, *weights, device=TILED_DEV)
+    untiled = evaluate(Qwen3_1_7B.lookup("mlp"), x, *weights, device=TILED_DEV)
+    tiled = evaluate(Qwen3_1_7B.lookup("tiled_mlp"), x, *weights, device=TILED_DEV)
 
     torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -72,7 +72,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
     so a step that returned its inputs unchanged would fail.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(qwen3.decoder_layer, {"ctx_len": drawn.ctx_len})
+    fn = specialize_concretely(Qwen3_1_7B.lookup("decoder_layer"), {"ctx_len": drawn.ctx_len})
     _, k_new, v_new = evaluate(fn, *drawn.args, device=DEV)
 
     want_k, want_v = reference.appended_cache_oracle(drawn)

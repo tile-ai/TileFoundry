@@ -19,7 +19,9 @@ import pytest
 import torch
 
 from tests.models.qwen3_5_35b_a3b import reference
-from tests.models.qwen3_5_35b_a3b.decoder_layer import build_decoder_layer
+from tests.models.qwen3_5_35b_a3b.model import (
+    LAYER_TYPE,
+)
 
 DEV = reference.DEVICE
 
@@ -68,7 +70,7 @@ def test_decoder_layer_matches_hugging_face(block_type):
     """The complete layer vs `Qwen3_5MoeDecoderLayer.forward` at the decoded
     position -- mixer + residual, then post-norm + MoE + residual."""
     step, oracle = _draw(block_type)
-    layer = build_decoder_layer(block_type)
+    layer = LAYER_TYPE[block_type].cloned()
 
     out, state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
 
@@ -102,7 +104,7 @@ def test_the_layer_gap_is_the_mixers_gap_amplified_by_the_moe(block_type):
     linear attention (4.10e-07 -> 1.06e-05, against an observed 1.17e-05).
     """
     step, oracle = _draw(block_type)
-    layer = build_decoder_layer(block_type)
+    layer = LAYER_TYPE[block_type].cloned()
 
     out, _state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
     observed = (out.float() - oracle(step).float()).abs().max().item()
@@ -148,7 +150,7 @@ def test_the_layer_is_two_residual_additions(block_type):
     boundary would not distinguish a layer that omitted it.
     """
     step, _oracle = _draw(block_type)
-    layer = build_decoder_layer(block_type)
+    layer = LAYER_TYPE[block_type].cloned()
 
     out, _state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
 
@@ -176,7 +178,7 @@ def test_the_moe_reads_the_mixed_state_not_the_layer_input(block_type):
     component test in this package.
     """
     step, _oracle = _draw(block_type)
-    layer = build_decoder_layer(block_type)
+    layer = LAYER_TYPE[block_type].cloned()
 
     out, _state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
 

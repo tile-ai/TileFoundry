@@ -25,13 +25,13 @@ partitioner actually raises.
 from __future__ import annotations
 
 from tests.models.corpus import (
-    MODELS_ROOT,
     FunctionCase,
     ModelCase,
     ReferenceCase,
     SizedCase,
 )
 from tests.models.minicpm3_4b.config import REAL as SHAPE
+from tests.models.minicpm3_4b.model import MiniCPM3_4B
 from tests.models.minicpm3_4b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -47,9 +47,7 @@ ANALYZED_AT = {"ctx_len": 1024}
 
 CASE = ModelCase(
     id="minicpm3_4b",
-    source=MODELS_ROOT / "minicpm3_4b" / "model" / "decoder_layer.py",
-    entry="MiniCPM3_4B",
-    namespace={"config": SHAPE},
+    prototype=MiniCPM3_4B,
     reference=ReferenceCase(
         id="minicpm3_4b/reference/full_decoder_decode",
         boundary=(
@@ -64,24 +62,24 @@ CASE = ModelCase(
     ),
     analyze=(
         FunctionCase(
-            id="minicpm3_4b/analyze/input_rms_norm", function="input_rms_norm"
+            id="minicpm3_4b/analyze/input_rms_norm", selector="input_rms_norm"
         ),
         FunctionCase(
             id="minicpm3_4b/analyze/mla_attention",
-            function="mla_attention",
+            selector="mla_attention",
             dims=ANALYZED_AT,
         ),
-        FunctionCase(id="minicpm3_4b/analyze/mlp", function="mlp"),
+        FunctionCase(id="minicpm3_4b/analyze/mlp", selector="mlp"),
         FunctionCase(
             id="minicpm3_4b/analyze/decoder_layer",
-            function="decoder_layer",
+            selector="decoder_layer",
             dims=ANALYZED_AT,
         ),
     ),
     schedule=(
         FunctionCase(
             id="minicpm3_4b/schedule/decoder_layer",
-            function="decoder_layer",
+            selector="decoder_layer",
             topology="cta",
             dims=ANALYZED_AT,
         ),
@@ -89,8 +87,9 @@ CASE = ModelCase(
     sized=(
         SizedCase(
             id="minicpm3_4b/sized/decoder_layer",
-            function="decoder_layer",
+            selector="decoder_layer",
             dims=ANALYZED_AT,
+            ceiling={"ctx_len": SHAPE.max_ctx},
         ),
     ),
 )

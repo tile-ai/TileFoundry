@@ -2,7 +2,7 @@
 
 Lives beside the model rather than in ``registry.py`` so the description and the
 description's subject move together: the functions selected here are the
-functions ``model/decoder_layer.py`` defines, and a kernel renamed in one file
+functions ``model.py`` defines, and a kernel renamed in one file
 without the other is a mismatch inside one package rather than a broken import
 across two.
 
@@ -35,13 +35,13 @@ limit of this model, which this is not.
 from __future__ import annotations
 
 from tests.models.corpus import (
-    MODELS_ROOT,
     FunctionCase,
     ModelCase,
     ReferenceCase,
     SizedCase,
 )
 from tests.models.gemma2_2b.config import REAL
+from tests.models.gemma2_2b.model import Gemma2_2B
 from tests.models.gemma2_2b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -57,9 +57,7 @@ ANALYZED_AT = {"ctx_len": 1024}
 
 CASE = ModelCase(
     id="gemma2_2b",
-    source=MODELS_ROOT / "gemma2_2b" / "model" / "decoder_layer.py",
-    entry="Gemma2_2B",
-    namespace={"config": REAL},
+    prototype=Gemma2_2B,
     reference=ReferenceCase(
         id="gemma2_2b/reference/full_decoder_decode",
         boundary=(
@@ -73,23 +71,23 @@ CASE = ModelCase(
         problem_sizes=(f"decode/ctx_len={CTX_LEN}",),
     ),
     analyze=(
-        FunctionCase(id="gemma2_2b/analyze/input_rms_norm", function="input_rms_norm"),
+        FunctionCase(id="gemma2_2b/analyze/input_rms_norm", selector="input_rms_norm"),
         FunctionCase(
             id="gemma2_2b/analyze/self_attention",
-            function="self_attention",
+            selector="self_attention",
             dims=ANALYZED_AT,
         ),
-        FunctionCase(id="gemma2_2b/analyze/mlp", function="mlp"),
+        FunctionCase(id="gemma2_2b/analyze/mlp", selector="mlp"),
         FunctionCase(
             id="gemma2_2b/analyze/decoder_layer",
-            function="decoder_layer",
+            selector="decoder_layer",
             dims=ANALYZED_AT,
         ),
     ),
     schedule=(
         FunctionCase(
             id="gemma2_2b/schedule/decoder_layer",
-            function="decoder_layer",
+            selector="decoder_layer",
             topology="cta",
             dims=ANALYZED_AT,
         ),
@@ -97,8 +95,9 @@ CASE = ModelCase(
     sized=(
         SizedCase(
             id="gemma2_2b/sized/decoder_layer",
-            function="decoder_layer",
+            selector="decoder_layer",
             dims=ANALYZED_AT,
+            ceiling={"ctx_len": REAL.max_ctx},
         ),
     ),
 )

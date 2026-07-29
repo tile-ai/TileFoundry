@@ -48,7 +48,7 @@ def _cases() -> list[object]:
             fixture,
             case,
             family,
-            id=f"{case.function}-{family}",
+            id=f"{case.selector}-{family}",
             marks=case.gate.expected_failure(expect=AnalysisError),
         )
         for model, fixture, case, family in _selected()
@@ -69,14 +69,15 @@ def test_every_selected_function_analyses_or_says_what_stopped_it(
         target=fixture.id,
         kind="analyze",
         case=f"{case.id}/{family}",
-        function=case.function,
+        function=case.selector,
     )
-    module = model.build_for(fixture)
-    function = model.function(module, case)
+    # The selected Module, not the root it was reached through: an analysis
+    # measures a function against the domain that owns it.
+    selected, function = model.resolve(model.build_for(fixture), case.selector)
 
     case.gate.hold(
         lambda: analyze(
-            module,
+            selected,
             function,
             analysis=family,
             dims=None if case.dims is None else dict(case.dims),
@@ -115,7 +116,7 @@ def test_the_report_states_the_matrix_the_registry_declares() -> None:
             target=fixture.id,
             kind="analyze",
             case=f"{case.id}/{family}",
-            function=case.function,
+            function=case.selector,
         )
 
     section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"][fixture.id]

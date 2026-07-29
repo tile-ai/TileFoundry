@@ -223,9 +223,13 @@ def stack_step(
 
 
 def run_stack(spec: DenseDecode, drawn: StackStep):
-    """The complete decoder over *drawn*, through the Evaluator."""
+    """The complete decoder over *drawn*, through the Evaluator.
+
+    ``decode_hidden`` rather than ``forward``: this boundary starts from a hidden
+    state, and the root's ``forward`` is the whole decode step from token ids.
+    """
     decoder = spec.build_decoder().bind_final_norm(spec.final_norm_of(drawn.model))
-    return decoder.forward(*drawn.args)
+    return decoder.decode_hidden(*drawn.args)
 
 
 def stack_oracle(spec: DenseDecode, drawn: StackStep) -> torch.Tensor:

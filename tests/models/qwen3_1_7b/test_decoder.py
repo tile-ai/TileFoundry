@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from tests.models.qwen3_1_7b import config
-from tests.models.qwen3_1_7b.decoder import build_decoder
+from tests.models.qwen3_1_7b.model import Qwen3_1_7B_Decoder
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the complete decoder at production dimensions"
@@ -77,12 +77,26 @@ def _draw(ctx_len=CTX_LEN):
     )
 
 
+def test_the_embedding_matches_hugging_face(drawn) -> None:
+    """The root's `embed` gathers the row `Qwen3Model.embed_tokens` would, at the
+    table's last row so a wrong axis or a truncated table cannot land on it."""
+    model, *_ = drawn
+    decoder = Qwen3_1_7B_Decoder.cloned()
+    token_ids = torch.tensor([config.REAL.vocab - 1], device=DEV, dtype=torch.int64)
+
+    out = decoder.embed(model.embed_tokens.weight, token_ids)
+
+    with torch.no_grad():
+        want = model.embed_tokens(token_ids).reshape(1, 1, config.REAL.hidden)
+    torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+
+
 def test_the_complete_decoder_matches_hugging_face(drawn) -> None:
     """Every layer, in order, plus the final norm."""
     model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = build_decoder().bind_final_norm(model.norm.weight)
+    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(model.norm.weight)
 
-    out, entries = decoder.forward(hidden_new, cos, sin, pos_ids, scale, weights, caches)
+    out, entries = decoder.decode_hidden(hidden_new, cos, sin, pos_ids, scale, weights, caches)
 
     want = config.decoder_decode_reference(model, hidden_ctx, hidden_new)
     assert len(entries) == config.REAL.n_layers
@@ -98,16 +112,15 @@ def test_every_layer_returns_its_own_cache_entry(drawn) -> None:
     can see.
     """
     model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = build_decoder().bind_final_norm(model.norm.weight)
+    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(model.norm.weight)
 
-    _out, entries = decoder.forward(hidden_new, cos, sin, pos_ids, scale, weights, caches)
+    _out, entries = decoder.decode_hidden(hidden_new, cos, sin, pos_ids, scale, weights, caches)
 
+    grown = decoder.append_cache(caches, entries)
     want = config.decoder_context_kv(
         model, torch.cat([hidden_ctx, hidden_new], dim=1), device=DEV
     )
-    for index, ((k_new, v_new), (want_k, want_v)) in enumerate(zip(entries, want)):
-        grown_k = torch.cat([caches[index][0], k_new], dim=1)
-        grown_v = torch.cat([caches[index][1], v_new], dim=1)
+    for index, ((grown_k, grown_v), (want_k, want_v)) in enumerate(zip(grown, want)):
         torch.testing.assert_close(
             grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL, msg=f"layer {index} keys"
         )
@@ -134,11 +147,11 @@ def test_a_stack_that_is_wrongly_ordered_is_caught(drawn, description) -> None:
     comes from 28 layers that were each already checked on their own.
     """
     model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = build_decoder().bind_final_norm(model.norm.weight)
+    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(model.norm.weight)
     want = config.decoder_decode_reference(model, hidden_ctx, hidden_new)
 
     broken_weights, broken_caches = _STACK_ERRORS[description](weights, caches)
-    out, _entries = decoder.forward(
+    out, _entries = decoder.decode_hidden(
         hidden_new, cos, sin, pos_ids, scale, broken_weights, broken_caches
     )
 
@@ -149,10 +162,10 @@ def test_a_stack_that_is_wrongly_ordered_is_caught(drawn, description) -> None:
 def test_a_wrong_final_norm_is_caught(drawn) -> None:
     """The norm that closes the stack is applied, and is the model's own."""
     model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = build_decoder().bind_final_norm(torch.ones_like(model.norm.weight))
+    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(torch.ones_like(model.norm.weight))
     want = config.decoder_decode_reference(model, hidden_ctx, hidden_new)
 
-    out, _entries = decoder.forward(
+    out, _entries = decoder.decode_hidden(
         hidden_new, cos, sin, pos_ids, scale, weights, caches
     )
 

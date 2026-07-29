@@ -180,20 +180,22 @@ def build_report(
 
 
 def _sizeable(built) -> tuple[str, ...]:
-    """The functions that leave a dimension open, across a model's Modules.
+    """The functions that leave a dimension open, across a model's Modules, as the
+    root-relative selectors that name them.
 
     Measured from the functions rather than declared, so a kernel rewritten to carry
     a range starts being a `sized` question without anyone updating a list, and one
-    rewritten to a fixed shape stops being one.
+    rewritten to a fixed shape stops being one. Over the whole tree, so a kernel
+    inside a child Module is one of the answers rather than invisible.
     """
-    from tilefoundry.ir.hir.function import Function  # noqa: PLC0415
+    from tilefoundry.ir.core.module import function_selectors  # noqa: PLC0415
     from tilefoundry.ir.hir.specialize import dim_vars_reached  # noqa: PLC0415
 
     names: list[str] = []
     for _case, module in built:
-        for function in module.functions:
-            if isinstance(function, Function) and dim_vars_reached(function):
-                names.append(function.name)
+        for selector, function in function_selectors(module):
+            if dim_vars_reached(function):
+                names.append(selector)
     return tuple(dict.fromkeys(names))
 
 

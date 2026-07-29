@@ -18,7 +18,7 @@ from __future__ import annotations
 import torch
 
 from tests.models.minicpm3_4b import config, reference
-from tests.models.minicpm3_4b import minicpm3_4b as model
+from tests.models.minicpm3_4b.model import MiniCPM3_4B
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import specialize_concretely
 
@@ -45,7 +45,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
     unchanged would fail.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(model.decoder_layer, {"ctx_len": drawn.ctx_len})
+    fn = specialize_concretely(MiniCPM3_4B.lookup("decoder_layer"), {"ctx_len": drawn.ctx_len})
     _, k_new, v_new = evaluate(fn, *drawn.args, device=DEV)
 
     want_k, want_v = reference.appended_cache_oracle(drawn)

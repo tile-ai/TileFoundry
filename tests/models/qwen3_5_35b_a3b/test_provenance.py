@@ -20,8 +20,17 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.models.qwen3_5_35b_a3b import config, full_attention, linear_attention, moe
-from tests.models.qwen3_5_35b_a3b.decoder_layer import build_decoder_layer
+from tests.models.qwen3_5_35b_a3b import config
+from tests.models.qwen3_5_35b_a3b.model import (
+    LAYER_TYPE,
+    Qwen3_5Decoder,
+    Qwen3_5FullAttention,
+    Qwen3_5FullAttnLayer,
+    Qwen3_5LinearAttention,
+    Qwen3_5LinearAttnLayer,
+    Qwen3_5MoE,
+)
+from tilefoundry.ir.core.module import select
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -130,6 +139,35 @@ def test_a_truncated_stack_still_names_the_layer_type_it_was_asked_for():
     assert shape.first_layer_of("full_attention") == shape.full_attention_interval - 1
 
 
+def test_the_stack_is_the_published_order_and_its_layers_are_independent():
+    """The stack is `layer_types` in order, and each layer is an independent copy.
+
+    A stack built from a restated pattern, or from layers sharing Functions, would
+    pass every component test in this package and fail here.
+    """
+    shape = config.REAL
+    stack = Qwen3_5Decoder
+    assert len(stack.modules) == shape.n_layers
+    assert [child.name for child in stack.modules[:3]] == ["layer0", "layer1", "layer2"]
+
+    for index, kind in enumerate(shape.layer_types):
+        mixer = select(stack, f"layer{index}.mixer")
+        entry = LAYER_TYPE[kind].modules[0].entry
+        assert mixer.entry == entry, f"layer{index} is not a {kind} layer"
+
+    first, second = stack.modules[0], stack.modules[1]
+    assert first.lookup("residual_add") is not second.lookup("residual_add")
+    assert first.modules[0].lookup("conv_step") is not second.modules[0].lookup("conv_step")
+
+    selected = select(stack, "layer0.moe.moe")
+    assert selected.name == "moe"
+    assert selected.entry_function().name == "moe"
+
+    assert "forward" in stack.methods
+    with pytest.raises(ValueError, match=f"{shape.n_layers} layers but was given 0"):
+        stack.decode_hidden(None, (), (), None)
+
+
 # ── what mrope actually covers here ─────────────────────────────────────
 
 
@@ -211,7 +249,8 @@ EXECUTED: dict[str, tuple[str, ...]] = {
     "Qwen3_5MoE": ("routing", "routed_experts", "shared_expert", "moe"),
     "Qwen3_5FullAttention": ("partial_rope", "full_attention"),
     "Qwen3_5LinearAttention": ("linear_attention",),
-    "Qwen3_5DecoderLayer": ("residual_add",),
+    "Qwen3_5FullAttnLayer": ("residual_add",),
+    "Qwen3_5LinearAttnLayer": ("residual_add",),
 }
 
 NOT_EXECUTED: dict[str, tuple[str, ...]] = {
@@ -224,6 +263,12 @@ NOT_EXECUTED: dict[str, tuple[str, ...]] = {
     # token of `torch_recurrent_gated_delta_rule`, so a direct comparison would
     # be against a slice of a function rather than against a module boundary.
     "Qwen3_5LinearAttention": ("conv_step", "l2_normalise", "delta_step"),
+    # The stack these belong to is not run against an oracle (see
+    # `the_40_layer_stack` below), so neither the norm that closes it nor the
+    # embedding and head at its two ends have anything to be compared with. They
+    # are authored because the model has them, and without them the root would
+    # describe a step that begins and ends nowhere.
+    "Qwen3_5Decoder": ("embed", "final_rms_norm", "lm_head"),
 }
 
 #: What no test in this package executes at all, with the reason. Not derived
@@ -239,13 +284,17 @@ UNCOVERED_SEMANTICS: dict[str, str] = {
         "vision_config and every Qwen3_5MoeVision* module are untouched."
     ),
     "the_40_layer_stack": (
-        "no complete-stack reference is built for a model this size. Layer order, "
-        "the residual thread across 40 layers, and the final norm are therefore "
-        "unmeasured; one layer of each published type is."
+        "`Qwen3_5Decoder` composes the published order and orchestrates it, so the "
+        "stack is described, its layer order is checked and its step is reachable "
+        "-- but no complete-stack reference is built for a model this size, so the "
+        "residual thread across 40 layers and the final norm are never compared "
+        "with anything; one layer of each published type is."
     ),
     "embedding_and_lm_head": (
-        "the only vocabulary-sized weights in the model. Either side of the "
-        "decoder boundary, and not needed to say whether a layer is right."
+        "the only vocabulary-sized weights in the model. Both are authored on the "
+        "root now, and neither is compared with anything: the oracle would be the "
+        "whole 40-layer text tower, and 35 billion parameters in f32 do not fit "
+        "one card."
     ),
     "mrope": (
         "a text-only fixture gives all three position axes the same value, so "
@@ -270,12 +319,13 @@ UNCOVERED_SEMANTICS: dict[str, str] = {
 
 
 def _authored_modules():
-    layer = build_decoder_layer("full_attention")
     return (
-        moe.Qwen3_5MoE,
-        full_attention.Qwen3_5FullAttention,
-        linear_attention.Qwen3_5LinearAttention,
-        layer,
+        Qwen3_5MoE,
+        Qwen3_5FullAttention,
+        Qwen3_5LinearAttention,
+        Qwen3_5FullAttnLayer,
+        Qwen3_5LinearAttnLayer,
+        Qwen3_5Decoder,
     )
 
 
@@ -306,5 +356,5 @@ def test_both_published_token_mixers_are_covered(block_type):
     attention; a fixture that covered only one of them would cover a model the
     published stack does not contain."""
     assert block_type in config.REAL.layer_types
-    layer = build_decoder_layer(block_type)
+    layer = LAYER_TYPE[block_type].cloned()
     assert {child.name for child in layer.modules} == {"mixer", "moe"}

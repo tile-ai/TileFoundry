@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 
 from tests.models.deepseek_v4_flash.case import ANALYZED_AT, CASE
+from tests.models.deepseek_v4_flash.config import REAL
 from tests.models.fixtures import ACCEPTANCE
 from tilefoundry.analysis import ANALYSES, analyze
 from tilefoundry.ir.hir.specialize import specialize_concretely
@@ -47,14 +48,13 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     """The window is what bounds the range, so the corpus's usual 1024 is not a
     context this layer type has rather than a long one -- and the length the case
     analyses at sits below the ceiling, which is asked about separately."""
-    shape = CASE.namespace["config"]
     function = CASE.build().lookup("mla_attend")
 
-    assert ANALYZED_AT["ctx_len"] < shape.max_ctx < shape.window
+    assert ANALYZED_AT["ctx_len"] < REAL.max_ctx < REAL.window
     sized = specialize_concretely(function, dict(ANALYZED_AT))
     cache = next(p for p in sized.params if p.name == "kv_cache")
     assert tuple(int(d) for d in cache.type.shape) == (
-        1, ANALYZED_AT["ctx_len"], 1, shape.head_dim,
+        1, ANALYZED_AT["ctx_len"], 1, REAL.head_dim,
     )
 
     with pytest.raises(
@@ -69,10 +69,10 @@ def test_every_analysis_family_answers_for_every_selected_function(family):
     selects, at the extents the case states."""
     fixture = ACCEPTANCE()
     for case in CASE.analyze:
-        module = CASE.build_for(fixture)
+        selected, function = CASE.resolve(CASE.build_for(fixture), case.selector)
         analyze(
-            module,
-            CASE.function(module, case),
+            selected,
+            function,
             analysis=family,
             dims=None if case.dims is None else dict(case.dims),
         )
@@ -83,10 +83,10 @@ def test_the_model_can_be_asked_at_a_context_length_of_our_choosing():
     was authored at."""
     fixture = ACCEPTANCE()
     for case in CASE.sized:
-        module = CASE.build_for(fixture)
+        selected, function = CASE.resolve(CASE.build_for(fixture), case.selector)
         analyze(
-            module,
-            module.lookup(case.function),
+            selected,
+            function,
             analysis="compute-cost",
             dims=dict(case.dims),
         )
@@ -98,13 +98,13 @@ def test_the_partition_plans_the_entry_function_and_the_plan_holds():
     carries, not the one that still holds a range."""
     fixture = ACCEPTANCE()
     for case in CASE.schedule:
-        module = CASE.build_for(fixture)
+        selected, function = CASE.resolve(CASE.build_for(fixture), case.selector)
         result = schedule(
-            module,
-            CASE.function(module, case),
+            selected,
+            function,
             topology=case.topology,
             options=_SOLVER,
             dims=dict(case.dims),
         )
-        result.plan.verify(module, result.function, fixture.level(case.topology))
+        result.plan.verify(selected, result.function, fixture.level(case.topology))
         assert result.plan.to_json() == result.plan.to_json()

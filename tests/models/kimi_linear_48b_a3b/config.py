@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from tests.models import decode_oracle as oracle
 
@@ -140,41 +140,99 @@ MINIMUM_LAYERS = (0, 3)
 
 
 @dataclass(frozen=True)
-class KimiShape:
-    """The dimensions the HIR and the oracles are both built at."""
+class KimiLinearConfig:
+    """The published fields this model is built at, plus the envelope we choose.
 
-    hidden: int = 2304
-    n_heads: int = 32
-    intermediate: int = 9216
-    rms_eps: float = 1e-5
-    rope_theta: float = 10000.0
+    A typed subset of the published `config.json`, under the published names, and
+    not an implementation of `transformers.PretrainedConfig`: this model's own
+    config class is remote code that is not available here (see this module's
+    docstring), so anything claiming to be it would be a counterfeit. What this
+    holds is exactly the fields the HIR and the oracles read.
 
-    # MLA. `qk_head` is the score dimension and therefore the scaling
-    # denominator: 128 + 64 = 192, NOT v_head. See `mla_scaling`.
-    kv_lora_rank: int = 512
-    qk_nope_head_dim: int = 128
-    qk_rope_head_dim: int = 64
-    v_head_dim: int = 128
+    No field carries a default. Every published number has to arrive from the
+    published fields, so a value edited upstream cannot be silently replaced by a
+    stale one written here -- see `from_published`. The two envelope fields and
+    the dtype are ours rather than published, so they are stated at the call.
 
-    # KDA
-    kda_head_dim: int = 128
-    kda_heads: int = 32
-    short_conv: int = 4
+    Anything computable from these is a property, not a field: a derived number
+    stored twice can disagree with itself.
+    """
+
+    hidden_size: int
+    num_attention_heads: int
+    intermediate_size: int
+    rms_norm_eps: float
+    rope_theta: float
+
+    # MLA. `qk_head_dim` is the score dimension and therefore the scaling
+    # denominator: 128 + 64 = 192, NOT v_head_dim. See `mla_scaling`.
+    kv_lora_rank: int
+    qk_nope_head_dim: int
+    qk_rope_head_dim: int
+    v_head_dim: int
+
+    # KDA. Published nested under `linear_attn_config`, so the prefix is ours: a
+    # flat `head_dim` would collide with MLA's, which is a different number.
+    kda_head_dim: int
+    kda_num_heads: int
+    short_conv_kernel_size: int
 
     # MoE
-    n_experts: int = 256
-    top_k: int = 8
-    n_shared: int = 1
-    moe_intermediate: int = 1024
-    routed_scaling_factor: float = 2.446
+    num_experts: int
+    num_experts_per_token: int
+    num_shared_experts: int
+    moe_intermediate_size: int
+    routed_scaling_factor: float
 
-    #: Envelope for the one dynamic dimension. Not the published 1048576: the
-    #: envelope only has to contain the lengths anything here is asked about,
-    #: and a million-long bound costs analysis precision for nothing.
-    max_ctx: int = 4096
-    max_pos: int = 4096
+    #: Envelope for the one dynamic dimension, and the position table's extent.
+    #: Ours, not published: the published `max_position_embeddings` is 1048576,
+    #: and the envelope only has to contain the lengths anything here is asked
+    #: about -- a million-long bound costs analysis precision for nothing.
+    max_ctx: int
+    max_pos: int
 
-    dt: str = "f32"
+    #: The dtype the HIR is authored in. Also ours: the published checkpoint's
+    #: storage dtype is a separate question from what these kernels compute in.
+    dtype: str
+
+    @classmethod
+    def from_published(
+        cls,
+        published: dict[str, object],
+        *,
+        max_ctx: int,
+        max_pos: int,
+        dtype: str,
+    ) -> "KimiLinearConfig":
+        """Read the published fields, and take the envelope from the caller.
+
+        Reading rather than restating is the point: `published` is the digested
+        subset this package is pinned to, so a field that moves upstream moves
+        here, and one that is missing raises instead of falling back.
+        """
+        linear = published["linear_attn_config"]
+        return cls(
+            hidden_size=published["hidden_size"],
+            num_attention_heads=published["num_attention_heads"],
+            intermediate_size=published["intermediate_size"],
+            rms_norm_eps=published["rms_norm_eps"],
+            rope_theta=published["rope_theta"],
+            kv_lora_rank=published["kv_lora_rank"],
+            qk_nope_head_dim=published["qk_nope_head_dim"],
+            qk_rope_head_dim=published["qk_rope_head_dim"],
+            v_head_dim=published["v_head_dim"],
+            kda_head_dim=linear["head_dim"],
+            kda_num_heads=linear["num_heads"],
+            short_conv_kernel_size=linear["short_conv_kernel_size"],
+            num_experts=published["num_experts"],
+            num_experts_per_token=published["num_experts_per_token"],
+            num_shared_experts=published["num_shared_experts"],
+            moe_intermediate_size=published["moe_intermediate_size"],
+            routed_scaling_factor=published["routed_scaling_factor"],
+            max_ctx=max_ctx,
+            max_pos=max_pos,
+            dtype=dtype,
+        )
 
     @property
     def qk_head_dim(self) -> int:
@@ -182,7 +240,7 @@ class KimiShape:
 
     @property
     def q_proj(self) -> int:
-        return self.n_heads * self.qk_head_dim
+        return self.num_attention_heads * self.qk_head_dim
 
     @property
     def kv_a_proj(self) -> int:
@@ -191,19 +249,19 @@ class KimiShape:
 
     @property
     def kv_b_proj(self) -> int:
-        return self.n_heads * (self.qk_nope_head_dim + self.v_head_dim)
+        return self.num_attention_heads * (self.qk_nope_head_dim + self.v_head_dim)
 
     @property
     def v_proj(self) -> int:
-        return self.n_heads * self.v_head_dim
+        return self.num_attention_heads * self.v_head_dim
 
     @property
     def kda_proj(self) -> int:
-        return self.kda_heads * self.kda_head_dim
+        return self.kda_num_heads * self.kda_head_dim
 
     @property
     def shared_intermediate(self) -> int:
-        return self.moe_intermediate * self.n_shared
+        return self.moe_intermediate_size * self.num_shared_experts
 
     @property
     def mla_scaling(self) -> float:
@@ -222,7 +280,19 @@ class KimiShape:
         return self.kda_head_dim ** -0.5
 
 
-REAL = KimiShape()
+#: The published model. The envelope is stated here rather than defaulted, so the
+#: numbers that are ours and not the checkpoint's are visible where they are chosen.
+REAL = KimiLinearConfig.from_published(
+    DEPENDED_FIELDS, max_ctx=4096, max_pos=4096, dtype="f32"
+)
+
+#: The published config with a quarter of the experts. The MoE oracle needs one
+#: expert's weights per expert on the device, and at 256 that is about 7 GB in
+#: f32 while the suite runs eight ways in parallel; the comparison it makes --
+#: that the router picks the same experts and weights them the same way -- is the
+#: same comparison at 64. Nothing else moves, so a difference between the two is
+#: the expert count and not a second config.
+SMALL_MOE = replace(REAL, num_experts=64)
 
 #: One token per decode step.
 SEQ_LEN = 1
@@ -231,7 +301,7 @@ SEQ_LEN = 1
 # ── the MLA oracle: DeepseekV3Attention at Kimi's ranks ───────────────────────
 
 
-def build_mla_hf_config(shape: KimiShape = REAL):
+def build_mla_hf_config(config: KimiLinearConfig = REAL):
     """A `DeepseekV3Config` whose MLA is structurally Kimi's.
 
     Not a claim that Kimi is DeepSeek-V3. It is a claim about one submodule:
@@ -251,38 +321,38 @@ def build_mla_hf_config(shape: KimiShape = REAL):
 
     return DeepseekV3Config(
         vocab_size=32,
-        hidden_size=shape.hidden,
-        intermediate_size=shape.intermediate,
-        moe_intermediate_size=shape.moe_intermediate,
+        hidden_size=config.hidden_size,
+        intermediate_size=config.intermediate_size,
+        moe_intermediate_size=config.moe_intermediate_size,
         num_hidden_layers=1,
-        num_attention_heads=shape.n_heads,
-        num_key_value_heads=shape.n_heads,
-        kv_lora_rank=shape.kv_lora_rank,
+        num_attention_heads=config.num_attention_heads,
+        num_key_value_heads=config.num_attention_heads,
+        kv_lora_rank=config.kv_lora_rank,
         q_lora_rank=None,
-        qk_nope_head_dim=shape.qk_nope_head_dim,
-        qk_rope_head_dim=shape.qk_rope_head_dim,
-        v_head_dim=shape.v_head_dim,
-        rms_norm_eps=shape.rms_eps,
+        qk_nope_head_dim=config.qk_nope_head_dim,
+        qk_rope_head_dim=config.qk_rope_head_dim,
+        v_head_dim=config.v_head_dim,
+        rms_norm_eps=config.rms_norm_eps,
         rope_interleave=False,
-        rope_parameters={"rope_type": "default", "rope_theta": shape.rope_theta},
+        rope_parameters={"rope_type": "default", "rope_theta": config.rope_theta},
         attention_bias=False,
         attn_implementation="eager",
     )
 
 
-def build_mla_attention(seed=0, device="cpu", dtype=None, shape: KimiShape = REAL):
+def build_mla_attention(seed=0, device="cpu", dtype=None, config: KimiLinearConfig = REAL):
     """A `DeepseekV3Attention` with random weights at a fixed seed."""
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (  # noqa: PLC0415
         DeepseekV3Attention,
     )
 
-    cfg = build_mla_hf_config(shape)
+    cfg = build_mla_hf_config(config)
     return oracle.randomised(
         lambda: DeepseekV3Attention(cfg, layer_idx=0), seed, device, dtype
     )
 
 
-def rope_caches(shape: KimiShape = REAL, device="cpu", dtype=None):
+def rope_caches(config: KimiLinearConfig = REAL, device="cpu", dtype=None):
     """cos / sin caches `[max_pos, qk_rope_head_dim]` for the RoPE'd MLA form.
 
     Built directly rather than through `DeepseekV3RotaryEmbedding`, because that
@@ -291,19 +361,19 @@ def rope_caches(shape: KimiShape = REAL, device="cpu", dtype=None):
     """
     import torch  # noqa: PLC0415
 
-    half = shape.qk_rope_head_dim // 2
+    half = config.qk_rope_head_dim // 2
     inv_freq = 1.0 / (
-        shape.rope_theta
+        config.rope_theta
         ** (torch.arange(0, half, dtype=torch.float32, device=device) / half)
     )
-    positions = torch.arange(shape.max_pos, dtype=torch.float32, device=device)
+    positions = torch.arange(config.max_pos, dtype=torch.float32, device=device)
     angles = positions.unsqueeze(1) * inv_freq.unsqueeze(0)
     cos = torch.cat([angles.cos(), angles.cos()], dim=-1)
     sin = torch.cat([angles.sin(), angles.sin()], dim=-1)
     return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
 
 
-def identity_rope_caches(shape: KimiShape = REAL, device="cpu", dtype=None):
+def identity_rope_caches(config: KimiLinearConfig = REAL, device="cpu", dtype=None):
     """cos = 1, sin = 0: the rotary that leaves q and k untouched.
 
     This is how `mla_use_nope: true` is expressed without a second attention
@@ -318,13 +388,13 @@ def identity_rope_caches(shape: KimiShape = REAL, device="cpu", dtype=None):
     """
     import torch  # noqa: PLC0415
 
-    shape_2d = (shape.max_pos, shape.qk_rope_head_dim)
+    shape_2d = (config.max_pos, config.qk_rope_head_dim)
     cos = torch.ones(shape_2d, dtype=torch.float32, device=device)
     sin = torch.zeros(shape_2d, dtype=torch.float32, device=device)
     return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
 
 
-def rms_norm(hidden, weight, shape: KimiShape = REAL):
+def rms_norm(hidden, weight, config: KimiLinearConfig = REAL):
     """`tf.rms_norm`'s semantics in torch: `x * rsqrt(mean(x**2) + eps) * weight`.
 
     The HIR fuses the pre-attention (or post-attention) RMSNorm into its kernel,
@@ -339,11 +409,11 @@ def rms_norm(hidden, weight, shape: KimiShape = REAL):
     with torch.no_grad():
         x = hidden.float()
         ms = x.pow(2).mean(dim=-1, keepdim=True)
-        out = x * torch.rsqrt(ms + shape.rms_eps) * weight.float()
+        out = x * torch.rsqrt(ms + config.rms_norm_eps) * weight.float()
     return out.to(hidden.dtype)
 
 
-def mla_key_value(attention, hidden, cos, sin, shape: KimiShape = REAL):
+def mla_key_value(attention, hidden, cos, sin, config: KimiLinearConfig = REAL):
     """MLA's own `(key, value)` for *hidden*, head-major, rotary already applied.
 
     This is the one step no shared helper can do, because MLA's key is not a
@@ -368,31 +438,31 @@ def mla_key_value(attention, hidden, cos, sin, shape: KimiShape = REAL):
     with torch.no_grad():
         compressed = attention.kv_a_proj_with_mqa(hidden)
         latent, k_rot = torch.split(
-            compressed, [shape.kv_lora_rank, shape.qk_rope_head_dim], dim=-1
+            compressed, [config.kv_lora_rank, config.qk_rope_head_dim], dim=-1
         )
         k_pass = (
             attention.kv_b_proj(attention.kv_a_layernorm(latent))
-            .view(batch, seq, -1, shape.qk_nope_head_dim + shape.v_head_dim)
+            .view(batch, seq, -1, config.qk_nope_head_dim + config.v_head_dim)
             .transpose(1, 2)
         )
         k_nope, value = torch.split(
-            k_pass, [shape.qk_nope_head_dim, shape.v_head_dim], dim=-1
+            k_pass, [config.qk_nope_head_dim, config.v_head_dim], dim=-1
         )
-        k_rot = k_rot.view(batch, 1, seq, shape.qk_rope_head_dim)
+        k_rot = k_rot.view(batch, 1, seq, config.qk_rope_head_dim)
         _q, k_rot = apply_rotary_pos_emb(k_rot, k_rot, cos.unsqueeze(0), sin.unsqueeze(0))
         k_rot = k_rot.expand(*k_nope.shape[:-1], -1)
         key = torch.cat([k_nope, k_rot], dim=-1)
     return key, value
 
 
-def mla_context_kv(attention, hidden_ctx, cos, sin, shape: KimiShape = REAL):
+def mla_context_kv(attention, hidden_ctx, cos, sin, config: KimiLinearConfig = REAL):
     """The cache *attention* would hold for *hidden_ctx*, as explicit tensors.
 
     `[1, ctx_len, n_heads, dim]`, the kernels' layout. No `Cache` object on
     either side -- the tensors are built by running the module's own projections
     over the context, which is what its cache would have contained.
     """
-    key, value = mla_key_value(attention, hidden_ctx, cos, sin, shape)
+    key, value = mla_key_value(attention, hidden_ctx, cos, sin, config)
     return key.transpose(1, 2).contiguous(), value.transpose(1, 2).contiguous()
 
 
@@ -434,17 +504,17 @@ class MoERouterConfig:
     dropped.
     """
 
-    def __init__(self, shape: KimiShape = REAL):
-        self.num_experts_per_tok = shape.top_k
-        self.num_local_experts = shape.n_experts
-        self.hidden_size = shape.hidden
-        self.routed_scaling_factor = shape.routed_scaling_factor
+    def __init__(self, config: KimiLinearConfig = REAL):
+        self.num_experts_per_tok = config.num_experts_per_token
+        self.num_local_experts = config.num_experts
+        self.hidden_size = config.hidden_size
+        self.routed_scaling_factor = config.routed_scaling_factor
         self.n_group = 1
         self.topk_group = 1
         self.norm_topk_prob = True  # moe_renormalize: true
 
 
-def build_moe_router(seed=0, device="cpu", shape: KimiShape = REAL):
+def build_moe_router(seed=0, device="cpu", config: KimiLinearConfig = REAL):
     """A `DeepseekV3TopkRouter` with random weights AND a nonzero bias.
 
     The nonzero `e_score_correction_bias` is the point, not a detail. The router
@@ -465,7 +535,7 @@ def build_moe_router(seed=0, device="cpu", shape: KimiShape = REAL):
 
     torch.manual_seed(seed)
     with torch.device(device):
-        router = DeepseekV3TopkRouter(MoERouterConfig(shape))
+        router = DeepseekV3TopkRouter(MoERouterConfig(config))
     router = router.eval()
     torch.manual_seed(seed)
     with torch.no_grad():
@@ -484,11 +554,12 @@ __all__ = [
     "DEPENDED_SHA256",
     "MINIMUM_LAYERS",
     "REAL",
+    "SMALL_MOE",
     "SEQ_LEN",
     "SOURCE_REVISION",
     "SOURCE_SHA256",
     "SOURCE_URL",
-    "KimiShape",
+    "KimiLinearConfig",
     "MoERouterConfig",
     "build_mla_attention",
     "build_mla_hf_config",

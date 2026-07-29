@@ -10,12 +10,13 @@ A case is target-free on purpose. The model source states shapes and dtypes; a
 `TargetFixture` states the machine. They meet only when a test asks for it, so the
 same model can be asked about on more than one target in one run.
 
-`build()` re-executes the model source every time. That is not caution about
+`build()` copies the model's prototype every time. That is not caution about
 mutation in the abstract -- an analysis attaches its records to the Call objects
 it measured, in place, so two tests sharing one built Module do not share a model,
-they share each other's results. Binding a Target with `dataclasses.replace`
-copies the Module value but keeps those very Call objects, so it isolates nothing
-on its own; the fresh build has to come first.
+they share each other's results, and the prototype they came from would collect
+every run's. Binding a Target with `dataclasses.replace` copies the Module value
+but keeps those very Call objects, so it isolates nothing on its own; the fresh
+copy has to come first.
 """
 
 from __future__ import annotations
@@ -27,8 +28,7 @@ from typing import Literal
 
 import pytest
 
-from tests.models.loader import load_model
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, function_selectors, select
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target.base import Target
@@ -209,6 +209,11 @@ class ReferenceCase:
 class FunctionCase:
     """One function of one model, selected to be analysed or scheduled.
 
+    `selector` names it root-relative to the case's Module: a bare function name
+    for a Module that owns the kernel itself, or a dotted path through the child
+    Modules it was reached by. The path is what makes the selected function's own
+    execution domain reachable, which is what an analysis measures against.
+
     `dims` states an extent for each dimension the function was authored to
     leave open, which is how a model written for decode is asked about at one
     context length. A model with no open dimension states none, and that is not
@@ -216,7 +221,7 @@ class FunctionCase:
     """
 
     id: str
-    function: str
+    selector: str
     problem_sizes: tuple[str, ...] = ()
     gate: CapabilityGate = field(default_factory=CapabilityGate)
     topology: str | None = None
@@ -238,8 +243,12 @@ class SizedCase:
     """
 
     id: str
-    function: str
+    selector: str
     dims: Mapping[str, int]
+    #: The largest size each of ``dims`` may be asked at. Stated here rather than
+    #: read off the model's config, because it is a question the corpus asks and
+    #: not a property the model source declares.
+    ceiling: Mapping[str, int] = field(default_factory=dict)
     topology: str | None = None
     gate: CapabilityGate = field(default_factory=CapabilityGate)
 
@@ -248,9 +257,9 @@ class SizedCase:
 class ModelCase:
     """One Module of one model, described once, for every kind of test.
 
-    `source` is re-executed on every `build()`; `namespace` is what that source
-    is parameterised by. `entry` names the attribute the source leaves the Module
-    in.
+    `prototype` is the Module the model's own `model.py` defines, reached by an
+    ordinary import. It is the single source of truth and is never handed out:
+    `build()` copies it, because analysis annotates the IR it is given.
 
     `id` names this Module's boundary and `model` names the model it belongs to.
     They differ only for a model whose kernels live in more than one Module -- a
@@ -262,9 +271,7 @@ class ModelCase:
     """
 
     id: str
-    source: Path
-    entry: str
-    namespace: Mapping[str, object] = field(default_factory=dict)
+    prototype: Module
     reference: ReferenceCase | None = None
     analyze: tuple[FunctionCase, ...] = ()
     schedule: tuple[FunctionCase, ...] = ()
@@ -278,44 +285,36 @@ class ModelCase:
     def build(self) -> Module:
         """A Module nothing else holds a reference to.
 
-        Re-executing the source is what makes this true. Two builds share no
+        A copy of the prototype is what makes this true. Two builds share no
         Function and no Call, so an analysis that annotates one is invisible to
-        the other.
+        the other and to the prototype they both came from.
         """
-        loaded = load_model(self.source, **dict(self.namespace))
-        module = getattr(loaded, self.entry, None)
-        if module is None:
+        if not isinstance(self.prototype, Module):
             raise CorpusError(
-                f"model case {self.id!r}: {self.source.name} defines no "
-                f"{self.entry!r}"
+                f"model case {self.id!r}: prototype is a "
+                f"{type(self.prototype).__name__}, not a Module"
             )
-        if not isinstance(module, Module):
-            raise CorpusError(
-                f"model case {self.id!r}: {self.entry!r} is a "
-                f"{type(module).__name__}, not a Module"
-            )
-        return module
+        return self.prototype.cloned()
 
     def build_for(self, fixture: TargetFixture) -> Module:
         """A fresh Module aimed at one machine, in the one order that isolates."""
         return fixture.bind(self.build())
 
     def inventory(self, module: Module | None = None) -> tuple[str, ...]:
-        """Every HIR function this model really defines, in source order.
+        """Every HIR function this model really defines, as root-relative
+        selectors, in source order.
 
         Derived from a built Module rather than written down, so a function added
         to the model appears as untested instead of silently escaping the report.
+        Recursive, so a kernel that moved into a child Module stays in the count
+        instead of dropping out of the report along with it.
         """
         built = self.build() if module is None else module
-        return tuple(
-            function.name
-            for function in built.functions
-            if isinstance(function, Function)
-        )
+        return tuple(selector for selector, _ in function_selectors(built))
 
     def selected(self, kind: Literal["analyze", "schedule"]) -> tuple[str, ...]:
         cases = self.analyze if kind == "analyze" else self.schedule
-        return tuple(dict.fromkeys(case.function for case in cases))
+        return tuple(dict.fromkeys(case.selector for case in cases))
 
     def untested(
         self, kind: Literal["analyze", "schedule"], module: Module | None = None
@@ -324,17 +323,36 @@ class ModelCase:
         chosen = set(self.selected(kind))
         return tuple(name for name in self.inventory(module) if name not in chosen)
 
-    def function(self, module: Module, case: FunctionCase) -> Function:
+    def resolve(self, module: Module, selector: str) -> tuple[Module, Function]:
+        """What *selector* names below *module*: the Module to measure against,
+        and the Function it names.
+
+        The selected Module rather than the outer root, because a function's cost
+        is a fact about the execution domain that owns it -- its Target and its
+        topology budget -- and for a nested kernel that domain is its own Module.
+
+        The selector must end in a function. A path stopping at a child Module
+        would resolve to whatever that Module happens to nominate as its default
+        step, which is an answer to a question no case asked.
+        """
+        *path, name = selector.split(".")
         try:
-            found = module.lookup(case.function)
-        except ValueError as error:
+            owner = select(module, ".".join(path))
+            if any(child.name == name for child in owner.modules):
+                raise ValueError(
+                    f"{selector!r} names the child Module {name!r}, not a "
+                    f"function; name the function of it this case selects"
+                )
+            found = owner.lookup(name)
+            selected = select(module, selector)
+        except (TypeError, ValueError) as error:
             raise CorpusError(f"model case {self.id!r}: {error}") from None
         if not isinstance(found, Function):
             raise CorpusError(
-                f"model case {self.id!r}: {case.function!r} is a "
+                f"model case {self.id!r}: {selector!r} is a "
                 f"{type(found).__name__}, not an HIR function"
             )
-        return found
+        return selected, found
 
 
 __all__ = [

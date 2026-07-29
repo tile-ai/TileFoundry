@@ -23,7 +23,7 @@ import torch
 
 from tests.models import decode_oracle as oracle
 from tests.models.gemma2_2b import config, reference
-from tests.models.gemma2_2b import gemma2_2b as model
+from tests.models.gemma2_2b.model import Gemma2_2B
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import specialize_concretely
 
@@ -56,7 +56,7 @@ def test_self_attention_soft_caps_the_new_token_too():
     logits at ~1900 against a cap of 50.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(model.self_attention, {"ctx_len": drawn.ctx_len})
+    fn = specialize_concretely(Gemma2_2B.lookup("self_attention"), {"ctx_len": drawn.ctx_len})
 
     loud = list(drawn.attention_args)
     loud[9] = loud[9] * SOFTCAP_PROBE_SCALE
@@ -95,7 +95,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
     so a step that returned its inputs unchanged would fail.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(model.decoder_layer, {"ctx_len": drawn.ctx_len})
+    fn = specialize_concretely(Gemma2_2B.lookup("decoder_layer"), {"ctx_len": drawn.ctx_len})
     _, k_new, v_new = evaluate(fn, *drawn.args, device=DEV)
 
     want_k, want_v = reference.appended_cache_oracle(drawn)

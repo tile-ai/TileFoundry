@@ -1,6 +1,6 @@
-"""Gemma-2-2B single decoder layer described as a single tilefoundry IR Module.
+"""Gemma-2-2B's dense decoder layer and the stack that closes it, as IR Modules.
 
-Phase 0 companion to ``tests/models/qwen3_1_7b/model/decoder_layer.py``: same
+Phase 0 companion to ``tests/models/qwen3_1_7b/model.py``: same
 ``@module class`` authoring style (each kernel a named ``@func`` method; the
 decorator returns the ``tilefoundry.ir.core.module.Module`` the class name
 binds directly to). Gemma-2's real architecture forces a different fusion
@@ -57,7 +57,7 @@ longer than ``sliding_window`` a sliding layer and a full layer are the same
 computation; ``config.max_ctx`` is pinned to ``sliding_window`` so that stays
 true rather than being assumed (see ``config.py``).
 
-Four Gemma-2-specific things to note (see ``tests/models/gemma2_2b/config.py``
+Six Gemma-2-specific things to note (see ``tests/models/gemma2_2b/config.py``
 module docstring for the full rundown):
 
 - ``Gemma2RMSNorm`` is ``normed * (1.0 + weight)``; ``tf.rms_norm`` is
@@ -81,6 +81,12 @@ module docstring for the full rundown):
   else.
 - MLP activation is ``gelu_pytorch_tanh`` (``tf.gelu(x, approximate="tanh")``),
   not SwiGLU's ``silu`` — the one op this package's task adds to ``src/``.
+- the token embedding carries a scale: ``Gemma2TextScaledWordEmbedding``
+  multiplies the gathered row by ``hidden_size ** 0.5`` (48.0), so ``embed`` is
+  a gather *and* a multiply.
+- the output logits are soft-capped as well, at ``final_logit_softcapping``
+  (30.0) rather than attention's 50.0. ``lm_head`` composes its tanh by the same
+  identity ``self_attention`` uses, for the same reason.
 
 GQA is 8 query / 4 kv heads (group 2, vs. qwen3_1_7b's 16/8); there is no
 per-head q_norm/k_norm fused into attention (that is Qwen3-specific — Gemma-2
@@ -91,6 +97,7 @@ application since cos/sin depend only on (seq, head_dim), not the head axis).
 """
 from __future__ import annotations
 
+from tests.models.gemma2_2b.config import REAL as config
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
@@ -104,9 +111,11 @@ C = DimVar("ctx_len", 1, config.max_ctx + 1)
 # One token per step.
 S = 1
 
-# `tf.div`/`tf.mul` take this as a value operand, and the parser only accepts a
+# `tf.div`/`tf.mul` take these as a value operand, and the parser only accepts a
 # plain name there -- an attribute access is not a valid Expr in a @func body.
 ATTN_SOFTCAP = config.attn_softcap
+LOGIT_SOFTCAP = config.final_logit_softcap
+EMBED_SCALE = config.embed_scale
 
 
 @module(entry="decoder_layer")
@@ -254,3 +263,132 @@ class Gemma2_2B:
         mlp_out = mlp(ff_in, w_gate, w_up, w_down)
         mlp_out_n = tf.rms_norm(mlp_out, gamma_post_ff)
         return tf.add(h1, mlp_out_n), k_new, v_new
+
+
+@module
+class Gemma2_2B_Decoder:
+    """The ordered layer stack, the norm that closes it, and the scaled embedding
+    and soft-capped head that bracket it."""
+
+    layers = tuple(
+        Gemma2_2B.renamed(f"layer{index}")
+        for index in range(config.n_layers)
+    )
+
+    @func
+    def embed(
+        w_embed: Tensor[(config.vocab, config.hidden), config.dt],
+        token_ids: Tensor[(S,), "i64"],
+    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        # HF `Gemma2TextScaledWordEmbedding`: scaled by `hidden_size ** 0.5`.
+        row = tf.reshape(
+            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden)
+        )
+        return tf.mul(row, EMBED_SCALE)
+
+    @func
+    def final_rms_norm(
+        hidden: Tensor[(1, S, config.hidden), config.dt],
+        gamma_final: Tensor[(config.hidden,), config.dt],
+    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        # HF `Gemma2Model.norm`, applied once after the last layer.
+        # `gamma_final` is pre-adjusted to `1.0 + weight` test-side.
+        return tf.rms_norm(hidden, gamma_final)
+
+    @func
+    def lm_head(
+        hidden: Tensor[(1, S, config.hidden), config.dt],
+        w_head: Tensor[(config.hidden, config.vocab), config.dt],
+    ) -> Tensor[(1, config.vocab), config.dt]:
+        # Soft-capped as `Gemma2ForCausalLM.forward` caps it, at
+        # `final_logit_softcapping` rather than attention's cap. tanh composed as
+        # `2*sigmoid(2z) - 1`: `tf.tanh` carries no evaluation handler.
+        logits = tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden)), w_head)
+        z = tf.div(logits, LOGIT_SOFTCAP)
+        return tf.mul(
+            tf.sub(tf.mul(tf.sigmoid(tf.mul(z, 2.0)), 2.0), 1.0), LOGIT_SOFTCAP
+        )
+
+    def forward(
+        self, token_ids, w_embed, cos_cache, sin_cache, pos_ids, scale, weights, caches,
+        w_head,
+    ):
+        """The whole decode step: this token's row, every layer over it, its logits.
+
+        Each weight sits where the step uses it, the way one layer's kernel takes
+        its own. What comes back is the logits and each layer's own fresh entry;
+        growing the cache with them is the caller's step, through `append_cache`.
+        """
+        hidden = self.embed(w_embed, token_ids)
+        normed, entries = self.decode_hidden(
+            hidden, cos_cache, sin_cache, pos_ids, scale, weights, caches
+        )
+        return self.lm_head(normed, w_head), entries
+
+    def decode_hidden(self, hidden, cos_cache, sin_cache, pos_ids, scale, weights, caches):
+        """One decode step through every layer, then the final norm.
+
+        *weights* and *caches* are per layer, in layer order. What comes back is
+        the normalised hidden state and each layer's own cache entry, for the
+        caller to append -- the same division the single layer makes, kept at the
+        stack's boundary so the caller owns the cache at exactly one place.
+        """
+        if len(weights) != len(self.modules) or len(caches) != len(self.modules):
+            raise ValueError(
+                f"decoder has {len(self.modules)} layers but was given "
+                f"{len(weights)} weight sets and {len(caches)} caches"
+            )
+        entries = []
+        for layer, layer_weights, (k_cache, v_cache) in zip(self.modules, weights, caches):
+            (
+                gamma_in, w_q, w_k, w_v, w_o, gamma_post_attn,
+                gamma_pre_ff, w_gate, w_up, w_down, gamma_post_ff,
+            ) = layer_weights
+            hidden, k_new, v_new = layer(
+                hidden, gamma_in, w_q, w_k, w_v, cos_cache, sin_cache, pos_ids,
+                k_cache, v_cache, scale, w_o, gamma_post_attn,
+                gamma_pre_ff, w_gate, w_up, w_down, gamma_post_ff,
+            )
+            entries.append((k_new, v_new))
+        return self.final_rms_norm(hidden, self._gamma_final), tuple(entries)
+
+    def append_cache(self, caches, fresh):
+        """The cache the next step reads: each layer's context with this step's own
+        key and value written after it.
+
+        A step hands back its own entry rather than the grown cache, so appending is
+        the caller's, and the caller of a step is this root -- stated here once so a
+        caller has none of its own.
+        """
+        import torch  # noqa: PLC0415
+
+        return tuple(
+            (torch.cat([k_cache, k_new], dim=1), torch.cat([v_cache, v_new], dim=1))
+            for (k_cache, v_cache), (k_new, v_new) in zip(caches, fresh)
+        )
+
+    def init_caches(self, device="cuda"):
+        """The per-layer cache container, zero positions long.
+
+        A container, not a decode start: no prefix produced these, and `ctx_len`
+        is bounded below by 1, so `forward` needs a context the caller prefilled.
+        """
+        import torch  # noqa: PLC0415
+
+        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
+        from tilefoundry.ir.types import DType  # noqa: PLC0415
+
+        empty = (1, 0, config.n_kv_heads, config.head_dim)
+        dtype = to_torch_dtype(DType.from_name(config.dt))
+        return tuple(
+            (
+                torch.zeros(empty, device=device, dtype=dtype),
+                torch.zeros(empty, device=device, dtype=dtype),
+            )
+            for _ in range(config.n_layers)
+        )
+
+    def bind_final_norm(self, gamma_final):
+        """Hold the final norm's weight, which `forward` does not take per layer."""
+        object.__setattr__(self, "_gamma_final", gamma_final)
+        return self

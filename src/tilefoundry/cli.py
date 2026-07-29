@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import dataclasses
 import io
 import runpy
 import sys
@@ -22,7 +21,7 @@ from tilefoundry.inspection.analysis_report import (
     selected_types,
 )
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, select
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget
@@ -101,28 +100,18 @@ def _unique_values(namespace: dict[str, object], kind: type) -> tuple[object, ..
     return tuple(values)
 
 
-def _detached_selection(module: Module, entry: str) -> Module:
-    """*module* re-entried at *entry*.
-
-    ``replace`` rebuilds the value without its owner backlink, so a child
-    selected out of a tree would lose the Target and hierarchy it inherits.
-    The copy therefore carries the context it resolved through.
-    """
-    try:
-        target = module.resolve_target()
-    except ValueError:
-        target = module.target
-    return dataclasses.replace(
-        module,
-        entry=entry,
-        target=target,
-        topologies=module.effective_topologies(),
-    )
-
-
 def _select_ir(namespace: dict[str, object], selector: str | None) -> Module:
     if selector is not None:
-        root_name, *path = selector.split(".")
+        # Validated before the join, which would turn `Root.` into the empty
+        # path -- and that deliberately means the root itself.
+        segments = selector.split(".")
+        if any(not segment for segment in segments):
+            raise ValueError(
+                f"selector {selector!r}: an empty segment names nothing. A path is "
+                f"its segments, so a leading, trailing or doubled dot would make "
+                f"two different selectors name one node"
+            )
+        root_name, *path = segments
         selected = namespace.get(root_name)
         if selected is None:
             raise ValueError(f"selector {root_name!r} is not defined by the source")
@@ -140,28 +129,9 @@ def _select_ir(namespace: dict[str, object], selector: str | None) -> Module:
             raise TypeError(
                 f"selector root {root_name!r} is {type(selected).__name__}, expected Module"
             )
-        # Walk the child Modules the path names, so a leaf deep in the tree is
-        # selected through the owners it inherits its context from.
-        for index, name in enumerate(path):
-            children = {child.name: child for child in selected.modules}
-            if name in children:
-                selected = children[name]
-                continue
-            if index != len(path) - 1:
-                raise ValueError(
-                    f"selector {selector!r}: Module {selected.name!r} has no "
-                    f"child module {name!r}"
-                )
-            function = selected.lookup(name)
-            if not isinstance(function, Function):
-                raise TypeError(
-                    f"selector {selector!r} resolves to {type(function).__name__}, "
-                    "expected HIR Function"
-                )
-            # Naming a function selects it without losing the Target and
-            # Topologies of the Module it runs against.
-            return _detached_selection(selected, name)
-        return selected
+        # The path below the root is resolved by the IR's own selector, so the
+        # CLI and the corpus reach a nested kernel the same way.
+        return select(selected, ".".join(path))
 
     modules = _unique_values(namespace, Module)
     if len(modules) == 1:

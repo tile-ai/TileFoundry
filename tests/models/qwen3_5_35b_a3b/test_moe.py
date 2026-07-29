@@ -14,7 +14,7 @@ from __future__ import annotations
 import torch
 
 from tests.models.qwen3_5_35b_a3b import config, reference
-from tests.models.qwen3_5_35b_a3b import moe as hir
+from tests.models.qwen3_5_35b_a3b.model import Qwen3_5MoE
 from tilefoundry.evaluator import evaluate
 
 DEV = reference.DEVICE
@@ -42,7 +42,7 @@ def test_moe_matches_hugging_face():
     """moe (post_attention_layernorm + `Qwen3_5MoeSparseMoeBlock`) vs HF."""
     layer, hidden, weights = _step()
 
-    out = evaluate(hir.moe, hidden, *weights, device=DEV)
+    out = evaluate(Qwen3_5MoE.lookup("moe"), hidden, *weights, device=DEV)
     want = reference.moe_oracle(layer, hidden)
 
     difference = (out.float() - want.float()).abs().max().item()
@@ -62,7 +62,7 @@ def test_routing_selects_the_experts_hugging_face_selects():
     tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
 
     got_weights, got_indices = evaluate(
-        hir.routing, tokens, weights[1], device=DEV
+        Qwen3_5MoE.lookup("routing"), tokens, weights[1], device=DEV
     )
     with torch.no_grad():
         _logits, want_weights, want_indices = layer.mlp.gate(tokens)
@@ -90,11 +90,11 @@ def test_the_shared_expert_is_part_of_the_block():
     layer, hidden, weights = _step()
     tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
 
-    routed_weights, indices = evaluate(hir.routing, tokens, weights[1], device=DEV)
+    routed_weights, indices = evaluate(Qwen3_5MoE.lookup("routing"), tokens, weights[1], device=DEV)
     routed = evaluate(
-        hir.routed_experts, tokens, routed_weights, indices, *weights[2:5], device=DEV
+        Qwen3_5MoE.lookup("routed_experts"), tokens, routed_weights, indices, *weights[2:5], device=DEV
     )
-    shared = evaluate(hir.shared_expert, tokens, *weights[5:], device=DEV)
+    shared = evaluate(Qwen3_5MoE.lookup("shared_expert"), tokens, *weights[5:], device=DEV)
     want = reference.moe_oracle(layer, hidden)
 
     torch.testing.assert_close(

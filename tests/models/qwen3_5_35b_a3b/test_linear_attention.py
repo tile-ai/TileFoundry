@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import torch
 
-from tests.models.qwen3_5_35b_a3b import config, reference
-from tests.models.qwen3_5_35b_a3b import linear_attention as hir
+from tests.models.qwen3_5_35b_a3b import reference
+from tests.models.qwen3_5_35b_a3b.model import Qwen3_5LinearAttention, advance_state
 from tilefoundry.evaluator import evaluate
 
 DEV = reference.DEVICE
@@ -37,7 +37,7 @@ def test_linear_attention_matches_hugging_face():
     for ctx_len in CTX_LENGTHS:
         step = reference.linear_step(ctx_len=ctx_len, device=DEV)
         out, _entry, _state = evaluate(
-            hir.linear_attention, step.hidden_new, *step.mixer_args, device=DEV
+            Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
         )
 
         want = reference.linear_mixer_oracle(step)
@@ -54,17 +54,19 @@ def test_the_step_returns_the_state_to_carry_forward():
     Checked against a rebuilt state rather than against the step's own inputs, so
     a step that returned its inputs unchanged would fail -- which for the
     recurrent matrix is the failure worth guarding, since its shape gives nothing
-    away.
+    away. The slide itself is the decoder's own ``advance_state``, so the rule is
+    stated once.
     """
     for ctx_len in CTX_LENGTHS:
         step = reference.linear_step(ctx_len=ctx_len, device=DEV)
         _out, entry, state = evaluate(
-            hir.linear_attention, step.hidden_new, *step.mixer_args, device=DEV
+            Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
         )
 
         want_conv, want_state = reference.advanced_state_oracle(step)
-        window = config.REAL.gdn_conv_context
-        slid = torch.cat([step.conv_state, entry], dim=2)[:, :, -window:]
+        slid, state = advance_state(
+            "linear_attention", (step.conv_state, step.recurrent_state), (entry, state)
+        )
 
         assert tuple(slid.shape) == tuple(want_conv.shape)
         assert tuple(state.shape) == tuple(want_state.shape)
@@ -88,13 +90,13 @@ def test_the_prior_state_is_read():
     """
     step = reference.linear_step(device=DEV)
     out, _entry, _state = evaluate(
-        hir.linear_attention, step.hidden_new, *step.mixer_args, device=DEV
+        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
     )
 
     weights = list(step.mixer_args)
     weights[9] = torch.zeros_like(step.recurrent_state)
     stateless, _entry, _state = evaluate(
-        hir.linear_attention, step.hidden_new, *weights, device=DEV
+        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *weights, device=DEV
     )
 
     moved = (out.float() - stateless.float()).abs().max().item()
@@ -114,13 +116,13 @@ def test_the_convolution_window_is_read():
     """
     step = reference.linear_step(device=DEV)
     out, _entry, _state = evaluate(
-        hir.linear_attention, step.hidden_new, *step.mixer_args, device=DEV
+        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
     )
 
     weights = list(step.mixer_args)
     weights[8] = torch.zeros_like(step.conv_state)
     windowless, _entry, _state = evaluate(
-        hir.linear_attention, step.hidden_new, *weights, device=DEV
+        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *weights, device=DEV
     )
 
     moved = (out.float() - windowless.float()).abs().max().item()

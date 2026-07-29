@@ -1,10 +1,7 @@
-"""MiniCPM3-4B decoder layer as one tilefoundry IR Module, over a free ``config``
-name -- not importable on its own, load it with ``tests.models.loader.load_model``
-(see ``../minicpm3_4b.py``).
+"""MiniCPM3-4B's dense decoder layer and the stack that closes it, as IR Modules.
 
 The corpus's only **Multi-head Latent Attention (MLA)** model, in the same
-``@module class`` authoring style as ``tests/models/qwen2_5_1_5b/model/
-decoder_layer.py``: each kernel is a named ``@func`` method and the decorator
+``@module class`` authoring style as ``tests/models/qwen2_5_1_5b/model.py``: each kernel is a named ``@func`` method and the decorator
 returns the ``tilefoundry.ir.core.module.Module`` the class name binds to, so
 ``MiniCPM3_4B.lookup("mla_attention")`` resolves one kernel to its IR node. Every
 step is composed from primitive HIR ops; MLA needed no new one.
@@ -83,9 +80,17 @@ siblings make). ``residual_scale`` is a runtime ``Tensor[(1,1,1)]`` like the
 attention ``scale``, so the HIR carries no config-specific number baked in --
 which also keeps it correct for a stack of any depth, since the scale divides by
 ``sqrt(num_hidden_layers)``.
+
+The root brackets that stack with the two scalars MiniCPM3 puts at the model's
+ends: ``embed`` multiplies the gathered row by ``scale_emb`` (12, HF's
+``MiniCPM3ScaledWordEmbedding``), and ``lm_head`` divides the hidden state by
+``logits_scaling`` (10.0) before the matmul, where ``MiniCPM3ForCausalLM``
+divides it. Both are config-derived constants rather than runtime tensors like
+``residual_scale``: neither depends on the depth.
 """
 from __future__ import annotations
 
+from tests.models.minicpm3_4b.config import REAL as config
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
@@ -105,6 +110,11 @@ _QK = config.qk_head_dim
 _NOPE = config.qk_nope_head_dim
 _V = config.v_head_dim
 _KV_PAIR = config.qk_nope_head_dim + config.v_head_dim
+
+# `tf.mul`/`tf.div` take these as a value operand, and the parser only accepts a
+# plain name there -- an attribute access is not a valid Expr in a @func body.
+EMBED_SCALE = float(config.scale_emb)
+LOGITS_SCALING = config.logits_scaling
 
 
 @module(entry="decoder_layer")
@@ -265,3 +275,132 @@ class MiniCPM3_4B:
         h1 = tf.add(hidden, tf.mul(attn_out, residual_scale))
         mlp_out = mlp(h1, gamma_post, w_gate, w_up, w_down)
         return tf.add(h1, tf.mul(mlp_out, residual_scale)), k_new, v_new
+
+
+@module
+class MiniCPM3_4B_Decoder:
+    """The ordered layer stack, the norm that closes it, and the two scaled ends
+    that bracket it."""
+
+    layers = tuple(
+        MiniCPM3_4B.renamed(f"layer{index}")
+        for index in range(config.n_layers)
+    )
+
+    @func
+    def embed(
+        w_embed: Tensor[(config.vocab, config.hidden), config.dt],
+        token_ids: Tensor[(S,), "i64"],
+    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        # HF `MiniCPM3ScaledWordEmbedding`: scaled by `scale_emb`.
+        row = tf.reshape(
+            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden)
+        )
+        return tf.mul(row, EMBED_SCALE)
+
+    @func
+    def final_rms_norm(
+        hidden: Tensor[(1, S, config.hidden), config.dt],
+        gamma_final: Tensor[(config.hidden,), config.dt],
+    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        # HF `MiniCPM3Model.norm`, applied once after the last layer, at
+        # config.rms_norm_eps like the two norms inside a layer.
+        return tf.rms_norm(hidden, gamma_final, eps=config.rms_eps)
+
+    @func
+    def lm_head(
+        hidden: Tensor[(1, S, config.hidden), config.dt],
+        w_head: Tensor[(config.hidden, config.vocab), config.dt],
+    ) -> Tensor[(1, config.vocab), config.dt]:
+        # `MiniCPM3ForCausalLM.forward` divides the hidden state by
+        # `logits_scaling` before the head, not after.
+        scaled = tf.div(tf.reshape(hidden, new_shape=(1, config.hidden)), LOGITS_SCALING)
+        return tf.matmul(scaled, w_head)
+
+    def forward(
+        self, token_ids, w_embed, cos_cache, sin_cache, pos_ids, scale, residual_scale,
+        weights, caches, w_head,
+    ):
+        """The whole decode step: this token's row, every layer over it, its logits.
+
+        Each weight sits where the step uses it, the way one layer's kernel takes
+        its own. What comes back is the logits and each layer's own fresh entry;
+        growing the cache with them is the caller's step, through `append_cache`.
+        """
+        hidden = self.embed(w_embed, token_ids)
+        normed, entries = self.decode_hidden(
+            hidden, cos_cache, sin_cache, pos_ids, scale, residual_scale, weights, caches
+        )
+        return self.lm_head(normed, w_head), entries
+
+    def decode_hidden(
+        self, hidden, cos_cache, sin_cache, pos_ids, scale, residual_scale,
+        weights, caches,
+    ):
+        """One decode step through every layer, then the final norm.
+
+        *weights* and *caches* are per layer, in layer order. What comes back is
+        the normalised hidden state and each layer's own cache entry, for the
+        caller to append -- the same division the single layer makes, kept at the
+        stack's boundary so the caller owns the cache at exactly one place.
+        """
+        if len(weights) != len(self.modules) or len(caches) != len(self.modules):
+            raise ValueError(
+                f"decoder has {len(self.modules)} layers but was given "
+                f"{len(weights)} weight sets and {len(caches)} caches"
+            )
+        entries = []
+        for layer, layer_weights, (k_cache, v_cache) in zip(self.modules, weights, caches):
+            (
+                gamma_in, w_q_a, gamma_q_a, w_q_b, w_kv_a, gamma_kv_a, w_kv_b, w_o,
+                gamma_post, w_gate, w_up, w_down,
+            ) = layer_weights
+            hidden, k_new, v_new = layer(
+                hidden, gamma_in, w_q_a, gamma_q_a, w_q_b, w_kv_a, gamma_kv_a,
+                w_kv_b, cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale,
+                w_o, gamma_post, w_gate, w_up, w_down, residual_scale,
+            )
+            entries.append((k_new, v_new))
+        return self.final_rms_norm(hidden, self._gamma_final), tuple(entries)
+
+    def append_cache(self, caches, fresh):
+        """The cache the next step reads: each layer's context with this step's own
+        key and value written after it.
+
+        A step hands back its own entry rather than the grown cache, so appending is
+        the caller's, and the caller of a step is this root -- stated here once so a
+        caller has none of its own.
+        """
+        import torch  # noqa: PLC0415
+
+        return tuple(
+            (torch.cat([k_cache, k_new], dim=1), torch.cat([v_cache, v_new], dim=1))
+            for (k_cache, v_cache), (k_new, v_new) in zip(caches, fresh)
+        )
+
+    def init_caches(self, device="cuda"):
+        """The per-layer cache container, zero positions long.
+
+        A container, not a decode start: no prefix produced these, and `ctx_len`
+        is bounded below by 1, so `forward` needs a context the caller prefilled.
+        MLA's halves differ in shape -- the key carries the nope and rope slices,
+        the value only its own head dim -- so the pair is stated twice.
+        """
+        import torch  # noqa: PLC0415
+
+        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
+        from tilefoundry.ir.types import DType  # noqa: PLC0415
+
+        dtype = to_torch_dtype(DType.from_name(config.dt))
+        return tuple(
+            (
+                torch.zeros((1, 0, config.n_kv_heads, _QK), device=device, dtype=dtype),
+                torch.zeros((1, 0, config.n_kv_heads, _V), device=device, dtype=dtype),
+            )
+            for _ in range(config.n_layers)
+        )
+
+    def bind_final_norm(self, gamma_final):
+        """Hold the final norm's weight, which `forward` does not take per layer."""
+        object.__setattr__(self, "_gamma_final", gamma_final)
+        return self

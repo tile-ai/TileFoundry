@@ -13,7 +13,7 @@ from __future__ import annotations
 import torch
 
 from tests.models.qwen3_5_35b_a3b import config, reference
-from tests.models.qwen3_5_35b_a3b import full_attention as hir
+from tests.models.qwen3_5_35b_a3b.model import Qwen3_5FullAttention, advance_state
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import specialize_concretely
 
@@ -40,7 +40,7 @@ def test_full_attention_matches_hugging_face():
     token) vs HF's own attention at the decoded position, at two lengths."""
     for ctx_len in CTX_LENGTHS:
         step = reference.full_step(ctx_len=ctx_len, device=DEV)
-        function = specialize_concretely(hir.full_attention, {"ctx_len": ctx_len})
+        function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": ctx_len})
         out, _key, _value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
 
         want = reference.full_mixer_oracle(step)
@@ -55,15 +55,17 @@ def test_the_step_returns_the_cache_entry_to_append():
     longer would have produced.
 
     Checked against a rebuilt cache rather than against the step's own inputs, so
-    a step that returned its inputs unchanged would fail.
+    a step that returned its inputs unchanged would fail. The append itself is the
+    decoder's own ``advance_state``, so the rule is stated once.
     """
     step = reference.full_step(device=DEV)
-    function = specialize_concretely(hir.full_attention, {"ctx_len": step.ctx_len})
+    function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": step.ctx_len})
     _out, key, value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
 
     want_key, want_value = reference.appended_cache_oracle(step)
-    grown_key = torch.cat([step.k_cache, key], dim=1)
-    grown_value = torch.cat([step.v_cache, value], dim=1)
+    grown_key, grown_value = advance_state(
+        "full_attention", (step.k_cache, step.v_cache), (key, value)
+    )
 
     assert tuple(grown_key.shape) == tuple(want_key.shape)
     for grown, want in ((grown_key, want_key), (grown_value, want_value)):
@@ -88,7 +90,7 @@ def test_only_the_leading_rotary_dims_carry_a_position():
 
     turned = [
         evaluate(
-            hir.partial_rope, x, cos, sin,
+            Qwen3_5FullAttention.lookup("partial_rope"), x, cos, sin,
             torch.tensor([position], device=DEV, dtype=torch.int32), device=DEV,
         )
         for position in (7, 19)
@@ -113,7 +115,7 @@ def test_the_output_gate_is_applied():
     being read.
     """
     step = reference.full_step(device=DEV)
-    function = specialize_concretely(hir.full_attention, {"ctx_len": step.ctx_len})
+    function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": step.ctx_len})
     out, _key, _value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
 
     shape = config.REAL

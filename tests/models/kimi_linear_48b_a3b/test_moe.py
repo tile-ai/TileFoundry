@@ -11,8 +11,10 @@ expert combine is linear in the weights -- measured at 7.1e-08 on an output of
 magnitude 1.156, which is the f32 rounding of the weight product and not a
 difference in what is computed.
 
-Most tests run at a reduced expert count (see `submodules.moe_at`); the headline
-parity test runs at the published 256.
+Most tests run at a reduced expert count: `SMALL_MOE` is the published config with
+a quarter of the experts, built from the same source, so it is the same kernel at
+a size that fits beside seven other workers. The headline parity test runs at the
+published 256.
 """
 from __future__ import annotations
 
@@ -20,7 +22,11 @@ import pytest
 import torch
 
 from tests.models.kimi_linear_48b_a3b import config, reference
-from tests.models.kimi_linear_48b_a3b import submodules as kimi
+from tests.models.kimi_linear_48b_a3b.config import REAL, SMALL_MOE
+from tests.models.kimi_linear_48b_a3b.model import (
+    KimiLinear48BA3B,
+    build_kimi_linear_48b_a3b,
+)
 from tilefoundry.evaluator import evaluate
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -29,13 +35,23 @@ ATOL = RTOL = 2e-4
 
 #: Expert count for the tests that only need to tell right from wrong. Eight times
 #: `top_k`, so a top-8 still selects a small minority of the experts.
-SMALL_EXPERTS = 64
+SMALL_EXPERTS = SMALL_MOE.num_experts
 
 #: Four orders of magnitude above the round-off the parity tests accept.
 DISCRIMINATION = 1e-3
 
 #: Headroom each expert count needs, measured: 256 experts peak at 17.1 GB.
-_NEEDED_GB = {256: 24.0, SMALL_EXPERTS: 8.0}
+_NEEDED_GB = {config.REAL.num_experts: 24.0, SMALL_EXPERTS: 8.0}
+
+
+def _moe_at(config_at) -> object:
+    """This model's MoE kernel at *config_at*, from the one public builder."""
+    return build_kimi_linear_48b_a3b(config_at).moe.lookup("moe")
+
+
+def _router_at(config_at) -> object:
+    """Its router, the same way."""
+    return build_kimi_linear_48b_a3b(config_at).moe.lookup("router")
 
 
 def _device(n_experts: int) -> str:
@@ -87,14 +103,14 @@ def test_moe_matches_hf_at_published_expert_count():
     to come from redrawing. The four draws select genuinely different expert sets
     (measured: 8-expert selections overlapping in 4 to 6 members, not identical).
     """
-    device = _device(256)
+    device = _device(config.REAL.num_experts)
     hf_moe = reference.build_hf_moe(device=device)
     try:
         for act_seed in reference.MOE_DRAWS:
             drawn = reference.moe_inputs(
                 device=device, act_seed=act_seed, hf_moe=hf_moe
             )
-            out = evaluate(kimi.moe, *drawn.args, device=device)
+            out = evaluate(KimiLinear48BA3B.moe.lookup("moe"), *drawn.args, device=device)
             want = reference.moe_oracle(drawn)
             torch.testing.assert_close(
                 out.float(), want.float(), atol=ATOL, rtol=RTOL
@@ -108,7 +124,7 @@ def test_moe_matches_hf_at_reduced_expert_count(small_moe):
     """The same source at `SMALL_EXPERTS`, so the reduced count the perturbation
     tests below use is itself known good rather than assumed."""
     drawn, device = _small(reference.ACTIVATION_SEED, small_moe)
-    out = evaluate(kimi.moe_at(SMALL_EXPERTS), *drawn.args, device=device)
+    out = evaluate(_moe_at(SMALL_MOE), *drawn.args, device=device)
     want = reference.moe_oracle(drawn)
     torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
 
@@ -130,7 +146,7 @@ def test_router_bias_is_load_bearing(small_moe):
 
     args = list(drawn.args)
     args[3] = torch.zeros_like(drawn.args[3])
-    unbiased = evaluate(kimi.moe_at(SMALL_EXPERTS), *args, device=device)
+    unbiased = evaluate(_moe_at(SMALL_MOE), *args, device=device)
 
     assert (unbiased.float() - want.float()).abs().max().item() > DISCRIMINATION
 
@@ -138,7 +154,7 @@ def test_router_bias_is_load_bearing(small_moe):
 def test_router_gathers_unbiased_scores(small_moe):
     """The routing weights come from the unbiased sigmoid scores.
 
-    A direct check on the one routing subtlety no shape agrees or disagrees about,
+    A direct check on the one routing subtlety no config agrees or disagrees about,
     against a hand-computed *wrong* variant rather than against an oracle: if the
     weights were gathered from `scores + bias` instead, they would differ by
     1.08e-01 measured. So this asserts two things at once -- that the HIR matches
@@ -146,24 +162,23 @@ def test_router_gathers_unbiased_scores(small_moe):
     apart for the first assertion to mean something.
     """
     drawn, device = _small(reference.ACTIVATION_SEED, small_moe)
-    shape = config.REAL
-    tokens = drawn.normed.view(-1, shape.hidden)
+    tokens = drawn.normed.view(-1, REAL.hidden_size)
     bias = drawn.args[3]
 
     with torch.no_grad():
         scores = (tokens.float() @ drawn.args[2].float()).sigmoid()
         biased = scores + bias.float()
-        _v, indices = biased.topk(shape.top_k, dim=-1)
+        _v, indices = biased.topk(REAL.num_experts_per_token, dim=-1)
 
         def normalise(gathered):
             weights = gathered / (gathered.sum(-1, keepdim=True) + 1e-20)
-            return weights * shape.routed_scaling_factor
+            return weights * REAL.routed_scaling_factor
 
         right = normalise(scores.gather(1, indices))
         wrong = normalise(biased.gather(1, indices))
 
     weights, hir_indices = evaluate(
-        kimi.router, tokens, drawn.args[2], bias, drawn.args[4], device=device
+        _router_at(SMALL_MOE), tokens, drawn.args[2], bias, drawn.args[4], device=device
     )
 
     # Same experts, and the weights are the unbiased ones.
@@ -189,7 +204,7 @@ def test_routed_scaling_is_applied_after_normalisation(small_moe):
 
     args = list(drawn.args)
     args[4] = torch.full((1, 1), 1.0, device=device)
-    unscaled = evaluate(kimi.moe_at(SMALL_EXPERTS), *args, device=device)
+    unscaled = evaluate(_moe_at(SMALL_MOE), *args, device=device)
 
     assert (unscaled.float() - want.float()).abs().max().item() > DISCRIMINATION
 
@@ -207,6 +222,6 @@ def test_shared_expert_contributes(small_moe):
 
     args = list(drawn.args)
     args[8] = torch.zeros_like(drawn.args[8])
-    without = evaluate(kimi.moe_at(SMALL_EXPERTS), *args, device=device)
+    without = evaluate(_moe_at(SMALL_MOE), *args, device=device)
 
     assert (without.float() - want.float()).abs().max().item() > DISCRIMINATION

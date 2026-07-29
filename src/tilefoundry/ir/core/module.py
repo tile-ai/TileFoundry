@@ -4,10 +4,10 @@ orchestration methods. See docs/spec/core-ir.md §1.
 from __future__ import annotations
 
 import copy
-import dataclasses
 import functools
 import types
 from dataclasses import dataclass, field
+from dataclasses import replace as _replace
 from typing import Mapping, Union
 
 from tilefoundry.ir.hir.function import Function as HirFunction
@@ -409,11 +409,22 @@ class Module:
         for child in self.modules:
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
 
+    def cloned(self) -> "Module":
+        """An independent copy of the IR graph: functions, bodies, children, and
+        every internal ``Call.target`` redirected to the copy. Immutable outside
+        context -- owner, ``target``, ``topologies`` -- stays shared."""
+        memo: dict[int, object] = {}
+        for kept in (getattr(self, "_parent", None), self.target, *(self.topologies or ())):
+            # Kept out of the copy: following the owner would clone upwards.
+            if kept is not None:
+                memo[id(kept)] = kept
+        return copy.deepcopy(self, memo)
+
     def renamed(self, name: str) -> "Module":
-        """A copy of this node under a different ``name``. The copy's children are
-        its own: ``__post_init__`` claims a child that belongs elsewhere as a
-        clone, so two copies never share one."""
-        return dataclasses.replace(self, name=name)
+        """An independent copy of this node under a different ``name``."""
+        clone = self.cloned()
+        object.__setattr__(clone, "name", name)
+        return clone
 
 
 @dataclass(frozen=True)
@@ -505,4 +516,88 @@ class LoadedModule:
     __call__ = forward
 
 
-__all__ = ["LoadedModule", "Module", "ModuleFunction"]
+def _reentered(module: Module, entry: str) -> Module:
+    """*module* re-entried at *entry*.
+
+    ``replace`` rebuilds the value without its owner backlink, so a child
+    selected out of a tree would lose the Target and hierarchy it inherits. The
+    copy therefore carries the context it resolved through.
+    """
+    try:
+        target = module.resolve_target()
+    except ValueError:
+        target = module.target
+    return _replace(
+        module,
+        entry=entry,
+        target=target,
+        topologies=module.effective_topologies(),
+    )
+
+
+def select(module: Module, path: str) -> Module:
+    """The node dotted *path* names below *module*, as a Module.
+
+    Each segment names a child Module, except that the last may instead name one
+    of the reached Module's own functions -- which selects that Module re-entried
+    at it, so what comes back is always something with a Target and a topology
+    hierarchy to be measured against. An empty *path* is *module* itself.
+
+    See docs/spec/core-ir.md §1.2.
+    """
+    selected = module
+    segments = path.split(".") if path else []
+    if any(not segment for segment in segments):
+        raise ValueError(
+            f"selector {path!r}: an empty segment names nothing. Dropping it would "
+            f"make two different paths mean the same node"
+        )
+    for index, name in enumerate(segments):
+        children = {child.name: child for child in selected.modules}
+        if name in children:
+            selected = children[name]
+            continue
+        if index != len(segments) - 1:
+            raise ValueError(
+                f"selector {path!r}: Module {selected.name!r} has no child "
+                f"module {name!r}"
+            )
+        # `lookup` refuses a name this Module does not define, so reaching here
+        # means the last segment named one of its functions.
+        selected.lookup(name)
+        return _reentered(selected, name)
+    return selected
+
+
+def function_selectors(
+    module: Module, prefix: str = ""
+) -> tuple[tuple[str, HirFunction], ...]:
+    """Every HIR function in *module*'s tree, each with the selector naming it.
+
+    Root-relative and dotted, the same paths :func:`select` resolves, so a leaf's
+    name is qualified by the children it was reached through: two child Modules
+    may each define a ``moe``, and an unqualified name would make them one entry
+    in an inventory meant to be countable.
+
+    A ``PrimFunction`` is not one of these: it is an implementation of a function
+    rather than a function of the model.
+
+    See docs/spec/core-ir.md §1.2.
+    """
+    found: list[tuple[str, HirFunction]] = [
+        (f"{prefix}{function.name}", function)
+        for function in module.functions
+        if isinstance(function, HirFunction)
+    ]
+    for child in module.modules:
+        found.extend(function_selectors(child, f"{prefix}{child.name}."))
+    return tuple(found)
+
+
+__all__ = [
+    "LoadedModule",
+    "Module",
+    "ModuleFunction",
+    "function_selectors",
+    "select",
+]

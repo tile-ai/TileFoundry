@@ -17,8 +17,19 @@ from dataclasses import dataclass
 
 import torch
 
-from tests.models.kimi_linear_48b_a3b import config
-from tests.models.kimi_linear_48b_a3b.config import SEQ_LEN
+from tests.models.kimi_linear_48b_a3b.config import (
+    REAL,
+    SEQ_LEN,
+    KimiLinearConfig,
+    build_mla_attention,
+    build_mla_hf_config,
+    identity_rope_caches,
+    linear_weight,
+    mla_context_kv,
+    mla_decode_reference,
+    rms_norm,
+    rope_caches,
+)
 
 #: Seeds, named so a change to either is a visible change to the reference.
 WEIGHT_SEED = 0
@@ -45,13 +56,13 @@ class KdaReferenceUnavailable(RuntimeError):
 
 #: Why the KDA reference is blocked, as measured on 2026-07-28.
 #:
-#: It is the *reference* that is blocked, not the model: `model/submodules.py`
+#: It is the *reference* that is blocked, not the model: `model.py`
 #: describes `kda_attention` completely, and it analyses and schedules. What is
 #: missing is anything to check its values against.
 #:
 #: `transformers` 5.14.1 has no `kimi_linear` implementation: `KimiLinearForCausalLM`
 #: appears nowhere in the installed package, `kimi_linear` is absent from
-#: `CONFIG_MAPPING`, and `AutoConfig.from_pretrained` on the pinned config fails
+#: `CONFIG_MAPPING`, and `AutoConfig.from_pretrained` on the pinned REAL fails
 #: offline both ways -- `trust_remote_code=False` raises ValueError ("contains
 #: custom code which must be executed"), `trust_remote_code=True` raises OSError
 #: ("does not appear to have a file named configuration_kimi.py").
@@ -62,9 +73,9 @@ class KdaReferenceUnavailable(RuntimeError):
 #: vector per head applied column-wise. Substituting it would score KDA against
 #: a model that is not KDA.
 #:
-#: Hand-writing the reference from the config was considered and rejected. It
+#: Hand-writing the reference from the REAL was considered and rejected. It
 #: would compare this package's guess against this package's other guess, and the
-#: config does not determine the answer: `mla_use_nope: true` alongside
+#: REAL does not determine the answer: `mla_use_nope: true` alongside
 #: `qk_rope_head_dim: 64` leaves the scaling denominator undetermined, and the
 #: measured cost of guessing it wrong there is 22.5%. The same class of ambiguity
 #: covers KDA's gate placement and normalisation order.
@@ -96,37 +107,36 @@ class KdaStepInputs:
 
 def kda_step_inputs(*, device: str = "cpu", seed: int = WEIGHT_SEED) -> KdaStepInputs:
     """Arguments of the right shapes for one KDA decode step."""
-    shape = config.REAL
     torch.manual_seed(seed)
 
     def drawn(*sizes, sigma=0.05):
         return torch.randn(*sizes, device=device) * sigma
 
-    window = shape.short_conv - 1
+    window = REAL.short_conv_kernel_size - 1
     return KdaStepInputs(
         args=(
-            drawn(1, SEQ_LEN, shape.hidden),
-            torch.ones(shape.hidden, device=device),
-            drawn(1, shape.hidden, shape.kda_proj),
-            drawn(1, shape.hidden, shape.kda_proj),
-            drawn(1, shape.hidden, shape.kda_proj),
-            drawn(shape.short_conv, shape.kda_proj),
-            drawn(shape.short_conv, shape.kda_proj),
-            drawn(shape.short_conv, shape.kda_proj),
-            drawn(1, window, shape.kda_proj),
-            drawn(1, window, shape.kda_proj),
-            drawn(1, window, shape.kda_proj),
-            drawn(1, shape.hidden, shape.kda_head_dim),
-            drawn(1, shape.kda_head_dim, shape.kda_proj),
-            drawn(shape.kda_proj),
-            drawn(shape.kda_heads),
-            drawn(1, shape.hidden, shape.kda_heads),
-            drawn(1, shape.hidden, shape.kda_head_dim),
-            drawn(1, shape.kda_head_dim, shape.kda_proj),
-            torch.ones(shape.kda_head_dim, device=device),
-            drawn(1, shape.kda_proj, shape.hidden),
-            drawn(1, shape.kda_heads, shape.kda_head_dim, shape.kda_head_dim),
-            torch.full((1, 1, 1), shape.kda_scaling, device=device),
+            drawn(1, SEQ_LEN, REAL.hidden_size),
+            torch.ones(REAL.hidden_size, device=device),
+            drawn(1, REAL.hidden_size, REAL.kda_proj),
+            drawn(1, REAL.hidden_size, REAL.kda_proj),
+            drawn(1, REAL.hidden_size, REAL.kda_proj),
+            drawn(REAL.short_conv_kernel_size, REAL.kda_proj),
+            drawn(REAL.short_conv_kernel_size, REAL.kda_proj),
+            drawn(REAL.short_conv_kernel_size, REAL.kda_proj),
+            drawn(1, window, REAL.kda_proj),
+            drawn(1, window, REAL.kda_proj),
+            drawn(1, window, REAL.kda_proj),
+            drawn(1, REAL.hidden_size, REAL.kda_head_dim),
+            drawn(1, REAL.kda_head_dim, REAL.kda_proj),
+            drawn(REAL.kda_proj),
+            drawn(REAL.kda_num_heads),
+            drawn(1, REAL.hidden_size, REAL.kda_num_heads),
+            drawn(1, REAL.hidden_size, REAL.kda_head_dim),
+            drawn(1, REAL.kda_head_dim, REAL.kda_proj),
+            torch.ones(REAL.kda_head_dim, device=device),
+            drawn(1, REAL.kda_proj, REAL.hidden_size),
+            drawn(1, REAL.kda_num_heads, REAL.kda_head_dim, REAL.kda_head_dim),
+            torch.full((1, 1, 1), REAL.kda_scaling, device=device),
         )
     )
 
@@ -144,14 +154,14 @@ def run_kda_step(inputs: KdaStepInputs):
     harness calls `inputs()` outside the gate, so a fixture that raised would be
     recorded as an error in the harness instead of as this model's stated limit.
     """
-    from tests.models.kimi_linear_48b_a3b import submodules  # noqa: PLC0415
+    from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B  # noqa: PLC0415
     from tilefoundry.evaluator import evaluate  # noqa: PLC0415
 
     # Evaluated on whichever device the arguments were drawn on, rather than the
     # evaluator's default: this boundary is small and CPU-sized, and inheriting a
     # default of "cuda" would make a blocked reference depend on a free GPU.
     device = inputs.args[0].device.type
-    out, state, *windows = evaluate(submodules.kda_attention, *inputs.args, device=device)
+    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *inputs.args, device=device)
     assert torch.isfinite(out).all(), "KDA produced non-finite output"
     assert torch.isfinite(state).all(), "KDA produced a non-finite state"
     for window in windows:
@@ -195,13 +205,12 @@ def mla_step_inputs(
     `cos = 1, sin = 0`. `test_mla.py` measures that this rotary is exactly the
     identity, which is what makes the substitution a fact rather than a hope.
     """
-    shape = config.REAL
-    attention = config.build_mla_attention(seed=WEIGHT_SEED, device=device)
-    caches = config.identity_rope_caches if nope else config.rope_caches
-    cos, sin = caches(shape, device=device)
+    attention = build_mla_attention(seed=WEIGHT_SEED, device=device)
+    caches = identity_rope_caches if nope else rope_caches
+    cos, sin = caches(REAL, device=device)
 
     torch.manual_seed(ACTIVATION_SEED)
-    drawn = torch.randn(1, ctx_len + 1, shape.hidden, device=device) * 0.1
+    drawn = torch.randn(1, ctx_len + 1, REAL.hidden_size, device=device) * 0.1
     hidden_ctx, hidden_new = drawn[:, :ctx_len], drawn[:, ctx_len:]
 
     # The input RMSNorm belongs to the decoder layer, not to DeepseekV3Attention.
@@ -210,30 +219,30 @@ def mla_step_inputs(
     # would leave a bug in the norm's weight application invisible, and -- because
     # RMSNorm is scale-invariant -- a norm the oracle does not also apply is
     # absorbed by MLA's latent norm and shows up only on the shared rope path.
-    gamma_in = torch.randn(shape.hidden, device=device) * 0.1 + 1.0
-    normed_ctx = config.rms_norm(hidden_ctx, gamma_in, shape)
+    gamma_in = torch.randn(REAL.hidden_size, device=device) * 0.1 + 1.0
+    normed_ctx = rms_norm(hidden_ctx, gamma_in, REAL)
 
-    k_cache, v_cache = config.mla_context_kv(attention, normed_ctx, cos, sin, shape)
+    k_cache, v_cache = mla_context_kv(attention, normed_ctx, cos, sin, REAL)
 
     # The token being decoded sits immediately after the context.
     pos_ids = torch.tensor([ctx_len], device=device, dtype=torch.int32)
-    scale = torch.full((1, 1, 1, 1), shape.mla_scaling, device=device)
+    scale = torch.full((1, 1, 1, 1), REAL.mla_scaling, device=device)
 
     return MlaStepInputs(
         args=(
             hidden_new,
             gamma_in,
-            config.linear_weight(attention.q_proj),
-            config.linear_weight(attention.kv_a_proj_with_mqa),
+            linear_weight(attention.q_proj),
+            linear_weight(attention.kv_a_proj_with_mqa),
             attention.kv_a_layernorm.weight,
-            config.linear_weight(attention.kv_b_proj),
+            linear_weight(attention.kv_b_proj),
             cos,
             sin,
             pos_ids,
             k_cache,
             v_cache,
             scale,
-            config.linear_weight(attention.o_proj),
+            linear_weight(attention.o_proj),
         ),
         attention=attention,
         ctx_len=ctx_len,
@@ -253,11 +262,10 @@ def mla_step_oracle(inputs: MlaStepInputs) -> torch.Tensor:
 
     Fed the normed states, because the HIR's kernel fuses the input RMSNorm.
     """
-    shape = config.REAL
-    return config.mla_decode_reference(
+    return mla_decode_reference(
         inputs.attention,
-        config.rms_norm(inputs.hidden_ctx, inputs.gamma_in, shape),
-        config.rms_norm(inputs.hidden_new, inputs.gamma_in, shape),
+        rms_norm(inputs.hidden_ctx, inputs.gamma_in, REAL),
+        rms_norm(inputs.hidden_new, inputs.gamma_in, REAL),
         inputs.cos,
         inputs.sin,
     )
@@ -270,17 +278,16 @@ def mla_appended_cache_oracle(inputs: MlaStepInputs):
     token appended: the step's returned key and value are correct exactly when
     appending them reproduces this.
     """
-    shape = config.REAL
-    return config.mla_context_kv(
+    return mla_context_kv(
         inputs.attention,
-        config.rms_norm(
+        rms_norm(
             torch.cat([inputs.hidden_ctx, inputs.hidden_new], dim=1),
             inputs.gamma_in,
-            shape,
+            REAL,
         ),
         inputs.cos,
         inputs.sin,
-        shape,
+        REAL,
     )
 
 
@@ -300,7 +307,10 @@ class MoeInputs:
 
 
 def build_hf_moe(
-    seed: int = WEIGHT_SEED, device: str = "cuda", shape=None, n_experts: int | None = None
+    seed: int = WEIGHT_SEED,
+    device: str = "cuda",
+    config: KimiLinearConfig | None = None,
+    n_experts: int | None = None,
 ):
     """A `DeepseekV3MoE` at Kimi's numbers, with a NONZERO router bias.
 
@@ -317,16 +327,16 @@ def build_hf_moe(
         DeepseekV3MoE,
     )
 
-    shape = shape or config.REAL
-    n_experts = shape.n_experts if n_experts is None else n_experts
-    cfg = config.build_mla_hf_config(shape)
+    config = config or REAL
+    n_experts = config.num_experts if n_experts is None else n_experts
+    cfg = build_mla_hf_config(config)
     cfg.num_local_experts = n_experts
-    cfg.num_experts_per_tok = shape.top_k
-    cfg.n_shared_experts = shape.n_shared
+    cfg.num_experts_per_tok = config.num_experts_per_token
+    cfg.n_shared_experts = config.num_shared_experts
     cfg.n_group = 1
     cfg.topk_group = 1
     cfg.norm_topk_prob = True
-    cfg.routed_scaling_factor = shape.routed_scaling_factor
+    cfg.routed_scaling_factor = config.routed_scaling_factor
 
     torch.manual_seed(seed)
     with torch.device(device):
@@ -349,9 +359,8 @@ def moe_inputs(
     *hf_moe* may be passed in to reuse an already-built module: at 256 experts its
     weights are about 7 GB, so rebuilding it per draw dominates the test.
     """
-    shape = config.REAL
     moe = (
-        build_hf_moe(seed=seed, device=device, shape=shape, n_experts=n_experts)
+        build_hf_moe(seed=seed, device=device, config=REAL, n_experts=n_experts)
         if hf_moe is None
         else hf_moe
     )
@@ -361,15 +370,15 @@ def moe_inputs(
     # the router reads the normed states directly, with no scale-invariant stage
     # downstream to absorb a mismatch.
     torch.manual_seed(seed + 7919)
-    gamma_post = torch.randn(shape.hidden, device=device) * 0.1 + 1.0
+    gamma_post = torch.randn(REAL.hidden_size, device=device) * 0.1 + 1.0
 
     torch.manual_seed(act_seed)
-    hidden = torch.randn(1, SEQ_LEN, shape.hidden, device=device) * 0.1
-    normed = config.rms_norm(hidden, gamma_post, shape)
+    hidden = torch.randn(1, SEQ_LEN, REAL.hidden_size, device=device) * 0.1
+    normed = rms_norm(hidden, gamma_post, REAL)
 
     gate_up = moe.experts.gate_up_proj
-    w_gate = gate_up[:, : shape.moe_intermediate, :].contiguous()
-    w_up = gate_up[:, shape.moe_intermediate :, :].contiguous()
+    w_gate = gate_up[:, : REAL.moe_intermediate_size, :].contiguous()
+    w_up = gate_up[:, REAL.moe_intermediate_size :, :].contiguous()
     w_down = moe.experts.down_proj.contiguous()
 
     shared = moe.shared_experts
@@ -379,13 +388,13 @@ def moe_inputs(
             gamma_post,
             moe.gate.weight.t().contiguous(),
             moe.gate.e_score_correction_bias,
-            torch.full((1, 1), shape.routed_scaling_factor, device=device),
+            torch.full((1, 1), REAL.routed_scaling_factor, device=device),
             w_gate,
             w_up,
             w_down,
-            config.linear_weight(shared.gate_proj),
-            config.linear_weight(shared.up_proj),
-            config.linear_weight(shared.down_proj),
+            linear_weight(shared.gate_proj),
+            linear_weight(shared.up_proj),
+            linear_weight(shared.down_proj),
         ),
         hf_moe=moe,
         hidden=hidden,

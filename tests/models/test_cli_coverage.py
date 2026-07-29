@@ -69,16 +69,31 @@ def _dims_of(model: ModelCase) -> dict[str, int]:
 
 
 def _dim_args(model: ModelCase) -> list[str]:
-    """The `--dim` arguments for every extent *model* states."""
-    return [f"--dim={name}={extent}" for name, extent in _dims_of(model).items()]
+    """The `--dim` arguments for the kernel the CLI is asked about.
+
+    The selected case's own extents, not the model's union: the CLI is asked about
+    one kernel, and a length stated for a different kernel of the same model is a
+    dimension this one does not have. `_dims_of` still holds the model to one
+    extent per dimension, which is a claim about the description rather than about
+    any one invocation.
+    """
+    stated = model.schedule[0].dims or {}
+    return [f"--dim={name}={extent}" for name, extent in stated.items()]
 
 
 def _source_for(model: ModelCase, fixture: TargetFixture, directory) -> str:
-    """The model, aimed at one machine, as source a user could have written."""
+    """The model, aimed at one machine, as source a user could have written, and
+    the selector naming which kernel of it the CLI is asked about.
+
+    The model's own schedule selection, which is the entry of one of its execution
+    Modules. Stated rather than left to the CLI's default, because a root that
+    composes child Modules declares no step of its own -- there is nothing for a
+    default to pick -- and the corpus already says which kernel it means.
+    """
     built = model.build_for(fixture)
     path = directory / f"{model.id}.py"
-    path.write_text(as_script(built, module=model.entry), encoding="utf-8")
-    return str(path)
+    path.write_text(as_script(built), encoding="utf-8")
+    return f"{path}:{built.name}.{model.schedule[0].selector}"
 
 
 def _models() -> list[ModelCase]:

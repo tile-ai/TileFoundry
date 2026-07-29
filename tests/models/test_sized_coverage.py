@@ -22,7 +22,7 @@ from tests.models.registry import CORPUS
 from tests.models.report import CoverageCollector, build_report
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.core.module import function_selectors
 from tilefoundry.ir.hir.specialize import dim_vars_reached
 
 
@@ -37,7 +37,7 @@ def _cases() -> list[object]:
             model,
             fixture,
             case,
-            id=case.function,
+            id=case.selector,
             marks=case.gate.expected_failure(expect=AnalysisError),
         )
         for model, fixture, case in _selected()
@@ -54,14 +54,13 @@ def test_each_model_is_asked_at_a_size_or_says_what_stops_it(
         target=fixture.id,
         kind="sized",
         case=case.id,
-        function=case.function,
+        function=case.selector,
     )
-    module = model.build_for(fixture)
-    function = module.lookup(case.function)
+    selected, function = model.resolve(model.build_for(fixture), case.selector)
 
     case.gate.hold(
         lambda: analyze(
-            module, function, analysis="compute-cost", dims=dict(case.dims)
+            selected, function, analysis="compute-cost", dims=dict(case.dims)
         ),
         expect=AnalysisError,
         label=case.id,
@@ -78,13 +77,16 @@ def test_every_model_with_an_open_dimension_is_asked_this_question() -> None:
     are exactly the ones whose functions reach a `DimVar`. A recurrent mixer whose
     state is fixed-size reaches none -- there is no context length to ask it about,
     which is what a fixed-size state means and not a capability it lacks.
+
+    Measured over the whole tree, not the root's own functions: a dynamic kernel
+    moved into a child Module would otherwise stop being asked about, and the
+    question would disappear along with it rather than being answered.
     """
     for model in CORPUS:
         module = model.build()
         open_dims = {
             name
-            for function in module.functions
-            if isinstance(function, Function)
+            for _selector, function in function_selectors(module)
             for name in dim_vars_reached(function)
         }
         if not open_dims:
@@ -117,7 +119,7 @@ def test_the_report_keeps_this_apart_from_analysis() -> None:
             target=fixture.id,
             kind="sized",
             case=case.id,
-            function=case.function,
+            function=case.selector,
         )
     for model in CORPUS:
         for case in model.analyze:
@@ -127,7 +129,7 @@ def test_the_report_keeps_this_apart_from_analysis() -> None:
                 target=fixture.id,
                 kind="analyze",
                 case=case.id,
-                function=case.function,
+                function=case.selector,
             )
 
     section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"][fixture.id]

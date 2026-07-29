@@ -6,7 +6,7 @@ enough not to need a device.
 Every number this file asserts was measured before it was written down. The
 parity tests are only half the point: the perturbation tests below establish that
 the parity tests can *fail*, which is what makes them evidence. Without them a
-kernel that ignored the cache, or used the wrong scaling, would pass a shape
+kernel that ignored the cache, or used the wrong scaling, would pass a config
 check and read as correct.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import torch
 
 from tests.models.kimi_linear_48b_a3b import config, reference
-from tests.models.kimi_linear_48b_a3b import submodules as kimi
+from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import specialize_concretely
 
@@ -33,7 +33,7 @@ DISCRIMINATION = 1e-3
 
 def _run(drawn, args=None):
     """`mla_attention` specialised at *drawn*'s context length and evaluated."""
-    fn = specialize_concretely(kimi.mla_attention, {"ctx_len": drawn.ctx_len})
+    fn = specialize_concretely(KimiLinear48BA3B.mla.lookup("mla_attention"), {"ctx_len": drawn.ctx_len})
     return evaluate(fn, *(args if args is not None else drawn.args), device=DEV)
 
 

@@ -20,6 +20,7 @@ import torch
 
 from tests.models import dense_decode
 from tests.models.gemma2_2b import config
+from tests.models.gemma2_2b.model import Gemma2_2B_Decoder
 
 DEVICE = dense_decode.DenseDecode.device
 CTX_LEN = dense_decode.DenseDecode.ctx_len
@@ -53,10 +54,6 @@ def layer_weights(layer) -> tuple:
     )
 
 
-def _build_decoder():
-    from tests.models.gemma2_2b.decoder import build_decoder  # noqa: PLC0415
-
-    return build_decoder()
 
 
 
@@ -82,7 +79,7 @@ SPEC = dense_decode.DenseDecode(
     config=config,
     layer_weights=layer_weights,
     attention_weights=4,
-    build_decoder=_build_decoder,
+    build_decoder=Gemma2_2B_Decoder.cloned,
     layer_step_class=DecodeStepInputs,
     final_norm_of=lambda model: config.rms_gamma(model.norm),
 )

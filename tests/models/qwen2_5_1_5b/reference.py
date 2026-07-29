@@ -17,6 +17,7 @@ from functools import partial
 
 from tests.models import dense_decode
 from tests.models.qwen2_5_1_5b import config
+from tests.models.qwen2_5_1_5b.model import Qwen2_5_1_5B_Decoder
 
 DEVICE = dense_decode.DenseDecode.device
 CTX_LEN = dense_decode.DenseDecode.ctx_len
@@ -50,17 +51,13 @@ def layer_weights(layer) -> tuple:
     )
 
 
-def _build_decoder():
-    from tests.models.qwen2_5_1_5b.decoder import build_decoder  # noqa: PLC0415
-
-    return build_decoder()
 
 
 SPEC = dense_decode.DenseDecode(
     config=config,
     layer_weights=layer_weights,
     attention_weights=7,
-    build_decoder=_build_decoder,
+    build_decoder=Qwen2_5_1_5B_Decoder.cloned,
 )
 
 DecodeStepInputs = dense_decode.LayerStep

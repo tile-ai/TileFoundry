@@ -24,7 +24,7 @@ import pytest
 import torch
 
 from tests.models.minicpm3_4b import config, reference
-from tests.models.minicpm3_4b.decoder import build_decoder
+from tests.models.minicpm3_4b.model import MiniCPM3_4B_Decoder
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the complete decoder at production dimensions"
@@ -63,6 +63,20 @@ def _difference(out, want) -> float:
     return (out.float() - want.float()).abs().max().item()
 
 
+def test_the_embedding_matches_hugging_face(drawn) -> None:
+    """The root's `embed` gathers the row `MiniCPM3Model.embed_tokens` would, scale
+    and all: the oracle is the HF module, so a plain gather lands twelve times too
+    small. Last row of the table, so a wrong axis cannot land on it."""
+    decoder = MiniCPM3_4B_Decoder.cloned()
+    token_ids = torch.tensor([config.REAL.vocab - 1], device=DEV, dtype=torch.int64)
+
+    out = decoder.embed(drawn.model.embed_tokens.weight, token_ids)
+
+    with torch.no_grad():
+        want = drawn.model.embed_tokens(token_ids).reshape(1, 1, config.REAL.hidden)
+    torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+
+
 def test_the_complete_decoder_matches_hugging_face(drawn) -> None:
     """Every layer, in order, plus the final norm."""
     out, entries = reference.run_decoder_step(drawn)
@@ -78,16 +92,16 @@ def test_every_layer_returns_its_own_cache_entry(drawn) -> None:
 
     Checked for all 62 rather than one, because the failure this catches is a
     layer reading or writing a neighbour's cache, which no single layer's test can
-    see.
+    see. The appending is the root's own ``append_cache``, which is what a decode
+    loop calls, so this observes that method rather than a copy of it.
     """
     _out, entries = reference.run_decoder_step(drawn)
 
+    grown = MiniCPM3_4B_Decoder.cloned().append_cache(drawn.caches, entries)
     want = config.decoder_context_kv(
         drawn.model, torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1), device=DEV
     )
-    for index, ((k_new, v_new), (want_k, want_v)) in enumerate(zip(entries, want)):
-        grown_k = torch.cat([drawn.caches[index][0], k_new], dim=1)
-        grown_v = torch.cat([drawn.caches[index][1], v_new], dim=1)
+    for index, ((grown_k, grown_v), (want_k, want_v)) in enumerate(zip(grown, want)):
         torch.testing.assert_close(
             grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL, msg=f"layer {index} keys"
         )
@@ -141,8 +155,8 @@ def test_a_stack_that_is_wrongly_assembled_is_caught(drawn) -> None:
         weights, caches, gamma, residual_scale = perturb(
             drawn.weights, drawn.caches, drawn.model.norm.weight, drawn.residual_scale
         )
-        decoder = build_decoder().bind_final_norm(gamma)
-        out, _entries = decoder.forward(
+        decoder = MiniCPM3_4B_Decoder.cloned().bind_final_norm(gamma)
+        out, _entries = decoder.decode_hidden(
             drawn.hidden_new, drawn.cos_cache, drawn.sin_cache, drawn.pos_ids,
             drawn.scale, residual_scale, weights, caches,
         )

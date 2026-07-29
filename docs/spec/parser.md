@@ -565,6 +565,25 @@ resulting `Module`. `target` declares the hardware the domain runs on; the
 ordered `Topology` hierarchy is declared by a `topologies` assignment in the
 class body instead (see below).
 
+A file of `@module` classes is an ordinary importable Python module: every name
+its class bodies read — the shape configuration above all — MUST resolve within
+that file, and the file MUST NOT require execution with a namespace injected into
+its globals. The Modules it defines are module-level values, so `import` reaches
+them, a linter sees them, and a CLI selector addresses them by name. A file that
+has to be executed with a namespace injected is reachable by none of those.
+
+A `@module` class body is evaluated once where it stands, so a body at file scope
+states one shape. A model asked about more than one structural configuration —
+shapes differing in a submodule count or a per-layer tuple, not only in a tensor
+axis — MAY instead place its class bodies in a function of that same file that
+takes the configuration as a parameter, and publish that function; each call
+states the same source at the shape its caller names. This is not injection: the
+file is still an ordinary import and the configurations are values its own
+package publishes. `@func` MUST resolve the names in its signature and body
+against the locals of every scope enclosing it, innermost first, so a parameter
+of that function is as visible to a nested class body as a module-level import
+is.
+
 - Every non-dunder class member MUST be one of four kinds: the `topologies`
   declaration; an `@func` /
   `@prim_func` result (an `hir.Function` / `tir.PrimFunction`); a child
