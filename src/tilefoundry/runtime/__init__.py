@@ -1,7 +1,7 @@
 """TileFoundry runtime layer — the ``RuntimeModule`` twin of an ir ``Module``
 (authored with ``@runtime_module`` / ``@runtime_func``), the
 ``RuntimeFunction`` implementation base, the compiled-path ``CompiledModule``,
-checkpoint ``RuntimeResource``s, and ``check`` / ``bench``. See
+checkpoint ``RuntimeResource``s, and ``check``. See
 docs/spec/runtime.md §1.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from .function import (
     entry_abi_of,
     param_abi_of,
 )
-from .measure import Gate, Report, bench, check
+from .measure import Gate, Report, check
 from .module import CompiledModule, RuntimeModule
 from .resource import Absolute, DictResource, RuntimeResource, SafetensorsResource
 
@@ -30,7 +30,6 @@ __all__ = [
     "RuntimeModule",
     "RuntimeResource",
     "SafetensorsResource",
-    "bench",
     "check",
     "entry_abi_of",
     "param_abi_of",

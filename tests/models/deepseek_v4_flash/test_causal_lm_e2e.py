@@ -20,12 +20,10 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.runtime import (
     Absolute,
     SafetensorsResource,
-    bench,
     check,
     runtime_func,
     runtime_module,
 )
-from tilefoundry.target.cuda import CudaTarget
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 
@@ -369,8 +367,3 @@ def test_structure_mismatch_rejected(config, twins):
             @runtime_func
             def residual_add(self, *args):
                 raise AssertionError("never called")
-
-    inputs = _node_inputs(semantic, config)["attention"]
-    report = bench(runtime.layer0.attention.forward, inputs, iters=3, device=CudaTarget().device)
-    assert report.metrics["mean_ms"] > 0
-    assert report.passed is None

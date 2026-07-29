@@ -446,19 +446,18 @@ class SafetensorsResource:
     checkpoint serve modules that declare a different precision than it holds:
     the alternative is a per-weight converter whose only work is a cast.
 
-### 1.6 `check` / `bench`
+### 1.6 `check`
 
 ```python
 class Gate:                                     # pass/fail thresholds for check()
     rel_l2_max: float = 1e-3
     cosine_min: float = 0.999
 
-class Report:                                   # result of check() / bench()
+class Report:                                   # result of check()
     metrics: Mapping[str, float]
-    passed: bool | None = None                  # None for bench() — no gate
+    passed: bool
 
 def check(candidate: Callable, reference: Callable, inputs: tuple, gate: Gate = Gate()) -> Report: ...
-def bench(fn: Callable, inputs: tuple, iters: int = 100, *, device: Device) -> Report: ...
 ```
 
 - constraints:
@@ -471,14 +470,10 @@ def bench(fn: Callable, inputs: tuple, iters: int = 100, *, device: Device) -> R
     results, MUST reject a candidate whose flattened structure, shape or dtype
     differs from the reference's, and gates on the **worst** per-leaf
     `rel_l2` / cosine — so one bad element of a tuple cannot be averaged away.
-  - `bench` times `fn(*inputs)` over `iters` calls after a few untimed
-    warmup calls. A `device` whose class lives under `tilefoundry.target.cuda`
-    times with `torch.cuda.Event`s (synchronized before/after); any other
-    `device` times with `time.perf_counter()`. `metrics = {"mean_ms": ...,
-    "iters": ...}`; `passed` is always `None`.
-  - neither helper is specific to `RuntimeModule`: *candidate* / *reference*
-    / *fn* may be a `RuntimeModule` bound method, a raw torch callable, or
-    an evaluator closure — anything callable on *inputs*.
+  - `check` MUST report a verdict: there is no result that measured nothing.
+  - it is not specific to `RuntimeModule`: *candidate* / *reference* may be a
+    `RuntimeModule` bound method, a raw torch callable, or an evaluator
+    closure — anything callable on *inputs*.
 
 ## 2. C++ Runtime Surface
 
