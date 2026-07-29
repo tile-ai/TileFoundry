@@ -84,6 +84,7 @@ SPEC = dense_decode.DenseDecode(
     attention_weights=4,
     build_decoder=_build_decoder,
     layer_step_class=DecodeStepInputs,
+    final_norm_of=lambda model: config.rms_gamma(model.norm),
 )
 
 decode_step_inputs = partial(dense_decode.layer_step, SPEC)

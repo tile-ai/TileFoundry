@@ -32,6 +32,10 @@ def _self_attn_scaling(layer) -> float:
     return layer.self_attn.scaling
 
 
+def _final_norm_weight(model):
+    return model.norm.weight
+
+
 @dataclass(frozen=True)
 class DenseDecode:
     """One dense decoder package's declaration of how to draw its oracle.
@@ -56,6 +60,10 @@ class DenseDecode:
     #: Whatever runs this states its own device; the oracle is a CPU f32 baseline.
     device: str = "cpu"
     scale_of: Callable[[object], float] = _self_attn_scaling
+    #: How this model's final norm gamma is read off the stack. Gemma2 stores it
+    #: as a zero-centred offset, so reading `.weight` there is off by one and the
+    #: whole stack's output is wrong -- which is what this exists to state.
+    final_norm_of: Callable[[object], object] = _final_norm_weight
     #: Runtime values this model's signature takes after the weights. MiniCPM3
     #: scales each residual by a depth-dependent constant, which is a value its
     #: step is given rather than a weight it holds.
@@ -216,7 +224,7 @@ def stack_step(
 
 def run_stack(spec: DenseDecode, drawn: StackStep):
     """The complete decoder over *drawn*, through the Evaluator."""
-    decoder = spec.build_decoder().bind_final_norm(drawn.model.norm.weight)
+    decoder = spec.build_decoder().bind_final_norm(spec.final_norm_of(drawn.model))
     return decoder.forward(*drawn.args)
 
 
