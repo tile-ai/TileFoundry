@@ -5,6 +5,7 @@ from __future__ import annotations
 import textwrap
 
 from tilefoundry import cli
+from tilefoundry.cli import schedule as schedule_command
 
 _NESTED_MODULE = """
     from tilefoundry import func, module
@@ -55,13 +56,13 @@ def test_the_solver_budget_is_stated_and_reaches_the_operation(tmp_path, capsys,
     path.write_text(textwrap.dedent(_NESTED_MODULE), encoding="utf-8")
 
     seen = {}
-    real = cli.schedule
+    real = schedule_command.schedule
 
     def record(*args, **kwargs):
         seen.update(kwargs)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(cli, "schedule", record)
+    monkeypatch.setattr(schedule_command, "schedule", record)
     assert (
         cli.main(
             [
@@ -91,13 +92,13 @@ def test_an_unstated_solver_budget_leaves_the_operation_its_own(tmp_path, capsys
     path.write_text(textwrap.dedent(_NESTED_MODULE), encoding="utf-8")
 
     seen = {}
-    real = cli.schedule
+    real = schedule_command.schedule
 
     def record(*args, **kwargs):
         seen.update(kwargs)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(cli, "schedule", record)
+    monkeypatch.setattr(schedule_command, "schedule", record)
     assert cli.main(["schedule", f"{path}:Model.child.inner", "--topology", "thread"]) == 0
 
     assert seen["options"] is None
@@ -115,13 +116,13 @@ def test_asking_for_the_first_plan_reaches_the_operation(tmp_path, capsys, monke
     path.write_text(textwrap.dedent(_NESTED_MODULE), encoding="utf-8")
 
     seen = {}
-    real = cli.schedule
+    real = schedule_command.schedule
 
     def record(*args, **kwargs):
         seen.update(kwargs)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(cli, "schedule", record)
+    monkeypatch.setattr(schedule_command, "schedule", record)
     assert (
         cli.main(
             ["schedule", f"{path}:Model.child.inner", "--topology", "thread", "--first-plan"]
