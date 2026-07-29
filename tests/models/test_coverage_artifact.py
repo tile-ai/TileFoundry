@@ -194,9 +194,10 @@ def test_running_on_several_workers_counts_each_case_once(tmp_path: Path) -> Non
     Compared against the same session run in one process, so the assertion is that
     the two agree rather than that either matches a number written here.
 
-    Skipped where `xdist` is absent, which is how CI runs: the double-count this
-    guards against only exists when there is a controller, so there is nothing to
-    assert without one. It is the local parallel run that keeps this honest.
+    `xdist` is declared in the `test` extra because both CI and the local runs are
+    parallel, so this normally executes; the guard is for an environment that
+    installed pytest alone, where there is no controller for the double count to
+    occur in.
     """
     pytest.importorskip("xdist", reason="the double count needs a controller to occur")
 
