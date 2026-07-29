@@ -138,3 +138,14 @@ def _tilefoundry_dump_scope(request: pytest.FixtureRequest):
     dumper = FileDumper(test_root)
     with DumpScope(dumper=dumper, flags=DumpFlags.ALL) as scope:
         yield scope
+
+
+@pytest.fixture(scope="session")
+def installed_tilefoundry(tmp_path_factory):
+    """TileFoundry installed from a built wheel, for the behaviour only an
+    installation has. Built once per session because building it is the cost."""
+    from tests.installed_env import build  # noqa: PLC0415
+
+    environment = build(tmp_path_factory.mktemp("installed"))
+    environment.assert_installed()
+    return environment
