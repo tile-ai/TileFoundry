@@ -31,7 +31,7 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @f
 S = 1
 
 
-@module(entry="final_rms_norm")
+@module
 class Qwen2_5_1_5B_Decoder:
     """The ordered layer stack plus the norm that closes it."""
 

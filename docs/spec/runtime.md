@@ -216,7 +216,10 @@ class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
     second description for an opaque state object.
   - `forward` (`__call__` is `forward`) exists on both, and each runs a
     registered `forward` orchestration method (`Module.methods`) if the class
-    body defined one, else the entry `@func`. They differ in exactly what the
+    body defined one, else the entry `@func`, and MUST be refused when there is
+    neither — naming the functions and methods to call instead, rather than
+    reporting `entry` as wrong. The runtime twin's `forward` mirrors all three
+    branches. They differ in exactly what the
     function's `ConstTensor` params come from: `Module.forward(*args)` takes one
     argument per declared param because a `Module` holds no constants, while
     `LoadedModule.forward(*acts)` takes activations alone and fills the

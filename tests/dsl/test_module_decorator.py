@@ -88,6 +88,68 @@ def test_collects_orchestration_method_and_rejects_other_members():
             budget = 3  # not a DSL function, a child Module, or a plain function
 
 
+def test_what_a_class_body_must_declare_to_be_a_module():
+    """Only an empty body is refused. One function, one child, or one plain method
+    is enough — a methods-only Module composes children it is given, and used to be
+    refused for owning no function. A supplied ``entry`` is still checked, and a
+    class-body ``__call__`` is refused rather than dropped."""
+
+    with pytest.raises(TypeError, match="empty class body"):
+
+        @module
+        class _Empty:
+            pass
+
+    @module
+    class _MethodsOnly:
+        def walk(self, x):
+            return x
+
+    assert _MethodsOnly.entry is None
+    assert _MethodsOnly.walk(3) == 3
+
+    with pytest.raises(ValueError, match=r"entry 'absent' names no collected function"):
+
+        @module(entry="absent")
+        class _WrongEntry:
+            @func
+            def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
+                return tf.rms_norm(x, g)
+
+    with pytest.raises(TypeError, match=r"__call__ has no effect"):
+
+        @module(entry="only")
+        class _OwnCall:
+            @func
+            def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
+                return tf.rms_norm(x, g)
+
+            def __call__(self, x):
+                raise AssertionError("never reached")
+
+
+def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
+    """Two refusals, kept apart. Asking for the step of a Module that has none is
+    answered by naming what to call; asking for the entry directly is answered by
+    saying there is no default step. Neither may read as ``entry`` being wrong,
+    which is what the caller sees when ``None`` reaches the entry lookup."""
+
+    @module
+    class _NoStep:
+        @func
+        def helper(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
+            return tf.rms_norm(x, g)
+
+    with pytest.raises(TypeError, match=r"no forward method and no entry.*helper"):
+        _NoStep()
+
+    with pytest.raises(ValueError, match=r"declares no entry, so it has no default step"):
+        _NoStep.entry_function()
+
+    # Named access is unaffected: this is the call the refusals point at.
+    assert _NoStep.lookup("helper").name == "helper"
+
+
 def test_the_runner_on_an_authored_module_takes_the_weights_too():
     """A Module's callable takes every declared param, a ``ConstTensor`` one
     included; a ``LoadedModule``'s takes activations alone. Each wrong argument

@@ -27,8 +27,9 @@ decorator-form ::= '@tilefoundry.module'
 (not the class). It collects the class body's `@func` / `@prim_func` results,
 child `Module`s, and plain Python functions, in definition order, into the
 result's `functions` / `modules` / `methods` (full contract in
-[§2.7](#27-module-authoring-surface)); `entry` is a required argument naming
-the public entry function. A member MAY call a sibling **defined above it** —
+[§2.7](#27-module-authoring-surface)); `entry` is an optional argument naming
+which collected function is the default step. A member MAY call a sibling
+**defined above it** —
 the call lowers to a `Call` targeting that sibling function; forward
 references (a callee declared below the caller) are unresolved (see
 [§3.3](#33-description)). Functions are reached by name on the result (see
@@ -593,8 +594,15 @@ class body instead (see below).
   collected into `Module.methods` by its own name. A duplicate function
   name, or duplicate child module name, across the class body MUST be
   rejected.
-- `entry` MUST name exactly one collected function; an unknown name MUST be
-  rejected.
+- A class body MUST declare at least one function, child `Module`, or plain
+  method; only an empty body MUST be rejected. A methods-only Module is therefore
+  valid — it composes the children it is given.
+- `entry` is optional. Supplied, it MUST name exactly one collected function and
+  an unknown name MUST be rejected. Omitted, the Module has no default step.
+- A method's name is free, but `forward` is the one a bare `<module>(...)`
+  delegates to; any other name is reached only by naming it. A class-body
+  `__call__` MUST be rejected: Python resolves a dunder on the type, so one
+  attached to the built Module instance would never run.
 - A member MAY call a sibling **defined above it** (the call resolves to the
   sibling function / launches a sibling device kernel); a forward reference to a
   sibling defined below stays unresolved and MUST fail.
@@ -609,7 +617,8 @@ class body instead (see below).
   unresolvable.
 - The printer emits this surface: shared meshes at module level (before the
   class) so the class body stays declaration-and-function-only, then
-  `@module(entry="<entry>")`, then the `topologies` declaration when the
+  `@module(entry="<entry>")` — or a bare `@module` for a Module that declares
+  neither an entry nor a target — then the `topologies` declaration when the
   Module makes one, then the functions and nested Modules.
 
 #### Design rationale

@@ -63,11 +63,15 @@ class Module:
     another owner MUST NOT change what the first owner's subtree resolves.
 
 - `parse_module` (see [parser §1](./parser.md)) returns a `Module`.
-- `entry` is the public entry point — `tilefoundry.lower(...)` and the
+- `entry` names this Module's default step — `tilefoundry.lower(...)` and the
   emitter both start there. Other functions only enter the output if
   they are reachable from `entry`.
-- `entry` MUST be the `name` of a function present in `functions`;
-  the verifier checks this.
+- `entry` is optional. Supplied, it MUST be the `name` of a function present in
+  `functions`, and the verifier checks this. Omitted (`None`), the Module has no
+  default step: `entry_function()` and a bare call MUST be refused saying so, and
+  every function is reached by name instead. A Module that composes children in an
+  orchestration method has no single step to nominate, and naming one anyway would
+  claim a default the execution path never takes.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
   `Module` whose `entry` is set to that function. A function that declares
   execution context of its own is therefore already a `Module`.

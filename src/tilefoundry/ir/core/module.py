@@ -19,6 +19,24 @@ from tilefoundry.target import Target
 ModuleFunction = Union[HirFunction, PrimFunction]
 
 
+def refuse_bare_call(module: "Module", kind: str) -> None:
+    """Refuse a bare call on a *kind* whose *module* has neither a ``forward``
+    method nor an entry, naming what to call instead.
+
+    Separate from ``entry_function``'s refusal because the caller is in a different
+    position: there is nothing to reach here, whereas a caller who asked for the
+    entry directly is being told this Module has no default step.
+    """
+    if module.entry is not None:
+        return
+    named = sorted({fn.name for fn in module.functions} | set(module.methods))
+    raise TypeError(
+        f"{kind} {module.name!r} has no forward method and no entry, so a bare "
+        f"call has nothing to run; call one by name"
+        + (f" -- {', '.join(named)}" if named else "")
+    )
+
+
 def _owned_by(child: "Module", parent: "Module") -> "Module":
     """*child* linked back to *parent* as its owner.
 
@@ -52,7 +70,9 @@ class Module:
 
     name: str
     functions: tuple[ModuleFunction, ...]
-    entry: str
+    #: Which function is this Module's default step, or ``None`` for a Module that
+    #: has none -- nothing then reaches a step without naming it.
+    entry: str | None = None
     modules: tuple["Module", ...] = field(default_factory=tuple)
     target: Target | None = None
     topologies: tuple[Topology, ...] | None = None
@@ -260,6 +280,12 @@ class Module:
         return origin is not None and self.owns(origin)
 
     def entry_function(self) -> ModuleFunction:
+        if self.entry is None:
+            raise ValueError(
+                f"Module {self.name!r} declares no entry, so it has no default "
+                f"step; name the function to use -- lookup('<name>') for the node, "
+                f"or <module>.<name>(...) to run it"
+            )
         matches = self.function_named(self.entry)
         if not matches:
             raise ValueError(
@@ -318,6 +344,7 @@ class Module:
         method = self.methods.get("forward")
         if method is not None:
             return method(self, *args)
+        refuse_bare_call(self, "Module")
         return self._run_authored(self.lookup(self.entry), *args)
 
     __call__ = forward
@@ -478,9 +505,10 @@ class LoadedModule:
         method = self.module.methods.get("forward")
         if method is not None:
             return method(self, *acts)
+        refuse_bare_call(self.module, "LoadedModule")
         return self._run_bound(self.module.entry_function(), *acts)
 
     __call__ = forward
 
 
-__all__ = ["LoadedModule", "Module", "ModuleFunction"]
+__all__ = ["LoadedModule", "Module", "ModuleFunction", "refuse_bare_call"]

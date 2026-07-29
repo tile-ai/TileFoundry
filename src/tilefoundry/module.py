@@ -25,10 +25,12 @@ UNDECLARED = _Undeclared()
 TOPOLOGIES_ATTR = "topologies"
 
 
-def module(cls=None, *, entry: str, target=None):
+def module(cls=None, *, entry: str | None = None, target=None):
     """Collect a class body into a ``Module``: DSL functions, child ``Module``s
     (or a tuple/list of them), and plain orchestration methods. See the module
     authoring surface in docs/spec/parser.md.
+
+    ``entry`` optionally names which collected function is the default step.
 
     ``target`` declares the hardware this execution domain runs on; only the
     outermost Module declares it and nested Modules inherit it.
@@ -71,6 +73,15 @@ def module(cls=None, *, entry: str, target=None):
         child_modules = []
         methods = {}
         for name, value in vars(cls_inner).items():
+            if name == "__call__":
+                # Dropping it silently is the trap: a dunder is looked up on the
+                # type, so one attached to a Module instance never runs anyway.
+                raise TypeError(
+                    f"@module {cls_inner.__name__!r}: a class-body __call__ has no "
+                    f"effect -- Python resolves it on the type, not on the Module "
+                    f"instance this builds. Name the method `forward`, which "
+                    f"<module>(...) delegates to."
+                )
             if name.startswith("__") and name.endswith("__"):
                 continue
             if name == TOPOLOGIES_ATTR:
@@ -106,9 +117,11 @@ def module(cls=None, *, entry: str, target=None):
             fn for fn in functions
             if not getattr(fn, "specializations", ()) and fn not in converter_fns
         ]
-        if not functions:
+        if not functions and not child_modules and not methods:
             raise TypeError(
-                f"@module {cls_inner.__name__!r}: no @func / @prim_func members"
+                f"@module {cls_inner.__name__!r}: empty class body; a Module must "
+                f"declare at least one @func / @prim_func, child Module, or "
+                f"orchestration method"
             )
         names = [fn.name for fn in functions]
         dupes = sorted({n for n in names if names.count(n) > 1})
@@ -126,7 +139,7 @@ def module(cls=None, *, entry: str, target=None):
                 f"{mod_dupes} (a class-body alias of a nested @module is not "
                 f"allowed; one name maps to one child module)"
             )
-        if entry not in names:
+        if entry is not None and entry not in names:
             raise ValueError(
                 f"@module {cls_inner.__name__!r}: entry {entry!r} names no "
                 f"collected function (have {names})"

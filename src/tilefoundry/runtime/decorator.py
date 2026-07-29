@@ -7,7 +7,7 @@ import inspect
 import types
 from typing import Callable
 
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, refuse_bare_call
 from tilefoundry.runtime.function import RuntimeFunction
 from tilefoundry.runtime.module import RuntimeModule
 from tilefoundry.runtime.resource import RuntimeResource
@@ -85,6 +85,7 @@ class _Twin(RuntimeModule):
         method = self._ir.methods.get("forward")
         if method is not None:
             return method(self, *acts)
+        refuse_bare_call(self._ir, type(self).__name__)
         return getattr(self, self._ir.entry)(*acts)
 
     def __getattr__(self, name: str):
