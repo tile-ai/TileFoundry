@@ -1,7 +1,9 @@
-"""Where an installed specification document is read from."""
+"""The `spec` command: which specifications exist, what is in one, and one section."""
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 #: Topic names that differ from their document's filename.
@@ -9,6 +11,13 @@ _SPEC_TOPICS = {
     "cli": "cli",
     "dsl": "hir",
 }
+
+#: A heading, outside a fenced block. `# example` inside a code fence is a comment.
+_HEADING = re.compile(r"^(#{2,6})\s+(.*?)\s*$")
+_FENCE = re.compile(r"^\s*(```|~~~)")
+
+#: A leading `1.` / `2.10.1` in a heading is that section's own key.
+_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.*)$")
 
 
 def _source_spec_path(topic: str) -> Path:
@@ -44,4 +53,206 @@ def read_spec(topic: str) -> str:
     return spec_path(topic).read_text(encoding="utf-8")
 
 
-__all__ = ["read_spec", "spec_path"]
+def spec_directory() -> Path:
+    """The directory the documents are read from, wherever they were found."""
+    return spec_path("cli").parent
+
+
+def topics() -> dict[str, Path]:
+    """Every document that can be asked for, by the name it is asked for under."""
+    found = {path.stem: path for path in sorted(spec_directory().glob("*.md"))}
+    for topic, name in _SPEC_TOPICS.items():
+        if name in found:
+            found.setdefault(topic, found[name])
+    return found
+
+
+@dataclass(frozen=True)
+class Section:
+    """One heading and the lines under it, down to the next heading as high."""
+
+    key: str
+    title: str
+    level: int
+    start: int
+    end: int
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.replace("`", "").lower()).strip("-")
+
+
+def _key_and_title(heading: str) -> tuple[str, str]:
+    numbered = _NUMBER.match(heading)
+    if numbered:
+        return numbered.group(1), numbered.group(2)
+    # An unnumbered heading still has to be addressable: most of the op catalogue
+    # is unnumbered, and a section nobody can name is a section nobody can read.
+    return _slug(heading), heading
+
+
+def _disambiguate(bases: list[str], ancestries: list[tuple[str, ...]]) -> list[str]:
+    """One key per section, no two alike.
+
+    A clash takes on the name of its enclosing heading, then the one above that,
+    until the keys separate.
+    """
+    from collections import Counter  # noqa: PLC0415
+
+    def compose(index: int, depth: int) -> str:
+        ancestry = ancestries[index]
+        return "/".join((*ancestry[len(ancestry) - depth :], bases[index]))
+
+    depths = [0] * len(bases)
+    keys = [compose(index, 0) for index in range(len(bases))]
+    while True:
+        counts = Counter(keys)
+        clashing = [index for index, key in enumerate(keys) if counts[key] > 1]
+        deepened = [
+            index for index in clashing if depths[index] < len(ancestries[index])
+        ]
+        if not deepened:
+            # Two headings with the same name and the same ancestry are only
+            # distinguishable by which came first.
+            seen: Counter[str] = Counter()
+            for index in clashing:
+                seen[keys[index]] += 1
+                if seen[keys[index]] > 1:
+                    keys[index] = f"{keys[index]}#{seen[keys[index]]}"
+            return keys
+        for index in deepened:
+            depths[index] += 1
+            keys[index] = compose(index, depths[index])
+
+
+def sections(text: str) -> tuple[Section, ...]:
+    """Every addressable section of *text*, in document order."""
+    lines = text.splitlines()
+    headings: list[tuple[int, str, str, int]] = []
+    ancestries: list[tuple[str, ...]] = []
+    enclosing: dict[int, str] = {}
+    fenced = False
+    for number, line in enumerate(lines):
+        if _FENCE.match(line):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        heading = _HEADING.match(line)
+        if heading is None:
+            continue
+        level = len(heading.group(1))
+        key, title = _key_and_title(heading.group(2))
+        enclosing = {at: slug for at, slug in enclosing.items() if at < level}
+        ancestries.append(tuple(enclosing[at] for at in sorted(enclosing)))
+        enclosing[level] = _slug(title)
+        headings.append((level, key, title, number))
+
+    keys = _disambiguate([key for _, key, _, _ in headings], ancestries)
+    found = [
+        Section(key=key, title=title, level=level, start=start, end=len(lines))
+        for key, (level, _, title, start) in zip(keys, headings)
+    ]
+    # A section ends where the next one at its level or above begins.
+    for index, section in enumerate(found):
+        for later in found[index + 1 :]:
+            if later.level <= section.level:
+                found[index] = Section(
+                    key=section.key, title=section.title, level=section.level,
+                    start=section.start, end=later.start,
+                )
+                break
+    return tuple(found)
+
+
+def render_topics() -> str:
+    """The documents there are, and which name reaches each."""
+    found = topics()
+    aliases = {
+        topic: name for topic, name in _SPEC_TOPICS.items() if topic != name
+    }
+    width = max(len(name) for name in found)
+    lines = [f"Specifications in {spec_directory()}:", ""]
+    for name in sorted(found):
+        alias = aliases.get(name)
+        row = f"  {name:<{width}}  another name for {alias}" if alias else f"  {name}"
+        lines.append(row)
+    lines += ["", "Ask for one with `tilefoundry spec <topic>`, a section with"]
+    lines.append("`tilefoundry spec <topic> <section>`.")
+    return "\n".join(lines) + "\n"
+
+
+def render_outline(topic: str) -> str:
+    """What is in one document: every section's key and title, indented by level."""
+    found = sections(read_spec(topic))
+    if not found:
+        return f"{topic}: no sections\n"
+    # Capped: one long key would otherwise push every title across the screen.
+    width = min(24, max(len(section.key) for section in found))
+    lines = [f"{topic} ({spec_path(topic).name}):", ""]
+    for section in found:
+        indent = "  " * (section.level - 1)
+        lines.append(f"  {section.key:<{width}}  {indent}{section.title}")
+    return "\n".join(lines) + "\n"
+
+
+def _neighbours(found: tuple[Section, ...], index: int) -> list[str]:
+    """The sections beside this one, so a reader can walk without the outline."""
+    chosen = found[index]
+    siblings = [
+        section for section in found if section.level == chosen.level
+    ]
+    at = siblings.index(chosen)
+    beside = []
+    if at:
+        beside.append(f"previous: {siblings[at - 1].key}  {siblings[at - 1].title}")
+    if at + 1 < len(siblings):
+        beside.append(f"next:     {siblings[at + 1].key}  {siblings[at + 1].title}")
+    inside = [
+        section for section in found[index + 1 :]
+        if section.level == chosen.level + 1 and section.start < chosen.end
+    ]
+    if inside:
+        beside.append("inside:   " + ", ".join(section.key for section in inside))
+    return beside
+
+
+def render_section(topic: str, key: str) -> str:
+    """One section of one document, and the keys of the sections beside it."""
+    text = read_spec(topic)
+    found = sections(text)
+    for index, section in enumerate(found):
+        if section.key == key:
+            body = "\n".join(text.splitlines()[section.start : section.end]).rstrip()
+            beside = _neighbours(found, index)
+            if not beside:
+                return body + "\n"
+            return body + "\n\n" + "\n".join(f"# {line}" for line in beside) + "\n"
+    keys = ", ".join(section.key for section in found)
+    raise ValueError(f"{topic} has no section {key!r}; it has {keys}")
+
+
+def run_spec(topic: str | None, section: str | None) -> int:
+    """Print the documents, one document's outline, or one of its sections."""
+    import sys  # noqa: PLC0415
+
+    if topic is None:
+        sys.stdout.write(render_topics())
+    elif section is None:
+        sys.stdout.write(render_outline(topic))
+    else:
+        sys.stdout.write(render_section(topic, section))
+    return 0
+
+
+__all__ = [
+    "Section",
+    "read_spec",
+    "render_outline",
+    "render_section",
+    "render_topics",
+    "run_spec",
+    "sections",
+    "spec_path",
+    "topics",
+]

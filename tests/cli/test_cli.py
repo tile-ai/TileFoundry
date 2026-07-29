@@ -31,6 +31,64 @@ def _write_module(tmp_path, source: str = _VALID_MODULE):
     return path
 
 
+def test_spec_lists_the_documents_there_are(capsys) -> None:
+    """With no topic, the answer is what can be asked for -- including the alias."""
+    assert cli.main(["spec"]) == 0
+    listed = capsys.readouterr().out
+
+    assert "hir" in listed and "dsl" in listed
+    assert "runtime" in listed
+
+
+def test_spec_outlines_a_document_rather_than_printing_it(capsys) -> None:
+    """An outline is the disclosure; the whole document is the thing being avoided.
+
+    Asserted as "shorter, and without the prose" rather than by matching wording:
+    a dump would satisfy any test that only looked for section titles.
+    """
+    assert cli.main(["spec", "dsl"]) == 0
+    outline = capsys.readouterr().out
+    whole = cli.spec_path("hir").read_text(encoding="utf-8")
+
+    assert "Silu" in outline and "silu" in outline
+    assert len(outline) < len(whole) / 4
+    assert "class Silu(Op):" not in outline
+
+
+def test_spec_prints_one_section_and_the_keys_beside_it(capsys) -> None:
+    """One section, its own body, and where to go next without the outline."""
+    assert cli.main(["spec", "dsl", "silu"]) == 0
+    section = capsys.readouterr().out
+
+    assert "class Silu(Op):" in section
+    # The neighbours are named, and the neighbour's own body is not dragged in.
+    assert "next:     rmsnorm" in section
+    assert "class RMSNorm(Op):" not in section
+
+
+def test_spec_separates_two_sections_that_would_share_a_key(capsys) -> None:
+    """Two sections numbered 3.2 are each reachable, and the bare key is refused."""
+    assert cli.main(["spec", "parser", "shared-parsing-machinery/3.2"]) == 0
+    resolution = capsys.readouterr().out
+    assert "Closure-then-registry callee resolution" in resolution
+    assert "classDiagram" not in resolution
+
+    assert cli.main(["spec", "parser", "parser-architecture/3.2"]) == 0
+    assert "classDiagram" in capsys.readouterr().out
+
+    assert cli.main(["spec", "parser", "3.2"]) == 1
+    assert "no section '3.2'" in capsys.readouterr().err
+
+
+def test_spec_rejects_a_section_that_does_not_exist(capsys) -> None:
+    """The refusal says what the document does have, so the next try can succeed."""
+    assert cli.main(["spec", "dsl", "9.9"]) == 1
+    error = capsys.readouterr().err
+
+    assert "no section '9.9'" in error
+    assert "silu" in error
+
+
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:
     path = _write_module(tmp_path)
     assert cli.main(["inspect", "capabilities", f"{path}:Model.main"]) == 0

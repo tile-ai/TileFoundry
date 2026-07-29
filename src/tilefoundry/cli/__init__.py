@@ -11,7 +11,7 @@ from tilefoundry.cli.analyze import ANALYSES, run_authored_analysis
 from tilefoundry.cli.inspect import run_capabilities
 from tilefoundry.cli.schedule import run_schedule
 from tilefoundry.cli.source import load_authored_ir, parse_dims
-from tilefoundry.cli.spec import read_spec, spec_path
+from tilefoundry.cli.spec import read_spec, run_spec, spec_path
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.schedule import ScheduleError
 
@@ -21,6 +21,7 @@ _ANALYSES = ANALYSES
 #: rather than alphabetically -- the order itself is meant to read as the workflow.
 #: One table, so the parser and the overview cannot describe different surfaces.
 _COMMANDS = {
+    "spec": "read one specification: its sections, or one of them",
     "analyze": "type-check and analyze authored HIR",
     "schedule": "schedule authored HIR at one declared topology level",
     "inspect": "inspect installed target facts",
@@ -70,6 +71,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tilefoundry")
     # Not required: naming no command is how the overview is asked for.
     commands = parser.add_subparsers(dest="command")
+
+    spec = commands.add_parser("spec", help=_COMMANDS["spec"])
+    spec.add_argument(
+        "topic",
+        nargs="?",
+        metavar="TOPIC",
+        help="which document; with none, list the documents there are",
+    )
+    spec.add_argument(
+        "section",
+        nargs="?",
+        metavar="SECTION",
+        help="one section's key, as the outline prints it; with none, print the outline",
+    )
 
     analyze = commands.add_parser("analyze", help=_COMMANDS["analyze"])
     _add_source_argument(analyze)
@@ -138,6 +153,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         sys.stdout.write(overview())
         return 0
+    if args.command == "spec":
+        try:
+            return run_spec(args.topic, args.section)
+        except (OSError, ValueError) as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
     if args.command == "inspect":
         try:
             return run_capabilities(args.source)

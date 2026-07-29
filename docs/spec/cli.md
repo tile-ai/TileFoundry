@@ -17,6 +17,8 @@ be restated in the command surface, so there is one copy of it.
 ## Commands
 
 ```text
+tilefoundry spec [TOPIC [SECTION]]
+
 tilefoundry analyze model.py[:Module[.child_module...][.function]]
     [--roofline] [--footprint] [--timeline] [--dim NAME=EXTENT ...]
 
@@ -40,6 +42,45 @@ whose `@func` declares no execution context binds one. Every verb here reads
 hardware facts, so such a selection MUST be rejected naming the Module that
 would declare its context, rather than analysed or scheduled against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
+
+## Spec
+
+`spec` discloses the installed specifications a step at a time: which documents
+there are, what is in one, and one section of one. It MUST NOT print a document
+whole; a reader who asked what a rule says is not asking for every rule.
+
+- constraints:
+  - With no `TOPIC`, output MUST list the documents that can be asked for,
+    including any name that is another name for one of them.
+  - With a `TOPIC` and no `SECTION`, output MUST be that document's outline —
+    every section's key and title, indented by heading depth — and MUST NOT
+    include the sections' bodies.
+  - A section's key MUST be its own number when its heading carries one, and
+    otherwise a name derived from its title. Numbers alone would leave most of a
+    document unaddressable: a catalogue of operations numbers its container and
+    not its entries, and a section that cannot be named cannot be read.
+  - Keys MUST be unique within a document. Neither a number nor a title is unique
+    on its own — a document may restart its numbering under a later heading, and
+    may describe a field of the same name in two places — and a key naming two
+    sections would make the refusal below unreachable and answer with whichever
+    came first. A key that would repeat MUST take on the name of its enclosing
+    heading, and the one above that, until the keys differ.
+  - Headings MUST be recognised outside fenced code blocks only. A `#` line
+    inside a fence is a comment in an example, and treating it as a section would
+    both invent entries and cut the surrounding section short.
+  - With a `SECTION`, output MUST be that section — its heading and the lines
+    down to the next heading at its level or above — followed by the keys of the
+    sections beside it: the previous and the next at its level, and the ones it
+    contains. Naming the neighbours is what lets a reader walk the document
+    without returning to the outline.
+  - A `SECTION` the document does not have MUST be refused naming the keys it
+    does have, so the next attempt can succeed.
+  - A `TOPIC` with no installed document MUST be refused as that.
+  - Documents MUST be read from the source tree when one is present, and from the
+    installed data directory otherwise, so the command answers the same in an
+    editable checkout as in an installed environment. The source tree comes first
+    because an editable checkout is the one place the two can disagree, and there
+    the working copy is what its author means.
 
 ## Analyze
 
