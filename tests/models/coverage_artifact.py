@@ -214,9 +214,6 @@ class ModelCoveragePlugin:
         (directory / "model-coverage.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
-        (directory / "model-coverage.html").write_text(
-            render_html(payload), encoding="utf-8"
-        )
 
 
 def build(records: list[Reported], corpus, shards: int) -> dict:
@@ -288,64 +285,8 @@ def build(records: list[Reported], corpus, shards: int) -> dict:
     }
 
 
-_STYLE = """
-body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem;
-       color: #1b1b1b; background: #fbfbfa; }
-h1 { font-size: 1.2rem; } h2 { font-size: 1rem; margin: 1.6rem 0 .4rem; }
-h3 { font-size: .9rem; margin: 1rem 0 .3rem; color: #444; font-weight: 600; }
-table { border-collapse: collapse; margin: .3rem 0 .9rem; }
-th, td { text-align: left; padding: .2rem .8rem .2rem 0; vertical-align: top; }
-th { color: #666; font-weight: 600; border-bottom: 1px solid #ddd; }
-.PASS { color: #14670f; } .BLOCKED { color: #8a5a00; } .FAIL { color: #a10f0f;
-       font-weight: 700; } .SKIPPED { color: #777; }
-.untested { color: #777; }
-.reason { color: #666; }
-.run { color: #666; margin-bottom: 1.5rem; }
-"""
 
 
-def render_html(payload: dict) -> str:
-    """One self-contained page: no stylesheet, no script, no network.
-
-    An artifact that fetched anything would stop being evidence the moment it was
-    opened somewhere without that thing.
-    """
-    from html import escape  # noqa: PLC0415
-
-    run = payload["run"]
-    parts = [
-        "<!doctype html><html><head><meta charset='utf-8'>",
-        "<title>TileFoundry model coverage</title>",
-        f"<style>{_STYLE}</style></head><body>",
-        "<h1>TileFoundry model coverage</h1>",
-        "<p class='run'>"
-        f"{run['cases_reported']} cases reported"
-        f" &middot; {len(run['models_in_corpus'])} models"
-        f" &middot; {len(run['modules_in_corpus'])} Modules"
-        f" &middot; {run['worker_shards']} worker shards merged"
-        "</p>",
-    ]
-    for model_id in sorted(payload["models"]):
-        model = payload["models"][model_id]
-        parts.append(f"<h2>{escape(model_id)}</h2>")
-        targets = model["targets"]
-        if not targets:
-            parts.append("<p class='untested'>nothing reported on any target</p>")
-        for target_id in sorted(targets):
-            section = targets[target_id]
-            parts.append(f"<h3>{escape(target_id)}</h3>")
-            parts.append(_rows("Reference", section["reference"]))
-            for kind in ("analyze", "schedule", "sized"):
-                parts.append(_rows(kind.capitalize(), section[kind]["tested"]))
-                parts.append(_untested(section[kind]["untested"]))
-                parts.append(
-                    _listing(
-                        "no dimension left open, so no size to ask about",
-                        section[kind].get("not_applicable", []),
-                    )
-                )
-    parts.append("</body></html>")
-    return "".join(part for part in parts if part)
 
 
 def _row(record: Reported) -> dict:
@@ -358,35 +299,7 @@ def _row(record: Reported) -> dict:
     return row
 
 
-def _rows(heading: str, rows: list[dict]) -> str:
-    from html import escape  # noqa: PLC0415
 
-    if not rows:
-        return f"<table><tr><th>{escape(heading)}</th><td class='untested'>none</td></tr></table>"
-    cells = [f"<table><tr><th>{escape(heading)}</th><th>status</th><th></th></tr>"]
-    for row in rows:
-        name = escape(str(row.get("function") or row["case"]))
-        status = escape(str(row["status"]))
-        reason = escape(str(row.get("reason", "")))
-        cells.append(
-            f"<tr><td>{name}</td><td class='{status}'>{status}</td>"
-            f"<td class='reason'>{reason}</td></tr>"
-        )
-    cells.append("</table>")
-    return "".join(cells)
-
-
-def _untested(functions: list[str]) -> str:
-    return _listing("untested", functions)
-
-
-def _listing(label: str, functions: list[str]) -> str:
-    from html import escape  # noqa: PLC0415
-
-    if not functions:
-        return ""
-    names = ", ".join(escape(name) for name in functions)
-    return f"<p class='untested'>{escape(label)}: {names}</p>"
 
 
 __all__ = [
@@ -397,6 +310,5 @@ __all__ = [
     "build",
     "declare",
     "declared",
-    "render_html",
     "status_of",
 ]

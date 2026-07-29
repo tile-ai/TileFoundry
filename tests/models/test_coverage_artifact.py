@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from scripts.summarise_model_coverage import summarise
-from tests.models.coverage_artifact import build, render_html
+from tests.models.coverage_artifact import build
 
 _SESSION = '''
 import pytest
@@ -264,28 +264,17 @@ def test_a_reported_failure_is_counted_as_one() -> None:
     assert "FAIL" in text
 
 
-def test_the_page_fetches_nothing() -> None:
-    """A self-contained artifact, so it is still evidence wherever it is opened.
 
-    One that pulled a stylesheet or a script would render differently, or not at
-    all, on a machine without whatever it pulled.
-    """
-    payload = build([], (), 0)
-
-    page = render_html(payload)
-
-    for outward in ("http://", "https://", "<script", "src=", "@import"):
-        assert outward not in page, f"the page reaches out through {outward!r}"
-
-
-def test_the_page_states_what_the_run_covered() -> None:
-    """The counts a reader checks first are in the page, not only in the JSON."""
+def test_the_report_states_what_the_run_covered() -> None:
+    """The counts a reader checks first are in the payload, so the summariser and
+    any other consumer read them from one place."""
     from tests.models.registry import CORPUS  # noqa: PLC0415
 
-    page = render_html(build([], CORPUS, 0))
+    run = build([], CORPUS, 0)["run"]
 
-    assert f"{len({case.model for case in CORPUS})} models" in page
-    assert f"{len(CORPUS)} Modules" in page
+    assert run["models_in_corpus"] == sorted({case.model for case in CORPUS})
+    assert len(run["modules_in_corpus"]) == len(CORPUS)
+    assert run["cases_reported"] == 0
 
 
 @pytest.mark.parametrize("kind", ["analyze", "schedule", "sized"])

@@ -50,7 +50,6 @@ jobs:
           name: model-coverage
           path: |
             test_results/model-coverage.json
-            test_results/model-coverage.html
           if-no-files-found: error
       # A report nobody looks at rots. Printing the summary in the log means a
       # reader sees what the run established without downloading anything, and a
