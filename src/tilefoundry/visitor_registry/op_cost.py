@@ -24,6 +24,7 @@ from tilefoundry.ir.hir.nn.relu import ReLU
 from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
+from tilefoundry.ir.hir.nn.silu import Silu
 from tilefoundry.ir.hir.nn.softmax import SoftMax
 from tilefoundry.ir.hir.nn.tanh import Tanh
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -138,6 +139,11 @@ def _sigmoid(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Softplus)
 def _softplus(call: Call, ctx: CostContext) -> Cost:
+    return _elementwise(call, ctx)
+
+
+@register_cost_evaluator(Silu)
+def _silu(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
 
 
