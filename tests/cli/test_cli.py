@@ -31,17 +31,6 @@ def _write_module(tmp_path, source: str = _VALID_MODULE):
     return path
 
 
-def test_help_dsl_is_the_hir_spec(capsys) -> None:
-    assert cli.main(["help", "dsl"]) == 0
-    assert cli.dsl_spec_path() == cli.spec_path("hir")
-    assert capsys.readouterr().out == cli.spec_path("hir").read_text(encoding="utf-8")
-
-
-def test_help_cli_is_the_source_spec(capsys) -> None:
-    assert cli.main(["help", "cli"]) == 0
-    assert capsys.readouterr().out == cli.spec_path("cli").read_text(encoding="utf-8")
-
-
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:
     path = _write_module(tmp_path)
     assert cli.main(["inspect", "capabilities", f"{path}:Model.main"]) == 0

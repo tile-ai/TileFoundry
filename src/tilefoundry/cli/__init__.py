@@ -11,16 +11,51 @@ from tilefoundry.cli.analyze import ANALYSES, run_authored_analysis
 from tilefoundry.cli.inspect import run_capabilities
 from tilefoundry.cli.schedule import run_schedule
 from tilefoundry.cli.source import load_authored_ir, parse_dims
-from tilefoundry.cli.spec import (
-    dsl_spec_path,
-    read_dsl_spec,
-    read_spec,
-    spec_path,
-)
+from tilefoundry.cli.spec import read_spec, spec_path
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.schedule import ScheduleError
 
 _ANALYSES = ANALYSES
+
+#: Every command and its one-line description, in the order an agent meets them
+#: rather than alphabetically -- the order itself is meant to read as the workflow.
+#: One table, so the parser and the overview cannot describe different surfaces.
+_COMMANDS = {
+    "analyze": "type-check and analyze authored HIR",
+    "schedule": "schedule authored HIR at one declared topology level",
+    "inspect": "inspect installed target facts",
+}
+
+
+def _project_summary() -> str:
+    """The packaged one-line description of the project.
+
+    Read from installed metadata rather than restated here, so there is one copy
+    of the sentence and no second one to drift.
+    """
+    from importlib.metadata import metadata  # noqa: PLC0415
+
+    return metadata("tilefoundry")["Summary"].rstrip(".")
+
+
+def overview() -> str:
+    """What a bare invocation prints: what this is, and how to ask it something."""
+    width = max(len(name) for name in _COMMANDS)
+    commands = "\n".join(
+        f"  {name:<{width}}  {description}" for name, description in _COMMANDS.items()
+    )
+    return (
+        f"TileFoundry — {_project_summary()}\n"
+        f"\n"
+        f"Usage:\n"
+        f"  tilefoundry <command> [options]\n"
+        f"\n"
+        f"Common commands:\n"
+        f"{commands}\n"
+        f"\n"
+        f"Options:\n"
+        f"  -h, --help  print this, or a command's own help after the command\n"
+    )
 
 
 def _add_source_argument(parser: argparse.ArgumentParser) -> None:
@@ -33,9 +68,10 @@ def _add_source_argument(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tilefoundry")
-    commands = parser.add_subparsers(dest="command", required=True)
+    # Not required: naming no command is how the overview is asked for.
+    commands = parser.add_subparsers(dest="command")
 
-    analyze = commands.add_parser("analyze", help="type-check and analyze authored HIR")
+    analyze = commands.add_parser("analyze", help=_COMMANDS["analyze"])
     _add_source_argument(analyze)
     for analysis in _ANALYSES:
         analyze.add_argument(
@@ -51,10 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print the report as JSON instead of text"
     )
 
-    schedule = commands.add_parser(
-        "schedule",
-        help="schedule authored HIR at one declared topology level",
-    )
+    schedule = commands.add_parser("schedule", help=_COMMANDS["schedule"])
     _add_source_argument(schedule)
     schedule.add_argument(
         "--topology",
@@ -92,20 +125,18 @@ def build_parser() -> argparse.ArgumentParser:
         "searching the whole budget for the best one",
     )
 
-    inspect = commands.add_parser("inspect", help="inspect installed target facts")
+    inspect = commands.add_parser("inspect", help=_COMMANDS["inspect"])
     inspect_commands = inspect.add_subparsers(dest="inspect_command", required=True)
     capabilities = inspect_commands.add_parser("capabilities", help="print target capabilities")
     _add_source_argument(capabilities)
 
-    help_command = commands.add_parser("help", help="print installed reference material")
-    help_command.add_argument("topic", choices=("dsl", "cli"))
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "help":
-        sys.stdout.write(read_spec(args.topic))
+    if args.command is None:
+        sys.stdout.write(overview())
         return 0
     if args.command == "inspect":
         try:
@@ -150,11 +181,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "build_parser",
-    "dsl_spec_path",
     "load_authored_ir",
     "main",
+    "overview",
     "parse_dims",
-    "read_dsl_spec",
     "read_spec",
     "spec_path",
 ]

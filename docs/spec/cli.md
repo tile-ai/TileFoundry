@@ -1,9 +1,18 @@
 # TileFoundry Command-Line Interface
 
-This file is the normative reference printed by `tilefoundry help cli`. It
-defines the command-line contract for Agent-authored HIR analysis. `help dsl`
-prints the installed [HIR specification](./hir.md); Python authoring syntax and
-grammar productions remain in the [parser specification](./parser.md).
+This file defines the command-line contract for the two pieces of work an Agent
+does through TileFoundry: translating a published model into authored HIR, and
+turning that HIR into a high-performance runtime implementation. The commands
+answer what only this project knows — which models have been described and how,
+what a specification section says, whether an implementation agrees with its
+reference, and what an authored program costs. Python authoring syntax and
+grammar productions remain in the [parser specification](./parser.md); the
+authored IR itself is the [HIR specification](./hir.md).
+
+Naming no command MUST print an overview rather than an error: a one-line
+project summary taken from installed package metadata, the usage form, the
+commands in the order the work is done, and the options. The summary MUST NOT
+be restated in the command surface, so there is one copy of it.
 
 ## Commands
 
@@ -16,9 +25,6 @@ tilefoundry schedule model.py[:Module[.child_module...][.function]] --topology L
     [--first-plan]
 
 tilefoundry inspect capabilities model.py[:Module[.child_module...][.function]]
-
-tilefoundry help dsl
-tilefoundry help cli
 ```
 
 `SOURCE` is a Python file followed optionally by
@@ -164,10 +170,3 @@ cited from a reference, derived, or a reading no source states. A fact with no
 usable value is reported as unavailable rather than given a placeholder number.
 A target composed from a directly supplied value has no installed document to
 report, and the command says so instead of naming the resource it resembles.
-
-## Help
-
-`help dsl` writes `share/tilefoundry/spec/hir.md` verbatim; `help cli` writes
-`share/tilefoundry/spec/cli.md`. In a source or editable tree, they read the
-matching files from `docs/spec/`. Python operation signatures are provided
-separately by installed stubs and Python introspection.
