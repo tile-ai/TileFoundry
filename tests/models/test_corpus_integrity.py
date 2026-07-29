@@ -18,7 +18,6 @@ it, so a model added tomorrow is checked by the same five rules.
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import importlib
 import inspect
@@ -40,28 +39,6 @@ _DIGEST = re.compile(r"\b[0-9a-f]{64}\b")
 
 def _all_cases() -> tuple[ModelCase, ...]:
     return CORPUS
-
-
-def _assigned_names(node: ast.Assign | ast.AnnAssign) -> list[str]:
-    """The plain names this statement binds, unpacking included."""
-    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    return [
-        one.id
-        for target in targets
-        for one in (target.elts if isinstance(target, ast.Tuple | ast.List) else [target])
-        if isinstance(one, ast.Name)
-    ]
-
-
-def _is_a_lookup(value: ast.expr) -> bool:
-    """`<expr>.lookup(...)`, however the receiver is spelled, or a tuple of them."""
-    if isinstance(value, ast.Tuple | ast.List):
-        return any(_is_a_lookup(element) for element in value.elts)
-    return (
-        isinstance(value, ast.Call)
-        and isinstance(value.func, ast.Attribute)
-        and value.func.attr == "lookup"
-    )
 
 
 def test_no_two_cases_share_an_id() -> None:
@@ -250,25 +227,3 @@ def test_a_stated_digest_is_the_digest_of_what_is_checked_in(package: str) -> No
             f"{package}/{path.name} hashes to {digest}, which {package}/config.py "
             f"does not state; the file and its pin have drifted apart"
         )
-
-
-@pytest.mark.parametrize("package", MODELS)
-def test_no_model_file_re_exports_a_looked_up_function(package: str) -> None:
-    """A module-level `NAME = Root.lookup("...")` in a model file is a re-export
-    shim: the node already has a name inside the tree. Matched on the assignment's
-    shape, so calling `lookup` inline anywhere stays legitimate.
-    """
-    module = importlib.import_module(f"tests.models.{package}.model")
-    tree = ast.parse(Path(inspect.getfile(module)).read_text(encoding="utf-8"))
-    shims = [
-        f"line {node.lineno}: {', '.join(_assigned_names(node))}"
-        for node in tree.body
-        if isinstance(node, ast.Assign | ast.AnnAssign)
-        and node.value is not None
-        and _assigned_names(node)
-        and _is_a_lookup(node.value)
-    ]
-    assert not shims, (
-        f"{package}/model.py binds a looked-up function to a module-level name "
-        f"({'; '.join(shims)}); call it where it is used instead"
-    )

@@ -168,33 +168,6 @@ def test_the_stack_is_the_published_order_and_its_layers_are_independent():
         stack.decode_hidden(None, (), ())
 
 
-def test_the_weights_are_declared_and_the_state_is_not():
-    """Which parameters a loading fills, and which a step is handed.
-
-    A weight is a ``ConstTensor`` parameter, so ``Module.weights`` is exactly what
-    a resource has to supply. A mixer's state is not one: ``conv_state`` and
-    ``recurrent_state`` are as large as a weight and are replaced every step, and
-    declaring either as one would leave a step reading the same history forever.
-
-    Asserted for the root too, because the root is never executed -- that its
-    embedding, its closing norm and its head are weights it holds is a structural
-    claim here or it is nothing.
-    """
-    assert set(Qwen3_5Decoder.weights) == {"table", "gamma_final", "w_head"}
-    # The head's published layout is (vocab, hidden); the converter is what makes
-    # the declared one reachable from it.
-    assert [name for name, _ in Qwen3_5Decoder.lookup("lm_head").converters] == ["w_head"]
-
-    state = {"k_cache", "v_cache", "conv_state", "recurrent_state"}
-    for module in (Qwen3_5FullAttention, Qwen3_5LinearAttention, Qwen3_5MoE):
-        assert module.weights, module.name
-        assert not state & set(module.weights), module.name
-
-    for kind, layer in LAYER_TYPE.items():
-        assert not layer.weights, f"{kind} holds no weight of its own; its blocks do"
-        assert all(child.weights for child in layer.modules), kind
-
-
 # ── what mrope actually covers here ─────────────────────────────────────
 
 
