@@ -16,9 +16,10 @@ from .function import (
 )
 from .measure import Gate, Report, bench, check
 from .module import CompiledModule, RuntimeModule
-from .resource import DictResource, RuntimeResource, SafetensorsResource
+from .resource import Absolute, DictResource, RuntimeResource, SafetensorsResource
 
 __all__ = [
+    "Absolute",
     "CompiledModule",
     "DictResource",
     "EntryABI",

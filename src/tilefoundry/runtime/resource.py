@@ -5,12 +5,21 @@ directory. See docs/spec/runtime.md §1.4.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Mapping, Protocol, Union
 
 import torch
 
+
+@dataclasses.dataclass(frozen=True)
+class Absolute:
+    """An absolute raw checkpoint key, not relative to the current subtree."""
+
+    name: str
+
+
 # One raw name, or (one-to-many, e.g. per-expert) a tuple in declared order.
-AliasValue = Union[str, "tuple[str, ...]"]
+AliasValue = Union[str, "tuple[str, ...]", Absolute]
 AliasMap = Mapping[str, AliasValue]
 
 
@@ -43,6 +52,8 @@ def _resolve_key(alias: AliasMap, prefix: str, name: str) -> AliasValue:
     hit = _alias_lookup(alias, prefix, name)
     if hit is None:
         return f"{prefix}{name}"
+    if isinstance(hit, Absolute):
+        return hit.name
     if isinstance(hit, tuple):
         return tuple(f"{prefix}{one}" for one in hit)
     return f"{prefix}{hit}"
@@ -57,6 +68,12 @@ def _resolve_segment(alias: AliasMap, prefix: str, seg: str) -> str:
             f"RuntimeResource.subtree: segment {seg!r} resolves to a "
             f"tuple-valued alias {hit!r}; a subtree segment must resolve to "
             f"one name"
+        )
+    if isinstance(hit, Absolute):
+        raise TypeError(
+            f"RuntimeResource.subtree: segment {seg!r} resolves to an absolute "
+            f"alias {hit!r}; a subtree segment must resolve to one relative "
+            f"name"
         )
     return hit
 
@@ -207,4 +224,4 @@ class SafetensorsResource:
         return child
 
 
-__all__ = ["DictResource", "RuntimeResource", "SafetensorsResource"]
+__all__ = ["Absolute", "DictResource", "RuntimeResource", "SafetensorsResource"]

@@ -363,6 +363,8 @@ class: both implementations below take an `alias={canonical: raw}` table,
 resolved by the same lookup order.
 
 ```python
+AliasValue = str | tuple[str, ...] | Absolute
+
 class RuntimeResource(Protocol):
     def load(self, name: str) -> torch.Tensor: ...
     def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None": ...
@@ -396,19 +398,29 @@ tuple value is the one-to-many group `load_group` reads; `subtree`'s own
 segment resolution rejects a tuple-valued hit (a subtree segment MUST
 resolve to one name).
 
+Aliasing therefore only ever reaches **downward**: a name resolved inside a
+scope carries that scope's prefix, so a node cannot address a tensor its
+parent owns — and a checkpoint may well store one there, such as a
+layer-level norm weight a child consumes. `Absolute(name)` is the escape: an
+alias whose value is `Absolute` MUST resolve to `name` as the whole raw key,
+with no prefix joined onto it. It stays a leaf-only form — `load_group` reads
+it as the one-to-one case and returns `None`, and `subtree` MUST reject it in
+the same shape as a tuple-valued hit, because a subtree segment must resolve
+to one relative name.
+
 Two implementations:
 
 ```python
 class DictResource:
     def __init__(
         self, data: Mapping[str, torch.Tensor], prefix: str = "",
-        alias: "Mapping[str, str | tuple[str, ...]] | None" = None,
+        alias: "Mapping[str, AliasValue] | None" = None,
     ) -> None: ...
 
 class SafetensorsResource:
     def __init__(
         self, ckpt_dir: str, prefix: str = "", device: str = "cuda",
-        alias: "Mapping[str, str | tuple[str, ...]] | None" = None,
+        alias: "Mapping[str, AliasValue] | None" = None,
     ) -> None: ...
 ```
 

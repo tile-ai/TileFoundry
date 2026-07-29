@@ -18,6 +18,7 @@ from tests.models.generation import generate
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module
 from tilefoundry.runtime import (
+    Absolute,
     SafetensorsResource,
     bench,
     check,
@@ -76,8 +77,12 @@ def _fabricate_one(shape, dtype, name, generator):
 
 
 def _raw_key(path, leaf, alias):
+    """Where the checkpoint keeps *leaf*, resolved the way the resource resolves it:
+    a path-qualified entry first, then a bare one, and an ``Absolute`` unprefixed."""
     prefix = "".join(f"{alias.get(seg, seg)}." for seg in path)
-    hit = alias.get(leaf, leaf)
+    hit = alias.get(f"{prefix}{leaf}", alias.get(leaf, leaf))
+    if isinstance(hit, Absolute):
+        return hit.name
     if isinstance(hit, tuple):
         return tuple(f"{prefix}{one}" for one in hit)
     return f"{prefix}{hit}"
@@ -204,6 +209,26 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
     ])
     assert w1.shape == expected_w1.shape
     assert torch.equal(w1.float().cpu(), expected_w1.float())
+
+    # `prepare` read the router's table through an `Absolute` alias, from a raw key
+    # outside the child's own prefix, and wrote it under the canonical name.
+    assert torch.equal(
+        store.load("layer0.moe.gate_weight").float().cpu(),
+        raw_tensors["layers.0.gate.weight"].float(),
+    )
+    assert "layers.0.ffn.gate.weight" not in raw_tensors
+
+    # The same escape on a scoped view; a subtree segment stays relative.
+    escaped = SafetensorsResource(
+        str(prepared), device="cuda",
+        alias={"pre_moe_norm_weight": Absolute("layer0.pre_moe_norm_weight")},
+    ).subtree("layer0").subtree("moe")
+    assert torch.equal(
+        escaped.load("pre_moe_norm_weight"), store.load("layer0.pre_moe_norm_weight")
+    )
+    assert escaped.load_group("pre_moe_norm_weight") is None
+    with pytest.raises(TypeError, match="absolute alias"):
+        escaped.subtree("pre_moe_norm_weight")
 
     w1_scale = store.load("layer0.moe.w1_scale")
     expected_scale = torch.stack([

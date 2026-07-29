@@ -3,9 +3,11 @@ name, per ``DeepSeek-V4-Flash-FP8``'s ``model.safetensors.index.json``."""
 from __future__ import annotations
 
 from tests.models.deepseek_v4_flash.config import DSV4Config
+from tilefoundry.runtime import Absolute
 
-# One raw name, or (per-expert groups) a tuple of raw names in declared order.
-AliasValue = "str | tuple[str, ...]"
+# One raw name, one absolute raw name, or (per-expert groups) a tuple of raw
+# names in declared order.
+AliasValue = "str | tuple[str, ...] | Absolute"
 
 
 def hf_alias(config: DSV4Config) -> "dict[str, AliasValue]":
@@ -32,7 +34,12 @@ def hf_alias(config: DSV4Config) -> "dict[str, AliasValue]":
         "wo_a_weight": "wo_a.weight",
         "wo_b_weight": "wo_b.weight",
         "wo_b_scale": "wo_b.scale",
-        "gate_weight": "gate.weight",
+        # The router's table is stored one level up, beside the layer's norms
+        # rather than inside the ffn: an absolute key is how the child reaches it.
+        **{
+            f"layers.{i}.ffn.gate_weight": Absolute(f"layers.{i}.gate.weight")
+            for i in range(config.n_layers)
+        },
         "tid2eid": "gate.tid2eid",
         "w1_weight": tuple(f"experts.{i}.w1.weight" for i in range(config.n_routed)),
         "w3_weight": tuple(f"experts.{i}.w3.weight" for i in range(config.n_routed)),
@@ -46,7 +53,6 @@ def hf_alias(config: DSV4Config) -> "dict[str, AliasValue]":
         "shared_w3_scale_raw": "shared_experts.w3.scale",
         "shared_w2_weight": "shared_experts.w2.weight",
         "shared_w2_scale_raw": "shared_experts.w2.scale",
-        # moe's own rms_weight has no checkpoint backing; intentionally not aliased.
     }
     return alias
 
