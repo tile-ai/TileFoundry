@@ -93,15 +93,17 @@ class Attention:
     keyword (every `@runtime_module` result already does).
   - weights are filled by name at call time from what `load` bound, so a
     kernel method's caller passes only activations — the same call shape the
-    semantic side's attribute-access callable answers with
-    ([core-ir §1.1](./core-ir.md#11-function-access)).
+    semantic side answers with once it has been read, i.e. `LoadedModule`'s
+    attribute-access callable rather than the `Module`'s, which takes every
+    declared param (§1.1.2, [core-ir §1.1](./core-ir.md#11-function-access)).
   - orchestration methods (`forward` / `init_caches` / …) are reused from the
     semantic `Module.methods` verbatim and are never rewritten on the
     runtime side: inside them, `self.<fn>` / `self.<child>` resolve to the
     runtime twin's own kernels / children, which is what lets one method
     body serve both sides. Absent an own `forward`, the generated class runs
     `sem.methods["forward"]` if present, else calls the entry function by
-    name — the runtime mirror of `Module.forward` (§1.1.2).
+    name — the same dispatch both semantic-side `forward`s make, on the
+    activations-alone convention `LoadedModule.forward` uses (§1.1.2).
 
 ### 1.1.1 `RuntimeFunction`
 
@@ -164,9 +166,16 @@ authoring surface as its `RuntimeModule` twin, which also has a `forward`:
 
 ```python
 class Module:      # tilefoundry.ir.core.module
-    def load(self, resource: RuntimeResource) -> None: ...
-    def forward(self, *acts): ...                                              # __call__ = forward
+    def load(self, resource: RuntimeResource) -> "LoadedModule": ...
+    def forward(self, *args): ...                                              # __call__ = forward
     def prepare(self, raw: RuntimeResource, out_dir: str, *, device="cpu") -> None: ...
+
+
+class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
+    module: Module
+    constants: Mapping[str, torch.Tensor]
+    modules: tuple["LoadedModule", ...]
+    def forward(self, *acts): ...                                              # __call__ = forward
 ```
 
 - constraints:
@@ -182,26 +191,42 @@ class Module:      # tilefoundry.ir.core.module
     (e.g. `layer0.attention.w_kv`). Plain directory — no content-hash cache /
     manifest. The runtime twin never prepares; both twins `load` straight
     from the directory this writes.
-  - `Module.load(resource)`: bind this node's `weights`
-    ([core-ir §1](./core-ir.md#1-module)) by name from `resource`, then
-    recurse into each child under `resource.subtree(child.name)` — the
-    semantic-side counterpart of the `RuntimeModule` twin's own `load`
-    (§1.1).
+  - `Module.load(resource)`: read this node's `weights`
+    ([core-ir §1](./core-ir.md#1-module)) by name from `resource` and recurse
+    into each child under `resource.subtree(child.name)`, **returning a
+    `LoadedModule` tree**. It MUST NOT write bindings onto the `Module`, which
+    stays pure IR: one `Module` may be read any number of times — two
+    checkpoints, two devices — and each reading is independent of the others.
+    A child reached from two owners therefore yields one `LoadedModule` per
+    owner rather than one binding the last owner wins. This is the
+    semantic-side counterpart of the `RuntimeModule` twin's own `load` (§1.1),
+    which still binds itself in place.
+  - `LoadedModule` attribute access mirrors the `Module`'s
+    ([core-ir §1.1](./core-ir.md#11-function-access)) against that reading: a
+    function resolves to a callable taking **activations alone**, its
+    `ConstTensor` params filled by name from these constants; a child name
+    resolves to the child `LoadedModule`; a method is bound to the
+    `LoadedModule`, so an orchestration method's own `self.<function>(...)`
+    reaches the bound callable. The `Module` behind a reading is
+    `loaded.module` — what a decorator or an analysis that wants the IR takes.
   - state is the caller's: a tensor that must survive across steps (e.g. a KV
     cache) is an ordinary `Tensor` param passed in and returned, and a step MUST
     NOT mutate one it was given. Sharding such a tensor is therefore the same
     mechanism as for any other — its own `TensorType.layout` — rather than a
     second description for an opaque state object.
-  - `Module.forward(*acts)` (`__call__` is `forward`): run a registered
-    `forward` orchestration method (`Module.methods`) if the class body
-    defined one, else the entry `@func` — with `ConstTensor` params filled
-    by name from what `load` already bound and every other param
-    positional. Reaching one function directly (rather than the whole step)
-    is `mod.<function_name>(*acts)`
-    ([core-ir §1.1](./core-ir.md#11-function-access)). `check` compares the
-    semantic and runtime forwards (§1.6). A multi-node composition is
-    chained by the caller, one `forward` (or one named function call) per
-    node.
+  - `forward` (`__call__` is `forward`) exists on both, and each runs a
+    registered `forward` orchestration method (`Module.methods`) if the class
+    body defined one, else the entry `@func`. They differ in exactly what the
+    function's `ConstTensor` params come from: `Module.forward(*args)` takes one
+    argument per declared param because a `Module` holds no constants, while
+    `LoadedModule.forward(*acts)` takes activations alone and fills the
+    constants from that reading. Reaching one function directly (rather than
+    the whole step) is `mod.<function_name>(...)` on either
+    ([core-ir §1.1](./core-ir.md#11-function-access)). Calling one with the
+    other's argument list MUST be rejected naming the runner it wanted, not
+    left to fail as a shape error inside the evaluator. `check` compares the
+    semantic and runtime forwards (§1.6). A multi-node composition is chained
+    by the caller, one `forward` (or one named function call) per node.
 
 ### 1.1.3 Internal Pipeline (compiled origin)
 

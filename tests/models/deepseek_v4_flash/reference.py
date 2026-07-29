@@ -127,9 +127,8 @@ def run_attention_step(inputs: DecodeStepInputs):
     step: the description under test is the one the checkpoint pipeline binds
     into, not a second copy that takes its weights positionally.
     """
-    module = build_attention()
-    module.load(DictResource(inputs.weights))
-    return module.forward(*inputs.args)
+    loaded = build_attention().load(DictResource(inputs.weights))
+    return loaded.forward(*inputs.args)
 
 
 def attention_step_oracle(inputs: DecodeStepInputs) -> torch.Tensor:

@@ -146,13 +146,14 @@ entries — so name resolution is always single-valued.
   when none match or when more than one same-kind entry shares the name. A
   **function** name resolves to a callable that runs it — not to the
   `Function` / `PrimFunction` node itself (reach that with `lookup` /
-  `function_named` above) — with its `ConstTensor` params filled by name
-  from what `load` bound and every other param positional
-  (docs/spec/runtime.md §1.1.2). A **child module** name resolves to that
-  child `Module`. A **method** name resolves to the class-body function
-  bound like an instance method (`m.forward(...)`). Names beginning with `_`
-  are never functions, modules, or methods and resolve by normal attribute
-  rules. This lets a module read like the model it mirrors —
+  `function_named` above). A `Module` holds no constants, so that callable
+  takes **one argument per declared param**, a `ConstTensor` one included; the
+  callable that fills constants from bindings instead belongs to
+  `LoadedModule` (docs/spec/runtime.md §1.1.2). A **child module** name
+  resolves to that child `Module`. A **method** name resolves to the
+  class-body function bound like an instance method (`m.forward(...)`). Names
+  beginning with `_` are never functions, modules, or methods and resolve by
+  normal attribute rules. This lets a module read like the model it mirrors —
   `decoder.layer0.attention(...)`.
 
 ## 2. `Expr`

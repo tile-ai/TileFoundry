@@ -178,13 +178,14 @@ class Module:
 
     def __getattr__(self, name: str):
         """Resolve *name* to a function, a child module, or a bound method. A
-        function resolves to a **callable that runs it**, not to the IR node —
-        use ``lookup`` for the node."""
+        function resolves to a **callable that runs it over every declared
+        parameter**, not to the IR node — use ``lookup`` for the node, and
+        ``load(resource)`` for a runner that fills constants from bindings."""
         if name.startswith("_"):
             raise AttributeError(name)
         matches = tuple(fn for fn in self.functions if fn.name == name)
         if len(matches) == 1:
-            return functools.partial(self._run, matches[0])
+            return functools.partial(self._run_authored, matches[0])
         if len(matches) > 1:
             raise AttributeError(
                 f"Module {self.name!r}: {name!r} resolves to {len(matches)} "
@@ -271,47 +272,60 @@ class Module:
             )
         return matches[0]
 
-    def load(self, resource) -> None:
-        """Bind this node's weights by name from *resource*, then recurse into
-        each child."""
-        bound: dict[str, object] = {}
+    def load(self, resource) -> "LoadedModule":
+        """This Module's constants read from *resource*, as a ``LoadedModule``.
+
+        Returns rather than mutates. Nothing is written back onto the Module: it
+        is the IR, one value may be loaded any number of times against different
+        checkpoints or devices, and a child reached from two owners gets one
+        ``LoadedModule`` per owner rather than one binding that the last owner
+        wins.
+        """
+        constants: dict[str, object] = {}
         for name in self.weights:
             try:
-                bound[name] = resource.load(name)
+                constants[name] = resource.load(name)
             except KeyError as e:
                 raise KeyError(f"Module {self.name!r}: missing weight {name!r}") from e
-        object.__setattr__(self, "_bound", bound)
-        for child in self.modules:
-            child.load(resource.subtree(child.name))
+        return LoadedModule(
+            module=self,
+            constants=constants,
+            modules=tuple(
+                child.load(resource.subtree(child.name)) for child in self.modules
+            ),
+        )
 
-    def _run(self, fn: ModuleFunction, *acts):
-        """Evaluate *fn*, weights filled by name from ``load``, the rest from
-        *acts* positionally."""
+    def _run_authored(self, fn: ModuleFunction, *args):
+        """Evaluate *fn* over the arguments given, one per declared parameter.
+
+        The authored Module holds no constants, so every parameter comes from the
+        call -- a ``ConstTensor`` one included. ``LoadedModule`` is where a
+        constant is filled from a binding instead.
+        """
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
-        bound = getattr(self, "_bound", {})
-        args = []
-        activations = iter(acts)
-        for param in fn.params:
-            if param.is_const:
-                try:
-                    args.append(bound[param.name])
-                except KeyError:
-                    raise KeyError(
-                        f"Module {self.name!r}: weight {param.name!r} of "
-                        f"{fn.name!r} is not bound; call load(resource) first"
-                    ) from None
-            else:
-                args.append(next(activations))
+        if len(args) != len(fn.params):
+            consts = sum(1 for p in fn.params if p.is_const)
+            hint = (
+                f"; {consts} of them are ConstTensor, which an authored Module "
+                f"does not hold -- pass them here, or call load(resource) and "
+                f"run the LoadedModule with activations alone"
+                if consts
+                else ""
+            )
+            raise TypeError(
+                f"Module {self.name!r}: {fn.name!r} declares {len(fn.params)} "
+                f"parameters but got {len(args)}{hint}"
+            )
         return evaluate(fn, *args)
 
-    def forward(self, *acts):
+    def forward(self, *args):
         """Run this node's step: its ``forward`` orchestration method if it has
-        one, else the entry function."""
+        one, else the entry function over the arguments given."""
         method = self.methods.get("forward")
         if method is not None:
-            return method(self, *acts)
-        return self._run(self.lookup(self.entry), *acts)
+            return method(self, *args)
+        return self._run_authored(self.lookup(self.entry), *args)
 
     __call__ = forward
 
@@ -382,9 +396,107 @@ class Module:
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
 
     def renamed(self, name: str) -> "Module":
-        """A copy of this node under a different ``name``. Shallow: children are
-        shared, so an independent instance needs a fresh build."""
+        """A copy of this node under a different ``name``.
+
+        The copy's children are its own. ``__post_init__`` claims each child for
+        its new owner, and a child that already belongs to another one is claimed
+        as a clone -- so two ``renamed`` copies of the same Module do not share a
+        child, and neither observes the other's subtree.
+        """
         return dataclasses.replace(self, name=name)
 
 
-__all__ = ["Module", "ModuleFunction"]
+@dataclass(frozen=True)
+class LoadedModule:
+    """An IR ``Module`` together with the constants read for *this* loading.
+
+    Two of these may stand over one Module -- two checkpoints, two devices, or
+    one child reached from two owners. Each holds its own constants and its own
+    child ``LoadedModule``s, so what one binds is not visible from the other.
+    The Module itself stays pure IR.
+
+    Attribute access mirrors ``Module``'s, with one difference that is the point
+    of the type: a function resolves to a runner that supplies the ``ConstTensor``
+    parameters from these bindings, so the caller passes activations alone.
+    """
+
+    module: Module
+    constants: Mapping[str, object]
+    modules: tuple["LoadedModule", ...] = field(default_factory=tuple)
+
+    @property
+    def name(self) -> str:
+        return self.module.name
+
+    def __getattr__(self, name: str):
+        """Resolve *name* against the Module, with functions and children
+        answering from this loading rather than from the IR."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        module = self.module
+        matches = tuple(fn for fn in module.functions if fn.name == name)
+        if len(matches) == 1:
+            return functools.partial(self._run_bound, matches[0])
+        if len(matches) > 1:
+            raise AttributeError(
+                f"LoadedModule {self.name!r}: {name!r} resolves to "
+                f"{len(matches)} entries; one name must map to one function"
+            )
+        children = tuple(child for child in self.modules if child.name == name)
+        if len(children) == 1:
+            return children[0]
+        if len(children) > 1:
+            raise AttributeError(
+                f"LoadedModule {self.name!r}: {name!r} resolves to "
+                f"{len(children)} child modules; one name must map to one module"
+            )
+        method = module.methods.get(name)
+        if method is not None:
+            # Bound to this LoadedModule, so an orchestration method's own
+            # ``self.some_func(...)`` reaches the bound runner rather than the
+            # authored one and stays free of the weights.
+            return types.MethodType(method, self)
+        raise AttributeError(
+            f"LoadedModule {self.name!r} has no function, child module, or "
+            f"method {name!r}"
+        )
+
+    def _run_bound(self, fn: ModuleFunction, *acts):
+        """Evaluate *fn* over *acts*, its ``ConstTensor`` parameters filled by
+        name from these bindings."""
+        from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
+
+        expected = sum(1 for p in fn.params if not p.is_const)
+        if len(acts) != expected:
+            raise TypeError(
+                f"LoadedModule {self.name!r}: {fn.name!r} takes {expected} "
+                f"activation(s) -- its {len(fn.params) - expected} ConstTensor "
+                f"parameter(s) come from the bindings -- but got {len(acts)}"
+            )
+        args = []
+        activations = iter(acts)
+        for param in fn.params:
+            if param.is_const:
+                try:
+                    args.append(self.constants[param.name])
+                except KeyError:
+                    raise KeyError(
+                        f"LoadedModule {self.name!r}: weight {param.name!r} of "
+                        f"{fn.name!r} was not read by load(resource)"
+                    ) from None
+            else:
+                args.append(next(activations))
+        return evaluate(fn, *args)
+
+    def forward(self, *acts):
+        """Run this node's step: its ``forward`` orchestration method if it has
+        one, else the entry function over the activations given."""
+        method = self.module.methods.get("forward")
+        if method is not None:
+            return method(self, *acts)
+        return self._run_bound(self.module.entry_function(), *acts)
+
+    __call__ = forward
+
+
+__all__ = ["LoadedModule", "Module", "ModuleFunction"]

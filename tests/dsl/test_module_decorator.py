@@ -88,6 +88,44 @@ def test_collects_orchestration_method_and_rejects_other_members():
             budget = 3  # not a DSL function, a child Module, or a plain function
 
 
+def test_the_runner_on_an_authored_module_takes_the_weights_too():
+    """The callable behind attribute access supplies nothing: an authored Module
+    is IR and holds no constants, so a ``ConstTensor`` parameter comes from the
+    call like any other. The corpus exercises the loaded runner instead, and its
+    six all-``Tensor`` models would leave this indistinguishable from ordinary
+    positional filling — hence a ``ConstTensor`` here.
+
+    Reaching for the wrong runner is the other half of the contract, and the two
+    directions must not give each other's advice: too few arguments here sends the
+    caller to ``load``, while the same mistake inverted on a ``LoadedModule`` must
+    not, because that caller has already loaded. Neither may surface as a shape
+    error from inside the evaluator.
+    """
+    import torch  # noqa: PLC0415 — only this test needs a real tensor
+
+    from tilefoundry.dsl import ConstTensor  # noqa: PLC0415
+    from tilefoundry.runtime.resource import DictResource  # noqa: PLC0415
+
+    @module(entry="scale")
+    class _Weighted:
+        @func
+        def scale(x: Tensor[(2,), "f32"], w: ConstTensor[(2,), "f32"]):
+            return x * w
+
+    ones = torch.ones(2, dtype=torch.float32)
+    weight = torch.full((2,), 3.0)
+
+    assert _Weighted.scale(ones, weight).float().cpu().tolist() == [3.0, 3.0]
+
+    with pytest.raises(TypeError, match=r"declares 2 parameters but got 1.*load\(resource\)"):
+        _Weighted.scale(ones)
+
+    loaded = _Weighted.load(DictResource({"w": weight}))
+    with pytest.raises(TypeError, match=r"takes 1 activation") as excinfo:
+        loaded.scale(ones, weight)
+    assert "load(resource)" not in str(excinfo.value)
+
+
 def test_forward_reference_sibling_fails_loudly():
     """A method that calls a sibling defined *below* it cannot resolve the
     sibling (only callee-before-caller is supported) and raises rather than

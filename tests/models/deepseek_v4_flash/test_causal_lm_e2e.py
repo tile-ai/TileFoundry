@@ -151,9 +151,11 @@ def prepared(tmp_path_factory, config, semantic, raw_tensors):
 @pytest.fixture(scope="module")
 def twins(config, semantic, prepared):
     runtime = build_runtime_causal_lm(config, ir=semantic)
-    semantic.load(SafetensorsResource(str(prepared), device="cuda"))
+    # The ir module's `load` hands back a LoadedModule; the runtime twin's still
+    # binds itself in place. Reach the IR behind the loaded one with `.module`.
+    loaded = semantic.load(SafetensorsResource(str(prepared), device="cuda"))
     runtime.load(SafetensorsResource(str(prepared), device="cuda"))
-    return semantic, runtime
+    return loaded, runtime
 
 
 def _node_inputs(semantic, config):
@@ -274,8 +276,10 @@ def test_structure_mismatch_rejected(config, twins):
     """``@runtime_module`` rejects a missing, extra, or mismatched kernel/child
     at decoration time."""
     semantic, runtime = twins
-    attention = semantic.layer0.attention
-    layer = semantic.layer0
+    # `runtime_module` decorates against the IR's function and child names, so it
+    # takes the Module rather than this loading of it.
+    attention = semantic.layer0.attention.module
+    layer = semantic.layer0.module
 
     with pytest.raises(TypeError, match=r"missing \['mla_kv_update'\]"):
         @runtime_module(attention)
