@@ -9,6 +9,7 @@ from typing import Sequence
 from tilefoundry.analysis import AnalysisError, ExtractError
 from tilefoundry.cli.analyze import ANALYSES, run_authored_analysis
 from tilefoundry.cli.inspect import run_capabilities
+from tilefoundry.cli.models import run_models
 from tilefoundry.cli.schedule import run_schedule
 from tilefoundry.cli.source import load_authored_ir, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
@@ -21,6 +22,7 @@ _ANALYSES = ANALYSES
 #: rather than alphabetically -- the order itself is meant to read as the workflow.
 #: One table, so the parser and the overview cannot describe different surfaces.
 _COMMANDS = {
+    "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
     "analyze": "type-check and analyze authored HIR",
     "schedule": "schedule authored HIR at one declared topology level",
@@ -71,6 +73,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tilefoundry")
     # Not required: naming no command is how the overview is asked for.
     commands = parser.add_subparsers(dest="command")
+
+    models = commands.add_parser("models", help=_COMMANDS["models"])
+    models.add_argument(
+        "name",
+        nargs="?",
+        metavar="NAME",
+        help="which model; with none, list the models there are",
+    )
+    models.add_argument(
+        "--source", action="store_true", help="print the model's authored source instead"
+    )
 
     spec = commands.add_parser("spec", help=_COMMANDS["spec"])
     spec.add_argument(
@@ -153,6 +166,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         sys.stdout.write(overview())
         return 0
+    if args.command == "models":
+        try:
+            return run_models(args.name, source=args.source)
+        except (OSError, ValueError) as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
     if args.command == "spec":
         try:
             return run_spec(args.topic, args.section)

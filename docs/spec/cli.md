@@ -17,6 +17,8 @@ be restated in the command surface, so there is one copy of it.
 ## Commands
 
 ```text
+tilefoundry models [NAME] [--source]
+
 tilefoundry spec [TOPIC [SECTION]]
 
 tilefoundry analyze model.py[:Module[.child_module...][.function]]
@@ -42,6 +44,54 @@ whose `@func` declares no execution context binds one. Every verb here reads
 hardware facts, so such a selection MUST be rejected naming the Module that
 would declare its context, rather than analysed or scheduled against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
+
+## Models
+
+`models` reports the models this project has described and how far each has been
+verified, and hands back one model's authored source as a reference to copy from.
+
+It reads a shipped catalog and MUST NOT import or execute a model's source. An
+installed package carries the authored sources as read-only data and nothing that
+could make them importable, so executing them is not available; and a reference
+that runs before it can be read is a reference that decides what it describes.
+
+- constraints:
+  - With no `NAME`, output MUST list every described model with its verification
+    level and its counts, MUST present the models that can serve as an oracle
+    separately from those that cannot, and MUST state what each level means.
+  - A level below the oracle level MUST be reported rather than hidden. A model
+    withheld for being below the bar is a model somebody rebuilds; the ones below
+    it remain useful as operator-level references.
+  - A model MUST NOT be recorded at the oracle level except from a committed
+    record of a run against a real checkpoint. A test that skipped because its
+    inputs were absent MUST NOT be read as evidence.
+  - With a `NAME`, output MUST be that model's whole forest: every top-level
+    Module it declares, each Module's own functions with their signatures beneath
+    it, and the leaf Modules marked. A leaf is a Module with no child Modules, not
+    a function — a runtime twin is written per Module and MUST cover all of that
+    Module's functions at once, so marking functions would state the work at a
+    granularity nobody implements at.
+  - A run of sibling Modules MAY be written once as the range it covers, and only
+    when the run is adjacent, identically shaped down its whole subtree, named from
+    one stem, and numbered consecutively. Such an entry MUST name every Module it
+    stands for and MUST say how many there are: it is the complete tree written as
+    ranges, not a tree with repetition left out. Distinct siblings MUST stay
+    separate. Without this a stack states its one layer forty times and the reader
+    is back to reading a dump.
+  - The leaf-Module count and the function count MUST come from one traversal, so
+    the numbers cannot disagree with the forest printed beside them, and they MUST
+    count every Module a range stands for rather than the range as one.
+  - `--source` MUST print the authored source as it shipped, byte for byte, and
+    MUST NOT reformat or regenerate it: the installed copy is the reference, and a
+    rendered copy is a different artifact wearing its name.
+  - A `NAME` the catalog does not have MUST be refused naming the models it does.
+  - The forest and the counts MUST be generated from the models themselves rather
+    than maintained beside them, because a hand-kept inventory of trees and numbers
+    drifts silently from what it claims to describe.
+  - A validation level MUST NOT be generated. Nothing in a model says how far it
+    has been compared against anything, so the level comes from a committed record
+    that a person wrote and a reviewer read. Deriving it would mean inferring
+    evidence from the presence of a test rather than from its having run.
 
 ## Spec
 

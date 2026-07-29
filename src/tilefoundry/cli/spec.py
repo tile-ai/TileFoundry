@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from tilefoundry.cli import data
+
 #: Topic names that differ from their document's filename.
 _SPEC_TOPICS = {
     "cli": "cli",
@@ -20,42 +22,19 @@ _FENCE = re.compile(r"^\s*(```|~~~)")
 _NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.*)$")
 
 
-def _source_spec_path(topic: str) -> Path:
-    """Find one source-tree spec used by editable and direct invocations."""
-    spec_name = _SPEC_TOPICS.get(topic, topic)
-    return Path(__file__).resolve().parents[3] / "docs" / "spec" / f"{spec_name}.md"
-
-
 def spec_path(topic: str) -> Path:
-    """Return an installed spec path, falling back to the source tree."""
-    spec_name = _SPEC_TOPICS.get(topic, topic)
-    source_path = _source_spec_path(topic)
-    if source_path.is_file():
-        return source_path
-
-    # setuptools data-files are placed below Python's installation data prefix.
-    from sysconfig import get_path  # noqa: PLC0415
-
-    installed = (
-        Path(get_path("data"))
-        / "share"
-        / "tilefoundry"
-        / "spec"
-        / f"{spec_name}.md"
-    )
-    if installed.is_file():
-        return installed
-    raise FileNotFoundError(f"installed TileFoundry {spec_name} spec was not found")
+    """The document a topic names, from this checkout or from the installation."""
+    return data.path("spec", f"{_SPEC_TOPICS.get(topic, topic)}.md")
 
 
 def read_spec(topic: str) -> str:
-    """Read the installed document a topic names."""
+    """Read the document a topic names."""
     return spec_path(topic).read_text(encoding="utf-8")
 
 
 def spec_directory() -> Path:
     """The directory the documents are read from, wherever they were found."""
-    return spec_path("cli").parent
+    return data.directory("spec")
 
 
 def topics() -> dict[str, Path]:
