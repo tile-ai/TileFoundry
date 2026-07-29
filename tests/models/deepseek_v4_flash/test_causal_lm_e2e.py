@@ -151,8 +151,7 @@ def prepared(tmp_path_factory, config, semantic, raw_tensors):
 @pytest.fixture(scope="module")
 def twins(config, semantic, prepared):
     runtime = build_runtime_causal_lm(config, ir=semantic)
-    # The ir module's `load` hands back a LoadedModule; the runtime twin's still
-    # binds itself in place. Reach the IR behind the loaded one with `.module`.
+    # The ir module's `load` returns; the runtime twin's still binds in place.
     loaded = semantic.load(SafetensorsResource(str(prepared), device="cuda"))
     runtime.load(SafetensorsResource(str(prepared), device="cuda"))
     return loaded, runtime

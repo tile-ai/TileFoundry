@@ -275,11 +275,8 @@ class Module:
     def load(self, resource) -> "LoadedModule":
         """This Module's constants read from *resource*, as a ``LoadedModule``.
 
-        Returns rather than mutates. Nothing is written back onto the Module: it
-        is the IR, one value may be loaded any number of times against different
-        checkpoints or devices, and a child reached from two owners gets one
-        ``LoadedModule`` per owner rather than one binding that the last owner
-        wins.
+        Returns rather than mutates: the Module is IR and may be read any number
+        of times. See docs/spec/runtime.md §1.1.2.
         """
         constants: dict[str, object] = {}
         for name in self.weights:
@@ -296,12 +293,8 @@ class Module:
         )
 
     def _run_authored(self, fn: ModuleFunction, *args):
-        """Evaluate *fn* over the arguments given, one per declared parameter.
-
-        The authored Module holds no constants, so every parameter comes from the
-        call -- a ``ConstTensor`` one included. ``LoadedModule`` is where a
-        constant is filled from a binding instead.
-        """
+        """Evaluate *fn* over the arguments given, one per declared parameter --
+        a ``ConstTensor`` one included, since a Module holds no constants."""
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
         if len(args) != len(fn.params):
@@ -396,13 +389,9 @@ class Module:
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
 
     def renamed(self, name: str) -> "Module":
-        """A copy of this node under a different ``name``.
-
-        The copy's children are its own. ``__post_init__`` claims each child for
-        its new owner, and a child that already belongs to another one is claimed
-        as a clone -- so two ``renamed`` copies of the same Module do not share a
-        child, and neither observes the other's subtree.
-        """
+        """A copy of this node under a different ``name``. The copy's children are
+        its own: ``__post_init__`` claims a child that belongs elsewhere as a
+        clone, so two copies never share one."""
         return dataclasses.replace(self, name=name)
 
 
@@ -410,14 +399,10 @@ class Module:
 class LoadedModule:
     """An IR ``Module`` together with the constants read for *this* loading.
 
-    Two of these may stand over one Module -- two checkpoints, two devices, or
-    one child reached from two owners. Each holds its own constants and its own
-    child ``LoadedModule``s, so what one binds is not visible from the other.
-    The Module itself stays pure IR.
-
-    Attribute access mirrors ``Module``'s, with one difference that is the point
-    of the type: a function resolves to a runner that supplies the ``ConstTensor``
-    parameters from these bindings, so the caller passes activations alone.
+    Two may stand over one Module and neither sees what the other bound. Attribute
+    access mirrors ``Module``'s, except that a function resolves to a runner
+    filling ``ConstTensor`` parameters from these constants, so the caller passes
+    activations alone. See docs/spec/runtime.md §1.1.2.
     """
 
     module: Module
@@ -452,9 +437,8 @@ class LoadedModule:
             )
         method = module.methods.get(name)
         if method is not None:
-            # Bound to this LoadedModule, so an orchestration method's own
-            # ``self.some_func(...)`` reaches the bound runner rather than the
-            # authored one and stays free of the weights.
+            # Bound to this LoadedModule, so the method's own `self.<fn>(...)`
+            # reaches the bound runner.
             return types.MethodType(method, self)
         raise AttributeError(
             f"LoadedModule {self.name!r} has no function, child module, or "

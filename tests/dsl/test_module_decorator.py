@@ -89,18 +89,10 @@ def test_collects_orchestration_method_and_rejects_other_members():
 
 
 def test_the_runner_on_an_authored_module_takes_the_weights_too():
-    """The callable behind attribute access supplies nothing: an authored Module
-    is IR and holds no constants, so a ``ConstTensor`` parameter comes from the
-    call like any other. The corpus exercises the loaded runner instead, and its
-    six all-``Tensor`` models would leave this indistinguishable from ordinary
-    positional filling — hence a ``ConstTensor`` here.
-
-    Reaching for the wrong runner is the other half of the contract, and the two
-    directions must not give each other's advice: too few arguments here sends the
-    caller to ``load``, while the same mistake inverted on a ``LoadedModule`` must
-    not, because that caller has already loaded. Neither may surface as a shape
-    error from inside the evaluator.
-    """
+    """A Module's callable takes every declared param, a ``ConstTensor`` one
+    included; a ``LoadedModule``'s takes activations alone. Each wrong argument
+    list is refused naming the runner it wanted, and neither is sent to the
+    other's."""
     import torch  # noqa: PLC0415 — only this test needs a real tensor
 
     from tilefoundry.dsl import ConstTensor  # noqa: PLC0415
@@ -124,6 +116,49 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     with pytest.raises(TypeError, match=r"takes 1 activation") as excinfo:
         loaded.scale(ones, weight)
     assert "load(resource)" not in str(excinfo.value)
+
+
+def test_one_shared_child_binds_once_per_owner():
+    """Two owners over one child IR read their own subtrees rather than the last
+    one loaded winning."""
+    import copy  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415
+
+    from tilefoundry.dsl import ConstTensor  # noqa: PLC0415
+    from tilefoundry.runtime.resource import DictResource  # noqa: PLC0415
+
+    @module(entry="scale")
+    class _Leaf:
+        @func
+        def scale(x: Tensor[(2,), "f32"], w: ConstTensor[(2,), "f32"]):
+            return x * w
+
+    @module(entry="twice")
+    class _Owner:
+        leaf = _Leaf
+
+        @func
+        def twice(x: Tensor[(2,), "f32"]):
+            return x + x
+
+    def aliasing(name):
+        # `copy.copy` skips __post_init__, and with it the claim that would clone
+        # the child -- normal construction cannot put one child under two owners.
+        node = copy.copy(_Owner)
+        object.__setattr__(node, "name", name)
+        return node
+
+    left, right = aliasing("left"), aliasing("right")
+    assert left.modules[0] is right.modules[0]
+
+    ones = torch.ones(2, dtype=torch.float32)
+    loaded_left = left.load(DictResource({"leaf.w": torch.full((2,), 3.0)}))
+    loaded_right = right.load(DictResource({"leaf.w": torch.full((2,), 10.0)}))
+
+    assert loaded_left.leaf.module is loaded_right.leaf.module
+    assert loaded_left.leaf.scale(ones).float().cpu().tolist() == [3.0, 3.0]
+    assert loaded_right.leaf.scale(ones).float().cpu().tolist() == [10.0, 10.0]
 
 
 def test_forward_reference_sibling_fails_loudly():
