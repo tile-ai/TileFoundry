@@ -130,6 +130,27 @@ class ModelCoveragePlugin:
         #: the corpus, in a report whose whole job is to be countable.
         self._collecting = self._worker is not None or not delegating
 
+    # -- lifecycle -------------------------------------------------------
+
+    def pytest_sessionstart(self, session) -> None:
+        """Discard shards left by an earlier run, before any worker writes one.
+
+        A shard is this run's worker handing its records to this run's controller.
+        One left behind -- by a controller killed after a worker had written, or by
+        a rerun whose worker allocation differs -- would otherwise be merged in as
+        if it belonged here, and then unlinked: the report would carry another
+        run's PASS and BLOCKED verdicts, name cases this session never collected,
+        and keep no trace that it had happened.
+
+        Only the controller may do this. A worker running it would delete the
+        shards its siblings had already written.
+        """
+        if self._worker is not None:
+            return
+        shards = artifact_dir(self._root) / _SHARD_DIR
+        for path in sorted(shards.glob("*.json")):
+            path.unlink()
+
     # -- collection ------------------------------------------------------
 
     def pytest_runtest_logreport(self, report) -> None:

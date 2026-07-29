@@ -107,6 +107,52 @@ def _statuses(payload: dict) -> dict[str, str]:
     return {row["case"]: row["status"] for row in rows}
 
 
+def test_a_shard_left_by_an_earlier_run_is_not_reported_as_this_one(
+    tmp_path: Path,
+) -> None:
+    """The dangerous shape of a stale shard: it names a case this session never
+    collected, and merging it leaves no trace.
+
+    A shard is a worker handing its records to its own controller. One survives
+    when a controller is killed after a worker has written, or when a rerun
+    allocates workers differently -- and the merge then unlinks it, so the report
+    carries another run's verdicts and looks legitimate.
+
+    The stale record here is deliberately a case the fresh session does not have,
+    because filtering by node id would let exactly that one through.
+    """
+    directory = tmp_path / "artifacts"
+    shards = directory / ".model-coverage-shards"
+    shards.mkdir(parents=True, exist_ok=True)
+    (shards / "gw0.json").write_text(
+        json.dumps(
+            [
+                {
+                    "model": "m",
+                    "target": "t",
+                    "kind": "analyze",
+                    "case": "m/a/from-an-earlier-run",
+                    "function": "gone",
+                    "status": "PASS",
+                    "reason": "",
+                    "nodeid": "test_that_no_longer_exists.py::test_gone",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = _run_session(tmp_path)
+
+    assert "m/a/from-an-earlier-run" not in _statuses(payload)
+    assert _statuses(payload) == {
+        "m/a/one": "PASS",
+        "m/a/two": "BLOCKED",
+        "m/a/three": "FAIL",
+    }
+    assert payload["run"]["cases_reported"] == 3
+
+
 def test_the_runner_decides_the_outcome_not_the_test(tmp_path: Path) -> None:
     """PASS, BLOCKED and FAIL come from what pytest reported, in one real session.
 
