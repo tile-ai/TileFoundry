@@ -13,12 +13,15 @@ generated regions:
   range carries the policy ACs whose ``when.path_glob`` matches that
   milestone's ``#### Related Files`` (with explicit
   ``- inherit: top-level`` fallback).
+- the plan-level ``<!-- final_gate:start --> ... <!-- final_gate:end -->``
+  range carries final-tree gates such as spec discipline and formatting.
 
 The finalizer never touches handwritten content outside the marker
 ranges. A ``policy_*`` HTML comment appearing outside any allowed
-range is a hard validation failure. Every milestone must also declare
-its public-contract impact in ``Spec Impact`` as either owning
-``docs/spec/*.md`` paths or one reasoned ``N/A:`` entry.
+range is a hard validation failure. Every milestone must declare its
+public-contract impact in ``Spec Impact`` as either owning
+``docs/spec/*.md`` paths or one reasoned ``N/A:`` entry, and must name
+its Golden Reference and behavioural verification boundary.
 """
 from __future__ import annotations
 
@@ -44,13 +47,18 @@ PREFLIGHT_START = "<!-- policy_preflight:start -->"
 PREFLIGHT_END = "<!-- policy_preflight:end -->"
 MILESTONE_AC_START = "<!-- policy_ac:start -->"
 MILESTONE_AC_END = "<!-- policy_ac:end -->"
+FINAL_GATE_START = "<!-- final_gate:start -->"
+FINAL_GATE_END = "<!-- final_gate:end -->"
 
 # Any ``<!-- policy_(ac|rules|knowledge): <id> -->`` tag. The
 # whitespace AFTER the colon is the rendered convention; the marker
 # pair sentinels ``policy_*:start`` / ``policy_*:end`` have no space
 # after the colon and are therefore NOT matched by this pattern.
 INLINE_POLICY_TAG_RE = re.compile(
-    r"<!--\s+(?:policy_ac|policy_rules|policy_knowledge):\s+[\w\-]+\s+-->"
+    r"<!--\s+(?:policy_ac|policy_final|policy_rules|policy_knowledge):\s+[\w\-]+\s+-->"
+)
+POLICY_CHECK_RE = re.compile(
+    r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([\w\-]+)\s+-->"
 )
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
 FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
@@ -123,6 +131,16 @@ def _list_bullets(lines: list[str], start: int, end: int) -> list[str]:
             if text:
                 out.append(text)
     return out
+
+
+def _policy_check_states(lines: list[str], start: int, end: int) -> dict[str, bool]:
+    """Return generated checklist completion keyed by its stable marker."""
+    states: dict[str, bool] = {}
+    for line in lines[start + 1 : end]:
+        match = POLICY_CHECK_RE.match(line)
+        if match:
+            states[match.group(2)] = match.group(1).lower() == "x"
+    return states
 
 
 def _related_files_from_section(
@@ -203,11 +221,22 @@ class PlanModel:
             raise FinalizeError(
                 f"{self.path}: `policy_preflight:end` precedes `policy_preflight:start`."
             )
+        self.final_gate_start_idx = self._require_unique_line(FINAL_GATE_START)
+        self.final_gate_end_idx = self._require_unique_line(FINAL_GATE_END)
+        if self.final_gate_end_idx <= self.final_gate_start_idx:
+            raise FinalizeError(
+                f"{self.path}: `final_gate:end` precedes `final_gate:start`."
+            )
+        self.final_gate_states = _policy_check_states(
+            lines, self.final_gate_start_idx, self.final_gate_end_idx
+        )
 
         # Plan-level template sections: every level-2 heading the
         # template promises must exist (and have a non-empty body for
         # the prose ones).
-        for name in ("Goal", "Constraints", "Milestones", "Execution Preflight"):
+        for name in (
+            "Goal", "Constraints", "Milestones", "Execution Preflight", "Final Gate"
+        ):
             span = _find_section(lines, 2, name)
             if span is None:
                 raise FinalizeError(
@@ -266,16 +295,18 @@ class PlanModel:
             "Depends",
             "Related Files",
             "Spec Impact",
+            "Golden Reference",
             "Plan",
             "Acceptance Criteria",
+            "Verification",
         ):
             span = _find_section(lines, 4, required, ms_start + 1, ms_end)
             if span is None:
                 raise FinalizeError(
                     f"{self.path}: milestone {name!r} missing `#### {required}`."
                 )
-            # Non-emptiness: there must be at least one non-blank, non-
-            # marker-only line in the body.
+            # Non-emptiness: there must be at least one non-blank, non-marker-only
+            # line in the body.
             body = [
                 ln
                 for ln in lines[span[0] + 1 : span[1]]
@@ -306,6 +337,8 @@ class PlanModel:
             sections["Spec Impact"],
             effective_paths,
         )
+        self._validate_golden_reference(name, sections["Golden Reference"])
+        self._validate_verification(name, sections["Verification"])
 
         ac_section = sections["Acceptance Criteria"]
 
@@ -335,7 +368,34 @@ class PlanModel:
             "ac_section": ac_section,
             "policy_ac_start_idx": ac_start,
             "policy_ac_end_idx": ac_end,
+            "policy_states": _policy_check_states(lines, ac_start, ac_end),
         }
+
+    def _validate_golden_reference(
+        self, milestone_name: str, section: tuple[int, int]
+    ) -> None:
+        items = _list_bullets(self.lines, section[0] + 1, section[1])
+        label = f"{self.path}: milestone {milestone_name!r} `#### Golden Reference`"
+        required = ("Source:", "Functional points:")
+        missing = [prefix for prefix in required if not any(item.startswith(prefix) for item in items)]
+        if missing:
+            raise FinalizeError(
+                f"{label} must contain {', '.join(repr(prefix) for prefix in missing)} "
+                "bullet(s)."
+            )
+
+    def _validate_verification(
+        self, milestone_name: str, section: tuple[int, int]
+    ) -> None:
+        items = _list_bullets(self.lines, section[0] + 1, section[1])
+        label = f"{self.path}: milestone {milestone_name!r} `#### Verification`"
+        required = ("Golden point(s) exercised:", "Evidence:")
+        missing = [prefix for prefix in required if not any(item.startswith(prefix) for item in items)]
+        if missing:
+            raise FinalizeError(
+                f"{label} must contain {', '.join(repr(prefix) for prefix in missing)} "
+                "bullet(s)."
+            )
 
     def _validate_spec_impact(
         self,
@@ -415,21 +475,33 @@ def render_preflight_body(matched: list[dict[str, Any]], role: str) -> list[str]
 
 
 def render_policy_ac_body(
-    matched: list[dict[str, Any]], policies: list[dict[str, Any]]
+    matched: list[dict[str, Any]], states: dict[str, bool]
 ) -> list[str]:
     items: list[str] = []
     for p in matched:
         for n, ac in enumerate(p.get("ac") or []):
-            items.append(f"- [ ] {ac} <!-- policy_ac: {p['id']}-{n} -->")
-    # The clang-format gate is present in every milestone: a milestone that
-    # touches C++ gets the rule's AC above (via the matched loop); one that
-    # touches no C++ gets an explicit N/A line so the gate is never silently
-    # absent from a checklist.
+            marker = f"{p['id']}-{n}"
+            check = "x" if states.get(marker, False) else " "
+            items.append(f"- [{check}] {ac} <!-- policy_ac: {marker} -->")
+    return items
+
+
+def render_final_gate_body(
+    matched: list[dict[str, Any]], policies: list[dict[str, Any]], states: dict[str, bool]
+) -> list[str]:
+    items: list[str] = []
+    for p in matched:
+        for n, ac in enumerate(p.get("final_ac") or []):
+            marker = f"{p['id']}-{n}"
+            check = "x" if states.get(marker, False) else " "
+            items.append(f"- [{check}] {ac} <!-- policy_final: {marker} -->")
     cf = next((p for p in policies if p.get("id") == "clang_format"), None)
     if cf is not None and cf not in matched:
+        marker = "clang_format-na"
+        check = "x" if states.get(marker, False) else " "
         items.append(
-            "- [ ] No touched C++/CUDA files in this milestone — clang-format "
-            "gate N/A <!-- policy_ac: clang_format-na -->"
+            f"- [{check}] No touched C++/CUDA files in this plan — clang-format "
+            f"gate N/A <!-- policy_final: {marker} -->"
         )
     return items
 
@@ -484,10 +556,17 @@ def finalize_plan(
     ]
     for m in plan.milestones:
         matched = filter_policies(policies, m["related_files"])
-        body = render_policy_ac_body(matched, policies)
+        body = render_policy_ac_body(matched, m["policy_states"])
         rewrites.append(
             (m["policy_ac_start_idx"], m["policy_ac_end_idx"], body)
         )
+    rewrites.append(
+        (
+            plan.final_gate_start_idx,
+            plan.final_gate_end_idx,
+            render_final_gate_body(plan_matched, policies, plan.final_gate_states),
+        )
+    )
     rewrites.sort(key=lambda r: r[0], reverse=True)
 
     new_lines = list(plan.lines)
@@ -507,6 +586,13 @@ def finalize_plan(
         i for i, line in enumerate(new_lines) if line.strip() == PREFLIGHT_END
     )
     allowed: list[tuple[int, int]] = [(final_preflight_start, final_preflight_end)]
+    final_gate_start = next(
+        i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_START
+    )
+    final_gate_end = next(
+        i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_END
+    )
+    allowed.append((final_gate_start, final_gate_end))
     ac_starts = [i for i, line in enumerate(new_lines) if line.strip() == MILESTONE_AC_START]
     ac_ends = [i for i, line in enumerate(new_lines) if line.strip() == MILESTONE_AC_END]
     if len(ac_starts) != len(ac_ends):

@@ -114,9 +114,20 @@ short bullet list — keep it that way.
 ### Tests
 
 - Write meaningful positive tests that exercise the intended path.
-- Avoid excessive defensive / catch-all tests; failures on real paths
-  are the signal to fix.
-- Lock contracts, not implementation detail.
+- Each milestone starts from a Golden Reference: an external source, measured
+  behaviour, existing workflow, or public contract that defines its result.
+  Tests prove its listed functional points.
+- Start with the smallest existing workflow that reaches the changed behaviour;
+  extend it before creating another test file or harness.
+- One workflow may evidence several acceptance criteria. An acceptance criterion
+  describes behaviour, not a one-test obligation.
+- Add a new test only when no existing workflow can reach a public behaviour;
+  state that missing reachability in the plan's verification note.
+- Lock contracts, not implementation detail. Do not test source text, AST shape,
+  private calls, object identity, counts, or names merely to prevent a future
+  refactor.
+- Add a negative test only for an externally reachable invalid input or error
+  contract; do not add catch-all defensive cases for hypothetical rewrites.
 
 ### DSL / HIR authoring
 

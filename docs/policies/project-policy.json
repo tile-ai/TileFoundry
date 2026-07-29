@@ -34,6 +34,29 @@
       }
     },
     {
+      "id": "milestone_review",
+      "name": "Milestone review",
+      "description": "Each milestone names its Golden Reference, verifies its functional points through real workflows, and removes redundant test/comment scaffolding.",
+      "when": {
+        "path_glob": ["**"]
+      },
+      "ac": [
+        "Milestone MUST name a `#### Golden Reference` before implementation steps, with the source of truth and the observable functional points it determines.",
+        "Verification MUST exercise the Golden Reference's functional points through the smallest real workflow; one workflow MAY cover several ACs, and a new test requires a stated reachability gap.",
+        "Touched tests and comments MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract."
+      ],
+      "rules": {
+        "implementer": [
+          {"path": "docs/develop.md", "section": "Tests"},
+          {"path": "docs/develop.md", "section": "Code comments"}
+        ],
+        "reviewer": [
+          {"path": "docs/develop.md", "section": "Tests"},
+          {"path": "docs/develop.md", "section": "Code comments"}
+        ]
+      }
+    },
+    {
       "id": "spec_impact",
       "name": "Spec impact",
       "description": "Every source milestone explicitly classifies whether it changes a public contract and names the owning specifications when it does.",
@@ -83,7 +106,7 @@
           "**/*.cc"
         ]
       },
-      "ac": [
+      "final_ac": [
         "Touched C++/CUDA files (`*.h`/`*.hpp`/`*.cuh`/`*.cu`/`*.cpp`/`*.cc`) MUST be formatted by the pre-commit `clang-format` hook (or an equivalent `clang-format --dry-run -Werror` check)."
       ],
       "rules": {
@@ -98,7 +121,7 @@
     {
       "id": "test_discipline",
       "name": "Test discipline",
-      "description": "Tests exercise intended behaviour; no excessive defensive / catch-all tests that lock implementation detail.",
+      "description": "Tests prove observable behaviour through existing workflows when possible; no defensive checks that lock implementation detail.",
       "when": {
         "path_glob": ["tests/**"]
       },
@@ -118,7 +141,7 @@
       "when": {
         "path_glob": ["docs/spec/**"]
       },
-      "ac": [
+      "final_ac": [
         "Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs.",
         "Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section.",
         "Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names.",
