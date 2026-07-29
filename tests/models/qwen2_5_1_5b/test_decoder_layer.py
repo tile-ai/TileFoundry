@@ -32,16 +32,21 @@ SEQ = config.SEQ_LEN
 DEV = "cpu"
 ATOL = RTOL = 2e-4
 
+#: Where the tiled comparison runs. Unlike the stack tests, this is a cost
+#: choice and not a scope one -- the two rewrites are the same program on either
+#: device -- so it falls back rather than skipping.
+TILED_DEV = "cuda" if torch.cuda.is_available() else "cpu"
+
 #: Two lengths, so a kernel that only works at the length it was authored
 #: against cannot pass. Neither divides the key/value head count.
 CTX_LENGTHS = (24, 40)
 
 
-def _one_token(seed=1):
+def _one_token(device, seed=1):
     """A fresh HF layer and one token's hidden states."""
-    layer = config.build_hf_layer(seed=0, device=DEV)
+    layer = config.build_hf_layer(seed=0, device=device)
     torch.manual_seed(seed)
-    return layer, torch.randn(1, SEQ, HIDDEN, device=DEV) * 0.1
+    return layer, torch.randn(1, SEQ, HIDDEN, device=device) * 0.1
 
 
 def test_tiled_mlp_matches_untiled_mlp():
@@ -49,7 +54,7 @@ def test_tiled_mlp_matches_untiled_mlp():
     itself on the same inputs: the loop tiling only reassociates the K
     reduction, so the two must agree to f32 round-off. Also checked against
     HF, so a bug shared by both rewrites cannot hide."""
-    layer, x = _one_token()
+    layer, x = _one_token(TILED_DEV)
     mlp = layer.mlp
     weights = (
         layer.post_attention_layernorm.weight,
@@ -60,8 +65,8 @@ def test_tiled_mlp_matches_untiled_mlp():
 
     with torch.no_grad():
         ref = mlp(layer.post_attention_layernorm(x))
-    untiled = evaluate(model.mlp, x, *weights, device=DEV)
-    tiled = evaluate(model.tiled_mlp, x, *weights, device=DEV)
+    untiled = evaluate(model.mlp, x, *weights, device=TILED_DEV)
+    tiled = evaluate(model.tiled_mlp, x, *weights, device=TILED_DEV)
 
     torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
