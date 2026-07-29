@@ -421,6 +421,7 @@ class SafetensorsResource:
     def __init__(
         self, ckpt_dir: str, prefix: str = "", device: str = "cuda",
         alias: "Mapping[str, AliasValue] | None" = None,
+        dtype: "torch.dtype | None" = None,
     ) -> None: ...
 ```
 
@@ -429,11 +430,21 @@ class SafetensorsResource:
     `{"layer0.w": tensor, ...}` mapping; `subtree` only extends the prefix
     each `load` / `load_group` name is joined onto, carrying `alias` down to
     every child view.
-  - `SafetensorsResource` — reads a repacked safetensors checkpoint
-    directory (N shard files + `model.safetensors.index.json`'s
-    `weight_map`); `load` / `load_group` open at most one shard handle per
-    shard file (mmap'd via `safetensors.safe_open`, shared across `subtree`
-    views) and read only the requested tensor(s), placed on *device*.
+  - `SafetensorsResource` — reads a safetensors checkpoint directory; `load` /
+    `load_group` open at most one shard handle per shard file (mmap'd via
+    `safetensors.safe_open`, shared across `subtree` views) and read only the
+    requested tensor(s), placed on *device*. Two directory shapes MUST be
+    accepted: N shard files with a `model.safetensors.index.json` whose
+    `weight_map` names the shard holding each key, and a single unsharded
+    `model.safetensors` with no index, whose own key list is that map — a
+    published checkpoint is only sharded once it outgrows the writer's limit,
+    so requiring an index would refuse the small ones. A directory with
+    neither MUST be reported as such rather than as a missing index.
+  - `dtype`, when given, is the dtype every tensor is read as, whatever the
+    checkpoint stores it as; the same value carries down to every `subtree`
+    view. Without it, a tensor keeps its stored dtype. This is what lets one
+    checkpoint serve modules that declare a different precision than it holds:
+    the alternative is a per-weight converter whose only work is a cast.
 
 ### 1.6 `check` / `bench`
 

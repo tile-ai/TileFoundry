@@ -147,19 +147,22 @@ class DictResource:
 class SafetensorsResource:
     """safetensors-directory-backed ``RuntimeResource``.
 
-    Reads a repacked HF checkpoint (N shards + ``model.safetensors.index.json``)
-    via mmap'd ``safe_open``; one shard handle is opened at most once and
-    reused across ``subtree`` views.
+    Reads a safetensors checkpoint directory via mmap'd ``safe_open``: either
+    N shards plus ``model.safetensors.index.json``, or a single unsharded
+    ``model.safetensors`` with no index. One shard handle is opened at most once
+    and reused across ``subtree`` views. *dtype*, when given, is what every
+    tensor is read as, whatever the checkpoint stores.
     """
 
     def __init__(
         self, ckpt_dir: str, prefix: str = "", device: str = "cuda",
-        alias: AliasMap | None = None,
+        alias: AliasMap | None = None, dtype: "torch.dtype | None" = None,
     ) -> None:
         self._ckpt_dir = ckpt_dir
         self._prefix = prefix
         self._device = device
         self._alias = alias or {}
+        self._dtype = dtype
         self._handles: dict[str, Any] = {}
         self._weight_map: dict[str, str] | None = None
 
@@ -168,10 +171,29 @@ class SafetensorsResource:
             import json  # noqa: PLC0415
             from pathlib import Path  # noqa: PLC0415
 
-            index_path = Path(self._ckpt_dir) / "model.safetensors.index.json"
-            with open(index_path, encoding="utf-8") as fh:
-                self._weight_map = dict(json.load(fh)["weight_map"])
+            directory = Path(self._ckpt_dir)
+            index_path = directory / "model.safetensors.index.json"
+            if index_path.is_file():
+                with open(index_path, encoding="utf-8") as fh:
+                    self._weight_map = dict(json.load(fh)["weight_map"])
+            else:
+                self._weight_map = self._unsharded_map(directory)
         return self._weight_map
+
+    @staticmethod
+    def _unsharded_map(directory: "Path") -> dict[str, str]:
+        """The one shard's own key list, for a directory that ships no index."""
+        from safetensors import safe_open  # noqa: PLC0415
+
+        shard = "model.safetensors"
+        path = directory / shard
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"SafetensorsResource: {directory} holds neither "
+                f"model.safetensors.index.json nor {shard}"
+            )
+        with safe_open(str(path), framework="pt", device="cpu") as handle:
+            return dict.fromkeys(handle.keys(), shard)
 
     def _read_one(self, raw_key: str) -> torch.Tensor:
         from pathlib import Path  # noqa: PLC0415
@@ -187,7 +209,8 @@ class SafetensorsResource:
                 device=_resolved_device(self._device),
             )
             self._handles[shard] = handle
-        return handle.get_tensor(raw_key)
+        tensor = handle.get_tensor(raw_key)
+        return tensor if self._dtype is None else tensor.to(self._dtype)
 
     def load(self, name: str) -> torch.Tensor:
         resolved = _reject_group(
@@ -217,7 +240,8 @@ class SafetensorsResource:
     def subtree(self, seg: str) -> "SafetensorsResource":
         resolved = _resolve_segment(self._alias, self._prefix, seg)
         child = SafetensorsResource(
-            self._ckpt_dir, f"{self._prefix}{resolved}.", self._device, alias=self._alias
+            self._ckpt_dir, f"{self._prefix}{resolved}.", self._device,
+            alias=self._alias, dtype=self._dtype,
         )
         child._weight_map = self._weight_map
         child._handles = self._handles
