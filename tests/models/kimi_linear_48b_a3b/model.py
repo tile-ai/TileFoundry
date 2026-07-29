@@ -126,37 +126,22 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # The query is a plain projection here: q_lora_rank is null, so there is
             # no q_a/q_b pair to fold.
             q = tf.reshape(tf.matmul(hn, w_q), new_shape=(1, S, _H, _QK))
-            q_pass = tf.slice(
-                q, begin=(0, 0, 0, 0), end=(1, S, _H, _NOPE), strides=(1, 1, 1, 1)
-            )
-            q_rot = tf.slice(
-                q, begin=(0, 0, 0, _NOPE), end=(1, S, _H, _QK), strides=(1, 1, 1, 1)
-            )
+            q_pass = q[:, :, :, :_NOPE]
+            q_rot = q[:, :, :, _NOPE:_QK]
 
             # One projection yields the latent and the rope part together, and the
             # rope part is shared across heads -- that is the "MQA" in
             # kv_a_proj_with_mqa.
             compressed = tf.matmul(hn, w_kv_a)
-            latent = tf.slice(
-                compressed, begin=(0, 0, 0), end=(1, S, config.kv_lora_rank), strides=(1, 1, 1)
-            )
-            k_rot_shared = tf.slice(
-                compressed,
-                begin=(0, 0, config.kv_lora_rank),
-                end=(1, S, config.kv_a_proj),
-                strides=(1, 1, 1),
-            )
+            latent = compressed[:, :, : config.kv_lora_rank]
+            k_rot_shared = compressed[:, :, config.kv_lora_rank : config.kv_a_proj]
 
             kv = tf.reshape(
                 tf.matmul(tf.rms_norm(latent, gamma_kv_a, eps=_EPS), w_kv_b),
                 new_shape=(1, S, _H, _KVB),
             )
-            k_nope = tf.slice(
-                kv, begin=(0, 0, 0, 0), end=(1, S, _H, _NOPE), strides=(1, 1, 1, 1)
-            )
-            v_new = tf.slice(
-                kv, begin=(0, 0, 0, _NOPE), end=(1, S, _H, _KVB), strides=(1, 1, 1, 1)
-            )
+            k_nope = kv[:, :, :, :_NOPE]
+            v_new = kv[:, :, :, _NOPE:_KVB]
 
             # Rotate the shared 64-wide part once, then broadcast it over the heads;
             # repeat_interleave on a length-1 axis is that broadcast.
@@ -173,7 +158,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # attend every position there is. Every key/value head serves exactly one
             # query head here (num_key_value_heads == num_attention_heads), so there
             # is no GQA expansion.
-            q_s = tf.mul(q_full, scale)
+            q_s = q_full * scale
             k_ctx = tf.reshape(
                 tf.transpose(k_cache, perm=(0, 2, 1, 3)), new_shape=(1, 1, _H, C, _QK)
             )
@@ -181,21 +166,21 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
                 tf.transpose(v_cache, perm=(0, 2, 1, 3)), new_shape=(1, 1, _H, C, _V)
             )
             q_e = tf.reshape(q_s, new_shape=(1, S, _H, 1, _QK))
-            score_ctx = tf.reduce(tf.mul(q_e, k_ctx), axes=(-1,), keepdim=True, kind="sum")
-            score_new = tf.reduce(tf.mul(q_s, k_new), axes=(-1,), keepdim=True, kind="sum")
+            score_ctx = tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum")
+            score_new = tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum")
 
             peak = tf.max(
                 tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
             )
             peak_e = tf.reshape(peak, new_shape=(1, S, _H, 1, 1))
-            p_ctx = tf.exp(tf.sub(score_ctx, peak_e))
-            p_new = tf.exp(tf.sub(score_new, peak))
-            total = tf.add(tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum"), p_new)
-            weighted = tf.add(
-                tf.reduce(tf.mul(p_ctx, v_ctx), axes=(-2,), keepdim=False, kind="sum"),
-                tf.mul(p_new, v_new),
+            p_ctx = tf.exp(score_ctx - peak_e)
+            p_new = tf.exp(score_new - peak)
+            total = tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new
+            weighted = (
+                tf.reduce(p_ctx * v_ctx, axes=(-2,), keepdim=False, kind="sum")
+                + p_new * v_new
             )
-            attn = tf.div(weighted, total)
+            attn = weighted / total
             out = tf.matmul(tf.reshape(attn, new_shape=(1, S, config.v_proj)), w_o)
             return out, k_new, v_new
 
@@ -229,20 +214,17 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # which is this window with its oldest position dropped.
             window = tf.concat(conv_state, x, axis=1)
             acc = tf.reduce(
-                tf.mul(window, tf.reshape(conv_w, new_shape=(1, config.short_conv_kernel_size, config.kda_proj))),
+                window
+                * tf.reshape(
+                    conv_w,
+                    new_shape=(1, config.short_conv_kernel_size, config.kda_proj),
+                ),
                 axes=(1,),
                 keepdim=True,
                 kind="sum",
             )
-            # silu(x) = x * sigmoid(x). There is no standalone silu op in the HIR op
-            # surface, and this is the definition rather than an approximation of it.
-            out = tf.mul(acc, tf.sigmoid(acc))
-            state_next = tf.slice(
-                window,
-                begin=(0, 1, 0),
-                end=(1, config.short_conv_kernel_size, config.kda_proj),
-                strides=(1, 1, 1),
-            )
+            out = tf.silu(acc)
+            state_next = window[:, 1 : config.short_conv_kernel_size, :]
             return out, state_next
 
         @func
@@ -253,7 +235,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # root, matching the kernel; it is not an rms_norm, which would divide by
             # the *mean* of the squares and carry a weight.
             sq = tf.reduce(tf.square(x), axes=(-1,), keepdim=True, kind="sum")
-            return tf.mul(x, tf.rsqrt(tf.add(sq, tf.full_like(sq, value=1e-6))))
+            return x * tf.rsqrt(sq + tf.full_like(sq, value=1e-6))
 
         @func
         def kda_gate(
@@ -270,11 +252,11 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # same function, not a different one.
             low = tf.matmul(hidden_norm, w_f_a)
             g_raw = tf.reshape(
-                tf.add(tf.matmul(low, w_f_b), dt_bias),
+                tf.matmul(low, w_f_b) + dt_bias,
                 new_shape=(1, S, config.kda_num_heads, config.kda_head_dim),
             )
-            decay_rate = tf.neg(tf.exp(tf.reshape(a_log, new_shape=(1, 1, config.kda_num_heads, 1))))
-            return tf.mul(decay_rate, tf.softplus(g_raw))
+            decay_rate = -tf.exp(tf.reshape(a_log, new_shape=(1, 1, config.kda_num_heads, 1)))
+            return decay_rate * tf.softplus(g_raw)
 
         @func
         def kda_attention(
@@ -319,7 +301,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # l2 normalisation happens inside the kernel, before the scale.
             q_n = l2_normalize(q_h)
             k_n = l2_normalize(k_h)
-            q_s = tf.mul(tf.reshape(q_n, new_shape=(1, _KH, 1, _KD)), scale)
+            q_s = tf.reshape(q_n, new_shape=(1, _KH, 1, _KD)) * scale
 
             g = kda_gate(hn, w_f_a, w_f_b, dt_bias, a_log)
             beta = tf.reshape(
@@ -330,13 +312,13 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # multiplies it column-wise along k_dim, which is the per-channel gate.
             decay = tf.reshape(tf.exp(g), new_shape=(1, _KH, 1, _KD))
             k_r = tf.reshape(k_n, new_shape=(1, _KH, 1, _KD))
-            h_decayed = tf.mul(state, decay)
-            kv_mem = tf.reduce(tf.mul(h_decayed, k_r), axes=(-1,), keepdim=False, kind="sum")
-            delta = tf.mul(tf.sub(tf.reshape(v_h, new_shape=(1, _KH, _KD)), kv_mem), beta)
-            state_next = tf.add(
-                h_decayed, tf.mul(tf.reshape(delta, new_shape=(1, _KH, _KD, 1)), k_r)
+            h_decayed = state * decay
+            kv_mem = tf.reduce(h_decayed * k_r, axes=(-1,), keepdim=False, kind="sum")
+            delta = (tf.reshape(v_h, new_shape=(1, _KH, _KD)) - kv_mem) * beta
+            state_next = (
+                h_decayed + tf.reshape(delta, new_shape=(1, _KH, _KD, 1)) * k_r
             )
-            attn = tf.reduce(tf.mul(state_next, q_s), axes=(-1,), keepdim=False, kind="sum")
+            attn = tf.reduce(state_next * q_s, axes=(-1,), keepdim=False, kind="sum")
 
             # Gated output norm: rms_norm(attn) * sigmoid(g2), the "sigmoid" activation
             # of the kernel's fused gated RMSNorm -- not a swish, which would be
@@ -344,7 +326,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             g2 = tf.reshape(
                 tf.matmul(tf.matmul(hn, w_g_a), w_g_b), new_shape=(1, _KH, _KD)
             )
-            gated = tf.mul(tf.rms_norm(attn, gamma_o, eps=_EPS), tf.sigmoid(g2))
+            gated = tf.rms_norm(attn, gamma_o, eps=_EPS) * tf.sigmoid(g2)
             out = tf.matmul(tf.reshape(gated, new_shape=(1, S, _KP)), w_o)
             return out, state_next, conv_q_next, conv_k_next, conv_v_next
 
@@ -377,15 +359,15 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # over bf16 scores can tie differently.
             logits = tf.cast(tf.matmul(tokens, w_router), dtype="f32")
             scores = tf.sigmoid(logits)
-            biased = tf.add(scores, tf.cast(bias, dtype="f32"))
+            biased = scores + tf.cast(bias, dtype="f32")
             top_biased, indices = tf.topk(biased, k=config.num_experts_per_token, axis=-1)
             # The weights come from the unbiased scores; subtracting the selected
             # experts' bias recovers them exactly.
-            unbiased = tf.sub(top_biased, tf.cast(tf.gather(bias, indices, axis=0), dtype="f32"))
+            unbiased = top_biased - tf.cast(tf.gather(bias, indices, axis=0), dtype="f32")
             denom = tf.reduce(unbiased, axes=(-1,), keepdim=True, kind="sum")
             # normalise, *then* scale: moe_renormalize is true and the scaling factor
             # is applied to the normalised weights, not folded into the denominator.
-            weights = tf.mul(tf.div(unbiased, denom), tf.cast(routed_scale, dtype="f32"))
+            weights = unbiased / denom * tf.cast(routed_scale, dtype="f32")
             return tf.cast(weights, dtype=config.dtype), indices
 
         @func
@@ -400,7 +382,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             x = tf.reshape(tokens, new_shape=(1, S, config.hidden_size))
             gate = tf.matmul(x, w_gate)
             up = tf.matmul(x, w_up)
-            h = tf.mul(tf.mul(gate, tf.sigmoid(gate)), up)
+            h = tf.silu(gate) * up
             return tf.reshape(tf.matmul(h, w_down), new_shape=(S, config.hidden_size))
 
         @func
@@ -431,17 +413,17 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             tok4 = tf.reshape(tokens, new_shape=(S, 1, config.hidden_size, 1))
             gate = tf.reshape(tf.matmul(g_sel, tok4), new_shape=(S, _TOPK, _MI))
             up = tf.reshape(tf.matmul(u_sel, tok4), new_shape=(S, _TOPK, _MI))
-            h = tf.mul(tf.mul(gate, tf.sigmoid(gate)), up)
+            h = tf.silu(gate) * up
             h4 = tf.reshape(h, new_shape=(S, _TOPK, _MI, 1))
             down = tf.reshape(tf.matmul(d_sel, h4), new_shape=(S, _TOPK, config.hidden_size))
             routed = tf.reduce(
-                tf.mul(down, tf.reshape(weights, new_shape=(S, _TOPK, 1))),
+                down * tf.reshape(weights, new_shape=(S, _TOPK, 1)),
                 axes=(1,),
                 keepdim=False,
                 kind="sum",
             )
             shared = shared_expert(tokens, sh_gate, sh_up, sh_down)
-            return tf.reshape(tf.add(routed, shared), new_shape=(1, S, config.hidden_size))
+            return tf.reshape(routed + shared, new_shape=(1, S, config.hidden_size))
 
     @module
     class KimiLinear48BA3B:

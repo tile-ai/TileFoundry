@@ -80,7 +80,7 @@ module docstring for the full rundown):
   ``tf.<op>``/``T.<op>`` schema or a sibling already-parsed ``@func``, nothing
   else.
 - MLP activation is ``gelu_pytorch_tanh`` (``tf.gelu(x, approximate="tanh")``),
-  not SwiGLU's ``silu`` — the one op this package's task adds to ``src/``.
+  not SwiGLU's ``silu``.
 - the token embedding carries a scale: ``Gemma2TextScaledWordEmbedding``
   multiplies the gathered row by ``hidden_size ** 0.5`` (48.0), so ``embed`` is
   a gather *and* a multiply.
@@ -111,8 +111,6 @@ C = DimVar("ctx_len", 1, config.max_ctx + 1)
 # One token per step.
 S = 1
 
-# `tf.div`/`tf.mul` take these as a value operand, and the parser only accepts a
-# plain name there -- an attribute access is not a valid Expr in a @func body.
 ATTN_SOFTCAP = config.attn_softcap
 LOGIT_SOFTCAP = config.final_logit_softcap
 EMBED_SCALE = config.embed_scale
@@ -159,7 +157,7 @@ class Gemma2_2B:
         # Every query head sees its group's key/value head, for the cache and for
         # the new token alike. No mask: one query at the end of the context may
         # attend every position there is.
-        q_s = tf.mul(q_rope, scale)
+        q_s = q_rope * scale
         k_ctx = tf.reshape(
             tf.transpose(tf.repeat_interleave(k_cache, repeats=config.gqa_group, axis=2), perm=(0, 2, 1, 3)),
             new_shape=(1, 1, config.n_q_heads, C, config.head_dim),
@@ -181,32 +179,28 @@ class Gemma2_2B:
         # @func binds its parameter shapes exactly, and a plain Python helper is
         # not a callee the @func parser resolves.
         q_e = tf.reshape(q_s, new_shape=(1, S, config.n_q_heads, 1, config.head_dim))
-        z_ctx = tf.div(
-            tf.reduce(tf.mul(q_e, k_ctx), axes=(-1,), keepdim=True, kind="sum"), ATTN_SOFTCAP
+        z_ctx = (
+            tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum") / ATTN_SOFTCAP
         )
-        score_ctx = tf.mul(
-            tf.sub(tf.mul(tf.sigmoid(tf.mul(z_ctx, 2.0)), 2.0), 1.0), ATTN_SOFTCAP
+        score_ctx = (tf.sigmoid(z_ctx * 2.0) * 2.0 - 1.0) * ATTN_SOFTCAP
+        z_new = (
+            tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum") / ATTN_SOFTCAP
         )
-        z_new = tf.div(
-            tf.reduce(tf.mul(q_s, k_new), axes=(-1,), keepdim=True, kind="sum"), ATTN_SOFTCAP
-        )
-        score_new = tf.mul(
-            tf.sub(tf.mul(tf.sigmoid(tf.mul(z_new, 2.0)), 2.0), 1.0), ATTN_SOFTCAP
-        )
+        score_new = (tf.sigmoid(z_new * 2.0) * 2.0 - 1.0) * ATTN_SOFTCAP
 
         # Log-sum-exp merge of the two groups against their joint max.
         peak = tf.max(
             tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
         )
         peak_e = tf.reshape(peak, new_shape=(1, S, config.n_q_heads, 1, 1))
-        p_ctx = tf.exp(tf.sub(score_ctx, peak_e))
-        p_new = tf.exp(tf.sub(score_new, peak))
-        total = tf.add(tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum"), p_new)
-        weighted = tf.add(
-            tf.reduce(tf.mul(p_ctx, v_ctx), axes=(-2,), keepdim=False, kind="sum"),
-            tf.mul(p_new, v_new),
+        p_ctx = tf.exp(score_ctx - peak_e)
+        p_new = tf.exp(score_new - peak)
+        total = tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new
+        weighted = (
+            tf.reduce(p_ctx * v_ctx, axes=(-2,), keepdim=False, kind="sum")
+            + p_new * v_new
         )
-        attn = tf.div(weighted, total)
+        attn = weighted / total
         out = tf.matmul(tf.reshape(attn, new_shape=(1, S, config.q_proj)), w_o)
         return out, k_rope, v
 
@@ -223,7 +217,7 @@ class Gemma2_2B:
         gate = tf.matmul(hidden, w_gate)
         up = tf.matmul(hidden, w_up)
         act = tf.gelu(gate, approximate="tanh")
-        h = tf.mul(act, up)
+        h = act * up
         return tf.matmul(h, w_down)
 
     @func
@@ -257,12 +251,12 @@ class Gemma2_2B:
             k_cache, v_cache, scale, w_o,
         )
         attn_out_n = tf.rms_norm(attn_out, gamma_post_attn)
-        h1 = tf.add(hidden, attn_out_n)
+        h1 = hidden + attn_out_n
 
         ff_in = tf.rms_norm(h1, gamma_pre_ff)
         mlp_out = mlp(ff_in, w_gate, w_up, w_down)
         mlp_out_n = tf.rms_norm(mlp_out, gamma_post_ff)
-        return tf.add(h1, mlp_out_n), k_new, v_new
+        return h1 + mlp_out_n, k_new, v_new
 
 
 @module
@@ -284,7 +278,7 @@ class Gemma2_2B_Decoder:
         row = tf.reshape(
             tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden)
         )
-        return tf.mul(row, EMBED_SCALE)
+        return row * EMBED_SCALE
 
     @func
     def final_rms_norm(
@@ -304,10 +298,8 @@ class Gemma2_2B_Decoder:
         # `final_logit_softcapping` rather than attention's cap. tanh composed as
         # `2*sigmoid(2z) - 1`: `tf.tanh` carries no evaluation handler.
         logits = tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden)), w_head)
-        z = tf.div(logits, LOGIT_SOFTCAP)
-        return tf.mul(
-            tf.sub(tf.mul(tf.sigmoid(tf.mul(z, 2.0)), 2.0), 1.0), LOGIT_SOFTCAP
-        )
+        z = logits / LOGIT_SOFTCAP
+        return (tf.sigmoid(z * 2.0) * 2.0 - 1.0) * LOGIT_SOFTCAP
 
     @lm_head.converter("w_head")
     def _(

@@ -119,24 +119,18 @@ class Qwen2_5_1_5B:
         # key and value, which are what the caller appends to the cache.
         hidden_norm = input_rms_norm(hidden, gamma_in)
         q = tf.reshape(
-            tf.add(
-                tf.matmul(hidden_norm, w_q),
-                tf.reshape(bias_q, new_shape=(1, 1, config.q_proj)),
-            ),
+            tf.matmul(hidden_norm, w_q)
+            + tf.reshape(bias_q, new_shape=(1, 1, config.q_proj)),
             new_shape=(1, S, config.n_q_heads, config.head_dim),
         )
         k = tf.reshape(
-            tf.add(
-                tf.matmul(hidden_norm, w_k),
-                tf.reshape(bias_k, new_shape=(1, 1, config.kv_proj)),
-            ),
+            tf.matmul(hidden_norm, w_k)
+            + tf.reshape(bias_k, new_shape=(1, 1, config.kv_proj)),
             new_shape=(1, S, config.n_kv_heads, config.head_dim),
         )
         v = tf.reshape(
-            tf.add(
-                tf.matmul(hidden_norm, w_v),
-                tf.reshape(bias_v, new_shape=(1, 1, config.kv_proj)),
-            ),
+            tf.matmul(hidden_norm, w_v)
+            + tf.reshape(bias_v, new_shape=(1, 1, config.kv_proj)),
             new_shape=(1, S, config.n_kv_heads, config.head_dim),
         )
         q_rope, _ = tf.rope(q, q, cos_cache, sin_cache, pos_ids)
@@ -144,7 +138,7 @@ class Qwen2_5_1_5B:
 
         # Every query head sees its group's key/value head, for the cache and
         # for the new token alike.
-        q_s = tf.mul(tf.reshape(q_rope, new_shape=(1, S, config.n_q_heads, config.head_dim)), scale)
+        q_s = tf.reshape(q_rope, new_shape=(1, S, config.n_q_heads, config.head_dim)) * scale
         k_ctx = tf.reshape(
             tf.transpose(tf.repeat_interleave(k_cache, repeats=_G, axis=2), perm=(0, 2, 1, 3)),
             new_shape=(1, 1, config.n_q_heads, C, config.head_dim),
@@ -158,24 +152,22 @@ class Qwen2_5_1_5B:
 
         # Two score groups: one over the cache, one over the token itself.
         q_e = tf.reshape(q_s, new_shape=(1, S, config.n_q_heads, 1, config.head_dim))
-        score_ctx = tf.reduce(tf.mul(q_e, k_ctx), axes=(-1,), keepdim=True, kind="sum")
-        score_new = tf.reduce(tf.mul(q_s, k_new), axes=(-1,), keepdim=True, kind="sum")
+        score_ctx = tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum")
+        score_new = tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum")
 
         # Log-sum-exp merge of the two groups' partials against their joint max.
         peak = tf.max(
             tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
         )
         peak_e = tf.reshape(peak, new_shape=(1, S, config.n_q_heads, 1, 1))
-        p_ctx = tf.exp(tf.sub(score_ctx, peak_e))
-        p_new = tf.exp(tf.sub(score_new, peak))
-        total = tf.add(
-            tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum"), p_new
+        p_ctx = tf.exp(score_ctx - peak_e)
+        p_new = tf.exp(score_new - peak)
+        total = tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new
+        weighted = (
+            tf.reduce(p_ctx * v_ctx, axes=(-2,), keepdim=False, kind="sum")
+            + p_new * v_new
         )
-        weighted = tf.add(
-            tf.reduce(tf.mul(p_ctx, v_ctx), axes=(-2,), keepdim=False, kind="sum"),
-            tf.mul(p_new, v_new),
-        )
-        attn = tf.div(weighted, total)
+        attn = weighted / total
         out = tf.matmul(
             tf.reshape(attn, new_shape=(1, S, config.q_proj)), w_o
         )
@@ -189,13 +181,12 @@ class Qwen2_5_1_5B:
         w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
         w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
-        # Fused post_attention_layernorm + dense SwiGLU, no residual. silu(x) =
-        # x * sigmoid(x) — there is no standalone silu op in the HIR op surface.
+        # Fused post_attention_layernorm + dense SwiGLU, no residual.
         hidden_norm = tf.rms_norm(hidden, gamma_post)
         gate = tf.matmul(hidden_norm, w_gate)
         up = tf.matmul(hidden_norm, w_up)
-        act = tf.mul(gate, tf.sigmoid(gate))
-        h = tf.mul(act, up)
+        act = tf.silu(gate)
+        h = act * up
         return tf.matmul(h, w_down)
 
     @func
@@ -237,15 +228,15 @@ class Qwen2_5_1_5B:
         up_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype=config.dt)
         for kh in tile(NK_HID):
             x_k = tf.gather(x_blk, kh, axis=0)
-            gate_z = tf.add(gate_z, tf.matmul(x_k, tf.gather(wg_blk, kh, axis=0)))
-            up_z = tf.add(up_z, tf.matmul(x_k, tf.gather(wu_blk, kh, axis=0)))
+            gate_z = gate_z + tf.matmul(x_k, tf.gather(wg_blk, kh, axis=0))
+            up_z = up_z + tf.matmul(x_k, tf.gather(wu_blk, kh, axis=0))
         gate = tf.reshape(
             tf.transpose(gate_z, perm=(0, 2, 1, 3)), new_shape=(1, S, config.intermediate)
         )
         up = tf.reshape(
             tf.transpose(up_z, perm=(0, 2, 1, 3)), new_shape=(1, S, config.intermediate)
         )
-        h = tf.mul(tf.mul(gate, tf.sigmoid(gate)), up)
+        h = tf.silu(gate) * up
         h_blk = tf.reshape(
             tf.transpose(tf.reshape(h, new_shape=(MB, MT, NK_INT, KT)), perm=(2, 0, 1, 3)),
             new_shape=(NK_INT, MB, 1, MT, KT),
@@ -258,9 +249,8 @@ class Qwen2_5_1_5B:
         )
         out_z = tf.zeros(shape=(MB, NB_HID, MT, NT), dtype=config.dt)
         for ki in tile(NK_INT):
-            out_z = tf.add(
-                out_z,
-                tf.matmul(tf.gather(h_blk, ki, axis=0), tf.gather(wd_blk, ki, axis=0)),
+            out_z = out_z + tf.matmul(
+                tf.gather(h_blk, ki, axis=0), tf.gather(wd_blk, ki, axis=0)
             )
         return tf.reshape(
             tf.transpose(out_z, perm=(0, 2, 1, 3)), new_shape=(1, S, config.hidden)
@@ -295,9 +285,9 @@ class Qwen2_5_1_5B:
             hidden, gamma_in, w_q, bias_q, w_k, bias_k, w_v, bias_v,
             cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale, w_o,
         )
-        h1 = tf.add(hidden, attn_out)
+        h1 = hidden + attn_out
         mlp_out = mlp(h1, gamma_post, w_gate, w_up, w_down)
-        return tf.add(h1, mlp_out), k_new, v_new
+        return h1 + mlp_out, k_new, v_new
 
 
 @module

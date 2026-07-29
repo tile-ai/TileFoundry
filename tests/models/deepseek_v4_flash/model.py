@@ -39,7 +39,7 @@ slice is un-rotated at the query's own position afterwards.
 
 RoPE uses DeepSeek's interleaved-pairs convention (view-as-complex on adjacent
 dims), not ``tilefoundry.dsl.tf.rope``'s rotate-half, so it is built from
-``tf.slice``/``tf.reshape``/``tf.concat`` primitives instead.
+subscripts and ``tf.reshape``/``tf.concat`` instead.
 
 Weights are derived automatically from every ``ConstTensor`` param. Routed expert
 weights are fp8 e4m3 with a ``quant_block``-square ``ue8m0`` (``f8e8m0``) block
@@ -130,15 +130,8 @@ def _submodules(config: DSV4Config):
             kv = tf.matmul(hidden, w_kv)
             kv_n = tf.rms_norm(kv, gamma_kv)
             kv_4d = tf.reshape(kv_n, new_shape=(1, 1, 1, config.head_dim))
-            kv_nope = tf.slice(
-                kv_4d, begin=(0, 0, 0, 0), end=(1, 1, 1, config.nope_dim), strides=(1, 1, 1, 1),
-            )
-            kv_rope_in = tf.slice(
-                kv_4d,
-                begin=(0, 0, 0, config.nope_dim),
-                end=(1, 1, 1, config.head_dim),
-                strides=(1, 1, 1, 1),
-            )
+            kv_nope = kv_4d[:, :, :, : config.nope_dim]
+            kv_rope_in = kv_4d[:, :, :, config.nope_dim : config.head_dim]
 
             # FP8 e4m3 fake-quant of the non-rope KV latent: block-absmax, scale
             # rounded up to a power of two (ue8m0), then a real fp8e4m3 round
@@ -149,23 +142,19 @@ def _submodules(config: DSV4Config):
             )
             kv_amax = tf.reduce(kv_nope_blk, axes=(-1,), keepdim=True, kind=ReduceKind.ABS_MAX)
             kv_amax = tf.max(kv_amax, FP8E4M3_QUANT_EPS)
-            kv_scale = tf.exp2(tf.ceil(tf.log2(tf.div(kv_amax, FP8E4M3_MAX))))
-            kv_scaled = tf.div(kv_nope_blk, kv_scale)
+            kv_scale = tf.exp2(tf.ceil(tf.log2(kv_amax / FP8E4M3_MAX)))
+            kv_scaled = kv_nope_blk / kv_scale
             kv_scaled = tf.min(tf.max(kv_scaled, -FP8E4M3_MAX), FP8E4M3_MAX)
             kv_q_fp8 = tf.cast(kv_scaled, dtype="fp8e4m3")
-            kv_dq = tf.mul(tf.cast(kv_q_fp8, dtype="f32"), kv_scale)
+            kv_dq = tf.cast(kv_q_fp8, dtype="f32") * kv_scale
             kv_nope_q = tf.cast(tf.reshape(kv_dq, new_shape=(1, 1, 1, config.nope_dim)), dtype="bf16")
 
-            kv_r0 = tf.slice(
-                kv_rope_in, begin=(0, 0, 0, 0), end=(1, 1, 1, config.rope_dim), strides=(1, 1, 1, 2),
-            )
-            kv_r1 = tf.slice(
-                kv_rope_in, begin=(0, 0, 0, 1), end=(1, 1, 1, config.rope_dim), strides=(1, 1, 1, 2),
-            )
+            kv_r0 = kv_rope_in[:, :, :, 0 : config.rope_dim : 2]
+            kv_r1 = kv_rope_in[:, :, :, 1 : config.rope_dim : 2]
             kv_r0_f32 = tf.cast(kv_r0, dtype="f32")
             kv_r1_f32 = tf.cast(kv_r1, dtype="f32")
-            kv_o0_f32 = tf.sub(tf.mul(kv_r0_f32, cos_pos), tf.mul(kv_r1_f32, sin_pos))
-            kv_o1_f32 = tf.add(tf.mul(kv_r0_f32, sin_pos), tf.mul(kv_r1_f32, cos_pos))
+            kv_o0_f32 = kv_r0_f32 * cos_pos - kv_r1_f32 * sin_pos
+            kv_o1_f32 = kv_r0_f32 * sin_pos + kv_r1_f32 * cos_pos
             kv_o0 = tf.cast(kv_o0_f32, dtype="bf16")
             kv_o1 = tf.cast(kv_o1_f32, dtype="bf16")
             kv_o0 = tf.reshape(kv_o0, new_shape=(1, 1, 1, config.rope_half, 1))
@@ -191,7 +180,7 @@ def _submodules(config: DSV4Config):
                 tf.cast(wkv_scale, dtype="bf16"),
                 new_shape=(config.blocks(config.head_dim), 1, config.blocks(config.dim), 1),
             )
-            dequant = tf.reshape(tf.mul(blocks, block_scale), new_shape=(config.head_dim, config.dim))
+            dequant = tf.reshape(blocks * block_scale, new_shape=(config.head_dim, config.dim))
             return tf.transpose(dequant, perm=(1, 0))
 
         @func
@@ -215,34 +204,14 @@ def _submodules(config: DSV4Config):
             q_full = tf.matmul(q_lat, w_q_b)
             q = tf.reshape(q_full, new_shape=(1, 1, config.n_heads, config.head_dim))
             q_rescaled = tf.rms_norm(q, ones_head_dim)
-            q_nope = tf.slice(
-                q_rescaled,
-                begin=(0, 0, 0, 0),
-                end=(1, 1, config.n_heads, config.nope_dim),
-                strides=(1, 1, 1, 1),
-            )
-            q_rope_in = tf.slice(
-                q_rescaled,
-                begin=(0, 0, 0, config.nope_dim),
-                end=(1, 1, config.n_heads, config.head_dim),
-                strides=(1, 1, 1, 1),
-            )
-            q_r0 = tf.slice(
-                q_rope_in,
-                begin=(0, 0, 0, 0),
-                end=(1, 1, config.n_heads, config.rope_dim),
-                strides=(1, 1, 1, 2),
-            )
-            q_r1 = tf.slice(
-                q_rope_in,
-                begin=(0, 0, 0, 1),
-                end=(1, 1, config.n_heads, config.rope_dim),
-                strides=(1, 1, 1, 2),
-            )
+            q_nope = q_rescaled[:, :, :, : config.nope_dim]
+            q_rope_in = q_rescaled[:, :, :, config.nope_dim : config.head_dim]
+            q_r0 = q_rope_in[:, :, :, 0 : config.rope_dim : 2]
+            q_r1 = q_rope_in[:, :, :, 1 : config.rope_dim : 2]
             q_r0_f32 = tf.cast(q_r0, dtype="f32")
             q_r1_f32 = tf.cast(q_r1, dtype="f32")
-            q_o0_f32 = tf.sub(tf.mul(q_r0_f32, cos_pos), tf.mul(q_r1_f32, sin_pos))
-            q_o1_f32 = tf.add(tf.mul(q_r0_f32, sin_pos), tf.mul(q_r1_f32, cos_pos))
+            q_o0_f32 = q_r0_f32 * cos_pos - q_r1_f32 * sin_pos
+            q_o1_f32 = q_r0_f32 * sin_pos + q_r1_f32 * cos_pos
             q_o0 = tf.cast(q_o0_f32, dtype="bf16")
             q_o1 = tf.cast(q_o1_f32, dtype="bf16")
             q_o0 = tf.reshape(q_o0, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
@@ -266,14 +235,14 @@ def _submodules(config: DSV4Config):
             k_new = tf.cast(
                 tf.repeat_interleave(kv_new, repeats=config.n_heads, axis=2), dtype="f32"
             )
-            q_s = tf.cast(tf.mul(q_final, scale), dtype="f32")
+            q_s = tf.cast(q_final * scale, dtype="f32")
 
             # Two score groups -- one over the cache, one over the token itself --
             # plus the sink's denominator-only column, merged by log-sum-exp
             # against their joint max.
             q_e = tf.reshape(q_s, new_shape=(1, 1, config.n_heads, 1, config.head_dim))
-            score_ctx = tf.reduce(tf.mul(q_e, k_ctx), axes=(-1,), keepdim=True, kind="sum")
-            score_new = tf.reduce(tf.mul(q_s, k_new), axes=(-1,), keepdim=True, kind="sum")
+            score_ctx = tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum")
+            score_new = tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum")
             peak = tf.max(
                 tf.max(
                     tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
@@ -281,48 +250,27 @@ def _submodules(config: DSV4Config):
                 attn_sink,
             )
             peak_e = tf.reshape(peak, new_shape=(1, 1, config.n_heads, 1, 1))
-            p_ctx = tf.exp(tf.sub(score_ctx, peak_e))
-            p_new = tf.exp(tf.sub(score_new, peak))
-            p_sink = tf.exp(tf.sub(attn_sink, peak))
-            total = tf.add(
-                tf.add(tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum"), p_new),
-                p_sink,
+            p_ctx = tf.exp(score_ctx - peak_e)
+            p_new = tf.exp(score_new - peak)
+            p_sink = tf.exp(attn_sink - peak)
+            total = (
+                tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new + p_sink
             )
-            weighted = tf.add(
-                tf.reduce(tf.mul(p_ctx, k_ctx), axes=(-2,), keepdim=False, kind="sum"),
-                tf.mul(p_new, k_new),
+            weighted = (
+                tf.reduce(p_ctx * k_ctx, axes=(-2,), keepdim=False, kind="sum")
+                + p_new * k_new
             )
-            ctx = tf.cast(tf.div(weighted, total), dtype="bf16")
+            ctx = tf.cast(weighted / total, dtype="bf16")
 
             # Inverse-RoPE: conjugate angle (signs flipped vs. the forward rotation above).
-            ctx_nope = tf.slice(
-                ctx,
-                begin=(0, 0, 0, 0),
-                end=(1, 1, config.n_heads, config.nope_dim),
-                strides=(1, 1, 1, 1),
-            )
-            ctx_rope_in = tf.slice(
-                ctx,
-                begin=(0, 0, 0, config.nope_dim),
-                end=(1, 1, config.n_heads, config.head_dim),
-                strides=(1, 1, 1, 1),
-            )
-            ctx_r0 = tf.slice(
-                ctx_rope_in,
-                begin=(0, 0, 0, 0),
-                end=(1, 1, config.n_heads, config.rope_dim),
-                strides=(1, 1, 1, 2),
-            )
-            ctx_r1 = tf.slice(
-                ctx_rope_in,
-                begin=(0, 0, 0, 1),
-                end=(1, 1, config.n_heads, config.rope_dim),
-                strides=(1, 1, 1, 2),
-            )
+            ctx_nope = ctx[:, :, :, : config.nope_dim]
+            ctx_rope_in = ctx[:, :, :, config.nope_dim : config.head_dim]
+            ctx_r0 = ctx_rope_in[:, :, :, 0 : config.rope_dim : 2]
+            ctx_r1 = ctx_rope_in[:, :, :, 1 : config.rope_dim : 2]
             ctx_r0_f32 = tf.cast(ctx_r0, dtype="f32")
             ctx_r1_f32 = tf.cast(ctx_r1, dtype="f32")
-            ctx_o0_f32 = tf.add(tf.mul(ctx_r0_f32, cos_pos), tf.mul(ctx_r1_f32, sin_pos))
-            ctx_o1_f32 = tf.sub(tf.mul(ctx_r1_f32, cos_pos), tf.mul(ctx_r0_f32, sin_pos))
+            ctx_o0_f32 = ctx_r0_f32 * cos_pos + ctx_r1_f32 * sin_pos
+            ctx_o1_f32 = ctx_r1_f32 * cos_pos - ctx_r0_f32 * sin_pos
             ctx_o0 = tf.cast(ctx_o0_f32, dtype="bf16")
             ctx_o1 = tf.cast(ctx_o1_f32, dtype="bf16")
             ctx_o0 = tf.reshape(ctx_o0, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
@@ -364,7 +312,7 @@ def _submodules(config: DSV4Config):
                 new_shape=(config.blocks(config.q_lora_rank), 1, config.blocks(config.dim), 1),
             )
             dequant = tf.reshape(
-                tf.mul(blocks, block_scale), new_shape=(config.q_lora_rank, config.dim),
+                blocks * block_scale, new_shape=(config.q_lora_rank, config.dim),
             )
             return tf.transpose(dequant, perm=(1, 0))
 
@@ -388,7 +336,7 @@ def _submodules(config: DSV4Config):
                 new_shape=(config.blocks(config.q_proj), 1, config.blocks(config.q_lora_rank), 1),
             )
             dequant = tf.reshape(
-                tf.mul(blocks, block_scale), new_shape=(config.q_proj, config.q_lora_rank),
+                blocks * block_scale, new_shape=(config.q_proj, config.q_lora_rank),
             )
             return tf.transpose(dequant, perm=(1, 0))
 
@@ -430,7 +378,7 @@ def _submodules(config: DSV4Config):
                 new_shape=(config.blocks(config.dim), 1, config.blocks(config.wo_a_out), 1),
             )
             dequant = tf.reshape(
-                tf.mul(blocks, block_scale), new_shape=(config.dim, config.wo_a_out),
+                blocks * block_scale, new_shape=(config.dim, config.wo_a_out),
             )
             return tf.transpose(dequant, perm=(1, 0))
 
@@ -739,7 +687,7 @@ def _submodules(config: DSV4Config):
             routed: Tensor[(1, 1, config.dim), "bf16"],
             shared: Tensor[(1, 1, config.dim), "bf16"],
         ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.add(routed, shared)
+            return routed + shared
 
         @func
         def deepseek_v4_flash_moe_hash(
@@ -1083,7 +1031,7 @@ def _submodules(config: DSV4Config):
             routed: Tensor[(1, 1, config.dim), "bf16"],
             shared: Tensor[(1, 1, config.dim), "bf16"],
         ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.add(routed, shared)
+            return routed + shared
 
         @func
         def deepseek_v4_flash_moe(
@@ -1172,7 +1120,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
             a: Tensor[(1, 1, config.dim), "bf16"],
             b: Tensor[(1, 1, config.dim), "bf16"],
         ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.add(a, b)
+            return a + b
 
         attention = attention_module
         moe = moe_module

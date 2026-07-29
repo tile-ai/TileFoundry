@@ -401,6 +401,16 @@ surface aliases ([core-ir §2.3](./core-ir.md)) over the kinded Ops; there are n
 per-name IR classes.
 [torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
 
+One spelling is preferred, so that two authors reading the same IR write it the
+same way: an arithmetic or comparison operand pair SHOULD be written with the
+Python operator (`a + b`, `a * b`, `a < b`), and a sub-tensor SHOULD be written as
+a subscript (`x[:, :, j:j + 1]`, `x[:, :, 3]`). The named forms `add(a, b)` and
+`slice(x, begin=…, end=…, strides=…)` remain the underlying surface — they are what
+the operator and subscript resolve to, and they stay available where a name must be
+computed — but they are not the form to reach for first. Both spellings build the
+same IR, so the choice carries no semantic weight; leaving it open is what lets one
+model read one way and its neighbour another.
+
 ##### Binary
 ```python
 class Binary(Op):

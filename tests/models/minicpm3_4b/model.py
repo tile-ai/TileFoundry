@@ -42,9 +42,9 @@ cache across heads on the way in.
 1. **Q down -> norm -> up -> split**: ``x @ Wq_a`` `[1,1,768]` ->
    ``rms_norm(., gamma_q_a, eps=1e-6)`` -> ``@ Wq_b`` `[1,1,40*96]` -> reshape
    `[1,1,40,96]` -> ``q_nope = [...,:64]``, ``q_rope = [...,64:]``. The split is
-   uneven, so it is ``tf.slice``; this repo's ``Split`` op takes a count and
+   uneven, so it is a subscript; this repo's ``Split`` op takes a count and
    requires equal parts, so it cannot express 64/32 (or 256/32) at all, and every
-   split here uses ``tf.slice`` uniformly rather than mixing the two.
+   split here is subscripted uniformly rather than mixing the two.
 2. **KV compress -> split**: ``x @ W_kv_a_mqa`` `[1,1,288]` ->
    ``kv_c = [...,:256]``, ``k_rope_flat = [...,256:]`` (headless; one shared
    rotary slice for all 40 heads).
@@ -111,8 +111,6 @@ _NOPE = config.qk_nope_head_dim
 _V = config.v_head_dim
 _KV_PAIR = config.qk_nope_head_dim + config.v_head_dim
 
-# `tf.mul`/`tf.div` take these as a value operand, and the parser only accepts a
-# plain name there -- an attribute access is not a valid Expr in a @func body.
 EMBED_SCALE = float(config.scale_emb)
 LOGITS_SCALING = config.logits_scaling
 
@@ -156,32 +154,19 @@ class MiniCPM3_4B:
         q_down = tf.matmul(x, w_q_a)
         q_up = tf.matmul(tf.rms_norm(q_down, gamma_q_a, eps=config.rms_eps_lora), w_q_b)
         q = tf.reshape(q_up, new_shape=(1, S, _H, _QK))
-        q_nope = tf.slice(
-            q, begin=(0, 0, 0, 0), end=(1, S, _H, _NOPE), strides=(1, 1, 1, 1)
-        )
-        q_rope = tf.slice(
-            q, begin=(0, 0, 0, _NOPE), end=(1, S, _H, _QK), strides=(1, 1, 1, 1)
-        )
+        q_nope = q[:, :, :, :_NOPE]
+        q_rope = q[:, :, :, _NOPE:_QK]
 
         # Step 2: KV compress -> split (shared latent | shared rotary slice).
         compressed = tf.matmul(x, w_kv_a)
-        kv_c = tf.slice(
-            compressed, begin=(0, 0, 0), end=(1, S, config.kv_lora_rank), strides=(1, 1, 1)
-        )
-        k_rope_flat = tf.slice(
-            compressed, begin=(0, 0, config.kv_lora_rank),
-            end=(1, S, config.kv_a_proj), strides=(1, 1, 1),
-        )
+        kv_c = compressed[:, :, : config.kv_lora_rank]
+        k_rope_flat = compressed[:, :, config.kv_lora_rank : config.kv_a_proj]
 
         # Step 3: KV up -> reshape -> split (nope | value), one pair per head.
         kv_up = tf.matmul(tf.rms_norm(kv_c, gamma_kv_a, eps=config.rms_eps_lora), w_kv_b)
         kv = tf.reshape(kv_up, new_shape=(1, S, _H, _KV_PAIR))
-        k_nope = tf.slice(
-            kv, begin=(0, 0, 0, 0), end=(1, S, _H, _NOPE), strides=(1, 1, 1, 1)
-        )
-        v_new = tf.slice(
-            kv, begin=(0, 0, 0, _NOPE), end=(1, S, _H, _KV_PAIR), strides=(1, 1, 1, 1)
-        )
+        k_nope = kv[:, :, :, :_NOPE]
+        v_new = kv[:, :, :, _NOPE:_KV_PAIR]
 
         # Step 4: RoPE on the rotary slice only (dim 32, not qk_head_dim 96).
         k_rope = tf.reshape(k_rope_flat, new_shape=(1, S, 1, config.qk_rope_head_dim))
@@ -195,7 +180,7 @@ class MiniCPM3_4B:
         k_new = tf.concat(k_nope, k_rope_b, axis=-1)
 
         # Step 7: attend the cache and the token itself, then project out.
-        q_s = tf.mul(query, scale)
+        q_s = query * scale
         k_ctx = tf.reshape(
             tf.transpose(k_cache, perm=(0, 2, 1, 3)), new_shape=(1, 1, _H, C, _QK)
         )
@@ -205,22 +190,22 @@ class MiniCPM3_4B:
 
         # Two score groups: one over the cache, one over the token itself.
         q_e = tf.reshape(q_s, new_shape=(1, S, _H, 1, _QK))
-        score_ctx = tf.reduce(tf.mul(q_e, k_ctx), axes=(-1,), keepdim=True, kind="sum")
-        score_new = tf.reduce(tf.mul(q_s, k_new), axes=(-1,), keepdim=True, kind="sum")
+        score_ctx = tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum")
+        score_new = tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum")
 
         # Log-sum-exp merge of the two groups' partials against their joint max.
         peak = tf.max(
             tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
         )
         peak_e = tf.reshape(peak, new_shape=(1, S, _H, 1, 1))
-        p_ctx = tf.exp(tf.sub(score_ctx, peak_e))
-        p_new = tf.exp(tf.sub(score_new, peak))
-        total = tf.add(tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum"), p_new)
-        weighted = tf.add(
-            tf.reduce(tf.mul(p_ctx, v_ctx), axes=(-2,), keepdim=False, kind="sum"),
-            tf.mul(p_new, v_new),
+        p_ctx = tf.exp(score_ctx - peak_e)
+        p_new = tf.exp(score_new - peak)
+        total = tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new
+        weighted = (
+            tf.reduce(p_ctx * v_ctx, axes=(-2,), keepdim=False, kind="sum")
+            + p_new * v_new
         )
-        attn = tf.div(weighted, total)
+        attn = weighted / total
         out = tf.matmul(tf.reshape(attn, new_shape=(1, S, config.attn_out)), w_o)
         return out, k_new, v_new
 
@@ -232,13 +217,12 @@ class MiniCPM3_4B:
         w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
         w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
-        # Fused post_attention_layernorm + dense SwiGLU, no residual. silu(x) =
-        # x * sigmoid(x) — there is no standalone silu op in the HIR op surface.
+        # Fused post_attention_layernorm + dense SwiGLU, no residual.
         hidden_norm = tf.rms_norm(hidden, gamma_post, eps=config.rms_eps)
         gate = tf.matmul(hidden_norm, w_gate)
         up = tf.matmul(hidden_norm, w_up)
-        act = tf.mul(gate, tf.sigmoid(gate))
-        h = tf.mul(act, up)
+        act = tf.silu(gate)
+        h = act * up
         return tf.matmul(h, w_down)
 
     @func
@@ -272,9 +256,9 @@ class MiniCPM3_4B:
             hidden, gamma_in, w_q_a, gamma_q_a, w_q_b, w_kv_a, gamma_kv_a, w_kv_b,
             cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale, w_o,
         )
-        h1 = tf.add(hidden, tf.mul(attn_out, residual_scale))
+        h1 = hidden + attn_out * residual_scale
         mlp_out = mlp(h1, gamma_post, w_gate, w_up, w_down)
-        return tf.add(h1, tf.mul(mlp_out, residual_scale)), k_new, v_new
+        return h1 + mlp_out * residual_scale, k_new, v_new
 
 
 @module
@@ -296,7 +280,7 @@ class MiniCPM3_4B_Decoder:
         row = tf.reshape(
             tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden)
         )
-        return tf.mul(row, EMBED_SCALE)
+        return row * EMBED_SCALE
 
     @func
     def final_rms_norm(
@@ -314,7 +298,7 @@ class MiniCPM3_4B_Decoder:
     ) -> Tensor[(1, config.vocab), config.dt]:
         # `MiniCPM3ForCausalLM.forward` divides the hidden state by
         # `logits_scaling` before the head, not after.
-        scaled = tf.div(tf.reshape(hidden, new_shape=(1, config.hidden)), LOGITS_SCALING)
+        scaled = tf.reshape(hidden, new_shape=(1, config.hidden)) / LOGITS_SCALING
         return tf.matmul(scaled, w_head)
 
     @lm_head.converter("w_head")

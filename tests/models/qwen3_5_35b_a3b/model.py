@@ -82,9 +82,9 @@ class Qwen3_5LinearAttention:
         # the kernel and one reduction over it. Channels do not mix -- that is
         # what depthwise means here, and it is why no matmul appears.
         window = tf.concat(conv_state, entry, axis=2)
-        weighted = tf.mul(window, tf.reshape(conv_w, new_shape=(1, _CONV, _KERNEL)))
+        weighted = window * tf.reshape(conv_w, new_shape=(1, _CONV, _KERNEL))
         summed = tf.reduce(weighted, axes=(-1,), keepdim=False, kind="sum")
-        return tf.mul(summed, tf.sigmoid(summed))
+        return tf.silu(summed)
 
     @func
     def l2_normalise(
@@ -94,7 +94,7 @@ class Qwen3_5LinearAttention:
         # (`l2norm` in the Hugging Face module): rsqrt of the *sum* of squares
         # plus eps, not of the mean, so it is not an RMSNorm with a unit scale.
         square_sum = tf.reduce(tf.square(x), axes=(-1,), keepdim=True, kind="sum")
-        return tf.mul(x, tf.rsqrt(tf.add(square_sum, tf.full_like(square_sum, value=_L2_EPS))))
+        return x * tf.rsqrt(square_sum + tf.full_like(square_sum, value=_L2_EPS))
 
     @func
     def delta_step(
@@ -108,21 +108,16 @@ class Qwen3_5LinearAttention:
         # One token of the gated delta rule. Returns the read-out and the updated
         # state, in that order; the state is an output because a rank-one update
         # has no smaller increment to hand back.
-        decayed = tf.mul(recurrent_state, tf.reshape(tf.exp(g), new_shape=(1, _HV, 1, 1)))
+        decayed = recurrent_state * tf.reshape(tf.exp(g), new_shape=(1, _HV, 1, 1))
         k_col = tf.reshape(k, new_shape=(1, _HV, _DK, 1))
-        recalled = tf.reduce(
-            tf.mul(decayed, k_col), axes=(-2,), keepdim=False, kind="sum"
+        recalled = tf.reduce(decayed * k_col, axes=(-2,), keepdim=False, kind="sum")
+        delta = (tf.reshape(v, new_shape=(1, _HV, _DV)) - recalled) * tf.reshape(
+            beta, new_shape=(1, _HV, 1)
         )
-        delta = tf.mul(
-            tf.sub(tf.reshape(v, new_shape=(1, _HV, _DV)), recalled),
-            tf.reshape(beta, new_shape=(1, _HV, 1)),
-        )
-        updated = tf.add(
-            decayed, tf.mul(k_col, tf.reshape(delta, new_shape=(1, _HV, 1, _DV)))
-        )
-        q_scaled = tf.mul(q, tf.full_like(q, value=_QSCALE))
+        updated = decayed + k_col * tf.reshape(delta, new_shape=(1, _HV, 1, _DV))
+        q_scaled = q * tf.full_like(q, value=_QSCALE)
         read = tf.reduce(
-            tf.mul(updated, tf.reshape(q_scaled, new_shape=(1, _HV, _DK, 1))),
+            updated * tf.reshape(q_scaled, new_shape=(1, _HV, _DK, 1)),
             axes=(-2,), keepdim=False, kind="sum",
         )
         return read, updated
@@ -151,9 +146,9 @@ class Qwen3_5LinearAttention:
         entry = tf.transpose(tf.matmul(hidden_norm, w_in_qkv), perm=(0, 2, 1))
         mixed = conv_step(conv_state, entry, conv_w)
 
-        q_flat = tf.slice(mixed, begin=(0, 0), end=(1, _KEY), strides=(1, 1))
-        k_flat = tf.slice(mixed, begin=(0, _KEY), end=(1, 2 * _KEY), strides=(1, 1))
-        v_flat = tf.slice(mixed, begin=(0, 2 * _KEY), end=(1, _CONV), strides=(1, 1))
+        q_flat = mixed[:, :_KEY]
+        k_flat = mixed[:, _KEY : 2 * _KEY]
+        v_flat = mixed[:, 2 * _KEY : _CONV]
 
         # Every value head reads the key head it shares; the projection produces
         # one key head per group, and the delta rule runs per value head.
@@ -173,10 +168,7 @@ class Qwen3_5LinearAttention:
         # g is negative by construction, so exp(g) is a decay in (0, 1): the
         # state cannot grow without a token asking for it through the rank-one
         # update.
-        g = tf.mul(
-            tf.neg(tf.exp(a_log)),
-            tf.softplus(tf.add(tf.matmul(hidden_norm, w_in_a), dt_bias)),
-        )
+        g = -tf.exp(a_log) * tf.softplus(tf.matmul(hidden_norm, w_in_a) + dt_bias)
 
         read, updated = delta_step(recurrent_state, q, k, v, g, beta)
 
@@ -184,7 +176,7 @@ class Qwen3_5LinearAttention:
         # projection of the layer input through silu.
         z = tf.reshape(tf.matmul(hidden_norm, w_in_z), new_shape=(1, _HV, _DV))
         normed = tf.rms_norm(read, gamma_gdn)
-        gated = tf.mul(normed, tf.mul(z, tf.sigmoid(z)))
+        gated = normed * tf.silu(z)
         out = tf.matmul(tf.reshape(gated, new_shape=(1, S, _VAL)), w_out)
         return out, entry, updated
 
@@ -201,12 +193,8 @@ class Qwen3_5FullAttention:
         # untouched tail back on. `tf.rope` multiplies its caches against the
         # whole of its input's last axis, so the split is what makes a partial
         # factor expressible at all rather than an optional rearrangement.
-        rot = tf.slice(
-            x, begin=(0, 0, 0, 0), end=(1, S, _HQ, _ROT), strides=(1, 1, 1, 1)
-        )
-        tail = tf.slice(
-            x, begin=(0, 0, 0, _ROT), end=(1, S, _HQ, _D), strides=(1, 1, 1, 1)
-        )
+        rot = x[:, :, :, :_ROT]
+        tail = x[:, :, :, _ROT:_D]
         turned, _ = tf.rope(rot, rot, cos_cache, sin_cache, pos_ids)
         return tf.concat(turned, tail, axis=-1)
 
@@ -219,12 +207,8 @@ class Qwen3_5FullAttention:
     ) -> Tensor[(1, S, _HKV, _D), config.dt]:
         # The same rotation over the key's head count. Its own Function because a
         # Function's parameter shapes are fixed and GQA's two head counts differ.
-        rot = tf.slice(
-            x, begin=(0, 0, 0, 0), end=(1, S, _HKV, _ROT), strides=(1, 1, 1, 1)
-        )
-        tail = tf.slice(
-            x, begin=(0, 0, 0, _ROT), end=(1, S, _HKV, _D), strides=(1, 1, 1, 1)
-        )
+        rot = x[:, :, :, :_ROT]
+        tail = x[:, :, :, _ROT:_D]
         turned, _ = tf.rope(rot, rot, cos_cache, sin_cache, pos_ids)
         return tf.concat(turned, tail, axis=-1)
 
@@ -257,10 +241,8 @@ class Qwen3_5FullAttention:
         qg = tf.reshape(
             tf.matmul(hidden_norm, w_qg), new_shape=(1, S, _HQ, 2 * _D)
         )
-        q = tf.slice(qg, begin=(0, 0, 0, 0), end=(1, S, _HQ, _D), strides=(1, 1, 1, 1))
-        gate = tf.slice(
-            qg, begin=(0, 0, 0, _D), end=(1, S, _HQ, 2 * _D), strides=(1, 1, 1, 1)
-        )
+        q = qg[:, :, :, :_D]
+        gate = qg[:, :, :, _D : 2 * _D]
 
         q_rope = partial_rope(
             tf.rms_norm(q, gamma_q), cos_cache, sin_cache, pos_ids
@@ -276,7 +258,7 @@ class Qwen3_5FullAttention:
 
         # Every query head sees its group's key/value head, for the cache and for
         # the new token alike.
-        q_s = tf.mul(q_rope, scale)
+        q_s = q_rope * scale
         k_ctx = tf.reshape(
             tf.transpose(tf.repeat_interleave(k_cache, repeats=_G, axis=2), perm=(0, 2, 1, 3)),
             new_shape=(1, 1, _HQ, C, _D),
@@ -290,28 +272,27 @@ class Qwen3_5FullAttention:
 
         # Two score groups: one over the cache, one over the token itself.
         q_e = tf.reshape(q_s, new_shape=(1, S, _HQ, 1, _D))
-        score_ctx = tf.reduce(tf.mul(q_e, k_ctx), axes=(-1,), keepdim=True, kind="sum")
-        score_new = tf.reduce(tf.mul(q_s, k_new), axes=(-1,), keepdim=True, kind="sum")
+        score_ctx = tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum")
+        score_new = tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum")
 
         # Log-sum-exp merge of the two groups' partials against their joint max.
         peak = tf.max(
             tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
         )
         peak_e = tf.reshape(peak, new_shape=(1, S, _HQ, 1, 1))
-        p_ctx = tf.exp(tf.sub(score_ctx, peak_e))
-        p_new = tf.exp(tf.sub(score_new, peak))
-        total = tf.add(tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum"), p_new)
-        weighted = tf.add(
-            tf.reduce(tf.mul(p_ctx, v_ctx), axes=(-2,), keepdim=False, kind="sum"),
-            tf.mul(p_new, v_new),
+        p_ctx = tf.exp(score_ctx - peak_e)
+        p_new = tf.exp(score_new - peak)
+        total = tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new
+        weighted = (
+            tf.reduce(p_ctx * v_ctx, axes=(-2,), keepdim=False, kind="sum")
+            + p_new * v_new
         )
-        attn = tf.div(weighted, total)
+        attn = weighted / total
 
         # The output gate, then o_proj. Head-major flattening on both sides, so
         # gate entry (h, j) meets attention entry (h, j).
-        gated = tf.mul(
-            tf.reshape(attn, new_shape=(1, S, _HQ * _D)),
-            tf.sigmoid(tf.reshape(gate, new_shape=(1, S, _HQ * _D))),
+        gated = tf.reshape(attn, new_shape=(1, S, _HQ * _D)) * tf.sigmoid(
+            tf.reshape(gate, new_shape=(1, S, _HQ * _D))
         )
         return tf.matmul(gated, w_o), k_rope, v
 
@@ -331,7 +312,7 @@ class Qwen3_5MoE:
         probs = tf.softmax(logits, axis=-1)
         top_vals, indices = tf.topk(probs, k=_K, axis=-1)
         denom = tf.reduce(top_vals, axes=(-1,), keepdim=True, kind="sum")
-        return tf.cast(tf.div(top_vals, denom), dtype=config.dt), indices
+        return tf.cast(top_vals / denom, dtype=config.dt), indices
 
     @func
     def routed_experts(
@@ -353,12 +334,12 @@ class Qwen3_5MoE:
         token_col = tf.reshape(tokens, new_shape=(S, 1, _H, 1))
         gate = tf.reshape(tf.matmul(gate_w, token_col), new_shape=(S, _K, _I))
         up = tf.reshape(tf.matmul(up_w, token_col), new_shape=(S, _K, _I))
-        hidden = tf.mul(tf.mul(gate, tf.sigmoid(gate)), up)
+        hidden = tf.silu(gate) * up
         down = tf.reshape(
             tf.matmul(down_w, tf.reshape(hidden, new_shape=(S, _K, _I, 1))),
             new_shape=(S, _K, _H),
         )
-        weighted = tf.mul(down, tf.reshape(weights, new_shape=(S, _K, 1)))
+        weighted = down * tf.reshape(weights, new_shape=(S, _K, 1))
         return tf.reduce(weighted, axes=(1,), keepdim=False, kind="sum")
 
     @func
@@ -374,9 +355,9 @@ class Qwen3_5MoE:
         # so it is between 0 and 1 per token and cannot change sign.
         gate = tf.matmul(tokens, w_shared_gate)
         up = tf.matmul(tokens, w_shared_up)
-        dense = tf.matmul(tf.mul(tf.mul(gate, tf.sigmoid(gate)), up), w_shared_down)
+        dense = tf.matmul(tf.silu(gate) * up, w_shared_down)
         scale = tf.sigmoid(tf.matmul(tokens, w_shared_scale))
-        return tf.mul(dense, scale)
+        return dense * scale
 
     @func
     def moe(
@@ -399,7 +380,7 @@ class Qwen3_5MoE:
         shared = shared_expert(
             tokens, w_shared_gate, w_shared_up, w_shared_down, w_shared_scale
         )
-        return tf.reshape(tf.add(routed, shared), new_shape=(1, S, _H))
+        return tf.reshape(routed + shared, new_shape=(1, S, _H))
 
 
 def _layer_forward(self, hidden, mixer_args):
@@ -434,7 +415,7 @@ class Qwen3_5FullAttnLayer:
         a: Tensor[(1, S, config.hidden), config.dt],
         b: Tensor[(1, S, config.hidden), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
-        return tf.add(a, b)
+        return a + b
 
     forward = _layer_forward
 
@@ -449,7 +430,7 @@ class Qwen3_5LinearAttnLayer:
         a: Tensor[(1, S, config.hidden), config.dt],
         b: Tensor[(1, S, config.hidden), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
-        return tf.add(a, b)
+        return a + b
 
     forward = _layer_forward
 
