@@ -251,5 +251,3 @@ def linear_weight(linear):
     the transpose/pack "weight preprocessing" the task calls for happening in
     test code, not in the kernel)."""
     return linear.weight.t().unsqueeze(0).contiguous()
-
-
