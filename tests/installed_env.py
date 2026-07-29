@@ -1,9 +1,8 @@
 """TileFoundry installed from a built wheel, for behaviour only an installation has.
 
-The nested environment inherits its base's packages, so an editable install in
-that base can shadow the wheel. `assert_installed` refuses that, and refuses it
-rather than skipping: a fallback to this checkout reports the same green as the
-installed branch actually running.
+`assert_installed` fails an environment that resolves back to this checkout rather
+than skipping it. Why an installed environment is tested at all is in
+[cli.md](../docs/spec/cli.md).
 """
 
 from __future__ import annotations
@@ -11,6 +10,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,11 +59,7 @@ class InstalledEnv:
         return json.loads(completed.stdout)
 
     def assert_installed(self) -> dict[str, str]:
-        """Refuse an environment that resolves back to this checkout.
-
-        Both halves are checked because neither implies the other: the package can
-        be the wheel's while the documents still come from `docs/spec/`.
-        """
+        """Fail unless both the package and its documents come from this root."""
         facts = self.facts()
         root = str(self.root)
         assert facts["prefix"] == root, facts
@@ -80,11 +77,8 @@ class InstalledEnv:
 
 
 def build(destination: Path) -> InstalledEnv:
-    """Build a wheel of this checkout and install it into a nested environment.
-
-    `--no-deps` because the dependencies come from the base environment: what is
-    under test is where TileFoundry itself is imported from.
-    """
+    """Build a wheel of this checkout and install it, without its dependencies, into
+    a nested environment under `destination`."""
     wheels = destination / "wheel"
     subprocess.run(
         [sys.executable, "-m", "pip", "wheel", str(_REPO_ROOT),
@@ -106,4 +100,45 @@ def build(destination: Path) -> InstalledEnv:
     return environment
 
 
-__all__ = ["InstalledEnv", "build"]
+def shared_build(
+    directory: Path,
+    builder: Callable[[Path], InstalledEnv] = build,
+    timeout: float = 600.0,
+) -> InstalledEnv:
+    """Build into `directory` once, in whichever process creates it first.
+
+    Creating the directory is the lock. Its winner writes `ready` when the
+    environment is usable, or `failed` carrying the diagnostic; the other processes
+    wait for `ready` and raise what `failed` says as soon as it appears, rather than
+    waiting out `timeout`.
+    """
+    ready, failed = directory / "ready", directory / "failed"
+    try:
+        directory.mkdir(parents=True)
+    except FileExistsError:
+        deadline = time.monotonic() + timeout
+        while not ready.is_file():
+            if failed.is_file():
+                raise RuntimeError(failed.read_text(encoding="utf-8"))
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"the process building {directory} never finished")
+            time.sleep(0.5)
+    else:
+        try:
+            builder(directory).assert_installed()
+        except BaseException as error:
+            output = getattr(error, "stderr", "") or ""
+            failed.write_text(
+                f"building an installed TileFoundry in {directory} failed: "
+                f"{error!r}\n{output}",
+                encoding="utf-8",
+            )
+            raise
+        ready.write_text("ready", encoding="utf-8")
+
+    environment = InstalledEnv(directory / "venv")
+    environment.assert_installed()
+    return environment
+
+
+__all__ = ["InstalledEnv", "build", "shared_build"]

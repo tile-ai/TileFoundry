@@ -142,10 +142,14 @@ def _tilefoundry_dump_scope(request: pytest.FixtureRequest):
 
 @pytest.fixture(scope="session")
 def installed_tilefoundry(tmp_path_factory):
-    """TileFoundry installed from a built wheel, for the behaviour only an
-    installation has. Built once per session because building it is the cost."""
-    from tests.installed_env import build  # noqa: PLC0415
+    """TileFoundry installed from a built wheel, for behaviour only an install has.
 
-    environment = build(tmp_path_factory.mktemp("installed"))
-    environment.assert_installed()
-    return environment
+    Built once for the whole run rather than once per worker: `pip wheel` writes
+    into the source tree it is building, so two at once corrupt each other. The
+    workers share it through the xdist parent's base directory.
+    """
+    from tests.installed_env import shared_build  # noqa: PLC0415
+
+    base = tmp_path_factory.getbasetemp()
+    shared = (base.parent if os.environ.get("PYTEST_XDIST_WORKER") else base) / "installed"
+    return shared_build(shared)

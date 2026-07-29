@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +30,59 @@ def _write_module(tmp_path, source: str = _VALID_MODULE):
     path = tmp_path / "model.py"
     path.write_text(textwrap.dedent(source), encoding="utf-8")
     return path
+
+
+def test_models_separates_oracles_from_everything_else(capsys) -> None:
+    """The list has to say which models can be a reference and which cannot.
+
+    A model hidden for being below the bar gets rebuilt by whoever needed it, so
+    they stay listed and are marked instead.
+    """
+    assert cli.main(["models"]) == 0
+    listed = capsys.readouterr().out
+
+    assert "usable as an oracle" in listed and "not usable as an oracle" in listed
+    for name in ("qwen3_1_7b", "kimi_linear_48b_a3b"):
+        assert name in listed
+    # Every level the entries use is explained in the same output.
+    assert "L1" in listed and "L2" in listed and "L3" in listed
+
+
+def test_models_renders_the_whole_forest_with_leaf_modules_marked(capsys) -> None:
+    """Every top-level Module, `*` on the ones with no children, counts beside them.
+
+    `*` marks a Module and not a function because a twin is written per Module and
+    has to cover all of that Module's functions at once.
+    """
+    assert cli.main(["models", "qwen3_1_7b"]) == 0
+    forest = capsys.readouterr().out
+
+    assert "29 leaf modules, 148 functions" in forest
+    # Both roots, and a layer marked as a leaf while the stack that owns it is not.
+    assert "* Qwen3_1_7B\n" in forest
+    assert "  Qwen3_1_7B_Decoder\n" in forest
+    # The 28 layers are one entry naming the range and how many, written once.
+    assert "*   layer0..layer27  (28 identical, each as shown)" in forest
+    assert "layer1\n" not in forest
+    assert "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"f32\"]" in forest
+
+
+def test_models_source_is_the_authored_file_byte_for_byte(capsys) -> None:
+    """`--source` is the reference an agent copies, so it is the file, not a render."""
+    assert cli.main(["models", "qwen3_1_7b", "--source"]) == 0
+
+    printed = capsys.readouterr().out
+    authored = Path("tests/models/qwen3_1_7b/model.py").read_text(encoding="utf-8")
+    assert printed == authored
+
+
+def test_models_rejects_a_name_the_catalog_does_not_have(capsys) -> None:
+    """The refusal lists the models there are."""
+    assert cli.main(["models", "nope"]) == 1
+
+    error = capsys.readouterr().err
+    assert "no model named 'nope'" in error
+    assert "qwen3_1_7b" in error
 
 
 def test_spec_lists_the_documents_there_are(capsys) -> None:
@@ -96,6 +150,25 @@ def test_spec_reads_the_installed_documents_not_the_source_tree(
     assert "silu" in outline
     assert "class Silu(Op):" not in outline
     assert "class Silu(Op):" in installed_tilefoundry.run("spec", "dsl", "silu")
+
+
+def test_models_answers_from_an_installed_environment(installed_tilefoundry) -> None:
+    """The catalog and the authored sources ship, so `models` works with no corpus.
+
+    `--source` is compared against the corpus file byte for byte, because what the
+    install is for is handing somebody the original to copy.
+    """
+    installed_tilefoundry.assert_installed()
+
+    listed = installed_tilefoundry.run("models")
+    assert "qwen3_1_7b" in listed and "not usable as an oracle" in listed
+
+    forest = installed_tilefoundry.run("models", "qwen3_1_7b")
+    assert "29 leaf modules, 148 functions" in forest
+    assert "*   layer0..layer27" in forest
+
+    printed = installed_tilefoundry.run("models", "qwen3_1_7b", "--source")
+    assert printed == Path("tests/models/qwen3_1_7b/model.py").read_text(encoding="utf-8")
 
 
 def test_spec_rejects_a_section_that_does_not_exist(capsys) -> None:
