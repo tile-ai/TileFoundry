@@ -89,10 +89,10 @@ def test_collects_orchestration_method_and_rejects_other_members():
 
 
 def test_what_a_class_body_must_declare_to_be_a_module():
-    """Only an empty body is refused. One function, one child, or one plain method
-    is enough — a methods-only Module composes children it is given, and used to be
-    refused for owning no function. A supplied ``entry`` is still checked, and a
-    class-body ``__call__`` is refused rather than dropped."""
+    """Only an empty body is refused: one function, one child, or one plain method
+    is enough, so a body of methods alone — refused before for owning no function —
+    is valid. A supplied ``entry`` is still checked, and a class-body ``__call__``
+    is refused rather than dropped."""
 
     with pytest.raises(TypeError, match="empty class body"):
 
@@ -129,10 +129,9 @@ def test_what_a_class_body_must_declare_to_be_a_module():
 
 
 def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
-    """Two refusals, kept apart. Asking for the step of a Module that has none is
-    answered by naming what to call; asking for the entry directly is answered by
-    saying there is no default step. Neither may read as ``entry`` being wrong,
-    which is what the caller sees when ``None`` reaches the entry lookup."""
+    """A bare call is answered by naming what to call; asking for the entry is
+    answered by saying there is no default step. Neither may read as ``entry``
+    being wrong, which is what ``None`` reaching the entry lookup produces."""
 
     @module
     class _NoStep:
@@ -146,7 +145,6 @@ def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
     with pytest.raises(ValueError, match=r"declares no entry, so it has no default step"):
         _NoStep.entry_function()
 
-    # Named access is unaffected: this is the call the refusals point at.
     assert _NoStep.lookup("helper").name == "helper"
 
 

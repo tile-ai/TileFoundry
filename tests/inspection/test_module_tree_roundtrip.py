@@ -45,6 +45,12 @@ class _Tree:
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.square(x)
 
+    @module
+    class nominates_nothing:
+        @func
+        def helper(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+            return tf.relu(x)
+
 
 def _child(mod: Module, name: str) -> Module:
     return next(child for child in mod.modules if child.name == name)
@@ -69,7 +75,9 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     that should follow whatever parent it is attached to."""
     reparsed = parse_script(as_script(_Tree))
 
-    assert sorted(child.name for child in reparsed.modules) == ["inherits", "replaces"]
+    assert sorted(child.name for child in reparsed.modules) == [
+        "inherits", "nominates_nothing", "replaces",
+    ]
     assert _child(reparsed, "inherits").entry == "step"
     assert _child(reparsed, "replaces").entry_function().name == "step"
 
@@ -82,6 +90,16 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     replaces = _child(reparsed, "replaces")
     assert replaces.topologies == (_THREAD,)
     assert replaces.effective_topologies() == (_THREAD,)
+
+
+def test_a_child_nominating_no_step_prints_as_a_bare_decorator() -> None:
+    """``entry="None"`` would re-parse into a Module whose entry names no function,
+    so the absence has to print as an absence."""
+    source = as_script(_Tree)
+
+    assert "@module\n    class nominates_nothing:" in source
+    assert 'entry="None"' not in source
+    assert _child(parse_script(source), "nominates_nothing").entry is None
 
 
 def test_printing_the_reparsed_tree_reaches_a_fixed_point() -> None:

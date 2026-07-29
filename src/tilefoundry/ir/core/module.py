@@ -19,14 +19,9 @@ from tilefoundry.target import Target
 ModuleFunction = Union[HirFunction, PrimFunction]
 
 
-def refuse_bare_call(module: "Module", kind: str) -> None:
+def _refuse_bare_call(module: "Module", kind: str) -> None:
     """Refuse a bare call on a *kind* whose *module* has neither a ``forward``
-    method nor an entry, naming what to call instead.
-
-    Separate from ``entry_function``'s refusal because the caller is in a different
-    position: there is nothing to reach here, whereas a caller who asked for the
-    entry directly is being told this Module has no default step.
-    """
+    method nor an entry, naming what to call instead."""
     if module.entry is not None:
         return
     named = sorted({fn.name for fn in module.functions} | set(module.methods))
@@ -70,8 +65,7 @@ class Module:
 
     name: str
     functions: tuple[ModuleFunction, ...]
-    #: Which function is this Module's default step, or ``None`` for a Module that
-    #: has none -- nothing then reaches a step without naming it.
+    #: Which function is the default step, or ``None`` for a Module without one.
     entry: str | None = None
     modules: tuple["Module", ...] = field(default_factory=tuple)
     target: Target | None = None
@@ -344,7 +338,7 @@ class Module:
         method = self.methods.get("forward")
         if method is not None:
             return method(self, *args)
-        refuse_bare_call(self, "Module")
+        _refuse_bare_call(self, "Module")
         return self._run_authored(self.lookup(self.entry), *args)
 
     __call__ = forward
@@ -505,10 +499,10 @@ class LoadedModule:
         method = self.module.methods.get("forward")
         if method is not None:
             return method(self, *acts)
-        refuse_bare_call(self.module, "LoadedModule")
+        _refuse_bare_call(self.module, "LoadedModule")
         return self._run_bound(self.module.entry_function(), *acts)
 
     __call__ = forward
 
 
-__all__ = ["LoadedModule", "Module", "ModuleFunction", "refuse_bare_call"]
+__all__ = ["LoadedModule", "Module", "ModuleFunction"]

@@ -1263,15 +1263,14 @@ def _module_decorator_call(cls_node: ast.ClassDef) -> ast.Call | None:
     return None
 
 
-def _module_entry_name(cls_node: ast.ClassDef) -> str:
-    """The ``entry=`` name declared by this class's ``@module`` decorator."""
+def _module_entry_name(cls_node: ast.ClassDef) -> str | None:
+    """The ``entry=`` name this class's ``@module`` decorator declares, or ``None``
+    where it declares none."""
     call = _module_decorator_call(cls_node)
     for kw in (call.keywords if call is not None else ()):
         if kw.arg == "entry" and isinstance(kw.value, ast.Constant):
             return kw.value.value
-    raise ValueError(
-        f"@module class {cls_node.name!r}: no entry= name in the decorator"
-    )
+    return None
 
 
 def _module_declared_context(cls_node: ast.ClassDef, closure: dict[str, Any]):
