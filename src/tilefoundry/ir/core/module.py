@@ -479,7 +479,11 @@ class LoadedModule:
 
     def _run_bound(self, fn: ModuleFunction, *acts):
         """Evaluate *fn* over *acts*, its ``ConstTensor`` parameters filled by
-        name from these bindings."""
+        name from these bindings.
+
+        Weights and activations must already agree on one device, which is where
+        this runs; nothing is moved implicitly. See docs/spec/runtime.md §1.1.2.
+        """
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
         expected = sum(1 for p in fn.params if not p.is_const)
@@ -502,7 +506,30 @@ class LoadedModule:
                     ) from None
             else:
                 args.append(next(activations))
-        return evaluate(fn, *args)
+        return evaluate(fn, *args, device=self._placement(fn, acts))
+
+    def _placement(self, fn: ModuleFunction, acts: tuple) -> str | None:
+        """The one device every bound constant and tensor activation agrees on,
+        or ``None`` when none names one. See docs/spec/runtime.md §1.1.2."""
+        where: dict[str, list[str]] = {}
+        for name, value in self.constants.items():
+            device = getattr(value, "device", None)
+            if device is not None:
+                where.setdefault(str(device), []).append(f"weight {name!r}")
+        for index, value in enumerate(acts):
+            device = getattr(value, "device", None)
+            if device is not None:
+                where.setdefault(str(device), []).append(f"activation {index}")
+        if len(where) > 1:
+            spread = "; ".join(
+                f"{device}: {', '.join(names)}" for device, names in sorted(where.items())
+            )
+            raise ValueError(
+                f"LoadedModule {self.name!r}: {fn.name!r} was given tensors on "
+                f"more than one device -- {spread}. Load the weights and build the "
+                f"activations on one device; this runner moves nothing."
+            )
+        return next(iter(where), None)
 
     def forward(self, *acts):
         """Run this node's step: its ``forward`` orchestration method if it has

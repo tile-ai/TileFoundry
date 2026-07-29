@@ -264,16 +264,18 @@ def build_hf_layer(seed=0, device="cpu", dtype=None):
 def build_hf_decoder(seed=0, device="cpu", dtype=None):
     """The complete ``REAL.n_layers``-layer decoder stack, random at a fixed seed.
 
-    Built for its layers and its final norm; the token embedding is not part of
-    what this returns, because the decoder's boundary is hidden states in and
-    hidden states out.
+    A ``MiniCPM3ForCausalLM`` rather than the base model: the decoder's own boundary
+    is still hidden states in and hidden states out, but the root's weights include
+    the head, and the head exists only on the causal LM. Its layers and final norm
+    are reached through ``.model``.
     """
     from transformers.models.minicpm3.modeling_minicpm3 import (  # noqa: PLC0415
-        MiniCPM3Model,
+        MiniCPM3ForCausalLM,
     )
 
     return oracle.randomised(
-        lambda: MiniCPM3Model(build_hf_config(layers=REAL.n_layers)), seed, device, dtype
+        lambda: MiniCPM3ForCausalLM(build_hf_config(layers=REAL.n_layers)),
+        seed, device, dtype,
     )
 
 
@@ -367,7 +369,7 @@ def decoder_context_kv(model, hidden_ctx, device="cpu"):
     """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
     cos, sin = rope_caches(build_hf_config(), hidden_ctx.shape[1], device=device)
     return oracle.stack_context_kv(
-        model.layers, hidden_ctx, cos, sin,
+        model.model.layers, hidden_ctx, cos, sin,
         key_value_of=_key_value_of, apply_rotary=_apply_rotary,
     )
 
@@ -378,7 +380,8 @@ def decoder_decode_reference(model, hidden_ctx, hidden_new):
     total = hidden_ctx.shape[1] + hidden_new.shape[1]
     cos, sin = rope_caches(build_hf_config(), total, device=device)
     return oracle.decode_reference(
-        model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.norm
+        model.model.layers, hidden_ctx, hidden_new, cos, sin,
+        final_norm=model.model.norm,
     )
 
 

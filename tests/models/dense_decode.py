@@ -13,11 +13,10 @@ Face layer, which weights its kernel takes and in what order, and the boundary i
 `ReferenceCase` declares. This module only knows how to draw a step and where to
 ask for the answer.
 
-``layer_weights`` is the one statement of the weight order. Both boundaries are
-projected from it -- one layer's arguments and a whole stack's per-layer weights --
-because they were previously two lists in one file that had to be edited together,
-and a Qwen2.5 bias or a Qwen3 head norm added to one and not the other is a silent
-mismatch between a kernel and its oracle.
+Weights do not appear here at all. Each package loads its own Module from its own
+resource and hands the ``LoadedModule`` in; this module knows only how to draw the
+activations and where to ask for the answer, so no canonical name and no weight
+order lives in one shared file.
 """
 
 from __future__ import annotations
@@ -32,24 +31,24 @@ def _self_attn_scaling(layer) -> float:
     return layer.self_attn.scaling
 
 
-def _final_norm_weight(model):
-    return model.norm.weight
+def _layers(model):
+    """A Hugging Face causal LM's decoder layers."""
+    return model.model.layers
 
 
 @dataclass(frozen=True)
 class DenseDecode:
     """One dense decoder package's declaration of how to draw its oracle.
 
-    ``attention_weights`` is how many of ``layer_weights`` the signature takes
-    before the runtime inputs appear in it -- the context, the rope tables, the
-    position, the cache, the scale. It is what lets one ordered weight list
-    reproduce a signature that interleaves weights with runtime values.
+    ``load_layer`` and ``load_decoder`` are the package's own: given its Hugging
+    Face layer or stack, each returns the ``LoadedModule`` to run. Which canonical
+    name reads which Hugging Face tensor is the package's statement, not this
+    module's.
     """
 
     config: object
-    layer_weights: Callable[[object], tuple]
-    attention_weights: int
-    build_decoder: Callable[[], object]
+    load_layer: Callable[[object], object]
+    load_decoder: Callable[[object], object]
     #: Seeds, named so a change to either is a visible change to the reference.
     weight_seed: int = 0
     activation_seed: int = 1
@@ -60,10 +59,6 @@ class DenseDecode:
     #: Whatever runs this states its own device; the oracle is a CPU f32 baseline.
     device: str = "cpu"
     scale_of: Callable[[object], float] = _self_attn_scaling
-    #: How this model's final norm gamma is read off the stack. Gemma2 stores it
-    #: as a zero-centred offset, so reading `.weight` there is off by one and the
-    #: whole stack's output is wrong -- which is what this exists to state.
-    final_norm_of: Callable[[object], object] = _final_norm_weight
     #: Runtime values this model's signature takes after the weights. MiniCPM3
     #: scales each residual by a depth-dependent constant, which is a value its
     #: step is given rather than a weight it holds.
@@ -87,6 +82,7 @@ class LayerStep:
     """
 
     args: tuple[torch.Tensor, ...]
+    loaded: object
     layer: object
     ctx_len: int
     hidden_ctx: torch.Tensor
@@ -100,11 +96,11 @@ class StackStep:
     """One drawn step of the complete decoder, and the stack behind it."""
 
     model: object
+    loaded: object
     ctx_len: int
     hidden_ctx: torch.Tensor
     hidden_new: torch.Tensor
     caches: list
-    weights: list
     cos_cache: torch.Tensor
     sin_cache: torch.Tensor
     pos_ids: torch.Tensor
@@ -116,7 +112,7 @@ class StackStep:
         """What the runner passes on, for a wiring check to count."""
         return (
             self.hidden_new, self.cos_cache, self.sin_cache, self.pos_ids,
-            self.scale, *self.trailing, self.weights, self.caches,
+            self.scale, *self.trailing, self.caches,
         )
 
 
@@ -150,21 +146,18 @@ def layer_step(
     hidden_ctx, hidden_new = _split_hidden(spec, ctx_len, device)
     k_cache, v_cache = spec.config.context_kv(layer, hidden_ctx, device=device)
 
-    weights = spec.layer_weights(layer)
-    taken_first = spec.attention_weights
     return (spec.layer_step_class or LayerStep)(
         args=(
             hidden_new,
-            *weights[:taken_first],
             cos_cache,
             sin_cache,
             _positions(ctx_len, device),
             k_cache,
             v_cache,
             scale,
-            *weights[taken_first:],
             *spec.trailing(layer, device),
         ),
+        loaded=spec.load_layer(layer),
         layer=layer,
         ctx_len=ctx_len,
         hidden_ctx=hidden_ctx,
@@ -207,18 +200,19 @@ def stack_step(
     model = spec.config.build_hf_decoder(seed=spec.weight_seed, device=device)
     hidden_ctx, hidden_new = _split_hidden(spec, ctx_len, device)
     cos_cache, sin_cache = _rope(spec, device)
+    first_layer = _layers(model)[0]
     return (spec.stack_step_class or StackStep)(
         model=model,
+        loaded=spec.load_decoder(model),
         ctx_len=ctx_len,
         hidden_ctx=hidden_ctx,
         hidden_new=hidden_new,
         caches=spec.config.decoder_context_kv(model, hidden_ctx, device=device),
-        weights=[spec.layer_weights(layer) for layer in model.layers],
         cos_cache=cos_cache,
         sin_cache=sin_cache,
         pos_ids=_positions(ctx_len, device),
-        scale=torch.full((1, 1, 1, 1), spec.scale_of(model.layers[0]), device=device),
-        trailing=spec.trailing(model.layers[0], device),
+        scale=torch.full((1, 1, 1, 1), spec.scale_of(first_layer), device=device),
+        trailing=spec.trailing(first_layer, device),
     )
 
 
@@ -226,10 +220,10 @@ def run_stack(spec: DenseDecode, drawn: StackStep):
     """The complete decoder over *drawn*, through the Evaluator.
 
     ``decode_hidden`` rather than ``forward``: this boundary starts from a hidden
-    state, and the root's ``forward`` is the whole decode step from token ids.
+    state, and the root's ``forward`` is the whole decode step from token ids. The
+    weights are already bound, so what is passed is activations.
     """
-    decoder = spec.build_decoder().bind_final_norm(spec.final_norm_of(drawn.model))
-    return decoder.decode_hidden(*drawn.args)
+    return drawn.loaded.decode_hidden(*drawn.args)
 
 
 def stack_oracle(spec: DenseDecode, drawn: StackStep) -> torch.Tensor:

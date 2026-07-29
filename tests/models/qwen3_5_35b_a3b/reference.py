@@ -3,8 +3,14 @@
 Inputs and oracle are one pair on purpose. The oracle is a Hugging Face layer
 with random weights, so a factory that returned only tensors would leave the
 reference free to score them against a differently initialised layer. What each
-``*_step`` returns therefore carries both: the arguments the evaluator is called
-with, and the module those arguments were drawn from.
+``*_step`` returns therefore carries both: what the kernels are handed, and the
+module it was drawn from.
+
+Weights are not arguments here. Each Module declares them ``ConstTensor``, so a
+boundary is run by loading that Module from a ``DictResource`` keyed the way the
+Module names its weights and then passing activations alone. Which Hugging Face
+tensor a canonical name reads is this model's own fact, stated once in the
+``*_constants`` mappings below.
 
 Everything is seeded. The same call returns the same weights and the same
 activations, so a disagreement is a disagreement about the compiler rather than
@@ -39,6 +45,13 @@ import torch
 import torch.nn.functional as F
 
 from tests.models.qwen3_5_35b_a3b import config
+from tests.models.qwen3_5_35b_a3b.model import (
+    LAYER_TYPE,
+    Qwen3_5FullAttention,
+    Qwen3_5LinearAttention,
+    Qwen3_5MoE,
+)
+from tilefoundry.runtime.resource import DictResource
 
 #: The oracle's device. Every builder takes one; this is what the tests pass.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -93,8 +106,51 @@ def drawn_hidden(ctx_len: int, device: str = DEVICE):
     return drawn[:, :ctx_len], drawn[:, ctx_len:]
 
 
-def moe_weights(layer) -> tuple:
-    """*layer*'s MoE block weights, in the order ``moe`` takes them.
+# ── what each Module holds, and where it is read from ───────────────────
+
+
+def full_mixer_constants(layer) -> dict:
+    """The full-attention mixer's weights, keyed the way its Module names them.
+
+    ``w_qg`` is one projection with two jobs: Hugging Face's ``q_proj`` fans out
+    to twice the query width, the second half being the output gate, so there is
+    no separate gate tensor to read.
+    """
+    attention = layer.self_attn
+    return {
+        "gamma_in": config.norm_gamma(layer.input_layernorm),
+        "w_qg": config.linear_weight(attention.q_proj),
+        "w_k": config.linear_weight(attention.k_proj),
+        "w_v": config.linear_weight(attention.v_proj),
+        "gamma_q": config.norm_gamma(attention.q_norm),
+        "gamma_k": config.norm_gamma(attention.k_norm),
+        "w_o": config.linear_weight(attention.o_proj),
+    }
+
+
+def linear_mixer_constants(layer) -> dict:
+    """The Gated DeltaNet's weights, keyed the way its Module names them."""
+    mixer = layer.linear_attn
+    return {
+        "gamma_in": config.norm_gamma(layer.input_layernorm),
+        "w_in_qkv": config.linear_weight(mixer.in_proj_qkv),
+        "w_in_z": config.linear_weight(mixer.in_proj_z),
+        "w_in_b": config.linear_weight(mixer.in_proj_b),
+        "w_in_a": config.linear_weight(mixer.in_proj_a),
+        # nn.Conv1d keeps a singleton in-channel axis a depthwise convolution
+        # never uses; the kernel takes [channels, kernel].
+        "conv_w": mixer.conv1d.weight.squeeze(1).contiguous(),
+        "a_log": mixer.A_log,
+        "dt_bias": mixer.dt_bias,
+        # `Qwen3_5MoeRMSNormGated` scales by its weight directly, not by
+        # 1 + weight the way the layer-level norms do.
+        "gamma_gdn": mixer.norm.weight,
+        "w_out": config.linear_weight(mixer.out_proj),
+    }
+
+
+def moe_constants(layer) -> dict:
+    """*layer*'s MoE block weights, keyed the way ``moe`` names them.
 
     Hugging Face keeps the two SwiGLU halves in one ``gate_up_proj`` tensor, rows
     ``[:intermediate]`` the gate and ``[intermediate:]`` the up projection -- one
@@ -104,17 +160,53 @@ def moe_weights(layer) -> tuple:
     block = layer.mlp
     width = config.REAL.moe_intermediate
     gate_up = block.experts.gate_up_proj
-    return (
-        config.norm_gamma(layer.post_attention_layernorm),
-        config.matrix_weight(block.gate.weight),
-        gate_up[:, :width, :].contiguous(),
-        gate_up[:, width:, :].contiguous(),
-        block.experts.down_proj.contiguous(),
-        config.matrix_weight(block.shared_expert.gate_proj.weight),
-        config.matrix_weight(block.shared_expert.up_proj.weight),
-        config.matrix_weight(block.shared_expert.down_proj.weight),
-        config.matrix_weight(block.shared_expert_gate.weight),
-    )
+    return {
+        "gamma_post": config.norm_gamma(layer.post_attention_layernorm),
+        "w_router": config.matrix_weight(block.gate.weight),
+        "w_gate": gate_up[:, :width, :].contiguous(),
+        "w_up": gate_up[:, width:, :].contiguous(),
+        "w_down": block.experts.down_proj.contiguous(),
+        "w_shared_gate": config.matrix_weight(block.shared_expert.gate_proj.weight),
+        "w_shared_up": config.matrix_weight(block.shared_expert.up_proj.weight),
+        "w_shared_down": config.matrix_weight(block.shared_expert.down_proj.weight),
+        "w_shared_scale": config.matrix_weight(block.shared_expert_gate.weight),
+    }
+
+
+#: The Module each published mixer kind is, and the mapping that fills it.
+_MIXER = {
+    "full_attention": (Qwen3_5FullAttention, full_mixer_constants),
+    "linear_attention": (Qwen3_5LinearAttention, linear_mixer_constants),
+}
+
+
+def load_mixer(kind: str, layer):
+    """The mixer Module of *kind* with *layer*'s weights bound.
+
+    A loading, not a Module: the weights are read on the device *layer* holds
+    them on, and the activations a caller then passes have to be on that one too.
+    """
+    module, constants = _MIXER[kind]
+    return module.cloned().load(DictResource(constants(layer)))
+
+
+def load_moe(layer):
+    """The MoE Module with *layer*'s block weights bound."""
+    return Qwen3_5MoE.cloned().load(DictResource(moe_constants(layer)))
+
+
+def load_layer(kind: str, layer):
+    """The decoder layer Module of *kind* with *layer*'s weights bound.
+
+    The keys are prefixed by the child each weight belongs to, which is how a
+    layer's two blocks stay two namespaces: ``load`` scopes a child to its own
+    subtree, so the mixer's ``gamma_in`` and the MoE's ``gamma_post`` are read
+    under the names their own Modules use.
+    """
+    _module, constants = _MIXER[kind]
+    flat = {f"mixer.{name}": w for name, w in constants(layer).items()}
+    flat.update({f"moe.{name}": w for name, w in moe_constants(layer).items()})
+    return LAYER_TYPE[kind].cloned().load(DictResource(flat))
 
 
 def moe_oracle(layer, hidden) -> torch.Tensor:
@@ -136,13 +228,9 @@ class FullStep:
     hidden_new: torch.Tensor
     k_cache: torch.Tensor
     v_cache: torch.Tensor
-    mixer_args: tuple
-    moe_args: tuple
-
-    @property
-    def args(self) -> tuple:
-        """What the mixer's own entry function takes, in its order."""
-        return (self.hidden_new, *self.mixer_args)
+    #: What the mixer is handed after the hidden state, in the order it declares
+    #: them. Its weights are not here; a loading holds those.
+    mixer_acts: tuple
 
 
 def context_kv(layer, hidden, device: str = DEVICE):
@@ -180,11 +268,9 @@ def full_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
 
     ``whole_layer`` builds the complete decoder layer, which is what the layer and
     MoE boundaries need; the mixer boundary leaves it off and pays neither the
-    memory nor the build. ``moe_args`` is empty unless it is set, because without
-    the block there are no weights to state.
+    memory nor the build.
     """
     layer = hf_layer("full_attention", device, whole_layer)
-    attention = layer.self_attn
     hidden_ctx, hidden_new = drawn_hidden(ctx_len, device)
     k_cache, v_cache = context_kv(layer, hidden_ctx, device)
     cos, sin = rope_caches(device)
@@ -195,23 +281,15 @@ def full_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
         hidden_new=hidden_new,
         k_cache=k_cache,
         v_cache=v_cache,
-        mixer_args=(
-            config.norm_gamma(layer.input_layernorm),
-            config.linear_weight(attention.q_proj),
-            config.linear_weight(attention.k_proj),
-            config.linear_weight(attention.v_proj),
-            config.norm_gamma(attention.q_norm),
-            config.norm_gamma(attention.k_norm),
+        mixer_acts=(
             cos,
             sin,
             # The token being decoded sits immediately after the context.
             torch.tensor([ctx_len], device=device, dtype=torch.int32),
             k_cache,
             v_cache,
-            torch.full((1, 1, 1, 1), attention.scaling, device=device),
-            config.linear_weight(attention.o_proj),
+            torch.full((1, 1, 1, 1), layer.self_attn.scaling, device=device),
         ),
-        moe_args=moe_weights(layer) if whole_layer else (),
     )
 
 
@@ -261,19 +339,10 @@ def full_layer_oracle(step: FullStep) -> torch.Tensor:
 
 
 def run_full_attention_step(step: FullStep):
-    """The full-attention mixer over *step*, through the Evaluator.
-
-    A runner rather than a named entry function, even though the boundary is one
-    Function: it carries ``ctx_len`` as a range, and counting elements needs an
-    extent. So it is resolved at the length the drawn step uses first, and what is
-    evaluated is that resolved function.
-    """
-    from tests.models.qwen3_5_35b_a3b.model import Qwen3_5FullAttention  # noqa: PLC0415
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
-    from tilefoundry.ir.hir.specialize import specialize_concretely  # noqa: PLC0415
-
-    function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": step.ctx_len})
-    return evaluate(function, *step.args, device=step.hidden_new.device.type)
+    """The full-attention mixer over *step*, weights bound from the layer drawn."""
+    return load_mixer("full_attention", step.layer).full_attention(
+        step.hidden_new, *step.mixer_acts
+    )
 
 
 def appended_cache_oracle(step: FullStep) -> tuple[torch.Tensor, torch.Tensor]:
@@ -299,13 +368,16 @@ class LinearStep:
     hidden_new: torch.Tensor
     conv_state: torch.Tensor
     recurrent_state: torch.Tensor
-    mixer_args: tuple
-    moe_args: tuple
+    #: What the mixer is handed after the hidden state, in the order it declares
+    #: them: its state, and nothing else -- the rest it holds.
+    mixer_acts: tuple
 
-    @property
-    def args(self) -> tuple:
-        """What the mixer's own entry function takes, in its order."""
-        return (self.hidden_new, *self.mixer_args)
+
+def run_linear_attention_step(step: LinearStep):
+    """The Gated DeltaNet mixer over *step*, weights bound from the layer drawn."""
+    return load_mixer("linear_attention", step.layer).linear_attention(
+        step.hidden_new, *step.mixer_acts
+    )
 
 
 def gdn_state(layer, hidden) -> tuple[torch.Tensor, torch.Tensor]:
@@ -375,7 +447,6 @@ def linear_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
     ``whole_layer`` as in ``full_step``.
     """
     layer = hf_layer("linear_attention", device, whole_layer)
-    mixer = layer.linear_attn
     hidden_ctx, hidden_new = drawn_hidden(ctx_len, device)
     conv_state, recurrent_state = gdn_state(layer, hidden_ctx)
     return LinearStep(
@@ -385,25 +456,7 @@ def linear_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
         hidden_new=hidden_new,
         conv_state=conv_state,
         recurrent_state=recurrent_state,
-        mixer_args=(
-            config.norm_gamma(layer.input_layernorm),
-            config.linear_weight(mixer.in_proj_qkv),
-            config.linear_weight(mixer.in_proj_z),
-            config.linear_weight(mixer.in_proj_b),
-            config.linear_weight(mixer.in_proj_a),
-            # nn.Conv1d keeps a singleton in-channel axis a depthwise
-            # convolution never uses; the kernel takes [channels, kernel].
-            mixer.conv1d.weight.squeeze(1).contiguous(),
-            mixer.A_log,
-            mixer.dt_bias,
-            conv_state,
-            recurrent_state,
-            # `Qwen3_5MoeRMSNormGated` scales by its weight directly, not by
-            # 1 + weight the way the layer-level norms do.
-            mixer.norm.weight,
-            config.linear_weight(mixer.out_proj),
-        ),
-        moe_args=moe_weights(layer) if whole_layer else (),
+        mixer_acts=(conv_state, recurrent_state),
     )
 
 
@@ -450,15 +503,21 @@ __all__ = [
     "context_kv",
     "drawn_hidden",
     "full_layer_oracle",
+    "full_mixer_constants",
     "full_mixer_oracle",
     "full_step",
     "gdn_state",
     "hf_layer",
     "linear_layer_oracle",
+    "linear_mixer_constants",
     "linear_mixer_oracle",
     "linear_step",
+    "load_layer",
+    "load_mixer",
+    "load_moe",
+    "moe_constants",
     "moe_oracle",
-    "moe_weights",
     "rope_caches",
     "run_full_attention_step",
+    "run_linear_attention_step",
 ]

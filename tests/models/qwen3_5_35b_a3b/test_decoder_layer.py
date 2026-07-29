@@ -7,6 +7,10 @@ that the MoE block reads the mixer's output rather than the layer's input. Both
 are invisible to the two component tests: they would pass with the residuals
 dropped, or with the MoE fed the wrong tensor.
 
+The layer is loaded whole, both blocks at once, so each child reads its weights
+under the names its own Module gives them and the step is called with
+activations: the hidden state and whatever the mixer is handed besides it.
+
 There is deliberately no test of the 40-layer stack. What a stack observes and a
 layer does not -- layer order, the residual thread running the length of the
 model, the final norm -- is not measured here and is recorded as untested in
@@ -19,9 +23,6 @@ import pytest
 import torch
 
 from tests.models.qwen3_5_35b_a3b import reference
-from tests.models.qwen3_5_35b_a3b.model import (
-    LAYER_TYPE,
-)
 
 DEV = reference.DEVICE
 
@@ -61,18 +62,24 @@ _STEP = {
 
 
 def _draw(block_type):
+    """One drawn step of a *block_type* layer, that layer loaded, and its oracle.
+
+    The whole layer is built here -- both blocks of it -- because both weights and
+    activations have to come from the same object for the comparison to mean
+    anything, and both are read on the device the step is drawn on.
+    """
     draw, oracle = _STEP[block_type]
-    return draw(device=DEV, whole_layer=True), oracle
+    step = draw(device=DEV, whole_layer=True)
+    return step, reference.load_layer(block_type, step.layer), oracle
 
 
 @pytest.mark.parametrize("block_type", sorted(_STEP))
 def test_decoder_layer_matches_hugging_face(block_type):
     """The complete layer vs `Qwen3_5MoeDecoderLayer.forward` at the decoded
     position -- mixer + residual, then post-norm + MoE + residual."""
-    step, oracle = _draw(block_type)
-    layer = LAYER_TYPE[block_type].cloned()
+    step, layer, oracle = _draw(block_type)
 
-    out, state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
+    out, state = layer.forward(step.hidden_new, step.mixer_acts)
 
     want = oracle(step)
     difference = (out.float() - want.float()).abs().max().item()
@@ -103,13 +110,12 @@ def test_the_layer_gap_is_the_mixers_gap_amplified_by_the_moe(block_type):
     gap 3.28e-06 -> 2.19e-05, against an observed 1.96e-05) and by 25.9x for
     linear attention (4.10e-07 -> 1.06e-05, against an observed 1.17e-05).
     """
-    step, oracle = _draw(block_type)
-    layer = LAYER_TYPE[block_type].cloned()
+    step, layer, oracle = _draw(block_type)
 
-    out, _state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
+    out, _state = layer.forward(step.hidden_new, step.mixer_acts)
     observed = (out.float() - oracle(step).float()).abs().max().item()
 
-    mixed, *_ = layer.mixer(step.hidden_new, *step.mixer_args)
+    mixed, *_ = layer.mixer(step.hidden_new, *step.mixer_acts)
     ours = (step.hidden_new + mixed).float()
     mixer_oracle = (
         reference.full_mixer_oracle if block_type == "full_attention"
@@ -149,19 +155,18 @@ def test_the_layer_is_two_residual_additions(block_type):
     all is worth measuring too -- if the blocks' outputs dominated it, this
     boundary would not distinguish a layer that omitted it.
     """
-    step, _oracle = _draw(block_type)
-    layer = LAYER_TYPE[block_type].cloned()
+    step, layer, _oracle = _draw(block_type)
 
-    out, _state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
+    out, _state = layer.forward(step.hidden_new, step.mixer_acts)
 
-    mixed, *_ = layer.mixer(step.hidden_new, *step.mixer_args)
+    mixed, *_ = layer.mixer(step.hidden_new, *step.mixer_acts)
     attended = step.hidden_new + mixed
-    expected = attended + layer.moe(attended, *step.moe_args)
+    expected = attended + layer.moe(attended)
 
     torch.testing.assert_close(out.float(), expected.float(), atol=ATOL, rtol=RTOL)
 
     # The same composition with the first residual left out.
-    without = mixed + layer.moe(mixed, *step.moe_args)
+    without = mixed + layer.moe(mixed)
     moved = (out.float() - without.float()).abs().max().item()
     assert moved > 100 * ATOL, (
         f"omitting the attention residual moved the answer by only {moved}, so "
@@ -177,14 +182,13 @@ def test_the_moe_reads_the_mixed_state_not_the_layer_input(block_type):
     the right shape, still be within the residual structure, and still pass every
     component test in this package.
     """
-    step, _oracle = _draw(block_type)
-    layer = LAYER_TYPE[block_type].cloned()
+    step, layer, _oracle = _draw(block_type)
 
-    out, _state = layer.forward(step.hidden_new, step.mixer_args, step.moe_args)
+    out, _state = layer.forward(step.hidden_new, step.mixer_acts)
 
-    mixed, *_ = layer.mixer(step.hidden_new, *step.mixer_args)
+    mixed, *_ = layer.mixer(step.hidden_new, *step.mixer_acts)
     attended = step.hidden_new + mixed
-    wrong_input = attended + layer.moe(step.hidden_new, *step.moe_args)
+    wrong_input = attended + layer.moe(step.hidden_new)
 
     moved = (out.float() - wrong_input.float()).abs().max().item()
     assert moved > 100 * ATOL, (

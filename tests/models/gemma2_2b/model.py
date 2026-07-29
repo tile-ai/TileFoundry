@@ -61,8 +61,8 @@ Six Gemma-2-specific things to note (see ``tests/models/gemma2_2b/config.py``
 module docstring for the full rundown):
 
 - ``Gemma2RMSNorm`` is ``normed * (1.0 + weight)``; ``tf.rms_norm`` is
-  ``normed * weight``. Every ``gamma*`` argument fed to ``tf.rms_norm`` below
-  is expected pre-adjusted by the caller (``config.rms_gamma``) — the kernel
+  ``normed * weight``. Every ``gamma*`` weight fed to ``tf.rms_norm`` below is
+  expected pre-adjusted by whatever loads it (``config.rms_gamma``) — the kernel
   stays the plain ``tf.rms_norm`` semantics throughout.
 - attention scaling is ``query_pre_attn_scalar**-0.5`` (0.0625 @ 256), not
   ``head_dim**-0.5`` — passed in as the ``scale`` kernel input, same
@@ -99,7 +99,7 @@ from __future__ import annotations
 
 from tests.models.gemma2_2b.config import REAL as config
 from tilefoundry import func, module
-from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
+from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.types.dim import DimVar
 
@@ -123,7 +123,7 @@ class Gemma2_2B:
     @func
     def input_rms_norm(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: Tensor[(config.hidden,), config.dt],
+        gamma_in: ConstTensor[(config.hidden,), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
         # Pre-attention input RMSNorm; HF `Gemma2DecoderLayer.input_layernorm`.
         # `gamma_in` is pre-adjusted to `1.0 + weight` test-side.
@@ -132,16 +132,16 @@ class Gemma2_2B:
     @func
     def self_attention(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_q: Tensor[(1, config.hidden, config.q_proj), config.dt],
-        w_k: Tensor[(1, config.hidden, config.kv_proj), config.dt],
-        w_v: Tensor[(1, config.hidden, config.kv_proj), config.dt],
+        w_q: ConstTensor[(1, config.hidden, config.q_proj), config.dt],
+        w_k: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
+        w_v: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
         cos_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
         sin_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
         pos_ids: Tensor[(S,), "i32"],
         k_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
         v_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
         scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: Tensor[(1, config.q_proj, config.hidden), config.dt],
+        w_o: ConstTensor[(1, config.q_proj, config.hidden), config.dt],
     ):
         # Pure GQA + RoPE + attn-logit-softcap attention block: `hidden` is
         # already normalized (`decoder_layer` applies `input_rms_norm` before
@@ -213,9 +213,9 @@ class Gemma2_2B:
     @func
     def mlp(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_gate: Tensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: Tensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: Tensor[(1, config.intermediate, config.hidden), config.dt],
+        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
+        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
+        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
         # Pure dense gelu_tanh-gated MLP (`hidden_activation="gelu_pytorch_tanh"`,
         # not SwiGLU's `silu`): `hidden` is already normalized
@@ -229,23 +229,23 @@ class Gemma2_2B:
     @func
     def decoder_layer(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: Tensor[(config.hidden,), config.dt],
-        w_q: Tensor[(1, config.hidden, config.q_proj), config.dt],
-        w_k: Tensor[(1, config.hidden, config.kv_proj), config.dt],
-        w_v: Tensor[(1, config.hidden, config.kv_proj), config.dt],
+        gamma_in: ConstTensor[(config.hidden,), config.dt],
+        w_q: ConstTensor[(1, config.hidden, config.q_proj), config.dt],
+        w_k: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
+        w_v: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
         cos_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
         sin_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
         pos_ids: Tensor[(S,), "i32"],
         k_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
         v_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
         scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: Tensor[(1, config.q_proj, config.hidden), config.dt],
-        gamma_post_attn: Tensor[(config.hidden,), config.dt],
-        gamma_pre_ff: Tensor[(config.hidden,), config.dt],
-        w_gate: Tensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: Tensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: Tensor[(1, config.intermediate, config.hidden), config.dt],
-        gamma_post_ff: Tensor[(config.hidden,), config.dt],
+        w_o: ConstTensor[(1, config.q_proj, config.hidden), config.dt],
+        gamma_post_attn: ConstTensor[(config.hidden,), config.dt],
+        gamma_pre_ff: ConstTensor[(config.hidden,), config.dt],
+        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
+        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
+        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
+        gamma_post_ff: ConstTensor[(config.hidden,), config.dt],
     ):
         # h = x + post_attn_norm(attn(input_norm(x)))
         # out = h + post_ff_norm(mlp(pre_ff_norm(h)))
@@ -277,7 +277,7 @@ class Gemma2_2B_Decoder:
 
     @func
     def embed(
-        w_embed: Tensor[(config.vocab, config.hidden), config.dt],
+        w_embed: ConstTensor[(config.vocab, config.hidden), config.dt],
         token_ids: Tensor[(S,), "i64"],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
         # HF `Gemma2TextScaledWordEmbedding`: scaled by `hidden_size ** 0.5`.
@@ -289,7 +289,7 @@ class Gemma2_2B_Decoder:
     @func
     def final_rms_norm(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_final: Tensor[(config.hidden,), config.dt],
+        gamma_final: ConstTensor[(config.hidden,), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
         # HF `Gemma2Model.norm`, applied once after the last layer.
         # `gamma_final` is pre-adjusted to `1.0 + weight` test-side.
@@ -298,7 +298,7 @@ class Gemma2_2B_Decoder:
     @func
     def lm_head(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_head: Tensor[(config.hidden, config.vocab), config.dt],
+        w_head: ConstTensor[(config.hidden, config.vocab), config.dt],
     ) -> Tensor[(1, config.vocab), config.dt]:
         # Soft-capped as `Gemma2ForCausalLM.forward` caps it, at
         # `final_logit_softcapping` rather than attention's cap. tanh composed as
@@ -309,48 +309,45 @@ class Gemma2_2B_Decoder:
             tf.sub(tf.mul(tf.sigmoid(tf.mul(z, 2.0)), 2.0), 1.0), LOGIT_SOFTCAP
         )
 
-    def forward(
-        self, token_ids, w_embed, cos_cache, sin_cache, pos_ids, scale, weights, caches,
-        w_head,
-    ):
+    @lm_head.converter("w_head")
+    def _(
+        head_weight_raw: ConstTensor[(config.vocab, config.hidden), config.dt],
+    ) -> Tensor[(config.hidden, config.vocab), config.dt]:
+        # HF stores the head as (vocab, hidden); the matmul above wants it the
+        # other way. Gemma-2 ties its head, so this input is the embedding table.
+        return tf.transpose(head_weight_raw, perm=(1, 0))
+
+    def forward(self, token_ids, cos_cache, sin_cache, pos_ids, scale, caches):
         """The whole decode step: this token's row, every layer over it, its logits.
 
-        Each weight sits where the step uses it, the way one layer's kernel takes
-        its own. What comes back is the logits and each layer's own fresh entry;
-        growing the cache with them is the caller's step, through `append_cache`.
+        What comes back is the logits and each layer's own fresh entry; growing the
+        cache with them is the caller's step, through `append_cache`.
         """
-        hidden = self.embed(w_embed, token_ids)
+        hidden = self.embed(token_ids)
         normed, entries = self.decode_hidden(
-            hidden, cos_cache, sin_cache, pos_ids, scale, weights, caches
+            hidden, cos_cache, sin_cache, pos_ids, scale, caches
         )
-        return self.lm_head(normed, w_head), entries
+        return self.lm_head(normed), entries
 
-    def decode_hidden(self, hidden, cos_cache, sin_cache, pos_ids, scale, weights, caches):
+    def decode_hidden(self, hidden, cos_cache, sin_cache, pos_ids, scale, caches):
         """One decode step through every layer, then the final norm.
 
-        *weights* and *caches* are per layer, in layer order. What comes back is
-        the normalised hidden state and each layer's own cache entry, for the
-        caller to append -- the same division the single layer makes, kept at the
-        stack's boundary so the caller owns the cache at exactly one place.
+        *caches* is one layer's context per layer, in layer order. What comes back
+        is the normalised hidden state and each layer's own cache entry, for the
+        caller to append -- the same division the single layer makes.
         """
-        if len(weights) != len(self.modules) or len(caches) != len(self.modules):
+        if len(caches) != len(self.modules):
             raise ValueError(
                 f"decoder has {len(self.modules)} layers but was given "
-                f"{len(weights)} weight sets and {len(caches)} caches"
+                f"{len(caches)} caches"
             )
         entries = []
-        for layer, layer_weights, (k_cache, v_cache) in zip(self.modules, weights, caches):
-            (
-                gamma_in, w_q, w_k, w_v, w_o, gamma_post_attn,
-                gamma_pre_ff, w_gate, w_up, w_down, gamma_post_ff,
-            ) = layer_weights
+        for layer, (k_cache, v_cache) in zip(self.modules, caches):
             hidden, k_new, v_new = layer(
-                hidden, gamma_in, w_q, w_k, w_v, cos_cache, sin_cache, pos_ids,
-                k_cache, v_cache, scale, w_o, gamma_post_attn,
-                gamma_pre_ff, w_gate, w_up, w_down, gamma_post_ff,
+                hidden, cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale
             )
             entries.append((k_new, v_new))
-        return self.final_rms_norm(hidden, self._gamma_final), tuple(entries)
+        return self.final_rms_norm(hidden), tuple(entries)
 
     def append_cache(self, caches, fresh):
         """The cache the next step reads: each layer's context with this step's own
@@ -387,8 +384,3 @@ class Gemma2_2B_Decoder:
             )
             for _ in range(config.n_layers)
         )
-
-    def bind_final_norm(self, gamma_final):
-        """Hold the final norm's weight, which `forward` does not take per layer."""
-        object.__setattr__(self, "_gamma_final", gamma_final)
-        return self

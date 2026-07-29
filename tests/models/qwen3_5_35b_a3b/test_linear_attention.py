@@ -5,14 +5,18 @@ mixer's state is fixed-size, so every extent in the kernel is a literal. It is
 still evaluated at two context lengths, because the *state* it is handed depends
 on the context even though its shape does not -- a step that quietly ignored the
 recurrent matrix would agree at one length and not at two.
+
+The mixer's weights are declared ``ConstTensor``, so they are bound once by the
+loading and every call below passes the hidden state and the state alone. The
+convolution window and the recurrent matrix are among what is passed: they are
+what the step is handed, not what it holds.
 """
 from __future__ import annotations
 
 import torch
 
 from tests.models.qwen3_5_35b_a3b import reference
-from tests.models.qwen3_5_35b_a3b.model import Qwen3_5LinearAttention, advance_state
-from tilefoundry.evaluator import evaluate
+from tests.models.qwen3_5_35b_a3b.model import advance_state
 
 DEV = reference.DEVICE
 ATOL = RTOL = 2e-5
@@ -36,9 +40,8 @@ def test_linear_attention_matches_hugging_face():
     output norm) vs HF's own mixer at the decoded position, at two lengths."""
     for ctx_len in CTX_LENGTHS:
         step = reference.linear_step(ctx_len=ctx_len, device=DEV)
-        out, _entry, _state = evaluate(
-            Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
-        )
+        loaded = reference.load_mixer("linear_attention", step.layer)
+        out, _entry, _state = loaded.linear_attention(step.hidden_new, *step.mixer_acts)
 
         want = reference.linear_mixer_oracle(step)
         difference = (out.float() - want.float()).abs().max().item()
@@ -59,9 +62,8 @@ def test_the_step_returns_the_state_to_carry_forward():
     """
     for ctx_len in CTX_LENGTHS:
         step = reference.linear_step(ctx_len=ctx_len, device=DEV)
-        _out, entry, state = evaluate(
-            Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
-        )
+        loaded = reference.load_mixer("linear_attention", step.layer)
+        _out, entry, state = loaded.linear_attention(step.hidden_new, *step.mixer_acts)
 
         want_conv, want_state = reference.advanced_state_oracle(step)
         slid, state = advance_state(
@@ -89,14 +91,11 @@ def test_the_prior_state_is_read():
     about one token in isolation.
     """
     step = reference.linear_step(device=DEV)
-    out, _entry, _state = evaluate(
-        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
-    )
+    loaded = reference.load_mixer("linear_attention", step.layer)
+    out, _entry, _state = loaded.linear_attention(step.hidden_new, *step.mixer_acts)
 
-    weights = list(step.mixer_args)
-    weights[9] = torch.zeros_like(step.recurrent_state)
-    stateless, _entry, _state = evaluate(
-        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *weights, device=DEV
+    stateless, _entry, _state = loaded.linear_attention(
+        step.hidden_new, step.conv_state, torch.zeros_like(step.recurrent_state)
     )
 
     moved = (out.float() - stateless.float()).abs().max().item()
@@ -115,14 +114,11 @@ def test_the_convolution_window_is_read():
     would say so.
     """
     step = reference.linear_step(device=DEV)
-    out, _entry, _state = evaluate(
-        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *step.mixer_args, device=DEV
-    )
+    loaded = reference.load_mixer("linear_attention", step.layer)
+    out, _entry, _state = loaded.linear_attention(step.hidden_new, *step.mixer_acts)
 
-    weights = list(step.mixer_args)
-    weights[8] = torch.zeros_like(step.conv_state)
-    windowless, _entry, _state = evaluate(
-        Qwen3_5LinearAttention.lookup("linear_attention"), step.hidden_new, *weights, device=DEV
+    windowless, _entry, _state = loaded.linear_attention(
+        step.hidden_new, torch.zeros_like(step.conv_state), step.recurrent_state
     )
 
     moved = (out.float() - windowless.float()).abs().max().item()

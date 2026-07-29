@@ -20,68 +20,93 @@ import torch
 
 from tests.models import dense_decode
 from tests.models.gemma2_2b import config
-from tests.models.gemma2_2b.model import Gemma2_2B_Decoder
+from tests.models.gemma2_2b.model import Gemma2_2B, Gemma2_2B_Decoder
+from tilefoundry.runtime.resource import DictResource
 
 DEVICE = dense_decode.DenseDecode.device
 CTX_LEN = dense_decode.DenseDecode.ctx_len
 
 
-def layer_weights(layer) -> tuple:
-    """One layer's weights, in the order its decode step takes them.
+def _layer_constants(layer) -> dict:
+    """One layer's weights, keyed the way its Module names them.
 
     Gemma2 norms both sides of the MLP as well as both sides of attention, so it
-    carries four norms where the Qwen layers carry two. Its norms are read through
-    `config.rms_gamma`, which accounts for Gemma storing gamma as a zero-centred
-    offset.
-
-    The order is stated here only; both the single-layer arguments and the
-    stack's per-layer weights are projected from it.
+    carries four norms where the Qwen layers carry two. Every one of them is read
+    through `config.rms_gamma`, which accounts for Gemma storing gamma as a
+    zero-centred offset. Stated here rather than shared: which Hugging Face tensor
+    a canonical name reads is this model's own fact.
     """
     attention, mlp = layer.self_attn, layer.mlp
-    return (
-
-        config.rms_gamma(layer.input_layernorm),
-        config.linear_weight(attention.q_proj),
-        config.linear_weight(attention.k_proj),
-        config.linear_weight(attention.v_proj),
-        config.linear_weight(attention.o_proj),
-        config.rms_gamma(layer.post_attention_layernorm),
-        config.rms_gamma(layer.pre_feedforward_layernorm),
-        config.linear_weight(mlp.gate_proj),
-        config.linear_weight(mlp.up_proj),
-        config.linear_weight(mlp.down_proj),
-        config.rms_gamma(layer.post_feedforward_layernorm),
-    )
-
+    return {
+        "gamma_in": config.rms_gamma(layer.input_layernorm),
+        "w_q": config.linear_weight(attention.q_proj),
+        "w_k": config.linear_weight(attention.k_proj),
+        "w_v": config.linear_weight(attention.v_proj),
+        "w_o": config.linear_weight(attention.o_proj),
+        "gamma_post_attn": config.rms_gamma(layer.post_attention_layernorm),
+        "gamma_pre_ff": config.rms_gamma(layer.pre_feedforward_layernorm),
+        "w_gate": config.linear_weight(mlp.gate_proj),
+        "w_up": config.linear_weight(mlp.up_proj),
+        "w_down": config.linear_weight(mlp.down_proj),
+        "gamma_post_ff": config.rms_gamma(layer.post_feedforward_layernorm),
+    }
 
 
+def load_layer(layer):
+    """The layer Module with *layer*'s weights bound."""
+    return Gemma2_2B.cloned().load(DictResource(_layer_constants(layer)))
+
+
+def load_decoder(model):
+    """The decoder root with *model*'s weights bound, one entry per layer.
+
+    ``gamma_final`` goes through `config.rms_gamma` like every other norm here: the
+    norm that closes the stack is the same zero-centred offset the four inside a
+    layer are, and it is the one where the raw ``.weight`` costs the whole stack's
+    output rather than one block's.
+
+    ``w_head`` is supplied in the layout `lm_head` declares: `DictResource` keys are
+    already canonical and its converters run in ``prepare``, not here. Reading the
+    head off the causal LM rather than deciding from a config field is what makes
+    this the same statement for a tied and an untied checkpoint.
+    """
+    constants = {
+        "w_embed": model.model.embed_tokens.weight,
+        "gamma_final": config.rms_gamma(model.model.norm),
+        "w_head": model.lm_head.weight.t(),
+    }
+    for index, layer in enumerate(model.model.layers):
+        constants.update(
+            {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
+        )
+    return Gemma2_2B_Decoder.cloned().load(DictResource(constants))
 
 
 @dataclass(frozen=True)
 class DecodeStepInputs(dense_decode.LayerStep):
-    """A drawn step, plus the projection `self_attention` takes."""
+    """A drawn step, plus the activations `self_attention` takes."""
 
     @property
     def attention_args(self) -> tuple[torch.Tensor, ...]:
-        """`self_attention`'s arguments, derived from the layer's own tuple.
+        """`self_attention`'s activations, derived from the layer's own.
 
         The attention block here is pure -- it takes already-normalised hidden
-        states and no ``gamma_in`` -- so its arguments are the layer's with the
-        first replaced by the normed token and the second dropped. Derived rather
-        than assembled a second time, so one parameter order is stated once.
+        states -- so its activations are the layer's with the first replaced by the
+        normed token. Derived rather than assembled a second time, so one parameter
+        order is stated once.
         """
         with torch.no_grad():
             normed = self.layer.input_layernorm(self.hidden_new)
-        return (normed, *self.args[2:12])
+        return (normed, *self.args[1:])
+
+
 DecoderStepInputs = dense_decode.StackStep
 
 SPEC = dense_decode.DenseDecode(
     config=config,
-    layer_weights=layer_weights,
-    attention_weights=4,
-    build_decoder=Gemma2_2B_Decoder.cloned,
+    load_layer=load_layer,
+    load_decoder=load_decoder,
     layer_step_class=DecodeStepInputs,
-    final_norm_of=lambda model: config.rms_gamma(model.norm),
 )
 
 decode_step_inputs = partial(dense_decode.layer_step, SPEC)
@@ -102,6 +127,7 @@ __all__ = [
     "decode_step_oracle",
     "decoder_step_inputs",
     "decoder_step_oracle",
-    "layer_weights",
+    "load_decoder",
+    "load_layer",
     "run_decoder_step",
 ]

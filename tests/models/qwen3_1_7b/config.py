@@ -211,17 +211,18 @@ def decode_reference(layer, hidden_ctx, hidden_new, device="cpu"):
 def build_hf_decoder(seed=0, device="cpu", dtype=None, shape: Qwen3Shape = REAL):
     """The complete ``shape.n_layers``-layer decoder stack, random at a fixed seed.
 
-    A ``Qwen3Model`` is built for its layers and its final norm; its token
-    embedding is not part of what this returns, because the decoder's boundary is
-    hidden states in and hidden states out. Stacking one layer's verified
-    behaviour is not the same as the stack behaving, which is why this exists
-    separately from ``build_hf_layer``: layer order, the final norm, and the
-    residual thread between layers are only observable here.
+    A ``Qwen3ForCausalLM`` rather than the base model: the decoder's own boundary
+    is still hidden states in and hidden states out, but the root's weights include
+    the head, and the head exists only on the causal LM. Its layers and final norm
+    are reached through ``.model``. Stacking one layer's verified behaviour is not
+    the same as the stack behaving, which is why this exists separately from
+    ``build_hf_layer``: layer order, the final norm, and the residual thread
+    between layers are only observable here.
     """
-    from transformers.models.qwen3.modeling_qwen3 import Qwen3Model  # noqa: PLC0415
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM  # noqa: PLC0415
 
     return oracle.randomised(
-        lambda: Qwen3Model(build_hf_config(shape, layers=shape.n_layers)),
+        lambda: Qwen3ForCausalLM(build_hf_config(shape, layers=shape.n_layers)),
         seed, device, dtype,
     )
 
@@ -230,7 +231,7 @@ def decoder_context_kv(model, hidden_ctx, device="cpu"):
     """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
     cos, sin = rope_caches(build_hf_config(), hidden_ctx.shape[1], device=device)
     return oracle.stack_context_kv(
-        model.layers, hidden_ctx, cos, sin,
+        model.model.layers, hidden_ctx, cos, sin,
         key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
     )
 
@@ -241,7 +242,7 @@ def decoder_decode_reference(model, hidden_ctx, hidden_new):
     total = hidden_ctx.shape[1] + hidden_new.shape[1]
     cos, sin = rope_caches(build_hf_config(), total, device=device)
     return oracle.decode_reference(
-        model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.norm
+        model.model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.model.norm
     )
 
 

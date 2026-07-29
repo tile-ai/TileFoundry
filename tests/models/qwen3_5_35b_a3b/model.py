@@ -11,7 +11,7 @@ import math
 
 from tests.models.qwen3_5_35b_a3b.config import REAL as config
 from tilefoundry import DType, func, module
-from tilefoundry.dsl import Tensor, tf  # noqa: F401 -- tf used by @func bodies
+from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 -- tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare op bindings
 from tilefoundry.evaluator import to_torch_dtype
 from tilefoundry.ir.types.dim import DimVar
@@ -75,7 +75,7 @@ class Qwen3_5LinearAttention:
     def conv_step(
         conv_state: Tensor[(1, _CONV, _WINDOW), config.dt],
         entry: Tensor[(1, _CONV, S), config.dt],
-        conv_w: Tensor[(_CONV, _KERNEL), config.dt],
+        conv_w: ConstTensor[(_CONV, _KERNEL), config.dt],
     ) -> Tensor[(1, _CONV), config.dt]:
         # The depthwise causal convolution at one token per step: the window
         # closes on this token, so the whole convolution is one multiply against
@@ -130,18 +130,18 @@ class Qwen3_5LinearAttention:
     @func
     def linear_attention(
         hidden: Tensor[(1, S, _H), config.dt],
-        gamma_in: Tensor[(_H,), config.dt],
-        w_in_qkv: Tensor[(1, _H, _CONV), config.dt],
-        w_in_z: Tensor[(1, _H, _VAL), config.dt],
-        w_in_b: Tensor[(1, _H, _HV), config.dt],
-        w_in_a: Tensor[(1, _H, _HV), config.dt],
-        conv_w: Tensor[(_CONV, _KERNEL), config.dt],
-        a_log: Tensor[(_HV,), config.dt],
-        dt_bias: Tensor[(_HV,), config.dt],
+        gamma_in: ConstTensor[(_H,), config.dt],
+        w_in_qkv: ConstTensor[(1, _H, _CONV), config.dt],
+        w_in_z: ConstTensor[(1, _H, _VAL), config.dt],
+        w_in_b: ConstTensor[(1, _H, _HV), config.dt],
+        w_in_a: ConstTensor[(1, _H, _HV), config.dt],
+        conv_w: ConstTensor[(_CONV, _KERNEL), config.dt],
+        a_log: ConstTensor[(_HV,), config.dt],
+        dt_bias: ConstTensor[(_HV,), config.dt],
         conv_state: Tensor[(1, _CONV, _WINDOW), config.dt],
         recurrent_state: Tensor[(1, _HV, _DK, _DV), config.dt],
-        gamma_gdn: Tensor[(_DV,), config.dt],
-        w_out: Tensor[(1, _VAL, _H), config.dt],
+        gamma_gdn: ConstTensor[(_DV,), config.dt],
+        w_out: ConstTensor[(1, _VAL, _H), config.dt],
     ):
         # Fused input_layernorm + `Qwen3_5MoeGatedDeltaNet`, no residual (the
         # layer owns the residual add). Returns the output, this step's own
@@ -231,19 +231,19 @@ class Qwen3_5FullAttention:
     @func
     def full_attention(
         hidden: Tensor[(1, S, _H), config.dt],
-        gamma_in: Tensor[(_H,), config.dt],
-        w_qg: Tensor[(1, _H, _HQ * _D * 2), config.dt],
-        w_k: Tensor[(1, _H, _HKV * _D), config.dt],
-        w_v: Tensor[(1, _H, _HKV * _D), config.dt],
-        gamma_q: Tensor[(_D,), config.dt],
-        gamma_k: Tensor[(_D,), config.dt],
+        gamma_in: ConstTensor[(_H,), config.dt],
+        w_qg: ConstTensor[(1, _H, _HQ * _D * 2), config.dt],
+        w_k: ConstTensor[(1, _H, _HKV * _D), config.dt],
+        w_v: ConstTensor[(1, _H, _HKV * _D), config.dt],
+        gamma_q: ConstTensor[(_D,), config.dt],
+        gamma_k: ConstTensor[(_D,), config.dt],
         cos_cache: Tensor[(_ROPE_ROWS, _ROT), config.dt],
         sin_cache: Tensor[(_ROPE_ROWS, _ROT), config.dt],
         pos_ids: Tensor[(S,), "i32"],
         k_cache: Tensor[(1, C, _HKV, _D), config.dt],
         v_cache: Tensor[(1, C, _HKV, _D), config.dt],
         scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: Tensor[(1, _HQ * _D, _H), config.dt],
+        w_o: ConstTensor[(1, _HQ * _D, _H), config.dt],
     ):
         # Fused input_layernorm + `Qwen3_5MoeAttention`, no residual (the layer
         # owns the residual add). Returns the attention output together with this
@@ -320,7 +320,7 @@ class Qwen3_5MoE:
     @func
     def routing(
         tokens: Tensor[(S, _H), config.dt],
-        w_router: Tensor[(_H, _E), config.dt],
+        w_router: ConstTensor[(_H, _E), config.dt],
     ):
         # HF `Qwen3_5MoeTopKRouter`: softmax over every expert in f32, then the
         # top k, then renormalise. Kept its own function because the selection
@@ -338,9 +338,9 @@ class Qwen3_5MoE:
         tokens: Tensor[(S, _H), config.dt],
         weights: Tensor[(S, _K), config.dt],
         indices: Tensor[(S, _K), "i64"],
-        w_gate: Tensor[(_E, _I, _H), config.dt],
-        w_up: Tensor[(_E, _I, _H), config.dt],
-        w_down: Tensor[(_E, _H, _I), config.dt],
+        w_gate: ConstTensor[(_E, _I, _H), config.dt],
+        w_up: ConstTensor[(_E, _I, _H), config.dt],
+        w_down: ConstTensor[(_E, _H, _I), config.dt],
     ) -> Tensor[(S, _H), config.dt]:
         # The gathers are the point: `indices` is a runtime value, so the three
         # expert tensors are indexed by it rather than sliced at a known offset.
@@ -364,10 +364,10 @@ class Qwen3_5MoE:
     @func
     def shared_expert(
         tokens: Tensor[(S, _H), config.dt],
-        w_shared_gate: Tensor[(_H, _IS), config.dt],
-        w_shared_up: Tensor[(_H, _IS), config.dt],
-        w_shared_down: Tensor[(_IS, _H), config.dt],
-        w_shared_scale: Tensor[(_H, 1), config.dt],
+        w_shared_gate: ConstTensor[(_H, _IS), config.dt],
+        w_shared_up: ConstTensor[(_H, _IS), config.dt],
+        w_shared_down: ConstTensor[(_IS, _H), config.dt],
+        w_shared_scale: ConstTensor[(_H, 1), config.dt],
     ) -> Tensor[(S, _H), config.dt]:
         # A dense SwiGLU every token goes through, scaled by the token's own
         # scalar gate. The gate is a projection to width one through a sigmoid,
@@ -381,15 +381,15 @@ class Qwen3_5MoE:
     @func
     def moe(
         hidden: Tensor[(1, S, _H), config.dt],
-        gamma_post: Tensor[(_H,), config.dt],
-        w_router: Tensor[(_H, _E), config.dt],
-        w_gate: Tensor[(_E, _I, _H), config.dt],
-        w_up: Tensor[(_E, _I, _H), config.dt],
-        w_down: Tensor[(_E, _H, _I), config.dt],
-        w_shared_gate: Tensor[(_H, _IS), config.dt],
-        w_shared_up: Tensor[(_H, _IS), config.dt],
-        w_shared_down: Tensor[(_IS, _H), config.dt],
-        w_shared_scale: Tensor[(_H, 1), config.dt],
+        gamma_post: ConstTensor[(_H,), config.dt],
+        w_router: ConstTensor[(_H, _E), config.dt],
+        w_gate: ConstTensor[(_E, _I, _H), config.dt],
+        w_up: ConstTensor[(_E, _I, _H), config.dt],
+        w_down: ConstTensor[(_E, _H, _I), config.dt],
+        w_shared_gate: ConstTensor[(_H, _IS), config.dt],
+        w_shared_up: ConstTensor[(_H, _IS), config.dt],
+        w_shared_down: ConstTensor[(_IS, _H), config.dt],
+        w_shared_scale: ConstTensor[(_H, 1), config.dt],
     ) -> Tensor[(1, S, _H), config.dt]:
         # Fused post_attention_layernorm + `Qwen3_5MoeSparseMoeBlock`, no
         # residual (the layer owns the residual add).
@@ -402,7 +402,7 @@ class Qwen3_5MoE:
         return tf.reshape(tf.add(routed, shared), new_shape=(1, S, _H))
 
 
-def _layer_forward(self, hidden, mixer_args, moe_args):
+def _layer_forward(self, hidden, mixer_args):
     """One decode step: mixer + residual, then MoE + residual.
 
     Mirrors ``Qwen3_5MoeDecoderLayer.forward``. The two pre-norms are not
@@ -411,12 +411,16 @@ def _layer_forward(self, hidden, mixer_args, moe_args):
     ``post_attention_layernorm``, so each fused kernel lines up with one
     Hugging Face pre-norm-then-block composition.
 
+    *mixer_args* is what the mixer is handed after the hidden state. The MoE
+    block is handed the mixed state and nothing else: every weight it reads is
+    one it holds.
+
     What comes back is the layer output and whatever state the mixer
     produced, passed through untouched for the caller to advance.
     """
     mixed, *state = self.mixer(hidden, *mixer_args)
     attended = self.residual_add(hidden, mixed)
-    expert_out = self.moe(attended, *moe_args)
+    expert_out = self.moe(attended)
     return self.residual_add(attended, expert_out), tuple(state)
 
 
@@ -467,8 +471,16 @@ _CACHE_PARAMS = frozenset({"k_cache", "v_cache", "conv_state", "recurrent_state"
 
 
 def _with_cache(mixer, mixer_args, cache):
-    """*mixer_args* with *cache* spliced in where *mixer* declares its state."""
-    names = [param.name for param in mixer.entry_function().params][1:]
+    """*mixer_args* with *cache* spliced in where *mixer* declares its state.
+
+    The position is counted over the parameters a step is handed, since a loading
+    fills the weights by name, and read from the Module a loading stands over so
+    that one rule answers for both.
+    """
+    node = getattr(mixer, "module", mixer)
+    names = [
+        param.name for param in node.entry_function().params if not param.is_const
+    ][1:]
     # `next`, not `min`: `from tilefoundry.dsl.tf import *` binds `min` to the op.
     at = next(index for index, name in enumerate(names) if name in _CACHE_PARAMS)
     return (*mixer_args[:at], *cache, *mixer_args[at:])
@@ -503,7 +515,7 @@ class Qwen3_5Decoder:
 
     @func
     def embed(
-        table: Tensor[(config.vocab, config.hidden), config.dt],
+        table: ConstTensor[(config.vocab, config.hidden), config.dt],
         token_ids: Tensor[(1,), "i64"],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
         # HF `Qwen3_5MoeModel.embed_tokens`: the decoded token's own row.
@@ -514,7 +526,7 @@ class Qwen3_5Decoder:
     @func
     def final_rms_norm(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_final: Tensor[(config.hidden,), config.dt],
+        gamma_final: ConstTensor[(config.hidden,), config.dt],
     ) -> Tensor[(1, S, config.hidden), config.dt]:
         # HF `Qwen3_5MoeModel.norm`, applied once after the last layer.
         return tf.rms_norm(hidden, gamma_final, eps=config.rms_eps)
@@ -522,38 +534,46 @@ class Qwen3_5Decoder:
     @func
     def lm_head(
         hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_head: Tensor[(config.hidden, config.vocab), config.dt],
+        w_head: ConstTensor[(config.hidden, config.vocab), config.dt],
     ) -> Tensor[(1, config.vocab), config.dt]:
         # HF `Qwen3_5MoeForCausalLM.lm_head`, over the one token being decoded.
         return tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden)), w_head)
 
-    def decode_hidden(self, hidden, layer_args, caches, gamma_final):
+    @lm_head.converter("w_head")
+    def _(
+        head_weight_raw: ConstTensor[(config.vocab, config.hidden), config.dt],
+    ) -> Tensor[(config.hidden, config.vocab), config.dt]:
+        # HF stores the head as (vocab, hidden); the matmul above wants it the
+        # other way. Tied models alias this input to the embedding table.
+        return tf.transpose(head_weight_raw, perm=(1, 0))
+
+    def decode_hidden(self, hidden, layer_args, caches):
         """One decode step through every layer, then the final norm.
 
-        *layer_args* is one `(mixer_args, moe_args)` pair per layer, carrying no
-        state; *caches* is each layer's own state, spliced into its mixer call.
-        What comes back is the normed hidden state and each layer's fresh state.
+        *layer_args* is one layer's mixer arguments per layer, carrying no state;
+        *caches* is each layer's own state, spliced into its mixer call. What
+        comes back is the normed hidden state and each layer's fresh state.
         """
         if len(layer_args) != len(self.modules) or len(caches) != len(self.modules):
             raise ValueError(
                 f"decoder has {len(self.modules)} layers but was given "
-                f"{len(layer_args)} argument pairs and {len(caches)} caches"
+                f"{len(layer_args)} argument tuples and {len(caches)} caches"
             )
         states = []
-        for layer, (mixer_args, moe_args), cache in zip(self.modules, layer_args, caches):
-            hidden, state = layer(hidden, _with_cache(layer.mixer, mixer_args, cache), moe_args)
+        for layer, mixer_args, cache in zip(self.modules, layer_args, caches):
+            hidden, state = layer(hidden, _with_cache(layer.mixer, mixer_args, cache))
             states.append(state)
-        return self.final_rms_norm(hidden, gamma_final), tuple(states)
+        return self.final_rms_norm(hidden), tuple(states)
 
-    def forward(self, token_ids, table, layer_args, caches, gamma_final, w_head):
+    def forward(self, token_ids, layer_args, caches):
         """One decode step of the whole model: token ids in, logits out.
 
         The fresh per-layer state comes out beside the logits; growing *caches*
         with it is the caller's step, through `append_cache`.
         """
-        hidden = self.embed(table, token_ids)
-        normed, states = self.decode_hidden(hidden, layer_args, caches, gamma_final)
-        return self.lm_head(normed, w_head), states
+        hidden = self.embed(token_ids)
+        normed, states = self.decode_hidden(hidden, layer_args, caches)
+        return self.lm_head(normed), states
 
     def init_caches(self, device="cuda"):
         """The per-layer state container, one entry per layer.

@@ -213,14 +213,15 @@ def decode_reference(layer, hidden_ctx, hidden_new, device="cpu"):
 def build_hf_decoder(seed=0, device="cpu", dtype=None):
     """The complete ``REAL.n_layers``-layer decoder stack, random at a fixed seed.
 
-    Built for its layers and its final norm; the token embedding is not part of
-    what this returns, because the decoder's boundary is hidden states in and
-    hidden states out.
+    A ``Qwen2ForCausalLM`` rather than the base model: the decoder's own boundary
+    is still hidden states in and hidden states out, but the root's weights include
+    the head, and the head exists only on the causal LM. Its layers and final norm
+    are reached through ``.model``.
     """
-    from transformers.models.qwen2.modeling_qwen2 import Qwen2Model  # noqa: PLC0415
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM  # noqa: PLC0415
 
     return oracle.randomised(
-        lambda: Qwen2Model(build_hf_config(layers=REAL.n_layers)), seed, device, dtype
+        lambda: Qwen2ForCausalLM(build_hf_config(layers=REAL.n_layers)), seed, device, dtype
     )
 
 
@@ -228,7 +229,7 @@ def decoder_context_kv(model, hidden_ctx, device="cpu"):
     """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
     cos, sin = rope_caches(build_hf_config(), hidden_ctx.shape[1], device=device)
     return oracle.stack_context_kv(
-        model.layers, hidden_ctx, cos, sin,
+        model.model.layers, hidden_ctx, cos, sin,
         key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
     )
 
@@ -239,7 +240,7 @@ def decoder_decode_reference(model, hidden_ctx, hidden_new):
     total = hidden_ctx.shape[1] + hidden_new.shape[1]
     cos, sin = rope_caches(build_hf_config(), total, device=device)
     return oracle.decode_reference(
-        model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.norm
+        model.model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.model.norm
     )
 
 

@@ -22,9 +22,6 @@ from __future__ import annotations
 import torch
 
 from tests.models.qwen2_5_1_5b import config, reference
-from tests.models.qwen2_5_1_5b.model import Qwen2_5_1_5B
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.hir.specialize import specialize_concretely
 
 HIDDEN = config.REAL.hidden
 SEQ = config.SEQ_LEN
@@ -55,18 +52,12 @@ def test_tiled_mlp_matches_untiled_mlp():
     reduction, so the two must agree to f32 round-off. Also checked against
     HF, so a bug shared by both rewrites cannot hide."""
     layer, x = _one_token(TILED_DEV)
-    mlp = layer.mlp
-    weights = (
-        layer.post_attention_layernorm.weight,
-        config.linear_weight(mlp.gate_proj),
-        config.linear_weight(mlp.up_proj),
-        config.linear_weight(mlp.down_proj),
-    )
+    loaded = reference.load_layer(layer)
 
     with torch.no_grad():
-        ref = mlp(layer.post_attention_layernorm(x))
-    untiled = evaluate(Qwen2_5_1_5B.lookup("mlp"), x, *weights, device=TILED_DEV)
-    tiled = evaluate(Qwen2_5_1_5B.lookup("tiled_mlp"), x, *weights, device=TILED_DEV)
+        ref = layer.mlp(layer.post_attention_layernorm(x))
+    untiled = loaded.mlp(x)
+    tiled = loaded.tiled_mlp(x)
 
     torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
@@ -81,8 +72,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
     so a step that returned its inputs unchanged would fail.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(Qwen2_5_1_5B.lookup("decoder_layer"), {"ctx_len": drawn.ctx_len})
-    _, k_new, v_new = evaluate(fn, *drawn.args, device=DEV)
+    _, k_new, v_new = drawn.loaded.decoder_layer(*drawn.args)
 
     want_k, want_v = reference.appended_cache_oracle(drawn)
     grown_k = torch.cat([drawn.k_cache, k_new], dim=1)

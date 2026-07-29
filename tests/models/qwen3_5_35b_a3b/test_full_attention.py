@@ -1,21 +1,23 @@
 """Qwen3.5-35B-A3B's full-attention decode step against Hugging Face's own.
 
-The kernel carries ``ctx_len`` as a range, so it is specialised at the length the
-drawn step uses before being evaluated: an extent is what counting elements
-needs, and a range is not one.
+The kernel carries ``ctx_len`` as a range, and it is run as it is authored: the
+loading evaluates the published Function and the range is bound from the cache it
+is handed, so what is measured is the kernel the model declares rather than a copy
+of it resolved at one length. The corpus runs the same loading.
 
-Arguments come from ``reference.py``'s drawn step rather than being assembled
-here, so the parameter order is stated once and a signature change cannot leave
-one test agreeing with a stale order.
+Weights are declared ``ConstTensor``, so they are bound by the loading and every
+call below passes activations alone; those come from ``reference.py``'s drawn step
+rather than being assembled here, so a signature change cannot leave one test
+agreeing with a stale order.
 """
 from __future__ import annotations
+
+import dataclasses
 
 import torch
 
 from tests.models.qwen3_5_35b_a3b import config, reference
-from tests.models.qwen3_5_35b_a3b.model import Qwen3_5FullAttention, advance_state
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.hir.specialize import specialize_concretely
+from tests.models.qwen3_5_35b_a3b.model import advance_state
 
 DEV = reference.DEVICE
 ATOL = RTOL = 2e-5
@@ -40,8 +42,8 @@ def test_full_attention_matches_hugging_face():
     token) vs HF's own attention at the decoded position, at two lengths."""
     for ctx_len in CTX_LENGTHS:
         step = reference.full_step(ctx_len=ctx_len, device=DEV)
-        function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": ctx_len})
-        out, _key, _value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
+        loaded = reference.load_mixer("full_attention", step.layer)
+        out, _key, _value = loaded.full_attention(step.hidden_new, *step.mixer_acts)
 
         want = reference.full_mixer_oracle(step)
         difference = (out.float() - want.float()).abs().max().item()
@@ -59,8 +61,8 @@ def test_the_step_returns_the_cache_entry_to_append():
     decoder's own ``advance_state``, so the rule is stated once.
     """
     step = reference.full_step(device=DEV)
-    function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": step.ctx_len})
-    _out, key, value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
+    loaded = reference.load_mixer("full_attention", step.layer)
+    _out, key, value = loaded.full_attention(step.hidden_new, *step.mixer_acts)
 
     want_key, want_value = reference.appended_cache_oracle(step)
     grown_key, grown_value = advance_state(
@@ -87,11 +89,13 @@ def test_only_the_leading_rotary_dims_carry_a_position():
     cos, sin = reference.rope_caches(DEV)
     torch.manual_seed(3)
     x = torch.randn(1, 1, shape.n_q_heads, shape.head_dim, device=DEV)
+    loaded = reference.load_mixer(
+        "full_attention", reference.hf_layer("full_attention", DEV)
+    )
 
     turned = [
-        evaluate(
-            Qwen3_5FullAttention.lookup("partial_rope"), x, cos, sin,
-            torch.tensor([position], device=DEV, dtype=torch.int32), device=DEV,
+        loaded.partial_rope(
+            x, cos, sin, torch.tensor([position], device=DEV, dtype=torch.int32)
         )
         for position in (7, 19)
     ]
@@ -110,22 +114,29 @@ def test_the_output_gate_is_applied():
 
     The gate is a sigmoid, so it lies strictly between 0 and 1: an implementation
     that ignored it would be uniformly larger, and one that applied it twice
-    uniformly smaller. Both are caught by comparing against Hugging Face with the
-    gate's own weights perturbed -- if the answer did not move, the gate is not
-    being read.
+    uniformly smaller. Both are caught by running the same step against a second
+    loading whose gate weights are neutralised -- if the answer did not move, the
+    gate is not being read.
     """
     step = reference.full_step(device=DEV)
-    function = specialize_concretely(Qwen3_5FullAttention.lookup("full_attention"), {"ctx_len": step.ctx_len})
-    out, _key, _value = evaluate(function, step.hidden_new, *step.mixer_args, device=DEV)
+    loaded = reference.load_mixer("full_attention", step.layer)
+    out, _key, _value = loaded.full_attention(step.hidden_new, *step.mixer_acts)
 
     shape = config.REAL
-    weights = list(step.mixer_args)
     # w_qg is [1, hidden, 2 * heads * head_dim] with the gate interleaved per
     # head; zeroing the gate half sends every gate to sigmoid(0) = 1/2.
-    gated = weights[1].clone().reshape(1, shape.hidden, shape.n_q_heads, 2 * shape.head_dim)
+    gated = loaded.constants["w_qg"].clone().reshape(
+        1, shape.hidden, shape.n_q_heads, 2 * shape.head_dim
+    )
     gated[..., shape.head_dim:] = 0.0
-    weights[1] = gated.reshape(1, shape.hidden, 2 * shape.q_proj).contiguous()
-    ungated, _key, _value = evaluate(function, step.hidden_new, *weights, device=DEV)
+    neutralised = dataclasses.replace(
+        loaded,
+        constants={
+            **loaded.constants,
+            "w_qg": gated.reshape(1, shape.hidden, 2 * shape.q_proj).contiguous(),
+        },
+    )
+    ungated, _key, _value = neutralised.full_attention(step.hidden_new, *step.mixer_acts)
 
     moved = (out.float() - ungated.float()).abs().max().item()
     assert moved > 100 * ATOL, (

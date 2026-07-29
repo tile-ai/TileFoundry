@@ -160,7 +160,8 @@ entries — so name resolution is always single-valued.
   `function_named` above). A `Module` holds no constants, so that callable
   takes **one argument per declared param**, a `ConstTensor` one included; the
   callable that fills constants from bindings instead belongs to
-  `LoadedModule` (docs/spec/runtime.md §1.1.2). A **child module** name
+  `LoadedModule`, which runs on the one device its bindings and activations
+  agree on (docs/spec/runtime.md §1.1.2). A **child module** name
   resolves to that child `Module`. A **method** name resolves to the
   class-body function bound like an instance method (`m.forward(...)`). Names
   beginning with `_` are never functions, modules, or methods and resolve by

@@ -23,38 +23,61 @@ import torch
 
 from tests.models import dense_decode
 from tests.models.minicpm3_4b import config
-from tests.models.minicpm3_4b.model import MiniCPM3_4B_Decoder
+from tests.models.minicpm3_4b.model import MiniCPM3_4B, MiniCPM3_4B_Decoder
+from tilefoundry.runtime.resource import DictResource
 
 DEVICE = dense_decode.DenseDecode.device
 CTX_LEN = dense_decode.DenseDecode.ctx_len
 
 
-def layer_weights(layer) -> tuple:
-    """One layer's weights, in the order its decode step takes them.
+def _layer_constants(layer) -> dict:
+    """One layer's weights, keyed the way its Module names them.
 
     MiniCPM3 attends over a compressed latent: the query and the key/value each
     come from a down-projection, a norm, and an up-projection, which is why this
-    list has no single `q_proj`.
-
-    The order is stated here only; both the single-layer arguments and the
-    stack's per-layer weights are projected from it.
+    mapping has no single `w_q`. Stated here rather than shared: which Hugging Face
+    tensor a canonical name reads is this model's own fact.
     """
     attention, mlp = layer.self_attn, layer.mlp
-    return (
+    return {
+        "gamma_in": layer.input_layernorm.weight,
+        "w_q_a": config.linear_weight(attention.q_a_proj),
+        "gamma_q_a": attention.q_a_layernorm.weight,
+        "w_q_b": config.linear_weight(attention.q_b_proj),
+        "w_kv_a": config.linear_weight(attention.kv_a_proj_with_mqa),
+        "gamma_kv_a": attention.kv_a_layernorm.weight,
+        "w_kv_b": config.linear_weight(attention.kv_b_proj),
+        "w_o": config.linear_weight(attention.o_proj),
+        "gamma_post": layer.post_attention_layernorm.weight,
+        "w_gate": config.linear_weight(mlp.gate_proj),
+        "w_up": config.linear_weight(mlp.up_proj),
+        "w_down": config.linear_weight(mlp.down_proj),
+    }
 
-        layer.input_layernorm.weight,
-        config.linear_weight(attention.q_a_proj),
-        attention.q_a_layernorm.weight,
-        config.linear_weight(attention.q_b_proj),
-        config.linear_weight(attention.kv_a_proj_with_mqa),
-        attention.kv_a_layernorm.weight,
-        config.linear_weight(attention.kv_b_proj),
-        config.linear_weight(attention.o_proj),
-        layer.post_attention_layernorm.weight,
-        config.linear_weight(mlp.gate_proj),
-        config.linear_weight(mlp.up_proj),
-        config.linear_weight(mlp.down_proj),
-    )
+
+def load_layer(layer):
+    """The layer Module with *layer*'s weights bound."""
+    return MiniCPM3_4B.cloned().load(DictResource(_layer_constants(layer)))
+
+
+def load_decoder(model):
+    """The decoder root with *model*'s weights bound, one entry per layer.
+
+    ``w_head`` is supplied in the layout `lm_head` declares: `DictResource` keys are
+    already canonical and its converters run in ``prepare``, not here. Reading the
+    head off the causal LM rather than deciding from a config field is what makes
+    this the same statement for a tied and an untied checkpoint.
+    """
+    constants = {
+        "w_embed": model.model.embed_tokens.weight,
+        "gamma_final": model.model.norm.weight,
+        "w_head": model.lm_head.weight.t(),
+    }
+    for index, layer in enumerate(model.model.layers):
+        constants.update(
+            {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
+        )
+    return MiniCPM3_4B_Decoder.cloned().load(DictResource(constants))
 
 
 def _residual_scale(layer, device: str) -> tuple:
@@ -63,9 +86,9 @@ def _residual_scale(layer, device: str) -> tuple:
 
 
 
-
-
 DecodeStepInputs = dense_decode.LayerStep
+
+
 @dataclass(frozen=True)
 class DecoderStepInputs(dense_decode.StackStep):
     """A drawn stack step, with its residual scale under its own name."""
@@ -75,11 +98,11 @@ class DecoderStepInputs(dense_decode.StackStep):
         """The value `trailing` carries, named for what a perturbation test asks."""
         return self.trailing[0]
 
+
 SPEC = dense_decode.DenseDecode(
     config=config,
-    layer_weights=layer_weights,
-    attention_weights=7,
-    build_decoder=MiniCPM3_4B_Decoder.cloned,
+    load_layer=load_layer,
+    load_decoder=load_decoder,
     trailing=_residual_scale,
     stack_step_class=DecoderStepInputs,
 )
@@ -102,6 +125,7 @@ __all__ = [
     "decode_step_oracle",
     "decoder_step_inputs",
     "decoder_step_oracle",
-    "layer_weights",
+    "load_decoder",
+    "load_layer",
     "run_decoder_step",
 ]

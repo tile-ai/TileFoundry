@@ -14,8 +14,6 @@ from __future__ import annotations
 import torch
 
 from tests.models.qwen3_5_35b_a3b import config, reference
-from tests.models.qwen3_5_35b_a3b.model import Qwen3_5MoE
-from tilefoundry.evaluator import evaluate
 
 DEV = reference.DEVICE
 ATOL = RTOL = 2e-5
@@ -28,21 +26,24 @@ MEASURED_MAX_ABS_DIFF = 4e-06
 
 
 def _step():
-    """The linear-attention layer's own MoE block.
+    """The linear-attention layer's own MoE block, and that block loaded.
 
     Both published layer types end in the same block, so this boundary asks for
     one of them rather than instantiating a second three-gigabyte one. It is the
     same object ``test_decoder_layer`` uses, so a worker running both pays once.
+
+    The block's weights are read on the device the layer holds them on, which is
+    where its activations are drawn, so the loading and the draw agree on one.
     """
     step = reference.linear_step(device=DEV, whole_layer=True)
-    return step.layer, step.hidden_new, step.moe_args
+    return step.layer, step.hidden_new, reference.load_moe(step.layer)
 
 
 def test_moe_matches_hugging_face():
     """moe (post_attention_layernorm + `Qwen3_5MoeSparseMoeBlock`) vs HF."""
-    layer, hidden, weights = _step()
+    layer, hidden, loaded = _step()
 
-    out = evaluate(Qwen3_5MoE.lookup("moe"), hidden, *weights, device=DEV)
+    out = loaded.moe(hidden)
     want = reference.moe_oracle(layer, hidden)
 
     difference = (out.float() - want.float()).abs().max().item()
@@ -58,12 +59,10 @@ def test_routing_selects_the_experts_hugging_face_selects():
     nothing downstream depends on the order the eight arrive in: they are
     renormalised and summed.
     """
-    layer, hidden, weights = _step()
+    layer, hidden, loaded = _step()
     tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
 
-    got_weights, got_indices = evaluate(
-        Qwen3_5MoE.lookup("routing"), tokens, weights[1], device=DEV
-    )
+    got_weights, got_indices = loaded.routing(tokens)
     with torch.no_grad():
         _logits, want_weights, want_indices = layer.mlp.gate(tokens)
 
@@ -87,14 +86,12 @@ def test_the_shared_expert_is_part_of_the_block():
     that the omission would not go unnoticed -- if the shared contribution were
     negligible, the whole boundary would be weaker than it looks.
     """
-    layer, hidden, weights = _step()
+    layer, hidden, loaded = _step()
     tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
 
-    routed_weights, indices = evaluate(Qwen3_5MoE.lookup("routing"), tokens, weights[1], device=DEV)
-    routed = evaluate(
-        Qwen3_5MoE.lookup("routed_experts"), tokens, routed_weights, indices, *weights[2:5], device=DEV
-    )
-    shared = evaluate(Qwen3_5MoE.lookup("shared_expert"), tokens, *weights[5:], device=DEV)
+    routed_weights, indices = loaded.routing(tokens)
+    routed = loaded.routed_experts(tokens, routed_weights, indices)
+    shared = loaded.shared_expert(tokens)
     want = reference.moe_oracle(layer, hidden)
 
     torch.testing.assert_close(

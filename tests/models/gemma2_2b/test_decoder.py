@@ -21,11 +21,12 @@ difference it means to be reporting.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 import torch
 
 from tests.models.gemma2_2b import config, reference
-from tests.models.gemma2_2b.model import Gemma2_2B_Decoder
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the complete decoder at production dimensions"
@@ -50,7 +51,7 @@ def drawn():
     initialised on the device -- and every test here asks the same question of
     the same draw. Drawing per test would pay that six times over to arrive at
     identical tensors. Nothing here mutates the draw; the tests that need a wrong
-    stack reorder copies of the two lists.
+    stack perturb a copy of the loading.
     """
     return reference.decoder_step_inputs(device=DEV)
 
@@ -61,30 +62,24 @@ def want(drawn):
     return reference.decoder_step_oracle(drawn).float()
 
 
-def _decoder(drawn, gamma_final=None):
-    """The decoder tree, closed by *gamma_final* or by the model's own norm."""
-    if gamma_final is None:
-        gamma_final = config.rms_gamma(drawn.model.norm)
-    return Gemma2_2B_Decoder.cloned().bind_final_norm(gamma_final)
-
-
 def test_the_embedding_matches_hugging_face(drawn) -> None:
     """The root's `embed` gathers the row `Gemma2Model.embed_tokens` would, scale
     and all: the oracle is the HF module, so a plain gather lands 48 times too
     small. Last row of the table, so a wrong axis cannot land on it."""
-    decoder = Gemma2_2B_Decoder.cloned()
     token_ids = torch.tensor([config.REAL.vocab - 1], device=DEV, dtype=torch.int64)
 
-    out = decoder.embed(drawn.model.embed_tokens.weight, token_ids)
+    out = drawn.loaded.embed(token_ids)
 
     with torch.no_grad():
-        want = drawn.model.embed_tokens(token_ids).reshape(1, 1, config.REAL.hidden)
+        want = drawn.model.model.embed_tokens(token_ids).reshape(
+            1, 1, config.REAL.hidden
+        )
     torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
 
 
 def test_the_complete_decoder_matches_hugging_face(drawn, want) -> None:
     """Every layer, in order, plus the final norm."""
-    out, entries = _decoder(drawn).decode_hidden(*drawn.args)
+    out, entries = drawn.loaded.decode_hidden(*drawn.args)
 
     assert len(entries) == config.REAL.n_layers
     torch.testing.assert_close(out.float(), want, atol=ATOL, rtol=RTOL)
@@ -99,10 +94,9 @@ def test_every_layer_returns_its_own_cache_entry(drawn) -> None:
     can see. The appending is the root's own ``append_cache``, which is what a
     decode loop calls, so this observes that method rather than a copy of it.
     """
-    decoder = _decoder(drawn)
-    _out, entries = decoder.decode_hidden(*drawn.args)
+    _out, entries = drawn.loaded.decode_hidden(*drawn.args)
 
-    grown = decoder.append_cache(drawn.caches, entries)
+    grown = drawn.loaded.append_cache(drawn.caches, entries)
     grown_context = torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1)
     expected = config.decoder_context_kv(drawn.model, grown_context, device=DEV)
     for index, ((grown_k, grown_v), (want_k, want_v)) in enumerate(zip(grown, expected)):
@@ -114,13 +108,26 @@ def test_every_layer_returns_its_own_cache_entry(drawn) -> None:
         )
 
 
-#: Ways the stack can be wrong that no single layer's test can see, each as a
-#: transform of the correctly-ordered per-layer arguments.
+#: Ways the stack can be wrong that no single layer's test can see. The weights
+#: are bound, so a wrong stack is a wrong *loading*: its layers reordered, or the
+#: caches handed to the right layers in the wrong order.
 _STACK_ERRORS = {
-    "two adjacent layers swapped": lambda w, c: (w[:1] + w[2:3] + w[1:2] + w[3:], c),
-    "two layers' caches swapped": lambda w, c: (w, c[:1] + c[2:3] + c[1:2] + c[3:]),
-    "layer order reversed": lambda w, c: (list(reversed(w)), c),
+    "two adjacent layers swapped": lambda m, c: (
+        _reordered(m, (0, 2, 1, *range(3, len(m.modules)))), c
+    ),
+    "two layers' caches swapped": lambda m, c: (m, c[:1] + c[2:3] + c[1:2] + c[3:]),
+    "layer order reversed": lambda m, c: (
+        _reordered(m, tuple(reversed(range(len(m.modules))))), c
+    ),
 }
+
+
+def _reordered(loaded, order):
+    """*loaded* with its layers visited in *order* -- the loading perturbed, since
+    that is where the weights now live."""
+    return dataclasses.replace(
+        loaded, modules=tuple(loaded.modules[index] for index in order)
+    )
 
 
 @pytest.mark.parametrize("description", sorted(_STACK_ERRORS))
@@ -131,12 +138,10 @@ def test_a_stack_that_is_wrongly_ordered_is_caught(drawn, want, description) -> 
     order while being satisfied by any order at all -- the agreement it reports
     comes from 26 layers that were each already checked on their own.
     """
-    broken_weights, broken_caches = _STACK_ERRORS[description](
-        drawn.weights, drawn.caches
-    )
-    out, _entries = _decoder(drawn).decode_hidden(
+    broken, broken_caches = _STACK_ERRORS[description](drawn.loaded, drawn.caches)
+    out, _entries = broken.decode_hidden(
         drawn.hidden_new, drawn.cos_cache, drawn.sin_cache, drawn.pos_ids,
-        drawn.scale, broken_weights, broken_caches,
+        drawn.scale, broken_caches,
     )
 
     _assert_far_from(out, want, description)
@@ -151,7 +156,12 @@ def test_a_wrong_final_norm_is_caught(drawn, want) -> None:
     it is also a different tensor from the right one, so it stands in for a norm
     that is not the model's own at all.
     """
-    out, _entries = _decoder(drawn, drawn.model.norm.weight).decode_hidden(*drawn.args)
+    raw = dataclasses.replace(
+        drawn.loaded,
+        constants={**drawn.loaded.constants, "gamma_final": drawn.model.model.norm.weight},
+    )
+
+    out, _entries = raw.decode_hidden(*drawn.args)
 
     _assert_far_from(out, want, "wrong final norm")
 

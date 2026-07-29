@@ -209,6 +209,19 @@ class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
     `LoadedModule`, so an orchestration method's own `self.<function>(...)`
     reaches the bound callable. The `Module` behind a reading is
     `loaded.module` — what a decorator or an analysis that wants the IR takes.
+  - **execution placement is agreed, never implied.** Before evaluating, a
+    `LoadedModule`'s function runner inspects this reading's bound constants and
+    the tensor activations it was given. They MUST all be on exactly one device,
+    and that device is where the run happens; a disagreement — including two
+    constants of one reading on different devices — MUST be refused there,
+    naming what sits where, rather than moved silently or left to fail as a
+    torch error inside the evaluator. A function with no tensor activation runs
+    where its constants are; a reading holding no constants leaves the
+    evaluator's own default in place. The runner still takes **activations
+    alone**: this is not an argument, and the evaluator infers nothing. So a
+    caller builds its activations on the device its resource loaded the weights
+    onto — a `DictResource` of CPU tensors runs on CPU,
+    `SafetensorsResource(device="cuda:2")` on `cuda:2`.
   - state is the caller's: a tensor that must survive across steps (e.g. a KV
     cache) is an ordinary `Tensor` param passed in and returned, and a step MUST
     NOT mutate one it was given. Sharding such a tensor is therefore the same

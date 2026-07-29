@@ -50,6 +50,7 @@ from tests.models.qwen3_5_35b_a3b.reference import (
     linear_mixer_oracle,
     linear_step,
     run_full_attention_step,
+    run_linear_attention_step,
 )
 
 #: The context length the cache-reading function is asked about at. A decode
@@ -76,7 +77,7 @@ CASE = ModelCase(
         ),
         inputs=linear_step,
         oracle=linear_mixer_oracle,
-        entry="linear_attention",
+        runner=run_linear_attention_step,
         problem_sizes=(f"decode/ctx_len={CTX_LEN}",),
     ),
     analyze=(
@@ -119,8 +120,8 @@ FULL_ATTENTION_CASE = ModelCase(
         ),
         inputs=full_step,
         oracle=full_mixer_oracle,
-        # `runner`, not `entry`: the boundary is one Function, but it carries
-        # `ctx_len` as a range and has to be resolved at the drawn length first.
+        # `runner`, not `entry`: the weights are bound by a loading, so what runs
+        # the boundary is that loading rather than a Function taken positionally.
         runner=run_full_attention_step,
         problem_sizes=(f"decode/ctx_len={CTX_LEN}",),
     ),

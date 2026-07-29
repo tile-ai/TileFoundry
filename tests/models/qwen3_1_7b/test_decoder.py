@@ -9,17 +9,18 @@ end, and each layer reading its own cache rather than another layer's. A
 per-layer comparison passes whether or not any of that holds.
 
 Production dimensions mean the real 28 layers and the real hidden size, which is
-5.3 GiB of f32 parameters. That is a CUDA-sized test, and CUDA is where model
+7.6 GiB of f32 parameters. That is a CUDA-sized test, and CUDA is where model
 completeness is accepted, so it skips rather than shrinks when there is no device
 -- a smaller stack would be a different claim wearing this test's name.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 import torch
 
-from tests.models.qwen3_1_7b import config
-from tests.models.qwen3_1_7b.model import Qwen3_1_7B_Decoder
+from tests.models.qwen3_1_7b import config, reference
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the complete decoder at production dimensions"
@@ -38,7 +39,7 @@ def drawn():
     initialised and moved to the device -- and every test here asks the same
     question of the same draw. Drawing per test paid that six times over to
     arrive at identical tensors. Nothing here mutates the draw; the tests that
-    need a wrong stack reorder copies of the two lists.
+    need a wrong stack perturb a copy of the loading.
     """
     return _draw()
 
@@ -54,25 +55,11 @@ def _draw(ctx_len=CTX_LEN):
     cfg = config.build_hf_config()
     cos_cache, sin_cache = config.rope_caches(cfg, config.REAL.max_pos, device=DEV)
     pos_ids = torch.tensor([ctx_len], device=DEV, dtype=torch.int32)
-    scale = torch.full((1, 1, 1, 1), model.layers[0].self_attn.scaling, device=DEV)
+    scale = torch.full(
+        (1, 1, 1, 1), model.model.layers[0].self_attn.scaling, device=DEV
+    )
 
-    weights = [
-        (
-            layer.input_layernorm.weight,
-            config.linear_weight(layer.self_attn.q_proj),
-            config.linear_weight(layer.self_attn.k_proj),
-            config.linear_weight(layer.self_attn.v_proj),
-            layer.self_attn.q_norm.weight,
-            layer.self_attn.k_norm.weight,
-            config.linear_weight(layer.self_attn.o_proj),
-            layer.post_attention_layernorm.weight,
-            config.linear_weight(layer.mlp.gate_proj),
-            config.linear_weight(layer.mlp.up_proj),
-            config.linear_weight(layer.mlp.down_proj),
-        )
-        for layer in model.layers
-    ]
-    return model, hidden_ctx, hidden_new, caches, weights, (
+    return model, reference.load_decoder(model), hidden_ctx, hidden_new, caches, (
         cos_cache, sin_cache, pos_ids, scale
     )
 
@@ -80,23 +67,21 @@ def _draw(ctx_len=CTX_LEN):
 def test_the_embedding_matches_hugging_face(drawn) -> None:
     """The root's `embed` gathers the row `Qwen3Model.embed_tokens` would, at the
     table's last row so a wrong axis or a truncated table cannot land on it."""
-    model, *_ = drawn
-    decoder = Qwen3_1_7B_Decoder.cloned()
+    model, loaded, *_ = drawn
     token_ids = torch.tensor([config.REAL.vocab - 1], device=DEV, dtype=torch.int64)
 
-    out = decoder.embed(model.embed_tokens.weight, token_ids)
+    out = loaded.embed(token_ids)
 
     with torch.no_grad():
-        want = model.embed_tokens(token_ids).reshape(1, 1, config.REAL.hidden)
+        want = model.model.embed_tokens(token_ids).reshape(1, 1, config.REAL.hidden)
     torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
 
 
 def test_the_complete_decoder_matches_hugging_face(drawn) -> None:
     """Every layer, in order, plus the final norm."""
-    model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(model.norm.weight)
+    model, loaded, hidden_ctx, hidden_new, caches, (cos, sin, pos_ids, scale) = drawn
 
-    out, entries = decoder.decode_hidden(hidden_new, cos, sin, pos_ids, scale, weights, caches)
+    out, entries = loaded.decode_hidden(hidden_new, cos, sin, pos_ids, scale, caches)
 
     want = config.decoder_decode_reference(model, hidden_ctx, hidden_new)
     assert len(entries) == config.REAL.n_layers
@@ -111,12 +96,11 @@ def test_every_layer_returns_its_own_cache_entry(drawn) -> None:
     layer reading or writing a neighbour's cache, which no single layer's test
     can see.
     """
-    model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(model.norm.weight)
+    model, loaded, hidden_ctx, hidden_new, caches, (cos, sin, pos_ids, scale) = drawn
 
-    _out, entries = decoder.decode_hidden(hidden_new, cos, sin, pos_ids, scale, weights, caches)
+    _out, entries = loaded.decode_hidden(hidden_new, cos, sin, pos_ids, scale, caches)
 
-    grown = decoder.append_cache(caches, entries)
+    grown = loaded.append_cache(caches, entries)
     want = config.decoder_context_kv(
         model, torch.cat([hidden_ctx, hidden_new], dim=1), device=DEV
     )
@@ -129,13 +113,26 @@ def test_every_layer_returns_its_own_cache_entry(drawn) -> None:
         )
 
 
-#: Ways the stack can be wrong that no single layer's test can see, each as a
-#: transform of the correctly-ordered per-layer arguments.
+#: Ways the stack can be wrong that no single layer's test can see. The weights
+#: are bound, so a wrong stack is a wrong *loading*: its layers reordered, or the
+#: caches handed to the right layers in the wrong order.
 _STACK_ERRORS = {
-    "two adjacent layers swapped": lambda w, c: (w[:1] + w[2:3] + w[1:2] + w[3:], c),
-    "two layers' caches swapped": lambda w, c: (w, c[:1] + c[2:3] + c[1:2] + c[3:]),
-    "layer order reversed": lambda w, c: (list(reversed(w)), c),
+    "two adjacent layers swapped": lambda m, c: (
+        _reordered(m, (0, 2, 1, *range(3, len(m.modules)))), c
+    ),
+    "two layers' caches swapped": lambda m, c: (m, c[:1] + c[2:3] + c[1:2] + c[3:]),
+    "layer order reversed": lambda m, c: (
+        _reordered(m, tuple(reversed(range(len(m.modules))))), c
+    ),
 }
+
+
+def _reordered(loaded, order):
+    """*loaded* with its layers visited in *order* -- the loading perturbed, since
+    that is where the weights now live."""
+    return dataclasses.replace(
+        loaded, modules=tuple(loaded.modules[index] for index in order)
+    )
 
 
 @pytest.mark.parametrize("description", sorted(_STACK_ERRORS))
@@ -146,13 +143,12 @@ def test_a_stack_that_is_wrongly_ordered_is_caught(drawn, description) -> None:
     order while being satisfied by any order at all -- the agreement it reports
     comes from 28 layers that were each already checked on their own.
     """
-    model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(model.norm.weight)
+    model, loaded, hidden_ctx, hidden_new, caches, (cos, sin, pos_ids, scale) = drawn
     want = config.decoder_decode_reference(model, hidden_ctx, hidden_new)
 
-    broken_weights, broken_caches = _STACK_ERRORS[description](weights, caches)
-    out, _entries = decoder.decode_hidden(
-        hidden_new, cos, sin, pos_ids, scale, broken_weights, broken_caches
+    broken, broken_caches = _STACK_ERRORS[description](loaded, caches)
+    out, _entries = broken.decode_hidden(
+        hidden_new, cos, sin, pos_ids, scale, broken_caches
     )
 
     with pytest.raises(AssertionError):
@@ -161,12 +157,15 @@ def test_a_stack_that_is_wrongly_ordered_is_caught(drawn, description) -> None:
 
 def test_a_wrong_final_norm_is_caught(drawn) -> None:
     """The norm that closes the stack is applied, and is the model's own."""
-    model, hidden_ctx, hidden_new, caches, weights, (cos, sin, pos_ids, scale) = drawn
-    decoder = Qwen3_1_7B_Decoder.cloned().bind_final_norm(torch.ones_like(model.norm.weight))
+    model, loaded, hidden_ctx, hidden_new, caches, (cos, sin, pos_ids, scale) = drawn
+    unit = dataclasses.replace(
+        loaded,
+        constants={**loaded.constants, "gamma_final": torch.ones_like(model.model.norm.weight)},
+    )
     want = config.decoder_decode_reference(model, hidden_ctx, hidden_new)
 
-    out, _entries = decoder.decode_hidden(
-        hidden_new, cos, sin, pos_ids, scale, weights, caches
+    out, _entries = unit.decode_hidden(
+        hidden_new, cos, sin, pos_ids, scale, caches
     )
 
     with pytest.raises(AssertionError):

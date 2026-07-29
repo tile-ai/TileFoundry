@@ -291,14 +291,16 @@ def decode_reference(layer, hidden_ctx, hidden_new, device="cpu"):
 def build_hf_decoder(seed=0, device="cpu", dtype=None):
     """The complete ``REAL.n_layers``-layer decoder stack, random at a fixed seed.
 
-    Built for its layers and its final norm; the token embedding is not part of
-    what this returns, because the decoder's boundary is hidden states in and
-    hidden states out.
+    A ``Gemma2ForCausalLM`` rather than the base model: the decoder's own boundary
+    is still hidden states in and hidden states out, but the root's weights include
+    the head, and the head exists only on the causal LM. Its layers and final norm
+    are reached through ``.model``.
     """
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2Model  # noqa: PLC0415
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2ForCausalLM  # noqa: PLC0415
 
     return oracle.randomised(
-        lambda: Gemma2Model(build_hf_config(layers=REAL.n_layers)), seed, device, dtype
+        lambda: Gemma2ForCausalLM(build_hf_config(layers=REAL.n_layers)),
+        seed, device, dtype,
     )
 
 
@@ -307,7 +309,7 @@ def decoder_context_kv(model, hidden_ctx, device="cpu"):
     total = _within_window(hidden_ctx.shape[1])
     cos, sin = rope_caches(build_hf_config(), total, device=device)
     return oracle.stack_context_kv(
-        model.layers, hidden_ctx, cos, sin,
+        model.model.layers, hidden_ctx, cos, sin,
         key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
     )
 
@@ -318,7 +320,8 @@ def decoder_decode_reference(model, hidden_ctx, hidden_new):
     total = _within_window(hidden_ctx.shape[1] + hidden_new.shape[1])
     cos, sin = rope_caches(build_hf_config(), total, device=device)
     return oracle.decode_reference(
-        model.layers, hidden_ctx, hidden_new, cos, sin, final_norm=model.norm
+        model.model.layers, hidden_ctx, hidden_new, cos, sin,
+        final_norm=model.model.norm,
     )
 
 

@@ -23,9 +23,6 @@ import torch
 
 from tests.models import decode_oracle as oracle
 from tests.models.gemma2_2b import config, reference
-from tests.models.gemma2_2b.model import Gemma2_2B
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.hir.specialize import specialize_concretely
 
 HIDDEN = config.REAL.hidden
 SEQ = config.SEQ_LEN
@@ -52,15 +49,14 @@ def test_self_attention_soft_caps_the_new_token_too():
     single logit is far past the cap, where the same omission moves the output by
     9329x the tolerance instead, and the kernel is asked again.
 
-    `scale` is the tenth of `self_attention`'s eleven arguments; x100 puts the raw
-    logits at ~1900 against a cap of 50.
+    `scale` is the last of `self_attention`'s seven activations -- its projections
+    are bound weights -- and x100 puts the raw logits at ~1900 against a cap of 50.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(Gemma2_2B.lookup("self_attention"), {"ctx_len": drawn.ctx_len})
 
     loud = list(drawn.attention_args)
-    loud[9] = loud[9] * SOFTCAP_PROBE_SCALE
-    out, _, _ = evaluate(fn, *loud, device=DEV)
+    loud[-1] = loud[-1] * SOFTCAP_PROBE_SCALE
+    out, _, _ = drawn.loaded.self_attention(*loud)
 
     cfg = config.build_hf_config()
     total = drawn.ctx_len + SEQ
@@ -95,8 +91,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
     so a step that returned its inputs unchanged would fail.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    fn = specialize_concretely(Gemma2_2B.lookup("decoder_layer"), {"ctx_len": drawn.ctx_len})
-    _, k_new, v_new = evaluate(fn, *drawn.args, device=DEV)
+    _, k_new, v_new = drawn.loaded.decoder_layer(*drawn.args)
 
     want_k, want_v = reference.appended_cache_oracle(drawn)
     grown_k = torch.cat([drawn.k_cache, k_new], dim=1)
