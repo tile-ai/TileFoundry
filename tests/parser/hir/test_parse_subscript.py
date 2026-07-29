@@ -1,11 +1,12 @@
 """Parser ``expr[idx]`` subscript dispatch + RangeSlice lift.
 
-``expr[...]`` dispatches on the subject's type: a TupleType (a call returning a
-tuple) yields ``TupleGetItem(index=i)``, a TensorType a ``Slice`` Op call. The
-tuple path is exercised wherever a model unpacks a multi-output op; the
-RangeSlice lift — two-arg ``tile`` binds the loop var to a range, and using it in
-a subscript slices the chunk that iteration owns — is spelled out only here,
-together with the indexers the surface refuses.
+``expr[...]`` dispatches on the subject: a TupleType (a call returning a tuple)
+yields ``TupleGetItem(index=i)``, a TensorType a ``Slice`` Op call, and a
+compile-time list the element it holds. The tuple path is exercised wherever a
+model unpacks a multi-output op; the RangeSlice lift — two-arg ``tile`` binds the
+loop var to a range, and using it in a subscript slices the chunk that iteration
+owns — is spelled out only here, together with integer indexing, which drops its
+axis, and the indexers the surface refuses.
 """
 
 from __future__ import annotations
@@ -94,11 +95,64 @@ def test_tile_with_too_many_args_rejected():
         parse_script(bad)
 
 
+@func
+def _collapsed(x: Tensor[(1, 4, 8), "f32"]) -> Tensor[(1, 4), "f32"]:
+    return x[:, :, 3]
+
+
+@func
+def _kept(x: Tensor[(1, 4, 8), "f32"]) -> Tensor[(1, 4, 1), "f32"]:
+    return x[:, :, 3:4]
+
+
+@func
+def _counted_back(x: Tensor[(1, 4, 8), "f32"]) -> Tensor[(1, 4), "f32"]:
+    return x[:, :, -1]
+
+
+def test_an_integer_index_drops_its_axis_and_a_slice_keeps_it():
+    """``x[..., 3]`` and ``x[..., 3:4]`` select the same element and differ only in
+    rank, and ``-1`` counts from the extent — the distinctions torch draws. The
+    dropped form is a one-element ``Slice`` reshaped."""
+    assert _collapsed.body.type.shape == (1, 4)
+    assert _kept.body.type.shape == (1, 4, 1)
+    assert _counted_back.body.type.shape == (1, 4)
+
+    sliced = _collapsed.body.args[0].target
+    assert isinstance(sliced, Slice)
+    assert isinstance(sliced.begin[2], Constant) and sliced.begin[2].value == 3
+    assert isinstance(sliced.end[2], Constant) and sliced.end[2].value == 4
+    assert _counted_back.body.args[0].target.begin[2].value == 7
+
+
+def test_a_compile_time_list_is_indexed_where_it_is_written():
+    """A comprehension and a plain list literal both bind a Python list of Exprs;
+    indexing either picks an expression rather than emitting an op."""
+    taps = _PRELUDE + (
+        '\n@func\ndef f(x: Tensor[(1, 4, 8), "f32"]) -> Tensor[(1, 4, 1), "f32"]:\n'
+        "    taps = [x[:, :, j:j + 1] for j in range(4)]\n"
+        "    return add(taps[0], taps[-1])\n"
+    )
+    first, last = parse_script(taps).body.args
+    assert isinstance(first.target, Slice) and isinstance(last.target, Slice)
+    assert first.target.begin[2].value == 0
+    assert last.target.begin[2].value == 3
+
+    literal = _PRELUDE + (
+        '\n@func\ndef f(x: Tensor[(1, 4, 8), "f32"]) -> Tensor[(1, 4, 1), "f32"]:\n'
+        "    ends = [x[:, :, 0:1], x[:, :, 7:8]]\n"
+        "    return add(ends[0], ends[1])\n"
+    )
+    low, high = parse_script(literal).body.args
+    assert isinstance(low.target, Slice) and isinstance(high.target, Slice)
+    assert low.target.begin[2].value == 0
+    assert high.target.begin[2].value == 7
+
+
 def test_unsupported_subscripts_are_rejected():
-    """Three shapes of illegal indexer, each named by its own diagnostic: a
-    subscript whose rank does not match the tensor's, an integer index into a
-    tensor (which would be a load, not a slice), and a runtime value as a tuple
-    index (the field must be known at parse time to give the result a type)."""
+    """Two shapes of illegal indexer, each named by its own diagnostic: a subscript
+    whose rank does not match the tensor's, and a runtime value as a tuple index
+    (the field must be known at parse time to give the result a type)."""
     rank_mismatch = _src(
         'x: Tensor[(1, 2048), "f32"]) -> Tensor[(1, 2048), "f32"]',
         "o = relu(x)",
@@ -108,14 +162,6 @@ def test_unsupported_subscripts_are_rejected():
     )
     with pytest.raises(VerifyError, match="rank 1 != tensor rank 2"):
         parse_script(rank_mismatch)
-
-    tensor_int_index = _src(
-        'a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(1, 4), "f32"]',
-        "c = add(a, b)",
-        "return c[0, 0]",
-    )
-    with pytest.raises(VerifyError, match="unsupported indexer"):
-        parse_script(tensor_int_index)
 
     runtime_tuple_index = _src(
         'x: Tensor[(1, 1536), "bf16"], i: Tensor[(), "i64"])'

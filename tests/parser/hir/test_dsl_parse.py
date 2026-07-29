@@ -14,12 +14,14 @@ surface live in ``test_parse_errors.py``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.core import Call, Tuple, VerifyError
+from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType
 from tilefoundry.parser.hir_parser import parse_script
@@ -62,3 +64,35 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
 """
     with pytest.raises(VerifyError, match="Tuple"):
         parse_script(bad)
+
+
+@dataclass(frozen=True)
+class _Cfg:
+    head_dim: int = 128
+    rms_eps: float = 1e-6
+
+
+_CFG = _Cfg()
+_NK, _KD = 16, 128
+
+
+@func
+def _compile_time_operands(x: Tensor[(1, 2048), "bf16"]) -> Tensor[(1, 16, 128), "bf16"]:
+    key_dim = _NK * _KD
+    scaled = mul(x, _CFG.head_dim ** -0.5)  # noqa: F405
+    shifted = add(scaled, _CFG.rms_eps)  # noqa: F405
+    return reshape(shifted, new_shape=(1, key_dim // _KD, _KD))  # noqa: F405
+
+
+def test_compile_time_values_reach_an_op_as_constants() -> None:
+    """``config.head_dim ** -0.5``, ``config.rms_eps`` and a body-local
+    ``_NK * _KD`` are numbers by parse time: the first two arrive as bf16 scalar
+    Constants, and the third serves as a shape."""
+    scaled, eps = _compile_time_operands.body.args[0].args
+    operand, scale = scaled.args
+
+    assert isinstance(scale, Constant) and scale.value == pytest.approx(128 ** -0.5)
+    assert isinstance(eps, Constant) and eps.value == pytest.approx(1e-6)
+    assert scale.type.dtype == DType.bf16 and eps.type.dtype == DType.bf16
+    assert operand.name == "x"
+    assert _compile_time_operands.body.target.new_shape == (1, 16, 128)

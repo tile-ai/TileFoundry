@@ -1,8 +1,9 @@
 """Parser ``a, b = call(...)`` — TupleType unpack.
 
 Every decode step returns a tuple, so the corpus evaluates the multi-output
-surface end to end; the cases here are the IR shape one unpack produces and the
-three ways an unpack cannot mean anything.
+surface end to end; the cases here are the IR shape one unpack produces, the
+compile-time form that binds numbers instead, and the three ways an unpack cannot
+mean anything.
 """
 
 from __future__ import annotations
@@ -70,6 +71,22 @@ def test_a_literal_tuple_return_is_unpackable_by_a_caller() -> None:
         if isinstance(arg, Call) and isinstance(arg.target, TupleGetItem)
     ]
     assert picked == [0, 1]
+
+
+_NV, _KD, _VD = 32, 128, 64
+
+
+@func
+def _unpacked_dims(x: Tensor[(1, 32, 128), "f32"]) -> Tensor[(1, 64, 64), "f32"]:
+    nv, kd, vd = _NV, _KD, _VD
+    return reshape(x, new_shape=(1, nv * kd // vd, vd))  # noqa: F405
+
+
+def test_unpacking_compile_time_values_binds_the_values() -> None:
+    """``nv, kd, vd = _NV, _KD, _VD`` names three numbers, so each can serve where a
+    number is required — here a shape, which no ``TupleGetItem`` could."""
+    assert _unpacked_dims.body.target.new_shape == (1, _NV * _KD // _VD, _VD)
+    assert _unpacked_dims.body.type.shape == (1, 64, 64)
 
 
 _HEADER = """

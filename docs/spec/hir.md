@@ -417,7 +417,11 @@ class Binary(Op):
     kind: BinaryKind
 ```
 - constraints:
-  - Behavior follows torch pointwise semantics with TileFoundry type promotion.
+  - Values follow torch pointwise semantics; dtypes do not promote. Both operands
+    MUST already carry the same `dtype`, and typeinfer MUST reject a mismatch. A
+    Python float scalar is given the other operand's float dtype by the authoring
+    surface, before it is an operand at all ([parser §1.9](./parser.md)); a Python
+    integer is not.
   - The elementwise `min` / `max` kinds are also surfaced as `minimum` / `maximum`.
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
     output only when `kind` provably commutes with `reduction`

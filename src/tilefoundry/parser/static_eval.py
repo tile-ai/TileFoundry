@@ -45,6 +45,8 @@ def _apply_binop(op: ast.operator, left: Any, right: Any, *, div: DivMode) -> An
             return left // right if div == "floor" else left / right
         case ast.Mod():
             return left % right
+        case ast.Pow():
+            return left ** right
     raise VerifyError(f"static BinOp {type(op).__name__} not supported")
 
 

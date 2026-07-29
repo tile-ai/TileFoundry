@@ -394,6 +394,53 @@ constraint. `mesh` resolves to a `Mesh`, and `storage` resolves through the
 current storage-kind registry. CTA capability checks do not occur in this
 parser surface.
 
+### 1.9 Compile-time values
+
+A **compile-time value** is a Python number the parser can reach without building
+any IR: a numeric literal, a name captured from the enclosing scope, an attribute
+of a captured object, and arithmetic over those (`+ - * / // % **`, unary `-`).
+
+```
+compile-time-expr ::= number-literal | identifier | compile-time-expr '.' identifier
+                    | compile-time-expr binary-arith-op compile-time-expr
+                    | '-' compile-time-expr
+```
+
+- A compile-time value MAY appear anywhere a number is required: an attribute
+  argument, a shape or extent, a subscript index, or an op input, where it
+  becomes a rank-0 unmaterialized `Constant`.
+- A body-local assignment whose right-hand side is a compile-time value binds
+  **the value**, not an `Expr`; the name is then usable in every position above.
+  A tuple target binds one number per name when every element is a compile-time
+  number.
+- An op input that is a **Python float** carries no precision of its own: the
+  parser MUST give it the float dtype of the operands it is used with, and MUST
+  reject the call when those name more than one float dtype. A Python **integer**
+  keeps its own dtype, so combining one with a float tensor MUST still be
+  rejected ([hir §1.3](./hir.md)).
+- Evaluation MUST NOT call anything reached from a speculative position: a value
+  that is not statically reachable is parsed as IR instead.
+
+A **compile-time list** holds `Expr` elements and never reaches the IR:
+
+```
+compile-time-list ::= '[' expr (',' expr)* ']'
+                    | '[' expr 'for' identifier 'in' compile-time-sequence ']'
+```
+
+- A comprehension MUST declare exactly one `for` clause, no `if` guard, and a
+  plain-name target. Its sequence MUST be either the builtin `range(...)` over
+  compile-time integers or a compile-time tuple / list; any other call MUST be
+  rejected rather than evaluated.
+- Subscripting the bound name with a compile-time integer selects one element.
+  Python's negative indexing applies.
+- The comprehension form is the fixed-length unrolled spelling; it does not
+  affect `for` (§1.7), which always builds a `GridRegionExpr`.
+
+A tensor subscript resolves per axis: an `ast.Slice` keeps the axis, a
+compile-time integer **drops** it (as in torch), and a negative integer counts
+back from the axis extent, which MUST therefore be static.
+
 ## 2. DSL namespace surface
 
 ### 2.1 Model

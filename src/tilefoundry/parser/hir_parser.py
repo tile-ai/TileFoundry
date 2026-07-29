@@ -94,6 +94,10 @@ def _find_func_def(stmts: list[ast.stmt]) -> ast.FunctionDef | None:
 # constant round-trips identically through either source entry point.
 _SOURCE_PRELUDE_STMTS = (ast.Assign, ast.AnnAssign, ast.Expr)
 
+#: A body-local binding is compile-time or it is not; ``None`` and ``0`` are both
+#: legitimate compile-time values, so the miss needs its own marker.
+_NOT_STATIC = object()
+
 
 def _build_source_closure(stmts: list[ast.stmt]) -> dict[str, Any]:
     """Build a source-level prelude namespace from *stmts* (module body, or
@@ -573,6 +577,12 @@ class _HirBodyVisitor(BaseExprVisitor):
             target = node.targets[0]
             if isinstance(target, ast.Name):
                 tgt = target.id
+                bound = self._static_body_value(node.value)
+                if bound is not _NOT_STATIC:
+                    # Bind the value itself, so a later use can be a shape as well
+                    # as an operand.
+                    self.env.define(tgt, bound)
+                    return self._visit_chain(stmts, idx + 1, require_return)
                 rhs = self.expr_with_binding(node.value, tgt)
                 # Attach the authored binding name when the
                 # user did not supply ``loc=`` explicitly. Applies to any
@@ -585,8 +595,10 @@ class _HirBodyVisitor(BaseExprVisitor):
                 # tuple unpack: `a, b = call(...)` — requires RHS type
                 # TupleType, synthesizes a TupleGetItem(rhs, index=i)
                 # binding per name (see `_visit_tuple_assign`, shared with
-                # the tile-body Assign path).
-                self._visit_tuple_assign(target, node.value)
+                # the tile-body Assign path). `nv, kd = _NV, _KD` binds two
+                # compile-time values instead.
+                if not self._static_tuple_assign(target, node.value):
+                    self._visit_tuple_assign(target, node.value)
                 return self._visit_chain(stmts, idx + 1, require_return)
             raise VerifyError("hir: only single-target Name or Tuple assignments supported in V1")
         if isinstance(node, ast.AnnAssign):
@@ -1033,6 +1045,28 @@ class _HirBodyVisitor(BaseExprVisitor):
                 "hir tile-for body must contain at least one assignment"
             )
         return last_expr
+
+    def _static_body_value(self, node: ast.AST):
+        """A body-local name's compile-time value — a number or a list of Exprs —
+        or ``_NOT_STATIC`` when the right-hand side belongs to the IR."""
+        number = self._static_number(node)
+        if number is not None:
+            return number
+        items = self._static_expr_list(node)
+        return _NOT_STATIC if items is None else items
+
+    def _static_tuple_assign(self, target: ast.Tuple, value: ast.AST) -> bool:
+        """Bind ``a, b = <compile-time>, <compile-time>``, reporting whether it applied."""
+        if not isinstance(value, ast.Tuple) or len(target.elts) != len(value.elts):
+            return False
+        if not all(isinstance(elt, ast.Name) for elt in target.elts):
+            return False
+        numbers = [self._static_number(el) for el in value.elts]
+        if any(number is None for number in numbers):
+            return False
+        for elt, number in zip(target.elts, numbers):
+            self.env.define(elt.id, number)
+        return True
 
     def _visit_tuple_assign(self, target: ast.Tuple, value: ast.AST) -> Expr:
         """Tuple-unpack inside tile body (mirrors _visit_chain Tuple branch)."""

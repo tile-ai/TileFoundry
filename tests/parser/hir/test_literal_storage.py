@@ -12,7 +12,14 @@ from __future__ import annotations
 
 import pytest
 
+from tilefoundry import func
+from tilefoundry.dsl import Tensor
+from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare bindings used by @func bodies
+from tilefoundry.ir.core import VerifyError
+from tilefoundry.ir.types import DType
 from tilefoundry.parser.hir_parser import parse_script
+
+_EPS = 1e-6
 
 
 def test_umat_is_not_an_accepted_surface_storage() -> None:
@@ -30,3 +37,32 @@ def test_umat_is_not_an_accepted_surface_storage() -> None:
     )
     with pytest.raises(ValueError, match="unknown storage"):
         parse_script(src)
+
+
+@func
+def _literal_on_bf16(x: Tensor[(1, 8), "bf16"]) -> Tensor[(1, 8), "bf16"]:
+    return add(x, 1e-6)  # noqa: F405
+
+
+@func
+def _captured_float_on_bf16(x: Tensor[(1, 8), "bf16"]) -> Tensor[(1, 8), "bf16"]:
+    return add(x, _EPS)  # noqa: F405
+
+
+def test_a_python_float_scalar_takes_the_dtype_of_the_operand_it_meets() -> None:
+    """A float is bf16 throughout, spelled inline or captured by name; an integer
+    keeps its own dtype and still reports the mismatch."""
+    for fn in (_literal_on_bf16, _captured_float_on_bf16):
+        assert fn.body.args[1].type.dtype == DType.bf16, fn.name
+        assert fn.body.type.dtype == DType.bf16, fn.name
+
+    integer = (
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "@func\n"
+        "def f(x: Tensor[(1, 8), 'f32']) -> Tensor[(1, 8), 'f32']:\n"
+        "    return mul(x, 2)\n"
+    )
+    with pytest.raises(VerifyError, match="dtype mismatch"):
+        parse_script(integer)

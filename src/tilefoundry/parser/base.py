@@ -26,9 +26,11 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.function import elaborate
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.dtype import FloatDType
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
@@ -205,6 +207,52 @@ def _constant_from_py(value: Any) -> Constant:
     raise VerifyError(f"unsupported literal type {type(value).__name__}")
 
 
+#: What a speculative static probe may evaluate. Without ``Call`` / ``Subscript``:
+#: a probe must not invoke anything.
+_STATIC_ARITH_NODES: tuple[type, ...] = (
+    ast.Constant, ast.Name, ast.Attribute, ast.UnaryOp, ast.BinOp,
+)
+
+
+def _is_python_float_scalar(expr: Expr) -> bool:
+    """Whether *expr* is a Python float scalar, which carries no precision."""
+    ty = expr.type
+    return (
+        isinstance(expr, Constant)
+        and isinstance(ty, TensorType)
+        and ty.shape == ()
+        and ty.storage is StorageKind.UMAT
+        and isinstance(ty.dtype, FloatDType)
+    )
+
+
+def _with_python_float_dtypes(args: tuple[Expr, ...]) -> tuple[Expr, ...]:
+    """Give each Python float scalar the float dtype its fellow operands carry.
+
+    Applies to floats only; a Python integer keeps its own dtype.
+    """
+    floats = {i for i, arg in enumerate(args) if _is_python_float_scalar(arg)}
+    if not floats:
+        return args
+    others = {
+        arg.type.dtype
+        for i, arg in enumerate(args)
+        if i not in floats
+        and isinstance(arg.type, TensorType)
+        and isinstance(arg.type.dtype, FloatDType)
+    }
+    if len(others) != 1:
+        return args
+    dtype = next(iter(others))
+    out = list(args)
+    for i in floats:
+        if out[i].type.dtype != dtype:
+            out[i] = dataclasses.replace(
+                out[i], type=dataclasses.replace(out[i].type, dtype=dtype)
+            )
+    return tuple(out)
+
+
 class BaseExprVisitor:
     """Shared visitor for Expr-returning AST nodes. Emits core_ir Expr."""
 
@@ -310,9 +358,93 @@ class BaseExprVisitor:
     # Constants ----------------------------------------------------------------------
 
     def visit_Constant(self, node: ast.Constant) -> Expr:
-        value = _constant_from_py(node.value)
+        return self._constant_expr(node.value)
+
+    def _constant_expr(self, value: Any) -> Expr:
+        constant = _constant_from_py(value)
         span = self._source_span()
-        return replace_metadata(value, span) if span is not None else value
+        return replace_metadata(constant, span) if span is not None else constant
+
+    def _static_number(self, node: ast.AST):
+        """The number *node* already is, or ``None`` to leave it to the IR path."""
+        try:
+            value = eval_static(
+                node,
+                closure=self.closure,
+                lookup=self.env.lookup,
+                allowed_nodes=_STATIC_ARITH_NODES,
+                attr_resolver=self._resolve_static_attribute,
+            )
+        except VerifyError:
+            return None
+        return value if isinstance(value, (int, float)) else None
+
+    def _static_iterable(self, node: ast.AST):
+        """The compile-time sequence a comprehension walks: builtin ``range`` over
+        compile-time integers, or a tuple / list of compile-time values.
+
+        No other call is evaluated here — resolving one would run it.
+        """
+        if isinstance(node, ast.Call):
+            shadowed = self.env.lookup("range") is not None or "range" in self.closure
+            if (
+                not isinstance(node.func, ast.Name)
+                or node.func.id != "range"
+                or shadowed
+                or node.keywords
+            ):
+                raise VerifyError(
+                    f"compile-time list comprehension iterates `range(...)` or a "
+                    f"compile-time sequence, not {ast.unparse(node)!r}"
+                )
+            bounds = [self._static_number(arg) for arg in node.args]
+            if not bounds or any(
+                isinstance(bound, bool) or not isinstance(bound, int) for bound in bounds
+            ):
+                raise VerifyError("`range(...)` here takes compile-time integers")
+            return range(*bounds)
+        value = eval_static(
+            node,
+            closure=self.closure,
+            lookup=self.env.lookup,
+            allowed_nodes=(*_STATIC_ARITH_NODES, ast.Tuple, ast.List),
+            attr_resolver=self._resolve_static_attribute,
+        )
+        if not isinstance(value, (tuple, list, range)):
+            raise VerifyError(
+                f"compile-time list comprehension iterates a compile-time sequence, "
+                f"got {type(value).__name__}"
+            )
+        return value
+
+    def _static_expr_list(self, node: ast.AST) -> "list[Expr] | None":
+        """A compile-time list of IR expressions, or ``None`` when *node* is not one.
+
+        The list stays Python; only its elements are Exprs.
+        """
+        if isinstance(node, ast.List):
+            return [self.expr(el) for el in node.elts]
+        if not isinstance(node, ast.ListComp):
+            return None
+        if len(node.generators) != 1:
+            raise VerifyError("compile-time list comprehension takes one `for` clause")
+        generator = node.generators[0]
+        if generator.ifs or generator.is_async:
+            raise VerifyError(
+                "compile-time list comprehension takes no `if` guard and is not async"
+            )
+        if not isinstance(generator.target, ast.Name):
+            raise VerifyError("compile-time list comprehension binds one plain name")
+        values = list(self._static_iterable(generator.iter))
+        self.env.push_frame()
+        try:
+            items = []
+            for value in values:
+                self.env.define(generator.target.id, value)
+                items.append(self.expr(node.elt))
+        finally:
+            self.env.pop_frame()
+        return items
 
     # Names --------------------------------------------------------------------------
 
@@ -337,6 +469,10 @@ class BaseExprVisitor:
     # Attribute access (cta.x etc.) --------------------------------------------------
 
     def visit_Attribute(self, node: ast.Attribute) -> Expr:
+        # `config.rms_eps` — a number reachable statically becomes a Constant.
+        value = self._static_number(node)
+        if value is not None:
+            return self._constant_expr(value)
         # `cta.x` / `cta.y` resolves through the lexical env to a
         # compile-time MeshAxis (Python object). It is NOT an Expr — callers
         # embedding it (e.g. ShardLayout construction) handle that. If it
@@ -348,14 +484,18 @@ class BaseExprVisitor:
     def visit_Subscript(self, node: ast.Subscript) -> Expr:
         """Resolve ``expr[idx]`` to a ``TupleGetItem`` or ``Slice`` Call.
 
+        - a compile-time list + integer index → the element it holds.
         - ``TupleType`` value + int constant index → ``TupleGetItem``.
         - ``TensorType`` value + slice/RangeSlice indices → ``Slice``.
           Each dim accepts either an ``ast.Slice``
-          (full / start:stop[:step]) or a Name resolving to a
-          ``RangeSlice`` (from ``for ok in tile(extent, step)``).
-          Plain integer indexing collapses dims and is not yet
-          supported here.
+          (full / start:stop[:step]), a Name resolving to a
+          ``RangeSlice`` (from ``for ok in tile(extent, step)``), or a
+          compile-time integer, which collapses that axis as it does in torch.
         """
+        if isinstance(node.value, ast.Name):
+            bound = self.env.lookup(node.value.id)
+            if isinstance(bound, list):
+                return self._list_element(node.value.id, bound, node.slice)
         value = self.expr(node.value)
         if isinstance(value.type, TupleType):
             slc = node.slice
@@ -401,16 +541,71 @@ class BaseExprVisitor:
         begin: list[Any] = []
         end: list[Any] = []
         strides: list[Any] = []
+        collapsed: list[int] = []
         for axis, (el, dim) in enumerate(zip(elts, x_ty.shape)):
+            index = self._integer_index(el, dim)
+            if index is not None:
+                begin.append(index)
+                end.append(index + 1)
+                strides.append(1)
+                collapsed.append(axis)
+                continue
             b, e, s = self._slicer_for_dim(el, dim, axis)
             begin.append(b)
             end.append(e)
             strides.append(s)
 
-        return self._build_call(
+        sliced = self._build_call(
             Slice(begin=tuple(begin), end=tuple(end), strides=tuple(strides)),
             (value,),
         )
+        if not collapsed:
+            return sliced
+        kept = tuple(
+            dim for axis, dim in enumerate(sliced.type.shape) if axis not in collapsed
+        )
+        return self._build_call(Reshape(new_shape=kept), (sliced,))
+
+    def _integer_index(self, el: ast.AST, dim: Any) -> "int | None":
+        """The compile-time integer this element is, counted from the front.
+
+        ``ast.Slice`` and a tile ``RangeSlice`` name keep their axis and are left
+        to ``_slicer_for_dim``.
+        """
+        if isinstance(el, ast.Slice):
+            return None
+        if isinstance(el, ast.Name) and isinstance(self.env.lookup(el.id), RangeSlice):
+            return None
+        value = self._static_number(el)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        if value < 0 or isinstance(dim, int):
+            if not isinstance(dim, int):
+                raise VerifyError(
+                    f"tensor subscript index {value}: counting back from the end needs "
+                    f"a static extent, and this axis is {dim}"
+                )
+            normalized = value + dim if value < 0 else value
+            if not 0 <= normalized < dim:
+                raise VerifyError(
+                    f"tensor subscript index {value} is out of range for extent {dim}"
+                )
+            return normalized
+        return value
+
+    def _list_element(self, name: str, items: list, slc: ast.AST) -> Expr:
+        """One element of a compile-time list, taken by compile-time index."""
+        index = self._static_number(slc)
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise VerifyError(
+                f"{name!r} is a compile-time list, so its index must be a "
+                f"compile-time integer"
+            )
+        if not -len(items) <= index < len(items):
+            raise VerifyError(
+                f"{name!r} holds {len(items)} entries; index {index} is out of range"
+            )
+        return items[index]
 
     def _slicer_for_dim(self, el: ast.AST, dim: Any, axis: int):
         """Resolve one subscript element to ``(begin, end, stride)``.
@@ -445,6 +640,10 @@ class BaseExprVisitor:
     # Binary ops ---------------------------------------------------------------------
 
     def visit_BinOp(self, node: ast.BinOp) -> Expr:
+        # Arithmetic with no tensor operand folds to its value.
+        value = self._static_number(node)
+        if value is not None:
+            return self._constant_expr(value)
         opname = type(node.op).__name__
         # MatMult (``@``) routes to the dedicated MatMul Op (not kinded).
         if opname == "MatMult":
@@ -828,6 +1027,7 @@ class BaseExprVisitor:
 
     def _build_call(self, op_inst, args: tuple[Expr, ...]) -> Call:
         """Build a Call with type eagerly populated via the typeinfer registry."""
+        args = _with_python_float_dtypes(args)
         # Construct with a placeholder; the registry reads (call.target, args)
         # and doesn't need call.type, so we can fix it post-hoc via dataclasses.replace.
         placeholder = Call(
