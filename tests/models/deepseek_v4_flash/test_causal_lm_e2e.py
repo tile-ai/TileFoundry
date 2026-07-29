@@ -16,6 +16,7 @@ from tests.models.deepseek_v4_flash.model import build_deepseek_v4_flash
 from tests.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
 from tests.models.generation import generate
 from tilefoundry.evaluator.value import to_torch_dtype
+from tilefoundry.ir.core.module import Module
 from tilefoundry.runtime import (
     SafetensorsResource,
     bench,
@@ -175,8 +176,9 @@ def _node_inputs(semantic, config):
 
 
 def test_prepare_and_parity(config, raw_tensors, prepared, twins):
-    """``prepare`` digests the checkpoint's naming and really converts, and the
-    twin agrees with the evaluator node by node."""
+    """``prepare`` digests the checkpoint's naming and really converts, one leaf of
+    the prepared store loads on its own, and the twin agrees with the evaluator node
+    by node."""
     semantic, runtime = twins
     store = SafetensorsResource(str(prepared), device="cuda")
 
@@ -210,6 +212,25 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
     assert raw_tensors["layers.0.ffn.experts.0.w1.scale"].dtype == torch.float32
     assert w1_scale.dtype == torch.float8_e8m0fnu
     assert torch.equal(w1_scale.float().cpu(), expected_scale)
+
+    # One leaf against its own slice of the same store, with `prepare` patched to
+    # raise so that reaching it would fail here.
+    leaf = semantic.layer0.moe.module
+    with pytest.MonkeyPatch.context() as patched:
+        def refuse(*_args, **_kwargs):
+            raise AssertionError("loading one leaf reached Module.prepare")
+
+        patched.setattr(Module, "prepare", refuse)
+        loaded_leaf = leaf.load(store.subtree("layer0").subtree("moe"))
+
+    assert loaded_leaf.module is leaf
+    assert set(loaded_leaf.constants) == set(leaf.weights)
+    assert {f"layer0.moe.{name}" for name in loaded_leaf.constants} == {
+        key for key in EXPECTED_PREPARED_KEYS if key.startswith("layer0.moe.")
+    }
+    assert torch.equal(
+        loaded_leaf.constants["w1_weight"].float(), store.load("layer0.moe.w1_weight").float()
+    )
 
     inputs = _node_inputs(semantic, config)
     nodes = {
