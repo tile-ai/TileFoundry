@@ -49,6 +49,7 @@ where = ["src"]
 # count is a property of the machine — the CI workflow states its own.
 markers = [
     "no_dump: opt out of the autouse DumpScope for tests that emit excessive dump output",
+    "l3: needs a real published checkpoint mount; runs in its own serial CI job",
 ]
 
 [tool.ruff]

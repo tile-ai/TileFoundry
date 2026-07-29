@@ -282,6 +282,73 @@ class Qwen3_1_7B:
         mlp_out = mlp(h1, gamma_post, w_gate, w_up, w_down)
         return h1 + mlp_out, k_new, v_new
 
+    # HF stores every projection as `nn.Linear.weight`, `(out, in)`; the matmuls
+    # above want `(1, in, out)`. Seven separate declarations rather than one
+    # mapping, because each names the published key it reads.
+
+    @decoder_layer.converter("w_q")
+    def _w_q(
+        q_proj_weight: ConstTensor[(config.q_proj, config.hidden), config.dt],
+    ) -> Tensor[(1, config.hidden, config.q_proj), config.dt]:
+        return tf.reshape(
+            tf.transpose(q_proj_weight, perm=(1, 0)),
+            new_shape=(1, config.hidden, config.q_proj),
+        )
+
+    @decoder_layer.converter("w_k")
+    def _w_k(
+        k_proj_weight: ConstTensor[(config.kv_proj, config.hidden), config.dt],
+    ) -> Tensor[(1, config.hidden, config.kv_proj), config.dt]:
+        return tf.reshape(
+            tf.transpose(k_proj_weight, perm=(1, 0)),
+            new_shape=(1, config.hidden, config.kv_proj),
+        )
+
+    @decoder_layer.converter("w_v")
+    def _w_v(
+        v_proj_weight: ConstTensor[(config.kv_proj, config.hidden), config.dt],
+    ) -> Tensor[(1, config.hidden, config.kv_proj), config.dt]:
+        return tf.reshape(
+            tf.transpose(v_proj_weight, perm=(1, 0)),
+            new_shape=(1, config.hidden, config.kv_proj),
+        )
+
+    @decoder_layer.converter("w_o")
+    def _w_o(
+        o_proj_weight: ConstTensor[(config.hidden, config.q_proj), config.dt],
+    ) -> Tensor[(1, config.q_proj, config.hidden), config.dt]:
+        return tf.reshape(
+            tf.transpose(o_proj_weight, perm=(1, 0)),
+            new_shape=(1, config.q_proj, config.hidden),
+        )
+
+    @decoder_layer.converter("w_gate")
+    def _w_gate(
+        gate_proj_weight: ConstTensor[(config.intermediate, config.hidden), config.dt],
+    ) -> Tensor[(1, config.hidden, config.intermediate), config.dt]:
+        return tf.reshape(
+            tf.transpose(gate_proj_weight, perm=(1, 0)),
+            new_shape=(1, config.hidden, config.intermediate),
+        )
+
+    @decoder_layer.converter("w_up")
+    def _w_up(
+        up_proj_weight: ConstTensor[(config.intermediate, config.hidden), config.dt],
+    ) -> Tensor[(1, config.hidden, config.intermediate), config.dt]:
+        return tf.reshape(
+            tf.transpose(up_proj_weight, perm=(1, 0)),
+            new_shape=(1, config.hidden, config.intermediate),
+        )
+
+    @decoder_layer.converter("w_down")
+    def _w_down(
+        down_proj_weight: ConstTensor[(config.hidden, config.intermediate), config.dt],
+    ) -> Tensor[(1, config.intermediate, config.hidden), config.dt]:
+        return tf.reshape(
+            tf.transpose(down_proj_weight, perm=(1, 0)),
+            new_shape=(1, config.intermediate, config.hidden),
+        )
+
 
 @module
 class Qwen3_1_7B_Decoder:
