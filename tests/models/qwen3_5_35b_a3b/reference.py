@@ -162,7 +162,6 @@ def moe_constants(layer) -> dict:
     gate_up = block.experts.gate_up_proj
     return {
         "gamma_post": config.norm_gamma(layer.post_attention_layernorm),
-        "w_router": config.matrix_weight(block.gate.weight),
         "w_gate": gate_up[:, :width, :].contiguous(),
         "w_up": gate_up[:, width:, :].contiguous(),
         "w_down": block.experts.down_proj.contiguous(),
@@ -171,6 +170,22 @@ def moe_constants(layer) -> dict:
         "w_shared_down": config.matrix_weight(block.shared_expert.down_proj.weight),
         "w_shared_scale": config.matrix_weight(block.shared_expert_gate.weight),
     }
+
+
+def router_constants(layer) -> dict:
+    """*layer*'s router weight, keyed the way ``Qwen3_5Router`` names it."""
+    return {"w_router": config.matrix_weight(layer.mlp.gate.weight)}
+
+
+def moe_weights(layer) -> dict:
+    """The MoE block's weights, each under the Module that declares it.
+
+    The router is a child, so its weight is read under the child's own name --
+    which is the same scoping ``load`` gives a nested Module anywhere else.
+    """
+    flat = dict(moe_constants(layer))
+    flat.update({f"router.{name}": w for name, w in router_constants(layer).items()})
+    return flat
 
 
 #: The Module each published mixer kind is, and the mapping that fills it.
@@ -191,8 +206,8 @@ def load_mixer(kind: str, layer):
 
 
 def load_moe(layer):
-    """The MoE Module with *layer*'s block weights bound."""
-    return Qwen3_5MoE.cloned().load(DictResource(moe_constants(layer)))
+    """The MoE Module with *layer*'s block weights bound, the router's included."""
+    return Qwen3_5MoE.cloned().load(DictResource(moe_weights(layer)))
 
 
 def load_layer(kind: str, layer):
@@ -205,7 +220,7 @@ def load_layer(kind: str, layer):
     """
     _module, constants = _MIXER[kind]
     flat = {f"mixer.{name}": w for name, w in constants(layer).items()}
-    flat.update({f"moe.{name}": w for name, w in moe_constants(layer).items()})
+    flat.update({f"moe.{name}": w for name, w in moe_weights(layer).items()})
     return LAYER_TYPE[kind].cloned().load(DictResource(flat))
 
 

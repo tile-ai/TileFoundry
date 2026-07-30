@@ -43,7 +43,7 @@ def test_moe_matches_hugging_face():
     """moe (post_attention_layernorm + `Qwen3_5MoeSparseMoeBlock`) vs HF."""
     layer, hidden, loaded = _step()
 
-    out = loaded.moe(hidden)
+    out = loaded(hidden)
     want = reference.moe_oracle(layer, hidden)
 
     difference = (out.float() - want.float()).abs().max().item()
@@ -62,7 +62,7 @@ def test_routing_selects_the_experts_hugging_face_selects():
     layer, hidden, loaded = _step()
     tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
 
-    got_weights, got_indices = loaded.routing(tokens)
+    got_weights, got_indices = loaded.router.routing(tokens)
     with torch.no_grad():
         _logits, want_weights, want_indices = layer.mlp.gate(tokens)
 
@@ -89,7 +89,7 @@ def test_the_shared_expert_is_part_of_the_block():
     layer, hidden, loaded = _step()
     tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
 
-    routed_weights, indices = loaded.routing(tokens)
+    routed_weights, indices = loaded.router.routing(tokens)
     routed = loaded.routed_experts(tokens, routed_weights, indices)
     shared = loaded.shared_expert(tokens)
     want = reference.moe_oracle(layer, hidden)

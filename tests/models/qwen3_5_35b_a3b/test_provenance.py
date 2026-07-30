@@ -29,6 +29,7 @@ from tests.models.qwen3_5_35b_a3b.model import (
     Qwen3_5LinearAttention,
     Qwen3_5LinearAttnLayer,
     Qwen3_5MoE,
+    Qwen3_5Router,
 )
 from tilefoundry.ir.core.module import select
 
@@ -159,9 +160,11 @@ def test_the_stack_is_the_published_order_and_its_layers_are_independent():
     assert first.lookup("residual_add") is not second.lookup("residual_add")
     assert first.modules[0].lookup("conv_step") is not second.modules[0].lookup("conv_step")
 
-    selected = select(stack, "layer0.moe.moe")
+    selected = select(stack, "layer0.moe.experts")
     assert selected.name == "moe"
-    assert selected.entry_function().name == "moe"
+    assert selected.entry_function().name == "experts"
+    # The router is a Module of its own, two levels down, and reachable as one.
+    assert select(stack, "layer0.moe.router.routing").entry_function().name == "routing"
 
     assert "forward" in stack.methods
     with pytest.raises(ValueError, match=f"{shape.n_layers} layers but was given 0"):
@@ -246,7 +249,8 @@ def test_multi_token_prediction_has_no_oracle_in_the_installed_transformers():
 #: ``test_every_authored_function_is_either_executed_or_declared``, so coverage
 #: cannot drift by someone adding a kernel.
 EXECUTED: dict[str, tuple[str, ...]] = {
-    "Qwen3_5MoE": ("routing", "routed_experts", "shared_expert", "moe"),
+    "Qwen3_5Router": ("routing",),
+    "Qwen3_5MoE": ("post_norm", "routed_experts", "shared_expert", "experts"),
     "Qwen3_5FullAttention": ("partial_rope", "full_attention"),
     "Qwen3_5LinearAttention": ("linear_attention",),
     "Qwen3_5FullAttnLayer": ("residual_add",),
@@ -322,6 +326,7 @@ UNCOVERED_SEMANTICS: dict[str, str] = {
 
 def _authored_modules():
     return (
+        Qwen3_5Router,
         Qwen3_5MoE,
         Qwen3_5FullAttention,
         Qwen3_5LinearAttention,

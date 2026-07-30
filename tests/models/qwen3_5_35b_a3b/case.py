@@ -173,8 +173,11 @@ MOE_CASE = ModelCase(
     #: contributes here is the block's analysis and schedule coverage and its
     #: function inventory.
     analyze=(
-        FunctionCase(id="qwen3_5_35b_a3b/analyze/moe", selector="moe"),
-        FunctionCase(id="qwen3_5_35b_a3b/analyze/routing", selector="routing"),
+        FunctionCase(id="qwen3_5_35b_a3b/analyze/experts", selector="experts"),
+        FunctionCase(id="qwen3_5_35b_a3b/analyze/post_norm", selector="post_norm"),
+        FunctionCase(
+            id="qwen3_5_35b_a3b/analyze/routing", selector="router.routing"
+        ),
         FunctionCase(
             id="qwen3_5_35b_a3b/analyze/routed_experts", selector="routed_experts"
         ),
@@ -184,7 +187,7 @@ MOE_CASE = ModelCase(
     ),
     schedule=(
         FunctionCase(
-            id="qwen3_5_35b_a3b/schedule/moe", selector="moe", topology="cta"
+            id="qwen3_5_35b_a3b/schedule/experts", selector="experts", topology="cta"
         ),
     ),
     #: One token through a router; nothing here is authored over a context.

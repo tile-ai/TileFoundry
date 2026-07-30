@@ -589,8 +589,8 @@
     },
     {
       "counts": {
-        "functions": 381,
-        "leaf_modules": 87
+        "functions": 425,
+        "leaf_modules": 88
       },
       "evidence": "declared, boundary-complete submodules rather than a stack; no complete-stack reference is built at this size",
       "level": "L1",
@@ -622,13 +622,34 @@
         },
         {
           "functions": [
-            "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
-            "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-            "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-            "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+            "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
           ],
           "leaf": true,
           "modules": [],
+          "names": [
+            "Qwen3_5Router"
+          ]
+        },
+        {
+          "functions": [
+            "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
+            "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
+            "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
+            "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+          ],
+          "leaf": false,
+          "modules": [
+            {
+              "functions": [
+                "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+              ],
+              "leaf": true,
+              "modules": [],
+              "names": [
+                "router"
+              ]
+            }
+          ],
           "names": [
             "Qwen3_5MoE"
           ]
@@ -653,13 +674,24 @@
             },
             {
               "functions": [
-                "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                 "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                 "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
               ],
-              "leaf": true,
-              "modules": [],
+              "leaf": false,
+              "modules": [
+                {
+                  "functions": [
+                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                  ],
+                  "leaf": true,
+                  "modules": [],
+                  "names": [
+                    "router"
+                  ]
+                }
+              ],
               "names": [
                 "moe"
               ]
@@ -690,13 +722,24 @@
             },
             {
               "functions": [
-                "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                 "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                 "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
               ],
-              "leaf": true,
-              "modules": [],
+              "leaf": false,
+              "modules": [
+                {
+                  "functions": [
+                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                  ],
+                  "leaf": true,
+                  "modules": [],
+                  "names": [
+                    "router"
+                  ]
+                }
+              ],
               "names": [
                 "moe"
               ]
@@ -735,13 +778,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -773,13 +827,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -810,13 +875,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -848,13 +924,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -885,13 +972,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -923,13 +1021,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -960,13 +1069,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -998,13 +1118,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1035,13 +1166,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1073,13 +1215,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1110,13 +1263,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1148,13 +1312,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1185,13 +1360,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1223,13 +1409,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1260,13 +1457,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1298,13 +1506,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1335,13 +1554,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1373,13 +1603,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1410,13 +1651,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
@@ -1448,13 +1700,24 @@
                 },
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])",
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
                     "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
                     "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "moe(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
                   ],
-                  "leaf": true,
-                  "modules": [],
+                  "leaf": false,
+                  "modules": [
+                    {
+                      "functions": [
+                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                      ],
+                      "leaf": true,
+                      "modules": [],
+                      "names": [
+                        "router"
+                      ]
+                    }
+                  ],
                   "names": [
                     "moe"
                   ]
