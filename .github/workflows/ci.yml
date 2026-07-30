@@ -36,20 +36,12 @@ jobs:
         run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
       - name: Install tilefoundry (editable, deps already in the image)
         run: pip install -e '.[test]' --no-build-isolation
-      # Eight workers: `tests/e2e` and `tests/ops` really invoke nvcc and dominate
-      # the wall clock, so the suite parallelises well -- this job reported 835 s
-      # serial, against 174 s at -n 8 on the same host.
-      #
-      # The worker count is bounded by the device, not the 240 cores. This container
-      # is pinned to one GPU and `tests/conftest.py` can only spread workers across
-      # cards it can see, so eight of them share 143 GB; measured peak 126 GB. That
-      # is the figure to recheck before raising -n or adding a production-sized
-      # model, because the failure mode is a CUDA OOM in whichever worker gets there
-      # last, not a clean capacity error.
+      # Each worker can instantiate an independent f32 HF reference model. Four
+      # fit on the one pinned GPU; eight OOMed in PR #38 run 30478400012.
       # `not l3` because those load a real published checkpoint: two f32 copies of
       # one would land in a worker sharing the card with seven others.
-      - name: pytest tests/ -n 8
-        run: pytest tests/ -n 8 -m "not l3"
+      - name: pytest tests/ -n 4
+        run: pytest tests/ -n 4 -m "not l3"
       # The coverage report is written by the test run itself, from what the runner
       # reported rather than from the registry — so it exists only if the tests
       # really executed, and it describes this machine. Uploaded rather than
