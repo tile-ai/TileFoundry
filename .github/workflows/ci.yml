@@ -60,26 +60,11 @@ jobs:
         if: always()
         run: python scripts/summarise_model_coverage.py test_results/model-coverage.json
 
-  # The wheel `install-smoke` reads, built once and passed on as an artifact.
-  package:
-    needs: lint
-    runs-on: [self-hosted, tilefoundry]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build the wheel
-        run: pip wheel . --no-deps --no-build-isolation --wheel-dir dist
-      - name: Upload the wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheel
-          path: dist/tilefoundry-*.whl
-          if-no-files-found: error
-
   # Two runners against one installed environment: the shipped files must resolve
   # under it, then the model source it ships must decode a real checkpoint. After
-  # `test` because the decode wants the whole card.
+  # `test` because the decode wants the whole card, and `lint` is upstream of that.
   install-smoke:
-    needs: [package, test]
+    needs: test
     runs-on: [self-hosted, tilefoundry]
     # Part of the runner's contract, like the baked cutlass headers. Not a
     # repository variable: `vars` is empty for a `pull_request` from a fork.
@@ -90,15 +75,20 @@ jobs:
       # checkout — the package lives under `src/` — so the IR under test is the
       # installed one.
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: wheel
-          path: ${{ runner.temp }}/wheel
-      # A path per run and attempt: the runner requires it not to exist.
+      # Built here and read off disk. Handing it between jobs as an artifact needs
+      # the runner to reach GitHub's artifact API, which failed with ECONNRESET and
+      # skipped both steps below — a hop that can break for reasons having nothing
+      # to do with the wheel.
+      - name: Build the wheel
+        run: >-
+          pip wheel . --no-deps --no-build-isolation
+          --wheel-dir ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}
+      # A path per run and attempt: the runner requires the environment not to exist,
+      # and a fresh wheel directory holds exactly the one wheel just built.
       - name: Verify the installed wheel
         run: >-
           python tests/integration/installed_wheel.py
-          --wheel ${{ runner.temp }}/wheel
+          --wheel ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}
           --venv ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
       # Run by the environment above. `--work` holds the emitted source and the
       # canonical store `prepare` writes.
