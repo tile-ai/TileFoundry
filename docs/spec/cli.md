@@ -96,7 +96,15 @@ bounds the caller stated.
   - A dimension the target states as a range MUST be reported, along with the
     extent this run pinned it to; several extents MAY be stated for one dimension,
     and each MUST be run and reported. Where the extents select an implementation,
-    the report MUST name the one selected and the range it covers.
+    the report MUST name the one selected and the range it covers. Naming it is what
+    separates "it ran" from "it ran the intended program", so a run that only passed
+    is not evidence that dispatch landed where the author meant.
+  - Reporting a pin MUST also state both ways out of it: binding the dimension, and
+    declaring a variant that covers the size.
+  - An extent no declared variant covers MUST fail, naming the ranges that are
+    covered. Choosing a neighbouring implementation instead would answer about a
+    program nobody selected, and the failure is only actionable if the reader can
+    see where the coverage stops.
   - The functions and their bounds in `--help` MUST be generated from the
     predicates themselves, so a predicate cannot exist without being listed.
   - Text and `--json` MUST carry the same facts.

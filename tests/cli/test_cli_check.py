@@ -318,6 +318,9 @@ def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(caps
     ]) == 0
     reported = capsys.readouterr().out
     assert "ctx_len is a range [0, 262144) that nothing bound; this run pinned it to 0" in reported
+    # Both ways out of a pin: bind the size, or declare a variant that covers it.
+    assert "--dim ctx_len=" in reported
+    assert "`tilefoundry spec parser 1.1`" in reported
 
     assert cli.main([
         "check", DISPATCHING, "--inputs", "random", "--out", "output", "--fn", "nan_inf", "--json",

@@ -619,6 +619,10 @@ def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | 
             )
             spread = ",".join(str(value) for value in pinned["spread"])
             lines.append(f"        tilefoundry check ... --dim {pinned['dim']}={spread}")
+            lines.append(
+                "        to make the size a declared variant instead of a pin, see "
+                "`tilefoundry spec parser 1.1`"
+            )
         lines.append("")
         for output in run["outputs"]:
             shape = ",".join(str(extent) for extent in output["shape"])
