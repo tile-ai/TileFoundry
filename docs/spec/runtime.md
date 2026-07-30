@@ -19,8 +19,8 @@ a `RuntimeModule` (the runtime instance — kernel bodies) are twins: same
 `name`, same child tree, same `entry`. `@runtime_module` / `@runtime_func`
 (`tilefoundry.runtime.decorator`, below) build one twin mechanically from the
 other, validated one-to-one at decoration time; the correspondence is
-additionally held by a numerical gate (below) — a `RuntimeModule` never runs
-the HIR evaluator.
+additionally held by comparing the two numerically (§1.6), against bounds the
+comparison's caller states — a `RuntimeModule` never runs the HIR evaluator.
 
 ```python
 class RuntimeModule:
@@ -49,8 +49,8 @@ class RuntimeModule:
     directory the semantic side prepared (§1.1.2).
   - correspondence contract: the twin `RuntimeModule` and the semantic
     `Module` both have a `forward`, and on the same inputs the two must agree
-    — `measure.check` comparing them (§1.6), default gate cosine >= 0.999, is
-    that contract.
+    — `measure.check` comparing them against stated bounds (§1.6) is that
+    contract.
   - the base class itself holds no weights or resource, and never runs the
     HIR evaluator.
   - two origins: compiled — `tilefoundry.build` / `compile` / `jit` →
@@ -449,28 +449,58 @@ class SafetensorsResource:
 ### 1.6 `check`
 
 ```python
-class Gate:                                     # pass/fail thresholds for check()
-    rel_l2_max: float = 1e-3
-    cosine_min: float = 0.999
+class Predicate:                                # one comparison and its bound
+    name: ClassVar[str]                         # how it is named
+    bounds: ClassVar[tuple[str, ...]]           # the bound fields it takes
+    needs_reference: ClassVar[bool]             # false: it judges the candidate alone
+    discrete: ClassVar[bool]                    # true: meaningful on integers
 
-class Report:                                   # result of check()
-    metrics: Mapping[str, float]
+PREDICATES: Mapping[str, type[Predicate]]       # allclose rel_l2 cosine equal
+                                                # ulp max_abs max_rel nan_inf
+
+class PredicateResult:
+    predicate: Predicate
+    values: Mapping[str, float]                 # what it measured
+    passed: bool
+    note: str | None                            # when the measure changed meaning
+
+class OutputCheck:
+    path: str                                   # "output", "output[0]", ...
+    shape: tuple[int, ...]
+    dtype: str
+    ref_norm: float | None                      # None without a reference
+    results: tuple[PredicateResult, ...]
     passed: bool
 
-def check(candidate: Callable, reference: Callable, inputs: tuple, gate: Gate = Gate()) -> Report: ...
+class Report:
+    outputs: tuple[OutputCheck, ...]
+    passed: bool
+
+def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
+          expect: Mapping[str, Sequence[Predicate]]) -> Report: ...
 ```
 
 - constraints:
-  - `check` runs `candidate(*inputs)` and `reference(*inputs)`, computes
-    `rel_l2` / cosine similarity between the two results, and sets
-    `passed = rel_l2 <= gate.rel_l2_max and cosine >= gate.cosine_min`.
-    `metrics = {"rel_l2": ..., "cosine": ...}`.
+  - `check` runs `candidate(*inputs)`, and `reference(*inputs)` when there is a
+    reference, and measures each output against the predicates *expect* states
+    for it. Neither *reference* nor *expect* has a default.
   - a result MAY be a bare tensor or an arbitrarily nested tuple of tensors
     (e.g. `forward`'s `(logits, past_key_values)`). `check` flattens both
-    results, MUST reject a candidate whose flattened structure, shape or dtype
-    differs from the reference's, and gates on the **worst** per-leaf
-    `rel_l2` / cosine — so one bad element of a tuple cannot be averaged away.
-  - `check` MUST report a verdict: there is no result that measured nothing.
+    results and MUST reject a candidate whose flattened structure, shape or
+    dtype differs from the reference's.
+  - every produced tensor MUST have exactly one non-empty list of predicates,
+    and a path *expect* names that was not produced MUST be rejected. A result
+    that flattens to nothing MUST be an error rather than a pass.
+  - `reference=None` admits only predicates whose `needs_reference` is false; any
+    other MUST be rejected. `ref_norm` is then absent, having nothing to measure.
+  - a predicate whose `discrete` is false MUST be rejected on an integer or
+    boolean output, naming exact comparison instead.
+  - where a measure has no meaning at the values it was given — a relative
+    distance against a zero reference, a direction between two zero vectors — the
+    result MUST state what was measured instead through its `note`, rather than
+    return a number whose scale is an artefact of a clamp.
+  - `passed` is `all` of its parts, at both levels, so a verdict cannot disagree
+    with the measurements printed beside it.
   - it is not specific to `RuntimeModule`: *candidate* / *reference* may be a
     `RuntimeModule` bound method, a raw torch callable, or an evaluator
     closure — anything callable on *inputs*.

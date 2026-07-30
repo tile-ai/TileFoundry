@@ -51,6 +51,15 @@ def to_torch_dtype(dtype: DType) -> torch.dtype:
         raise EvalError(f"evaluator: unsupported dtype {dtype}") from None
 
 
+def from_torch_dtype(dtype: torch.dtype) -> DType:
+    """The declared dtype a torch dtype stands for -- ``to_torch_dtype`` inverted,
+    off the same table, so a name reported back cannot drift from one accepted."""
+    for declared, torch_dtype in _TORCH_DTYPE.items():
+        if torch_dtype == dtype:
+            return declared
+    raise EvalError(f"evaluator: no declared dtype for {dtype}")
+
+
 def _flatten_ints(shape) -> tuple[int, ...]:
     """Flatten a (possibly nested) IntTuple of static dims into plain ints."""
     out: list[int] = []
