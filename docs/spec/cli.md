@@ -21,6 +21,10 @@ tilefoundry models [NAME] [--source]
 
 tilefoundry spec [TOPIC [SECTION]]
 
+tilefoundry check TARGET (--inputs random | --inputs real --ckpt DIR | --input=PATH ...)
+    [--expected=PATH ...] --out PATH --fn F [bounds] [--fn F [bounds]] ...
+    [--out PATH ...] [--dim NAME=V[,V...] ...] [--json]
+
 tilefoundry analyze model.py[:Module[.child_module...][.function]]
     [--roofline] [--footprint] [--timeline] [--dim NAME=EXTENT ...]
 
@@ -44,6 +48,57 @@ whose `@func` declares no execution context binds one. Every verb here reads
 hardware facts, so such a selection MUST be rejected naming the Module that
 would declare its context, rather than analysed or scheduled against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
+
+`check` reads the same `SOURCE` shape and one thing more: its selector MAY name a
+runtime twin instead of an authored Module. A twin generated from an authored
+Module states which Module that is ([runtime §1.1](./runtime.md#11-runtimemodule)),
+so naming the implementation is enough to reach what it is judged against. A
+runtime module that states none MUST be refused rather than compared against
+something chosen for it.
+
+## Check
+
+`check` is the one command that reports agreement. It runs an implementation and,
+when there is one, its reference, and says of every output whether it meets the
+bounds the caller stated.
+
+- constraints:
+  - Every output MUST be judged by at least one predicate the caller states, and
+    there MUST be no default predicate and no default bound. A bound nobody can
+    meet is worse than none: a single `f32`→`bf16` rounding already measures
+    `rel_l2` 1.66e-3, so a default of 1e-3 would teach its reader that FAIL is
+    the normal state of a correct program.
+  - Naming an output that was not produced, or leaving a produced output
+    unjudged, MUST be refused. A comparison that silently skipped an output
+    reports the same PASS as one that checked it.
+  - An empty result MUST be an error, never a PASS: measuring nothing is not
+    agreement.
+  - A predicate MUST be refused on an output whose dtype it says nothing about.
+    On a discrete output one wrong value is a total failure and a negligible
+    numerical deviation, so an aggregate over indices MUST be refused pointing at
+    exact comparison.
+  - The reference MAY be stated as files, or MAY be the evaluator running the
+    authored Module the implementation stands for. With no reference at all, only
+    a predicate that judges the candidate alone is admissible; every two-sided
+    predicate MUST be refused, because there is nothing to compare against.
+  - Each output MUST report the norm of its reference. Near zero, a relative
+    measure divides by nothing, so the report MUST state what it measured instead
+    rather than a number with no scale to read it against.
+  - Inputs MUST be stated: random, real weights from a checkpoint, or files, and
+    no form MAY be the default. Weights MUST come from the same draw on both
+    sides, and the report MUST say which form was used and what seed drew it.
+  - Reaching one leaf MUST read only that leaf's weights. A comparison of one
+    kernel MUST NOT materialise a whole model.
+  - A dimension the target states as a range MUST be reported, along with the
+    extent this run pinned it to; several extents MAY be stated for one dimension,
+    and each MUST be run and reported. Where the extents select an implementation,
+    the report MUST name the one selected and the range it covers.
+  - The functions and their bounds in `--help` MUST be generated from the
+    predicates themselves, so a predicate cannot exist without being listed.
+  - Text and `--json` MUST carry the same facts.
+  - A target whose validation level is below the oracle level MUST still be
+    checked, and MUST carry a warning that agreement with a Module is not
+    agreement with what the Module describes.
 
 ## Models
 

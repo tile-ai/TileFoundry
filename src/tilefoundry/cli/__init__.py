@@ -8,6 +8,8 @@ from typing import Sequence
 
 from tilefoundry.analysis import AnalysisError, ExtractError
 from tilefoundry.cli.analyze import ANALYSES, run_authored_analysis
+from tilefoundry.cli.check import add_arguments as add_check_arguments
+from tilefoundry.cli.check import guidance, run_check
 from tilefoundry.cli.inspect import run_capabilities
 from tilefoundry.cli.models import run_models
 from tilefoundry.cli.schedule import run_schedule
@@ -24,6 +26,7 @@ _ANALYSES = ANALYSES
 _COMMANDS = {
     "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
+    "check": "compare an implementation against its reference, output by output",
     "analyze": "type-check and analyze authored HIR",
     "schedule": "schedule authored HIR at one declared topology level",
     "inspect": "inspect installed target facts",
@@ -98,6 +101,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECTION",
         help="one section's key, as the outline prints it; with none, print the outline",
     )
+
+    check = commands.add_parser(
+        "check",
+        help=_COMMANDS["check"],
+        epilog=guidance(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    add_check_arguments(check)
 
     analyze = commands.add_parser("analyze", help=_COMMANDS["analyze"])
     _add_source_argument(analyze)
@@ -177,6 +188,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_spec(args.topic, args.section)
         except (OSError, ValueError) as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "check":
+        try:
+            return run_check(args)
+        except Exception as error:
+            print(f"tilefoundry check: error: {error}", file=sys.stderr)
             return 1
     if args.command == "inspect":
         try:

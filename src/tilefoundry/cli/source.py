@@ -32,7 +32,7 @@ def _unique_values(namespace: dict[str, object], kind: type) -> tuple[object, ..
     return tuple(values)
 
 
-def _select_ir(namespace: dict[str, object], selector: str | None) -> Module:
+def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
     if selector is not None:
         # Validated before the join, which would turn `Root.` into the empty
         # path -- and that deliberately means the root itself.
@@ -82,6 +82,19 @@ def _select_ir(namespace: dict[str, object], selector: str | None) -> Module:
     raise ValueError("source defines no TileFoundry Module")
 
 
+def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
+    """Execute one authored file, returning what it defined and its selector.
+
+    Executing it is how an authored file produces anything at all, so its own
+    output is captured: what the command prints is its answer, not the file's.
+    """
+    path, selector = _split_source(source)
+    captured_stdout = io.StringIO()
+    with contextlib.redirect_stdout(captured_stdout):
+        namespace = runpy.run_path(str(path))
+    return namespace, selector
+
+
 def load_authored_ir(source: str) -> Module:
     """Execute one authored file and resolve its optional IR selector.
 
@@ -89,11 +102,8 @@ def load_authored_ir(source: str) -> Module:
     resolved: it declares neither the Target its numbers would be measured
     against nor the topology hierarchy they divide over.
     """
-    path, selector = _split_source(source)
-    captured_stdout = io.StringIO()
-    with contextlib.redirect_stdout(captured_stdout):
-        namespace = runpy.run_path(str(path))
-    return _select_ir(namespace, selector)
+    namespace, selector = load_namespace(source)
+    return select_ir(namespace, selector)
 
 
 def entry_function(ir: Module | Function) -> Function:
@@ -154,6 +164,8 @@ def parse_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
 __all__ = [
     "entry_function",
     "load_authored_ir",
+    "load_namespace",
     "parse_dims",
+    "select_ir",
     "selected_target",
 ]
