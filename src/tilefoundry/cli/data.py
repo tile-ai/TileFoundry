@@ -24,6 +24,7 @@ class Kind:
 _KINDS = {
     "spec": Kind(source=("docs", "spec"), installed="spec"),
     "models": Kind(source=("tests", "models"), installed="models"),
+    "tutorial": Kind(source=("docs", "tutorial"), installed="tutorial"),
 }
 
 

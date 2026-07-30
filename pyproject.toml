@@ -41,6 +41,8 @@ where = ["src"]
 
 [tool.setuptools.data-files]
 "share/tilefoundry/spec" = ["docs/spec/*.md"]
+# Tutorial pages have distinct filenames, so one destination is sufficient.
+"share/tilefoundry/tutorial" = ["docs/tutorial/*.md"]
 # The model catalog `tilefoundry models` reads, and each model's authored source
 # as read-only reference. One destination per model: data-files flattens, and
 # seven files all named model.py would land on each other.

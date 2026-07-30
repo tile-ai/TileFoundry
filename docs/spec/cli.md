@@ -104,6 +104,24 @@ bounds the caller stated.
     checked, and MUST carry a warning that agreement with a Module is not
     agreement with what the Module describes.
 
+## Tutorial
+
+`tutorial` teaches the workflow: what to do, in what order, and at what
+granularity.
+
+- constraints:
+  - It MUST point at `spec` for normative and reference material and at
+    `check --help` for the predicate flags, and MUST NOT duplicate either. A
+    second copy of a contract is a copy that goes stale, and the reader cannot
+    tell which one is current.
+  - Its pages ship as data beside the specifications and MUST be read from the
+    same installed lookup, so a page is available to an installed wheel and not
+    only to a checkout.
+  - Where a page teaches by example, the example MUST be the shipped model source
+    itself, selected by what a declaration is called rather than by where it sits.
+    A copy pasted into prose is a second source that drifts, and a line range
+    silently quotes the wrong lines as soon as the model above it changes.
+
 ## Models
 
 `models` reports the models this project has described and how far each has been

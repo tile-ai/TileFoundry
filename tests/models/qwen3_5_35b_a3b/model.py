@@ -40,15 +40,14 @@ _QSCALE = 1.0 / math.sqrt(config.gdn_head_k_dim)
 _L2_EPS = 1e-6
 
 
-# The prior cache this step reads: the only range this kernel carries. Zero is a
-# first step, and the exclusive upper bound is the authoring envelope max_ctx, so
-# with this step's own token the longest context is max_ctx positions.
+# Prior-cache length. The caller appends this step's returned K/V entry.
 C = DimVar("ctx_len", 0, config.max_ctx)
 
 # One token per step.
 
 _HQ = config.n_q_heads
 _HKV = config.n_kv_heads
+# Published dimensions; do not derive them from the other fields.
 _D = config.head_dim
 _ROT = config.rotary_dim
 _PASS = config.pass_dim
@@ -304,6 +303,7 @@ class Qwen3_5Router:
     @func
     def routing(
         tokens: Tensor[(S, _H), config.dt],
+        # Only ConstTensor parameters are bound by Module.load.
         w_router: ConstTensor[(_H, _E), config.dt],
     ):
         # HF `Qwen3_5MoeTopKRouter`: softmax over every expert in f32, then the
@@ -508,6 +508,7 @@ class Qwen3_5Decoder:
     embedding, the walk, the closing norm, the head. Each layer is an independent
     copy, so an analysis of one annotates only it."""
 
+    # The published layer-type cycle determines each layer Module.
     layers = tuple(
         LAYER_TYPE[kind].renamed(f"layer{index}")
         for index, kind in enumerate(config.layer_types)

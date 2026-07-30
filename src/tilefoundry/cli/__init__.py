@@ -15,6 +15,7 @@ from tilefoundry.cli.models import run_models
 from tilefoundry.cli.schedule import run_schedule
 from tilefoundry.cli.source import load_authored_ir, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
+from tilefoundry.cli.tutorial import PAGES, run_tutorial
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.schedule import ScheduleError
 
@@ -26,6 +27,7 @@ _ANALYSES = ANALYSES
 _COMMANDS = {
     "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
+    "tutorial": "learn the two-step workflow: its pages, or one of them",
     "check": "compare an implementation against its reference, output by output",
     "analyze": "type-check and analyze authored HIR",
     "schedule": "schedule authored HIR at one declared topology level",
@@ -86,6 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     models.add_argument(
         "--source", action="store_true", help="print the model's authored source instead"
+    )
+
+    tutorial = commands.add_parser("tutorial", help=_COMMANDS["tutorial"])
+    tutorial.add_argument(
+        "page",
+        nargs="?",
+        choices=PAGES[1:],
+        metavar="PAGE",
+        help="which page; with none, the overview and the pages there are",
     )
 
     spec = commands.add_parser("spec", help=_COMMANDS["spec"])
@@ -186,6 +197,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "spec":
         try:
             return run_spec(args.topic, args.section)
+        except (OSError, ValueError) as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "tutorial":
+        try:
+            return run_tutorial(args.page)
         except (OSError, ValueError) as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1
