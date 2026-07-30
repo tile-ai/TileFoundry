@@ -19,6 +19,7 @@ Two things that Reference genuinely cannot say, and they are what is left here:
 """
 from __future__ import annotations
 
+import pytest
 import torch
 
 from tests.models.qwen3_1_7b import config, reference
@@ -54,21 +55,34 @@ def test_tiled_mlp_matches_untiled_mlp():
     torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
 
-def test_decoder_layer_returns_the_cache_entry_to_append():
+@pytest.mark.parametrize("ctx_len", [0, 24])
+def test_decoder_layer_returns_the_cache_entry_to_append(ctx_len):
     """The step's returned key and value are this token's cache entry: appending
     them to the cache it was given reproduces the cache a context one token
     longer would have produced.
 
     Checked against a rebuilt cache rather than against the step's own inputs,
     so a step that returned its inputs unchanged would fail.
+
+    A zero-length context is the first step of a sequence: nothing is cached, so
+    the step attends the one token it brings itself and the cache it hands back is
+    that token's single entry. The output is compared here as well as the cache,
+    because the corpus Reference runs at its own one context length and at zero
+    nothing else says the step computed the right value.
     """
-    drawn = reference.decode_step_inputs(device=DEV)
-    _, k_new, v_new = drawn.loaded.decoder_layer(*drawn.args)
+    drawn = reference.decode_step_inputs(ctx_len=ctx_len, device=DEV)
+    out, k_new, v_new = drawn.loaded.decoder_layer(*drawn.args)
+
+    torch.testing.assert_close(
+        out.float(), reference.decode_step_oracle(drawn).float(), atol=ATOL, rtol=RTOL
+    )
 
     want_k, want_v = reference.appended_cache_oracle(drawn)
     grown_k = torch.cat([drawn.k_cache, k_new], dim=1)
     grown_v = torch.cat([drawn.v_cache, v_new], dim=1)
 
+    assert drawn.k_cache.shape[1] == drawn.ctx_len
+    assert grown_k.shape[1] == drawn.ctx_len + 1
     assert tuple(grown_k.shape) == tuple(want_k.shape)
     torch.testing.assert_close(grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL)
     torch.testing.assert_close(grown_v.float(), want_v.float(), atol=ATOL, rtol=RTOL)
