@@ -67,28 +67,31 @@ jobs:
   l3:
     needs: test
     runs-on: [self-hosted, tilefoundry]
-    # Set as a repository variable, so the path is configuration and never a
-    # committed one. The preflight below is what reports it missing.
+    # A read-only mount the runner already carries, named here the same way the
+    # baked cutlass headers are below: part of the runner's contract, not per-repo
+    # configuration. A repository variable cannot serve this — `vars` is empty for
+    # a `pull_request` from a fork, so the job died on its own preflight there.
     env:
-      TILEFOUNDRY_QWEN3_1_7B_CKPT: ${{ vars.TILEFOUNDRY_QWEN3_1_7B_CKPT }}
+      TILEFOUNDRY_QWEN3_1_7B_CKPT: /checkpoints/Qwen3-1.7B
     steps:
       - uses: actions/checkout@v4
       - name: Link baked cutlass headers
         run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
       - name: Install tilefoundry (editable, deps already in the image)
         run: pip install -e '.[test]' --no-build-isolation
-      # Before pytest, so an unset or unreadable mount fails here instead of
+      # Before pytest, so a missing or unreadable mount fails here instead of
       # reaching the test's skip.
       - name: Preflight the checkpoint mount
         run: |
           set -eu
-          dir="${TILEFOUNDRY_QWEN3_1_7B_CKPT:-}"
-          test -n "$dir" || { echo "TILEFOUNDRY_QWEN3_1_7B_CKPT is empty or unset"; exit 1; }
+          dir="$TILEFOUNDRY_QWEN3_1_7B_CKPT"
           test -d "$dir" || { echo "not a directory: $dir"; exit 1; }
           test -r "$dir/config.json" || { echo "unreadable config.json in $dir"; exit 1; }
           test -r "$dir/model.safetensors" -o -r "$dir/model.safetensors.index.json" \
             || { echo "no safetensors shard or index in $dir"; exit 1; }
           ls "$dir"/tokenizer*.json >/dev/null || { echo "no tokenizer files in $dir"; exit 1; }
-      # `--basetemp` because `prepare` writes a 7.6 GB canonical store.
+      # `--basetemp` because `prepare` writes a 7.6 GiB canonical store: the test
+      # reads the published bf16 checkpoint at the f32 the kernels are authored
+      # at, so the store is twice the checkpoint, not the size of a 1.7B model.
       - name: pytest -m l3
         run: pytest tests/ -m l3 --basetemp="${RUNNER_TEMP}/l3" -q
