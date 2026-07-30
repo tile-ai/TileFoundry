@@ -56,13 +56,12 @@ where = ["src"]
 "share/tilefoundry/models/qwen3_5_35b_a3b" = ["tests/models/qwen3_5_35b_a3b/model.py"]
 
 [tool.pytest.ini_options]
-# Parallel is how this suite is run, on CI (`-n 8`) and locally: conftest's
+# Parallel is how this suite is run, on CI (`-n 4`) and locally: conftest's
 # DumpScope isolates per xdist worker, the compile workdir is pid-keyed, and the
 # coverage plugin merges per-worker shards. No addopts default, because the worker
 # count is a property of the machine — the CI workflow states its own.
 markers = [
     "no_dump: opt out of the autouse DumpScope for tests that emit excessive dump output",
-    "l3: needs a real published checkpoint mount; runs in its own serial CI job",
 ]
 
 [tool.ruff]

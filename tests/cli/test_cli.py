@@ -134,43 +134,6 @@ def test_spec_separates_two_sections_that_would_share_a_key(capsys) -> None:
     assert "no section '3.2'" in capsys.readouterr().err
 
 
-def test_spec_reads_the_installed_documents_not_the_source_tree(
-    installed_tilefoundry,
-) -> None:
-    """`spec` answers from an installed wheel, reading its data-files.
-
-    The fixture asserts its own premise first: that the nested environment really
-    imported the wheel and not this checkout.
-    """
-    facts = installed_tilefoundry.assert_installed()
-    assert facts["spec"].endswith("share/tilefoundry/spec/hir.md")
-
-    outline = installed_tilefoundry.run("spec", "dsl")
-
-    assert "silu" in outline
-    assert "class Silu(Op):" not in outline
-    assert "class Silu(Op):" in installed_tilefoundry.run("spec", "dsl", "silu")
-
-
-def test_models_answers_from_an_installed_environment(installed_tilefoundry) -> None:
-    """The catalog and the authored sources ship, so `models` works with no corpus.
-
-    `--source` is compared against the corpus file byte for byte, because what the
-    install is for is handing somebody the original to copy.
-    """
-    installed_tilefoundry.assert_installed()
-
-    listed = installed_tilefoundry.run("models")
-    assert "qwen3_1_7b" in listed and "not usable as an oracle" in listed
-
-    forest = installed_tilefoundry.run("models", "qwen3_1_7b")
-    assert "29 leaf modules, 148 functions" in forest
-    assert "*   layer0..layer27" in forest
-
-    printed = installed_tilefoundry.run("models", "qwen3_1_7b", "--source")
-    assert printed == Path("tests/models/qwen3_1_7b/model.py").read_text(encoding="utf-8")
-
-
 def test_spec_rejects_a_section_that_does_not_exist(capsys) -> None:
     """The refusal says what the document does have, so the next try can succeed."""
     assert cli.main(["spec", "dsl", "9.9"]) == 1

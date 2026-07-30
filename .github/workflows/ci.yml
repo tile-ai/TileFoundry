@@ -38,10 +38,8 @@ jobs:
         run: pip install -e '.[test]' --no-build-isolation
       # Each worker can instantiate an independent f32 HF reference model. Four
       # fit on the one pinned GPU; eight OOMed in PR #38 run 30478400012.
-      # `not l3` because those load a real published checkpoint: two f32 copies of
-      # one would land in a worker sharing the card with seven others.
       - name: pytest tests/ -n 4
-        run: pytest tests/ -n 4 -m "not l3"
+        run: pytest tests/ -n 4
       # The coverage report is written by the test run itself, from what the runner
       # reported rather than from the registry — so it exists only if the tests
       # really executed, and it describes this machine. Uploaded rather than
@@ -62,36 +60,51 @@ jobs:
         if: always()
         run: python scripts/summarise_model_coverage.py test_results/model-coverage.json
 
-  # Real published checkpoints, one at a time on the whole card. After `test`
-  # rather than beside it: both would be on the one GPU this runner is pinned to.
-  l3:
-    needs: test
+  # The wheel `install-smoke` reads, built once and passed on as an artifact.
+  package:
+    needs: lint
     runs-on: [self-hosted, tilefoundry]
-    # A read-only mount the runner already carries, named here the same way the
-    # baked cutlass headers are below: part of the runner's contract, not per-repo
-    # configuration. A repository variable cannot serve this — `vars` is empty for
-    # a `pull_request` from a fork, so the job died on its own preflight there.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the wheel
+        run: pip wheel . --no-deps --no-build-isolation --wheel-dir dist
+      - name: Upload the wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/tilefoundry-*.whl
+          if-no-files-found: error
+
+  # Two runners against one installed environment: the shipped files must resolve
+  # under it, then the model source it ships must decode a real checkpoint. After
+  # `test` because the decode wants the whole card.
+  install-smoke:
+    needs: [package, test]
+    runs-on: [self-hosted, tilefoundry]
+    # Part of the runner's contract, like the baked cutlass headers. Not a
+    # repository variable: `vars` is empty for a `pull_request` from a fork.
     env:
       TILEFOUNDRY_QWEN3_1_7B_CKPT: /checkpoints/Qwen3-1.7B
     steps:
+      # For the two runner files only. `tilefoundry` is not importable from a
+      # checkout — the package lives under `src/` — so the IR under test is the
+      # installed one.
       - uses: actions/checkout@v4
-      - name: Link baked cutlass headers
-        run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
-      - name: Install tilefoundry (editable, deps already in the image)
-        run: pip install -e '.[test]' --no-build-isolation
-      # Before pytest, so a missing or unreadable mount fails here instead of
-      # reaching the test's skip.
-      - name: Preflight the checkpoint mount
-        run: |
-          set -eu
-          dir="$TILEFOUNDRY_QWEN3_1_7B_CKPT"
-          test -d "$dir" || { echo "not a directory: $dir"; exit 1; }
-          test -r "$dir/config.json" || { echo "unreadable config.json in $dir"; exit 1; }
-          test -r "$dir/model.safetensors" -o -r "$dir/model.safetensors.index.json" \
-            || { echo "no safetensors shard or index in $dir"; exit 1; }
-          ls "$dir"/tokenizer*.json >/dev/null || { echo "no tokenizer files in $dir"; exit 1; }
-      # `--basetemp` because `prepare` writes a 7.6 GiB canonical store: the test
-      # reads the published bf16 checkpoint at the f32 the kernels are authored
-      # at, so the store is twice the checkpoint, not the size of a 1.7B model.
-      - name: pytest -m l3
-        run: pytest tests/ -m l3 --basetemp="${RUNNER_TEMP}/l3" -q
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: ${{ runner.temp }}/wheel
+      # A path per run and attempt: the runner requires it not to exist.
+      - name: Verify the installed wheel
+        run: >-
+          python tests/integration/installed_wheel.py
+          --wheel ${{ runner.temp }}/wheel
+          --venv ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      # Run by the environment above. `--work` holds the emitted source and the
+      # canonical store `prepare` writes.
+      - name: Decode the published checkpoint with the shipped source
+        run: >-
+          ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/python
+          tests/integration/qwen3_1_7b_l3.py
+          --venv ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          --work ${{ runner.temp }}/l3-${{ github.run_id }}-${{ github.run_attempt }}
