@@ -13,7 +13,7 @@ import torch
 from tilefoundry.cli import data
 from tilefoundry.cli.source import load_namespace, select_ir
 from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.core.module import LoadedModule, Module
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function, canonical_specialization_signature
 from tilefoundry.ir.hir.specialize import (
     dim_vars_reached,
@@ -182,22 +182,28 @@ def _combinations(dims: dict[str, tuple[int, ...]]) -> list[dict[str, int]]:
 
 
 class Target:
-    """What a `SOURCE` resolved to: something to run, and the Module behind it."""
+    """What a `SOURCE` resolved to: something to run, and the Module behind it.
+
+    `children` is the child-module part of the selector, which the resource is
+    scoped by. `module` is that node in the tree, not the re-entered copy
+    `ir.core.module.select` returns for a terminal function.
+    """
 
     def __init__(self, source: str) -> None:
         path_text, _, selector = source.partition(":")
         self.path = Path(path_text).expanduser().resolve()
         namespace, _ = load_namespace(source)
         segments = selector.split(".") if selector else []
-        root = namespace.get(segments[0]) if segments else None
+        first = namespace.get(segments[0]) if segments else None
 
         self.twin: RuntimeModule | None = None
-        if isinstance(root, type) and issubclass(root, RuntimeModule):
-            self.twin, self.module, self.function_name = _walk_twin(root, segments)
+        if isinstance(first, type) and issubclass(first, RuntimeModule):
+            (
+                self.twin, self.top, self.module, self.children, self.function_name
+            ) = _walk_twin(first, segments)
         else:
-            module = select_ir(namespace, selector or None)
-            self.module = module
-            self.function_name = module.entry if module.methods.get("forward") is None else None
+            self.top = select_ir(namespace, segments[0] if segments else None)
+            self.module, self.children, self.function_name = _walk_ir(self.top, segments[1:])
         self.selector = selector
 
     @property
@@ -208,9 +214,38 @@ class Target:
         return self.module.lookup(self.function_name)
 
 
-def _walk_twin(root: type, segments: Sequence[str]) -> tuple[RuntimeModule, Module, str | None]:
-    """A twin class and a dotted path into it, as (node, its Module, function)."""
-    node = root()
+def _walk_ir(top: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...], str | None]:
+    """*path* below *top*, as (the Module, the child names walked, the function
+    named). A non-child segment must be last and must name one of the reached
+    Module's functions."""
+    reached = top
+    children: list[str] = []
+    for index, name in enumerate(path):
+        below = {child.name: child for child in reached.modules}
+        if name in below:
+            reached = below[name]
+            children.append(name)
+            continue
+        if index != len(path) - 1:
+            raise ValueError(
+                f"selector {'.'.join(path)!r}: Module {reached.name!r} has no child "
+                f"module {name!r}"
+            )
+        reached.lookup(name)  # refuses a name this Module does not define
+        return reached, tuple(children), name
+    if reached.methods.get("forward") is not None:
+        return reached, tuple(children), None
+    return reached, tuple(children), reached.entry
+
+
+def _walk_twin(
+    root: type, segments: Sequence[str]
+) -> tuple[RuntimeModule, Module, Module, tuple[str, ...], str | None]:
+    """A twin class and a dotted path into it, as (node, the top Module, the
+    node's Module, the child names walked, the function named)."""
+    top = root()
+    node = top
+    children: list[str] = []
     for index, segment in enumerate(segments[1:]):
         try:
             found = getattr(node, segment)
@@ -218,14 +253,15 @@ def _walk_twin(root: type, segments: Sequence[str]) -> tuple[RuntimeModule, Modu
             raise ValueError(f"selector {'.'.join(segments)!r}: {error}") from None
         if isinstance(found, RuntimeModule):
             node = found
+            children.append(segment)
             continue
         if index != len(segments) - 2:
             raise ValueError(
                 f"selector {'.'.join(segments)!r}: {segment!r} is a function, so it "
                 f"can only be the last segment"
             )
-        return node, _authored(node), segment
-    return node, _authored(node), None
+        return node, _authored(top), _authored(node), tuple(children), segment
+    return node, _authored(top), _authored(node), tuple(children), None
 
 
 def _authored(node: RuntimeModule) -> Module:
@@ -346,26 +382,21 @@ def _read(path: str, device: str) -> torch.Tensor:
     return loaded
 
 
-def _weights_needed(module: Module, function: Function | None) -> tuple[str, ...]:
-    """The canonical names a run of this target has to bind."""
-    if function is not None:
-        return tuple(param.name for param in function.params if param.is_const)
+def _weights_needed(module: Module) -> tuple[str, ...]:
+    """Every weight the selected Module declares, which is what a run binds."""
     return tuple(module.weights)
 
 
 def _resource(target: Target, generator, device: str, ckpt: str | None):
-    """Where both sides read their weights: one seeded draw, or the checkpoint.
-
-    A checkpoint is narrowed down the selector before anything is read, so a leaf
-    reads its own tensors and not the model's.
-    """
-    if ckpt is None:
-        return RandomWeights(target.module, generator, device)
-    resource = SafetensorsResource(ckpt, device=device)
-    for segment in target.selector.split(".")[1:]:
-        if segment == target.function_name:
-            break
-        resource = resource.subtree(segment)
+    """Where both sides read their weights: one seeded draw, or the checkpoint,
+    rooted at the top-level Module and scoped by *target*'s child names."""
+    resource = (
+        RandomWeights(target.top, generator, device)
+        if ckpt is None
+        else SafetensorsResource(ckpt, device=device)
+    )
+    for name in target.children:
+        resource = resource.subtree(name)
     return resource
 
 
@@ -443,32 +474,20 @@ def _level(path: Path) -> dict[str, Any] | None:
     return None
 
 
-def _evaluator(target: Target, function: Function | None, resource):
-    """The evaluator running this target, with only what it needs bound.
+def _sides(target: Target, resource, expected: Sequence[str] | None, device: str):
+    """The two callables to compare, and how to say what the reference was.
 
-    A leaf names its own weights, so it is loaded with those rather than through
-    the Module its siblings share: reaching one kernel must not materialise the
-    tensors of every kernel beside it.
+    The reference is the selected Module loaded whole, then its function.
     """
     name = target.function_name
-    if name is None or function is None:
-        return target.module.load(resource).forward
-    constants = {
-        param.name: resource.load(param.name) for param in function.params if param.is_const
-    }
-    return getattr(LoadedModule(module=target.module, constants=constants), name)
+    loaded = target.module.load(resource)
+    evaluator = getattr(loaded, name) if name else loaded.forward
 
-
-def _sides(
-    target: Target, function: Function | None, resource, expected: Sequence[str] | None, device: str
-):
-    """The two callables to compare, and how to say what the reference was."""
-    name = target.function_name
     if target.twin is not None:
         target.twin.load(resource)
         candidate = getattr(target.twin, name) if name else target.twin.forward
     else:
-        candidate = _evaluator(target, function, resource)
+        candidate = evaluator
 
     if expected:
         tensors = tuple(_read(path, device) for path in expected)
@@ -480,7 +499,7 @@ def _sides(
         # predicates that judge it on its own are available.
         return candidate, None, None
     authored = target.module.name if name is None else f"{target.module.name}.{name}"
-    return candidate, _evaluator(target, function, resource), f"evaluator on {authored}"
+    return candidate, evaluator, f"evaluator on {authored}"
 
 
 def _one_run(
@@ -505,7 +524,7 @@ def _one_run(
             f"method rather than one function, so there is no signature to bind"
         )
 
-    needed = _weights_needed(target.module, concrete)
+    needed = _weights_needed(target.module)
     if needed and arguments.ckpt is None and arguments.inputs != "random":
         raise ValueError(
             f"{target.module.name!r} needs weights {list(needed)} and no source was "
@@ -539,7 +558,7 @@ def _one_run(
         weights_from = "the checkpoint" if arguments.ckpt else f"random, seed {SEED}"
 
     candidate, reference, reference_label = _sides(
-        target, concrete, resource, arguments.expected, device
+        target, resource, arguments.expected, device
     )
     report = check(candidate, reference, activations, expect=expect)
     return {

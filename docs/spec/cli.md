@@ -87,8 +87,12 @@ bounds the caller stated.
   - Inputs MUST be stated: random, real weights from a checkpoint, or files, and
     no form MAY be the default. Weights MUST come from the same draw on both
     sides, and the report MUST say which form was used and what seed drew it.
-  - Reaching one leaf MUST read only that leaf's weights. A comparison of one
-    kernel MUST NOT materialise a whole model.
+  - Reaching one leaf MUST read only that leaf Module's own weights. A comparison
+    of one kernel MUST NOT materialise a whole model. A Module is the unit that
+    loads, so what a run binds is everything the selected Module declares, not the
+    subset the selected function names; the selector's child segments MUST scope
+    the checkpoint by the same names they resolve the Module by, so the two cannot
+    be addressed differently.
   - A dimension the target states as a range MUST be reported, along with the
     extent this run pinned it to; several extents MAY be stated for one dimension,
     and each MUST be run and reported. Where the extents select an implementation,

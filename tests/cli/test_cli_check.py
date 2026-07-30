@@ -19,12 +19,13 @@ from tilefoundry import cli
 from tilefoundry.cli.check import SEED
 from tilefoundry.cli.source import load_namespace, select_ir
 from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.core.module import LoadedModule
+from tilefoundry.runtime import DictResource
 
-#: Two outputs of different kinds from one call: bf16-family weights and i64
-#: indices. A router that picked a different eight would be a different model
-#: even if every number matched, so the indices are compared exactly.
-ROUTING = "tests/models/qwen3_5_35b_a3b/model.py:Qwen3_5MoE.routing"
+#: Two outputs of different kinds from one call: routing weights and i64 indices.
+#: A router that picked a different eight would be a different model even if every
+#: number matched, so the indices are compared exactly. A child Module of the MoE
+#: block, so this is also the real nested selector path.
+ROUTING = "tests/models/qwen3_5_35b_a3b/model.py:Qwen3_5MoE.router.routing"
 
 DISPATCHING = "tests/fixtures/gqa_online.py:GqaOnline.gqa_online_attend"
 
@@ -76,7 +77,7 @@ class Drifted:
         return x - x
 
 
-@module(entry="scaled", target=CudaTarget())
+@module(entry="scaled")
 class Weighted:
     topologies = (Topology("cta", 168),)
 
@@ -96,6 +97,16 @@ class WeightedTwin:
     @runtime_func
     def scaled(self, x, w):
         return x * w
+
+
+@module(target=CudaTarget())
+class Nested:
+    child = Weighted
+
+
+@runtime_module(Nested)
+class NestedTwin:
+    child = WeightedTwin
 
 
 class Handwritten(RuntimeModule):
@@ -121,26 +132,27 @@ def twin(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def routing(tmp_path_factory) -> dict[str, Path]:
-    """One evaluator run of `routing`, written out as what a check reads.
+    """One evaluator run of the MoE block's `router` child, as what a check reads.
 
-    The inputs, a checkpoint holding the one weight it needs, and its two outputs
-    -- plus the same indices with one of them changed, and a zero reference.
+    The inputs, a checkpoint holding the one weight that child declares, its two
+    outputs, the same indices with one of them changed, and a zero reference.
     """
     where = tmp_path_factory.mktemp("routing")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     namespace, _ = load_namespace(ROUTING)
-    module = select_ir(namespace, "Qwen3_5MoE")
-    function = module.lookup("routing")
+    parent = select_ir(namespace, "Qwen3_5MoE")
+    leaf = next(child for child in parent.modules if child.name == "router")
+    declared = leaf.lookup("routing")
 
     generator = torch.Generator(device=device).manual_seed(11)
     drawn = [
         torch.randn(tuple(param.type.shape), generator=generator, device=device).to(
             to_torch_dtype(param.type.dtype)
         )
-        for param in function.params
+        for param in declared.params
     ]
     tokens, w_router = drawn
-    weights, indices = LoadedModule(module=module, constants={"w_router": w_router}).routing(tokens)
+    weights, indices = leaf.load(DictResource({"w_router": w_router})).routing(tokens)
 
     torch.save(tokens.cpu(), where / "tokens.pt")
     torch.save(weights.cpu(), where / "weights.pt")
@@ -149,7 +161,8 @@ def routing(tmp_path_factory) -> dict[str, Path]:
     changed = indices.clone()
     changed[0, 0] = (changed[0, 0] + 1) % w_router.shape[-1]
     numpy.save(where / "one_off.npy", changed.cpu().numpy())
-    save_file({"w_router": w_router.cpu()}, str(where / "model.safetensors"))
+    # Exactly the leaf's own tensor, under the path the selector walks to it.
+    save_file({"router.w_router": w_router.cpu()}, str(where / "model.safetensors"))
     return {
         "dir": where,
         "tokens": where / "tokens.pt",
@@ -270,9 +283,11 @@ def test_check_refuses_what_it_cannot_answer(routing, capsys, comparison, refuse
     assert refused in capsys.readouterr().err
 
 
-def test_inputs_must_be_stated_and_weights_must_come_from_somewhere(capsys) -> None:
+def test_inputs_must_be_stated_and_weights_must_come_from_somewhere(routing, capsys) -> None:
     """Neither the inputs nor the weights have a default form."""
-    assert cli.main(["check", ROUTING, "--out", "output[0]", "--fn", "nan_inf"]) == 1
+    assert cli.main([
+        "check", ROUTING, "--out", "output[0]", "--fn", "nan_inf",
+    ]) == 1
     assert "needs weights ['w_router']" in capsys.readouterr().err
 
     assert cli.main([
@@ -302,14 +317,13 @@ def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(caps
         "check", DISPATCHING, "--inputs", "random", "--out", "output", "--fn", "nan_inf",
     ]) == 0
     reported = capsys.readouterr().out
-    assert "ctx_len is a range [1, 262145) that nothing bound; this run pinned it to 1" in reported
-    assert "seq_len is a range [1, 5)" in reported
+    assert "ctx_len is a range [0, 262144) that nothing bound; this run pinned it to 0" in reported
 
     assert cli.main([
         "check", DISPATCHING, "--inputs", "random", "--out", "output", "--fn", "nan_inf", "--json",
     ]) == 0
     pinned = json.loads(capsys.readouterr().out)["runs"][0]["pinned"]
-    assert {entry["dim"]: entry["pinned"] for entry in pinned} == {"ctx_len": 1, "seq_len": 1}
+    assert {entry["dim"]: entry["pinned"] for entry in pinned} == {"ctx_len": 0}
 
 
 def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys) -> None:
@@ -319,24 +333,23 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys) 
     deciding reads, so both are reported and the text carries the label too.
     """
     assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=1,64,4096,32768",
-        "--dim", "seq_len=1", "--out", "output", "--fn", "nan_inf", "--json",
+        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=0,64,4096,32768",
+        "--out", "output", "--fn", "nan_inf", "--json",
     ]) == 0
     runs = json.loads(capsys.readouterr().out)["runs"]
 
-    assert [run["dims"]["ctx_len"] for run in runs] == [1, 64, 4096, 32768]
+    assert [run["dims"]["ctx_len"] for run in runs] == [0, 64, 4096, 32768]
     assert [run["variant"]["display_name"] for run in runs] == [
         "head_on_cta", "head_on_cta", "ctx_split_kv", "ctx_split_kv"
     ]
     assert [run["variant"]["signature"] for run in runs] == [
-        "ctx_len$1_4096", "ctx_len$1_4096", "ctx_len$4096_262145", "ctx_len$4096_262145"
+        "ctx_len$0_4096", "ctx_len$0_4096", "ctx_len$4096_262144", "ctx_len$4096_262144"
     ]
 
     assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=4096",
-        "--dim", "seq_len=1", "--out", "output", "--fn", "nan_inf",
+        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=4096", "--out", "output", "--fn", "nan_inf",
     ]) == 0
-    assert "variant:   ctx_split_kv  ctx_len$4096_262145" in capsys.readouterr().out
+    assert "variant:   ctx_split_kv  ctx_len$4096_262144" in capsys.readouterr().out
 
 
 def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) -> None:
@@ -346,13 +359,12 @@ def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) ->
     if the reader can see where the coverage stops.
     """
     assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=262145",
-        "--dim", "seq_len=1", "--out", "output", "--fn", "nan_inf",
+        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=262144", "--out", "output", "--fn", "nan_inf",
     ]) == 1
     refused = capsys.readouterr().err
 
-    assert "declares no variant covering ctx_len=262145" in refused
-    assert "4096, 262145)" in refused
+    assert "declares no variant covering ctx_len=262144" in refused
+    assert "4096, 262144)" in refused
 
 
 def test_a_model_below_the_oracle_level_passes_with_a_warning(routing, capsys) -> None:
@@ -457,6 +469,32 @@ def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
         "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
     ]) == 1
     assert "needs --ckpt DIR" in capsys.readouterr().err
+
+
+def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsys) -> None:
+    """Reaching `router.routing` reads `router.w_router`: the checkpoint holds
+    that one tensor and none of the eight the block around it declares."""
+    assert cli.main(_routing_argv(
+        routing, "indices",
+        "--out", "output[0]", "--fn", "nan_inf", "--out", "output[1]", "--fn", "equal",
+    )) == 0
+    assert "weights the checkpoint" in capsys.readouterr().out
+
+
+def test_a_nested_twin_is_reached_through_the_child_it_is_declared_under(
+    twin, capsys
+) -> None:
+    """Selector descent on a twin: the child segment moves the twin and the
+    authored Module it is judged against, and the weight is read under the child's
+    own name. Resolution and loading only."""
+    assert cli.main([
+        "check", f"{twin}:NestedTwin.child.scaled", "--inputs", "random",
+        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
+    ]) == 0
+    reported = capsys.readouterr().out
+
+    assert "reference: evaluator on child.scaled" in reported
+    assert "max_violation 0" in reported
 
 
 def test_a_runtime_module_that_names_no_authored_module_is_refused(twin, capsys) -> None:
