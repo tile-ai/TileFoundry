@@ -27,6 +27,7 @@ class RuntimeModule:
     name: str                                    # mirrors the ir Module node name
     entry: str | None                            # mirrors the ir Module entry (metadata)
     modules: tuple["RuntimeModule", ...]         # children, registered explicitly in __init__
+    module: Module | None                        # the authored Module this stands for
     def __init__(self, name, entry=None, modules=()): ...
     def forward(self, *args): ...                # subclass-written orchestration — forward IS the step
     def __call__(self, *args): ...               # delegates to forward
@@ -51,6 +52,16 @@ class RuntimeModule:
     `Module` both have a `forward`, and on the same inputs the two must agree
     — `measure.check` comparing them against stated bounds (§1.6) is that
     contract.
+  - `module` names the authored `Module` a twin was generated from, so a
+    caller holding an implementation can reach what it is judged against. A
+    `RuntimeModule` that stands for no single authored Module — a compiled entry,
+    a hand-written subclass — MUST report `None` rather than something chosen
+    for it, and a caller that needs one MUST refuse instead of substituting.
+  - `module` is therefore reserved on a twin. An authored `Module` MAY name a
+    function, child or method `module`, and a generated twin binds each of those
+    as an attribute, which would shadow the accessor. `@runtime_module` MUST
+    reject such a Module when it is decorated, rather than generate a twin whose
+    accessor answers something else.
   - the base class itself holds no weights or resource, and never runs the
     HIR evaluator.
   - two origins: compiled — `tilefoundry.build` / `compile` / `jit` →

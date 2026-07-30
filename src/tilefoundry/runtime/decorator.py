@@ -14,6 +14,10 @@ from tilefoundry.runtime.resource import RuntimeResource
 
 _RUNTIME_FUNC_MARK = "_tilefoundry_runtime_func"
 
+#: Names a twin answers itself, so an authored Module may not also use them:
+#: functions and children become instance attributes and would shadow these.
+_RESERVED = ("module",)
+
 
 def runtime_func(fn: Callable) -> Callable:
     """Tag *fn* as a kernel body, signature-identical to the semantic ``@func``
@@ -67,6 +71,11 @@ class _Twin(RuntimeModule):
     is identical for all of them."""
 
     _ir: Module
+
+    @property
+    def module(self) -> Module:
+        """The authored ``Module`` this twin was generated from."""
+        return self._ir
 
     def load(self, resource: RuntimeResource) -> None:
         for name in self._ir.weights:
@@ -122,11 +131,31 @@ def runtime_module(sem: Module) -> Callable[[type], type]:
     child names, same entry, validated one-to-one here at decoration time."""
 
     def _decorate(cls_inner: type) -> type:
+        declared = (
+            {fn.name for fn in sem.functions}
+            | {child.name for child in sem.modules}
+            | set(sem.methods)
+        )
+        reserved = sorted(declared & set(_RESERVED))
+        if reserved:
+            raise TypeError(
+                f"@runtime_module {cls_inner.__name__!r}: Module {sem.name!r} declares "
+                f"{reserved}, which a runtime twin reserves; rename it in the authored "
+                f"Module"
+            )
+
         raw = {
             name: value
             for name, value in vars(cls_inner).items()
             if not (name.startswith("__") and name.endswith("__"))
         }
+        written = sorted(set(raw) & set(_RESERVED))
+        if written:
+            raise TypeError(
+                f"@runtime_module {cls_inner.__name__!r} writes {written}, which a "
+                f"runtime twin reserves; the generated class would answer it instead "
+                f"of naming the authored Module"
+            )
 
         kernel_names = {name for name, value in raw.items() if _is_kernel_impl(value)}
         child_names = {name for name, value in raw.items() if _is_child_impl(value)}

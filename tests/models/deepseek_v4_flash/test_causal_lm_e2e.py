@@ -5,6 +5,7 @@ check parity.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 import torch
@@ -364,6 +365,32 @@ def test_structure_mismatch_rejected(config, twins):
 
             @runtime_func
             def mla_attend_extra(self, *args):
+                raise AssertionError("never called")
+
+    # `module` is a name an authored Module may legitimately use, and a twin
+    # answers to it itself, so the collision is refused from either side.
+    with pytest.raises(TypeError, match="a runtime twin reserves"):
+        @runtime_module(replace(attention, methods={**attention.methods, "module": None}))
+        class ReservedInTheModule:
+            @runtime_func
+            def mla_kv_update(self, *args):
+                raise AssertionError("never called")
+
+            @runtime_func
+            def mla_attend(self, *args):
+                raise AssertionError("never called")
+
+    with pytest.raises(TypeError, match="a runtime twin reserves"):
+        @runtime_module(attention)
+        class ReservedInTheTwin:
+            module = "not a Module"
+
+            @runtime_func
+            def mla_kv_update(self, *args):
+                raise AssertionError("never called")
+
+            @runtime_func
+            def mla_attend(self, *args):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match=r"child module names.*missing \['moe'\]"):

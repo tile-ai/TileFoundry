@@ -23,6 +23,12 @@ class RuntimeModule:
         self.entry = entry
         self.modules = tuple(modules)
 
+    @property
+    def module(self):
+        """The authored ``Module`` this twin stands for, or ``None`` when there is
+        no such thing to name -- a compiled entry or a hand-written subclass."""
+        return None
+
     def forward(self, *args):
         raise NotImplementedError(
             f"RuntimeModule {self.name!r}: subclass must implement forward()"
