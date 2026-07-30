@@ -55,6 +55,32 @@ When to stop is yours to judge. Nothing in here decides that the numbers are goo
 enough; it only makes sure that whatever you decide, you decided it against a
 reference and not against the last thing you happened to measure.
 
+## Where your copy comes from
+
+`your_copy_of` is a command:
+
+```sh
+tilefoundry models qwen3_5_35b_a3b --source > mine.py
+```
+
+Then edit `mine.py` — merge two of a Module's functions into one, move a boundary,
+whatever the fusion is — and point the tools at it:
+
+```sh
+tilefoundry check mine.py:MyFused.fused --inputs random --out output \
+    --fn allclose --atol 1e-6 --rtol 1e-6
+```
+
+A target is `file:Class[.child...][.function]`, and that file is any file you can
+read. Nothing in the command surface knows or cares that the shipped models exist,
+so a fused copy is not a special case: it is the ordinary case pointed at your file.
+
+You do not have to protect the original. What `--source` prints lives in the
+installation, and an installation is not where you edit — so the reference stays the
+reference because of where it sits, not because anything stops you. Keeping it
+intact is the point: the moment you fuse, that copy is the only thing that still
+says what the answer was supposed to be.
+
 ## Siblings are independent; a parent is not
 
 There is no dependency edge between siblings. Two leaves under one parent neither

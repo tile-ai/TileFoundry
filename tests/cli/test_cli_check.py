@@ -99,6 +99,26 @@ class WeightedTwin:
         return x * w
 
 
+@module(entry="fused", target=CudaTarget())
+class Fused:
+    topologies = (Topology("cta", 168),)
+
+    @func
+    def fused(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
+        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
+            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
+            squared = tf.square(x_local)
+            shifted = tf.sub(squared, x_local)
+            return tf.reshard(shifted, (168 @ cta.block,), "gmem")
+
+
+@runtime_module(Fused)
+class FusedTwin:
+    @runtime_func
+    def fused(self, x):
+        return x * x - x
+
+
 @module(target=CudaTarget())
 class Nested:
     child = Weighted
@@ -398,6 +418,13 @@ def test_a_twin_is_compared_against_the_module_it_states(twin, capsys) -> None:
         "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
     ]) == 1
     assert "FAIL" in capsys.readouterr().out
+
+    # The fused copy: what the file above spends two functions on, in one.
+    assert cli.main([
+        "check", f"{twin}:FusedTwin.fused", "--inputs", "random",
+        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
+    ]) == 0
+    assert "reference: evaluator on Fused.fused" in capsys.readouterr().out
 
 
 def test_a_whole_module_is_checked_against_an_expected_output_file(twin, tmp_path, capsys) -> None:

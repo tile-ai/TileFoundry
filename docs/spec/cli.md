@@ -49,6 +49,14 @@ hardware facts, so such a selection MUST be rejected naming the Module that
 would declare its context, rather than analysed or scheduled against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
+The file in `SOURCE` is any readable Python file. Nothing privileges the model
+sources this project ships: a reader who copies one out, merges two of a Module's
+functions into one and points a verb at the result MUST reach the same command
+surface, because coarsening a boundary is done by editing source and there is no
+other mechanism for it. What `models <name> --source` prints stays the reference to
+compare against, and it stays intact because an installation is not where anybody
+edits — no verb enforces that, and none should.
+
 `check` reads the same `SOURCE` shape and one thing more: its selector MAY name a
 runtime twin instead of an authored Module. A twin generated from an authored
 Module states which Module that is ([runtime §1.1](./runtime.md#11-runtimemodule)),
