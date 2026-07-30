@@ -15,14 +15,24 @@ def build_domain(extents: tuple) -> "isl.set":
     return domain
 
 
-def shape_from_relation(relation) -> tuple:
+def shape_from_relation(relation, source_extents: tuple | None = None) -> tuple:
     """Derive the output shape from the relation's output map + bounded domain.
 
     Each output map result axis is a pure projection of a domain dim (its
     extent is recovered via ``isl_utility.to_dim`` and ``relation.param_map``)
     or a constant (a size-1 output axis). Anything else fails closed.
+
+    An extent of 0 makes the whole domain empty, and an empty domain has no
+    per-axis maximum left to read: *source_extents* is what the domain was built
+    from, and a projected axis takes its extent from there instead.
     """
     domain = relation.domain
+    empty = domain.is_empty()
+    if empty and source_extents is None:
+        raise ValueError(
+            "the iteration domain is empty, so no axis extent can be recovered "
+            "from it; pass the extents it was built from"
+        )
     output_map = relation.maps[-1]
     ma = output_map.as_pw_multi_aff().as_multi_aff()
     n_out = ma.dim(isl.dim_type.OUT)
@@ -38,8 +48,11 @@ def shape_from_relation(relation) -> tuple:
         if not used:
             shape.append(1)
         elif len(used) == 1 and used[0][1] == 1:
-            extent = domain.dim_max(used[0][0]).add_constant(1)
-            shape.append(to_dim(extent, relation.param_map))
+            if empty:
+                shape.append(source_extents[used[0][0]])
+            else:
+                extent = domain.dim_max(used[0][0]).add_constant(1)
+                shape.append(to_dim(extent, relation.param_map))
         else:
             raise ValueError(
                 f"output axis {o} is not a pure projection or constant; "

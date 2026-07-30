@@ -147,7 +147,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     # Output shape comes from the relation (domain + output map), not a separate
     # hand-written rule: output axes are [batch.., M, N] (K reduced); the K
     # domain dim and N output axis fall out of the output shape's rank.
-    out_shape = shape_from_relation(relation)
+    out_batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
+    out_shape = shape_from_relation(
+        relation, (*out_batch, lhs.shape[-2], rhs.shape[-1], lhs.shape[-1])
+    )
     k_domain_dim = len(out_shape)
     try:
         shard = derive_output_shard_layout(

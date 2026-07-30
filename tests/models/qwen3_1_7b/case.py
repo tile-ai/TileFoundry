@@ -72,7 +72,7 @@ CASE = ModelCase(
             id="qwen3_1_7b/sized/decoder_layer",
             selector="decoder_layer",
             dims={"ctx_len": 1024},
-            ceiling={"ctx_len": SHAPE.max_ctx},
+            ceiling={"ctx_len": SHAPE.max_ctx - 1},
         ),
     ),
 )

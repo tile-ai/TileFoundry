@@ -115,7 +115,7 @@ CASE = ModelCase(
             id="kimi_linear_48b_a3b/sized/mla_attention",
             selector="mla.mla_attention",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": CONFIG.max_ctx},
+            ceiling={"ctx_len": CONFIG.max_ctx - 1},
         ),
     ),
 )

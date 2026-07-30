@@ -96,11 +96,10 @@ from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.ir.types.dim import DimVar
 
-# The active context length: the only range this model carries. DimVar bounds
-# are half-open [lo, hi), so the envelope's exclusive upper bound is max_ctx + 1
-# to keep the largest supported context inside it. The lower bound is 1: a step
-# with no prior context is a prefill, not a decode step.
-C = DimVar("ctx_len", 1, config.max_ctx + 1)
+# The prior cache this step reads: the only range this model carries. Zero is a
+# first step, and the exclusive upper bound is max_ctx because a position beyond
+# the rotary cache has no embedding to gather.
+C = DimVar("ctx_len", 0, config.max_ctx)
 
 # One token per step.
 S = 1
@@ -364,8 +363,8 @@ class MiniCPM3_4B_Decoder:
     def init_caches(self, device="cuda"):
         """The per-layer cache container, zero positions long.
 
-        A container, not a decode start: no prefix produced these, and `ctx_len`
-        is bounded below by 1, so `forward` needs a context the caller prefilled.
+        `ctx_len` admits 0, so these are a decode start: the first step of a
+        sequence attends the one position it brings itself.
         MLA's halves differ in shape -- the key carries the nope and rope slices,
         the value only its own head dim -- so the pair is stated twice.
         """

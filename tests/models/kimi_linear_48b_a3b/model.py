@@ -64,11 +64,10 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
     they mean -- ``REAL`` or ``SMALL_MOE`` from ``config.py`` -- and get a tree
     that shares no IR node with any other call's.
     """
-    # The active context length: the only range this model carries, and only the MLA
-    # submodule carries it. Bounds are half-open, so the exclusive upper bound is
-    # max_ctx + 1 to keep the largest supported context inside it; the lower bound is
-    # 1 because a step with no prior context is a prefill, not a decode step.
-    C = DimVar("ctx_len", 1, config.max_ctx + 1)
+    # The prior cache this step reads: the only range this model carries, and only
+    # the MLA submodule carries it. Zero is a first step, and the exclusive upper
+    # bound is max_ctx, which is also the position table's extent.
+    C = DimVar("ctx_len", 0, config.max_ctx)
 
     # One token per step.
     S = 1

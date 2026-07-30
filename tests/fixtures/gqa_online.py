@@ -1,12 +1,12 @@
 """Flash / online-softmax GQA decode core + context-length `specialize`, with
 the two compute-distribution strategies expressed in the dataflow itself.
 
-Decode regime: batch 1, a small dynamic query length ``S`` (``seq_len``, designed
-range 1..4 for speculative / chunked decode), ``NUM_Q_HEADS`` query heads sharing
-``NUM_KV_HEADS`` KV heads (``GQA_GROUP`` queries per KV head), head dim
-``HEAD_DIM``. The KV cache / active context length ``C`` (``ctx_len``) is the
-large dynamic dimension (designed up to ``MAX_CTX`` = 256K) — and the dimension
-the GQA prototype specializes on.
+Decode regime: batch 1, **one token per step**, ``NUM_Q_HEADS`` query heads
+sharing ``NUM_KV_HEADS`` KV heads (``GQA_GROUP`` queries per KV head), head dim
+``HEAD_DIM``. The prior-cache length ``C`` (``ctx_len``) is the only dynamic
+dimension — designed up to ``MAX_CTX`` = 256K — and the one the GQA prototype
+specializes on. Each step is handed the cache before it plus its own ``k_new`` /
+``v_new``, so a step with no prior cache still attends one position: itself.
 
 Authoring surface (per docs/spec/parser.md §8): ``gqa_online_attend`` is a
 ``pass``-bodied dispatch **prototype**; the two strategies are registered as
@@ -21,7 +21,10 @@ Authoring surface (per docs/spec/parser.md §8): ``gqa_online_attend`` is a
   module-level ``@func``s. ``_ctx_partials`` reshapes the KV context into
   ``NUM_SPLITS`` contiguous blocks (one per CTA, ``NUM_SPLITS == NUM_CTA``) and
   computes each block's *own* local softmax partial ``(m_p, l_p, o_p)``;
-  ``_ctx_combine`` flash-merges the partials over the ``NUM_SPLITS`` axis. The
+  ``_ctx_combine`` flash-merges the partials over the ``NUM_SPLITS`` axis and
+  folds this step's own K/V there — the cross-CTA merge is the one place the
+  current token may be admitted, since it must be counted once, not once per
+  split. The
   function-call boundary *models* the intended kernel boundary for lowering —
   the cross-CTA handoff (materialize partials to gmem, or a persistent-kernel
   barrier) is lowering work, not expressed in HIR and not realized by this
@@ -30,8 +33,8 @@ Authoring surface (per docs/spec/parser.md §8): ``gqa_online_attend`` is a
   silently dropping the tail and returning a wrong answer.
 
 ``DimVar`` bounds are half-open ``[lo, hi)`` (``hi`` exclusive; see the
-partition verifier): the envelope upper bounds below are ``MAX_* + 1`` so the
-maximum supported length is included.
+partition verifier), and the prior cache starts at 0: a step with nothing cached
+attends the one position it brings itself.
 """
 from __future__ import annotations
 
@@ -54,15 +57,14 @@ NUM_Q_HEADS = 32
 NUM_KV_HEADS = 4
 GQA_GROUP = NUM_Q_HEADS // NUM_KV_HEADS  # 8
 
-# Decode regime ceilings (largest supported lengths, inclusive value). DimVar /
-# DimVarRangePat bounds are half-open [lo, hi), so the envelopes below use
-# MAX_* + 1 as the exclusive upper bound.
-MAX_SEQ = 4            # query length 1..4
-MAX_CTX = 262144       # context / cache length 1..262144 (256K)
+# Position envelope for the decode regime: the exclusive upper bound on the prior
+# cache, so the longest one is MAX_CTX - 1 and this step's own token makes MAX_CTX
+# positions in all.
+MAX_CTX = 262144       # 256K
 
 # Context-length boundary that selects the distribution strategy (NOT a
-# performance threshold): head-on-CTA covers [1, SMALL_CONTEXT_T) (ctx_len up
-# to SMALL_CONTEXT_T - 1); context-on-CTA covers [SMALL_CONTEXT_T, MAX_CTX + 1).
+# performance threshold): head-on-CTA covers [0, SMALL_CONTEXT_T);
+# context-on-CTA covers [SMALL_CONTEXT_T, MAX_CTX).
 SMALL_CONTEXT_T = 4096
 
 # CTA mesh extent; the context-on-CTA strategy cuts the KV context into this many
@@ -71,8 +73,11 @@ SMALL_CONTEXT_T = 4096
 NUM_CTA = 8
 NUM_SPLITS = NUM_CTA
 
-S = DimVar("seq_len", 1, MAX_SEQ + 1)   # [1, 5) = 1..4
-C = DimVar("ctx_len", 1, MAX_CTX + 1)   # [1, 262145) = 1..262144
+# One token per step: the query length is a fixed 1, not a dimension. A range
+# here would be speculative or chunked decode, which needs multi-token causal
+# semantics for the current K/V that one-token decode does not define.
+S = 1
+C = DimVar("ctx_len", 0, MAX_CTX)   # [0, 262144) -- 0 is a first step
 # Per-split context block (context-on-CTA): C is cut into NUM_SPLITS blocks, so
 # the block length is the context length over the number of splits. It is that
 # expression rather than a name of its own, because a second named dimension
@@ -100,17 +105,21 @@ class GqaOnline:
         q: Tensor[(1, S, _HQ, _D), "bf16"],
         k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16"],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16"],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
         # Dispatch prototype: the strategy implementations live in the two
         # `.specialize` variants below, selected by the runtime ctx_len.
         pass
 
 
-    @gqa_online_attend.specialize(DimVarRangePat("ctx_len", 1, SMALL_CONTEXT_T))
+    @gqa_online_attend.specialize(DimVarRangePat("ctx_len", 0, SMALL_CONTEXT_T))
     def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
         k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16"],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16"],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
         # head-on-CTA: split the query-head axis across the CTA mesh (`_HQ @ cta`),
         # each CTA running the full online-softmax over the context (heads are
@@ -140,6 +149,17 @@ class GqaOnline:
                 l = l * corr + p
                 o = o * corr + p * v_i
                 m = m_new
+            # This step's own K/V, folded into the same accumulators exactly once
+            # after the prior cache is scanned. With no prior cache the loop runs
+            # zero times and this is the only position the step attends.
+            k_n = tf.cast(tf.repeat_interleave(k_new, repeats=_G, axis=2), dtype="f32")
+            v_n = tf.cast(tf.repeat_interleave(v_new, repeats=_G, axis=2), dtype="f32")
+            score_n = tf.reduce(q_s * k_n, axes=(-1,), keepdim=True, kind="sum")
+            m_all = tf.max(m, score_n)
+            p_n = tf.exp(score_n - m_all)
+            corr_n = tf.exp(m - m_all)
+            l = l * corr_n + p_n
+            o = o * corr_n + p_n * v_n
             return tf.cast(o / l, dtype="bf16")
 
 
@@ -199,6 +219,9 @@ class GqaOnline:
         m_p: Tensor[(1, S, _HQ, NUM_SPLITS, 1), "f32"],
         l_p: Tensor[(1, S, _HQ, NUM_SPLITS, 1), "f32"],
         o_p: Tensor[(1, S, _HQ, NUM_SPLITS, _D), "f32"],
+        q: Tensor[(1, S, _HQ, _D), "bf16"],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16"],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16"],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
         # Flash log-sum-exp merge of the per-CTA partials over the NUM_SPLITS axis.
         # `with Mesh(cta)` keeps this on the same CTA mesh as `_ctx_partials`: the
@@ -209,20 +232,38 @@ class GqaOnline:
             alpha = tf.exp(m_p - m)                                           # rescale per block
             l = tf.reduce(alpha * l_p, axes=(-2,), keepdim=True, kind="sum")  # [1,S,Hq,1,1]
             o = tf.reduce(alpha * o_p, axes=(-2,), keepdim=False, kind="sum") # [1,S,Hq,D]
-            return tf.cast(o / tf.reshape(l, new_shape=(1, S, _HQ, 1)), dtype="bf16")
+            # This step's own K/V joins here and only here -- one merge, not one per
+            # split. Its partial is over a single position, so the local max is the
+            # score itself, its l is 1 and its o is v.
+            q_f = tf.cast(q, dtype="f32")
+            q_s = q_f * tf.full_like(q_f, value=_SCALE)
+            k_n = tf.cast(tf.repeat_interleave(k_new, repeats=_G, axis=2), dtype="f32")
+            v_n = tf.cast(tf.repeat_interleave(v_new, repeats=_G, axis=2), dtype="f32")
+            score_n = tf.reduce(q_s * k_n, axes=(-1,), keepdim=True, kind="sum")
+            m_blk = tf.reshape(m, new_shape=(1, S, _HQ, 1))
+            l_blk = tf.reshape(l, new_shape=(1, S, _HQ, 1))
+            m_all = tf.max(m_blk, score_n)
+            corr = tf.exp(m_blk - m_all)
+            corr_n = tf.exp(score_n - m_all)
+            return tf.cast(
+                (o * corr + corr_n * v_n) / (l_blk * corr + corr_n), dtype="bf16"
+            )
 
 
-    @gqa_online_attend.specialize(DimVarRangePat("ctx_len", SMALL_CONTEXT_T, MAX_CTX + 1))
+    @gqa_online_attend.specialize(DimVarRangePat("ctx_len", SMALL_CONTEXT_T, MAX_CTX))
     def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
         k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16"],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16"],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
-        # Two kernels: per-CTA partials, then a flash combine. The function-call
-        # boundary models the intended kernel boundary; lowering (not this example)
-        # realizes the cross-CTA handoff.
+        # Two kernels: per-CTA partials over the prior cache, then a flash combine
+        # that also folds this step's own position. The function-call boundary models
+        # the intended kernel boundary; lowering (not this example) realizes the
+        # cross-CTA handoff.
         m_p, l_p, o_p = _ctx_partials(q, k_cache, v_cache)
-        return _ctx_combine(m_p, l_p, o_p)
+        return _ctx_combine(m_p, l_p, o_p, q, k_new, v_new)
 
 
 gqa_online_attend = GqaOnline.lookup("gqa_online_attend")
@@ -233,7 +274,6 @@ __all__ = [
     "SMALL_CONTEXT_T",
     "NUM_CTA",
     "NUM_SPLITS",
-    "MAX_SEQ",
     "MAX_CTX",
     "HEAD_DIM",
     "NUM_Q_HEADS",

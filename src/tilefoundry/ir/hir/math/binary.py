@@ -156,7 +156,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         # relation builds the broadcast domain, the output shape is read back
         # from it, and the shard engine consumes the same maps.
         relation = build_relation(call, (lhs_ty, rhs_ty), ctx)
-        out_shape = shape_from_relation(relation)
+        out_shape = shape_from_relation(
+            relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape)
+        )
         shard = None
         if isinstance(la, ShardLayout) or isinstance(lb, ShardLayout):
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)

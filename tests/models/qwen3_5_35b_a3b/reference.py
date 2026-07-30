@@ -96,7 +96,7 @@ def hf_layer(block_type: str, device: str = DEVICE, whole_layer: bool = False):
 @functools.lru_cache(maxsize=None)
 def rope_caches(device: str = DEVICE):
     """cos / sin caches covering every position a step may be decoded at."""
-    return config.rope_caches(total=config.REAL.max_ctx + 1, device=device)
+    return config.rope_caches(total=config.REAL.max_ctx, device=device)
 
 
 def drawn_hidden(ctx_len: int, device: str = DEVICE):

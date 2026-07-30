@@ -40,11 +40,10 @@ _QSCALE = 1.0 / math.sqrt(config.gdn_head_k_dim)
 _L2_EPS = 1e-6
 
 
-# The active context length: the only range this kernel carries. DimVar bounds
-# are half-open [lo, hi), so the envelope's exclusive upper bound is max_ctx + 1
-# to keep the largest supported context inside it. The lower bound is 1: a step
-# with no prior context is a prefill, not a decode step.
-C = DimVar("ctx_len", 1, config.max_ctx + 1)
+# The prior cache this step reads: the only range this kernel carries. Zero is a
+# first step, and the exclusive upper bound is the authoring envelope max_ctx, so
+# with this step's own token the longest context is max_ctx positions.
+C = DimVar("ctx_len", 0, config.max_ctx)
 
 # One token per step.
 
@@ -55,10 +54,10 @@ _ROT = config.rotary_dim
 _PASS = config.pass_dim
 _G = config.gqa_group
 
-# The rotary caches need one row per position a step may be decoded at, which is
-# at most ``max_ctx``; ``max_position_embeddings`` is 262144 and a cache that
-# size is 67 MB of zeros nothing reads.
-_ROPE_ROWS = config.max_ctx + 1
+# One row per position a step may be decoded at: `pos_ids` is the prior-cache
+# length, which stops one below ``max_ctx``. ``max_position_embeddings`` is 262144
+# and a cache that size is 67 MB of zeros nothing reads.
+_ROPE_ROWS = config.max_ctx
 
 
 # One token per step.
@@ -562,9 +561,8 @@ class Qwen3_5Decoder:
         A linear-attention layer's two halves are genuinely zero at the start:
         Hugging Face left-pads the convolution window when the context is shorter
         than it, and `initial_state=None` is the zero recurrent matrix. An
-        attention layer gets a container of no positions -- not a decode start,
-        since no prefix produced it and `ctx_len` is bounded below by 1, so
-        `forward` needs a context the caller prefilled.
+        attention layer gets a container of no positions, which `ctx_len` admits:
+        the first step of a sequence attends the one position it brings itself.
         """
         import torch  # noqa: PLC0415
 

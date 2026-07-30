@@ -44,6 +44,14 @@ CASES = [
         inputs=(make_tensor_type((16, 8), DType.bf16), make_tensor_type((8, 32), DType.f32)),
         expected=ExpectedError(match="dtype mismatch"),
     ),
+    TypeInferCase(
+        # M of no rows: the [batch.., M, N, K] domain is empty, so M and N come
+        # from the extents it was built from rather than back out of it.
+        name="empty_m",
+        op=_MM,
+        inputs=(make_tensor_type((0, 16), DType.bf16), make_tensor_type((16, 8), DType.bf16)),
+        expected=make_tensor_type((0, 8), DType.bf16),
+    ),
 ]
 
 

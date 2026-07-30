@@ -42,6 +42,9 @@ _PSUM_AXIS1 = make_shard_tensor_type(
 CASES = [
     # Right-aligned NumPy broadcast: a lower-rank operand against a higher-rank one.
     TypeInferCase("different_rank_broadcast", _ADD, (make_tensor_type((4, 8), _F), make_tensor_type((8,), _F)), make_tensor_type((4, 8), _F)),
+    # An axis of no elements. The iteration domain is then empty, so the extents
+    # come from the shapes the domain was built from rather than back out of it.
+    TypeInferCase("empty_axis", _ADD, (make_tensor_type((1, 0, 8), _F), make_tensor_type((8,), _F)), make_tensor_type((1, 0, 8), _F)),
     # lhs splits axis 0, rhs splits axis 1 on the same mesh axis → conflict,
     # not a silent lhs pick.
     TypeInferCase(

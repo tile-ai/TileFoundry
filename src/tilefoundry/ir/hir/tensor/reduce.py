@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import isl
+import torch
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -104,12 +105,35 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
+#: The kinds whose reduction over no elements has an identity (hir.md Reduce).
+_EMPTY_IDENTITY = (ReduceKind.MAX, ReduceKind.ABS_MAX)
+
+
+def _least_representable(dtype: "torch.dtype"):
+    """The smallest value *dtype* can hold: ``False``, ``iinfo.min``, or ``-inf``
+    where the dtype round-trips it and ``finfo.min`` where it does not."""
+    if dtype is torch.bool:
+        return False
+    if not dtype.is_floating_point:
+        return torch.iinfo(dtype).min
+    negative_infinity = float("-inf")
+    held = torch.tensor(negative_infinity, dtype=torch.float32).to(dtype).to(torch.float32)
+    return negative_infinity if held.item() == negative_infinity else torch.finfo(dtype).min
+
+
 @register_eval(Reduce)
 def _eval_reduce(ctx):
     x = ctx.args[0].data
     axes = tuple(ctx.op.axes)
     keepdim = ctx.op.keepdim
     kind = ctx.op.kind
+    if kind in _EMPTY_IDENTITY and any(x.shape[axis] == 0 for axis in axes):
+        identity = 0 if kind is ReduceKind.ABS_MAX else _least_representable(x.dtype)
+        reduced = list(x.shape)
+        for axis in axes:
+            reduced[axis] = 1
+        out = torch.full(reduced, identity, dtype=x.dtype, device=x.device)
+        return TensorValue(data=out if keepdim else out.squeeze(dim=axes), type=ctx.result_type)
     if kind is ReduceKind.MEAN:
         out = x.mean(dim=axes, keepdim=keepdim)
     elif kind is ReduceKind.SUM:

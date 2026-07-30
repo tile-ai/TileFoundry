@@ -97,7 +97,7 @@ CASE = ModelCase(
             id="gemma2_2b/sized/decoder_layer",
             selector="decoder_layer",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": REAL.max_ctx},
+            ceiling={"ctx_len": REAL.max_ctx - 1},
         ),
     ),
 )

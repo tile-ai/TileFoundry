@@ -89,7 +89,7 @@ CASE = ModelCase(
             id="minicpm3_4b/sized/decoder_layer",
             selector="decoder_layer",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": SHAPE.max_ctx},
+            ceiling={"ctx_len": SHAPE.max_ctx - 1},
         ),
     ),
 )

@@ -610,9 +610,9 @@
         },
         {
           "functions": [
-            "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-            "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-            "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+            "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+            "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+            "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -641,9 +641,9 @@
           "modules": [
             {
               "functions": [
-                "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -761,9 +761,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -836,9 +836,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -911,9 +911,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -986,9 +986,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1061,9 +1061,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1136,9 +1136,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1211,9 +1211,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1286,9 +1286,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1361,9 +1361,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1436,9 +1436,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4097, 64), \"f32\"], sin_cache: Tensor[(4097, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
                   ],
                   "leaf": true,
                   "modules": [],

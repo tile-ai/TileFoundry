@@ -27,39 +27,39 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.ir.types.dim import DimVar
 
 ENTRY = GqaOnline.entry_function()
-STEADY = {"ctx_len": SMALL_CONTEXT_T, "seq_len": 1}
+STEADY = {"ctx_len": SMALL_CONTEXT_T}
 _LOOP_CTX = DimVar("loop_ctx", 1, 4097)
 
 
 def test_the_model_is_dynamic_in_its_context_length_alone() -> None:
     """A derived extent is an expression, so it is not a second dimension the
     caller has to know how to compute."""
-    assert set(residual_dims(ENTRY)) == {"ctx_len", "seq_len"}
+    assert set(residual_dims(ENTRY)) == {"ctx_len"}
 
 
 def test_a_size_selects_the_one_implementation_that_covers_it() -> None:
-    short = variant_for(ENTRY, {"ctx_len": SMALL_CONTEXT_T - 1, "seq_len": 1})
+    short = variant_for(ENTRY, {"ctx_len": SMALL_CONTEXT_T - 1})
     long = variant_for(ENTRY, STEADY)
 
     assert short is not long
     assert [(p.dim_var, p.lo, p.hi) for p in short.specializations] == [
-        ("ctx_len", 1, SMALL_CONTEXT_T)
+        ("ctx_len", 0, SMALL_CONTEXT_T)
     ]
     assert [(p.dim_var, p.lo, p.hi) for p in long.specializations] == [
-        ("ctx_len", SMALL_CONTEXT_T, MAX_CTX + 1)
+        ("ctx_len", SMALL_CONTEXT_T, MAX_CTX)
     ]
 
 
 def test_a_size_no_implementation_covers_is_refused() -> None:
     with pytest.raises(SpecializationError, match="no variant covering"):
-        variant_for(ENTRY, {"ctx_len": MAX_CTX + 1, "seq_len": 1})
+        variant_for(ENTRY, {"ctx_len": MAX_CTX})
 
 
 def test_choosing_an_implementation_needs_the_dimension_it_turns_on() -> None:
     """Selection reads the dimensions the variants name. Skipping an unstated
     one would pick an implementation the caller never chose."""
     with pytest.raises(SpecializationError, match="was not given a size"):
-        variant_for(ENTRY, {"seq_len": 1})
+        variant_for(ENTRY, {"batch": 4})
 
 
 def test_a_dimension_the_function_does_not_have_is_refused() -> None:
@@ -192,12 +192,14 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     strategy's range, and the assertion below is that both routes choose it.
     """
     context = 32
-    dims = {"ctx_len": context, "seq_len": 1}
+    dims = {"ctx_len": context}
 
     torch.manual_seed(0)
     q = torch.randn(1, 1, 32, 128, dtype=torch.bfloat16)
     k = torch.randn(1, context, 4, 128, dtype=torch.bfloat16)
     v = torch.randn(1, context, 4, 128, dtype=torch.bfloat16)
+    k_new = torch.randn(1, 1, 4, 128, dtype=torch.bfloat16)
+    v_new = torch.randn(1, 1, 4, 128, dtype=torch.bfloat16)
 
     # What the evaluator would pick, decided the way it decides: the one
     # pattern that admits the context length the arguments actually carry.
@@ -209,8 +211,10 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     assert len(admitted) == 1
     assert variant_for(ENTRY, dims) is admitted[0]
 
-    expected = evaluate(ENTRY, q, k, v, device="cpu")
-    got = evaluate(specialize_function(ENTRY, dims), q, k, v, device="cpu")
+    expected = evaluate(ENTRY, q, k, v, k_new, v_new, device="cpu")
+    got = evaluate(
+        specialize_function(ENTRY, dims), q, k, v, k_new, v_new, device="cpu"
+    )
 
     assert got.shape == expected.shape
     assert got.dtype == expected.dtype

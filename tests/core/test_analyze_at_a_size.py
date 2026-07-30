@@ -29,7 +29,7 @@ from tilefoundry.target import CudaTarget
 
 #: Small enough to solve and to analyse on a CPU gate.
 CONTEXT = 32
-DIMS = {"ctx_len": CONTEXT, "seq_len": 1}
+DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
 #: What is asked here is that a plan exists for the stated size and verifies against
 #: the program of that size. The solver cannot prove this makespan optimal, so left
@@ -135,7 +135,7 @@ def test_a_size_no_variant_covers_is_refused() -> None:
             module,
             module.entry_function(),
             analysis="compute-cost",
-            dims={"ctx_len": MAX_CTX + 1, "seq_len": 1},
+            dims={"ctx_len": MAX_CTX},
         )
 
 
@@ -152,15 +152,15 @@ def test_a_dimension_the_function_does_not_have_is_refused() -> None:
 
 
 def test_a_dimension_left_unbound_is_refused() -> None:
-    """Partial binding is useful while the choices are being made and useless
-    to an analysis, which would meet the unbound one as an extent that is not a
-    number."""
+    """Stating some other dimension is useful while the choices are being made
+    and useless to an analysis, which would meet the unbound one as an extent
+    that is not a number."""
     module = _aimed()
 
     with pytest.raises(AnalysisError, match="was not given a size"):
         analyze(
             module, module.entry_function(), analysis="compute-cost",
-            dims={"seq_len": 1},
+            dims={"batch": 4},
         )
 
 
@@ -173,11 +173,6 @@ def test_an_empty_or_malformed_size_is_refused_rather_than_ignored() -> None:
         analyze(module, entry, analysis="compute-cost", dims={})
     with pytest.raises(AnalysisError, match="takes an integer extent"):
         analyze(module, entry, analysis="compute-cost", dims={"ctx_len": 32.0})
-    # Zero is refused by variant selection, which runs first and gives the
-    # more useful message: no implementation covers that length at all. The
-    # declared-range check is exercised where it can be reached, over a type.
-    with pytest.raises(AnalysisError, match="no variant covering"):
-        analyze(module, entry, analysis="compute-cost", dims={**DIMS, "ctx_len": 0})
 
 
 def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
@@ -216,7 +211,7 @@ def test_scheduling_refuses_a_size_no_variant_covers() -> None:
             module.entry_function(),
             topology="cta",
             options=SOLVER,
-            dims={"ctx_len": MAX_CTX + 1, "seq_len": 1},
+            dims={"ctx_len": MAX_CTX},
         )
 
 

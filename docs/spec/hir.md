@@ -628,6 +628,12 @@ class Reduce(Op):
 ```
 - constraints:
   - The logical result shape follows numpy reduction rules.
+  - A reduction over an axis of no elements MUST return that kind's identity
+    rather than fail. For `max` that is the least value its result dtype can
+    hold, which is not always `-inf`: an integer dtype cannot hold `-inf`,
+    `bool`'s least value is `False`, and a finite-only float has no infinity.
+    `abs_max` is 0, its results being magnitudes. `sum` is 0. `mean` has no
+    identity — there is nothing to divide by — so it MUST NOT invent one.
   - Storage is preserved.
   - Plain input layout passes through unchanged.
   - For `ShardLayout` input, every split layout position that belongs to a

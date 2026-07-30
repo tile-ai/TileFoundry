@@ -103,10 +103,10 @@ from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.types.dim import DimVar
 
-# The active context length: the only range this model carries. DimVar bounds are
-# half-open, so the envelope's exclusive upper bound admits max_ctx itself. The
-# lower bound is 1: a step with no prior context is a prefill, not a decode step.
-C = DimVar("ctx_len", 1, config.max_ctx + 1)
+# The prior cache this step reads: the only range this model carries. Zero is a
+# first step, and the exclusive upper bound is the window (max_ctx), so with this
+# step's own token the total is one `_within_window` admits.
+C = DimVar("ctx_len", 0, config.max_ctx)
 
 # One token per step.
 S = 1
@@ -359,8 +359,8 @@ class Gemma2_2B_Decoder:
     def init_caches(self, device="cuda"):
         """The per-layer cache container, zero positions long.
 
-        A container, not a decode start: no prefix produced these, and `ctx_len`
-        is bounded below by 1, so `forward` needs a context the caller prefilled.
+        `ctx_len` admits 0, so these are a decode start: the first step of a
+        sequence attends the one position it brings itself.
         """
         import torch  # noqa: PLC0415
 

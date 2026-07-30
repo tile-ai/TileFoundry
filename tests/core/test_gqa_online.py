@@ -1,13 +1,15 @@
 """Flash / online-softmax GQA decode core (`@func` DSL) with context-length
 `specialize` and the two CTA-distribution strategies.
 
-Decode regime: query length `seq_len` is a small dynamic dim (1..4); the KV
-context length `ctx_len` is the large dynamic dim (designed to 256K) and the
-dimension the prototype specializes on. The tests are evaluator-vs-reference
-parity (this folder's convention): each variant — and the dispatch prototype —
-must compute the same attention as a torch reference. The one non-parity test
-is the fail-closed regression for non-split-aligned `ctx_len` (the split-KV
-variant must raise, not silently drop the tail).
+Decode regime: one token per step (the query length is a fixed 1), handed the
+prior cache plus its own `k_new` / `v_new`; the prior-cache length `ctx_len` is
+the large dynamic dim (designed to 256K) and the dimension the prototype
+specializes on. The tests are evaluator-vs-reference parity (this folder's
+convention): each variant — and the dispatch prototype — must compute the same
+attention as a torch reference, which attends the cache and this step's own
+position. The one non-parity test is the fail-closed regression for
+non-split-aligned `ctx_len` (the split-KV variant must raise, not silently drop
+the tail).
 """
 from __future__ import annotations
 
@@ -39,57 +41,64 @@ _SCALE = 1.0 / math.sqrt(D)
 _HEAD_VARIANT, _CTX_VARIANT = gqa_online_attend.variants
 
 
-def _ref(q, k, v):
-    """Standard (materialized, full / non-causal) GQA softmax attention, f32."""
-    kb = k.repeat_interleave(G, dim=2).float()  # [1, C, Hq, D]
-    vb = v.repeat_interleave(G, dim=2).float()
-    scores = torch.einsum("bshd,bchd->bshc", q.float(), kb) * _SCALE  # [1, S, Hq, C]
+def _ref(q, k, v, k_new, v_new):
+    """Standard (materialized, non-causal) GQA softmax attention over the prior
+    cache plus this step's own position, f32."""
+    kb = torch.cat([k, k_new], dim=1).repeat_interleave(G, dim=2).float()  # [1, C+1, Hq, D]
+    vb = torch.cat([v, v_new], dim=1).repeat_interleave(G, dim=2).float()
+    scores = torch.einsum("bshd,bchd->bshc", q.float(), kb) * _SCALE  # [1, 1, Hq, C+1]
     probs = torch.softmax(scores, dim=-1)
-    return torch.einsum("bshc,bchd->bshd", probs, vb)  # [1, S, Hq, D]
+    return torch.einsum("bshc,bchd->bshd", probs, vb)  # [1, 1, Hq, D]
 
 
-def _inputs(seq, ctx):
-    torch.manual_seed(seq * 100003 + ctx)
-    q = (torch.randn(1, seq, Hq, D) * 0.1).bfloat16()
+def _inputs(ctx):
+    """One decode step: the prior cache of length *ctx*, plus its own K/V."""
+    torch.manual_seed(100003 + ctx)
+    q = (torch.randn(1, 1, Hq, D) * 0.1).bfloat16()
     k = (torch.randn(1, ctx, Hkv, D) * 0.1).bfloat16()
     v = (torch.randn(1, ctx, Hkv, D) * 0.1).bfloat16()
-    return q, k, v
+    k_new = (torch.randn(1, 1, Hkv, D) * 0.1).bfloat16()
+    v_new = (torch.randn(1, 1, Hkv, D) * 0.1).bfloat16()
+    return q, k, v, k_new, v_new
 
 
-# ── head-on-CTA: evaluator == reference, any seq × small/mid context ───────
+# ── head-on-CTA: evaluator == reference, empty / small / mid prior cache ───
+# The zero row is the first step of a sequence: nothing cached yet, so the
+# context scan runs zero times and the only position is the step's own K/V.
 
 
-@pytest.mark.parametrize("seq,ctx", [(1, 1), (4, 37), (2, 256)], ids=lambda v: str(v))
-def test_head_variant_matches_reference(seq, ctx):
-    q, k, v = _inputs(seq, ctx)
-    out = evaluate(_HEAD_VARIANT, q, k, v, device="cpu")
-    assert out.shape == (1, seq, Hq, D)
-    assert torch.allclose(out.float(), _ref(q, k, v), atol=2e-2, rtol=2e-2)
+@pytest.mark.parametrize("ctx", [0, 1, 37, 256], ids=lambda v: str(v))
+def test_head_variant_matches_reference(ctx):
+    step = _inputs(ctx)
+    out = evaluate(_HEAD_VARIANT, *step, device="cpu")
+    assert out.shape == (1, 1, Hq, D)
+    assert torch.allclose(out.float(), _ref(*step), atol=2e-2, rtol=2e-2)
 
 
-# ── context-on-CTA split-KV: evaluator == reference, any seq × aligned ctx ─
+# ── context-on-CTA split-KV: evaluator == reference, aligned prior cache ───
 # The context is cut into NUM_SPLITS contiguous blocks by reshape; a
 # split-aligned ctx (ctx_len % NUM_SPLITS == 0) reshapes exactly, so the
 # two-pass math matches the reference.
 
 
-@pytest.mark.parametrize(
-    "seq,ctx", [(1, NUM_SPLITS), (4, NUM_SPLITS * 8)], ids=lambda v: str(v)
-)
-def test_context_variant_splitkv_matches_reference(seq, ctx):
-    q, k, v = _inputs(seq, ctx)
-    out = evaluate(_CTX_VARIANT, q, k, v, device="cpu")
-    assert out.shape == (1, seq, Hq, D)
-    assert torch.allclose(out.float(), _ref(q, k, v), atol=2e-2, rtol=2e-2)
+@pytest.mark.parametrize("ctx", [NUM_SPLITS, NUM_SPLITS * 8], ids=lambda v: str(v))
+def test_context_variant_splitkv_matches_reference(ctx):
+    step = _inputs(ctx)
+    out = evaluate(_CTX_VARIANT, *step, device="cpu")
+    assert out.shape == (1, 1, Hq, D)
+    assert torch.allclose(out.float(), _ref(*step), atol=2e-2, rtol=2e-2)
 
 
 # ── dispatch prototype: evaluator == reference (small ctx → head-on-CTA) ───
 
 
-def test_prototype_dispatches_and_matches_reference():
-    q, k, v = _inputs(2, 64)
-    out = evaluate(gqa_online_attend, q, k, v, device="cpu")
-    assert torch.allclose(out.float(), _ref(q, k, v), atol=2e-2, rtol=2e-2)
+@pytest.mark.parametrize("ctx", [0, 64], ids=lambda v: str(v))
+def test_prototype_dispatches_and_matches_reference(ctx):
+    """Dispatch admits an empty prior cache: the envelope starts at 0, so the
+    first step of a sequence picks an implementation like any other length."""
+    step = _inputs(ctx)
+    out = evaluate(gqa_online_attend, *step, device="cpu")
+    assert torch.allclose(out.float(), _ref(*step), atol=2e-2, rtol=2e-2)
 
 
 # ── regression: split-KV fails closed on non-aligned ctx_len ───────────────
@@ -102,9 +111,9 @@ def test_prototype_dispatches_and_matches_reference():
 def test_context_variant_fails_closed_on_unaligned_ctx():
     ctx = NUM_SPLITS + 1
     assert ctx % NUM_SPLITS != 0
-    q, k, v = _inputs(2, ctx)
+    step = _inputs(ctx)
     with pytest.raises(RuntimeError, match="invalid for input of size"):
-        evaluate(_CTX_VARIANT, q, k, v, device="cpu")
+        evaluate(_CTX_VARIANT, *step, device="cpu")
 
 
 def _walk_ir(expr, seen=None):

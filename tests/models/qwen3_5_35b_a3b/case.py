@@ -151,7 +151,7 @@ FULL_ATTENTION_CASE = ModelCase(
             id="qwen3_5_35b_a3b/sized/full_attention",
             selector="full_attention",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": SHAPE.max_ctx},
+            ceiling={"ctx_len": SHAPE.max_ctx - 1},
         ),
     ),
 )

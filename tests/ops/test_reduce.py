@@ -24,6 +24,7 @@ from tilefoundry import func, module
 from tilefoundry.codegen.cuda.module import emit_cuda_module
 from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.types import DType, make_shard_tensor_type
@@ -200,3 +201,60 @@ def test_cross_warp_sum_emits_reduce() -> None:
     src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
     assert re.search(r"\breduce<[^(]*>\([^;]*\);", src), src
     assert re.search(r"__shared__ __align__\(16\) float ws\w*\[128\];", src), src
+
+
+@module(entry="max_over_nothing")
+class _EmptyAxisModule:
+    """Reductions over an axis of no elements: per kind, and per keepdim."""
+
+    topologies = ()
+
+    @func
+    def max_over_nothing(x: Tensor[(1, 0, 8), "f32"]) -> Tensor[(1, 1, 8), "f32"]:
+        return tf.reduce(x, axes=(-2,), keepdim=True, kind="max")
+
+    @func
+    def abs_max_over_nothing(x: Tensor[(1, 0, 8), "f32"]) -> Tensor[(1, 1, 8), "f32"]:
+        return tf.reduce(x, axes=(-2,), keepdim=True, kind="abs_max")
+
+    @func
+    def sum_over_nothing(x: Tensor[(1, 0, 8), "f32"]) -> Tensor[(1, 1, 8), "f32"]:
+        return tf.reduce(x, axes=(-2,), keepdim=True, kind="sum")
+
+    @func
+    def max_over_nothing_squeezed(x: Tensor[(1, 0, 8), "f32"]) -> Tensor[(1, 8), "f32"]:
+        return tf.reduce(x, axes=(-2,), keepdim=False, kind="max")
+
+    @func
+    def max_over_a_full_axis(x: Tensor[(1, 0, 8), "f32"]) -> Tensor[(1, 0, 1), "f32"]:
+        return tf.reduce(x, axes=(-1,), keepdim=True, kind="max")
+
+    @func
+    def max_over_nothing_of_indices(x: Tensor[(1, 0, 8), "i64"]) -> Tensor[(1, 1, 8), "i64"]:
+        return tf.reduce(x, axes=(-2,), keepdim=True, kind="max")
+
+
+@pytest.mark.parametrize(
+    "name, shape, identity, dtype",
+    [
+        ("max_over_nothing", (1, 1, 8), float("-inf"), torch.float32),
+        ("abs_max_over_nothing", (1, 1, 8), 0.0, torch.float32),
+        ("sum_over_nothing", (1, 1, 8), 0.0, torch.float32),
+        ("max_over_nothing_squeezed", (1, 8), float("-inf"), torch.float32),
+        ("max_over_nothing_of_indices", (1, 1, 8), -(2**63), torch.int64),
+    ],
+)
+def test_a_reduction_over_no_elements_is_its_identity(name, shape, identity, dtype) -> None:
+    """Per kind, per keepdim, and on a dtype that cannot hold -inf."""
+    out = evaluate(_EmptyAxisModule.lookup(name), torch.zeros(1, 0, 8, dtype=dtype))
+
+    assert tuple(out.shape) == shape
+    assert out.flatten().tolist() == [identity] * (shape[-1] if len(shape) > 1 else 1)
+
+
+def test_an_empty_axis_that_is_not_the_reduced_one_gets_no_identity() -> None:
+    """Only a reduced axis of no elements is a reduction over nothing."""
+    out = evaluate(_EmptyAxisModule.lookup("max_over_a_full_axis"), torch.zeros(1, 0, 8))
+
+    assert tuple(out.shape) == (1, 0, 1)
+    assert out.numel() == 0

@@ -97,9 +97,9 @@ def _rope_cos_sin(position: int, *, device):
     sin = (angles.sin() * attention_scaling).to(dtype=torch.float32, device=device)
     return cos, sin
 
-#: The context length the decode loop starts from. A decode step reads a
-#: context, so there is one; producing it from a prompt is a prefill, which
-#: this package does not state, so it is drawn at a fixed seed instead.
+#: The context length the decode loop starts from. Producing a context from a
+#: prompt is a prefill, which this package does not state, so the loop starts
+#: from one drawn at a fixed seed instead.
 SEED_CTX_LEN = 1
 SEED_CTX_SEED = 20260728
 
@@ -108,11 +108,11 @@ def _submodules(config: DSV4Config):
     """This model's leaves at *config*: the attention submodule and the two MoE
     blocks, each built fresh for this call."""
 
-    # The active context length: the only range this model carries. DimVar bounds
-    # are half-open [lo, hi), so the exclusive upper bound is the window itself --
-    # a query attends `window` positions counting its own. The lower bound is 1: a
-    # step with no prior context is a prefill, not a decode step.
-    C = DimVar("ctx_len", 1, config.window)
+    # The prior cache this step reads: the only range this model carries. Zero is a
+    # first step, and the exclusive upper bound is the window itself -- a query
+    # attends `window` positions counting its own, so the cache before it is one
+    # shorter.
+    C = DimVar("ctx_len", 0, config.window)
 
 
     @module(entry="mla_attend")

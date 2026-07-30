@@ -5,10 +5,9 @@ one token at a time over their own caches, and the weights reach HIR through the
 alias table and the converters -- so this is where a published key or layout that
 was read wrongly shows up.
 
-Two boundaries. Prefill is Hugging Face's: `ctx_len` is bounded below by 1, so the
-kernels express a continuation step and not the prompt before it, and what is
-claimed here is continuation decode over a real checkpoint rather than a complete
-causal LM. And the checkpoint is a mount named by an environment variable with no
+Two boundaries. Prefill is Hugging Face's: these kernels express one step at a
+time and not the prompt pass before it, so what is claimed here is continuation
+decode over a real checkpoint rather than a complete causal LM. And the checkpoint is a mount named by an environment variable with no
 default; nothing here downloads anything, and absent the variable this skips.
 """
 from __future__ import annotations

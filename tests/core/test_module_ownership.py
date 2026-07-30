@@ -24,7 +24,7 @@ from tilefoundry.schedule.partition.program import (
 )
 from tilefoundry.target import CudaTarget
 
-DIMS = {"ctx_len": SMALL_CONTEXT_T, "seq_len": 1}
+DIMS = {"ctx_len": SMALL_CONTEXT_T}
 
 
 @module(entry="main", target="cuda")
