@@ -10,6 +10,7 @@ from typing import Any
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
@@ -137,9 +138,10 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
 def _specialize(self: HirFunction, pattern: Any):
     """``@base.specialize(DimVarRangePat(...))`` — register a shape variant.
 
-    Parses the decorated ``def`` into a variant ``hir.Function`` and appends
-    it to ``base.variants``; the decorated name is a throwaway. Legal only
-    before ``base`` enters a ``Module`` (a later call raises)."""
+    Parses the decorated ``def`` into a variant ``hir.Function`` and appends it to
+    ``base.variants``. The identifier becomes the variant's display label, or
+    nothing when it is ``_``; the variant's ``name`` is the base's either way.
+    Legal only before ``base`` enters a ``Module`` (a later call raises)."""
     pat = _validate_one_pattern(pattern)
 
     def _wrap_variant(fn_inner):
@@ -153,7 +155,9 @@ def _specialize(self: HirFunction, pattern: Any):
                 "tilefoundry.specialize: a variant must have a real body, not "
                 "`pass` (only the base prototype declares a `pass` body)"
             )
-        # throwaway def name; give it the base's name instead.
+        # `_` labels nothing; the name is the base's either way.
+        if fn_inner.__name__ != "_":
+            object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
         object.__setattr__(ir, "name", self.name)
         verify_function(ir)
         self.add_variant(ir)

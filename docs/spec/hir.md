@@ -214,6 +214,12 @@ freeze** below).
 
 - `variants` is a canonical IR field — it participates in structural
   equality, hashing, and canonical printing.
+- A variant MAY carry a **display label**, taken from the identifier its author
+  decorated ([parser.md §1.1](./parser.md#11-authoring-decorators)). The label is
+  non-canonical metadata: it MUST NOT participate in structural equality,
+  hashing, or the canonical signature, and nothing MAY select an implementation
+  by it. Printing a variant back to source MUST preserve it, since it is the only
+  thing distinguishing two implementations that share a name.
 - Every variant of a base MUST share the base's `name`, `params`, and
   `return_type`: a variant specializes the body, not the signature. A variant
   runs in the same execution domain as its base because both are owned by the

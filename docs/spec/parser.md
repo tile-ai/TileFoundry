@@ -67,7 +67,7 @@ class M:
 
 **Specialization decorators.** A function specializes its body per input
 shape through `Function.specialize`. The base function is defined with
-`@tilefoundry.func`; each variant is added by decorating a throwaway `def`
+`@tilefoundry.func`; each variant is added by decorating a `def`
 with `@base.specialize(pattern)`:
 
 ```python
@@ -79,12 +79,12 @@ def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     pass                                                       # prototype base
 
 @f.specialize(DimVarRangePat("S", 1, 5))
-def _(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
+def small_s(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     return small_impl(x)                                       # variant [1, 5) = 1..4
 
 @f.specialize(DimVarRangePat("S", 5, 9))
 def _(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
-    return large_impl(x)                                       # variant [5, 9) = 5..8
+    return large_impl(x)                                       # variant [5, 9), unlabelled
 ```
 
 - `@tilefoundry.func` evaluates to the base `hir.Function`. `func()` has no
@@ -98,8 +98,16 @@ def _(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
 - `base.specialize(pattern)` returns a decorator. It parses the decorated
   `def` into a variant `hir.Function` (same `name` as the base,
   `specializations=(pattern,)`), registers it on `base.variants`, and
-  returns the variant. The decorated name is a throwaway: `def _` is
-  reusable across variants because the base is the persistent handle.
+  returns the variant.
+- The decorated identifier is the variant's **display label** and nothing more.
+  It MUST NOT become the variant's `name`, and MUST NOT take part in equality,
+  hashing, dispatch or TIR identity ([hir.md §1.1](./hir.md#11-function)): the
+  variants of one base share that base's name, and which one runs is decided by
+  the pattern alone. `def _` states no label and remains legal — `_` is reusable
+  across variants because the base is the persistent handle — and anything
+  reporting an unlabelled variant names it by its canonical specialization
+  signature instead. A label is for a reader who has to be told which of two
+  implementations ran.
 - `pattern` MUST be a single `DimVarRangePat` (see
   [core-ir §3](./core-ir.md#3-pattern)); other `Pattern` subclasses are rejected for
   v0. The referenced `DimVar` and its `(lo, hi)` envelope live on the base

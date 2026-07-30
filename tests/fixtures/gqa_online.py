@@ -107,7 +107,7 @@ class GqaOnline:
 
 
     @gqa_online_attend.specialize(DimVarRangePat("ctx_len", 1, SMALL_CONTEXT_T))
-    def _(
+    def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
         k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
@@ -213,7 +213,7 @@ class GqaOnline:
 
 
     @gqa_online_attend.specialize(DimVarRangePat("ctx_len", SMALL_CONTEXT_T, MAX_CTX + 1))
-    def _(
+    def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
         k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],

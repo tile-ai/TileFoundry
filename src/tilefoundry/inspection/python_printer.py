@@ -38,7 +38,7 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.specialize import dim_vars_reached
+from tilefoundry.ir.hir.specialize import dim_vars_reached, display_name
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -1186,13 +1186,15 @@ def _emit_decorated_defs(
     lines: list[str] = ["@func"]
     lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options))
 
-    # Variant defs: each a `@<base>.specialize(pattern)` over a throwaway `def _`.
+    # Variant defs: `@<base>.specialize(pattern)` over the label, or `_`.
     for variant in fn.variants:
         lines.append("")
         lines.append(
             f"@{fn.name}.specialize({_pattern_ctor(variant.specializations[0])})"
         )
-        lines.extend(_emit_def(variant, "_", mesh_map, indent, options))
+        lines.extend(
+            _emit_def(variant, display_name(variant) or "_", mesh_map, indent, options)
+        )
     return lines
 
 

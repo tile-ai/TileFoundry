@@ -6,10 +6,12 @@ import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, DimVarRangePat, T, Tensor, tf
+from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor as TensorPat
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir.specialize import display_name
 from tilefoundry.ir.types.dim import DimVar as IrDimVar
 
 
@@ -70,7 +72,7 @@ def _(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
 
 
 @sub.specialize(DimVarRangePat("S", 4, 7))
-def _(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
+def wide_s(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     return x
 
 
@@ -82,6 +84,17 @@ def test_func_specializations_parse_to_variants() -> None:
     assert [v.name for v in variants] == ["sub", "sub"]
     assert variants[0].specializations == (DimVarRangePat("S", 1, 3),)
     assert variants[1].specializations == (DimVarRangePat("S", 4, 7),)
+
+    # The decorated identifier is a display label and nothing else: both variants
+    # are still named for the base, and `def _` labels nothing at all.
+    assert display_name(variants[0]) is None
+    assert display_name(variants[1]) == "wide_s"
+
+    # Printing back to source keeps the label, which is the only thing telling
+    # two implementations of one name apart.
+    printed = as_script(sub)
+    assert "def wide_s(" in printed
+    assert "def _(" in printed
 
     # Param shape on each variant carries the DimVar from the annotation.
     for v in variants:

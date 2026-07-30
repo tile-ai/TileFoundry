@@ -51,6 +51,15 @@ PROVENANCE = "_specialized_from"
 #: inferred from what the rebuild happened to change.
 BOUND_DIMS = "_specialized_dims"
 
+#: A variant's display label, out of band like the two records above: it takes no
+#: part in equality, hashing or canonical printing. See parser.md §1.1.
+DISPLAY_NAME = "_display_name"
+
+
+def display_name(fn: Function) -> str | None:
+    """This variant's label, or ``None`` where its author gave none."""
+    return getattr(fn, DISPLAY_NAME, None)
+
 
 def _record_provenance(
     derived: Function, origin: Function, dims: Mapping[str, int]
