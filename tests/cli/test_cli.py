@@ -138,6 +138,17 @@ def test_spec_prints_one_section_and_the_keys_beside_it(capsys) -> None:
     assert "class RMSNorm(Op):" not in section
 
 
+def test_spec_lists_and_prints_cache_update(capsys) -> None:
+    """The CacheUpdate contract is discoverable from the HIR outline and its key."""
+    assert cli.main(["spec", "hir"]) == 0
+    assert "CacheUpdate" in capsys.readouterr().out
+
+    assert cli.main(["spec", "hir", "cacheupdate"]) == 0
+    section = capsys.readouterr().out
+    assert "class CacheUpdate(Op):" in section
+    assert "eval/runtime, not typeinfer" in section
+
+
 def test_spec_separates_two_sections_that_would_share_a_key(capsys) -> None:
     """Two sections numbered 3.2 are each reachable, and the bare key is refused."""
     assert cli.main(["spec", "parser", "shared-parsing-machinery/3.2"]) == 0
@@ -159,6 +170,57 @@ def test_spec_rejects_a_section_that_does_not_exist(capsys) -> None:
 
     assert "no section '9.9'" in error
     assert "silu" in error
+
+
+@pytest.mark.parametrize(
+    ("topic", "section", "expected"),
+    (
+        ("target", "topology-levels", "Only `cta` MAY have a launch-provided"),
+        ("core-ir", "target-inheritance", 'with `target="cuda"`'),
+        ("core-ir", "default-step", "MUST have no default step"),
+    ),
+)
+def test_spec_answers_the_target_and_default_step_rules(
+    topic, section, expected, capsys
+) -> None:
+    """The rules' stable slug keys are directly askable."""
+    assert cli.main(["spec", topic, section]) == 0
+
+    assert expected in capsys.readouterr().out
+
+
+def test_schedule_refusal_of_a_launch_provided_level_points_to_the_spec(
+    tmp_path, capsys
+) -> None:
+    """A schedule refusal points to the rule that distinguishes launch shape."""
+    path = _write_module(
+        tmp_path,
+        _VALID_MODULE.replace(
+            'Topology("cta", 168)', 'Topology("cta", None)', 1
+        ),
+    )
+
+    assert cli.main(["schedule", str(path), "--topology", "cta"]) == 1
+
+    error = capsys.readouterr().err
+    assert "not known until launch" in error
+    assert "The rule: tilefoundry spec target topology-levels" in error
+
+
+def test_module_without_an_entry_names_its_functions_and_rule(tmp_path, capsys) -> None:
+    """An absent default step names both the callable choices and its contract."""
+    path = _write_module(
+        tmp_path,
+        _VALID_MODULE.replace(
+            '@module(entry="main", target=CudaTarget())', '@module(target=CudaTarget())'
+        ),
+    )
+
+    assert cli.main(["schedule", str(path), "--topology", "cta"]) == 1
+
+    error = capsys.readouterr().err
+    assert "declares no entry, so it has no default step. It declares main" in error
+    assert "The rule: tilefoundry spec core-ir default-step" in error
 
 
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:

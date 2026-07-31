@@ -5,23 +5,22 @@ from dataclasses import dataclass
 from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 
-# A ``cta`` topology may declare ``size=None`` to mean its extent is provided by
-# the host launch (a runtime grid); only that topology kind supports it.
+# The local validation exception is defined by docs/spec/target.md § Topology levels.
 _LAUNCH_PROVIDED_TOPOLOGY = "cta"
 
 
 @dataclass(frozen=True)
 class Topology:
     name: str
-    # ``int`` for a static extent, a scalar ``ShapeDim`` expression, or ``None``
-    # for a launch-provided (dynamic) ``cta`` extent.
+    # ``None`` reaches the local launch-provided extent check.
     size: "ShapeDim | None"
 
     def __post_init__(self) -> None:
         if self.size is None and self.name != _LAUNCH_PROVIDED_TOPOLOGY:
             raise ValueError(
                 f"Topology {self.name!r}: only a {_LAUNCH_PROVIDED_TOPOLOGY!r} "
-                f"topology may have a launch-provided (None) extent"
+                "topology may have a launch-provided (None) extent. The rule: "
+                "tilefoundry spec target topology-levels"
             )
 
 
