@@ -42,8 +42,16 @@ bound is one past the longest prior cache the model admits, which for this model
 differs between published models.
 
 The step takes `k_cache` / `v_cache` and hands back the entry its caller appends.
-There is a `cache_update` operation in the IR; no model here uses it, and its name
-is the only reason anybody reaches for it. Concatenation belongs to the caller.
+Two forms fit different callers; which one fits is a property of the caller, not
+a preference.
+
+| Form | Fits when | Cost |
+|---|---|---|
+| Caller-managed concat | The cache grows each step, execution is eager, or `ctx_len` participates in types as a `DimVar`. | Each step replaces the cache buffer, so one fixed-address graph cannot replay it. |
+| `cache_update` | The cache has fixed capacity, its write window advances each step, or it must be captured and replayed in a CUDA graph. | Shape stays static, the write window is runtime data, and traffic falls back to the whole tensor when its bounds cannot be derived. |
+
+See [spec hir § CacheUpdate](../spec/hir.md#cacheupdate) for the operation's
+contract.
 
 {{fixture: qwen3_5_35b_a3b/model.py:Qwen3_5FullAttention.full_attention}}
 
