@@ -143,6 +143,23 @@ def test_spec_rejects_a_section_that_does_not_exist(capsys) -> None:
     assert "silu" in error
 
 
+@pytest.mark.parametrize(
+    ("topic", "section", "expected"),
+    (
+        ("target", "topology-levels", "Only `cta` MAY have a launch-provided"),
+        ("core-ir", "target-inheritance", 'with `target="cuda"`'),
+        ("core-ir", "default-step", "MUST have no default step"),
+    ),
+)
+def test_spec_answers_the_target_and_default_step_rules(
+    topic, section, expected, capsys
+) -> None:
+    """The rules' stable slug keys are directly askable."""
+    assert cli.main(["spec", topic, section]) == 0
+
+    assert expected in capsys.readouterr().out
+
+
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:
     path = _write_module(tmp_path)
     assert cli.main(["inspect", "capabilities", f"{path}:Model.main"]) == 0

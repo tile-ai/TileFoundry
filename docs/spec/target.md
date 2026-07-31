@@ -184,11 +184,6 @@ class CudaTarget(Target):
     supplied directly carries no document, so it has no ID or digest and is
     exempt from that check: it is a distinct hardware value rather than a
     revision of an installed one.
-  - `topology_levels` MUST be `("cta", "thread")` for this single-device
-    target. Warp/lane/warpgroup structure belongs in thread mesh layouts.
-  - `topology_limit("cta")` MUST be `None`: the CUDA grid is a launch shape
-    rather than an SM allocation, so its static extent is unbounded here.
-    `topology_limit("thread")` MUST equal `architecture.max_threads_per_cta`.
   - CUDA MUST register one scheduling algorithm per level it schedules, and both
     at the exact `(CudaTarget, level)` pair
     ([schedule §1.1](./schedule.md#11-algorithm-registration)): the pipeline
@@ -210,6 +205,26 @@ class CudaTarget(Target):
     `ScheduleOptions` ([schedule §2.1](./schedule.md#21-scheduleoptions)); it MUST
     NOT be projected here, because a Facts value that already encodes a policy
     cannot be read as what the hardware is.
+
+#### Topology levels
+
+A target's topology levels define the names a program may declare. The program
+hierarchy stops at those levels; warp, lane, and warpgroup structure belongs in
+thread mesh layouts.
+
+- constraints:
+  - `CudaTarget.topology_levels` MUST be `("cta", "thread")` for this
+    single-device target.
+  - A declared program topology name MUST be one of its target's
+    `topology_levels`. A name outside that set MUST be refused naming the levels
+    the target declares.
+  - `topology_limit("cta")` MUST be `None`: the CUDA grid is a launch shape
+    rather than an SM allocation, so its static extent is unbounded here.
+    `topology_limit("thread")` MUST equal `architecture.max_threads_per_cta`.
+  - Only `cta` MAY have a launch-provided (`None`) extent; every other level
+    MUST have a static extent.
+  - A launch-provided level MUST NOT be scheduled, because scheduling requires
+    its static extent.
   - Static declared topology extents MUST be positive integers within their
     target resource limits. `Topology("cta", None)` MUST remain valid for the
     handwritten dynamic-launch compile path.
@@ -237,16 +252,9 @@ class CpuTarget(Target):
   `resolve_target("amx")` MUST return a default `AmxTarget`,
   `resolve_target("cpu")` MUST return a `CpuTarget`, and a Target object MUST
   pass through unchanged.
-- A `Target` MUST be declared by the `Module` that owns the functions running
-  on it, never by an authored HIR `Function`. Analyze, Schedule, and compile
-  MUST obtain it through `Module.resolve_target()`
-  ([core-ir §1](./core-ir.md#1-module)).
-- Only the outermost `Module` of a tree declares a `Target`; every Module
-  below it inherits that one declaration and MUST NOT declare its own. A
-  Module that is reused both as an owned child and as an independently
-  analysed root therefore declares its Target only in the second role.
-- `Module.resolve_target()` MUST fail when no Module in the owner chain
-  declares a Target.
+- A `Target` belongs to a `Module` rather than an authored HIR `Function`.
+  Target inheritance and its declaration rules are defined by
+  [core-ir `target-inheritance`](./core-ir.md#target-inheritance).
 - Analyze and Schedule MUST obtain the Target from `Module.resolve_target()`
   and from nowhere else. Neither accepts a bare `Function`, and neither
   resolves an undeclared Target to a default: both report hardware-dependent

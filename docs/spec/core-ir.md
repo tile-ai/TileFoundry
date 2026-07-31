@@ -63,15 +63,6 @@ class Module:
     another owner MUST NOT change what the first owner's subtree resolves.
 
 - `parse_module` (see [parser §1](./parser.md)) returns a `Module`.
-- `entry` names this Module's default step — `tilefoundry.lower(...)` and the
-  emitter both start there. Other functions only enter the output if
-  they are reachable from `entry`.
-- `entry` is optional. Supplied, it MUST be the `name` of a function present in
-  `functions`, and the verifier checks this. Omitted (`None`), the Module has no
-  default step: `entry_function()` and a bare call MUST be refused saying so, and
-  every function is reached by name instead. A Module that composes children in an
-  orchestration method has no single step to nominate, and naming one anyway would
-  claim a default the execution path never takes.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
   `Module` whose `entry` is set to that function. A function that declares
   execution context of its own is therefore already a `Module`.
@@ -85,10 +76,6 @@ class Module:
 *declares*, not what it resolves to; resolution is lexical over the owner
 chain and is not copied onto each Module or Function.
 
-- `resolve_target()` returns the nearest declaration at or above this Module,
-  and MUST fail when no owner in the chain declares one. Only the outermost
-  Module declares a `Target`: a child that declares its own MUST be rejected
-  when it is attached, so one tree has exactly one hardware declaration.
 - `topologies = None` declares nothing and inherits the owner's hierarchy;
   `topologies = ()` declares an explicitly topology-free domain; an explicit
   tuple replaces the inherited hierarchy whole rather than extending it. A
@@ -130,6 +117,41 @@ chain and is not copied onto each Module or Function.
   base only during authoring, before the base enters a `Module`; once
   sealed, adding a variant is an error
   ([hir.md §1.1](./hir.md#11-function)).
+
+#### Target inheritance
+
+A Module's target declaration belongs to its execution domain and is resolved
+through its owner chain.
+
+- constraints:
+  - `resolve_target()` MUST return this Module's declared target when it has
+    one; otherwise it MUST return the nearest target declared by an owner.
+  - Only the outermost Module of a tree MAY declare a target. A child Module
+    that declares a target of its own MUST be refused when it is attached, and
+    MUST inherit its owner's target instead.
+  - A Module with no declaration anywhere in its owner chain MUST be refused
+    when its target is resolved. Its root Module MUST declare one, for example
+    with `target="cuda"`.
+  - A Module reused as an owned child and as an independently analysed root
+    declares a target only in the latter role.
+
+#### Default step
+
+A Module's optional `entry` determines whether it exposes a default execution
+step.
+
+- constraints:
+  - When `entry` is present, it MUST name a function in `functions`.
+    `entry_function()` MUST return that function, and `tilefoundry.lower(...)`
+    and the emitter MUST start there. Other functions enter the output only when
+    reachable from `entry`.
+  - When `entry` is omitted (`None`), the Module MUST have no default step.
+    `entry_function()` and a bare call MUST be refused, naming the Module's
+    functions and explaining that one is selected with `lookup('<name>')`.
+    Each function remains reachable by name. A Module that composes children in
+    an orchestration method has no single step to nominate.
+  - A bare `@func` / `@prim_func` MUST become an implicit single-function
+    Module whose `entry` names that function.
 
 ### 1.1 Function access
 
