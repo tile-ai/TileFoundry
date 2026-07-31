@@ -59,14 +59,24 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="how activations and weights are made: random, or real from --ckpt",
     )
     parser.add_argument(
-        "--input", action="append", metavar="PATH", help="an activation file; repeat per input"
+        "--input",
+        action="append",
+        metavar="PATH",
+        help="an activation file; repeat per input, in the parameter's declared order",
     )
     parser.add_argument("--ckpt", metavar="DIR", help="a prepared checkpoint directory")
     parser.add_argument(
         "--expected", action="append", metavar="PATH", help="compare against this file"
     )
     parser.add_argument(
-        "--out", action=Ordered, metavar="PATH", help="which output the following --fn apply to"
+        "--out",
+        action=Ordered,
+        metavar="OUTPUT",
+        help=(
+            "which output the following --fn apply to: `output` when the function "
+            "returns one tensor, `output[0]` `output[1]` ... in return order when "
+            "it returns a tuple -- positions, not the names your code gives them"
+        ),
     )
     parser.add_argument(
         "--fn", action=Ordered, metavar="F", choices=sorted(PREDICATES), help="a comparison to make"

@@ -262,6 +262,21 @@ def test_usage_errors_include_the_command_help(capsys) -> None:
     assert "model.py[:Module[.child_module...][.function]]" in captured.err
 
 
+def test_check_help_explains_input_and_output_positions(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["check", "--help"])
+
+    assert error.value.code == 0
+    captured = capsys.readouterr()
+    assert "--input PATH" in captured.out
+    assert "parameter's declared order" in captured.out
+    assert "--out OUTPUT" in captured.out
+    assert "`output[0]`" in captured.out
+    assert "return order" in captured.out
+    assert "positions, not the names your code gives them" in captured.out
+    assert captured.err == ""
+
+
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:
     path = _write_module(tmp_path)
     assert cli.main(["inspect", "capabilities", f"{path}:Model.main"]) == 0

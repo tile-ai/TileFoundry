@@ -28,8 +28,8 @@ tilefoundry models [NAME] [--source]
 tilefoundry spec [TOPIC [SECTION]]
 
 tilefoundry check TARGET (--inputs random | --inputs real --ckpt DIR | --input=PATH ...)
-    [--expected=PATH ...] --out PATH --fn F [bounds] [--fn F [bounds]] ...
-    [--out PATH ...] [--dim NAME=V[,V...] ...] [--json]
+    [--expected=PATH ...] --out OUTPUT --fn F [bounds] [--fn F [bounds]] ...
+    [--out OUTPUT ...] [--dim NAME=V[,V...] ...] [--json]
 
 tilefoundry analyze model.py[:Module[.child_module...][.function]]
     [--roofline] [--footprint] [--timeline] [--dim NAME=EXTENT ...]
@@ -82,6 +82,10 @@ when there is one, its reference, and says of every output whether it meets the
 bounds the caller stated.
 
 - constraints:
+  - Repeated `--input` values MUST bind the function's inputs in parameter
+    declaration order. Output names MUST come from return position: one tensor is
+    `output`; a tuple's tensors are `output[0]`, `output[1]`, and so on in return
+    order. These are positions, not names authored in the function.
   - Every output MUST be judged by at least one predicate the caller states, and
     there MUST be no default predicate and no default bound. A bound nobody can
     meet is worse than none: a single `f32`→`bf16` rounding already measures
