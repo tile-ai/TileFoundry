@@ -34,6 +34,8 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import DType, numel
 from tilefoundry.target import AmxTarget, CudaTarget
 from tilefoundry.target.facts import TARGET_FACTS
+from tilefoundry.visitor_registry import cost_evaluator_registry
+from tilefoundry.visitor_registry.contexts import Cost
 
 
 @module(entry="main", target="cuda")
@@ -113,6 +115,18 @@ class _BatchedOnTheRight:
         blocks: Tensor[(5, 4, 3), "f32"],
     ):
         return tf.matmul(token, blocks)
+
+
+@module(entry="main", target="cuda")
+class _Gathered:
+    topologies = (Topology("cta", 1),)
+
+    @func
+    def main(
+        table: ConstTensor[(1024, 64), "f32"],
+        rows: ConstTensor[(4,), "i32"],
+    ):
+        return tf.gather(table, rows, axis=0)
 
 
 @func(target="cuda", topologies=(Topology("cta", 168),))
@@ -264,8 +278,42 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
     assert zeros is not None
     assert zeros.flops == ()
     traffic = zeros.traffic_at("gmem")
-    assert traffic.write_bytes == 64 * 4
-    assert traffic.read_bytes == 0
+    assert traffic.write == 64 * 4
+    assert traffic.read == 0
+
+
+def test_a_gather_reads_the_rows_it_names_and_not_the_table() -> None:
+    result, entry = _run(_Gathered, "compute-cost")
+
+    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    assert record is not None
+    traffic = record.traffic_at("gmem")
+    rows = 4 * 64 * 4
+    assert traffic.read == rows + 4 * 4
+    assert traffic.write == rows
+
+    payload = json.loads(render_json(report([result])))
+    table, indices, produced = payload["calls"][-1]["compute-cost"]["operands"]
+    assert table == {
+        "arg": 0,
+        "name": "table",
+        "type": "f32[1024,64] gmem",
+        "read": rows,
+        "write": 0,
+    }
+    assert (indices["arg"], indices["read"]) == (1, 16)
+    assert (produced["arg"], produced["read"], produced["write"]) == ("result", 0, rows)
+
+
+def test_an_evaluator_that_misses_an_operand_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cost_evaluator_registry, "lookup", lambda cls: lambda call, ctx: Cost({}, ())
+    )
+
+    with pytest.raises(
+        AnalysisError, match="op=Binary: cost reports 0 operands, the call has 3"
+    ):
+        _run(_wide_grid, "compute-cost")
 
 
 def test_memory_holds_a_weight_resident_past_its_last_reader() -> None:

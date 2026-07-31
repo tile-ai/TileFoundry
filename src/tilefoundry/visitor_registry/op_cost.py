@@ -44,7 +44,7 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import DType, TensorType, Type, numel, tensor_bytes
 
-from .contexts import Cost, CostContext
+from .contexts import Cost, CostContext, TrafficBytes
 from .registries import register_cost_evaluator
 
 
@@ -56,8 +56,25 @@ def _output_type(call: Call, ctx: CostContext) -> Type:
     return ctx.local_output_type(call)
 
 
-def _traffic(inputs: tuple[Type, ...], output: Type) -> int:
-    return sum(tensor_bytes(type) for type in inputs) + tensor_bytes(output)
+def _traffic(inputs: tuple[Type, ...], output: Type) -> tuple[TrafficBytes, ...]:
+    """One entry per operand: every input read whole, the result written whole.
+
+    The default an Op gets by saying nothing about which part it touches.
+    """
+    return (
+        *(TrafficBytes(read=tensor_bytes(type)) for type in inputs),
+        TrafficBytes(write=tensor_bytes(output)),
+    )
+
+
+def _row(table: Type) -> int:
+    """One position's worth of a cache whose leading axis is the position."""
+    return tensor_bytes(table) // table.shape[0]
+
+
+def _idle(call: Call) -> tuple[TrafficBytes, ...]:
+    """No operand moves, but every operand still has a slot."""
+    return tuple(TrafficBytes() for _ in range(len(call.args) + 1))
 
 
 def _elementwise(call: Call, ctx: CostContext, *, dtype: DType | None = None) -> Cost:
@@ -105,11 +122,12 @@ def _reduce(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(RMSNorm)
 def _rms_norm(call: Call, ctx: CostContext) -> Cost:
-    source = _input_types(call, ctx)[0]
+    inputs = _input_types(call, ctx)
     output = _output_type(call, ctx)
+    source = inputs[0]
     if not isinstance(source, TensorType):
         raise ValueError("RMSNorm cost requires a tensor input")
-    return Cost({DType.f32: 8 * numel(source)}, _traffic((source,), output))
+    return Cost({DType.f32: 8 * numel(source)}, _traffic(inputs, output))
 
 
 @register_cost_evaluator(Binary)
@@ -177,12 +195,12 @@ def _slice(call: Call, ctx: CostContext) -> Cost:
     """A slice selects elements and computes none.
 
     Its traffic is what it actually moves -- the selected region, not the tensor
-    it came from -- so the cost is read off the output rather than the input. A
-    model that splits a wide projection into unequal parts does that once per
-    part, and charging each one for the whole projection would report a kernel
-    reading its input as many times as it has pieces.
+    it came from. A model that splits a wide projection into unequal parts does
+    that once per part, and charging each one for the whole projection would
+    report a kernel reading its input as many times as it has pieces.
     """
-    return Cost({}, tensor_bytes(_output_type(call, ctx)) * 2)
+    kept = tensor_bytes(_output_type(call, ctx))
+    return Cost({}, (TrafficBytes(read=kept), TrafficBytes(write=kept)))
 
 
 @register_cost_evaluator(SoftMax)
@@ -206,13 +224,24 @@ def _rope(call: Call, ctx: CostContext) -> Cost:
     Each rotated element costs one multiply against the cosine, one against
     the sine of its partner, and the add that combines them. The output is the
     pair, so its element count already covers both q and k.
+
+    The position-indexed caches contribute one row per call.
     """
-    inputs = _input_types(call, ctx)
+    query, key, cos_cache, sin_cache, pos_ids = _input_types(call, ctx)
     output = _output_type(call, ctx)
-    query = inputs[0]
     if not isinstance(query, TensorType):
         raise ValueError("RoPE cost requires a tensor query input")
-    return Cost({query.dtype: 3 * numel(output)}, _traffic(inputs, output))
+    return Cost(
+        {query.dtype: 3 * numel(output)},
+        (
+            TrafficBytes(read=tensor_bytes(query)),
+            TrafficBytes(read=tensor_bytes(key)),
+            TrafficBytes(read=_row(cos_cache)),
+            TrafficBytes(read=_row(sin_cache)),
+            TrafficBytes(read=tensor_bytes(pos_ids)),
+            TrafficBytes(write=tensor_bytes(output)),
+        ),
+    )
 
 
 @register_cost_evaluator(TopK)
@@ -226,9 +255,16 @@ def _topk(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Gather)
 def _gather(call: Call, ctx: CostContext) -> Cost:
-    inputs = _input_types(call, ctx)
-    output = _output_type(call, ctx)
-    return Cost({}, _traffic(inputs, output))
+    indices = _input_types(call, ctx)[1]
+    rows = tensor_bytes(_output_type(call, ctx))
+    return Cost(
+        {},
+        (
+            TrafficBytes(read=rows),
+            TrafficBytes(read=tensor_bytes(indices)),
+            TrafficBytes(write=rows),
+        ),
+    )
 
 
 @register_cost_evaluator(ArgMax)
@@ -255,20 +291,19 @@ def _quant(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(TupleGetItem)
 def _tuple_get_item(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, 0)
+    return Cost({}, _idle(call))
 
 
 @register_cost_evaluator(FullLike)
 def _full_like(call: Call, ctx: CostContext) -> Cost:
-    output = _output_type(call, ctx)
-    return Cost({}, tensor_bytes(output))
+    return Cost({}, _traffic(_input_types(call, ctx), _output_type(call, ctx)))
 
 
 @register_cost_evaluator(Zeros)
 def _zeros(call: Call, ctx: CostContext) -> Cost:
     """Materialise a tensor of zeros: no arithmetic, one full write."""
     output = _output_type(call, ctx)
-    return Cost({}, tensor_bytes(output))
+    return Cost({}, (TrafficBytes(write=tensor_bytes(output)),))
 
 
 @register_cost_evaluator(RepeatInterleave)
@@ -280,19 +315,22 @@ def _repeat_interleave(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Reshape)
 def _reshape(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, 0)
+    return Cost({}, _idle(call))
 
 
 @register_cost_evaluator(Transpose)
 def _transpose(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, 0)
+    return Cost({}, _idle(call))
 
 
 @register_cost_evaluator(Reshard)
 def _reshard(call: Call, ctx: CostContext) -> Cost:
     source = _input_types(call, ctx)[0]
     destination = _output_type(call, ctx)
-    return Cost({}, tensor_bytes(source) + tensor_bytes(destination))
+    return Cost({}, (
+        TrafficBytes(read=tensor_bytes(source)),
+        TrafficBytes(write=tensor_bytes(destination)),
+    ))
 
 
 __all__ = ["tensor_bytes"]

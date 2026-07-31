@@ -343,12 +343,12 @@ class TrafficBytes:
     """Read and write byte counts for one memory hierarchy level.
 
     Attributes:
-        read_bytes: attribute; Bytes read at this level.
-        write_bytes: attribute; Bytes written at this level.
+        read: attribute; Bytes read at this level.
+        write: attribute; Bytes written at this level.
     """
 
-    read_bytes: int = 0
-    write_bytes: int = 0
+    read: int = 0
+    write: int = 0
 
 class ComputeCostMetadata(IRMetadata):
     """One Call's logical work, as the authored program states it.
@@ -357,11 +357,13 @@ class ComputeCostMetadata(IRMetadata):
         flops: attribute; Flop count per compute DType name, sorted by name.
         traffic: attribute; TrafficBytes per storage level name.
         execution_count: attribute; How many times the call runs.
+        operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     execution_count: int = 1
+    operands: tuple[TrafficBytes, ...] = ()
 
 class LevelFootprint:
     """How much of one memory level a function needs at its peak.
@@ -464,7 +466,22 @@ class TimelineMetadata(IRMetadata):
   - The execution count MUST be the product of the execution-topology extents the
     call's value meshes carry and the owning Module declares. Conflicting extents
     for one topology name MUST raise rather than be reconciled.
-  - A call into another `Function` MUST report that function's totals.
+  - `operands` MUST be positional against `(*call.args, call)`: one entry per
+    argument in order, then the result. Each entry MUST be the amount the op's
+    cost evaluator reported for that operand, unmodified. Two operands MAY name
+    the same value; the position is what distinguishes them.
+  - Which level an operand's bytes are charged at MUST come from that operand's
+    Type. Where the Type occupies one level, the per-level `traffic` is those
+    same amounts regrouped. Where it spans several, the per-level `traffic` MUST
+    charge the whole Type at each of them, in the directions the op reported
+    movement in: no operand-level count states how the bytes divide, so the
+    aggregate takes a conservative bound while the operand entry keeps the
+    reported amount. The two MUST NOT be assumed equal in general.
+  - Operand attribution is defined for a call on a primitive op only. A call
+    into another `Function` MUST report that function's totals and MUST record
+    no operands: that traffic is an aggregate over the callee's own operands,
+    and no breakdown of this call's arguments describes it. A rendering MUST
+    omit the operand breakdown for such a call rather than emit it empty.
   - `MemoryMetadata` MUST be attached per `Function`: a peak is a property of the
     whole function's live ranges and belongs to no single expression.
   - Parameters MUST be resident from the start of the value order. A parameter

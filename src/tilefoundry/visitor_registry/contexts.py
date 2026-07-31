@@ -141,23 +141,47 @@ class CostContext(TypeInferContext):
 
 
 @dataclass(frozen=True)
+class TrafficBytes:
+    """Bytes one operand moves, read and write kept apart."""
+
+    read: int = 0
+    write: int = 0
+
+    @property
+    def total_bytes(self) -> int:
+        """Bytes moved in either direction."""
+        return self.read + self.write
+
+
+@dataclass(frozen=True)
 class Cost:
     """Leaf-local logical work for one selected ``OpCandidate``.
 
     ``flops`` groups leaf-local logical work by compute ``DType`` so one Op
     can report mixed work without selecting an ALU/TensorCore
-    implementation. ``bytes`` is scalar logical byte traffic. Neither field
-    selects a hardware implementation.
+    implementation. ``traffic`` carries one entry per operand in call order
+    with the result last, so an Op that reads part of an input says so where
+    it knows it. Neither field selects a hardware implementation, and neither
+    names a memory level: that is a function of the operand's Type.
     """
 
     flops: Mapping[DType, int]
-    bytes: int
+    traffic: tuple[TrafficBytes, ...]
+
+    @property
+    def bytes(self) -> int:
+        """Every operand's traffic, in either direction."""
+        return sum(moved.total_bytes for moved in self.traffic)
 
     def __post_init__(self) -> None:
         if any(not isinstance(value, int) or value < 0 for value in self.flops.values()):
             raise ValueError("Cost flops must be non-negative integers")
-        if not isinstance(self.bytes, int) or self.bytes < 0:
-            raise ValueError("Cost bytes must be a non-negative integer")
+        if any(
+            not isinstance(value, int) or value < 0
+            for moved in self.traffic
+            for value in (moved.read, moved.write)
+        ):
+            raise ValueError("Cost traffic must be non-negative integers")
 
 
 __all__ = [
@@ -165,4 +189,5 @@ __all__ = [
     "VerifyContext",
     "CostContext",
     "Cost",
+    "TrafficBytes",
 ]

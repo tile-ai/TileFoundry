@@ -129,8 +129,8 @@ def analyze_roofline(
             for name, value in cost.flops:
                 total_flops[name] = total_flops.get(name, 0) + value
             total_traffic = TrafficBytes(
-                total_traffic.read_bytes + traffic.read_bytes,
-                total_traffic.write_bytes + traffic.write_bytes,
+                total_traffic.read + traffic.read,
+                total_traffic.write + traffic.write,
             )
         # The function's bound sums each side first and compares once. Taking the
         # per-Call bounds and adding them would charge the machine twice for work

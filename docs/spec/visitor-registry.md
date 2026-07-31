@@ -492,9 +492,20 @@ candidate Types through `CostContext`; it does not select hardware resources.
 
 ```python
 @dataclass
+class TrafficBytes:
+    read: int = 0
+    write: int = 0
+
+    @property
+    def total_bytes(self) -> int: ...
+
+@dataclass
 class Cost:
     flops: Mapping[DType, int]
-    bytes: int
+    traffic: tuple[TrafficBytes, ...]
+
+    @property
+    def bytes(self) -> int: ...
 
 class CostContext(TypeInferContext):
     selected_types: Mapping[int, IRType] = {}
@@ -517,8 +528,20 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     and its operand types, so it is the same on every backend; registering them
     from a target package would make one backend's presence decide whether any
     consumer can cost a program at all.
-  - `flops` MUST group leaf-local logical work by compute `DType`, and `bytes`
-    MUST be one scalar logical byte count.
+  - `flops` MUST group leaf-local logical work by compute `DType`.
+  - `traffic` MUST carry exactly one `TrafficBytes` per operand of the call, in
+    argument order with the result last, so an Op that only touches part of an
+    input says so where it knows it. `bytes` is derived: every operand's traffic
+    in either direction.
+  - an evaluator MUST NOT name a memory level. Which level an operand's bytes
+    move at follows from that operand's Type, and is the consumer's to read;
+    reporting a length that disagrees with the call's operand count MUST fail
+    naming the call and both counts.
+  - an operand whose Type spans several levels admits no split of one reported
+    count between them, so a consumer MAY charge that operand's whole Type at
+    each level instead. What the evaluator reported stands as the operand's own
+    amount; a per-level total is therefore not always the sum of the amounts
+    reported here.
   - `CostContext.local_type_of` MUST apply every resolved nested `ShardLayout`
     exactly once and MUST reject unresolved or non-concrete local extents at the
     point where the evaluator requires them.

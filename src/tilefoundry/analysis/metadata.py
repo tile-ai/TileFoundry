@@ -22,19 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.core.metadata import IRMetadata
-
-
-@dataclass(frozen=True)
-class TrafficBytes:
-    """Read and write byte counts for one memory hierarchy level."""
-
-    read_bytes: int = 0
-    write_bytes: int = 0
-
-    @property
-    def total_bytes(self) -> int:
-        """Bytes moved at this level in either direction."""
-        return self.read_bytes + self.write_bytes
+from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 
 @dataclass(frozen=True)
@@ -45,6 +33,12 @@ class ComputeCostMetadata(IRMetadata):
     that mixes precisions does not have one flop count -- and which of those
     counts dominates is a question about hardware, asked later.
 
+    ``operands`` breaks ``traffic`` down the other way: per operand rather than
+    per level, positional against ``(*call.args, call)``. It is present only for
+    a direct call on a primitive op; a call into another Function carries that
+    callee's aggregate traffic, which no breakdown of this call's operands
+    describes.
+
     Nothing here reads a Target. The same authored call carries the same record
     on every backend.
     """
@@ -52,6 +46,7 @@ class ComputeCostMetadata(IRMetadata):
     flops: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     execution_count: int = 1
+    operands: tuple[TrafficBytes, ...] = ()
 
     @property
     def total_flops(self) -> int:
@@ -68,7 +63,7 @@ class ComputeCostMetadata(IRMetadata):
         flop_text = ",".join(f"{name}:{value}" for name, value in self.flops) or "0"
         traffic_text = (
             ",".join(
-                f"{level}:r{value.read_bytes}/w{value.write_bytes}"
+                f"{level}:r{value.read}/w{value.write}"
                 for level, value in self.traffic
             )
             or "0"

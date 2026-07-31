@@ -144,19 +144,12 @@ def test_the_layer_costs_its_two_halves_and_nothing_else() -> None:
 def test_the_layer_reads_at_least_its_weights_and_its_cache() -> None:
     """Traffic is what a decode step is actually about, so it is checked too.
 
-    A lower bound only, and the reason is a defect this measurement found rather
-    than a limit of the arithmetic. `_call_traffic` derives its per-level bytes from
-    each operand's whole type and discards the evaluator's own byte count, so a call
-    that reads part of a table cannot say so: the two rotary tables are charged whole
-    at each of the two calls that take them, which is 67,108,864 B for a step that
-    gathers one position -- 1,024 B. Intermediates are likewise charged in full at
-    every consumer. So the reported total is above the truth by an amount this file
-    cannot derive, and an upper bound here would either encode the overcount as
-    expected or be too loose to catch anything.
-
-    What is still worth holding: the step cannot read *less* than its weights and the
-    cache it attends, and those are exactly derivable. A step that read a weight
-    matrix per output element, or forgot the cache, fails this.
+    A lower bound, because an intermediate is charged in full at every consumer
+    that reads it, so the reported total sits above the truth by an amount this
+    file cannot derive. What is exactly derivable is the floor: the step cannot
+    read *less* than its weights, the cache it attends, and the rotary rows its
+    position lands on. A step that read a weight matrix per output element, or
+    forgot the cache, fails this.
     """
     data = _analysed("decoder_layer", {"ctx_len": CTX})
 
@@ -166,11 +159,13 @@ def test_the_layer_reads_at_least_its_weights_and_its_cache() -> None:
         + 2 * CONFIG.hidden_size * KV_PROJ               # k, v
     )
     cache = BYTES_PER * 2 * CTX * CONFIG.num_key_value_heads * CONFIG.head_dim
-    read = data["totals"]["traffic"]["gmem"]["read_bytes"]
+    # The layer rotates q and k, and each call indexes a cos and a sin cache.
+    rope_rows = 2 * 2 * CONFIG.head_dim * BYTES_PER
+    read = data["totals"]["traffic"]["gmem"]["read"]
 
-    assert read >= weights + cache, (
-        f"the step reads {read} B, less than the {weights} B of weights and "
-        f"{cache} B of cache it must read"
+    assert read >= weights + cache + rope_rows, (
+        f"the step reads {read} B, less than the {weights} B of weights, "
+        f"{cache} B of cache and {rope_rows} B of rotary rows it must read"
     )
 
 
@@ -190,7 +185,7 @@ def test_a_decode_step_is_bound_by_memory() -> None:
     bound = data["function_records"]["roofline"]
     assert bound["bound_by"] == "memory", (
         f"a one-token decode step is reported as {bound['bound_by']}-bound; it "
-        f"moves {data['totals']['traffic']['gmem']['read_bytes']} B to do "
+        f"moves {data['totals']['traffic']['gmem']['read']} B to do "
         f"{data['totals']['flops']['f32']} flops"
     )
     assert bound["theoretical_ns"] > 0

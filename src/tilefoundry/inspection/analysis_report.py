@@ -24,7 +24,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.api import AnalysisResult
 from tilefoundry.analysis.registry import ANALYSES
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import postorder, tensor_types
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import bound_dims_of, origin_of
@@ -32,20 +32,63 @@ from tilefoundry.ir.hir.specialize import bound_dims_of, origin_of
 
 def _traffic(traffic: tuple[tuple[str, TrafficBytes], ...]) -> dict[str, dict[str, int]]:
     return {
-        level: {"read_bytes": value.read_bytes, "write_bytes": value.write_bytes}
+        level: {"read": value.read, "write": value.write}
         for level, value in traffic
     }
 
 
-def _compute_cost(record: ComputeCostMetadata) -> dict[str, object]:
-    return {
+def _type_text(type_: object) -> str:
+    """One operand's type, short enough to sit on a report line."""
+    tensors = tensor_types(type_)
+    if not tensors:
+        return str(type_)
+    first = tensors[0]
+    shape = ",".join(str(dim) for dim in first.shape)
+    more = "+" if len(tensors) > 1 else ""
+    storage = "" if first.storage is None else f" {first.storage}"
+    return f"{first.dtype.name}[{shape}]{more}{storage}"
+
+
+def _operand_name(operand: object) -> str:
+    """What to call this operand, from the program rather than from the record."""
+    name = binding_name(operand) or getattr(operand, "name", None)
+    if name:
+        return name
+    if isinstance(operand, Call):
+        return type(operand.target).__name__.lower()
+    return type(operand).__name__.lower()
+
+
+def _operands(record: ComputeCostMetadata, expr: object) -> list[dict[str, object]]:
+    """Each recorded amount, against the operand it was charged to."""
+    if not isinstance(expr, Call):
+        return []
+    operands = (*expr.args, expr)
+    return [
+        {
+            "arg": "result" if index == len(expr.args) else index,
+            "name": _operand_name(operand),
+            "type": _type_text(operand.type),
+            "read": moved.read,
+            "write": moved.write,
+        }
+        for index, (operand, moved) in enumerate(zip(operands, record.operands))
+    ]
+
+
+def _compute_cost(record: ComputeCostMetadata, expr: object) -> dict[str, object]:
+    projected: dict[str, object] = {
         "flops": dict(record.flops),
         "traffic": _traffic(record.traffic),
         "execution_count": record.execution_count,
     }
+    operands = _operands(record, expr)
+    if operands:
+        projected["operands"] = operands
+    return projected
 
 
-def _roofline(record: RooflineMetadata) -> dict[str, object]:
+def _roofline(record: RooflineMetadata, expr: object) -> dict[str, object]:
     return {
         "compute_ns": record.compute_ns,
         "memory_ns": record.memory_ns,
@@ -54,7 +97,7 @@ def _roofline(record: RooflineMetadata) -> dict[str, object]:
     }
 
 
-def _timeline(record: TimelineMetadata) -> dict[str, object]:
+def _timeline(record: TimelineMetadata, expr: object) -> dict[str, object]:
     return {
         "grid_units": record.grid_units,
         "waves": record.waves,
@@ -63,7 +106,7 @@ def _timeline(record: TimelineMetadata) -> dict[str, object]:
     }
 
 
-def _memory(record: MemoryMetadata) -> dict[str, object]:
+def _memory(record: MemoryMetadata, expr: object) -> dict[str, object]:
     return {
         "footprint": [
             {
@@ -108,7 +151,7 @@ def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str
             continue
         record = get_metadata(expr, metadata_type)
         if record is not None:
-            result[name] = project(record)
+            result[name] = project(record, expr)
     return result
 
 
@@ -291,8 +334,8 @@ def _work_totals(function: Function) -> dict[str, object]:
         for level, value in record.traffic:
             current = traffic.get(level, TrafficBytes())
             traffic[level] = TrafficBytes(
-                current.read_bytes + value.read_bytes,
-                current.write_bytes + value.write_bytes,
+                current.read + value.read,
+                current.write + value.write,
             )
     return {
         "flops": dict(sorted(flops.items())),
@@ -307,10 +350,17 @@ def _flop_text(flops: dict[str, int]) -> str:
 def _traffic_text(traffic: dict[str, dict[str, int]]) -> str:
     return (
         ", ".join(
-            f"{level}=r{value['read_bytes']}/w{value['write_bytes']}"
+            f"{level}=r{value['read']}/w{value['write']}"
             for level, value in sorted(traffic.items())
         )
         or "0"
+    )
+
+
+def _operand_text(operand: dict[str, object]) -> str:
+    return (
+        f"{operand['arg']}:{operand['name']}="
+        f"r{operand['read']}/w{operand['write']}"
     )
 
 
@@ -373,6 +423,12 @@ def render_text(data: dict[str, object]) -> str:
                 f"units={timeline['grid_units']} waves={timeline['waves']}"
             )
         lines.append(" ".join(parts))
+        operands = call.get("compute-cost", {}).get("operands")
+        if operands is not None:
+            lines.append(
+                "  operands "
+                + ", ".join(_operand_text(operand) for operand in operands)
+            )
     return "\n".join(f"# {line}" for line in lines)
 
 

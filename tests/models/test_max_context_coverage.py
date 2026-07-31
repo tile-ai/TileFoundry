@@ -71,7 +71,7 @@ def test_the_largest_context_is_reasoned_about_and_not_allocated(model) -> None:
     def reads(result) -> int:
         record = get_metadata(result.function, MemoryMetadata)
         assert record is not None, "the memory analysis wrote no record"
-        return sum(item.read_bytes for _level, item in record.traffic)
+        return sum(item.read for _level, item in record.traffic)
 
     tracemalloc.start()
     try:

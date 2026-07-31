@@ -237,7 +237,7 @@ def test_analyze_json_and_text_report_the_same_conclusions(tmp_path, capsys) -> 
     assert payload["function"] == "main"
     assert payload["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
     for level, value in payload["totals"]["traffic"].items():
-        assert f"{level}=r{value['read_bytes']}/w{value['write_bytes']}" in text
+        assert f"{level}=r{value['read']}/w{value['write']}" in text
     for item in payload["function_records"]["memory"]["footprint"]:
         assert f"{item['level']}={item['peak_bytes']}" in text
     assert f"by={payload['function_records']['roofline']['bound_by']}" in text

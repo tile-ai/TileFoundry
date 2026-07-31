@@ -155,8 +155,8 @@ def _function_traffic(fn: Function) -> tuple[tuple[str, TrafficBytes], ...]:
         for level, value in record.traffic:
             current = totals.get(level, TrafficBytes())
             totals[level] = TrafficBytes(
-                current.read_bytes + value.read_bytes,
-                current.write_bytes + value.write_bytes,
+                current.read + value.read,
+                current.write + value.write,
             )
     return tuple(sorted(totals.items()))
 

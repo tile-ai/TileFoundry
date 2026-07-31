@@ -55,26 +55,47 @@ def _local_cost(call: Call, module: Module) -> Cost:
     return evaluate(call, CostContext(module=module))
 
 
-def _call_traffic(call: Call, cost: Cost) -> tuple[tuple[str, TrafficBytes], ...]:
-    """Bytes *call* reads and writes, per storage level.
+def _call_movement(
+    call: Call, cost: Cost
+) -> tuple[tuple[tuple[str, TrafficBytes], ...], tuple[TrafficBytes, ...]]:
+    """What each operand of *call* moves, and where those bytes are charged.
 
-    The operand types state global shapes, so these counts already cover every
-    instance of the call and are not scaled again. An op that moves no bytes at
-    all records no traffic rather than a row of zeroes.
+    How much moves is the op's answer; which level it moves at is a function of
+    that operand's Type.
     """
-    if cost.bytes == 0:
-        return ()
+    operands = (*call.args, call)
+    if len(cost.traffic) != len(operands):
+        raise AnalysisError(
+            f"{describe(call)}: cost reports {len(cost.traffic)} operands, "
+            f"the call has {len(operands)}"
+        )
     reads: dict[str, int] = {}
     writes: dict[str, int] = {}
-    for arg in call.args:
-        for name, value in bytes_by_storage(arg.type).items():
-            reads[name] = reads.get(name, 0) + value
-    for name, value in bytes_by_storage(call.type).items():
-        writes[name] = writes.get(name, 0) + value
-    return tuple(
-        (name, TrafficBytes(reads.get(name, 0), writes.get(name, 0)))
-        for name in sorted(set(reads) | set(writes))
+    charged: list[TrafficBytes] = []
+    for operand, moved in zip(operands, cost.traffic):
+        by_level = bytes_by_storage(operand.type)
+        charged.append(moved)
+        if len(by_level) == 1:
+            (level,) = by_level
+            reads[level] = reads.get(level, 0) + moved.read
+            writes[level] = writes.get(level, 0) + moved.write
+            continue
+        # A Type spanning several levels states no split, so the aggregate
+        # charges the whole Type at each, in the directions the op reported.
+        for level, value in by_level.items():
+            if moved.read:
+                reads[level] = reads.get(level, 0) + value
+            if moved.write:
+                writes[level] = writes.get(level, 0) + value
+    levels = (
+        ()
+        if cost.bytes == 0
+        else tuple(
+            (level, TrafficBytes(reads.get(level, 0), writes.get(level, 0)))
+            for level in sorted(set(reads) | set(writes))
+        )
     )
+    return levels, tuple(charged)
 
 
 def _accumulate(
@@ -87,8 +108,8 @@ def _accumulate(
     for level, value in record.traffic:
         current = traffic.get(level, TrafficBytes())
         traffic[level] = TrafficBytes(
-            current.read_bytes + value.read_bytes,
-            current.write_bytes + value.write_bytes,
+            current.read + value.read,
+            current.write + value.write,
         )
 
 
@@ -120,6 +141,7 @@ def _call_record(
         return _scaled(child.flops, child.traffic, trips)
     count = execution_count(call, fn, topologies)
     cost = _local_cost(call, module)
+    traffic, operands = _call_movement(call, cost)
     return ComputeCostMetadata(
         flops=tuple(
             sorted(
@@ -127,8 +149,9 @@ def _call_record(
                 for dtype, value in cost.flops.items()
             )
         ),
-        traffic=_scale_traffic(_call_traffic(call, cost), trips),
+        traffic=_scale_traffic(traffic, trips),
         execution_count=count * trips,
+        operands=_scale_moved(operands, trips),
     )
 
 
@@ -138,8 +161,18 @@ def _scale_traffic(
     if trips == 1:
         return traffic
     return tuple(
-        (level, TrafficBytes(value.read_bytes * trips, value.write_bytes * trips))
+        (level, TrafficBytes(value.read * trips, value.write * trips))
         for level, value in traffic
+    )
+
+
+def _scale_moved(
+    operands: tuple[TrafficBytes, ...], trips: int
+) -> tuple[TrafficBytes, ...]:
+    if trips == 1:
+        return operands
+    return tuple(
+        TrafficBytes(item.read * trips, item.write * trips) for item in operands
     )
 
 
