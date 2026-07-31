@@ -57,6 +57,11 @@ other mechanism for it. What `models <name> --source` prints stays the reference
 compare against, and it stays intact because an installation is not where anybody
 edits — no verb enforces that, and none should.
 
+A command MUST load `SOURCE` as a Python module. While loading it, the directory
+containing `SOURCE` MUST be first on the Python module search path, so a file beside
+it MAY be imported by its module name. A command MUST capture and suppress standard
+output that `SOURCE` emits while loading.
+
 `check` reads the same `SOURCE` shape and one thing more: its selector MAY name a
 runtime twin instead of an authored Module. A twin generated from an authored
 Module states which Module that is ([runtime §1.1](./runtime.md#11-runtimemodule)),

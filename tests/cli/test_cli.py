@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import textwrap
 from pathlib import Path
 
@@ -30,6 +31,23 @@ def _write_module(tmp_path, source: str = _VALID_MODULE):
     path = tmp_path / "model.py"
     path.write_text(textwrap.dedent(source), encoding="utf-8")
     return path
+
+
+def _write_sibling_module(tmp_path: Path, directory: str, name: str) -> Path:
+    source = tmp_path / directory
+    source.mkdir()
+    (source / "model.py").write_text(
+        _VALID_MODULE.replace("class Model:", f"class {name}:"), encoding="utf-8"
+    )
+    runtime = source / "runtime_model.py"
+    runtime.write_text(
+        f"from model import {name}\n"
+        "if __spec__ is None:\n"
+        "    raise RuntimeError('source was not loaded as a module')\n"
+        "print('source output')\n",
+        encoding="utf-8",
+    )
+    return runtime
 
 
 def test_models_separates_oracles_from_everything_else(capsys) -> None:
@@ -274,6 +292,35 @@ def test_analyze_failure_reports_line_variable_and_reason(tmp_path, capsys) -> N
     assert f"{path}:9:" in captured.err
     assert "variable 'wrong'" in captured.err
     assert "dtype mismatch" in captured.err
+
+
+def test_analyze_loads_sibling_modules_without_leaking_paths_or_output(
+    tmp_path, capsys
+) -> None:
+    first = _write_sibling_module(tmp_path, "first", "First")
+    second = _write_sibling_module(tmp_path, "second", "Second")
+    before = sys.path.copy()
+
+    assert cli.main(["analyze", f"{first}:First", "--memory"]) == 0
+    first_output = capsys.readouterr().out
+    assert "source output" not in first_output
+    assert sys.path == before
+
+    assert cli.main(["analyze", f"{second}:Second", "--memory"]) == 0
+    second_output = capsys.readouterr().out
+    assert "source output" not in second_output
+    assert sys.path == before
+
+
+def test_analyze_names_the_source_directory_when_a_sibling_is_missing(tmp_path, capsys) -> None:
+    source = tmp_path / "runtime_model.py"
+    source.write_text("from model import Model\n", encoding="utf-8")
+
+    assert cli.main(["analyze", str(source), "--memory"]) == 1
+
+    error = capsys.readouterr().err
+    assert str(tmp_path) in error
+    assert "a sibling module must sit in that directory" in error
 
 
 def test_parse_dims_reads_one_extent_per_dimension() -> None:

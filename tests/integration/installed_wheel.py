@@ -44,16 +44,15 @@ _SMOKES = (
     (("check", "--help"), "--dim"),
 )
 
-# A file the installation never shipped: one authored function and its twin, which
-# is the least that reaches `check` at all.
-_MINE = '''\
+# Files the installation never shipped: one authored function and a twin in a
+# sibling module, which is the least that reaches `check` at all.
+_MINE_MODEL = '''\
 from tilefoundry import module
 from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CpuTarget
 
 
-@module(entry="main", target=CudaTarget())
+@module(entry="main", target=CpuTarget())
 class Mine:
     topologies = (Topology("cta", 168),)
 
@@ -62,6 +61,12 @@ class Mine:
         with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
             local = tf.reshard(x, (168 @ cta.block,), "rmem")
             return tf.reshard(tf.square(local), (168 @ cta.block,), "gmem")
+'''
+
+
+_MINE_RUNTIME = '''\
+from model import Mine
+from tilefoundry.runtime import runtime_func, runtime_module
 
 
 @runtime_module(Mine)
@@ -146,19 +151,22 @@ def smoke(command: Path, outside: Path) -> None:
 
 
 def own_file(command: Path, work: Path) -> None:
-    """`check` compares a Module in a file the installation never shipped."""
-    source = work / "mine.py"
-    source.write_text(_MINE, encoding="utf-8")
+    """`check` compares Modules in files the installation never shipped."""
+    source = work / "mine"
+    source.mkdir(exist_ok=True)
+    (source / "model.py").write_text(_MINE_MODEL, encoding="utf-8")
+    runtime = source / "runtime_model.py"
+    runtime.write_text(_MINE_RUNTIME, encoding="utf-8")
     printed = _run(
         [
-            str(command), "check", f"{source}:MineTwin.main", "--inputs", "random",
+            str(command), "check", f"{runtime}:MineTwin.main", "--inputs", "random",
             "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
         ],
         work,
     )
     if "reference: evaluator on Mine.main" not in printed or "PASS" not in printed:
         raise SystemExit(f"`check` on a file of one's own did not pass:\n{printed}")
-    print(f"  tilefoundry check {source.name}:MineTwin.main: PASS")
+    print(f"  tilefoundry check {runtime.name}:MineTwin.main: PASS")
 
 
 def main(argv: list[str] | None = None) -> int:

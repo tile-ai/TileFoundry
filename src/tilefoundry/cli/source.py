@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
-import runpy
+import sys
 from pathlib import Path
 from typing import Sequence
 
@@ -83,16 +84,50 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
 
 
 def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
-    """Execute one authored file, returning what it defined and its selector.
+    """Load one authored file, returning what it defined and its selector.
 
-    Executing it is how an authored file produces anything at all, so its own
+    Loading it is how an authored file produces anything at all, so its own
     output is captured: what the command prints is its answer, not the file's.
     """
     path, selector = _split_source(source)
-    captured_stdout = io.StringIO()
-    with contextlib.redirect_stdout(captured_stdout):
-        namespace = runpy.run_path(str(path))
-    return namespace, selector
+    directory = str(path.parent)
+    sibling_names = {
+        child.stem for child in path.parent.glob("*.py")
+    } | {
+        child.name
+        for child in path.parent.iterdir()
+        if child.is_dir() and (child / "__init__.py").is_file()
+    }
+    previous_modules = {
+        name: module
+        for name, module in tuple(sys.modules.items())
+        if name.partition(".")[0] in sibling_names
+    }
+    sys.path.insert(0, directory)
+    try:
+        for name in previous_modules:
+            del sys.modules[name]
+        spec = importlib.util.spec_from_file_location(path.stem, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load source module {path}")
+        module = importlib.util.module_from_spec(spec)
+        captured_stdout = io.StringIO()
+        with contextlib.redirect_stdout(captured_stdout):
+            try:
+                spec.loader.exec_module(module)
+            except ModuleNotFoundError as error:
+                raise ValueError(
+                    f"{path.name} imports {error.name!r}, which is not importable.\n"
+                    f"  sys.path got: {directory} (the file's own directory)\n"
+                    "  a sibling module must sit in that directory"
+                ) from None
+        return vars(module), selector
+    finally:
+        for name in tuple(sys.modules):
+            if name.partition(".")[0] in sibling_names:
+                del sys.modules[name]
+        sys.modules.update(previous_modules)
+        sys.path.remove(directory)
 
 
 def load_authored_ir(source: str) -> Module:
