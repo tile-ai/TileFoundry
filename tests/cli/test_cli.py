@@ -120,6 +120,17 @@ def test_spec_prints_one_section_and_the_keys_beside_it(capsys) -> None:
     assert "class RMSNorm(Op):" not in section
 
 
+def test_spec_lists_and_prints_cache_update(capsys) -> None:
+    """The CacheUpdate contract is discoverable from the HIR outline and its key."""
+    assert cli.main(["spec", "hir"]) == 0
+    assert "CacheUpdate" in capsys.readouterr().out
+
+    assert cli.main(["spec", "hir", "cacheupdate"]) == 0
+    section = capsys.readouterr().out
+    assert "class CacheUpdate(Op):" in section
+    assert "eval/runtime, not typeinfer" in section
+
+
 def test_spec_separates_two_sections_that_would_share_a_key(capsys) -> None:
     """Two sections numbered 3.2 are each reachable, and the bare key is refused."""
     assert cli.main(["spec", "parser", "shared-parsing-machinery/3.2"]) == 0
