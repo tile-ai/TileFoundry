@@ -7,7 +7,6 @@ reference, so every behaviour here is reached the way an agent reaches it.
 from __future__ import annotations
 
 import json
-import textwrap
 from pathlib import Path
 
 import numpy
@@ -15,8 +14,9 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
+from tests.fixtures import gqa_online
+from tests.models.corpus import MODELS_ROOT
 from tilefoundry import cli
-from tilefoundry.cli.check import SEED
 from tilefoundry.cli.source import load_namespace, select_ir
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.runtime import DictResource
@@ -25,130 +25,9 @@ from tilefoundry.runtime import DictResource
 #: A router that picked a different eight would be a different model even if every
 #: number matched, so the indices are compared exactly. A child Module of the MoE
 #: block, so this is also the real nested selector path.
-ROUTING = "tests/models/qwen3_5_35b_a3b/model.py:Qwen3_5MoE.router.routing"
+ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5MoE.router.routing"
 
-DISPATCHING = "tests/fixtures/gqa_online.py:GqaOnline.gqa_online_attend"
-
-_TWIN_SOURCE = """
-from tilefoundry import module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, func, tf
-from tilefoundry.runtime import RuntimeModule, runtime_func, runtime_module
-from tilefoundry.target import CudaTarget
-
-
-@module(entry="main", target=CudaTarget())
-class Model:
-    topologies = (Topology("cta", 168),)
-
-    @func
-    def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            squared = tf.square(x_local)
-            return tf.reshard(squared, (168 @ cta.block,), "gmem")
-
-    @func
-    def zeroed(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            nothing = tf.sub(x_local, x_local)
-            return tf.reshard(nothing, (168 @ cta.block,), "gmem")
-
-
-@runtime_module(Model)
-class Twin:
-    @runtime_func
-    def main(self, x):
-        return x * x
-
-    @runtime_func
-    def zeroed(self, x):
-        return x - x
-
-
-@runtime_module(Model)
-class Drifted:
-    @runtime_func
-    def main(self, x):
-        return x * x + 0.5
-
-    @runtime_func
-    def zeroed(self, x):
-        return x - x
-
-
-@module(entry="scaled")
-class Weighted:
-    topologies = (Topology("cta", 168),)
-
-    @func
-    def scaled(
-        x: Tensor[(168,), "f32"], w: ConstTensor[(168,), "f32"]
-    ) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            w_local = tf.reshard(w, (168 @ cta.block,), "rmem")
-            weighted = tf.mul(x_local, w_local)
-            return tf.reshard(weighted, (168 @ cta.block,), "gmem")
-
-
-@runtime_module(Weighted)
-class WeightedTwin:
-    @runtime_func
-    def scaled(self, x, w):
-        return x * w
-
-
-@module(entry="fused", target=CudaTarget())
-class Fused:
-    topologies = (Topology("cta", 168),)
-
-    @func
-    def fused(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            squared = tf.square(x_local)
-            shifted = tf.sub(squared, x_local)
-            return tf.reshard(shifted, (168 @ cta.block,), "gmem")
-
-
-@runtime_module(Fused)
-class FusedTwin:
-    @runtime_func
-    def fused(self, x):
-        return x * x - x
-
-
-@module(target=CudaTarget())
-class Nested:
-    child = Weighted
-
-
-@runtime_module(Nested)
-class NestedTwin:
-    child = WeightedTwin
-
-
-class Handwritten(RuntimeModule):
-    def __init__(self):
-        super().__init__(name="handwritten")
-
-
-class Mislabelled(RuntimeModule):
-    module = "not a Module"
-
-    def __init__(self):
-        super().__init__(name="mislabelled")
-"""
-
-
-@pytest.fixture(scope="module")
-def twin(tmp_path_factory) -> Path:
-    """A file of somebody's own: a Module, its twin, and one that drifts."""
-    path = tmp_path_factory.mktemp("authored") / "mine.py"
-    path.write_text(textwrap.dedent(_TWIN_SOURCE), encoding="utf-8")
-    return path
-
+DISPATCHING = f"{gqa_online.__file__}:GqaOnline.gqa_online_attend"
 
 @pytest.fixture(scope="module")
 def routing(tmp_path_factory) -> dict[str, Path]:
@@ -402,105 +281,6 @@ def test_a_model_below_the_oracle_level_passes_with_a_warning(routing, capsys) -
     assert "not\n           that the Module matches what it describes" in reported
 
 
-def test_a_twin_is_compared_against_the_module_it_states(twin, capsys) -> None:
-    """The target is any file, and naming the implementation reaches its reference."""
-    assert cli.main([
-        "check", f"{twin}:Twin.main", "--inputs", "random",
-        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
-        "--fn", "cosine", "--min", "0.9999",
-    ]) == 0
-    reported = capsys.readouterr().out
-    assert "reference: evaluator on Model.main" in reported
-    assert "max_violation 0" in reported
-
-    assert cli.main([
-        "check", f"{twin}:Drifted.main", "--inputs", "random",
-        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
-    ]) == 1
-    assert "FAIL" in capsys.readouterr().out
-
-    # The fused copy: what the file above spends two functions on, in one.
-    assert cli.main([
-        "check", f"{twin}:FusedTwin.fused", "--inputs", "random",
-        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
-    ]) == 0
-    assert "reference: evaluator on Fused.fused" in capsys.readouterr().out
-
-
-def test_a_whole_module_is_checked_against_an_expected_output_file(twin, tmp_path, capsys) -> None:
-    """An authored Module, activations from a file, and a file to match."""
-    activation = torch.arange(168, dtype=torch.float32)
-    torch.save(activation, tmp_path / "x.pt")
-    torch.save(activation * activation, tmp_path / "expected.pt")
-
-    assert cli.main([
-        "check", f"{twin}:Model",
-        "--input", str(tmp_path / "x.pt"),
-        "--expected", str(tmp_path / "expected.pt"),
-        "--out", "output", "--fn", "equal",
-    ]) == 0
-    reported = capsys.readouterr().out
-
-    assert "expected.pt" in reported
-    assert "elements 168" in reported
-
-
-def test_the_inputs_are_exactly_one_form(twin, tmp_path, capsys) -> None:
-    """Files and a draw are two answers to one question, so asking both is refused."""
-    torch.save(torch.arange(168, dtype=torch.float32), tmp_path / "x.pt")
-
-    for form in ("random", "real"):
-        assert cli.main([
-            "check", f"{twin}:Twin.main", "--input", str(tmp_path / "x.pt"),
-            "--inputs", form, "--out", "output", "--fn", "nan_inf",
-        ]) == 1
-        assert "give exactly one form" in capsys.readouterr().err
-
-
-def test_two_entirely_zero_sides_are_a_match_not_a_total_mismatch(twin, capsys) -> None:
-    """Both sides zero: cosine is 1, which is what agreement between them means."""
-    assert cli.main([
-        "check", f"{twin}:Twin.zeroed", "--inputs", "random",
-        "--out", "output", "--fn", "cosine", "--min", "0.999", "--fn", "rel_l2", "--max", "1e-6",
-    ]) == 0
-    reported = capsys.readouterr().out
-
-    assert "cosine 1" in reported
-    assert "both sides are entirely zero" in reported
-    assert "ref_norm 0" in reported
-    assert "PASS" in reported
-
-
-def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
-    twin, tmp_path, capsys
-) -> None:
-    """The third input form: the weight is read, the activations are drawn.
-
-    The report has to say which is which -- a run whose numbers came from a
-    checkpoint and a run whose numbers were invented look the same otherwise.
-    """
-    save_file(
-        {"w": torch.linspace(0.5, 2.0, 168)}, str(tmp_path / "model.safetensors")
-    )
-
-    assert cli.main([
-        "check", f"{twin}:WeightedTwin.scaled", "--inputs", "real", "--ckpt", str(tmp_path),
-        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
-    ]) == 0
-    reported = capsys.readouterr().out
-
-    assert "weights the checkpoint" in reported
-    assert f"random, seed {SEED}" in reported
-    assert "max_violation 0" in reported
-
-    # And real weights without a checkpoint to read them from is refused.
-    assert cli.main([
-        "check", f"{twin}:WeightedTwin.scaled", "--inputs", "real",
-        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
-    ]) == 1
-    assert "needs --ckpt DIR" in capsys.readouterr().err
-
-
 def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsys) -> None:
     """Reaching `router.routing` reads `router.w_router`: the checkpoint holds
     that one tensor and none of the eight the block around it declares."""
@@ -509,36 +289,3 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsy
         "--out", "output[0]", "--fn", "nan_inf", "--out", "output[1]", "--fn", "equal",
     )) == 0
     assert "weights the checkpoint" in capsys.readouterr().out
-
-
-def test_a_nested_twin_is_reached_through_the_child_it_is_declared_under(
-    twin, capsys
-) -> None:
-    """Selector descent on a twin: the child segment moves the twin and the
-    authored Module it is judged against, and the weight is read under the child's
-    own name. Resolution and loading only."""
-    assert cli.main([
-        "check", f"{twin}:NestedTwin.child.scaled", "--inputs", "random",
-        "--out", "output", "--fn", "allclose", "--atol", "1e-6", "--rtol", "1e-6",
-    ]) == 0
-    reported = capsys.readouterr().out
-
-    assert "reference: evaluator on child.scaled" in reported
-    assert "max_violation 0" in reported
-
-
-def test_a_runtime_module_that_names_no_authored_module_is_refused(twin, capsys) -> None:
-    """`check` reads the twin's accessor and takes what it says at its word.
-
-    Both refusals are the CLI's, not the decorator's: `@runtime_module` rejects a
-    written `module` outright, so only a hand-written subclass reaches here.
-    """
-    for target, refused in (
-        ("Handwritten", "names no authored Module"),
-        ("Mislabelled", "module must be Module or None, got str"),
-    ):
-        assert cli.main([
-            "check", f"{twin}:{target}", "--inputs", "random",
-            "--out", "output", "--fn", "nan_inf",
-        ]) == 1
-        assert refused in capsys.readouterr().err

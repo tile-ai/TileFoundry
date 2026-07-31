@@ -83,13 +83,18 @@ jobs:
         run: >-
           pip wheel . --no-deps --no-build-isolation
           --wheel-dir ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}
-      # A path per run and attempt: the runner requires the environment not to exist,
-      # and a fresh wheel directory holds exactly the one wheel just built.
-      - name: Verify the installed wheel
+      # Built once here; the shards reuse it through TF_SMOKE_VENV.
+      - name: Install the wheel into a clean environment
+        run: |
+          python -m venv --system-site-packages ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/pip install --no-deps \
+            ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}/tilefoundry-*.whl
+      # Default collection misses smoke_*.py, so the pattern is named here.
+      - name: Verify the installed surface
+        env:
+          TF_SMOKE_VENV: ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: >-
-          python tests/integration/installed_wheel.py
-          --wheel ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}
-          --venv ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          pytest tests/integration/installed -o python_files='smoke_*.py' -q
       # Run by the environment above. `--work` holds the emitted source and the
       # canonical store `prepare` writes.
       - name: Decode the published checkpoint with the shipped source
