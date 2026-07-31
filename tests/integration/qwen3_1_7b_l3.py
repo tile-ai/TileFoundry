@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,17 +36,17 @@ PROMPT = "Explain why the sky appears blue in one sentence."
 STEPS = 16
 DEV = "cuda"
 
-# The published fields this run reads, and the shape field each one becomes.
-_PUBLISHED = {
-    "hidden": "hidden_size",
-    "head_dim": "head_dim",
-    "n_q_heads": "num_attention_heads",
-    "n_kv_heads": "num_key_value_heads",
-    "intermediate": "intermediate_size",
-    "vocab": "vocab_size",
-    "max_pos": "max_position_embeddings",
-    "n_layers": "num_hidden_layers",
-}
+# The published keys this run reads off the mounted checkpoint.
+_PUBLISHED = (
+    "hidden_size",
+    "head_dim",
+    "num_attention_heads",
+    "num_key_value_heads",
+    "intermediate_size",
+    "vocab_size",
+    "max_position_embeddings",
+    "num_hidden_layers",
+)
 
 # Canonical name -> published key. The seven projections and the head resolve to
 # the keys their converters read; `layer{i}` is a subtree segment, not a leaf.
@@ -65,18 +66,6 @@ _ALIAS = {
     "up_proj_weight": "mlp.up_proj.weight",
     "down_proj_weight": "mlp.down_proj.weight",
 }
-
-# The `tests.models.qwen3_1_7b.config` the emitted source imports `REAL` from. The
-# wheel ships model source and not this module, so the run writes it from the
-# mounted checkpoint: the dimensions the source binds to are the decoded ones.
-_COMPANION = '''\
-"""Qwen3-1.7B's dimensions, read from the mounted checkpoint."""
-from types import SimpleNamespace
-
-REAL = SimpleNamespace(
-{fields}
-)
-'''
 
 
 def _installed(venv: Path) -> None:
@@ -99,7 +88,7 @@ def _published(mount: Path) -> dict:
     read = json.loads(stated.read_text(encoding="utf-8"))
     if read.get("model_type") != "qwen3":
         raise SystemExit(f"{mount} publishes model_type {read.get('model_type')!r}")
-    missing = sorted(key for key in _PUBLISHED.values() if key not in read)
+    missing = sorted(key for key in _PUBLISHED if key not in read)
     if missing:
         raise SystemExit(f"{stated} states no {', '.join(missing)}")
     if not sorted(mount.glob("model*.safetensors*")):
@@ -107,7 +96,7 @@ def _published(mount: Path) -> dict:
     return read
 
 
-def _emitted(venv: Path, work: Path, outside: Path) -> Path:
+def _emitted(venv: Path, work: Path, outside: Path, mount: Path) -> Path:
     """Ask the installation for the model source, and write it where it will run."""
     done = subprocess.run(
         [str(venv / "bin" / "tilefoundry"), "models", MODEL, "--source"],
@@ -120,33 +109,11 @@ def _emitted(venv: Path, work: Path, outside: Path) -> Path:
         )
     source = work / "model.py"
     source.write_text(done.stdout, encoding="utf-8")
+    # The source reads its dimensions from a `config.json` beside it, so the
+    # mounted checkpoint's own file is what it binds to here.
+    shutil.copyfile(mount / "config.json", work / "config.json")
     print(f"emitted {len(done.stdout)} characters of {MODEL} source to {source}")
     return source
-
-
-def _companion(work: Path, published: dict) -> Path:
-    """Write the config module the emitted source imports, and return its root."""
-    fields = {field: published[key] for field, key in _PUBLISHED.items()}
-    fields.update(
-        # A position past the rotary cache has no embedding to gather.
-        max_ctx=fields["max_pos"],
-        # The dtype the kernels are authored at, not a published field.
-        dt="f32",
-        gqa_group=fields["n_q_heads"] // fields["n_kv_heads"],
-        q_proj=fields["n_q_heads"] * fields["head_dim"],
-        kv_proj=fields["n_kv_heads"] * fields["head_dim"],
-    )
-
-    root = work / "companion"
-    package = root / "tests" / "models" / MODEL
-    package.mkdir(parents=True, exist_ok=True)
-    for name in ("tests", "tests/models", f"tests/models/{MODEL}"):
-        (root / name / "__init__.py").write_text("", encoding="utf-8")
-    rendered = "\n".join(f"    {name}={value!r}," for name, value in fields.items())
-    package.joinpath("config.py").write_text(
-        _COMPANION.format(fields=rendered), encoding="utf-8"
-    )
-    return root
 
 
 def _oracle(mount: Path):
@@ -241,8 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     published = _published(args.checkpoint)
     args.work.mkdir(parents=True, exist_ok=True)
 
-    source = _emitted(args.venv, args.work, args.outside)
-    sys.path.insert(0, str(_companion(args.work, published)))
+    source = _emitted(args.venv, args.work, args.outside, args.checkpoint)
 
     tokenizer, model = _oracle(args.checkpoint)
     loaded = _loaded(source, args.work, args.checkpoint, published["num_hidden_layers"])
