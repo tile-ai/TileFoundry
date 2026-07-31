@@ -9,10 +9,16 @@ reference, and what an authored program costs. Python authoring syntax and
 grammar productions remain in the [parser specification](./parser.md); the
 authored IR itself is the [HIR specification](./hir.md).
 
-Naming no command MUST print an overview rather than an error: a one-line
-project summary taken from installed package metadata, the usage form, the
-commands in the order the work is done, and the options. The summary MUST NOT
-be restated in the command surface, so there is one copy of it.
+Naming no command at any command level MUST print that level's overview rather
+than an error. The top-level overview MUST include a one-line project summary
+taken from installed package metadata, the usage form, the commands in the order
+the work is done, and the options. A command overview MUST include its
+description, usage form, subcommands, and options, and its description MUST be
+the one shown by the command above it. The project summary MUST NOT be restated
+in the command surface, so there is one copy of it.
+
+A command usage error MUST print the error followed by that command's complete
+help to standard error and exit with status 2.
 
 ## Commands
 
@@ -22,8 +28,8 @@ tilefoundry models [NAME] [--source]
 tilefoundry spec [TOPIC [SECTION]]
 
 tilefoundry check TARGET (--inputs random | --inputs real --ckpt DIR | --input=PATH ...)
-    [--expected=PATH ...] --out PATH --fn F [bounds] [--fn F [bounds]] ...
-    [--out PATH ...] [--dim NAME=V[,V...] ...] [--json]
+    [--expected=PATH ...] --out OUTPUT --fn F [bounds] [--fn F [bounds]] ...
+    [--out OUTPUT ...] [--dim NAME=V[,V...] ...] [--json]
 
 tilefoundry analyze model.py[:Module[.child_module...][.function]]
     [--roofline] [--footprint] [--timeline] [--dim NAME=EXTENT ...]
@@ -32,7 +38,7 @@ tilefoundry schedule model.py[:Module[.child_module...][.function]] --topology L
     [--dim NAME=EXTENT ...] [--solver-timeout SECONDS] [--solver-workers COUNT]
     [--first-plan]
 
-tilefoundry inspect capabilities model.py[:Module[.child_module...][.function]]
+tilefoundry inspect [capabilities [SOURCE]]
 ```
 
 `SOURCE` is a Python file followed optionally by
@@ -57,6 +63,11 @@ other mechanism for it. What `models <name> --source` prints stays the reference
 compare against, and it stays intact because an installation is not where anybody
 edits — no verb enforces that, and none should.
 
+A command MUST load `SOURCE` as a Python module. While loading it, the directory
+containing `SOURCE` MUST be first on the Python module search path, so a file beside
+it MAY be imported by its module name. A command MUST capture and suppress standard
+output that `SOURCE` emits while loading.
+
 `check` reads the same `SOURCE` shape and one thing more: its selector MAY name a
 runtime twin instead of an authored Module. A twin generated from an authored
 Module states which Module that is ([runtime §1.1](./runtime.md#11-runtimemodule)),
@@ -71,6 +82,10 @@ when there is one, its reference, and says of every output whether it meets the
 bounds the caller stated.
 
 - constraints:
+  - Repeated `--input` values MUST bind the function's inputs in parameter
+    declaration order. Output names MUST come from return position: one tensor is
+    `output`; a tuple's tensors are `output[0]`, `output[1]`, and so on in return
+    order. These are positions, not names authored in the function.
   - Every output MUST be judged by at least one predicate the caller states, and
     there MUST be no default predicate and no default bound. A bound nobody can
     meet is worse than none: a single `f32`→`bf16` rounding already measures
@@ -344,8 +359,12 @@ decided different things.
 
 ## Inspect Capabilities
 
-`inspect capabilities` resolves the target from the selected Module and prints
-the installed compact hardware capability record. It does not emit compiler
+`inspect capabilities` with no `SOURCE` lists the installed architecture and
+device documents, including each document's compatibility declarations, and the
+target names a Module may declare. It also states how to ask for one selection.
+
+With a `SOURCE`, it resolves the target from the selected Module and prints the
+installed compact hardware capability record. It does not emit compiler
 operation coverage. The record names both the architecture and the device
 document behind the target, each with its content digest, then every recorded
 fact by its path. A fact identifies its unit, the conditions it holds under,

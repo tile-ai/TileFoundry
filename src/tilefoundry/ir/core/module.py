@@ -109,7 +109,8 @@ class Module:
                 raise ValueError(
                     f"Module {self.name!r}: child module {child.name!r} declares "
                     f"its own target {child.target!r}; only the root module "
-                    f"declares a target and children inherit it"
+                    "declares a target and children inherit it. The rule: "
+                    "tilefoundry spec core-ir target-inheritance"
                 )
         # Own the subtree rather than sharing it. A child links back to its
         # owner to resolve inherited context, so one child value placed under
@@ -129,8 +130,10 @@ class Module:
         return ".".join(reversed(names))
 
     def resolve_target(self) -> Target:
-        """The effective Target: this Module's declaration, else the nearest
-        owner's. Raises when no owner in the chain declares one."""
+        """Resolve this Module's owner-chain target lookup.
+
+        See docs/spec/core-ir.md § Target inheritance.
+        """
         node: "Module | None" = self
         while node is not None:
             if node.target is not None:
@@ -138,7 +141,8 @@ class Module:
             node = getattr(node, "_parent", None)
         raise ValueError(
             f"Module {self._owner_path()!r}: no target is declared by this "
-            f"module or any of its owners; the root module must declare one"
+            "module or any of its owners; declare target=\"cuda\" on the root "
+            "module. The rule: tilefoundry spec core-ir target-inheritance"
         )
 
     def effective_topologies(self) -> tuple[Topology, ...]:
@@ -275,10 +279,12 @@ class Module:
 
     def entry_function(self) -> ModuleFunction:
         if self.entry is None:
+            names = ", ".join(fn.name for fn in self.functions) or "no functions"
             raise ValueError(
                 f"Module {self.name!r} declares no entry, so it has no default "
-                f"step; name the function to use -- lookup('<name>') for the node, "
-                f"or <module>.<name>(...) to run it"
+                f"step. It declares {names}; name the function to use -- "
+                "lookup('<name>') for the node, or <module>.<name>(...) to run "
+                "it. The rule: tilefoundry spec core-ir default-step"
             )
         matches = self.function_named(self.entry)
         if not matches:

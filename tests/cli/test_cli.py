@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import textwrap
 from pathlib import Path
 
@@ -30,6 +31,23 @@ def _write_module(tmp_path, source: str = _VALID_MODULE):
     path = tmp_path / "model.py"
     path.write_text(textwrap.dedent(source), encoding="utf-8")
     return path
+
+
+def _write_sibling_module(tmp_path: Path, directory: str, name: str) -> Path:
+    source = tmp_path / directory
+    source.mkdir()
+    (source / "model.py").write_text(
+        _VALID_MODULE.replace("class Model:", f"class {name}:"), encoding="utf-8"
+    )
+    runtime = source / "runtime_model.py"
+    runtime.write_text(
+        f"from model import {name}\n"
+        "if __spec__ is None:\n"
+        "    raise RuntimeError('source was not loaded as a module')\n"
+        "print('source output')\n",
+        encoding="utf-8",
+    )
+    return runtime
 
 
 def test_models_separates_oracles_from_everything_else(capsys) -> None:
@@ -120,6 +138,17 @@ def test_spec_prints_one_section_and_the_keys_beside_it(capsys) -> None:
     assert "class RMSNorm(Op):" not in section
 
 
+def test_spec_lists_and_prints_cache_update(capsys) -> None:
+    """The CacheUpdate contract is discoverable from the HIR outline and its key."""
+    assert cli.main(["spec", "hir"]) == 0
+    assert "CacheUpdate" in capsys.readouterr().out
+
+    assert cli.main(["spec", "hir", "cacheupdate"]) == 0
+    section = capsys.readouterr().out
+    assert "class CacheUpdate(Op):" in section
+    assert "eval/runtime, not typeinfer" in section
+
+
 def test_spec_separates_two_sections_that_would_share_a_key(capsys) -> None:
     """Two sections numbered 3.2 are each reachable, and the bare key is refused."""
     assert cli.main(["spec", "parser", "shared-parsing-machinery/3.2"]) == 0
@@ -141,6 +170,111 @@ def test_spec_rejects_a_section_that_does_not_exist(capsys) -> None:
 
     assert "no section '9.9'" in error
     assert "silu" in error
+
+
+@pytest.mark.parametrize(
+    ("topic", "section", "expected"),
+    (
+        ("target", "topology-levels", "Only `cta` MAY have a launch-provided"),
+        ("core-ir", "target-inheritance", 'with `target="cuda"`'),
+        ("core-ir", "default-step", "MUST have no default step"),
+    ),
+)
+def test_spec_answers_the_target_and_default_step_rules(
+    topic, section, expected, capsys
+) -> None:
+    """The rules' stable slug keys are directly askable."""
+    assert cli.main(["spec", topic, section]) == 0
+
+    assert expected in capsys.readouterr().out
+
+
+def test_schedule_refusal_of_a_launch_provided_level_points_to_the_spec(
+    tmp_path, capsys
+) -> None:
+    """A schedule refusal points to the rule that distinguishes launch shape."""
+    path = _write_module(
+        tmp_path,
+        _VALID_MODULE.replace(
+            'Topology("cta", 168)', 'Topology("cta", None)', 1
+        ),
+    )
+
+    assert cli.main(["schedule", str(path), "--topology", "cta"]) == 1
+
+    error = capsys.readouterr().err
+    assert "not known until launch" in error
+    assert "The rule: tilefoundry spec target topology-levels" in error
+
+
+def test_module_without_an_entry_names_its_functions_and_rule(tmp_path, capsys) -> None:
+    """An absent default step names both the callable choices and its contract."""
+    path = _write_module(
+        tmp_path,
+        _VALID_MODULE.replace(
+            '@module(entry="main", target=CudaTarget())', '@module(target=CudaTarget())'
+        ),
+    )
+
+    assert cli.main(["schedule", str(path), "--topology", "cta"]) == 1
+
+    error = capsys.readouterr().err
+    assert "declares no entry, so it has no default step. It declares main" in error
+    assert "The rule: tilefoundry spec core-ir default-step" in error
+
+
+def test_inspect_describes_its_commands(capsys) -> None:
+    assert cli.main(["inspect"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.startswith("tilefoundry inspect — inspect installed target facts\n")
+    assert "Usage:\n  tilefoundry inspect <command> [options]\n" in captured.out
+    assert "capabilities  the facts a selection's target was composed from" in captured.out
+    assert captured.err == ""
+
+
+def test_inspect_capabilities_lists_installed_documents(capsys) -> None:
+    assert cli.main(["inspect", "capabilities"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.startswith("Installed hardware documents:\n")
+    for document in ("apple.amx", "apple.m2_pro", "nvidia.sm90", "nvidia.h200_sxm"):
+        assert document in captured.out
+    assert "architectures: apple.amx" in captured.out
+    assert "architectures: nvidia.sm90" in captured.out
+    assert "Targets a module may declare: amx, cpu, cuda" in captured.out
+    assert "tilefoundry inspect capabilities model.py:Model" in captured.out
+    assert captured.err == ""
+
+
+def test_usage_errors_include_the_command_help(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["analyze"])
+
+    assert error.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith(
+        "tilefoundry analyze: error: the following arguments are required: SOURCE\n\n"
+    )
+    assert "usage: tilefoundry analyze" in captured.err
+    assert "SOURCE" in captured.err
+    assert "model.py[:Module[.child_module...][.function]]" in captured.err
+
+
+def test_check_help_explains_input_and_output_positions(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["check", "--help"])
+
+    assert error.value.code == 0
+    captured = capsys.readouterr()
+    assert "--input PATH" in captured.out
+    assert "parameter's declared order" in captured.out
+    assert "--out OUTPUT" in captured.out
+    assert "`output[0]`" in captured.out
+    assert "return order" in captured.out
+    assert "positions, not the names your code gives them" in captured.out
+    assert captured.err == ""
 
 
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:
@@ -274,6 +408,35 @@ def test_analyze_failure_reports_line_variable_and_reason(tmp_path, capsys) -> N
     assert f"{path}:9:" in captured.err
     assert "variable 'wrong'" in captured.err
     assert "dtype mismatch" in captured.err
+
+
+def test_analyze_loads_sibling_modules_without_leaking_paths_or_output(
+    tmp_path, capsys
+) -> None:
+    first = _write_sibling_module(tmp_path, "first", "First")
+    second = _write_sibling_module(tmp_path, "second", "Second")
+    before = sys.path.copy()
+
+    assert cli.main(["analyze", f"{first}:First", "--memory"]) == 0
+    first_output = capsys.readouterr().out
+    assert "source output" not in first_output
+    assert sys.path == before
+
+    assert cli.main(["analyze", f"{second}:Second", "--memory"]) == 0
+    second_output = capsys.readouterr().out
+    assert "source output" not in second_output
+    assert sys.path == before
+
+
+def test_analyze_names_the_source_directory_when_a_sibling_is_missing(tmp_path, capsys) -> None:
+    source = tmp_path / "runtime_model.py"
+    source.write_text("from model import Model\n", encoding="utf-8")
+
+    assert cli.main(["analyze", str(source), "--memory"]) == 1
+
+    error = capsys.readouterr().err
+    assert str(tmp_path) in error
+    assert "a sibling module must sit in that directory" in error
 
 
 def test_parse_dims_reads_one_extent_per_dimension() -> None:

@@ -1,11 +1,6 @@
-"""Functional KV-cache update HIR primitive.
+"""KV-cache update: write ``new[:, :s]`` at ``cache[:, cur_pos : cur_pos + s]``.
 
-Returns a new cache of the **same** (static) shape with ``new[:, :s]`` written at
-``cache[:, cur_pos : cur_pos + s]`` and all other positions unchanged. The write
-region (``cur_pos`` / ``s``) is runtime scalar data, never a shape dim, so the
-cache shape stays static (no compound ``DimVar`` context axis). It is a pure
-value-form op; an in-place realization is a lowering concern (the output is
-anchored on the input cache buffer).
+Contract and constraints: `spec hir § CacheUpdate`.
 """
 from __future__ import annotations
 
@@ -19,14 +14,10 @@ from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 
-# Data-dependent write region (``cur_pos`` / ``s`` are runtime values), so no
-# affine access relation is registered — the boundaries are opaque.
-
 
 @register_op(name="cache_update")
 class CacheUpdate(Op):
-    """Write ``new[:, :s]`` into ``cache[:, cur_pos : cur_pos + s]``; return the
-    updated cache (same shape). ``cur_pos`` / ``s`` are runtime scalar tensors."""
+    """Cache-update HIR operation; see `spec hir § CacheUpdate`."""
     cache = ParamDef(kind="input", pattern=Tensor)
     cur_pos = ParamDef(kind="input", pattern=Tensor)
     s = ParamDef(kind="input", pattern=Tensor)

@@ -30,7 +30,10 @@ def default_target() -> Target:
 
 
 def validate_cuda_topology_levels(names) -> None:
-    """Validate topology names against the default CUDA target."""
+    """Validate names at the CUDA lowering boundary.
+
+    See docs/spec/target.md § Topology levels.
+    """
     target = CudaTarget()
     for name in names:
         if name not in target.topology_levels:

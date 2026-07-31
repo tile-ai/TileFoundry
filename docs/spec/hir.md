@@ -691,6 +691,44 @@ class InsertSlice(Op):
     the write result cannot preserve that secondary value state. An explicit
     `Reshard(update, Broadcast)` completes it.
 
+##### CacheUpdate
+```python
+class CacheUpdate(Op):
+    """Write a window of ``new`` into ``cache``; produces a same-shape cache.
+
+    Attributes:
+        cache: input; cache that receives the write.
+        cur_pos: input; i32 scalar where the write begins.
+        s: input; i32 scalar number of positions to write.
+        new: input; source positions, taken as ``new[:, :s]``.
+    """
+
+    cache: Tensor
+    cur_pos: Tensor
+    s: Tensor
+    new: Tensor
+```
+- constraints:
+  - `cache` and `new` MUST be rank-4 `[B, len, kv_heads, head_dim]` tensors
+    with the same dtype and equal `B`, `kv_heads`, and `head_dim`; typeinfer
+    rejects a mismatch. When both lengths are static, `new.len` MUST NOT exceed
+    `cache.len`.
+  - `cur_pos` and `s` MUST be i32 scalar tensors. A scalar is rank-0 or has
+    only literal size-1 dimensions; typeinfer rejects another dtype or shape.
+  - The write interval is runtime data, never a shape dimension. The result has
+    `cache`'s same static shape; no context-length `DimVar` grows with a write.
+  - `cur_pos >= 0`, `1 <= s <= new.len`, and `cur_pos + s <= cache.len` MUST
+    be checked at eval/runtime, not typeinfer, because their operands are
+    runtime values.
+  - This is a pure value-form op. Lowering MAY realize the output in place on
+    `cache`'s buffer.
+  - A `cache` carrying `Partial(reduction)` on a mesh axis requires `new` to
+    carry the identical mesh and per-mesh-axis state; a complete `cache`
+    rejects a `new` carrying `Partial`. Typeinfer rejects either mismatch.
+  - No affine access relation is registered because the data-dependent write
+    boundaries are opaque. Traffic analysis therefore charges the full tensor
+    types.
+
 ##### TopK
 ```python
 class TopK(Op):
