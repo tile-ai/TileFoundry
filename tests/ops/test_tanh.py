@@ -1,8 +1,10 @@
-"""Tanh typeinfer + Partial(R) commutation."""
+"""Tanh typeinfer + Partial(R) commutation, and what it evaluates to."""
 from __future__ import annotations
 
 import pytest
+import torch
 
+from tests.ops.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -31,3 +33,36 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_tanh_typeinfer(case):
     run_typeinfer_case(case)
+
+
+#: Small magnitudes around zero and the saturating tail, so the evaluation is
+#: checked where tanh is steep and where it flattens to 1.
+_VALUES = torch.tensor(
+    [-8.0, -1.0, -0.25, -0.03125, -0.0078125, 0.0, 0.0078125, 0.03125, 1.0, 8.0],
+    dtype=torch.bfloat16,
+)
+
+EVAL_CASES = [
+    EvalCase(
+        "bf16_matches_torch_tanh",
+        Tanh(),
+        (_VALUES,),
+        torch.tanh(_VALUES),
+        atol=0,
+        rtol=0,
+    ),
+    EvalCase(
+        "f32_matches_torch_tanh",
+        Tanh(),
+        (_VALUES.float(),),
+        torch.tanh(_VALUES.float()),
+        atol=0,
+        rtol=0,
+    ),
+]
+
+
+@pytest.mark.parametrize("case", EVAL_CASES, ids=lambda c: c.name)
+def test_tanh_evaluates_as_torch_tanh(case):
+    """The op computes `torch.tanh`, bit for bit, at the dtype it is given."""
+    run_eval_case(case)
