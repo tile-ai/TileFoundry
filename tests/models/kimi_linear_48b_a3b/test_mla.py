@@ -1,7 +1,7 @@
 """Kimi-Linear MLA decode step vs Hugging Face, in both of its forms.
 
-cpu + f32, because the oracle is a CPU f32 baseline and this submodule is small
-enough not to need a device.
+On the host, because this submodule is small enough not to need a device. Both
+sides run at the dtype the checkpoint publishes.
 
 Every number this file asserts was measured before it was written down. The
 parity tests are only half the point: the perturbation tests below establish that
@@ -13,21 +13,23 @@ from __future__ import annotations
 
 import torch
 
-from tests.models.kimi_linear_48b_a3b import config, reference
+from tests.models.decode_oracle import agrees_as_a_component
+from tests.models.kimi_linear_48b_a3b import reference
 from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import specialize_concretely
 
+CONFIG = reference.CONFIG
+
 DEV = "cpu"
-ATOL = RTOL = 2e-4
 
 #: Two lengths, so a kernel that only works at the length it was authored against
 #: cannot pass. Neither is a multiple of the 32 heads.
 CTX_LENGTHS = (24, 40)
 
 #: What a perturbed run has to move the output by before the corresponding parity
-#: test counts as discriminating. Four orders of magnitude above the f32
-#: round-off the parity tests accept, so "it changed" cannot be round-off.
+#: test counts as discriminating. Far above the rounding the parity tests accept,
+#: so "it changed" cannot be round-off.
 DISCRIMINATION = 1e-3
 
 
@@ -49,7 +51,7 @@ def test_identity_rotary_is_exactly_the_identity():
         apply_rotary_pos_emb,
     )
 
-    rope_dim = config.REAL.qk_rope_head_dim
+    rope_dim = CONFIG.qk_rope_head_dim
     torch.manual_seed(0)
     q = torch.randn(1, 4, 7, rope_dim)
     k = torch.randn(1, 1, 7, rope_dim)
@@ -72,7 +74,7 @@ def test_mla_nope_matches_hf():
         drawn = reference.mla_step_inputs(ctx_len=ctx_len, device=DEV, nope=True)
         out, _k, _v = _run(drawn)
         want = reference.mla_step_oracle(drawn)
-        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+        agrees_as_a_component(out, want)
 
 
 def test_mla_rope_matches_hf():
@@ -86,7 +88,7 @@ def test_mla_rope_matches_hf():
         drawn = reference.mla_step_inputs(ctx_len=ctx_len, device=DEV, nope=False)
         out, _k, _v = _run(drawn)
         want = reference.mla_step_oracle(drawn)
-        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+        agrees_as_a_component(out, want)
 
 
 def test_mla_returns_the_cache_entry_to_append():
@@ -104,8 +106,10 @@ def test_mla_returns_the_cache_entry_to_append():
 
     assert tuple(grown_k.shape) == tuple(want_k.shape)
     assert tuple(grown_v.shape) == tuple(want_v.shape)
-    torch.testing.assert_close(grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL)
-    torch.testing.assert_close(grown_v.float(), want_v.float(), atol=ATOL, rtol=RTOL)
+    # The cache handed in is the oracle's own, so the entry appended to it is the
+    # only computed part and the one whose precision the bound follows.
+    agrees_as_a_component(grown_k, want_k)
+    agrees_as_a_component(grown_v, want_v)
 
 
 def test_mla_scaling_is_qk_head_dim_not_v_head_dim():
@@ -121,7 +125,9 @@ def test_mla_scaling_is_qk_head_dim_not_v_head_dim():
     want = reference.mla_step_oracle(drawn)
 
     args = list(drawn.args)
-    args[11] = torch.full((1, 1, 1, 1), config.REAL.v_head_dim ** -0.5, device=DEV)
+    args[11] = torch.full(
+        (1, 1, 1, 1), CONFIG.v_head_dim ** -0.5, device=DEV, dtype=reference.DTYPE
+    )
     wrong, _k, _v = _run(drawn, args)
 
     assert (wrong.float() - want.float()).abs().max().item() > DISCRIMINATION

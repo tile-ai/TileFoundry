@@ -20,8 +20,8 @@ import math
 import pytest
 import torch
 
-from tests.models.deepseek_v4_flash import config as shape
 from tests.models.deepseek_v4_flash import reference
+from tests.models.deepseek_v4_flash import reference as shape
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 

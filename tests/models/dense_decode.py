@@ -40,13 +40,36 @@ def _layers(model):
 class DenseDecode:
     """One dense decoder package's declaration of how to draw its oracle.
 
+    Every field is something this module calls. It used to take the package's
+    ``config`` module and reach into it for whichever name it wanted, which made
+    that module an interface nobody had written down -- a package satisfied it by
+    happening to export ten right-shaped names. Naming the callables is the same
+    dependency stated where it can be read, and it is what let the hand-copied
+    dimensions behind ``config.REAL`` be replaced by each model's published
+    ``config.json`` without this file knowing.
+
     ``load_layer`` and ``load_decoder`` are the package's own: given its Hugging
     Face layer or stack, each returns the ``LoadedModule`` to run. Which canonical
     name reads which Hugging Face tensor is the package's statement, not this
     module's.
     """
 
-    config: object
+    #: The published hidden size, the dtype the checkpoint publishes, and the
+    #: caches at the published context limit. The dtype is here because every
+    #: draw this module makes has to be at it: an oracle built in f32 against
+    #: kernels declared at the checkpoint's bf16 would be comparing two
+    #: precisions, and calling the difference a tolerance.
+    hidden_size: int
+    dtype: object
+    rope_caches: Callable[[str], tuple[torch.Tensor, torch.Tensor]]
+    #: Hugging Face's own layer and stack, drawn at a seed.
+    build_layer: Callable[..., object]
+    build_decoder: Callable[..., object]
+    #: What Hugging Face would hold, and what it would answer.
+    context_kv: Callable[..., tuple[torch.Tensor, torch.Tensor]]
+    decode_reference: Callable[..., torch.Tensor]
+    decoder_context_kv: Callable[..., list]
+    decoder_decode_reference: Callable[..., torch.Tensor]
     load_layer: Callable[[object], object]
     load_decoder: Callable[[object], object]
     #: Seeds, named so a change to either is a visible change to the reference.
@@ -56,7 +79,7 @@ class DenseDecode:
     #: power of the head count, so an index arithmetic error cannot coincide with
     #: a head boundary.
     ctx_len: int = 24
-    #: Whatever runs this states its own device; the oracle is a CPU f32 baseline.
+    #: Whatever runs this states its own device; the oracle runs on the CPU.
     device: str = "cpu"
     scale_of: Callable[[object], float] = _self_attn_scaling
     #: Runtime values this model's signature takes after the weights. MiniCPM3
@@ -119,13 +142,10 @@ class StackStep:
 def _split_hidden(spec: DenseDecode, ctx_len: int, device: str):
     """The context and the token that follows it, drawn together and seeded."""
     torch.manual_seed(spec.activation_seed)
-    drawn = torch.randn(1, ctx_len + 1, spec.config.REAL.hidden, device=device) * 0.1
+    drawn = (torch.randn(1, ctx_len + 1, spec.hidden_size, device=device) * 0.1).to(
+        spec.dtype
+    )
     return drawn[:, :ctx_len], drawn[:, ctx_len:]
-
-
-def _rope(spec: DenseDecode, device: str):
-    cfg = spec.config.build_hf_config()
-    return spec.config.rope_caches(cfg, spec.config.REAL.max_pos, device=device)
 
 
 def _positions(ctx_len: int, device: str) -> torch.Tensor:
@@ -140,11 +160,13 @@ def layer_step(
     ctx_len = spec.ctx_len if ctx_len is None else ctx_len
     device = spec.device if device is None else device
 
-    layer = spec.config.build_hf_layer(seed=spec.weight_seed, device=device)
-    cos_cache, sin_cache = _rope(spec, device)
-    scale = torch.full((1, 1, 1, 1), spec.scale_of(layer), device=device)
+    layer = spec.build_layer(seed=spec.weight_seed, device=device)
+    cos_cache, sin_cache = spec.rope_caches(device)
+    scale = torch.full(
+        (1, 1, 1, 1), spec.scale_of(layer), device=device, dtype=spec.dtype
+    )
     hidden_ctx, hidden_new = _split_hidden(spec, ctx_len, device)
-    k_cache, v_cache = spec.config.context_kv(layer, hidden_ctx, device=device)
+    k_cache, v_cache = spec.context_kv(layer, hidden_ctx, device=device)
 
     return (spec.layer_step_class or LayerStep)(
         args=(
@@ -169,7 +191,7 @@ def layer_step(
 
 def layer_oracle(spec: DenseDecode, drawn: LayerStep) -> torch.Tensor:
     """What Hugging Face's own layer produces for the same drawn step."""
-    return spec.config.decode_reference(drawn.layer, drawn.hidden_ctx, drawn.hidden_new)
+    return spec.decode_reference(drawn.layer, drawn.hidden_ctx, drawn.hidden_new)
 
 
 def appended_cache(spec: DenseDecode, drawn: LayerStep):
@@ -179,7 +201,7 @@ def appended_cache(spec: DenseDecode, drawn: LayerStep):
     appended: the kernel's returned key and value are correct exactly when
     appending them reproduces this.
     """
-    return spec.config.context_kv(
+    return spec.context_kv(
         drawn.layer,
         torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1),
         device=drawn.hidden_ctx.device.type,
@@ -197,9 +219,9 @@ def stack_step(
     boundary exists to observe.
     """
     ctx_len = spec.ctx_len if ctx_len is None else ctx_len
-    model = spec.config.build_hf_decoder(seed=spec.weight_seed, device=device)
+    model = spec.build_decoder(seed=spec.weight_seed, device=device)
     hidden_ctx, hidden_new = _split_hidden(spec, ctx_len, device)
-    cos_cache, sin_cache = _rope(spec, device)
+    cos_cache, sin_cache = spec.rope_caches(device)
     first_layer = _layers(model)[0]
     return (spec.stack_step_class or StackStep)(
         model=model,
@@ -207,11 +229,13 @@ def stack_step(
         ctx_len=ctx_len,
         hidden_ctx=hidden_ctx,
         hidden_new=hidden_new,
-        caches=spec.config.decoder_context_kv(model, hidden_ctx, device=device),
+        caches=spec.decoder_context_kv(model, hidden_ctx, device=device),
         cos_cache=cos_cache,
         sin_cache=sin_cache,
         pos_ids=_positions(ctx_len, device),
-        scale=torch.full((1, 1, 1, 1), spec.scale_of(first_layer), device=device),
+        scale=torch.full(
+            (1, 1, 1, 1), spec.scale_of(first_layer), device=device, dtype=spec.dtype
+        ),
         trailing=spec.trailing(first_layer, device),
     )
 
@@ -228,7 +252,7 @@ def run_stack(spec: DenseDecode, drawn: StackStep):
 
 def stack_oracle(spec: DenseDecode, drawn: StackStep) -> torch.Tensor:
     """What Hugging Face's own stack produces for the same drawn step."""
-    return spec.config.decoder_decode_reference(
+    return spec.decoder_decode_reference(
         drawn.model, drawn.hidden_ctx, drawn.hidden_new
     )
 

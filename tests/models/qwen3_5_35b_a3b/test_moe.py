@@ -5,24 +5,20 @@ count standing in for it. The router softmaxes over every expert before the top-
 is taken, so at 8 experts the surviving weights would be different numbers, and a
 kernel that got those wrong would pass.
 
-``ATOL`` / ``RTOL`` are f32 round-off with headroom. The measured maximum
+Both sides run at the dtype the checkpoint publishes and each comparison allows
+one rounding at its reference's scale. The f32-era measured maximum
 absolute difference is recorded in each test, so a regression that stays inside
 the tolerance is still visible as a changed number.
 """
 from __future__ import annotations
 
+import pytest
 import torch
 
-from tests.models.qwen3_5_35b_a3b import config, reference
+from tests.models.decode_oracle import agrees_as_a_component
+from tests.models.qwen3_5_35b_a3b import reference
 
 DEV = reference.DEVICE
-ATOL = RTOL = 2e-5
-
-#: Measured on an H200, f32: 2.38e-06 against a reference of maximum magnitude
-#: 7.16. Asserted as an upper bound rather than printed, so the boundary's
-#: accuracy is a property the suite holds rather than something a reader has to
-#: go and reproduce.
-MEASURED_MAX_ABS_DIFF = 4e-06
 
 
 def _step():
@@ -46,9 +42,7 @@ def test_moe_matches_hugging_face():
     out = loaded(hidden)
     want = reference.moe_oracle(layer, hidden)
 
-    difference = (out.float() - want.float()).abs().max().item()
-    assert difference <= MEASURED_MAX_ABS_DIFF, difference
-    torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+    agrees_as_a_component(out, want)
 
 
 def test_routing_selects_the_experts_hugging_face_selects():
@@ -60,21 +54,19 @@ def test_routing_selects_the_experts_hugging_face_selects():
     renormalised and summed.
     """
     layer, hidden, loaded = _step()
-    tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
+    tokens = layer.post_attention_layernorm(hidden).reshape(1, reference.CONFIG.hidden_size)
 
     got_weights, got_indices = loaded.router.routing(tokens)
     with torch.no_grad():
         _logits, want_weights, want_indices = layer.mlp.gate(tokens)
 
     assert set(got_indices.flatten().tolist()) == set(want_indices.flatten().tolist())
-    assert got_indices.shape == (1, config.REAL.top_k)
+    assert got_indices.shape == (1, reference.CONFIG.num_experts_per_tok)
     order = torch.argsort(got_indices, dim=-1)
     want_order = torch.argsort(want_indices, dim=-1)
-    torch.testing.assert_close(
-        got_weights.gather(-1, order).float(),
-        want_weights.gather(-1, want_order).float(),
-        atol=ATOL, rtol=RTOL,
-    )
+    got_sorted = got_weights.gather(-1, order)
+    want_sorted = want_weights.gather(-1, want_order)
+    agrees_as_a_component(got_sorted, want_sorted)
 
 
 def test_the_shared_expert_is_part_of_the_block():
@@ -87,19 +79,16 @@ def test_the_shared_expert_is_part_of_the_block():
     negligible, the whole boundary would be weaker than it looks.
     """
     layer, hidden, loaded = _step()
-    tokens = layer.post_attention_layernorm(hidden).reshape(1, config.REAL.hidden)
+    tokens = layer.post_attention_layernorm(hidden).reshape(1, reference.CONFIG.hidden_size)
 
     routed_weights, indices = loaded.router.routing(tokens)
     routed = loaded.routed_experts(tokens, routed_weights, indices)
     shared = loaded.shared_expert(tokens)
     want = reference.moe_oracle(layer, hidden)
 
-    torch.testing.assert_close(
-        (routed + shared).reshape(want.shape).float(), want.float(),
-        atol=ATOL, rtol=RTOL,
-    )
-    routed_only = (routed.reshape(want.shape).float() - want.float()).abs().max().item()
-    assert routed_only > 100 * ATOL, (
-        f"the shared expert moves the block's output by only {routed_only}, so "
-        f"a fixture that omitted it would pass this package's tolerance"
-    )
+    together = (routed + shared).reshape(want.shape)
+    agrees_as_a_component(together, want)
+    # Omitting the shared expert has to break the comparison the whole block
+    # passes, or this test would hold for a fixture that never added it.
+    with pytest.raises(AssertionError):
+        agrees_as_a_component(routed.reshape(want.shape), want)

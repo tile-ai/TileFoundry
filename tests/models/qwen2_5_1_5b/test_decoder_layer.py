@@ -11,56 +11,22 @@ What that Reference genuinely cannot say is what the step hands *back*. A decode
 returns the state its caller advances, and the Reference compares only the value. A
 step that computed the right output and the wrong cache entry would pass every
 comparison and then decode the next token from a corrupted context.
-
-It also cannot say that the tiled rewrite is the same program: `tiled_mlp` is the loop
-nest a tiled target wants, and nothing about the decoder's output distinguishes it
-from `mlp`, because it is only ever reached when somebody selects it.
 """
 
 from __future__ import annotations
 
 import torch
 
-from tests.models.qwen2_5_1_5b import config, reference
+from tests.models.decode_oracle import agrees_to_one_rounding
+from tests.models.qwen2_5_1_5b import reference
 
-HIDDEN = config.REAL.hidden
-SEQ = config.SEQ_LEN
+HIDDEN = reference.CONFIG.hidden_size
 
 DEV = "cpu"
-ATOL = RTOL = 2e-4
-
-#: Where the tiled comparison runs. Unlike the stack tests, this is a cost
-#: choice and not a scope one -- the two rewrites are the same program on either
-#: device -- so it falls back rather than skipping.
-TILED_DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 #: Two lengths, so a kernel that only works at the length it was authored
 #: against cannot pass. Neither divides the key/value head count.
 CTX_LENGTHS = (24, 40)
-
-
-def _one_token(device, seed=1):
-    """A fresh HF layer and one token's hidden states."""
-    layer = config.build_hf_layer(seed=0, device=device)
-    torch.manual_seed(seed)
-    return layer, torch.randn(1, SEQ, HIDDEN, device=device) * 0.1
-
-
-def test_tiled_mlp_matches_untiled_mlp():
-    """tiled_mlp (the K-loop / column-block rewrite of `mlp`) against `mlp`
-    itself on the same inputs: the loop tiling only reassociates the K
-    reduction, so the two must agree to f32 round-off. Also checked against
-    HF, so a bug shared by both rewrites cannot hide."""
-    layer, x = _one_token(TILED_DEV)
-    loaded = reference.load_layer(layer)
-
-    with torch.no_grad():
-        ref = layer.mlp(layer.post_attention_layernorm(x))
-    untiled = loaded.mlp(x)
-    tiled = loaded.tiled_mlp(x)
-
-    torch.testing.assert_close(tiled.float(), untiled.float(), atol=ATOL, rtol=RTOL)
-    torch.testing.assert_close(tiled.float(), ref.float(), atol=ATOL, rtol=RTOL)
 
 
 def test_decoder_layer_returns_the_cache_entry_to_append():
@@ -79,5 +45,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
     grown_v = torch.cat([drawn.v_cache, v_new], dim=1)
 
     assert tuple(grown_k.shape) == tuple(want_k.shape)
-    torch.testing.assert_close(grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL)
-    torch.testing.assert_close(grown_v.float(), want_v.float(), atol=ATOL, rtol=RTOL)
+    # The cache handed in is the oracle's own, so the entry appended to it is the
+    # only computed part and the one whose precision the bound follows.
+    agrees_to_one_rounding(grown_k, want_k)
+    agrees_to_one_rounding(grown_v, want_v)

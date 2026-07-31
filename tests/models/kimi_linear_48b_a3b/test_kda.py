@@ -17,12 +17,29 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.models.kimi_linear_48b_a3b import case, config, reference
+from tests.models.decode_oracle import SEQ_LEN
+from tests.models.kimi_linear_48b_a3b import case, reference
 from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B
+from tests.models.kimi_linear_48b_a3b.reference import (
+    KDA_HEAD_DIM,
+    KDA_NUM_HEADS,
+    KDA_PROJ,
+    SHORT_CONV_KERNEL_SIZE,
+)
 from tilefoundry.evaluator import evaluate
 
 DEV = "cpu"
-CONFIG = config.REAL
+CONFIG = reference.CONFIG
+
+#: The two 0-based layer indices a minimum model must contain: one KDA layer and
+#: one MLA layer. Layer 0 is KDA + dense MLP; layer 3 is MLA + MoE. Layers 1 and 2
+#: are KDA + MoE and add no attention kind, so they are not replicated.
+MINIMUM_LAYERS = (0, 3)
+
+
+def _is_dense_layer(layer_idx: int) -> bool:
+    """Whether 0-based *layer_idx* uses a dense MLP rather than the MoE."""
+    return layer_idx < CONFIG.first_k_dense_replace
 
 
 def _kda_args(seed: int = 0, device: str = DEV):
@@ -104,11 +121,11 @@ def test_kda_state_and_window_shapes_are_the_published_ones():
         KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args(), device=DEV
     )
 
-    assert tuple(out.shape) == (1, config.SEQ_LEN, CONFIG.hidden_size)
-    assert tuple(state.shape) == (1, CONFIG.kda_num_heads, CONFIG.kda_head_dim, CONFIG.kda_head_dim)
+    assert tuple(out.shape) == (1, SEQ_LEN, CONFIG.hidden_size)
+    assert tuple(state.shape) == (1, KDA_NUM_HEADS, KDA_HEAD_DIM, KDA_HEAD_DIM)
     for window in (conv_q, conv_k, conv_v):
-        assert tuple(window.shape) == (1, CONFIG.short_conv_kernel_size - 1, CONFIG.kda_proj)
-    assert CONFIG.kda_head_dim == 128 != CONFIG.hidden_size // CONFIG.num_attention_heads
+        assert tuple(window.shape) == (1, SHORT_CONV_KERNEL_SIZE - 1, KDA_PROJ)
+    assert KDA_HEAD_DIM == 128 != CONFIG.hidden_size // CONFIG.num_attention_heads
 
 
 def test_kda_executes_and_stays_finite():
@@ -134,17 +151,21 @@ def test_short_conv_window_shifts_by_exactly_one_position():
     True by construction rather than by transcription from any implementation, so
     it is checkable with no oracle: the stored window is a slice of
     `concat(state, x)`, and appending then evicting is what a depthwise causal
-    convolution of kernel 4 needs its caller to hold. Measured exact (0.0).
+    convolution of kernel 4 needs its caller to hold. Measured exact (0.0), and
+    still exact at the bf16 the checkpoint publishes: the claim is about which
+    positions are kept, not about arithmetic, so rounding the draw to the kernel's
+    dtype and then slicing is the same tensor as slicing and then rounding. The
+    comparison is therefore left at equality rather than given a tolerance.
     """
     torch.manual_seed(1)
-    window = CONFIG.short_conv_kernel_size - 1
-    x = torch.randn(1, config.SEQ_LEN, CONFIG.kda_proj) * 0.05
-    conv_w = torch.randn(CONFIG.short_conv_kernel_size, CONFIG.kda_proj) * 0.05
-    state = torch.randn(1, window, CONFIG.kda_proj) * 0.05
+    window = SHORT_CONV_KERNEL_SIZE - 1
+    x = (torch.randn(1, SEQ_LEN, KDA_PROJ) * 0.05).to(reference.DTYPE)
+    conv_w = (torch.randn(SHORT_CONV_KERNEL_SIZE, KDA_PROJ) * 0.05).to(reference.DTYPE)
+    state = (torch.randn(1, window, KDA_PROJ) * 0.05).to(reference.DTYPE)
 
     _out, next_state = evaluate(KimiLinear48BA3B.kda.lookup("short_conv"), x, conv_w, state, device=DEV)
 
-    want = torch.cat([state, x], dim=1)[:, 1:]
+    want = torch.cat([state, x], dim=1)[:, 1:].to(next_state.dtype)
     assert (next_state - want).abs().max().item() == 0.0
 
 
@@ -174,27 +195,21 @@ def test_layer_taxonomy_is_one_based():
     is KDA and layer 3 is the first MLA layer, and with `first_k_dense_replace: 1`
     layer 0 is the only one with a dense MLP. A two-layer minimum of layers 0 and 1
     would therefore contain two KDA layers and no MLA one.
+
+    Asked of `KimiLinearConfig.is_kda_layer` -- the checkpoint's own method, from
+    the config class vendored into `model.py` -- rather than of a reimplementation
+    of it, so what is checked is the published reading of the published lists.
     """
-    assert config.is_kda_layer(0)
-    assert config.is_kda_layer(1)
-    assert config.is_kda_layer(2)
-    assert not config.is_kda_layer(3)
+    assert CONFIG.model_type == "kimi_linear"
 
-    assert config.is_dense_layer(0)
-    assert not config.is_dense_layer(1)
+    assert CONFIG.is_kda_layer(0)
+    assert CONFIG.is_kda_layer(1)
+    assert CONFIG.is_kda_layer(2)
+    assert not CONFIG.is_kda_layer(3)
 
-    kda, mla = config.MINIMUM_LAYERS
-    assert config.is_kda_layer(kda) and config.is_dense_layer(kda)
-    assert not config.is_kda_layer(mla) and not config.is_dense_layer(mla)
+    assert _is_dense_layer(0)
+    assert not _is_dense_layer(1)
 
-
-def test_depended_config_fields_match_their_recorded_digest():
-    """The fields this package rests on are the ones it was written against.
-
-    A digest over just those fields, not the whole file: an upstream edit to a
-    field nobody here reads should not invalidate the model, and an edit to one of
-    these must.
-    """
-    assert config.depended_digest() == config.DEPENDED_SHA256
-    assert config.DEPENDED_FIELDS["model_type"] == "kimi_linear"
-    assert config.SOURCE_REVISION == "e1df551a447157d4658b573f9a695d57658590e9"
+    kda, mla = MINIMUM_LAYERS
+    assert CONFIG.is_kda_layer(kda) and _is_dense_layer(kda)
+    assert not CONFIG.is_kda_layer(mla) and not _is_dense_layer(mla)

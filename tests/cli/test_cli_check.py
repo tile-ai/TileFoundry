@@ -213,7 +213,7 @@ def test_each_output_is_judged_by_a_predicate_its_dtype_admits(routing, capsys) 
     )) == 0
     reported = capsys.readouterr().out
 
-    assert "output[0]   f32[1,8]" in reported and "output[1]   i64[1,8]" in reported
+    assert "output[0]   bf16[1,8]" in reported and "output[1]   i64[1,8]" in reported
     assert "allclose(atol=0.001 rtol=0.004)" in reported
     assert "equal" in reported and "elements 8" in reported
     assert reported.rstrip().endswith("PASS") or "\nPASS" in reported

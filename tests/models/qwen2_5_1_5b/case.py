@@ -12,8 +12,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.qwen2_5_1_5b.config import REAL as SHAPE
-from tests.models.qwen2_5_1_5b.model import Qwen2_5_1_5B
+from tests.models.qwen2_5_1_5b.model import MAX_CTX, Qwen2_5_1_5B
 from tests.models.qwen2_5_1_5b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -52,7 +51,6 @@ CASE = ModelCase(
             dims=ANALYZED_AT,
         ),
         FunctionCase(id="qwen2_5_1_5b/analyze/mlp", selector="mlp"),
-        FunctionCase(id="qwen2_5_1_5b/analyze/tiled_mlp", selector="tiled_mlp"),
         FunctionCase(
             id="qwen2_5_1_5b/analyze/decoder_layer",
             selector="decoder_layer",
@@ -72,7 +70,7 @@ CASE = ModelCase(
             id="qwen2_5_1_5b/sized/decoder_layer",
             selector="decoder_layer",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": SHAPE.max_ctx - 1},
+            ceiling={"ctx_len": MAX_CTX - 1},
         ),
     ),
 )

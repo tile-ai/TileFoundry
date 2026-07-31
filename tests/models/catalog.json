@@ -198,10 +198,10 @@
       "modules": [
         {
           "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_in: ConstTensor[(2304,), \"f32\"])",
-            "self_attention(hidden: Tensor[(1, 1, 2304), \"f32\"], w_q: ConstTensor[(1, 2304, 2048), \"f32\"], w_k: ConstTensor[(1, 2304, 1024), \"f32\"], w_v: ConstTensor[(1, 2304, 1024), \"f32\"], cos_cache: Tensor[(8192, 256), \"f32\"], sin_cache: Tensor[(8192, 256), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2304), \"f32\"])",
-            "mlp(hidden: Tensor[(1, 1, 2304), \"f32\"], w_gate: ConstTensor[(1, 2304, 9216), \"f32\"], w_up: ConstTensor[(1, 2304, 9216), \"f32\"], w_down: ConstTensor[(1, 9216, 2304), \"f32\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_in: ConstTensor[(2304,), \"f32\"], w_q: ConstTensor[(1, 2304, 2048), \"f32\"], w_k: ConstTensor[(1, 2304, 1024), \"f32\"], w_v: ConstTensor[(1, 2304, 1024), \"f32\"], cos_cache: Tensor[(8192, 256), \"f32\"], sin_cache: Tensor[(8192, 256), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2304), \"f32\"], gamma_post_attn: ConstTensor[(2304,), \"f32\"], gamma_pre_ff: ConstTensor[(2304,), \"f32\"], w_gate: ConstTensor[(1, 2304, 9216), \"f32\"], w_up: ConstTensor[(1, 2304, 9216), \"f32\"], w_down: ConstTensor[(1, 9216, 2304), \"f32\"], gamma_post_ff: ConstTensor[(2304,), \"f32\"])"
+            "input_rms_norm(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: ConstTensor[(2304,), \"bf16\"])",
+            "self_attention(hidden: Tensor[(1, 1, 2304), \"bf16\"], w_q: ConstTensor[(1, 2304, 2048), \"bf16\"], w_k: ConstTensor[(1, 2304, 1024), \"bf16\"], w_v: ConstTensor[(1, 2304, 1024), \"bf16\"], cos_cache: Tensor[(8192, 256), \"bf16\"], sin_cache: Tensor[(8192, 256), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2304), \"bf16\"])",
+            "mlp(hidden: Tensor[(1, 1, 2304), \"bf16\"], w_gate: ConstTensor[(1, 2304, 9216), \"bf16\"], w_up: ConstTensor[(1, 2304, 9216), \"bf16\"], w_down: ConstTensor[(1, 9216, 2304), \"bf16\"])",
+            "decoder_layer(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: ConstTensor[(2304,), \"bf16\"], w_q: ConstTensor[(1, 2304, 2048), \"bf16\"], w_k: ConstTensor[(1, 2304, 1024), \"bf16\"], w_v: ConstTensor[(1, 2304, 1024), \"bf16\"], cos_cache: Tensor[(8192, 256), \"bf16\"], sin_cache: Tensor[(8192, 256), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2304), \"bf16\"], gamma_post_attn: ConstTensor[(2304,), \"bf16\"], gamma_pre_ff: ConstTensor[(2304,), \"bf16\"], w_gate: ConstTensor[(1, 2304, 9216), \"bf16\"], w_up: ConstTensor[(1, 2304, 9216), \"bf16\"], w_down: ConstTensor[(1, 9216, 2304), \"bf16\"], gamma_post_ff: ConstTensor[(2304,), \"bf16\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -211,18 +211,18 @@
         },
         {
           "functions": [
-            "embed(w_embed: ConstTensor[(256000, 2304), \"f32\"], token_ids: Tensor[(1,), \"i64\"])",
-            "final_rms_norm(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_final: ConstTensor[(2304,), \"f32\"])",
-            "lm_head(hidden: Tensor[(1, 1, 2304), \"f32\"], w_head: ConstTensor[(2304, 256000), \"f32\"])"
+            "embed(w_embed: ConstTensor[(256000, 2304), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
+            "final_rms_norm(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_final: ConstTensor[(2304,), \"bf16\"])",
+            "lm_head(hidden: Tensor[(1, 1, 2304), \"bf16\"], w_head: ConstTensor[(2304, 256000), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "input_rms_norm(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_in: ConstTensor[(2304,), \"f32\"])",
-                "self_attention(hidden: Tensor[(1, 1, 2304), \"f32\"], w_q: ConstTensor[(1, 2304, 2048), \"f32\"], w_k: ConstTensor[(1, 2304, 1024), \"f32\"], w_v: ConstTensor[(1, 2304, 1024), \"f32\"], cos_cache: Tensor[(8192, 256), \"f32\"], sin_cache: Tensor[(8192, 256), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2304), \"f32\"])",
-                "mlp(hidden: Tensor[(1, 1, 2304), \"f32\"], w_gate: ConstTensor[(1, 2304, 9216), \"f32\"], w_up: ConstTensor[(1, 2304, 9216), \"f32\"], w_down: ConstTensor[(1, 9216, 2304), \"f32\"])",
-                "decoder_layer(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_in: ConstTensor[(2304,), \"f32\"], w_q: ConstTensor[(1, 2304, 2048), \"f32\"], w_k: ConstTensor[(1, 2304, 1024), \"f32\"], w_v: ConstTensor[(1, 2304, 1024), \"f32\"], cos_cache: Tensor[(8192, 256), \"f32\"], sin_cache: Tensor[(8192, 256), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2304), \"f32\"], gamma_post_attn: ConstTensor[(2304,), \"f32\"], gamma_pre_ff: ConstTensor[(2304,), \"f32\"], w_gate: ConstTensor[(1, 2304, 9216), \"f32\"], w_up: ConstTensor[(1, 2304, 9216), \"f32\"], w_down: ConstTensor[(1, 9216, 2304), \"f32\"], gamma_post_ff: ConstTensor[(2304,), \"f32\"])"
+                "input_rms_norm(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: ConstTensor[(2304,), \"bf16\"])",
+                "self_attention(hidden: Tensor[(1, 1, 2304), \"bf16\"], w_q: ConstTensor[(1, 2304, 2048), \"bf16\"], w_k: ConstTensor[(1, 2304, 1024), \"bf16\"], w_v: ConstTensor[(1, 2304, 1024), \"bf16\"], cos_cache: Tensor[(8192, 256), \"bf16\"], sin_cache: Tensor[(8192, 256), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2304), \"bf16\"])",
+                "mlp(hidden: Tensor[(1, 1, 2304), \"bf16\"], w_gate: ConstTensor[(1, 2304, 9216), \"bf16\"], w_up: ConstTensor[(1, 2304, 9216), \"bf16\"], w_down: ConstTensor[(1, 9216, 2304), \"bf16\"])",
+                "decoder_layer(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: ConstTensor[(2304,), \"bf16\"], w_q: ConstTensor[(1, 2304, 2048), \"bf16\"], w_k: ConstTensor[(1, 2304, 1024), \"bf16\"], w_v: ConstTensor[(1, 2304, 1024), \"bf16\"], cos_cache: Tensor[(8192, 256), \"bf16\"], sin_cache: Tensor[(8192, 256), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2304), \"bf16\"], gamma_post_attn: ConstTensor[(2304,), \"bf16\"], gamma_pre_ff: ConstTensor[(2304,), \"bf16\"], w_gate: ConstTensor[(1, 2304, 9216), \"bf16\"], w_up: ConstTensor[(1, 2304, 9216), \"bf16\"], w_down: ConstTensor[(1, 9216, 2304), \"bf16\"], gamma_post_ff: ConstTensor[(2304,), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -277,10 +277,10 @@
           "modules": [
             {
               "functions": [
-                "short_conv(x: Tensor[(1, 1, 4096), \"f32\"], conv_w: Tensor[(4, 4096), \"f32\"], conv_state: Tensor[(1, 3, 4096), \"f32\"])",
-                "l2_normalize(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                "kda_gate(hidden_norm: Tensor[(1, 1, 2304), \"f32\"], w_f_a: Tensor[(1, 2304, 128), \"f32\"], w_f_b: Tensor[(1, 128, 4096), \"f32\"], dt_bias: Tensor[(4096,), \"f32\"], a_log: Tensor[(32,), \"f32\"])",
-                "kda_attention(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_in: Tensor[(2304,), \"f32\"], w_q: Tensor[(1, 2304, 4096), \"f32\"], w_k: Tensor[(1, 2304, 4096), \"f32\"], w_v: Tensor[(1, 2304, 4096), \"f32\"], conv_w_q: Tensor[(4, 4096), \"f32\"], conv_w_k: Tensor[(4, 4096), \"f32\"], conv_w_v: Tensor[(4, 4096), \"f32\"], conv_state_q: Tensor[(1, 3, 4096), \"f32\"], conv_state_k: Tensor[(1, 3, 4096), \"f32\"], conv_state_v: Tensor[(1, 3, 4096), \"f32\"], w_f_a: Tensor[(1, 2304, 128), \"f32\"], w_f_b: Tensor[(1, 128, 4096), \"f32\"], dt_bias: Tensor[(4096,), \"f32\"], a_log: Tensor[(32,), \"f32\"], w_b: Tensor[(1, 2304, 32), \"f32\"], w_g_a: Tensor[(1, 2304, 128), \"f32\"], w_g_b: Tensor[(1, 128, 4096), \"f32\"], gamma_o: Tensor[(128,), \"f32\"], w_o: Tensor[(1, 4096, 2304), \"f32\"], state: Tensor[(1, 32, 128, 128), \"f32\"], scale: Tensor[(1, 1, 1), \"f32\"])"
+                "short_conv(x: Tensor[(1, 1, 4096), \"bf16\"], conv_w: Tensor[(4, 4096), \"bf16\"], conv_state: Tensor[(1, 3, 4096), \"bf16\"])",
+                "l2_normalize(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                "kda_gate(hidden_norm: Tensor[(1, 1, 2304), \"bf16\"], w_f_a: Tensor[(1, 2304, 128), \"bf16\"], w_f_b: Tensor[(1, 128, 4096), \"bf16\"], dt_bias: Tensor[(4096,), \"bf16\"], a_log: Tensor[(32,), \"bf16\"])",
+                "kda_attention(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: Tensor[(2304,), \"bf16\"], w_q: Tensor[(1, 2304, 4096), \"bf16\"], w_k: Tensor[(1, 2304, 4096), \"bf16\"], w_v: Tensor[(1, 2304, 4096), \"bf16\"], conv_w_q: Tensor[(4, 4096), \"bf16\"], conv_w_k: Tensor[(4, 4096), \"bf16\"], conv_w_v: Tensor[(4, 4096), \"bf16\"], conv_state_q: Tensor[(1, 3, 4096), \"bf16\"], conv_state_k: Tensor[(1, 3, 4096), \"bf16\"], conv_state_v: Tensor[(1, 3, 4096), \"bf16\"], w_f_a: Tensor[(1, 2304, 128), \"bf16\"], w_f_b: Tensor[(1, 128, 4096), \"bf16\"], dt_bias: Tensor[(4096,), \"bf16\"], a_log: Tensor[(32,), \"bf16\"], w_b: Tensor[(1, 2304, 32), \"bf16\"], w_g_a: Tensor[(1, 2304, 128), \"bf16\"], w_g_b: Tensor[(1, 128, 4096), \"bf16\"], gamma_o: Tensor[(128,), \"bf16\"], w_o: Tensor[(1, 4096, 2304), \"bf16\"], state: Tensor[(1, 32, 128, 128), \"bf16\"], scale: Tensor[(1, 1, 1), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -290,7 +290,7 @@
             },
             {
               "functions": [
-                "mla_attention(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_in: Tensor[(2304,), \"f32\"], w_q: Tensor[(1, 2304, 6144), \"f32\"], w_kv_a: Tensor[(1, 2304, 576), \"f32\"], gamma_kv_a: Tensor[(512,), \"f32\"], w_kv_b: Tensor[(1, 512, 8192), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 32, 192), \"f32\"], v_cache: Tensor[(1, ctx_len, 32, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: Tensor[(1, 4096, 2304), \"f32\"])"
+                "mla_attention(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: Tensor[(2304,), \"bf16\"], w_q: Tensor[(1, 2304, 6144), \"bf16\"], w_kv_a: Tensor[(1, 2304, 576), \"bf16\"], gamma_kv_a: Tensor[(512,), \"bf16\"], w_kv_b: Tensor[(1, 512, 8192), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 32, 192), \"bf16\"], v_cache: Tensor[(1, ctx_len, 32, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: Tensor[(1, 4096, 2304), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -300,9 +300,9 @@
             },
             {
               "functions": [
-                "router(tokens: Tensor[(1, 2304), \"f32\"], w_router: Tensor[(2304, 256), \"f32\"], bias: Tensor[(256,), \"f32\"], routed_scale: Tensor[(1, 1), \"f32\"])",
-                "shared_expert(tokens: Tensor[(1, 2304), \"f32\"], w_gate: Tensor[(1, 2304, 1024), \"f32\"], w_up: Tensor[(1, 2304, 1024), \"f32\"], w_down: Tensor[(1, 1024, 2304), \"f32\"])",
-                "moe(hidden: Tensor[(1, 1, 2304), \"f32\"], gamma_post: Tensor[(2304,), \"f32\"], w_router: Tensor[(2304, 256), \"f32\"], bias: Tensor[(256,), \"f32\"], routed_scale: Tensor[(1, 1), \"f32\"], w_gate: Tensor[(256, 1024, 2304), \"f32\"], w_up: Tensor[(256, 1024, 2304), \"f32\"], w_down: Tensor[(256, 2304, 1024), \"f32\"], sh_gate: Tensor[(1, 2304, 1024), \"f32\"], sh_up: Tensor[(1, 2304, 1024), \"f32\"], sh_down: Tensor[(1, 1024, 2304), \"f32\"])"
+                "router(tokens: Tensor[(1, 2304), \"bf16\"], w_router: Tensor[(2304, 256), \"bf16\"], bias: Tensor[(256,), \"bf16\"], routed_scale: Tensor[(1, 1), \"bf16\"])",
+                "shared_expert(tokens: Tensor[(1, 2304), \"bf16\"], w_gate: Tensor[(1, 2304, 1024), \"bf16\"], w_up: Tensor[(1, 2304, 1024), \"bf16\"], w_down: Tensor[(1, 1024, 2304), \"bf16\"])",
+                "moe(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_post: Tensor[(2304,), \"bf16\"], w_router: Tensor[(2304, 256), \"bf16\"], bias: Tensor[(256,), \"bf16\"], routed_scale: Tensor[(1, 1), \"bf16\"], w_gate: Tensor[(256, 1024, 2304), \"bf16\"], w_up: Tensor[(256, 1024, 2304), \"bf16\"], w_down: Tensor[(256, 2304, 1024), \"bf16\"], sh_gate: Tensor[(1, 2304, 1024), \"bf16\"], sh_up: Tensor[(1, 2304, 1024), \"bf16\"], sh_down: Tensor[(1, 1024, 2304), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -328,10 +328,10 @@
       "modules": [
         {
           "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_in: ConstTensor[(2560,), \"f32\"])",
-            "mla_attention(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_in: ConstTensor[(2560,), \"f32\"], w_q_a: ConstTensor[(1, 2560, 768), \"f32\"], gamma_q_a: ConstTensor[(768,), \"f32\"], w_q_b: ConstTensor[(1, 768, 3840), \"f32\"], w_kv_a: ConstTensor[(1, 2560, 288), \"f32\"], gamma_kv_a: ConstTensor[(256,), \"f32\"], w_kv_b: ConstTensor[(1, 256, 5120), \"f32\"], cos_cache: Tensor[(32768, 32), \"f32\"], sin_cache: Tensor[(32768, 32), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"f32\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2560, 2560), \"f32\"])",
-            "mlp(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_post: ConstTensor[(2560,), \"f32\"], w_gate: ConstTensor[(1, 2560, 6400), \"f32\"], w_up: ConstTensor[(1, 2560, 6400), \"f32\"], w_down: ConstTensor[(1, 6400, 2560), \"f32\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_in: ConstTensor[(2560,), \"f32\"], w_q_a: ConstTensor[(1, 2560, 768), \"f32\"], gamma_q_a: ConstTensor[(768,), \"f32\"], w_q_b: ConstTensor[(1, 768, 3840), \"f32\"], w_kv_a: ConstTensor[(1, 2560, 288), \"f32\"], gamma_kv_a: ConstTensor[(256,), \"f32\"], w_kv_b: ConstTensor[(1, 256, 5120), \"f32\"], cos_cache: Tensor[(32768, 32), \"f32\"], sin_cache: Tensor[(32768, 32), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"f32\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2560, 2560), \"f32\"], gamma_post: ConstTensor[(2560,), \"f32\"], w_gate: ConstTensor[(1, 2560, 6400), \"f32\"], w_up: ConstTensor[(1, 2560, 6400), \"f32\"], w_down: ConstTensor[(1, 6400, 2560), \"f32\"], residual_scale: Tensor[(1, 1, 1), \"f32\"])"
+            "input_rms_norm(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"])",
+            "mla_attention(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"], w_q_a: ConstTensor[(1, 2560, 768), \"bf16\"], gamma_q_a: ConstTensor[(768,), \"bf16\"], w_q_b: ConstTensor[(1, 768, 3840), \"bf16\"], w_kv_a: ConstTensor[(1, 2560, 288), \"bf16\"], gamma_kv_a: ConstTensor[(256,), \"bf16\"], w_kv_b: ConstTensor[(1, 256, 5120), \"bf16\"], cos_cache: Tensor[(32768, 32), \"bf16\"], sin_cache: Tensor[(32768, 32), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"bf16\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2560, 2560), \"bf16\"])",
+            "mlp(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_post: ConstTensor[(2560,), \"bf16\"], w_gate: ConstTensor[(1, 2560, 6400), \"bf16\"], w_up: ConstTensor[(1, 2560, 6400), \"bf16\"], w_down: ConstTensor[(1, 6400, 2560), \"bf16\"])",
+            "decoder_layer(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"], w_q_a: ConstTensor[(1, 2560, 768), \"bf16\"], gamma_q_a: ConstTensor[(768,), \"bf16\"], w_q_b: ConstTensor[(1, 768, 3840), \"bf16\"], w_kv_a: ConstTensor[(1, 2560, 288), \"bf16\"], gamma_kv_a: ConstTensor[(256,), \"bf16\"], w_kv_b: ConstTensor[(1, 256, 5120), \"bf16\"], cos_cache: Tensor[(32768, 32), \"bf16\"], sin_cache: Tensor[(32768, 32), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"bf16\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2560, 2560), \"bf16\"], gamma_post: ConstTensor[(2560,), \"bf16\"], w_gate: ConstTensor[(1, 2560, 6400), \"bf16\"], w_up: ConstTensor[(1, 2560, 6400), \"bf16\"], w_down: ConstTensor[(1, 6400, 2560), \"bf16\"], residual_scale: Tensor[(1, 1, 1), \"bf16\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -341,18 +341,18 @@
         },
         {
           "functions": [
-            "embed(w_embed: ConstTensor[(73448, 2560), \"f32\"], token_ids: Tensor[(1,), \"i64\"])",
-            "final_rms_norm(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_final: ConstTensor[(2560,), \"f32\"])",
-            "lm_head(hidden: Tensor[(1, 1, 2560), \"f32\"], w_head: ConstTensor[(2560, 73448), \"f32\"])"
+            "embed(w_embed: ConstTensor[(73448, 2560), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
+            "final_rms_norm(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_final: ConstTensor[(2560,), \"bf16\"])",
+            "lm_head(hidden: Tensor[(1, 1, 2560), \"bf16\"], w_head: ConstTensor[(2560, 73448), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "input_rms_norm(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_in: ConstTensor[(2560,), \"f32\"])",
-                "mla_attention(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_in: ConstTensor[(2560,), \"f32\"], w_q_a: ConstTensor[(1, 2560, 768), \"f32\"], gamma_q_a: ConstTensor[(768,), \"f32\"], w_q_b: ConstTensor[(1, 768, 3840), \"f32\"], w_kv_a: ConstTensor[(1, 2560, 288), \"f32\"], gamma_kv_a: ConstTensor[(256,), \"f32\"], w_kv_b: ConstTensor[(1, 256, 5120), \"f32\"], cos_cache: Tensor[(32768, 32), \"f32\"], sin_cache: Tensor[(32768, 32), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"f32\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2560, 2560), \"f32\"])",
-                "mlp(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_post: ConstTensor[(2560,), \"f32\"], w_gate: ConstTensor[(1, 2560, 6400), \"f32\"], w_up: ConstTensor[(1, 2560, 6400), \"f32\"], w_down: ConstTensor[(1, 6400, 2560), \"f32\"])",
-                "decoder_layer(hidden: Tensor[(1, 1, 2560), \"f32\"], gamma_in: ConstTensor[(2560,), \"f32\"], w_q_a: ConstTensor[(1, 2560, 768), \"f32\"], gamma_q_a: ConstTensor[(768,), \"f32\"], w_q_b: ConstTensor[(1, 768, 3840), \"f32\"], w_kv_a: ConstTensor[(1, 2560, 288), \"f32\"], gamma_kv_a: ConstTensor[(256,), \"f32\"], w_kv_b: ConstTensor[(1, 256, 5120), \"f32\"], cos_cache: Tensor[(32768, 32), \"f32\"], sin_cache: Tensor[(32768, 32), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"f32\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2560, 2560), \"f32\"], gamma_post: ConstTensor[(2560,), \"f32\"], w_gate: ConstTensor[(1, 2560, 6400), \"f32\"], w_up: ConstTensor[(1, 2560, 6400), \"f32\"], w_down: ConstTensor[(1, 6400, 2560), \"f32\"], residual_scale: Tensor[(1, 1, 1), \"f32\"])"
+                "input_rms_norm(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"])",
+                "mla_attention(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"], w_q_a: ConstTensor[(1, 2560, 768), \"bf16\"], gamma_q_a: ConstTensor[(768,), \"bf16\"], w_q_b: ConstTensor[(1, 768, 3840), \"bf16\"], w_kv_a: ConstTensor[(1, 2560, 288), \"bf16\"], gamma_kv_a: ConstTensor[(256,), \"bf16\"], w_kv_b: ConstTensor[(1, 256, 5120), \"bf16\"], cos_cache: Tensor[(32768, 32), \"bf16\"], sin_cache: Tensor[(32768, 32), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"bf16\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2560, 2560), \"bf16\"])",
+                "mlp(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_post: ConstTensor[(2560,), \"bf16\"], w_gate: ConstTensor[(1, 2560, 6400), \"bf16\"], w_up: ConstTensor[(1, 2560, 6400), \"bf16\"], w_down: ConstTensor[(1, 6400, 2560), \"bf16\"])",
+                "decoder_layer(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"], w_q_a: ConstTensor[(1, 2560, 768), \"bf16\"], gamma_q_a: ConstTensor[(768,), \"bf16\"], w_q_b: ConstTensor[(1, 768, 3840), \"bf16\"], w_kv_a: ConstTensor[(1, 2560, 288), \"bf16\"], gamma_kv_a: ConstTensor[(256,), \"bf16\"], w_kv_b: ConstTensor[(1, 256, 5120), \"bf16\"], cos_cache: Tensor[(32768, 32), \"bf16\"], sin_cache: Tensor[(32768, 32), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"bf16\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2560, 2560), \"bf16\"], gamma_post: ConstTensor[(2560,), \"bf16\"], w_gate: ConstTensor[(1, 2560, 6400), \"bf16\"], w_up: ConstTensor[(1, 2560, 6400), \"bf16\"], w_down: ConstTensor[(1, 6400, 2560), \"bf16\"], residual_scale: Tensor[(1, 1, 1), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -431,7 +431,7 @@
     },
     {
       "counts": {
-        "functions": 148,
+        "functions": 119,
         "leaf_modules": 29
       },
       "evidence": "tests/models/qwen2_5_1_5b/ compares the full stack against Hugging Face at random weights",
@@ -439,11 +439,10 @@
       "modules": [
         {
           "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_in: ConstTensor[(1536,), \"f32\"])",
-            "self_attention(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_in: ConstTensor[(1536,), \"f32\"], w_q: ConstTensor[(1, 1536, 1536), \"f32\"], bias_q: ConstTensor[(1536,), \"f32\"], w_k: ConstTensor[(1, 1536, 256), \"f32\"], bias_k: ConstTensor[(256,), \"f32\"], w_v: ConstTensor[(1, 1536, 256), \"f32\"], bias_v: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(131072, 128), \"f32\"], sin_cache: Tensor[(131072, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 1536, 1536), \"f32\"])",
-            "mlp(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_post: ConstTensor[(1536,), \"f32\"], w_gate: ConstTensor[(1, 1536, 8960), \"f32\"], w_up: ConstTensor[(1, 1536, 8960), \"f32\"], w_down: ConstTensor[(1, 8960, 1536), \"f32\"])",
-            "tiled_mlp(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_post: ConstTensor[(1536,), \"f32\"], w_gate: ConstTensor[(1, 1536, 8960), \"f32\"], w_up: ConstTensor[(1, 1536, 8960), \"f32\"], w_down: ConstTensor[(1, 8960, 1536), \"f32\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_in: ConstTensor[(1536,), \"f32\"], w_q: ConstTensor[(1, 1536, 1536), \"f32\"], bias_q: ConstTensor[(1536,), \"f32\"], w_k: ConstTensor[(1, 1536, 256), \"f32\"], bias_k: ConstTensor[(256,), \"f32\"], w_v: ConstTensor[(1, 1536, 256), \"f32\"], bias_v: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(131072, 128), \"f32\"], sin_cache: Tensor[(131072, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 1536, 1536), \"f32\"], gamma_post: ConstTensor[(1536,), \"f32\"], w_gate: ConstTensor[(1, 1536, 8960), \"f32\"], w_up: ConstTensor[(1, 1536, 8960), \"f32\"], w_down: ConstTensor[(1, 8960, 1536), \"f32\"])"
+            "input_rms_norm(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"])",
+            "self_attention(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"], w_q: ConstTensor[(1, 1536, 1536), \"bf16\"], bias_q: ConstTensor[(1536,), \"bf16\"], w_k: ConstTensor[(1, 1536, 256), \"bf16\"], bias_k: ConstTensor[(256,), \"bf16\"], w_v: ConstTensor[(1, 1536, 256), \"bf16\"], bias_v: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(131072, 128), \"bf16\"], sin_cache: Tensor[(131072, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 1536, 1536), \"bf16\"])",
+            "mlp(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_post: ConstTensor[(1536,), \"bf16\"], w_gate: ConstTensor[(1, 1536, 8960), \"bf16\"], w_up: ConstTensor[(1, 1536, 8960), \"bf16\"], w_down: ConstTensor[(1, 8960, 1536), \"bf16\"])",
+            "decoder_layer(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"], w_q: ConstTensor[(1, 1536, 1536), \"bf16\"], bias_q: ConstTensor[(1536,), \"bf16\"], w_k: ConstTensor[(1, 1536, 256), \"bf16\"], bias_k: ConstTensor[(256,), \"bf16\"], w_v: ConstTensor[(1, 1536, 256), \"bf16\"], bias_v: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(131072, 128), \"bf16\"], sin_cache: Tensor[(131072, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 1536, 1536), \"bf16\"], gamma_post: ConstTensor[(1536,), \"bf16\"], w_gate: ConstTensor[(1, 1536, 8960), \"bf16\"], w_up: ConstTensor[(1, 1536, 8960), \"bf16\"], w_down: ConstTensor[(1, 8960, 1536), \"bf16\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -453,19 +452,18 @@
         },
         {
           "functions": [
-            "embed(w_embed: ConstTensor[(151936, 1536), \"f32\"], token_ids: Tensor[(1,), \"i64\"])",
-            "final_rms_norm(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_final: ConstTensor[(1536,), \"f32\"])",
-            "lm_head(hidden: Tensor[(1, 1, 1536), \"f32\"], w_head: ConstTensor[(1536, 151936), \"f32\"])"
+            "embed(w_embed: ConstTensor[(151936, 1536), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
+            "final_rms_norm(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_final: ConstTensor[(1536,), \"bf16\"])",
+            "lm_head(hidden: Tensor[(1, 1, 1536), \"bf16\"], w_head: ConstTensor[(1536, 151936), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "input_rms_norm(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_in: ConstTensor[(1536,), \"f32\"])",
-                "self_attention(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_in: ConstTensor[(1536,), \"f32\"], w_q: ConstTensor[(1, 1536, 1536), \"f32\"], bias_q: ConstTensor[(1536,), \"f32\"], w_k: ConstTensor[(1, 1536, 256), \"f32\"], bias_k: ConstTensor[(256,), \"f32\"], w_v: ConstTensor[(1, 1536, 256), \"f32\"], bias_v: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(131072, 128), \"f32\"], sin_cache: Tensor[(131072, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 1536, 1536), \"f32\"])",
-                "mlp(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_post: ConstTensor[(1536,), \"f32\"], w_gate: ConstTensor[(1, 1536, 8960), \"f32\"], w_up: ConstTensor[(1, 1536, 8960), \"f32\"], w_down: ConstTensor[(1, 8960, 1536), \"f32\"])",
-                "tiled_mlp(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_post: ConstTensor[(1536,), \"f32\"], w_gate: ConstTensor[(1, 1536, 8960), \"f32\"], w_up: ConstTensor[(1, 1536, 8960), \"f32\"], w_down: ConstTensor[(1, 8960, 1536), \"f32\"])",
-                "decoder_layer(hidden: Tensor[(1, 1, 1536), \"f32\"], gamma_in: ConstTensor[(1536,), \"f32\"], w_q: ConstTensor[(1, 1536, 1536), \"f32\"], bias_q: ConstTensor[(1536,), \"f32\"], w_k: ConstTensor[(1, 1536, 256), \"f32\"], bias_k: ConstTensor[(256,), \"f32\"], w_v: ConstTensor[(1, 1536, 256), \"f32\"], bias_v: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(131072, 128), \"f32\"], sin_cache: Tensor[(131072, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 1536, 1536), \"f32\"], gamma_post: ConstTensor[(1536,), \"f32\"], w_gate: ConstTensor[(1, 1536, 8960), \"f32\"], w_up: ConstTensor[(1, 1536, 8960), \"f32\"], w_down: ConstTensor[(1, 8960, 1536), \"f32\"])"
+                "input_rms_norm(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"])",
+                "self_attention(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"], w_q: ConstTensor[(1, 1536, 1536), \"bf16\"], bias_q: ConstTensor[(1536,), \"bf16\"], w_k: ConstTensor[(1, 1536, 256), \"bf16\"], bias_k: ConstTensor[(256,), \"bf16\"], w_v: ConstTensor[(1, 1536, 256), \"bf16\"], bias_v: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(131072, 128), \"bf16\"], sin_cache: Tensor[(131072, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 1536, 1536), \"bf16\"])",
+                "mlp(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_post: ConstTensor[(1536,), \"bf16\"], w_gate: ConstTensor[(1, 1536, 8960), \"bf16\"], w_up: ConstTensor[(1, 1536, 8960), \"bf16\"], w_down: ConstTensor[(1, 8960, 1536), \"bf16\"])",
+                "decoder_layer(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"], w_q: ConstTensor[(1, 1536, 1536), \"bf16\"], bias_q: ConstTensor[(1536,), \"bf16\"], w_k: ConstTensor[(1, 1536, 256), \"bf16\"], bias_k: ConstTensor[(256,), \"bf16\"], w_v: ConstTensor[(1, 1536, 256), \"bf16\"], bias_v: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(131072, 128), \"bf16\"], sin_cache: Tensor[(131072, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 1536, 1536), \"bf16\"], gamma_post: ConstTensor[(1536,), \"bf16\"], w_gate: ConstTensor[(1, 1536, 8960), \"bf16\"], w_up: ConstTensor[(1, 1536, 8960), \"bf16\"], w_down: ConstTensor[(1, 8960, 1536), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -510,7 +508,7 @@
     },
     {
       "counts": {
-        "functions": 148,
+        "functions": 119,
         "leaf_modules": 29
       },
       "evidence": "tests/models/qwen3_1_7b/test_decoder.py compares all 28 layers against Hugging Face at random weights; the L3 case exists but has never run against a real mount",
@@ -518,11 +516,10 @@
       "modules": [
         {
           "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"])",
-            "self_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_q: ConstTensor[(1, 2048, 2048), \"f32\"], w_k: ConstTensor[(1, 2048, 1024), \"f32\"], w_v: ConstTensor[(1, 2048, 1024), \"f32\"], gamma_q: ConstTensor[(128,), \"f32\"], gamma_k: ConstTensor[(128,), \"f32\"], cos_cache: Tensor[(40960, 128), \"f32\"], sin_cache: Tensor[(40960, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2048), \"f32\"])",
-            "mlp(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_gate: ConstTensor[(1, 2048, 6144), \"f32\"], w_up: ConstTensor[(1, 2048, 6144), \"f32\"], w_down: ConstTensor[(1, 6144, 2048), \"f32\"])",
-            "tiled_mlp(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_gate: ConstTensor[(1, 2048, 6144), \"f32\"], w_up: ConstTensor[(1, 2048, 6144), \"f32\"], w_down: ConstTensor[(1, 6144, 2048), \"f32\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_q: ConstTensor[(1, 2048, 2048), \"f32\"], w_k: ConstTensor[(1, 2048, 1024), \"f32\"], w_v: ConstTensor[(1, 2048, 1024), \"f32\"], gamma_q: ConstTensor[(128,), \"f32\"], gamma_k: ConstTensor[(128,), \"f32\"], cos_cache: Tensor[(40960, 128), \"f32\"], sin_cache: Tensor[(40960, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_gate: ConstTensor[(1, 2048, 6144), \"f32\"], w_up: ConstTensor[(1, 2048, 6144), \"f32\"], w_down: ConstTensor[(1, 6144, 2048), \"f32\"])"
+            "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"])",
+            "self_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"])",
+            "mlp(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])",
+            "decoder_layer(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -532,19 +529,18 @@
         },
         {
           "functions": [
-            "embed(w_embed: ConstTensor[(151936, 2048), \"f32\"], token_ids: Tensor[(1,), \"i64\"])",
-            "final_rms_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_final: ConstTensor[(2048,), \"f32\"])",
-            "lm_head(hidden: Tensor[(1, 1, 2048), \"f32\"], w_head: ConstTensor[(2048, 151936), \"f32\"])"
+            "embed(w_embed: ConstTensor[(151936, 2048), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
+            "final_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_final: ConstTensor[(2048,), \"bf16\"])",
+            "lm_head(hidden: Tensor[(1, 1, 2048), \"bf16\"], w_head: ConstTensor[(2048, 151936), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"])",
-                "self_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_q: ConstTensor[(1, 2048, 2048), \"f32\"], w_k: ConstTensor[(1, 2048, 1024), \"f32\"], w_v: ConstTensor[(1, 2048, 1024), \"f32\"], gamma_q: ConstTensor[(128,), \"f32\"], gamma_k: ConstTensor[(128,), \"f32\"], cos_cache: Tensor[(40960, 128), \"f32\"], sin_cache: Tensor[(40960, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2048), \"f32\"])",
-                "mlp(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_gate: ConstTensor[(1, 2048, 6144), \"f32\"], w_up: ConstTensor[(1, 2048, 6144), \"f32\"], w_down: ConstTensor[(1, 6144, 2048), \"f32\"])",
-                "tiled_mlp(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_gate: ConstTensor[(1, 2048, 6144), \"f32\"], w_up: ConstTensor[(1, 2048, 6144), \"f32\"], w_down: ConstTensor[(1, 6144, 2048), \"f32\"])",
-                "decoder_layer(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_q: ConstTensor[(1, 2048, 2048), \"f32\"], w_k: ConstTensor[(1, 2048, 1024), \"f32\"], w_v: ConstTensor[(1, 2048, 1024), \"f32\"], gamma_q: ConstTensor[(128,), \"f32\"], gamma_k: ConstTensor[(128,), \"f32\"], cos_cache: Tensor[(40960, 128), \"f32\"], sin_cache: Tensor[(40960, 128), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 2048, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"], w_gate: ConstTensor[(1, 2048, 6144), \"f32\"], w_up: ConstTensor[(1, 2048, 6144), \"f32\"], w_down: ConstTensor[(1, 6144, 2048), \"f32\"])"
+                "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"])",
+                "self_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"])",
+                "mlp(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])",
+                "decoder_layer(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -597,10 +593,10 @@
       "modules": [
         {
           "functions": [
-            "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-            "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-            "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-            "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+            "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+            "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+            "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+            "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -610,9 +606,9 @@
         },
         {
           "functions": [
-            "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-            "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-            "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+            "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+            "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+            "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -622,7 +618,7 @@
         },
         {
           "functions": [
-            "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+            "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
           ],
           "leaf": true,
           "modules": [],
@@ -632,16 +628,16 @@
         },
         {
           "functions": [
-            "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-            "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-            "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-            "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+            "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+            "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+            "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+            "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -656,15 +652,15 @@
         },
         {
           "functions": [
-            "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+            "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -674,16 +670,16 @@
             },
             {
               "functions": [
-                "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                    "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -703,16 +699,16 @@
         },
         {
           "functions": [
-            "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+            "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -722,16 +718,16 @@
             },
             {
               "functions": [
-                "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                    "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -751,24 +747,24 @@
         },
         {
           "functions": [
-            "embed(table: ConstTensor[(248320, 2048), \"f32\"], token_ids: Tensor[(1,), \"i64\"])",
-            "final_rms_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_final: ConstTensor[(2048,), \"f32\"])",
-            "lm_head(hidden: Tensor[(1, 1, 2048), \"f32\"], w_head: ConstTensor[(2048, 248320), \"f32\"])"
+            "embed(table: ConstTensor[(248320, 2048), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
+            "final_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_final: ConstTensor[(2048,), \"bf16\"])",
+            "lm_head(hidden: Tensor[(1, 1, 2048), \"bf16\"], w_head: ConstTensor[(2048, 248320), \"bf16\"])"
           ],
           "leaf": false,
           "modules": [
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -778,16 +774,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -809,15 +805,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -827,16 +823,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -856,16 +852,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -875,16 +871,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -906,15 +902,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -924,16 +920,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -953,16 +949,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -972,16 +968,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1003,15 +999,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1021,16 +1017,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1050,16 +1046,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1069,16 +1065,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1100,15 +1096,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1118,16 +1114,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1147,16 +1143,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1166,16 +1162,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1197,15 +1193,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1215,16 +1211,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1244,16 +1240,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1263,16 +1259,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1294,15 +1290,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1312,16 +1308,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1341,16 +1337,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1360,16 +1356,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1391,15 +1387,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1409,16 +1405,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1438,16 +1434,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1457,16 +1453,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1488,15 +1484,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1506,16 +1502,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1535,16 +1531,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1554,16 +1550,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1585,15 +1581,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1603,16 +1599,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1632,16 +1628,16 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"f32\"], entry: Tensor[(1, 8192, 1), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"])",
-                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"f32\"])",
-                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], q: Tensor[(1, 1, 32, 128), \"f32\"], k: Tensor[(1, 1, 32, 128), \"f32\"], v: Tensor[(1, 1, 32, 128), \"f32\"], g: Tensor[(1, 1, 32), \"f32\"], beta: Tensor[(1, 1, 32), \"f32\"])",
-                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"f32\"], w_in_z: ConstTensor[(1, 2048, 4096), \"f32\"], w_in_b: ConstTensor[(1, 2048, 32), \"f32\"], w_in_a: ConstTensor[(1, 2048, 32), \"f32\"], conv_w: ConstTensor[(8192, 4), \"f32\"], a_log: ConstTensor[(32,), \"f32\"], dt_bias: ConstTensor[(32,), \"f32\"], conv_state: Tensor[(1, 8192, 3), \"f32\"], recurrent_state: Tensor[(1, 32, 128, 128), \"f32\"], gamma_gdn: ConstTensor[(128,), \"f32\"], w_out: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
+                    "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
+                    "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
+                    "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1651,16 +1647,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],
@@ -1682,15 +1678,15 @@
             },
             {
               "functions": [
-                "residual_add(a: Tensor[(1, 1, 2048), \"f32\"], b: Tensor[(1, 1, 2048), \"f32\"])"
+                "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
               ],
               "leaf": false,
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_in: ConstTensor[(2048,), \"f32\"], w_qg: ConstTensor[(1, 2048, 8192), \"f32\"], w_k: ConstTensor[(1, 2048, 512), \"f32\"], w_v: ConstTensor[(1, 2048, 512), \"f32\"], gamma_q: ConstTensor[(256,), \"f32\"], gamma_k: ConstTensor[(256,), \"f32\"], cos_cache: Tensor[(4096, 64), \"f32\"], sin_cache: Tensor[(4096, 64), \"f32\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"f32\"], w_o: ConstTensor[(1, 4096, 2048), \"f32\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1700,16 +1696,16 @@
                 },
                 {
                   "functions": [
-                    "post_norm(hidden: Tensor[(1, 1, 2048), \"f32\"], gamma_post: ConstTensor[(2048,), \"f32\"])",
-                    "routed_experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"])",
-                    "shared_expert(tokens: Tensor[(1, 2048), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])",
-                    "experts(tokens: Tensor[(1, 2048), \"f32\"], weights: Tensor[(1, 8), \"f32\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"f32\"], w_up: ConstTensor[(256, 512, 2048), \"f32\"], w_down: ConstTensor[(256, 2048, 512), \"f32\"], w_shared_gate: ConstTensor[(2048, 512), \"f32\"], w_shared_up: ConstTensor[(2048, 512), \"f32\"], w_shared_down: ConstTensor[(512, 2048), \"f32\"], w_shared_scale: ConstTensor[(2048, 1), \"f32\"])"
+                    "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
+                    "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
+                    "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
+                    "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
                   ],
                   "leaf": false,
                   "modules": [
                     {
                       "functions": [
-                        "routing(tokens: Tensor[(1, 2048), \"f32\"], w_router: ConstTensor[(2048, 256), \"f32\"])"
+                        "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
                       ],
                       "leaf": true,
                       "modules": [],

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from tests.models.deepseek_v4_flash.config import REAL
-from tests.models.deepseek_v4_flash.model import deepseek_v4_flash_module
+from tests.models.deepseek_v4_flash.model import REAL, deepseek_v4_flash_module
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.constraints import LayoutConstraint, constraint_metadata
 from tilefoundry.ir.core import Call, Tuple

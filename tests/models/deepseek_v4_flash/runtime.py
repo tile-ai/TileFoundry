@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import torch
 
-from tests.models.deepseek_v4_flash.config import (
+from tests.models.deepseek_v4_flash.model import (
     FP8E4M3_MAX,
     FP8E4M3_QUANT_EPS,
     KV_QUANT_BLOCK,

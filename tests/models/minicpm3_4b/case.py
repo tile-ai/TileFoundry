@@ -30,8 +30,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.minicpm3_4b.config import REAL as SHAPE
-from tests.models.minicpm3_4b.model import MiniCPM3_4B
+from tests.models.minicpm3_4b.model import MAX_CTX, MiniCPM3_4B
 from tests.models.minicpm3_4b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -89,7 +88,7 @@ CASE = ModelCase(
             id="minicpm3_4b/sized/decoder_layer",
             selector="decoder_layer",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": SHAPE.max_ctx - 1},
+            ceiling={"ctx_len": MAX_CTX - 1},
         ),
     ),
 )

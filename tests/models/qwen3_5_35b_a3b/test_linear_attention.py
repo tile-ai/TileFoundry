@@ -13,25 +13,17 @@ what the step is handed, not what it holds.
 """
 from __future__ import annotations
 
+import pytest
 import torch
 
+from tests.models.decode_oracle import agrees_as_a_component
 from tests.models.qwen3_5_35b_a3b import reference
 from tests.models.qwen3_5_35b_a3b.model import advance_state
 
 DEV = reference.DEVICE
-ATOL = RTOL = 2e-5
-
-#: Measured on an H200, f32. Mixer output: 4.06e-07 at ctx_len 25 (reference
-#: maximum magnitude 0.436) and 5.66e-07 at 41 (0.466). Recurrent state:
-#: 1.34e-07 / 4.32e-07 (state magnitude 0.186 / 0.379). Convolution column:
-#: 3.81e-06 / 5.25e-06, on columns of magnitude about 10 -- looser than the
-#: others in absolute terms and tighter in relative terms, which is what a value
-#: that has been through one projection and no reduction should look like.
-MEASURED_MIXER_MAX_ABS_DIFF = 1e-06
-MEASURED_STATE_MAX_ABS_DIFF = 1e-06
-MEASURED_CONV_MAX_ABS_DIFF = 8e-06
 
 CTX_LENGTHS = (25, 41)
+
 
 
 def test_linear_attention_matches_hugging_face():
@@ -44,9 +36,7 @@ def test_linear_attention_matches_hugging_face():
         out, _entry, _state = loaded.linear_attention(step.hidden_new, *step.mixer_acts)
 
         want = reference.linear_mixer_oracle(step)
-        difference = (out.float() - want.float()).abs().max().item()
-        assert difference <= MEASURED_MIXER_MAX_ABS_DIFF, (ctx_len, difference)
-        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+        agrees_as_a_component(out, want)
 
 
 def test_the_step_returns_the_state_to_carry_forward():
@@ -72,12 +62,10 @@ def test_the_step_returns_the_state_to_carry_forward():
 
         assert tuple(slid.shape) == tuple(want_conv.shape)
         assert tuple(state.shape) == tuple(want_state.shape)
-        conv_difference = (slid.float() - want_conv.float()).abs().max().item()
-        state_difference = (state.float() - want_state.float()).abs().max().item()
-        assert conv_difference <= MEASURED_CONV_MAX_ABS_DIFF, (ctx_len, conv_difference)
-        assert state_difference <= MEASURED_STATE_MAX_ABS_DIFF, (ctx_len, state_difference)
-        torch.testing.assert_close(slid.float(), want_conv.float(), atol=ATOL, rtol=RTOL)
-        torch.testing.assert_close(state.float(), want_state.float(), atol=ATOL, rtol=RTOL)
+        # As with the KV cache: the state slid forward carries the oracle's own
+        # columns, so the bound follows the entry the step computed.
+        agrees_as_a_component(slid, want_conv)
+        agrees_as_a_component(state, want_state)
 
 
 def test_the_prior_state_is_read():
@@ -98,11 +86,8 @@ def test_the_prior_state_is_read():
         step.hidden_new, step.conv_state, torch.zeros_like(step.recurrent_state)
     )
 
-    moved = (out.float() - stateless.float()).abs().max().item()
-    assert moved > 100 * ATOL, (
-        f"zeroing the recurrent state moved the answer by only {moved}, so this "
-        f"boundary does not distinguish a kernel that ignores its history"
-    )
+    with pytest.raises(AssertionError):
+        agrees_as_a_component(out, stateless)
 
 
 def test_the_convolution_window_is_read():
@@ -121,11 +106,8 @@ def test_the_convolution_window_is_read():
         step.hidden_new, torch.zeros_like(step.conv_state), step.recurrent_state
     )
 
-    moved = (out.float() - windowless.float()).abs().max().item()
-    assert moved > 100 * ATOL, (
-        f"zeroing the convolution window moved the answer by only {moved}, so "
-        f"this boundary does not distinguish a kernel with no left context"
-    )
+    with pytest.raises(AssertionError):
+        agrees_as_a_component(out, windowless)
 
 
 def test_the_state_decays_rather_than_accumulating():

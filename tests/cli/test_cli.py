@@ -57,14 +57,14 @@ def test_models_renders_the_whole_forest_with_leaf_modules_marked(capsys) -> Non
     assert cli.main(["models", "qwen3_1_7b"]) == 0
     forest = capsys.readouterr().out
 
-    assert "29 leaf modules, 148 functions" in forest
+    assert "29 leaf modules, 119 functions" in forest
     # Both roots, and a layer marked as a leaf while the stack that owns it is not.
     assert "* Qwen3_1_7B\n" in forest
     assert "  Qwen3_1_7B_Decoder\n" in forest
     # The 28 layers are one entry naming the range and how many, written once.
     assert "*   layer0..layer27  (28 identical, each as shown)" in forest
     assert "layer1\n" not in forest
-    assert "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"f32\"]" in forest
+    assert "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"]" in forest
 
 
 def test_models_source_is_the_authored_file_byte_for_byte(capsys) -> None:

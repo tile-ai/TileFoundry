@@ -17,20 +17,23 @@ from dataclasses import dataclass
 
 import torch
 
-from tests.models.kimi_linear_48b_a3b.config import (
-    REAL,
-    SEQ_LEN,
+from tests.models import decode_oracle as oracle
+from tests.models.decode_oracle import SEQ_LEN, linear_weight
+from tests.models.kimi_linear_48b_a3b.model import (
+    MAX_POS,
     KimiLinearConfig,
-    build_mla_attention,
-    build_mla_hf_config,
-    identity_rope_caches,
-    linear_weight,
-    mla_context_kv,
-    mla_decode_reference,
-    rms_norm,
-    rope_caches,
+    published,
 )
 
+#: The checkpoint's own configuration, read by the class it names.
+CONFIG = published()
+
+
+#: The precision the checkpoint publishes; both sides of every comparison run at it.
+DTYPE = CONFIG.dtype
+
+#: The same config with a quarter of the experts: the router claim is identical
+#: at 64 and the full 256 will not fit alongside a parallel suite.
 #: Seeds, named so a change to either is a visible change to the reference.
 WEIGHT_SEED = 0
 ACTIVATION_SEED = 1
@@ -45,6 +48,321 @@ CTX_LEN = 24
 #: expert set; breadth over *which* experts get selected therefore comes from
 #: redrawing rather than from batching, which would contradict the contract.
 MOE_DRAWS = (1, 2, 3, 4)
+
+
+SMALL_MOE = published()
+SMALL_MOE.num_experts = 64
+
+# KDA's dimensions are published under `linear_attn_config`, so they carry the
+# prefix: the top-level `head_dim: 72` belongs to neither path, and KDA's 128 and
+# MLA's 192/128 are different numbers.
+_KDA = CONFIG.linear_attn_config
+KDA_HEAD_DIM = _KDA["head_dim"]
+KDA_NUM_HEADS = _KDA["num_heads"]
+SHORT_CONV_KERNEL_SIZE = _KDA["short_conv_kernel_size"]
+KDA_PROJ = KDA_NUM_HEADS * KDA_HEAD_DIM
+
+#: The scaling denominator is `qk_head_dim` (128 + 64), not `v_head_dim`; the
+#: config alone does not say which, and vLLM uses `qk_head_dim ** -0.5`.
+QK_HEAD_DIM = CONFIG.qk_nope_head_dim + CONFIG.qk_rope_head_dim
+MLA_SCALING = QK_HEAD_DIM ** -0.5
+
+#: `kda_head_dim ** -0.5`, applied to q *after* its l2 normalisation.
+KDA_SCALING = KDA_HEAD_DIM ** -0.5
+
+
+
+# ── the MLA oracle: DeepseekV3Attention at Kimi's ranks ───────────────────────
+
+
+def build_mla_hf_config(config: KimiLinearConfig = CONFIG):
+    """A `DeepseekV3Config` whose MLA is structurally Kimi's.
+
+    Not a claim that Kimi is DeepSeek-V3. It is a claim about one submodule:
+    at these ranks `DeepseekV3Attention` builds exactly the parameter set vLLM's
+    `KimiMLAAttention` builds -- `q_lora_rank=None` so a plain `q_proj`, the same
+    `kv_a_proj_with_mqa` (512 + 64 out), `kv_a_layernorm`, `kv_b_proj`
+    (32 * (128 + 128) out) and `o_proj` -- and sets the same
+    `scaling = qk_head_dim ** -0.5`.
+
+    `rope_interleave=False` because `tf.rope` is the rotate-half convention and
+    DeepSeek-V3 defaults to the interleaved one. This is not a statement about
+    Kimi either way: Kimi's MLA is NoPE (`mla_use_nope: true`), so the RoPE'd
+    form exercised alongside it is extra coverage of the same score/merge path
+    rather than a configuration Kimi ships.
+    """
+    from transformers import DeepseekV3Config  # noqa: PLC0415
+
+    return DeepseekV3Config(
+        vocab_size=32,
+        hidden_size=config.hidden_size,
+        intermediate_size=config.intermediate_size,
+        moe_intermediate_size=config.moe_intermediate_size,
+        num_hidden_layers=1,
+        num_attention_heads=config.num_attention_heads,
+        num_key_value_heads=config.num_attention_heads,
+        kv_lora_rank=config.kv_lora_rank,
+        q_lora_rank=None,
+        qk_nope_head_dim=config.qk_nope_head_dim,
+        qk_rope_head_dim=config.qk_rope_head_dim,
+        v_head_dim=config.v_head_dim,
+        rms_norm_eps=config.rms_norm_eps,
+        rope_interleave=False,
+        rope_parameters={"rope_type": "default", "rope_theta": config.rope_theta},
+        attention_bias=False,
+        attn_implementation="eager",
+    )
+
+
+def build_mla_attention(seed=0, device="cpu", dtype=DTYPE, config: KimiLinearConfig = CONFIG):
+    """A `DeepseekV3Attention` with random weights at a fixed seed."""
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import (  # noqa: PLC0415
+        DeepseekV3Attention,
+    )
+
+    cfg = build_mla_hf_config(config)
+    return oracle.randomised(
+        lambda: DeepseekV3Attention(cfg, layer_idx=0), seed, device, dtype
+    )
+
+
+def rope_caches(config: KimiLinearConfig = CONFIG, device="cpu", dtype=DTYPE):
+    """cos / sin caches `[max_pos, qk_rope_head_dim]` for the RoPE'd MLA form.
+
+    Built directly rather than through `DeepseekV3RotaryEmbedding`, because that
+    class sizes its inverse frequencies from `config.head_dim` while MLA rotates
+    only `qk_rope_head_dim` of each head.
+    """
+
+    half = config.qk_rope_head_dim // 2
+    inv_freq = 1.0 / (
+        config.rope_theta
+        ** (torch.arange(0, half, dtype=torch.float32, device=device) / half)
+    )
+    positions = torch.arange(MAX_POS, dtype=torch.float32, device=device)
+    angles = positions.unsqueeze(1) * inv_freq.unsqueeze(0)
+    cos = torch.cat([angles.cos(), angles.cos()], dim=-1)
+    sin = torch.cat([angles.sin(), angles.sin()], dim=-1)
+    return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
+
+
+def identity_rope_caches(config: KimiLinearConfig = CONFIG, device="cpu", dtype=DTYPE):
+    """cos = 1, sin = 0: the rotary that leaves q and k untouched.
+
+    This is how `mla_use_nope: true` is expressed without a second attention
+    implementation. `apply_rotary_pos_emb(x, x, ones, zeros)` returns
+    `x * 1 + rotate_half(x) * 0`, and that it is *exactly* the identity is
+    measured in `test_mla.py` (max abs diff 0.0 on both q and k), not assumed.
+
+    vLLM's `KimiMLAAttention` sets `rotary_emb=None` yet keeps
+    `qk_head_dim = 192` and `kv_a_proj_with_mqa` at `512 + 64` out, so NoPE
+    does not remove the 64 dimensions -- it only stops rotating them, and they
+    still enter the score and the scaling denominator.
+    """
+
+    shape_2d = (MAX_POS, config.qk_rope_head_dim)
+    cos = torch.ones(shape_2d, dtype=torch.float32, device=device)
+    sin = torch.zeros(shape_2d, dtype=torch.float32, device=device)
+    return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
+
+
+def rms_norm(hidden, weight, config: KimiLinearConfig = CONFIG):
+    """`tf.rms_norm`'s semantics in torch: `x * rsqrt(mean(x**2) + eps) * weight`.
+
+    The HIR fuses the pre-attention (or post-attention) RMSNorm into its kernel,
+    so the oracle has to be fed the states that norm produces. Feeding it the raw
+    states instead is not a small error: RMSNorm is scale-invariant, so a second
+    RMSNorm downstream -- MLA has one, on the latent -- absorbs the difference and
+    only the paths that bypass it (MLA's shared rope part, the MoE router) come
+    out wrong, by the reciprocal of the input RMS.
+    """
+
+    with torch.no_grad():
+        x = hidden.float()
+        ms = x.pow(2).mean(dim=-1, keepdim=True)
+        out = x * torch.rsqrt(ms + config.rms_norm_eps) * weight.float()
+    return out.to(hidden.dtype)
+
+
+def mla_key_value(attention, hidden, cos, sin, config: KimiLinearConfig = CONFIG):
+    """MLA's own `(key, value)` for *hidden*, head-major, rotary already applied.
+
+    This is the one step no shared helper can do, because MLA's key is not a
+    projection: it is the latent, normed, expanded by `kv_b_proj`, split from the
+    value, and concatenated with a rope part that is shared across heads
+    (`kv_a_proj_with_mqa` produces one 64-wide rope vector per token, which
+    `DeepseekV3Attention` then expands over all 32 heads). Mirrors
+    `DeepseekV3Attention.forward` lines 430-446.
+
+    *cos* / *sin* are the full `[max_pos, qk_rope_head_dim]` caches the kernel
+    takes, sliced here to the positions this call covers. The context starts at
+    absolute position 0, so a prefix is the right slice; the kernel makes the same
+    selection by `pos_ids` instead.
+    """
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import (  # noqa: PLC0415
+        apply_rotary_pos_emb,
+    )
+
+    batch, seq = hidden.shape[:2]
+    cos, sin = cos[:seq], sin[:seq]
+    with torch.no_grad():
+        compressed = attention.kv_a_proj_with_mqa(hidden)
+        latent, k_rot = torch.split(
+            compressed, [config.kv_lora_rank, config.qk_rope_head_dim], dim=-1
+        )
+        k_pass = (
+            attention.kv_b_proj(attention.kv_a_layernorm(latent))
+            .view(batch, seq, -1, config.qk_nope_head_dim + config.v_head_dim)
+            .transpose(1, 2)
+        )
+        k_nope, value = torch.split(
+            k_pass, [config.qk_nope_head_dim, config.v_head_dim], dim=-1
+        )
+        k_rot = k_rot.view(batch, 1, seq, config.qk_rope_head_dim)
+        _q, k_rot = apply_rotary_pos_emb(k_rot, k_rot, cos.unsqueeze(0), sin.unsqueeze(0))
+        k_rot = k_rot.expand(*k_nope.shape[:-1], -1)
+        key = torch.cat([k_nope, k_rot], dim=-1)
+    return key, value
+
+
+def mla_context_kv(attention, hidden_ctx, cos, sin, config: KimiLinearConfig = CONFIG):
+    """The cache *attention* would hold for *hidden_ctx*, as explicit tensors.
+
+    `[1, ctx_len, n_heads, dim]`, the kernels' layout. No `Cache` object on
+    either side -- the tensors are built by running the module's own projections
+    over the context, which is what its cache would have contained.
+    """
+    key, value = mla_key_value(attention, hidden_ctx, cos, sin, config)
+    return key.transpose(1, 2).contiguous(), value.transpose(1, 2).contiguous()
+
+
+def mla_decode_reference(attention, hidden_ctx, hidden_new, cos, sin):
+    """What MLA produces for *hidden_new* decoded after *hidden_ctx*.
+
+    The whole sequence under a causal mask with the last position kept, so the
+    reference never constructs a cache. Causality makes that position's output
+    depend on exactly the context before it.
+
+    *cos* / *sin* arrive as the full caches and are sliced to the sequence, as in
+    `mla_key_value`.
+    """
+
+    total = hidden_ctx.shape[1] + hidden_new.shape[1]
+    cos, sin = cos[:total], sin[:total]
+    mask = oracle.causal_mask(total, hidden_ctx.device.type, hidden_ctx.dtype)
+    sequence = torch.cat([hidden_ctx, hidden_new], dim=1)
+    with torch.no_grad():
+        out, _ = attention(
+            sequence,
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
+            attention_mask=mask,
+        )
+    return out[:, hidden_ctx.shape[1] :, :]
+
+
+# ── the MoE oracle: DeepseekV3TopkRouter at Kimi's numbers ────────────────────
+
+
+class MoERouterConfig:
+    """What `DeepseekV3TopkRouter` reads, at Kimi's numbers.
+
+    `n_group = topk_group = 1` makes DeepSeek-V3's group-limited routing the
+    identity -- every expert is in the one group, so the group mask is all ones
+    and nothing is masked to `-inf`. That is why the HIR below has no group
+    stage: at these numbers there is nothing for it to do, not because it was
+    dropped.
+    """
+
+    def __init__(self, config: KimiLinearConfig = CONFIG):
+        self.num_experts_per_tok = config.num_experts_per_token
+        self.num_local_experts = config.num_experts
+        self.hidden_size = config.hidden_size
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.n_group = 1
+        self.topk_group = 1
+        self.norm_topk_prob = True  # moe_renormalize: true
+
+
+@dataclass(frozen=True)
+class KdaStepInputs:
+    """One KDA decode step's arguments.
+
+    Random rather than drawn from a model, because there is no model to draw from.
+    They are enough to *run* the boundary, which is not the same as scoring it --
+    that is exactly the gap `KDA_BLOCK_REASON` records.
+    """
+
+    args: tuple
+
+
+def kda_step_inputs(*, device: str = "cpu", seed: int = WEIGHT_SEED) -> KdaStepInputs:
+    """Arguments of the right shapes for one KDA decode step."""
+    torch.manual_seed(seed)
+
+    def drawn(*sizes, sigma=0.05):
+        return (torch.randn(*sizes, device=device) * sigma).to(DTYPE)
+
+    window = SHORT_CONV_KERNEL_SIZE - 1
+    return KdaStepInputs(
+        args=(
+            drawn(1, SEQ_LEN, CONFIG.hidden_size),
+            torch.ones(CONFIG.hidden_size, device=device, dtype=DTYPE),
+            drawn(1, CONFIG.hidden_size, KDA_PROJ),
+            drawn(1, CONFIG.hidden_size, KDA_PROJ),
+            drawn(1, CONFIG.hidden_size, KDA_PROJ),
+            drawn(SHORT_CONV_KERNEL_SIZE, KDA_PROJ),
+            drawn(SHORT_CONV_KERNEL_SIZE, KDA_PROJ),
+            drawn(SHORT_CONV_KERNEL_SIZE, KDA_PROJ),
+            drawn(1, window, KDA_PROJ),
+            drawn(1, window, KDA_PROJ),
+            drawn(1, window, KDA_PROJ),
+            drawn(1, CONFIG.hidden_size, KDA_HEAD_DIM),
+            drawn(1, KDA_HEAD_DIM, KDA_PROJ),
+            drawn(KDA_PROJ),
+            drawn(KDA_NUM_HEADS),
+            drawn(1, CONFIG.hidden_size, KDA_NUM_HEADS),
+            drawn(1, CONFIG.hidden_size, KDA_HEAD_DIM),
+            drawn(1, KDA_HEAD_DIM, KDA_PROJ),
+            torch.ones(KDA_HEAD_DIM, device=device, dtype=DTYPE),
+            drawn(1, KDA_PROJ, CONFIG.hidden_size),
+            drawn(1, KDA_NUM_HEADS, KDA_HEAD_DIM, KDA_HEAD_DIM),
+            torch.full((1, 1, 1), KDA_SCALING, device=device, dtype=DTYPE),
+        )
+    )
+
+
+def run_kda_step(inputs: KdaStepInputs):
+    """Run the KDA boundary, then report that it cannot be scored.
+
+    The run is real: the complete layer is evaluated at production dimensions and
+    its results are checked to be finite, so the boundary is genuinely exercised
+    rather than skipped. What cannot happen afterwards is the comparison, because
+    there is no oracle -- so this raises `AssertionError` carrying
+    `KDA_BLOCK_REASON`, which is what the capability gate holds the block to.
+
+    Failing here rather than in `kda_step_inputs` is deliberate. The reference
+    harness calls `inputs()` outside the gate, so a fixture that raised would be
+    recorded as an error in the harness instead of as this model's stated limit.
+    """
+    from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B  # noqa: PLC0415
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
+
+    # Evaluated on whichever device the arguments were drawn on, rather than the
+    # evaluator's default: this boundary is small and CPU-sized, and inheriting a
+    # default of "cuda" would make a blocked reference depend on a free GPU.
+    device = inputs.args[0].device.type
+    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *inputs.args, device=device)
+    assert torch.isfinite(out).all(), "KDA produced non-finite output"
+    assert torch.isfinite(state).all(), "KDA produced a non-finite state"
+    for window in windows:
+        assert torch.isfinite(window).all(), "KDA produced a non-finite conv window"
+
+    raise AssertionError(KDA_BLOCK_REASON)
+
+
+def kda_step_oracle(inputs):
+    """There is none. Unreachable: `run_kda_step` raises before this is called."""
+    raise KdaReferenceUnavailable(KDA_BLOCK_REASON)
 
 
 # ── KDA: no oracle ───────────────────────────────────────────────────────────
@@ -93,88 +411,6 @@ KDA_BLOCK_REASON = (
 )
 
 
-@dataclass(frozen=True)
-class KdaStepInputs:
-    """One KDA decode step's arguments.
-
-    Random rather than drawn from a model, because there is no model to draw from.
-    They are enough to *run* the boundary, which is not the same as scoring it --
-    that is exactly the gap `KDA_BLOCK_REASON` records.
-    """
-
-    args: tuple
-
-
-def kda_step_inputs(*, device: str = "cpu", seed: int = WEIGHT_SEED) -> KdaStepInputs:
-    """Arguments of the right shapes for one KDA decode step."""
-    torch.manual_seed(seed)
-
-    def drawn(*sizes, sigma=0.05):
-        return torch.randn(*sizes, device=device) * sigma
-
-    window = REAL.short_conv_kernel_size - 1
-    return KdaStepInputs(
-        args=(
-            drawn(1, SEQ_LEN, REAL.hidden_size),
-            torch.ones(REAL.hidden_size, device=device),
-            drawn(1, REAL.hidden_size, REAL.kda_proj),
-            drawn(1, REAL.hidden_size, REAL.kda_proj),
-            drawn(1, REAL.hidden_size, REAL.kda_proj),
-            drawn(REAL.short_conv_kernel_size, REAL.kda_proj),
-            drawn(REAL.short_conv_kernel_size, REAL.kda_proj),
-            drawn(REAL.short_conv_kernel_size, REAL.kda_proj),
-            drawn(1, window, REAL.kda_proj),
-            drawn(1, window, REAL.kda_proj),
-            drawn(1, window, REAL.kda_proj),
-            drawn(1, REAL.hidden_size, REAL.kda_head_dim),
-            drawn(1, REAL.kda_head_dim, REAL.kda_proj),
-            drawn(REAL.kda_proj),
-            drawn(REAL.kda_num_heads),
-            drawn(1, REAL.hidden_size, REAL.kda_num_heads),
-            drawn(1, REAL.hidden_size, REAL.kda_head_dim),
-            drawn(1, REAL.kda_head_dim, REAL.kda_proj),
-            torch.ones(REAL.kda_head_dim, device=device),
-            drawn(1, REAL.kda_proj, REAL.hidden_size),
-            drawn(1, REAL.kda_num_heads, REAL.kda_head_dim, REAL.kda_head_dim),
-            torch.full((1, 1, 1), REAL.kda_scaling, device=device),
-        )
-    )
-
-
-def run_kda_step(inputs: KdaStepInputs):
-    """Run the KDA boundary, then report that it cannot be scored.
-
-    The run is real: the complete layer is evaluated at production dimensions and
-    its results are checked to be finite, so the boundary is genuinely exercised
-    rather than skipped. What cannot happen afterwards is the comparison, because
-    there is no oracle -- so this raises `AssertionError` carrying
-    `KDA_BLOCK_REASON`, which is what the capability gate holds the block to.
-
-    Failing here rather than in `kda_step_inputs` is deliberate. The reference
-    harness calls `inputs()` outside the gate, so a fixture that raised would be
-    recorded as an error in the harness instead of as this model's stated limit.
-    """
-    from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B  # noqa: PLC0415
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
-
-    # Evaluated on whichever device the arguments were drawn on, rather than the
-    # evaluator's default: this boundary is small and CPU-sized, and inheriting a
-    # default of "cuda" would make a blocked reference depend on a free GPU.
-    device = inputs.args[0].device.type
-    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *inputs.args, device=device)
-    assert torch.isfinite(out).all(), "KDA produced non-finite output"
-    assert torch.isfinite(state).all(), "KDA produced a non-finite state"
-    for window in windows:
-        assert torch.isfinite(window).all(), "KDA produced a non-finite conv window"
-
-    raise AssertionError(KDA_BLOCK_REASON)
-
-
-def kda_step_oracle(inputs):
-    """There is none. Unreachable: `run_kda_step` raises before this is called."""
-    raise KdaReferenceUnavailable(KDA_BLOCK_REASON)
-
-
 # ── MLA ──────────────────────────────────────────────────────────────────────
 
 
@@ -207,10 +443,10 @@ def mla_step_inputs(
     """
     attention = build_mla_attention(seed=WEIGHT_SEED, device=device)
     caches = identity_rope_caches if nope else rope_caches
-    cos, sin = caches(REAL, device=device)
+    cos, sin = caches(CONFIG, device=device)
 
     torch.manual_seed(ACTIVATION_SEED)
-    drawn = torch.randn(1, ctx_len + 1, REAL.hidden_size, device=device) * 0.1
+    drawn = (torch.randn(1, ctx_len + 1, CONFIG.hidden_size, device=device) * 0.1).to(DTYPE)
     hidden_ctx, hidden_new = drawn[:, :ctx_len], drawn[:, ctx_len:]
 
     # The input RMSNorm belongs to the decoder layer, not to DeepseekV3Attention.
@@ -219,14 +455,14 @@ def mla_step_inputs(
     # would leave a bug in the norm's weight application invisible, and -- because
     # RMSNorm is scale-invariant -- a norm the oracle does not also apply is
     # absorbed by MLA's latent norm and shows up only on the shared rope path.
-    gamma_in = torch.randn(REAL.hidden_size, device=device) * 0.1 + 1.0
-    normed_ctx = rms_norm(hidden_ctx, gamma_in, REAL)
+    gamma_in = (torch.randn(CONFIG.hidden_size, device=device) * 0.1 + 1.0).to(DTYPE)
+    normed_ctx = rms_norm(hidden_ctx, gamma_in, CONFIG)
 
-    k_cache, v_cache = mla_context_kv(attention, normed_ctx, cos, sin, REAL)
+    k_cache, v_cache = mla_context_kv(attention, normed_ctx, cos, sin, CONFIG)
 
     # The token being decoded sits immediately after the context.
     pos_ids = torch.tensor([ctx_len], device=device, dtype=torch.int32)
-    scale = torch.full((1, 1, 1, 1), REAL.mla_scaling, device=device)
+    scale = torch.full((1, 1, 1, 1), MLA_SCALING, device=device, dtype=DTYPE)
 
     return MlaStepInputs(
         args=(
@@ -264,8 +500,8 @@ def mla_step_oracle(inputs: MlaStepInputs) -> torch.Tensor:
     """
     return mla_decode_reference(
         inputs.attention,
-        rms_norm(inputs.hidden_ctx, inputs.gamma_in, REAL),
-        rms_norm(inputs.hidden_new, inputs.gamma_in, REAL),
+        rms_norm(inputs.hidden_ctx, inputs.gamma_in, CONFIG),
+        rms_norm(inputs.hidden_new, inputs.gamma_in, CONFIG),
         inputs.cos,
         inputs.sin,
     )
@@ -283,11 +519,11 @@ def mla_appended_cache_oracle(inputs: MlaStepInputs):
         rms_norm(
             torch.cat([inputs.hidden_ctx, inputs.hidden_new], dim=1),
             inputs.gamma_in,
-            REAL,
+            CONFIG,
         ),
         inputs.cos,
         inputs.sin,
-        REAL,
+        CONFIG,
     )
 
 
@@ -327,7 +563,7 @@ def build_hf_moe(
         DeepseekV3MoE,
     )
 
-    config = config or REAL
+    config = config or CONFIG
     n_experts = config.num_experts if n_experts is None else n_experts
     cfg = build_mla_hf_config(config)
     cfg.num_local_experts = n_experts
@@ -347,6 +583,7 @@ def build_hf_moe(
         for parameter in moe.parameters():
             parameter.normal_(0.0, 0.02)
         moe.gate.e_score_correction_bias.normal_(0.0, 0.5)
+    moe = moe.to(DTYPE)
     return moe
 
 
@@ -360,7 +597,7 @@ def moe_inputs(
     weights are about 7 GB, so rebuilding it per draw dominates the test.
     """
     moe = (
-        build_hf_moe(seed=seed, device=device, config=REAL, n_experts=n_experts)
+        build_hf_moe(seed=seed, device=device, config=CONFIG, n_experts=n_experts)
         if hf_moe is None
         else hf_moe
     )
@@ -370,15 +607,15 @@ def moe_inputs(
     # the router reads the normed states directly, with no scale-invariant stage
     # downstream to absorb a mismatch.
     torch.manual_seed(seed + 7919)
-    gamma_post = torch.randn(REAL.hidden_size, device=device) * 0.1 + 1.0
+    gamma_post = (torch.randn(CONFIG.hidden_size, device=device) * 0.1 + 1.0).to(DTYPE)
 
     torch.manual_seed(act_seed)
-    hidden = torch.randn(1, SEQ_LEN, REAL.hidden_size, device=device) * 0.1
-    normed = rms_norm(hidden, gamma_post, REAL)
+    hidden = (torch.randn(1, SEQ_LEN, CONFIG.hidden_size, device=device) * 0.1).to(DTYPE)
+    normed = rms_norm(hidden, gamma_post, CONFIG)
 
     gate_up = moe.experts.gate_up_proj
-    w_gate = gate_up[:, : REAL.moe_intermediate_size, :].contiguous()
-    w_up = gate_up[:, REAL.moe_intermediate_size :, :].contiguous()
+    w_gate = gate_up[:, : CONFIG.moe_intermediate_size, :].contiguous()
+    w_up = gate_up[:, CONFIG.moe_intermediate_size :, :].contiguous()
     w_down = moe.experts.down_proj.contiguous()
 
     shared = moe.shared_experts
@@ -388,7 +625,7 @@ def moe_inputs(
             gamma_post,
             moe.gate.weight.t().contiguous(),
             moe.gate.e_score_correction_bias,
-            torch.full((1, 1), REAL.routed_scaling_factor, device=device),
+            torch.full((1, 1), CONFIG.routed_scaling_factor, device=device, dtype=DTYPE),
             w_gate,
             w_up,
             w_down,

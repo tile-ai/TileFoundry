@@ -14,26 +14,20 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
 import torch
 
-from tests.models.qwen3_5_35b_a3b import config, reference
+from tests.models.decode_oracle import agrees_as_a_component
+from tests.models.qwen3_5_35b_a3b import reference
 from tests.models.qwen3_5_35b_a3b.model import advance_state
 
 DEV = reference.DEVICE
-ATOL = RTOL = 2e-5
-
-#: Measured on an H200, f32. Mixer output: 3.28e-06 at ctx_len 25 (reference
-#: maximum magnitude 4.44) and 2.80e-06 at 41 (3.78). Cache entries: key
-#: 1.07e-06 / 9.65e-07, value 1.67e-06 / 1.91e-06. The bounds carry about half
-#: again as headroom -- enough that f32 reassociation on another device does not
-#: fail them, tight enough that a semantic change cannot hide under them.
-MEASURED_MIXER_MAX_ABS_DIFF = 5e-06
-MEASURED_CACHE_MAX_ABS_DIFF = 3e-06
 
 #: Two lengths, so a kernel that only works at the length it was authored
 #: against cannot pass. Neither divides either head count, and neither is a
 #: multiple of the other.
 CTX_LENGTHS = (25, 41)
+
 
 
 def test_full_attention_matches_hugging_face():
@@ -46,9 +40,7 @@ def test_full_attention_matches_hugging_face():
         out, _key, _value = loaded.full_attention(step.hidden_new, *step.mixer_acts)
 
         want = reference.full_mixer_oracle(step)
-        difference = (out.float() - want.float()).abs().max().item()
-        assert difference <= MEASURED_MIXER_MAX_ABS_DIFF, (ctx_len, difference)
-        torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+        agrees_as_a_component(out, want)
 
 
 def test_the_step_returns_the_cache_entry_to_append():
@@ -70,10 +62,10 @@ def test_the_step_returns_the_cache_entry_to_append():
     )
 
     assert tuple(grown_key.shape) == tuple(want_key.shape)
+    # The cache each entry is appended to is the oracle's own, so this token's
+    # entry is the only computed part and the one the bound follows.
     for grown, want in ((grown_key, want_key), (grown_value, want_value)):
-        difference = (grown.float() - want.float()).abs().max().item()
-        assert difference <= MEASURED_CACHE_MAX_ABS_DIFF, difference
-        torch.testing.assert_close(grown.float(), want.float(), atol=ATOL, rtol=RTOL)
+        agrees_as_a_component(grown, want)
 
 
 def test_only_the_leading_rotary_dims_carry_a_position():
@@ -85,10 +77,16 @@ def test_only_the_leading_rotary_dims_carry_a_position():
     second. Asserted against the position embedding rather than against the
     configuration field, so it is the behaviour that is checked.
     """
-    shape = config.REAL
+    shape = reference.CONFIG
+    shape_rotary_dim = int(
+        shape.head_dim * float(shape.rope_parameters["partial_rotary_factor"])
+    )
     cos, sin = reference.rope_caches(DEV)
     torch.manual_seed(3)
-    x = torch.randn(1, 1, shape.n_q_heads, shape.head_dim, device=DEV)
+    x = torch.randn(
+        1, 1, shape.num_attention_heads, shape.head_dim, device=DEV,
+        dtype=reference.DTYPE,
+    )
     loaded = reference.load_mixer(
         "full_attention", reference.hf_layer("full_attention", DEV)
     )
@@ -99,12 +97,12 @@ def test_only_the_leading_rotary_dims_carry_a_position():
         )
         for position in (7, 19)
     ]
-    tail = [item[..., shape.rotary_dim:] for item in turned]
-    head = [item[..., : shape.rotary_dim] for item in turned]
+    tail = [item[..., shape_rotary_dim:] for item in turned]
+    head = [item[..., : shape_rotary_dim] for item in turned]
 
     assert torch.equal(tail[0], tail[1])
-    torch.testing.assert_close(tail[0].float(), x[..., shape.rotary_dim:].float(),
-                               atol=ATOL, rtol=RTOL)
+    untouched = x[..., shape_rotary_dim:]
+    agrees_as_a_component(tail[0], untouched)
     assert (head[0] - head[1]).abs().max().item() > 1e-2
 
 
@@ -122,24 +120,21 @@ def test_the_output_gate_is_applied():
     loaded = reference.load_mixer("full_attention", step.layer)
     out, _key, _value = loaded.full_attention(step.hidden_new, *step.mixer_acts)
 
-    shape = config.REAL
+    shape = reference.CONFIG
     # w_qg is [1, hidden, 2 * heads * head_dim] with the gate interleaved per
     # head; zeroing the gate half sends every gate to sigmoid(0) = 1/2.
     gated = loaded.constants["w_qg"].clone().reshape(
-        1, shape.hidden, shape.n_q_heads, 2 * shape.head_dim
+        1, shape.hidden_size, shape.num_attention_heads, 2 * shape.head_dim
     )
     gated[..., shape.head_dim:] = 0.0
     neutralised = dataclasses.replace(
         loaded,
         constants={
             **loaded.constants,
-            "w_qg": gated.reshape(1, shape.hidden, 2 * shape.q_proj).contiguous(),
+            "w_qg": gated.reshape(1, shape.hidden_size, 2 * shape.num_attention_heads * shape.head_dim).contiguous(),
         },
     )
     ungated, _key, _value = neutralised.full_attention(step.hidden_new, *step.mixer_acts)
 
-    moved = (out.float() - ungated.float()).abs().max().item()
-    assert moved > 100 * ATOL, (
-        f"neutralising the output gate moved the answer by only {moved}, so this "
-        f"boundary does not distinguish a kernel that ignores the gate"
-    )
+    with pytest.raises(AssertionError):
+        agrees_as_a_component(out, ungated)

@@ -1,6 +1,6 @@
 """Kimi-Linear MoE vs Hugging Face's `DeepseekV3MoE` at Kimi's numbers.
 
-CUDA, because the expert weights are large: 256 experts of f32 is about 7 GB, and
+CUDA, because the expert weights are large: 256 experts is several gigabytes, and
 the evaluated run peaks near 17 GB.
 
 Why DeepSeek-V3 is a legitimate oracle here, rather than a lookalike: at
@@ -8,7 +8,7 @@ Why DeepSeek-V3 is a legitimate oracle here, rather than a lookalike: at
 router applies `routed_scaling_factor` to the *routing weights* while vLLM's
 `KimiMoE` applies it to the *expert output*. Those are the same function -- the
 expert combine is linear in the weights -- measured at 7.1e-08 on an output of
-magnitude 1.156, which is the f32 rounding of the weight product and not a
+magnitude 1.156, which is the rounding of the weight product and not a
 difference in what is computed.
 
 Most tests run at a reduced expert count: `SMALL_MOE` is the published config with
@@ -21,17 +21,19 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.models.kimi_linear_48b_a3b import config, reference
-from tests.models.kimi_linear_48b_a3b.config import REAL, SMALL_MOE
+from tests.models.decode_oracle import agrees_as_a_component
+from tests.models.kimi_linear_48b_a3b import reference
 from tests.models.kimi_linear_48b_a3b.model import (
     KimiLinear48BA3B,
     build_kimi_linear_48b_a3b,
 )
+from tests.models.kimi_linear_48b_a3b.reference import SMALL_MOE
 from tilefoundry.evaluator import evaluate
+
+CONFIG = reference.CONFIG
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 
-ATOL = RTOL = 2e-4
 
 #: Expert count for the tests that only need to tell right from wrong. Eight times
 #: `top_k`, so a top-8 still selects a small minority of the experts.
@@ -41,7 +43,7 @@ SMALL_EXPERTS = SMALL_MOE.num_experts
 DISCRIMINATION = 1e-3
 
 #: Headroom each expert count needs, measured: 256 experts peak at 17.1 GB.
-_NEEDED_GB = {config.REAL.num_experts: 24.0, SMALL_EXPERTS: 8.0}
+_NEEDED_GB = {CONFIG.num_experts: 24.0, SMALL_EXPERTS: 8.0}
 
 
 def _moe_at(config_at) -> object:
@@ -103,7 +105,7 @@ def test_moe_matches_hf_at_published_expert_count():
     to come from redrawing. The four draws select genuinely different expert sets
     (measured: 8-expert selections overlapping in 4 to 6 members, not identical).
     """
-    device = _device(config.REAL.num_experts)
+    device = _device(CONFIG.num_experts)
     hf_moe = reference.build_hf_moe(device=device)
     try:
         for act_seed in reference.MOE_DRAWS:
@@ -112,9 +114,7 @@ def test_moe_matches_hf_at_published_expert_count():
             )
             out = evaluate(KimiLinear48BA3B.moe.lookup("moe"), *drawn.args, device=device)
             want = reference.moe_oracle(drawn)
-            torch.testing.assert_close(
-                out.float(), want.float(), atol=ATOL, rtol=RTOL
-            )
+            agrees_as_a_component(out, want)
     finally:
         del hf_moe
         torch.cuda.empty_cache()
@@ -126,7 +126,7 @@ def test_moe_matches_hf_at_reduced_expert_count(small_moe):
     drawn, device = _small(reference.ACTIVATION_SEED, small_moe)
     out = evaluate(_moe_at(SMALL_MOE), *drawn.args, device=device)
     want = reference.moe_oracle(drawn)
-    torch.testing.assert_close(out.float(), want.float(), atol=ATOL, rtol=RTOL)
+    agrees_as_a_component(out, want)
 
 
 def test_router_bias_is_load_bearing(small_moe):
@@ -162,17 +162,17 @@ def test_router_gathers_unbiased_scores(small_moe):
     apart for the first assertion to mean something.
     """
     drawn, device = _small(reference.ACTIVATION_SEED, small_moe)
-    tokens = drawn.normed.view(-1, REAL.hidden_size)
+    tokens = drawn.normed.view(-1, CONFIG.hidden_size)
     bias = drawn.args[3]
 
     with torch.no_grad():
         scores = (tokens.float() @ drawn.args[2].float()).sigmoid()
         biased = scores + bias.float()
-        _v, indices = biased.topk(REAL.num_experts_per_token, dim=-1)
+        _v, indices = biased.topk(CONFIG.num_experts_per_token, dim=-1)
 
         def normalise(gathered):
             weights = gathered / (gathered.sum(-1, keepdim=True) + 1e-20)
-            return weights * REAL.routed_scaling_factor
+            return (weights * CONFIG.routed_scaling_factor).to(reference.DTYPE)
 
         right = normalise(scores.gather(1, indices))
         wrong = normalise(biased.gather(1, indices))
@@ -183,9 +183,7 @@ def test_router_gathers_unbiased_scores(small_moe):
 
     # Same experts, and the weights are the unbiased ones.
     assert sorted(hir_indices[0].tolist()) == sorted(indices[0].tolist())
-    torch.testing.assert_close(
-        weights.float().sort(-1).values, right.sort(-1).values, atol=ATOL, rtol=RTOL
-    )
+    agrees_as_a_component(weights.sort(-1).values, right.sort(-1).values)
     assert (right - wrong).abs().max().item() > DISCRIMINATION
 
 
@@ -203,7 +201,7 @@ def test_routed_scaling_is_applied_after_normalisation(small_moe):
     want = reference.moe_oracle(drawn)
 
     args = list(drawn.args)
-    args[4] = torch.full((1, 1), 1.0, device=device)
+    args[4] = torch.full((1, 1), 1.0, device=device, dtype=reference.DTYPE)
     unscaled = evaluate(_moe_at(SMALL_MOE), *args, device=device)
 
     assert (unscaled.float() - want.float()).abs().max().item() > DISCRIMINATION

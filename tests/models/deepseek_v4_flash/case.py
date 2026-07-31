@@ -27,8 +27,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.deepseek_v4_flash.config import REAL
-from tests.models.deepseek_v4_flash.model import DeepseekV4ForCausalLM
+from tests.models.deepseek_v4_flash.model import REAL, DeepseekV4ForCausalLM
 from tests.models.deepseek_v4_flash.reference import (
     CTX_LEN,
     attention_step_inputs,

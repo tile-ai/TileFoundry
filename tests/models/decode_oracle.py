@@ -33,6 +33,55 @@ from typing import Callable
 
 import torch
 
+#: Tokens per decode step. Every model in the corpus states the same contract --
+#: one token in, one cache entry out -- so the step's own sequence axis is this
+#: literal and the context it reads is the only dimension left as a range.
+SEQ_LEN = 1
+
+
+def one_ulp_at(reference: torch.Tensor) -> float:
+    """One representable step at *reference*'s own greatest magnitude.
+
+    At the tensor's scale, not per element: an element that cancels to near zero
+    is many representable values from the true answer while being absolutely
+    tiny, so a per-element bound is ill-conditioned there.
+    """
+    scale = reference.abs().max()
+    up = torch.nextafter(scale, torch.full_like(scale, float("inf")))
+    down = torch.nextafter(scale, torch.full_like(scale, float("-inf")))
+    return max(abs((up - scale).item()), abs((scale - down).item()))
+
+
+def agrees_to_one_rounding(got, want, msg: str = "") -> None:
+    """*got* and *want* differ by at most one rounding at *want*'s scale.
+
+    For an assertion that isolates a single primitive boundary. Gather and copy
+    paths reassociate nothing and use `torch.equal` instead.
+    """
+    assert got.dtype == want.dtype, (
+        f"comparing {got.dtype} against {want.dtype}; build the oracle at the "
+        f"dtype the checkpoint publishes rather than widening a tolerance"
+    )
+    torch.testing.assert_close(
+        got.float(), want.float(), atol=one_ulp_at(want), rtol=0, msg=msg or None
+    )
+
+
+def agrees_as_a_component(got, want, msg: str = "") -> None:
+    """*got* and *want* differ by at most three roundings at *want*'s scale.
+
+    The bound a whole fused HIR Function is held to against the Hugging Face
+    component it reproduces, which rounds at each of the boundaries it fuses.
+    One uniform contract for every model here, not per-model or depth-scaled.
+    """
+    assert got.dtype == want.dtype, (
+        f"comparing {got.dtype} against {want.dtype}; build the oracle at the "
+        f"dtype the checkpoint publishes rather than widening a tolerance"
+    )
+    torch.testing.assert_close(
+        got.float(), want.float(), atol=3 * one_ulp_at(want), rtol=0, msg=msg or None
+    )
+
 
 def causal_mask(total: int, device: str = "cpu", dtype=None) -> torch.Tensor:
     """Additive mask ``[1, 1, total, total]``: 0 where a query may attend a key.
@@ -195,11 +244,15 @@ def linear_weight(linear) -> torch.Tensor:
 
 
 __all__ = [
+    "SEQ_LEN",
+    "agrees_as_a_component",
+    "agrees_to_one_rounding",
     "causal_mask",
     "context_kv",
     "decode_reference",
     "layer_inputs_over_context",
     "linear_weight",
+    "one_ulp_at",
     "randomised",
     "rope_caches",
     "run_layers",

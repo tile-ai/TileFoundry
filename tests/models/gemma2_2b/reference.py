@@ -18,37 +18,161 @@ from functools import partial
 
 import torch
 
+from tests.models import decode_oracle as oracle
 from tests.models import dense_decode
-from tests.models.gemma2_2b import config
-from tests.models.gemma2_2b.model import Gemma2_2B, Gemma2_2B_Decoder
+from tests.models.gemma2_2b.model import MAX_CTX, Gemma2_2B, Gemma2_2B_Decoder, published
 from tilefoundry.runtime.resource import DictResource
 
 DEVICE = dense_decode.DenseDecode.device
 CTX_LEN = dense_decode.DenseDecode.ctx_len
+
+#: Eager attention, because Gemma-2 caps attention logits at 50.0 and only the
+#: eager path applies the cap; the default would silently drop it.
+CONFIG = published(attn_implementation="eager")
+
+#: The precision the checkpoint publishes; both sides of every comparison run at it.
+DTYPE = CONFIG.dtype
+
+
+
+def _within_window(total: int) -> int:
+    """*total* positions, checked against Gemma-2's sliding window.
+
+    Half of Gemma-2's layers attend within ``sliding_window`` rather than over the
+    whole context, and these kernels describe full attention. The two agree
+    exactly while the window does not bind and not at all once it does, so the
+    boundary is enforced rather than documented.
+    """
+    if total > CONFIG.sliding_window:
+        raise ValueError(
+            f"{total} positions exceeds Gemma-2's sliding window "
+            f"({CONFIG.sliding_window}); half the layers would attend a window "
+            f"rather than the whole context, which these kernels do not describe"
+        )
+    return total
+
+
+def build_layer(seed=0, device="cpu", dtype=DTYPE):
+    """One `Gemma2DecoderLayer` with random weights at a fixed seed.
+
+    The published config is passed whole. A layer reads only per-layer fields, so
+    nothing here has to shrink `num_hidden_layers` first to avoid building 26.
+    """
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2DecoderLayer  # noqa: PLC0415
+
+    return oracle.randomised(
+        lambda: Gemma2DecoderLayer(CONFIG, layer_idx=0), seed, device, dtype
+    )
+
+
+def build_decoder(seed=0, device="cpu", dtype=DTYPE):
+    """The complete published-depth decoder stack, random at a fixed seed.
+
+    A `Gemma2ForCausalLM` rather than the base model: the decoder's own boundary
+    is still hidden states in and hidden states out, but the root's weights
+    include the head, and the head exists only on the causal LM. Its layers and
+    final norm are reached through `.model`.
+    """
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2ForCausalLM  # noqa: PLC0415
+
+    return oracle.randomised(lambda: Gemma2ForCausalLM(CONFIG), seed, device, dtype)
+
+
+def _rope_at(rows: int, device="cpu"):
+    """Full cos / sin caches `[rows, head_dim]` from the HF rotary embedding.
+
+    Row `p` is the rotary embedding for absolute position `p`, so gathering by
+    `pos_ids` reproduces the cos / sin the HF attention applies.
+    """
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding  # noqa: PLC0415
+
+    return oracle.rope_caches(Gemma2RotaryEmbedding, CONFIG, rows, device, DTYPE)
+
+
+def rope_caches(device="cpu"):
+    """The caches at the context envelope the kernels are authored for."""
+    return _rope_at(MAX_CTX, device)
+
+
+def _key_value_of(layer, normed):
+    """*layer*'s pre-rotary key and its value, head-major.
+
+    The one step of the oracle that is Gemma-2's own, and it is the plainest of
+    the corpus: no per-head norm on the key (that is Qwen3's), no projection bias
+    (``attention_bias`` is False), just the projection reshaped into heads.
+    """
+    attention = layer.self_attn
+    heads = (1, normed.shape[1], CONFIG.num_key_value_heads, CONFIG.head_dim)
+    key = attention.k_proj(normed).view(heads).transpose(1, 2)
+    value = attention.v_proj(normed).view(heads).transpose(1, 2)
+    return key, value
+
+
+def _apply_rotary():
+    from transformers.models.gemma2.modeling_gemma2 import apply_rotary_pos_emb  # noqa: PLC0415
+
+    return apply_rotary_pos_emb
+
+
+def context_kv(layer, hidden_ctx, device="cpu"):
+    """The KV cache *layer* would hold for *hidden_ctx*, as explicit tensors."""
+    cos, sin = _rope_at(_within_window(hidden_ctx.shape[1]), device)
+    return oracle.context_kv(
+        layer, hidden_ctx, cos, sin,
+        key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
+    )
+
+
+def decode_reference(layer, hidden_ctx, hidden_new):
+    """Hugging Face's output for *hidden_new* decoded after *hidden_ctx*."""
+    total = _within_window(hidden_ctx.shape[1] + hidden_new.shape[1])
+    cos, sin = _rope_at(total, hidden_ctx.device.type)
+    return oracle.decode_reference([layer], hidden_ctx, hidden_new, cos, sin)
+
+
+def decoder_context_kv(model, hidden_ctx, device="cpu"):
+    """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
+    cos, sin = _rope_at(_within_window(hidden_ctx.shape[1]), device)
+    return oracle.stack_context_kv(
+        model.model.layers, hidden_ctx, cos, sin,
+        key_value_of=_key_value_of, apply_rotary=_apply_rotary(),
+    )
+
+
+def decoder_decode_reference(model, hidden_ctx, hidden_new):
+    """The decoder stack's output for *hidden_new* decoded after *hidden_ctx*."""
+    total = _within_window(hidden_ctx.shape[1] + hidden_new.shape[1])
+    cos, sin = _rope_at(total, hidden_ctx.device.type)
+    return oracle.decode_reference(
+        model.model.layers, hidden_ctx, hidden_new, cos, sin,
+        final_norm=model.model.norm,
+    )
+
 
 
 def _layer_constants(layer) -> dict:
     """One layer's weights, keyed the way its Module names them.
 
     Gemma2 norms both sides of the MLP as well as both sides of attention, so it
-    carries four norms where the Qwen layers carry two. Every one of them is read
-    through `config.rms_gamma`, which accounts for Gemma storing gamma as a
-    zero-centred offset. Stated here rather than shared: which Hugging Face tensor
-    a canonical name reads is this model's own fact.
+    carries four norms where the Qwen layers carry two. Each is the checkpoint's
+    tensor as stored; Gemma keeps gamma as a zero-centred offset and the kernels
+    add the one back, so nothing is adjusted on the way in. Stated here rather
+    than shared: which Hugging Face tensor a canonical name reads is this model's
+    own fact.
     """
     attention, mlp = layer.self_attn, layer.mlp
     return {
-        "gamma_in": config.rms_gamma(layer.input_layernorm),
-        "w_q": config.linear_weight(attention.q_proj),
-        "w_k": config.linear_weight(attention.k_proj),
-        "w_v": config.linear_weight(attention.v_proj),
-        "w_o": config.linear_weight(attention.o_proj),
-        "gamma_post_attn": config.rms_gamma(layer.post_attention_layernorm),
-        "gamma_pre_ff": config.rms_gamma(layer.pre_feedforward_layernorm),
-        "w_gate": config.linear_weight(mlp.gate_proj),
-        "w_up": config.linear_weight(mlp.up_proj),
-        "w_down": config.linear_weight(mlp.down_proj),
-        "gamma_post_ff": config.rms_gamma(layer.post_feedforward_layernorm),
+        "gamma_in": layer.input_layernorm.weight,
+        "w_q": oracle.linear_weight(attention.q_proj),
+        "w_k": oracle.linear_weight(attention.k_proj),
+        "w_v": oracle.linear_weight(attention.v_proj),
+        "w_o": oracle.linear_weight(attention.o_proj),
+        "gamma_post_attn": layer.post_attention_layernorm.weight,
+        "gamma_pre_ff": layer.pre_feedforward_layernorm.weight,
+        "w_gate": oracle.linear_weight(mlp.gate_proj),
+        "w_up": oracle.linear_weight(mlp.up_proj),
+        "w_down": oracle.linear_weight(mlp.down_proj),
+        "gamma_post_ff": layer.post_feedforward_layernorm.weight,
     }
 
 
@@ -60,11 +184,6 @@ def load_layer(layer):
 def load_decoder(model):
     """The decoder root with *model*'s weights bound, one entry per layer.
 
-    ``gamma_final`` goes through `config.rms_gamma` like every other norm here: the
-    norm that closes the stack is the same zero-centred offset the four inside a
-    layer are, and it is the one where the raw ``.weight`` costs the whole stack's
-    output rather than one block's.
-
     ``w_head`` is supplied in the layout `lm_head` declares: `DictResource` keys are
     already canonical and its converters run in ``prepare``, not here. Reading the
     head off the causal LM rather than deciding from a config field is what makes
@@ -72,7 +191,7 @@ def load_decoder(model):
     """
     constants = {
         "w_embed": model.model.embed_tokens.weight,
-        "gamma_final": config.rms_gamma(model.model.norm),
+        "gamma_final": model.model.norm.weight,
         "w_head": model.lm_head.weight.t(),
     }
     for index, layer in enumerate(model.model.layers):
@@ -103,7 +222,15 @@ class DecodeStepInputs(dense_decode.LayerStep):
 DecoderStepInputs = dense_decode.StackStep
 
 SPEC = dense_decode.DenseDecode(
-    config=config,
+    hidden_size=CONFIG.hidden_size,
+    dtype=DTYPE,
+    rope_caches=rope_caches,
+    build_layer=build_layer,
+    build_decoder=build_decoder,
+    context_kv=context_kv,
+    decode_reference=decode_reference,
+    decoder_context_kv=decoder_context_kv,
+    decoder_decode_reference=decoder_decode_reference,
     load_layer=load_layer,
     load_decoder=load_decoder,
     layer_step_class=DecodeStepInputs,

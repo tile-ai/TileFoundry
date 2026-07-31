@@ -37,8 +37,8 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.qwen3_5_35b_a3b.config import REAL as SHAPE
 from tests.models.qwen3_5_35b_a3b.model import (
+    MAX_CTX,
     Qwen3_5FullAttention,
     Qwen3_5LinearAttention,
     Qwen3_5MoE,
@@ -151,7 +151,7 @@ FULL_ATTENTION_CASE = ModelCase(
             id="qwen3_5_35b_a3b/sized/full_attention",
             selector="full_attention",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": SHAPE.max_ctx - 1},
+            ceiling={"ctx_len": MAX_CTX - 1},
         ),
     ),
 )

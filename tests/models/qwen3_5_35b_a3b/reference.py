@@ -44,14 +44,132 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from tests.models.qwen3_5_35b_a3b import config
+from tests.models import decode_oracle as oracle
+from tests.models.decode_oracle import linear_weight
 from tests.models.qwen3_5_35b_a3b.model import (
     LAYER_TYPE,
+    MAX_CTX,
     Qwen3_5FullAttention,
     Qwen3_5LinearAttention,
     Qwen3_5MoE,
+    published,
 )
 from tilefoundry.runtime.resource import DictResource
+
+#: The checkpoint's own text configuration.
+CONFIG = published()
+
+
+#: The precision the checkpoint publishes; both sides of every comparison run at it.
+DTYPE = CONFIG.dtype
+
+#: Dimensions the published fields imply, named once where the oracles read them.
+GDN_KEY_DIM = CONFIG.linear_num_key_heads * CONFIG.linear_key_head_dim
+GDN_VALUE_DIM = CONFIG.linear_num_value_heads * CONFIG.linear_value_head_dim
+#: Value heads sharing one key head.
+GDN_V_PER_K = CONFIG.linear_num_value_heads // CONFIG.linear_num_key_heads
+#: How many earlier positions the causal convolution needs: the kernel spans
+#: `linear_conv_kernel_dim` positions ending at the one being decoded, so the
+#: state handed in is the `kernel - 1` before it.
+GDN_CONV_CONTEXT = CONFIG.linear_conv_kernel_dim - 1
+
+
+
+def build_hf_decoder_layer(block_type: str, seed=0, device="cpu", dtype=DTYPE):
+    """One ``Qwen3_5MoeDecoderLayer`` of *block_type*, weights drawn at *seed*.
+
+    ``layer_idx`` is the lowest published index of that type, because the layer
+    reads its own type out of ``config.layer_types[layer_idx]`` -- the index is
+    how the type is chosen, not a decoration. The published config is passed
+    whole: only one layer is constructed either way, so nothing has to shrink
+    ``num_hidden_layers`` and ``layer_types`` together first.
+    """
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: PLC0415
+        Qwen3_5MoeDecoderLayer,
+    )
+
+    index = CONFIG.layer_types.index(block_type)
+    return oracle.randomised(
+        lambda: Qwen3_5MoeDecoderLayer(CONFIG, layer_idx=index), seed, device, dtype
+    )
+
+
+def build_hf_mixer(block_type: str, seed=0, device="cpu", dtype=DTYPE):
+    """One token mixer of *block_type* and the norm in front of it, and no more.
+
+    A whole ``Qwen3_5MoeDecoderLayer`` is 1.7 GB at the published bf16, of which 3.2 GB is its
+    256-expert MoE block -- and the mixer boundaries do not touch the MoE at all.
+    Building the layer to test the mixer put that 3.2 GB in every parallel test
+    worker at once and exhausted a 140 GB device when the rest of the suite ran
+    alongside; measured, as an out-of-memory failure in eight of this package's
+    tests under ``-n 8``. So the mixer is built on its own.
+
+    The classes are the published ones -- ``Qwen3_5MoeAttention``,
+    ``Qwen3_5MoeGatedDeltaNet``, ``Qwen3_5MoeRMSNorm`` -- at the published
+    dimensions, held in a container that exposes them under the attribute names a
+    decoder layer uses. So an oracle written against a layer reads this without
+    knowing the difference, and what it is comparing against is still Hugging
+    Face's own module rather than a reimplementation of it.
+    """
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: PLC0415
+        Qwen3_5MoeAttention,
+        Qwen3_5MoeGatedDeltaNet,
+        Qwen3_5MoeRMSNorm,
+    )
+
+    index = CONFIG.layer_types.index(block_type)
+
+    class MixerOnly(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.input_layernorm = Qwen3_5MoeRMSNorm(
+                CONFIG.hidden_size, eps=CONFIG.rms_norm_eps
+            )
+            if block_type == "linear_attention":
+                self.linear_attn = Qwen3_5MoeGatedDeltaNet(CONFIG, index)
+            else:
+                self.self_attn = Qwen3_5MoeAttention(CONFIG, index)
+
+    return oracle.randomised(MixerOnly, seed, device, dtype)
+
+
+def rope_caches_at(total: int = 64, device="cpu", dtype=DTYPE):
+    """cos / sin caches ``[total, rotary_dim]`` from the published rotary module.
+
+    Narrower than ``head_dim``: ``partial_rotary_factor`` is 0.25, so the caches
+    cover the 64 entries of each head that rotate and nothing else. That is what
+    Hugging Face's own ``apply_rotary_pos_emb`` reads -- it slices ``q`` to
+    ``cos.shape[-1]`` and concatenates the untouched tail back on.
+
+    ``mrope`` is not exercised by a text-only fixture and this does not pretend
+    it is. The published rotary embedding assigns a position triple per token and
+    interleaves the three axes' frequencies by ``mrope_section``; with no image
+    the three are the same number, so every branch of the interleave selects the
+    same frequency and the result is ordinary RoPE at ``rotary_dim``. What these
+    caches do cover is the partial factor. ``test_provenance.py`` measures the
+    degeneracy rather than asserting it.
+    """
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: PLC0415
+        Qwen3_5MoeTextRotaryEmbedding,
+    )
+
+    with torch.device(device):
+        rotary = Qwen3_5MoeTextRotaryEmbedding(CONFIG)
+    reference = torch.zeros(1, total, CONFIG.hidden_size, device=device)
+    cos, sin = rotary(reference, torch.arange(total, device=device).unsqueeze(0))
+    cos, sin = cos[0], sin[0]
+    return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
+
+
+def matrix_weight(weight):
+    """A bare ``[out, in]`` parameter -> the kernels' ``[in, out]``.
+
+    The MoE router and Hugging Face's expert tensors are ``nn.Parameter``s
+    consumed by ``F.linear``, not ``nn.Linear`` modules, so they need the same
+    transpose without the module wrapper.
+    """
+    return weight.t().contiguous()
+
 
 #: The oracle's device. Every builder takes one; this is what the tests pass.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -87,22 +205,22 @@ def hf_layer(block_type: str, device: str = DEVICE, whole_layer: bool = False):
     Cached per (type, device, extent). Safe to share -- eval mode, nothing writes.
     """
     if whole_layer:
-        return config.build_hf_decoder_layer(
+        return build_hf_decoder_layer(
             block_type, seed=WEIGHT_SEED, device=device
         )
-    return config.build_hf_mixer(block_type, seed=WEIGHT_SEED, device=device)
+    return build_hf_mixer(block_type, seed=WEIGHT_SEED, device=device)
 
 
 @functools.lru_cache(maxsize=None)
 def rope_caches(device: str = DEVICE):
     """cos / sin caches covering every position a step may be decoded at."""
-    return config.rope_caches(total=config.REAL.max_ctx, device=device)
+    return rope_caches_at(total=MAX_CTX, device=device)
 
 
 def drawn_hidden(ctx_len: int, device: str = DEVICE):
     """A context of *ctx_len* tokens and the one token decoded after it."""
     torch.manual_seed(ACTIVATION_SEED)
-    drawn = torch.randn(1, ctx_len + 1, config.REAL.hidden, device=device) * 0.1
+    drawn = (torch.randn(1, ctx_len + 1, CONFIG.hidden_size, device=device) * 0.1).to(DTYPE)
     return drawn[:, :ctx_len], drawn[:, ctx_len:]
 
 
@@ -118,13 +236,13 @@ def full_mixer_constants(layer) -> dict:
     """
     attention = layer.self_attn
     return {
-        "gamma_in": config.norm_gamma(layer.input_layernorm),
-        "w_qg": config.linear_weight(attention.q_proj),
-        "w_k": config.linear_weight(attention.k_proj),
-        "w_v": config.linear_weight(attention.v_proj),
-        "gamma_q": config.norm_gamma(attention.q_norm),
-        "gamma_k": config.norm_gamma(attention.k_norm),
-        "w_o": config.linear_weight(attention.o_proj),
+        "gamma_in": layer.input_layernorm.weight,
+        "w_qg": linear_weight(attention.q_proj),
+        "w_k": linear_weight(attention.k_proj),
+        "w_v": linear_weight(attention.v_proj),
+        "gamma_q": attention.q_norm.weight,
+        "gamma_k": attention.k_norm.weight,
+        "w_o": linear_weight(attention.o_proj),
     }
 
 
@@ -132,11 +250,11 @@ def linear_mixer_constants(layer) -> dict:
     """The Gated DeltaNet's weights, keyed the way its Module names them."""
     mixer = layer.linear_attn
     return {
-        "gamma_in": config.norm_gamma(layer.input_layernorm),
-        "w_in_qkv": config.linear_weight(mixer.in_proj_qkv),
-        "w_in_z": config.linear_weight(mixer.in_proj_z),
-        "w_in_b": config.linear_weight(mixer.in_proj_b),
-        "w_in_a": config.linear_weight(mixer.in_proj_a),
+        "gamma_in": layer.input_layernorm.weight,
+        "w_in_qkv": linear_weight(mixer.in_proj_qkv),
+        "w_in_z": linear_weight(mixer.in_proj_z),
+        "w_in_b": linear_weight(mixer.in_proj_b),
+        "w_in_a": linear_weight(mixer.in_proj_a),
         # nn.Conv1d keeps a singleton in-channel axis a depthwise convolution
         # never uses; the kernel takes [channels, kernel].
         "conv_w": mixer.conv1d.weight.squeeze(1).contiguous(),
@@ -145,7 +263,7 @@ def linear_mixer_constants(layer) -> dict:
         # `Qwen3_5MoeRMSNormGated` scales by its weight directly, not by
         # 1 + weight the way the layer-level norms do.
         "gamma_gdn": mixer.norm.weight,
-        "w_out": config.linear_weight(mixer.out_proj),
+        "w_out": linear_weight(mixer.out_proj),
     }
 
 
@@ -158,23 +276,23 @@ def moe_constants(layer) -> dict:
     same kind as transposing a projection, and it belongs on this side.
     """
     block = layer.mlp
-    width = config.REAL.moe_intermediate
+    width = CONFIG.moe_intermediate_size
     gate_up = block.experts.gate_up_proj
     return {
-        "gamma_post": config.norm_gamma(layer.post_attention_layernorm),
+        "gamma_post": layer.post_attention_layernorm.weight,
         "w_gate": gate_up[:, :width, :].contiguous(),
         "w_up": gate_up[:, width:, :].contiguous(),
         "w_down": block.experts.down_proj.contiguous(),
-        "w_shared_gate": config.matrix_weight(block.shared_expert.gate_proj.weight),
-        "w_shared_up": config.matrix_weight(block.shared_expert.up_proj.weight),
-        "w_shared_down": config.matrix_weight(block.shared_expert.down_proj.weight),
-        "w_shared_scale": config.matrix_weight(block.shared_expert_gate.weight),
+        "w_shared_gate": matrix_weight(block.shared_expert.gate_proj.weight),
+        "w_shared_up": matrix_weight(block.shared_expert.up_proj.weight),
+        "w_shared_down": matrix_weight(block.shared_expert.down_proj.weight),
+        "w_shared_scale": matrix_weight(block.shared_expert_gate.weight),
     }
 
 
 def router_constants(layer) -> dict:
     """*layer*'s router weight, keyed the way ``Qwen3_5Router`` names it."""
-    return {"w_router": config.matrix_weight(layer.mlp.gate.weight)}
+    return {"w_router": matrix_weight(layer.mlp.gate.weight)}
 
 
 def moe_weights(layer) -> dict:
@@ -262,13 +380,12 @@ def context_kv(layer, hidden, device: str = DEVICE):
         apply_rotary_pos_emb,
     )
 
-    shape = config.REAL
     length = hidden.shape[1]
     cos, sin = rope_caches(device)
     attention = layer.self_attn
     with torch.no_grad():
         normed = layer.input_layernorm(hidden)
-        heads = (1, length, shape.n_kv_heads, shape.head_dim)
+        heads = (1, length, CONFIG.num_key_value_heads, CONFIG.head_dim)
         key = attention.k_norm(attention.k_proj(normed).view(heads)).transpose(1, 2)
         value = attention.v_proj(normed).view(heads).transpose(1, 2)
         _query, key = apply_rotary_pos_emb(
@@ -303,7 +420,9 @@ def full_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
             torch.tensor([ctx_len], device=device, dtype=torch.int32),
             k_cache,
             v_cache,
-            torch.full((1, 1, 1, 1), layer.self_attn.scaling, device=device),
+            torch.full(
+                (1, 1, 1, 1), layer.self_attn.scaling, device=device, dtype=DTYPE
+            ),
         ),
     )
 
@@ -325,7 +444,7 @@ def full_mixer_oracle(step: FullStep) -> torch.Tensor:
     positions = torch.arange(total, device=step.hidden_new.device)
     mask = torch.where(
         positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
-    ).view(1, 1, total, total)
+    ).view(1, 1, total, total).to(step.hidden_new.dtype)
     with torch.no_grad():
         normed = step.layer.input_layernorm(_whole_sequence(step))
         out, _ = step.layer.self_attn(
@@ -343,7 +462,7 @@ def full_layer_oracle(step: FullStep) -> torch.Tensor:
     positions = torch.arange(total, device=step.hidden_new.device)
     mask = torch.where(
         positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
-    ).view(1, 1, total, total)
+    ).view(1, 1, total, total).to(step.hidden_new.dtype)
     with torch.no_grad():
         out = step.layer(
             _whole_sequence(step),
@@ -418,10 +537,9 @@ def gdn_state(layer, hidden) -> tuple[torch.Tensor, torch.Tensor]:
         torch_chunk_gated_delta_rule,
     )
 
-    shape = config.REAL
     mixer = layer.linear_attn
     length = hidden.shape[1]
-    window = shape.gdn_conv_context
+    window = GDN_CONV_CONTEXT
     with torch.no_grad():
         normed = layer.input_layernorm(hidden)
         projected = mixer.in_proj_qkv(normed).transpose(1, 2)
@@ -435,14 +553,14 @@ def gdn_state(layer, hidden) -> tuple[torch.Tensor, torch.Tensor]:
         convolved = F.silu(mixer.conv1d(projected)[:, :, :length]).transpose(1, 2)
         query, key, value = torch.split(
             convolved,
-            [shape.gdn_key_dim, shape.gdn_key_dim, shape.gdn_value_dim],
+            [GDN_KEY_DIM, GDN_KEY_DIM, GDN_VALUE_DIM],
             dim=-1,
         )
-        query = query.reshape(1, length, -1, shape.gdn_head_k_dim)
-        key = key.reshape(1, length, -1, shape.gdn_head_k_dim)
-        value = value.reshape(1, length, -1, shape.gdn_head_v_dim)
-        query = query.repeat_interleave(shape.gdn_v_per_k, dim=2)
-        key = key.repeat_interleave(shape.gdn_v_per_k, dim=2)
+        query = query.reshape(1, length, -1, CONFIG.linear_key_head_dim)
+        key = key.reshape(1, length, -1, CONFIG.linear_key_head_dim)
+        value = value.reshape(1, length, -1, CONFIG.linear_value_head_dim)
+        query = query.repeat_interleave(GDN_V_PER_K, dim=2)
+        key = key.repeat_interleave(GDN_V_PER_K, dim=2)
         beta = mixer.in_proj_b(normed).sigmoid()
         decay = -mixer.A_log.float().exp() * F.softplus(
             mixer.in_proj_a(normed).float() + mixer.dt_bias
@@ -503,7 +621,8 @@ def advanced_state_oracle(step: LinearStep) -> tuple[torch.Tensor, torch.Tensor]
     Built the same way the input state was, over the context with the decoded
     token appended.
     """
-    return gdn_state(step.layer, _whole_sequence(step))
+    conv, recurrent = gdn_state(step.layer, _whole_sequence(step))
+    return conv.to(DTYPE), recurrent.to(DTYPE)
 
 
 __all__ = [

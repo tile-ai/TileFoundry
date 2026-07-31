@@ -2,7 +2,7 @@
 name, per ``DeepSeek-V4-Flash-FP8``'s ``model.safetensors.index.json``."""
 from __future__ import annotations
 
-from tests.models.deepseek_v4_flash.config import DSV4Config
+from tests.models.deepseek_v4_flash.model import DSV4Config
 from tilefoundry.runtime import Absolute
 
 # One raw name, one absolute raw name, or (per-expert groups) a tuple of raw

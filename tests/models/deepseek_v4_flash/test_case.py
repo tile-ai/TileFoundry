@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from tests.models.deepseek_v4_flash.case import ANALYZED_AT, CASE
-from tests.models.deepseek_v4_flash.config import REAL
+from tests.models.deepseek_v4_flash.model import REAL
 from tests.models.fixtures import ACCEPTANCE
 from tilefoundry.analysis import ANALYSES, analyze
 from tilefoundry.ir.hir.specialize import specialize_concretely

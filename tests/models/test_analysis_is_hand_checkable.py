@@ -23,11 +23,28 @@ flops. A wrong count fails the bound in one direction or the other.
 
 from __future__ import annotations
 
+import torch
+
 from tests.models.fixtures import ACCEPTANCE
-from tests.models.qwen3_1_7b.config import REAL
+from tests.models.qwen3_1_7b.model import published
 from tests.models.registry import case
 from tilefoundry.analysis import analyze
 from tilefoundry.inspection.analysis_report import report
+
+#: The dimensions, from the checkpoint's own `config.json`.
+CONFIG = published()
+
+#: The dtype the checkpoint publishes, as the analysis buckets flops by and as
+#: bytes on the wire. Both are read off the config rather than written down: the
+#: expectations below are about the model, and the model states its own precision.
+DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
+    str(CONFIG.dtype).removeprefix("torch.")
+]
+BYTES_PER = torch.finfo(CONFIG.dtype).bits // 8
+
+#: The projection widths GQA makes unequal, derived where they are decided.
+Q_PROJ = CONFIG.num_attention_heads * CONFIG.head_dim
+KV_PROJ = CONFIG.num_key_value_heads * CONFIG.head_dim
 
 #: The context the layer is asked about. Any length works; this one is stated so
 #: the attention terms below can be written down.
@@ -58,13 +75,13 @@ def _analysed(function_name: str, dims):
 
 def _mlp_matmul_flops() -> int:
     """Gate, up and down, each one token against a `hidden x intermediate`."""
-    return 3 * FLOPS_PER_MAC * REAL.hidden * REAL.intermediate
+    return 3 * FLOPS_PER_MAC * CONFIG.hidden_size * CONFIG.intermediate_size
 
 
 def _projection_flops() -> int:
     """q, k, v and o for one token. GQA makes k and v narrower than q."""
-    widths = (REAL.q_proj, REAL.kv_proj, REAL.kv_proj, REAL.q_proj)
-    return sum(FLOPS_PER_MAC * REAL.hidden * width for width in widths)
+    widths = (Q_PROJ, KV_PROJ, KV_PROJ, Q_PROJ)
+    return sum(FLOPS_PER_MAC * CONFIG.hidden_size * width for width in widths)
 
 
 def _attention_flops(ctx: int) -> int:
@@ -75,8 +92,8 @@ def _attention_flops(ctx: int) -> int:
     decoded token's own key is written into the cache by the step and attended as
     part of it.
     """
-    per_head = FLOPS_PER_MAC * ctx * REAL.head_dim
-    return 2 * REAL.n_q_heads * per_head
+    per_head = FLOPS_PER_MAC * ctx * CONFIG.head_dim
+    return 2 * CONFIG.num_attention_heads * per_head
 
 
 def _holds(reported: int, derived: int, label: str) -> None:
@@ -89,7 +106,7 @@ def _holds(reported: int, derived: int, label: str) -> None:
     assert excess <= ELEMENTWISE_SHARE * derived, (
         f"{label}: analysis reports {reported} flops against {derived} of matmul, "
         f"an excess of {excess} that elementwise work over vectors of "
-        f"{REAL.hidden} and {REAL.intermediate} cannot account for"
+        f"{CONFIG.hidden_size} and {CONFIG.intermediate_size} cannot account for"
     )
 
 
@@ -97,26 +114,7 @@ def test_the_mlp_costs_its_three_matrices() -> None:
     """75,497,472 flops of matmul: 3 x 2 x 2048 x 6144."""
     data = _analysed("mlp", None)
 
-    _holds(data["totals"]["flops"]["f32"], _mlp_matmul_flops(), "mlp")
-
-
-def test_a_tiled_mlp_costs_the_same_matmuls_as_the_untiled_one() -> None:
-    """Tiling reassociates a K reduction; it does not change the arithmetic.
-
-    So the same lower bound and the same elementwise allowance hold, and between
-    them they pin a loop nest from both sides. Measured, both sides were needed: the
-    loop trip counts were not being applied at all, which reported this kernel at a
-    thousandth of its cost, and a first attempt at applying them charged everything
-    the body could reach -- including values computed once before the loop, and the
-    whole of a preceding loop -- which reported it at thirty-four times.
-
-    The excess over the matmuls is real work here rather than round-off: the tiled
-    form accumulates into three buffers, which the untiled form does not do at all.
-    It stays inside the same one percent.
-    """
-    data = _analysed("tiled_mlp", None)
-
-    _holds(data["totals"]["flops"]["f32"], _mlp_matmul_flops(), "tiled_mlp")
+    _holds(data["totals"]["flops"][DT], _mlp_matmul_flops(), "mlp")
 
 
 def test_the_attention_costs_its_projections_and_its_context() -> None:
@@ -124,7 +122,7 @@ def test_the_attention_costs_its_projections_and_its_context() -> None:
     data = _analysed("self_attention", {"ctx_len": CTX})
 
     _holds(
-        data["totals"]["flops"]["f32"],
+        data["totals"]["flops"][DT],
         _projection_flops() + _attention_flops(CTX),
         "self_attention",
     )
@@ -137,7 +135,7 @@ def test_the_layer_costs_its_two_halves_and_nothing_else() -> None:
     data = _analysed("decoder_layer", {"ctx_len": CTX})
 
     _holds(
-        data["totals"]["flops"]["f32"],
+        data["totals"]["flops"][DT],
         _mlp_matmul_flops() + _projection_flops() + _attention_flops(CTX),
         "decoder_layer",
     )
@@ -162,13 +160,12 @@ def test_the_layer_reads_at_least_its_weights_and_its_cache() -> None:
     """
     data = _analysed("decoder_layer", {"ctx_len": CTX})
 
-    bytes_per = 4  # f32
-    weights = bytes_per * (
-        3 * REAL.hidden * REAL.intermediate            # MLP
-        + 2 * REAL.hidden * REAL.q_proj                # q, o
-        + 2 * REAL.hidden * REAL.kv_proj               # k, v
+    weights = BYTES_PER * (
+        3 * CONFIG.hidden_size * CONFIG.intermediate_size            # MLP
+        + 2 * CONFIG.hidden_size * Q_PROJ                # q, o
+        + 2 * CONFIG.hidden_size * KV_PROJ               # k, v
     )
-    cache = bytes_per * 2 * CTX * REAL.n_kv_heads * REAL.head_dim
+    cache = BYTES_PER * 2 * CTX * CONFIG.num_key_value_heads * CONFIG.head_dim
     read = data["totals"]["traffic"]["gmem"]["read_bytes"]
 
     assert read >= weights + cache, (

@@ -32,7 +32,7 @@ attend every position there is.
 latent a production MLA stack would cache. That is Hugging Face's own cache
 content (``MiniCPM3Attention.forward`` calls ``past_key_values.update`` after
 assembling both), and matching it is what lets the oracle be exact without
-constructing a ``Cache``; ``../config.py`` states the evidence. Two things follow
+constructing a ``Cache``; ``reference.py`` states the evidence. Two things follow
 in the signatures below: the key cache and the value cache have different head
 dims, and ``num_key_value_heads == num_attention_heads``, so nothing repeats the
 cache across heads on the way in.
@@ -90,22 +90,70 @@ divides it. Both are config-derived constants rather than runtime tensors like
 """
 from __future__ import annotations
 
-from tests.models.minicpm3_4b.config import REAL as config
+import json
+from pathlib import Path
+
+from transformers import MiniCPM3Config
+from transformers.models.minicpm3.modeling_minicpm3 import MiniCPM3RMSNorm
+
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.target import CudaTarget
+
+
+def published(path: Path | None = None) -> MiniCPM3Config:
+    """The checkpoint's own configuration, read by the class Hugging Face uses."""
+    path = Path(__file__).parent / "config.json" if path is None else path
+    return MiniCPM3Config(**json.loads(path.read_text(encoding="utf-8")))
+
+
+config = published()
+
+#: The longest prior cache these kernels are authored for. Not a published field:
+#: `max_position_embeddings` is where the checkpoint stops, and a position beyond
+#: the rotary cache has no embedding to gather, so the envelope is that limit.
+MAX_CTX = config.max_position_embeddings
+
+# The published dtype as the DSL spells it. The checkpoint stores its weights at
+# this precision, so it is what a kernel reading them consumes.
+_DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
+    str(config.dtype).removeprefix("torch.")
+]
+
+#: Three numbers this checkpoint's `config.json` does not state, each taken from
+#: where the published model itself gets it rather than copied as a literal:
+#:
+#: - the rotary base sits inside the `rope_scaling` block `MiniCPM3Config`
+#:   normalises into `rope_parameters`, which is what `MiniCPM3RotaryEmbedding`
+#:   reads (`config.rope_parameters["rope_theta"]`);
+#: - the two LoRA norms are built as `MiniCPM3RMSNorm(q_lora_rank)` and
+#:   `MiniCPM3RMSNorm(kv_lora_rank)` with no eps passed, so they run at that
+#:   class's own default -- 1e-6, and *not* the 1e-5 `rms_norm_eps` the layer
+#:   norms use. Reading it off the class keeps the two in step if it ever moves.
+_ROPE_THETA = config.rope_parameters["rope_theta"]
+_LORA_EPS = MiniCPM3RMSNorm(1).variance_epsilon
+
+# MLA widths, each derived at the one place its shape is decided.
+_QK_HEAD_DIM = config.qk_nope_head_dim + config.qk_rope_head_dim
+_Q_UP_PROJ = config.num_attention_heads * _QK_HEAD_DIM      # q_b_proj out
+_KV_A_PROJ = config.kv_lora_rank + config.qk_rope_head_dim  # kv_a_proj_with_mqa out
+_KV_B_PROJ = config.num_attention_heads * (
+    config.qk_nope_head_dim + config.v_head_dim
+)                                                            # kv_b_proj out
+_ATTN_OUT = config.num_attention_heads * config.v_head_dim   # o_proj in
 
 # The prior cache this step reads: the only range this model carries. Zero is a
 # first step, and the exclusive upper bound is max_ctx because a position beyond
 # the rotary cache has no embedding to gather.
-C = DimVar("ctx_len", 0, config.max_ctx)
+C = DimVar("ctx_len", 0, MAX_CTX)
 
 # One token per step.
 S = 1
 
-_H = config.n_q_heads
-_QK = config.qk_head_dim
+_H = config.num_attention_heads
+_QK = _QK_HEAD_DIM
 _NOPE = config.qk_nope_head_dim
 _V = config.v_head_dim
 _KV_PAIR = config.qk_nope_head_dim + config.v_head_dim
@@ -118,31 +166,37 @@ LOGITS_SCALING = config.logits_scaling
 class MiniCPM3_4B:
     @func
     def input_rms_norm(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # Pre-attention input RMSNorm; HF `MiniCPM3DecoderLayer.input_layernorm`
         # (eps = config.rms_norm_eps = 1e-5, NOT the rms_norm op's own 1e-6
         # default, which is what the two low-rank norms below use).
-        return tf.rms_norm(hidden, gamma_in, eps=config.rms_eps)
+        # `MiniCPMRMSNorm` rounds the normalised activation to the input dtype before
+        # the learned scale multiplies it; `tf.rms_norm` keeps f32 through that
+        # multiply. On bf16 the two differ in the last bit.
+        out32 = tf.cast(hidden, dtype="f32")
+        out_var = tf.reduce(out32 * out32, axes=(-1,), keepdim=True, kind="mean")
+        out = tf.cast(out32 * tf.rsqrt(out_var + config.rms_norm_eps), dtype=_DT) * gamma_in
+        return out
 
     @func
     def mla_attention(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-        w_q_a: ConstTensor[(1, config.hidden, config.q_lora_rank), config.dt],
-        gamma_q_a: ConstTensor[(config.q_lora_rank,), config.dt],
-        w_q_b: ConstTensor[(1, config.q_lora_rank, config.q_up_proj), config.dt],
-        w_kv_a: ConstTensor[(1, config.hidden, config.kv_a_proj), config.dt],
-        gamma_kv_a: ConstTensor[(config.kv_lora_rank,), config.dt],
-        w_kv_b: ConstTensor[(1, config.kv_lora_rank, config.kv_b_proj), config.dt],
-        cos_cache: Tensor[(config.max_pos, config.qk_rope_head_dim), config.dt],
-        sin_cache: Tensor[(config.max_pos, config.qk_rope_head_dim), config.dt],
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+        w_q_a: ConstTensor[(1, config.hidden_size, config.q_lora_rank), _DT],
+        gamma_q_a: ConstTensor[(config.q_lora_rank,), _DT],
+        w_q_b: ConstTensor[(1, config.q_lora_rank, _Q_UP_PROJ), _DT],
+        w_kv_a: ConstTensor[(1, config.hidden_size, _KV_A_PROJ), _DT],
+        gamma_kv_a: ConstTensor[(config.kv_lora_rank,), _DT],
+        w_kv_b: ConstTensor[(1, config.kv_lora_rank, _KV_B_PROJ), _DT],
+        cos_cache: Tensor[(config.max_position_embeddings, config.qk_rope_head_dim), _DT],
+        sin_cache: Tensor[(config.max_position_embeddings, config.qk_rope_head_dim), _DT],
         pos_ids: Tensor[(S,), "i32"],
-        k_cache: Tensor[(1, C, config.n_kv_heads, config.qk_head_dim), config.dt],
-        v_cache: Tensor[(1, C, config.n_kv_heads, config.v_head_dim), config.dt],
-        scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: ConstTensor[(1, config.attn_out, config.hidden), config.dt],
+        k_cache: Tensor[(1, C, config.num_key_value_heads, _QK_HEAD_DIM), _DT],
+        v_cache: Tensor[(1, C, config.num_key_value_heads, config.v_head_dim), _DT],
+        scale: Tensor[(1, 1, 1, 1), _DT],
+        w_o: ConstTensor[(1, _ATTN_OUT, config.hidden_size), _DT],
     ):
         # Fused input_layernorm + MLA self_attn, no residual (the layer owns the
         # residual add). Returns the attention output together with this token's
@@ -151,7 +205,10 @@ class MiniCPM3_4B:
 
         # Step 1: Q down -> norm -> up -> reshape -> split (nope | rope).
         q_down = tf.matmul(x, w_q_a)
-        q_up = tf.matmul(tf.rms_norm(q_down, gamma_q_a, eps=config.rms_eps_lora), w_q_b)
+        q_n32 = tf.cast(q_down, dtype="f32")
+        q_n_var = tf.reduce(q_n32 * q_n32, axes=(-1,), keepdim=True, kind="mean")
+        q_n = tf.cast(q_n32 * tf.rsqrt(q_n_var + _LORA_EPS), dtype=_DT) * gamma_q_a
+        q_up = tf.matmul(q_n, w_q_b)
         q = tf.reshape(q_up, new_shape=(1, S, _H, _QK))
         q_nope = q[:, :, :, :_NOPE]
         q_rope = q[:, :, :, _NOPE:_QK]
@@ -159,10 +216,13 @@ class MiniCPM3_4B:
         # Step 2: KV compress -> split (shared latent | shared rotary slice).
         compressed = tf.matmul(x, w_kv_a)
         kv_c = compressed[:, :, : config.kv_lora_rank]
-        k_rope_flat = compressed[:, :, config.kv_lora_rank : config.kv_a_proj]
+        k_rope_flat = compressed[:, :, config.kv_lora_rank : _KV_A_PROJ]
 
         # Step 3: KV up -> reshape -> split (nope | value), one pair per head.
-        kv_up = tf.matmul(tf.rms_norm(kv_c, gamma_kv_a, eps=config.rms_eps_lora), w_kv_b)
+        kv_n32 = tf.cast(kv_c, dtype="f32")
+        kv_n_var = tf.reduce(kv_n32 * kv_n32, axes=(-1,), keepdim=True, kind="mean")
+        kv_n = tf.cast(kv_n32 * tf.rsqrt(kv_n_var + _LORA_EPS), dtype=_DT) * gamma_kv_a
+        kv_up = tf.matmul(kv_n, w_kv_b)
         kv = tf.reshape(kv_up, new_shape=(1, S, _H, _KV_PAIR))
         k_nope = kv[:, :, :, :_NOPE]
         v_new = kv[:, :, :, _NOPE:_KV_PAIR]
@@ -205,19 +265,21 @@ class MiniCPM3_4B:
             + p_new * v_new
         )
         attn = weighted / total
-        out = tf.matmul(tf.reshape(attn, new_shape=(1, S, config.attn_out)), w_o)
+        out = tf.matmul(tf.reshape(attn, new_shape=(1, S, _ATTN_OUT)), w_o)
         return out, k_new, v_new
 
     @func
     def mlp(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_post: ConstTensor[(config.hidden,), config.dt],
-        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_post: ConstTensor[(config.hidden_size,), _DT],
+        w_gate: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # Fused post_attention_layernorm + dense SwiGLU, no residual.
-        hidden_norm = tf.rms_norm(hidden, gamma_post, eps=config.rms_eps)
+        hidden_norm32 = tf.cast(hidden, dtype="f32")
+        hidden_norm_var = tf.reduce(hidden_norm32 * hidden_norm32, axes=(-1,), keepdim=True, kind="mean")
+        hidden_norm = tf.cast(hidden_norm32 * tf.rsqrt(hidden_norm_var + config.rms_norm_eps), dtype=_DT) * gamma_post
         gate = tf.matmul(hidden_norm, w_gate)
         up = tf.matmul(hidden_norm, w_up)
         act = tf.silu(gate)
@@ -226,26 +288,26 @@ class MiniCPM3_4B:
 
     @func
     def decoder_layer(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-        w_q_a: ConstTensor[(1, config.hidden, config.q_lora_rank), config.dt],
-        gamma_q_a: ConstTensor[(config.q_lora_rank,), config.dt],
-        w_q_b: ConstTensor[(1, config.q_lora_rank, config.q_up_proj), config.dt],
-        w_kv_a: ConstTensor[(1, config.hidden, config.kv_a_proj), config.dt],
-        gamma_kv_a: ConstTensor[(config.kv_lora_rank,), config.dt],
-        w_kv_b: ConstTensor[(1, config.kv_lora_rank, config.kv_b_proj), config.dt],
-        cos_cache: Tensor[(config.max_pos, config.qk_rope_head_dim), config.dt],
-        sin_cache: Tensor[(config.max_pos, config.qk_rope_head_dim), config.dt],
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+        w_q_a: ConstTensor[(1, config.hidden_size, config.q_lora_rank), _DT],
+        gamma_q_a: ConstTensor[(config.q_lora_rank,), _DT],
+        w_q_b: ConstTensor[(1, config.q_lora_rank, _Q_UP_PROJ), _DT],
+        w_kv_a: ConstTensor[(1, config.hidden_size, _KV_A_PROJ), _DT],
+        gamma_kv_a: ConstTensor[(config.kv_lora_rank,), _DT],
+        w_kv_b: ConstTensor[(1, config.kv_lora_rank, _KV_B_PROJ), _DT],
+        cos_cache: Tensor[(config.max_position_embeddings, config.qk_rope_head_dim), _DT],
+        sin_cache: Tensor[(config.max_position_embeddings, config.qk_rope_head_dim), _DT],
         pos_ids: Tensor[(S,), "i32"],
-        k_cache: Tensor[(1, C, config.n_kv_heads, config.qk_head_dim), config.dt],
-        v_cache: Tensor[(1, C, config.n_kv_heads, config.v_head_dim), config.dt],
-        scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: ConstTensor[(1, config.attn_out, config.hidden), config.dt],
-        gamma_post: ConstTensor[(config.hidden,), config.dt],
-        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
-        residual_scale: Tensor[(1, 1, 1), config.dt],
+        k_cache: Tensor[(1, C, config.num_key_value_heads, _QK_HEAD_DIM), _DT],
+        v_cache: Tensor[(1, C, config.num_key_value_heads, config.v_head_dim), _DT],
+        scale: Tensor[(1, 1, 1, 1), _DT],
+        w_o: ConstTensor[(1, _ATTN_OUT, config.hidden_size), _DT],
+        gamma_post: ConstTensor[(config.hidden_size,), _DT],
+        w_gate: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
+        residual_scale: Tensor[(1, 1, 1), _DT],
     ):
         # One decode step: mla_attention + scaled residual, then mlp + scaled
         # residual -- mirrors `MiniCPM3DecoderLayer.forward` exactly, INCLUDING
@@ -260,50 +322,56 @@ class MiniCPM3_4B:
         return h1 + mlp_out * residual_scale, k_new, v_new
 
 
-@module
+# The target its tree runs on, so a standalone analyze or schedule caller that
+# selects this as its root has one. The layer above is cloned into the children
+# here and so declares none: a child inherits its owner's.
+@module(target=CudaTarget())
 class MiniCPM3_4B_Decoder:
     """The ordered layer stack, the norm that closes it, and the two scaled ends
     that bracket it."""
 
     layers = tuple(
         MiniCPM3_4B.renamed(f"layer{index}")
-        for index in range(config.n_layers)
+        for index in range(config.num_hidden_layers)
     )
 
     @func
     def embed(
-        w_embed: ConstTensor[(config.vocab, config.hidden), config.dt],
+        w_embed: ConstTensor[(config.vocab_size, config.hidden_size), _DT],
         token_ids: Tensor[(S,), "i64"],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `MiniCPM3ScaledWordEmbedding`: scaled by `scale_emb`.
         row = tf.reshape(
-            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden)
+            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden_size)
         )
         return row * EMBED_SCALE
 
     @func
     def final_rms_norm(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_final: ConstTensor[(config.hidden,), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_final: ConstTensor[(config.hidden_size,), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `MiniCPM3Model.norm`, applied once after the last layer, at
         # config.rms_norm_eps like the two norms inside a layer.
-        return tf.rms_norm(hidden, gamma_final, eps=config.rms_eps)
+        out32 = tf.cast(hidden, dtype="f32")
+        out_var = tf.reduce(out32 * out32, axes=(-1,), keepdim=True, kind="mean")
+        out = tf.cast(out32 * tf.rsqrt(out_var + config.rms_norm_eps), dtype=_DT) * gamma_final
+        return out
 
     @func
     def lm_head(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_head: ConstTensor[(config.hidden, config.vocab), config.dt],
-    ) -> Tensor[(1, config.vocab), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        w_head: ConstTensor[(config.hidden_size, config.vocab_size), _DT],
+    ) -> Tensor[(1, config.vocab_size), _DT]:
         # `MiniCPM3ForCausalLM.forward` divides the hidden state by
         # `logits_scaling` before the head, not after.
-        scaled = tf.reshape(hidden, new_shape=(1, config.hidden)) / LOGITS_SCALING
+        scaled = tf.reshape(hidden, new_shape=(1, config.hidden_size)) / LOGITS_SCALING
         return tf.matmul(scaled, w_head)
 
     @lm_head.converter("w_head")
     def _(
-        head_weight_raw: ConstTensor[(config.vocab, config.hidden), config.dt],
-    ) -> Tensor[(config.hidden, config.vocab), config.dt]:
+        head_weight_raw: ConstTensor[(config.vocab_size, config.hidden_size), _DT],
+    ) -> Tensor[(config.hidden_size, config.vocab_size), _DT]:
         # HF stores the head as (vocab, hidden); the matmul above wants it the
         # other way. MiniCPM3 ties its head, so this input is the embedding table.
         return tf.transpose(head_weight_raw, perm=(1, 0))
@@ -373,11 +441,11 @@ class MiniCPM3_4B_Decoder:
         from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
         from tilefoundry.ir.types import DType  # noqa: PLC0415
 
-        dtype = to_torch_dtype(DType.from_name(config.dt))
+        dtype = to_torch_dtype(DType.from_name(_DT))
         return tuple(
             (
-                torch.zeros((1, 0, config.n_kv_heads, _QK), device=device, dtype=dtype),
-                torch.zeros((1, 0, config.n_kv_heads, _V), device=device, dtype=dtype),
+                torch.zeros((1, 0, config.num_key_value_heads, _QK), device=device, dtype=dtype),
+                torch.zeros((1, 0, config.num_key_value_heads, _V), device=device, dtype=dtype),
             )
-            for _ in range(config.n_layers)
+            for _ in range(config.num_hidden_layers)
         )

@@ -12,9 +12,9 @@ returns the state its caller advances, and the Reference compares only the value
 step that computed the right output and the wrong cache entry would pass every
 comparison and then decode the next token from a corrupted context.
 
-Nor can it isolate the soft cap on the decoded token's own logit. That token is one
-lane of one row, so a cap applied to the context and not to it moves the output by
-very little -- little enough to pass a tolerance the rest of the layer needs.
+It also cannot isolate the attention block itself, which is what the first test
+below does: `self_attention` against `Gemma2Attention` at the decoded position,
+at the input scale the model actually decodes at.
 """
 
 from __future__ import annotations
@@ -22,64 +22,46 @@ from __future__ import annotations
 import torch
 
 from tests.models import decode_oracle as oracle
-from tests.models.gemma2_2b import config, reference
+from tests.models.decode_oracle import SEQ_LEN, agrees_as_a_component
+from tests.models.gemma2_2b import reference
 
-HIDDEN = config.REAL.hidden
-SEQ = config.SEQ_LEN
+HIDDEN = reference.CONFIG.hidden_size
 
 DEV = "cpu"
-ATOL = RTOL = 2e-4
-
 #: Two lengths, so a kernel that only works at the length it was authored
 #: against cannot pass. Neither divides the key/value head count.
 CTX_LENGTHS = (24, 40)
 
-#: How much the drawn query is scaled up to make `attn_logit_softcapping` bite on
-#: the new token's single logit rather than only on the cache's many.
-SOFTCAP_PROBE_SCALE = 100.0
 
+def test_self_attention_matches_hugging_face():
+    """`self_attention` (input_layernorm + `Gemma2Attention`: GQA, RoPE and the
+    soft-capped logits, over the cache and the new token) against Hugging Face's
+    own attention at the decoded position.
 
-def test_self_attention_soft_caps_the_new_token_too():
-    """The soft cap is on the new token's own logit as well as the cache's.
-
-    A step that capped only the cache group would pass every other test in this
-    file. The new token contributes one logit of `ctx_len + 1`, and at the drawn
-    scale leaving it uncapped moves the output by 0.014x the tolerance -- below
-    the round-off the comparison already allows. So the query is scaled until that
-    single logit is far past the cap, where the same omission moves the output by
-    9329x the tolerance instead, and the kernel is asked again.
-
-    `scale` is the last of `self_attention`'s seven activations -- its projections
-    are bound weights -- and x100 puts the raw logits at ~1900 against a cap of 50.
+    At the ordinary decode input scale, which is the scale the comparison means
+    something at: the soft cap is part of the computation being reproduced, not a
+    thing to be provoked, and driving the query far past the cap only compresses
+    the reference range until the bound is measuring the compression.
     """
     drawn = reference.decode_step_inputs(device=DEV)
 
-    loud = list(drawn.attention_args)
-    loud[-1] = loud[-1] * SOFTCAP_PROBE_SCALE
-    out, _, _ = drawn.loaded.self_attention(*loud)
+    out, _, _ = drawn.loaded.self_attention(*drawn.attention_args)
 
-    cfg = config.build_hf_config()
-    total = drawn.ctx_len + SEQ
-    cos, sin = config.rope_caches(cfg, total, device=DEV)
-    mask = oracle.causal_mask(total, DEV)
+    total = drawn.ctx_len + SEQ_LEN
+    cos, sin = reference._rope_at(total, DEV)
     sequence = torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1)
-    attention = drawn.layer.self_attn
+    # At the activations dtype: an f32 mask would promote HF attention and make
+    # this a bf16-against-f32 comparison rather than a comparison of two kernels.
+    mask = oracle.causal_mask(total, DEV, sequence.dtype)
     with torch.no_grad():
-        normed = drawn.layer.input_layernorm(sequence)
-        held = attention.scaling
-        attention.scaling = held * SOFTCAP_PROBE_SCALE
-        try:
-            ref, _ = attention(
-                normed,
-                position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
-                attention_mask=mask,
-            )
-        finally:
-            attention.scaling = held
+        ref, _ = drawn.layer.self_attn(
+            drawn.layer.input_layernorm(sequence),
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
+            attention_mask=mask,
+        )
 
-    torch.testing.assert_close(
-        out.float(), ref[:, -SEQ:, :].float(), atol=ATOL, rtol=RTOL
-    )
+    agrees_as_a_component(out, ref[:, -SEQ_LEN:, :])
+
 
 
 def test_decoder_layer_returns_the_cache_entry_to_append():
@@ -98,5 +80,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
     grown_v = torch.cat([drawn.v_cache, v_new], dim=1)
 
     assert tuple(grown_k.shape) == tuple(want_k.shape)
-    torch.testing.assert_close(grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL)
-    torch.testing.assert_close(grown_v.float(), want_v.float(), atol=ATOL, rtol=RTOL)
+    # The cache handed in is the oracle's own, so the entry appended to it is the
+    # only computed part and the one whose precision the bound follows.
+    agrees_as_a_component(grown_k, want_k)
+    agrees_as_a_component(grown_v, want_v)

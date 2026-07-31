@@ -11,9 +11,9 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from tests.models.deepseek_v4_flash.config import TINY
 from tests.models.deepseek_v4_flash.hf_alias import hf_alias
 from tests.models.deepseek_v4_flash.model import build_deepseek_v4_flash
+from tests.models.deepseek_v4_flash.reference import small
 from tests.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
 from tests.models.generation import generate
 from tilefoundry.evaluator.value import to_torch_dtype
@@ -135,7 +135,7 @@ def _dequant_blocks(weight, scale):
 
 @pytest.fixture(scope="module")
 def config():
-    return TINY
+    return small()
 
 
 @pytest.fixture(scope="module")

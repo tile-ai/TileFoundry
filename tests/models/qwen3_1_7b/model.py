@@ -39,74 +39,99 @@ HF pre-norm-then-block composition. ``decoder_layer`` composes
 ``self_attention`` + residual + ``mlp`` + residual, mirroring
 ``Qwen3DecoderLayer.forward`` exactly.
 
-Qwen3's per-head ``q_norm`` / ``k_norm`` (RMSNorm over just the ``head_dim``
-axis, applied to every head independently) needs no special HIR combinator:
-``tf.rms_norm`` normalizes only the last axis and is rank-agnostic on every
-axis before it (see ``tilefoundry/ir/hir/nn/rms_norm.py``), so calling it
-directly on the ``[1, 1, heads, head_dim]`` tensor -- the same reshape the head
-split already produces -- reproduces HF's ``q_norm(q_proj(x).view(hidden_shape))``
-with no extra reshape either side of the norm (the Qwen3 HF docstring notes
-exactly this: "unlike olmo, only on the head dim... thus post q_norm does not
-need reshape").
+Every RMSNorm here is written out rather than calling ``tf.rms_norm``:
+``Qwen3RMSNorm`` rounds the normalised activation to the input dtype *before* the
+learned scale multiplies it, where the generic op matches ``torch.nn.RMSNorm``
+and stays in f32 through that multiply.
+
+``q_norm`` / ``k_norm`` are the same normalisation over the ``head_dim`` axis
+alone, applied per head, so they run directly on the ``[1, 1, heads, head_dim]``
+tensor the head split already produces.
 """
 from __future__ import annotations
 
-from tests.models.qwen3_1_7b.config import REAL as config
+import json
+from pathlib import Path
+
+from transformers import Qwen3Config
+
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.target import CudaTarget
+
+
+def published(path: Path | None = None) -> Qwen3Config:
+    """The checkpoint's own configuration, read by the class Hugging Face uses."""
+    path = Path(__file__).parent / "config.json" if path is None else path
+    return Qwen3Config(**json.loads(path.read_text(encoding="utf-8")))
+
+
+config = published()
+
+#: The longest prior cache these kernels are authored for. Not a published field:
+#: `max_position_embeddings` is where the checkpoint stops, and a position beyond
+#: the rotary cache has no embedding to gather, so the envelope is that limit.
+MAX_CTX = config.max_position_embeddings
+
+# The published dtype as the DSL spells it. The checkpoint stores its weights at
+# this precision, so it is what a kernel reading them consumes.
+_DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
+    str(config.dtype).removeprefix("torch.")
+]
+_Q_PROJ = config.num_attention_heads * config.head_dim
+_KV_PROJ = config.num_key_value_heads * config.head_dim
+_GQA = config.num_attention_heads // config.num_key_value_heads
+
+#: The variance floor every one of this model's norms adds, read from the
+#: checkpoint rather than written down: the norms below are spelled out, so the
+#: epsilon `tf.rms_norm` would have carried as an attribute is carried here.
+_EPS = config.rms_norm_eps
 
 # The prior cache this step reads: the only range this model carries. Zero is a
 # first step, and the exclusive upper bound is max_ctx because a position beyond
 # the rotary cache has no embedding to gather.
-C = DimVar("ctx_len", 0, config.max_ctx)
+C = DimVar("ctx_len", 0, MAX_CTX)
 
 # One token per step.
 S = 1
 
-# ── tiled_mlp block shape ───────────────────────────────────────────────
-# The AMX f32 register files (Apple M2 Pro, target/hardware/*.toml): Z holds
-# 4096 B = 32x32 f32, X and Y 512 B each. NT x KT are sized against those; the
-# token axis is not blocked at all, because a decode step has one token to
-# block. MT = 1 makes each block matmul the [1, KT] @ [KT, NT] row-times-panel
-# the step actually performs.
-MT, NT, KT = 1, 32, 64
-MB = S // MT                            # token blocks
-NB_INT = config.intermediate // NT      # gate/up column blocks
-NB_HID = config.hidden // NT            # down-projection column blocks
-NK_HID = config.hidden // KT            # gate/up K steps
-NK_INT = config.intermediate // KT      # down-projection K steps
-
-_G = config.gqa_group
+_G = _GQA
 
 
 @module(entry="decoder_layer")
 class Qwen3_1_7B:
     @func
     def input_rms_norm(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
-        # Pre-attention input RMSNorm; HF `Qwen3DecoderLayer.input_layernorm`.
-        return tf.rms_norm(hidden, gamma_in)
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
+        # HF `Qwen3DecoderLayer.input_layernorm`. Written out because
+        # `Qwen3RMSNorm` ends `self.weight * hidden_states.to(input_dtype)`: it
+        # rounds to the input dtype before the scale multiplies, where
+        # `tf.rms_norm` keeps f32 through that multiply.
+        x32 = tf.cast(hidden, dtype="f32")
+        variance = tf.reduce(x32 * x32, axes=(-1,), keepdim=True, kind="mean")
+        normed = tf.cast(x32 * tf.rsqrt(variance + _EPS), dtype=_DT)
+        return normed * gamma_in
 
     @func
     def self_attention(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-        w_q: ConstTensor[(1, config.hidden, config.q_proj), config.dt],
-        w_k: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        w_v: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        gamma_q: ConstTensor[(config.head_dim,), config.dt],
-        gamma_k: ConstTensor[(config.head_dim,), config.dt],
-        cos_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
-        sin_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+        w_q: ConstTensor[(1, config.hidden_size, _Q_PROJ), _DT],
+        w_k: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        w_v: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        gamma_q: ConstTensor[(config.head_dim,), _DT],
+        gamma_k: ConstTensor[(config.head_dim,), _DT],
+        cos_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
+        sin_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
         pos_ids: Tensor[(S,), "i32"],
-        k_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        v_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: ConstTensor[(1, config.q_proj, config.hidden), config.dt],
+        k_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        v_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        scale: Tensor[(1, 1, 1, 1), _DT],
+        w_o: ConstTensor[(1, _Q_PROJ, config.hidden_size), _DT],
     ):
         # Fused input_layernorm + self_attn, no residual (the layer owns the
         # residual add). Returns the attention output together with this token's
@@ -114,37 +139,41 @@ class Qwen3_1_7B:
         hidden_norm = input_rms_norm(hidden, gamma_in)
         q = tf.reshape(
             tf.matmul(hidden_norm, w_q),
-            new_shape=(1, S, config.n_q_heads, config.head_dim),
+            new_shape=(1, S, config.num_attention_heads, config.head_dim),
         )
         k = tf.reshape(
             tf.matmul(hidden_norm, w_k),
-            new_shape=(1, S, config.n_kv_heads, config.head_dim),
+            new_shape=(1, S, config.num_key_value_heads, config.head_dim),
         )
         v = tf.reshape(
             tf.matmul(hidden_norm, w_v),
-            new_shape=(1, S, config.n_kv_heads, config.head_dim),
+            new_shape=(1, S, config.num_key_value_heads, config.head_dim),
         )
-        q_n = tf.rms_norm(q, gamma_q)
+        q_n32 = tf.cast(q, dtype="f32")
+        q_n_var = tf.reduce(q_n32 * q_n32, axes=(-1,), keepdim=True, kind="mean")
+        q_n = tf.cast(q_n32 * tf.rsqrt(q_n_var + _EPS), dtype=_DT) * gamma_q
         q_rope, _ = tf.rope(q_n, q_n, cos_cache, sin_cache, pos_ids)
-        k_n = tf.rms_norm(k, gamma_k)
+        k_n32 = tf.cast(k, dtype="f32")
+        k_n_var = tf.reduce(k_n32 * k_n32, axes=(-1,), keepdim=True, kind="mean")
+        k_n = tf.cast(k_n32 * tf.rsqrt(k_n_var + _EPS), dtype=_DT) * gamma_k
         _, k_rope = tf.rope(k_n, k_n, cos_cache, sin_cache, pos_ids)
 
         # Every query head sees its group's key/value head, for the cache and
         # for the new token alike.
-        q_s = tf.reshape(q_rope, new_shape=(1, S, config.n_q_heads, config.head_dim)) * scale
+        q_s = tf.reshape(q_rope, new_shape=(1, S, config.num_attention_heads, config.head_dim)) * scale
         k_ctx = tf.reshape(
             tf.transpose(tf.repeat_interleave(k_cache, repeats=_G, axis=2), perm=(0, 2, 1, 3)),
-            new_shape=(1, 1, config.n_q_heads, C, config.head_dim),
+            new_shape=(1, 1, config.num_attention_heads, C, config.head_dim),
         )
         v_ctx = tf.reshape(
             tf.transpose(tf.repeat_interleave(v_cache, repeats=_G, axis=2), perm=(0, 2, 1, 3)),
-            new_shape=(1, 1, config.n_q_heads, C, config.head_dim),
+            new_shape=(1, 1, config.num_attention_heads, C, config.head_dim),
         )
         k_new = tf.repeat_interleave(k_rope, repeats=_G, axis=2)
         v_new = tf.repeat_interleave(v, repeats=_G, axis=2)
 
         # Two score groups: one over the cache, one over the token itself.
-        q_e = tf.reshape(q_s, new_shape=(1, S, config.n_q_heads, 1, config.head_dim))
+        q_e = tf.reshape(q_s, new_shape=(1, S, config.num_attention_heads, 1, config.head_dim))
         score_ctx = tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum")
         score_new = tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum")
 
@@ -152,7 +181,7 @@ class Qwen3_1_7B:
         peak = tf.max(
             tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
         )
-        peak_e = tf.reshape(peak, new_shape=(1, S, config.n_q_heads, 1, 1))
+        peak_e = tf.reshape(peak, new_shape=(1, S, config.num_attention_heads, 1, 1))
         p_ctx = tf.exp(score_ctx - peak_e)
         p_new = tf.exp(score_new - peak)
         total = tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new
@@ -162,20 +191,22 @@ class Qwen3_1_7B:
         )
         attn = weighted / total
         out = tf.matmul(
-            tf.reshape(attn, new_shape=(1, S, config.q_proj)), w_o
+            tf.reshape(attn, new_shape=(1, S, _Q_PROJ)), w_o
         )
         return out, k_rope, v
 
     @func
     def mlp(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_post: ConstTensor[(config.hidden,), config.dt],
-        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_post: ConstTensor[(config.hidden_size,), _DT],
+        w_gate: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # Fused post_attention_layernorm + dense SwiGLU, no residual.
-        hidden_norm = tf.rms_norm(hidden, gamma_post)
+        hidden_norm32 = tf.cast(hidden, dtype="f32")
+        hidden_norm_var = tf.reduce(hidden_norm32 * hidden_norm32, axes=(-1,), keepdim=True, kind="mean")
+        hidden_norm = tf.cast(hidden_norm32 * tf.rsqrt(hidden_norm_var + _EPS), dtype=_DT) * gamma_post
         gate = tf.matmul(hidden_norm, w_gate)
         up = tf.matmul(hidden_norm, w_up)
         act = tf.silu(gate)
@@ -183,92 +214,25 @@ class Qwen3_1_7B:
         return tf.matmul(h, w_down)
 
     @func
-    def tiled_mlp(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_post: ConstTensor[(config.hidden,), config.dt],
-        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
-        # Same value as `mlp`, written as the loop nest AMX wants: every matmul
-        # is [MT, KT] @ [KT, NT] over a (token-block, column-block) batch pair,
-        # and the K walk is an authored `for ... in tile(...)` whose carried arg
-        # IS the accumulator buffer — `zeros` declares it, the loop carry holds
-        # it, and nothing allocates. The reshape/transpose pairs only re-index:
-        # [1, S, K] -> [NK, MB, 1, MT, KT] blocks the M/K axes, [1, K, N] ->
-        # [NK, 1, NB, KT, NT] the K/N axes, and `gather(_, k, axis=0)` picks
-        # iteration k's K slice of both.
-        hidden_norm = tf.rms_norm(hidden, gamma_post)
-        x_blk = tf.reshape(
-            tf.transpose(
-                tf.reshape(hidden_norm, new_shape=(MB, MT, NK_HID, KT)), perm=(2, 0, 1, 3)
-            ),
-            new_shape=(NK_HID, MB, 1, MT, KT),
-        )
-        wg_blk = tf.reshape(
-            tf.transpose(
-                tf.reshape(w_gate, new_shape=(NK_HID, KT, NB_INT, NT)), perm=(0, 2, 1, 3)
-            ),
-            new_shape=(NK_HID, 1, NB_INT, KT, NT),
-        )
-        wu_blk = tf.reshape(
-            tf.transpose(
-                tf.reshape(w_up, new_shape=(NK_HID, KT, NB_INT, NT)), perm=(0, 2, 1, 3)
-            ),
-            new_shape=(NK_HID, 1, NB_INT, KT, NT),
-        )
-        gate_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype=config.dt)
-        up_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype=config.dt)
-        for kh in tile(NK_HID):
-            x_k = tf.gather(x_blk, kh, axis=0)
-            gate_z = gate_z + tf.matmul(x_k, tf.gather(wg_blk, kh, axis=0))
-            up_z = up_z + tf.matmul(x_k, tf.gather(wu_blk, kh, axis=0))
-        gate = tf.reshape(
-            tf.transpose(gate_z, perm=(0, 2, 1, 3)), new_shape=(1, S, config.intermediate)
-        )
-        up = tf.reshape(
-            tf.transpose(up_z, perm=(0, 2, 1, 3)), new_shape=(1, S, config.intermediate)
-        )
-        h = tf.silu(gate) * up
-        h_blk = tf.reshape(
-            tf.transpose(tf.reshape(h, new_shape=(MB, MT, NK_INT, KT)), perm=(2, 0, 1, 3)),
-            new_shape=(NK_INT, MB, 1, MT, KT),
-        )
-        wd_blk = tf.reshape(
-            tf.transpose(
-                tf.reshape(w_down, new_shape=(NK_INT, KT, NB_HID, NT)), perm=(0, 2, 1, 3)
-            ),
-            new_shape=(NK_INT, 1, NB_HID, KT, NT),
-        )
-        out_z = tf.zeros(shape=(MB, NB_HID, MT, NT), dtype=config.dt)
-        for ki in tile(NK_INT):
-            out_z = out_z + tf.matmul(
-                tf.gather(h_blk, ki, axis=0), tf.gather(wd_blk, ki, axis=0)
-            )
-        return tf.reshape(
-            tf.transpose(out_z, perm=(0, 2, 1, 3)), new_shape=(1, S, config.hidden)
-        )
-
-    @func
     def decoder_layer(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-        w_q: ConstTensor[(1, config.hidden, config.q_proj), config.dt],
-        w_k: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        w_v: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        gamma_q: ConstTensor[(config.head_dim,), config.dt],
-        gamma_k: ConstTensor[(config.head_dim,), config.dt],
-        cos_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
-        sin_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+        w_q: ConstTensor[(1, config.hidden_size, _Q_PROJ), _DT],
+        w_k: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        w_v: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        gamma_q: ConstTensor[(config.head_dim,), _DT],
+        gamma_k: ConstTensor[(config.head_dim,), _DT],
+        cos_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
+        sin_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
         pos_ids: Tensor[(S,), "i32"],
-        k_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        v_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: ConstTensor[(1, config.q_proj, config.hidden), config.dt],
-        gamma_post: ConstTensor[(config.hidden,), config.dt],
-        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
+        k_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        v_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        scale: Tensor[(1, 1, 1, 1), _DT],
+        w_o: ConstTensor[(1, _Q_PROJ, config.hidden_size), _DT],
+        gamma_post: ConstTensor[(config.hidden_size,), _DT],
+        w_gate: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
     ):
         # One decode step: self_attention + residual, then mlp + residual --
         # mirrors `Qwen3DecoderLayer.forward` exactly -- plus this token's key
@@ -287,106 +251,112 @@ class Qwen3_1_7B:
 
     @decoder_layer.converter("w_q")
     def _w_q(
-        q_proj_weight: ConstTensor[(config.q_proj, config.hidden), config.dt],
-    ) -> Tensor[(1, config.hidden, config.q_proj), config.dt]:
+        q_proj_weight: ConstTensor[(_Q_PROJ, config.hidden_size), _DT],
+    ) -> Tensor[(1, config.hidden_size, _Q_PROJ), _DT]:
         return tf.reshape(
             tf.transpose(q_proj_weight, perm=(1, 0)),
-            new_shape=(1, config.hidden, config.q_proj),
+            new_shape=(1, config.hidden_size, _Q_PROJ),
         )
 
     @decoder_layer.converter("w_k")
     def _w_k(
-        k_proj_weight: ConstTensor[(config.kv_proj, config.hidden), config.dt],
-    ) -> Tensor[(1, config.hidden, config.kv_proj), config.dt]:
+        k_proj_weight: ConstTensor[(_KV_PROJ, config.hidden_size), _DT],
+    ) -> Tensor[(1, config.hidden_size, _KV_PROJ), _DT]:
         return tf.reshape(
             tf.transpose(k_proj_weight, perm=(1, 0)),
-            new_shape=(1, config.hidden, config.kv_proj),
+            new_shape=(1, config.hidden_size, _KV_PROJ),
         )
 
     @decoder_layer.converter("w_v")
     def _w_v(
-        v_proj_weight: ConstTensor[(config.kv_proj, config.hidden), config.dt],
-    ) -> Tensor[(1, config.hidden, config.kv_proj), config.dt]:
+        v_proj_weight: ConstTensor[(_KV_PROJ, config.hidden_size), _DT],
+    ) -> Tensor[(1, config.hidden_size, _KV_PROJ), _DT]:
         return tf.reshape(
             tf.transpose(v_proj_weight, perm=(1, 0)),
-            new_shape=(1, config.hidden, config.kv_proj),
+            new_shape=(1, config.hidden_size, _KV_PROJ),
         )
 
     @decoder_layer.converter("w_o")
     def _w_o(
-        o_proj_weight: ConstTensor[(config.hidden, config.q_proj), config.dt],
-    ) -> Tensor[(1, config.q_proj, config.hidden), config.dt]:
+        o_proj_weight: ConstTensor[(config.hidden_size, _Q_PROJ), _DT],
+    ) -> Tensor[(1, _Q_PROJ, config.hidden_size), _DT]:
         return tf.reshape(
             tf.transpose(o_proj_weight, perm=(1, 0)),
-            new_shape=(1, config.q_proj, config.hidden),
+            new_shape=(1, _Q_PROJ, config.hidden_size),
         )
 
     @decoder_layer.converter("w_gate")
     def _w_gate(
-        gate_proj_weight: ConstTensor[(config.intermediate, config.hidden), config.dt],
-    ) -> Tensor[(1, config.hidden, config.intermediate), config.dt]:
+        gate_proj_weight: ConstTensor[(config.intermediate_size, config.hidden_size), _DT],
+    ) -> Tensor[(1, config.hidden_size, config.intermediate_size), _DT]:
         return tf.reshape(
             tf.transpose(gate_proj_weight, perm=(1, 0)),
-            new_shape=(1, config.hidden, config.intermediate),
+            new_shape=(1, config.hidden_size, config.intermediate_size),
         )
 
     @decoder_layer.converter("w_up")
     def _w_up(
-        up_proj_weight: ConstTensor[(config.intermediate, config.hidden), config.dt],
-    ) -> Tensor[(1, config.hidden, config.intermediate), config.dt]:
+        up_proj_weight: ConstTensor[(config.intermediate_size, config.hidden_size), _DT],
+    ) -> Tensor[(1, config.hidden_size, config.intermediate_size), _DT]:
         return tf.reshape(
             tf.transpose(up_proj_weight, perm=(1, 0)),
-            new_shape=(1, config.hidden, config.intermediate),
+            new_shape=(1, config.hidden_size, config.intermediate_size),
         )
 
     @decoder_layer.converter("w_down")
     def _w_down(
-        down_proj_weight: ConstTensor[(config.hidden, config.intermediate), config.dt],
-    ) -> Tensor[(1, config.intermediate, config.hidden), config.dt]:
+        down_proj_weight: ConstTensor[(config.hidden_size, config.intermediate_size), _DT],
+    ) -> Tensor[(1, config.intermediate_size, config.hidden_size), _DT]:
         return tf.reshape(
             tf.transpose(down_proj_weight, perm=(1, 0)),
-            new_shape=(1, config.intermediate, config.hidden),
+            new_shape=(1, config.intermediate_size, config.hidden_size),
         )
 
 
-@module
+# The target its tree runs on, so a standalone analyze or schedule caller that
+# selects this as its root has one. The layer above is cloned into the children
+# here and so declares none: a child inherits its owner's.
+@module(target=CudaTarget())
 class Qwen3_1_7B_Decoder:
     """The ordered layer stack plus the norm that closes it."""
 
     layers = tuple(
         Qwen3_1_7B.renamed(f"layer{index}")
-        for index in range(config.n_layers)
+        for index in range(config.num_hidden_layers)
     )
 
     @func
     def embed(
-        w_embed: ConstTensor[(config.vocab, config.hidden), config.dt],
+        w_embed: ConstTensor[(config.vocab_size, config.hidden_size), _DT],
         token_ids: Tensor[(S,), "i64"],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `Qwen3Model.embed_tokens`.
         return tf.reshape(
-            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden)
+            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden_size)
         )
 
     @func
     def final_rms_norm(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_final: ConstTensor[(config.hidden,), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_final: ConstTensor[(config.hidden_size,), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `Qwen3Model.norm`, applied once after the last layer.
-        return tf.rms_norm(hidden, gamma_final)
+        out32 = tf.cast(hidden, dtype="f32")
+        out_var = tf.reduce(out32 * out32, axes=(-1,), keepdim=True, kind="mean")
+        out = tf.cast(out32 * tf.rsqrt(out_var + _EPS), dtype=_DT) * gamma_final
+        return out
 
     @func
     def lm_head(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_head: ConstTensor[(config.hidden, config.vocab), config.dt],
-    ) -> Tensor[(1, config.vocab), config.dt]:
-        return tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden)), w_head)
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        w_head: ConstTensor[(config.hidden_size, config.vocab_size), _DT],
+    ) -> Tensor[(1, config.vocab_size), _DT]:
+        return tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden_size)), w_head)
 
     @lm_head.converter("w_head")
     def _(
-        head_weight_raw: ConstTensor[(config.vocab, config.hidden), config.dt],
-    ) -> Tensor[(config.hidden, config.vocab), config.dt]:
+        head_weight_raw: ConstTensor[(config.vocab_size, config.hidden_size), _DT],
+    ) -> Tensor[(config.hidden_size, config.vocab_size), _DT]:
         # HF stores the head as (vocab, hidden); the matmul above wants it the
         # other way. Tied models alias this input to the embedding table.
         return tf.transpose(head_weight_raw, perm=(1, 0))
@@ -449,12 +419,12 @@ class Qwen3_1_7B_Decoder:
         from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
         from tilefoundry.ir.types import DType  # noqa: PLC0415
 
-        empty = (1, 0, config.n_kv_heads, config.head_dim)
-        dtype = to_torch_dtype(DType.from_name(config.dt))
+        empty = (1, 0, config.num_key_value_heads, config.head_dim)
+        dtype = to_torch_dtype(DType.from_name(_DT))
         return tuple(
             (
                 torch.zeros(empty, device=device, dtype=dtype),
                 torch.zeros(empty, device=device, dtype=dtype),
             )
-            for _ in range(config.n_layers)
+            for _ in range(config.num_hidden_layers)
         )

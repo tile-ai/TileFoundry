@@ -48,16 +48,11 @@ scale; only the *scale* tensors need a converter (cast, F32 on disk ->
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from pathlib import Path
 
-from tests.models.deepseek_v4_flash.config import (
-    FP8E4M3_MAX,
-    FP8E4M3_QUANT_EPS,
-    HF_CONFIG,
-    KV_QUANT_BLOCK,
-    REAL,
-    DSV4Config,
-)
+from transformers import AutoConfig
+
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, ReduceKind, Tensor, tf
 from tilefoundry.ir.types.dim import DimVar
@@ -103,6 +98,131 @@ def _rope_cos_sin(position: int, *, device):
 SEED_CTX_LEN = 1
 SEED_CTX_SEED = 20260728
 
+
+
+# ── the checkpoint's own configuration, and the shapes it implies ────────────
+
+
+def published(path: Path | None = None, **overrides):
+    """The checkpoint's own configuration, read by the class Hugging Face uses."""
+    directory = Path(__file__).parent if path is None else path
+    return AutoConfig.from_pretrained(directory, **overrides)
+
+
+#: Fake-quantisation constants for the KV cache, sourced from the modelling code
+#: rather than from `config.json`: the fp8 block and the e4m3 grid it lands on.
+KV_QUANT_BLOCK = 64
+FP8E4M3_MAX = 448.0
+FP8E4M3_QUANT_EPS = 1e-4  # amax floor, guards log2(0) on an all-zero block
+
+
+@dataclass(frozen=True)
+class DSV4Config:
+    """One decoder layer's shape, plus the model-wide embedding/head shape."""
+
+    dim: int
+    n_heads: int
+    n_kv_heads: int
+    head_dim: int
+    rope_dim: int
+    q_lora_rank: int
+    o_groups: int
+    o_lora_rank: int
+    window: int
+    vocab: int
+    moe_inter: int
+    n_routed: int
+    n_act: int
+    route_scale: float
+    swiglu_limit: float
+    n_layers: int
+    n_hash_layers: int
+    rms_eps: float
+    quant_block: int
+    compress_ratios: tuple[int, ...]
+
+    @classmethod
+    def from_hf_config(cls, cfg) -> "DSV4Config":
+        block = cfg.quantization_config["weight_block_size"]
+        if block[0] != block[1]:
+            raise ValueError(f"non-square weight_block_size {block} is not supported")
+        return cls(
+            dim=cfg.hidden_size,
+            n_heads=cfg.num_attention_heads,
+            n_kv_heads=cfg.num_key_value_heads,
+            head_dim=cfg.head_dim,
+            rope_dim=cfg.qk_rope_head_dim,
+            q_lora_rank=cfg.q_lora_rank,
+            o_groups=cfg.o_groups,
+            o_lora_rank=cfg.o_lora_rank,
+            window=cfg.sliding_window,
+            vocab=cfg.vocab_size,
+            moe_inter=cfg.moe_intermediate_size,
+            n_routed=cfg.n_routed_experts,
+            n_act=cfg.num_experts_per_tok,
+            route_scale=cfg.routed_scaling_factor,
+            swiglu_limit=cfg.swiglu_limit,
+            n_layers=cfg.num_hidden_layers,
+            n_hash_layers=cfg.mlp_layer_types.count("hash_moe"),
+            rms_eps=cfg.rms_norm_eps,
+            quant_block=block[0],
+            compress_ratios=tuple(cfg.compress_rates.get(t, 0) for t in cfg.layer_types),
+        )
+
+    # ── derived shapes ───────────────────────────────────────────────────────
+
+    @property
+    def rope_half(self) -> int:
+        return self.rope_dim // 2
+
+    @property
+    def nope_dim(self) -> int:
+        """Head dims left unrotated, and the only part the KV cache quantizes."""
+        return self.head_dim - self.rope_dim
+
+    @property
+    def kv_quant_blocks(self) -> int:
+        return self.nope_dim // KV_QUANT_BLOCK
+
+    @property
+    def max_ctx(self) -> int:
+        """The longest context a decode step can be asked about.
+
+        The window, not the position embedding: a query in a sliding layer
+        attends ``window`` positions counting its own, so the context before it
+        is one shorter. A longer cache is a context this layer type does not
+        attend rather than one it attends slowly.
+        """
+        return self.window - 1
+
+    @property
+    def q_proj(self) -> int:
+        return self.n_heads * self.head_dim
+
+    @property
+    def wo_a_in(self) -> int:
+        return self.q_proj // self.o_groups
+
+    @property
+    def wo_a_out(self) -> int:
+        return self.o_groups * self.o_lora_rank
+
+    def blocks(self, extent: int) -> int:
+        """Block-scale count along an axis of *extent* (weight_block_size)."""
+        if extent % self.quant_block:
+            raise ValueError(
+                f"extent {extent} is not a multiple of quant_block {self.quant_block}"
+            )
+        return extent // self.quant_block
+
+
+#: Every dimension below is derived from the published file, and every function
+#: that builds IR derives its own from the config it is handed. Nothing is read
+#: off this module-level value inside a builder: a shape computed here and used
+#: there would be the published shape wearing a caller's config, which is
+#: exactly how a small-config tree ends up holding a published-config kernel.
+HF_CONFIG = published()
+REAL = DSV4Config.from_hf_config(HF_CONFIG)
 
 def _submodules(config: DSV4Config):
     """This model's leaves at *config*: the attention submodule and the two MoE
@@ -1093,7 +1213,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
 
     Public because this model is asked about more than one shape, and a
     ``@module`` class body at file scope is evaluated once. Callers name the
-    shape they mean -- ``REAL`` or ``TINY`` from ``config.py`` -- and get a tree
+    shape they mean -- ``REAL`` here, or the small shape a test builds -- and get a tree
     that shares no IR node with any other call's.
     """
     attention_module, moe_module, _ = _submodules(config)

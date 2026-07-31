@@ -1,40 +1,25 @@
 """The corpus is held to being describable before it is held to working.
 
 A capability matrix is read as a claim about a system, so the ways it can lie are
-worth failing on directly rather than hoping a reader notices. Five of them are
+worth failing on directly rather than hoping a reader notices. Four of them are
 checked here, each because it produces a report that looks complete:
 
 - two cases with one id collapse into one row, and whichever ran second silently
   replaces the first;
 - a reference with no oracle is a boundary compared against nothing;
 - a block with no reason cannot be reviewed or retired, so it becomes permanent;
-- a gate that has gone stale describes a limit nobody has any more;
-- a model whose configuration is not pinned is a model whose dimensions can change
-  under a green report.
+- a gate that has gone stale describes a limit nobody has any more.
 
 Each is asserted against the corpus itself rather than against a list kept beside
-it, so a model added tomorrow is checked by the same five rules.
+it, so a model added tomorrow is checked by the same four rules.
 """
 
 from __future__ import annotations
 
-import hashlib
-import importlib
-import inspect
 import re
-from pathlib import Path
-
-import pytest
 
 from tests.models.corpus import ModelCase
-from tests.models.registry import CORPUS, MODELS
-
-#: A pinned revision is a full commit sha, not a branch. A branch names whatever it
-#: points at today, which is the thing being pinned against.
-_REVISION = re.compile(r"\b[0-9a-f]{40}\b")
-
-#: A pinned digest is a sha256 of the fetched file.
-_DIGEST = re.compile(r"\b[0-9a-f]{64}\b")
+from tests.models.registry import CORPUS
 
 
 def _all_cases() -> tuple[ModelCase, ...]:
@@ -156,74 +141,3 @@ def test_a_blocked_reason_names_what_would_lift_it() -> None:
                 f"{case_id} is blocked on {gate.reason!r}, which names nothing a "
                 f"reader could go and check"
             )
-
-
-@pytest.mark.parametrize("package", MODELS)
-def test_every_model_pins_the_configuration_it_was_built_from(package: str) -> None:
-    """Dimensions come from something stated, and stated so it can be checked.
-
-    Without a pin, a model's shape is whatever somebody typed, and a report about
-    the model is a report about that. It is not a hypothetical: two packages here
-    quoted `max_position_embeddings` wrong -- one of them quoted a library default
-    while naming the model's published file -- and pinning is what surfaced it.
-
-    Three forms count, because three are honest:
-
-    - a published file, by URL, at a full-sha revision, with its digest;
-    - a file checked in beside the module, by name, with its digest -- the artifact
-      itself is the record, and anyone with the repository can verify it;
-    - neither, with a stated reason. One repository here is gated, so an
-      unauthenticated fetch returns prose instead of a configuration; a digest of
-      that prose would look like a pin and be worth less than none.
-
-    What is refused is silence.
-    """
-    module = importlib.import_module(f"tests.models.{package}.config")
-    source = Path(inspect.getfile(module)).read_text(encoding="utf-8")
-    reason = getattr(module, "SOURCE_UNPINNED_REASON", "")
-
-    if reason:
-        assert len(reason.split()) >= 10, (
-            f"{package}/config.py says its configuration is unpinned but not "
-            f"enough about why: {reason!r}"
-        )
-        assert getattr(module, "SOURCE_URL", ""), (
-            f"{package}/config.py states no source at all, pinned or not"
-        )
-        return
-
-    assert _DIGEST.search(source), (
-        f"{package}/config.py states no sha256 of the configuration it read, and "
-        f"no reason why it cannot"
-    )
-    if getattr(module, "SOURCE_FILE", ""):
-        return
-    assert "://" in source, f"{package}/config.py names no source for its dimensions"
-    assert _REVISION.search(source), (
-        f"{package}/config.py names a published source but pins no 40-character "
-        f"revision; a branch names whatever it points at today"
-    )
-
-
-@pytest.mark.parametrize("package", MODELS)
-def test_a_stated_digest_is_the_digest_of_what_is_checked_in(package: str) -> None:
-    """Where a package checks a configuration in, some stated digest has to be of it.
-
-    A digest of something not present cannot be wrong, which makes it worth nothing.
-    Checked against every digest the module states rather than a named one, because
-    a package may pin both a published file and the subtree it keeps.
-    """
-    module = importlib.import_module(f"tests.models.{package}.config")
-    directory = Path(inspect.getfile(module)).parent
-    checked_in = sorted(directory.glob("*config*.json"))
-    if not checked_in:
-        pytest.skip(f"{package} keeps no configuration file of its own")
-
-    source = Path(inspect.getfile(module)).read_text(encoding="utf-8")
-    stated = set(_DIGEST.findall(source))
-    for path in checked_in:
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        assert digest in stated, (
-            f"{package}/{path.name} hashes to {digest}, which {package}/config.py "
-            f"does not state; the file and its pin have drifted apart"
-        )

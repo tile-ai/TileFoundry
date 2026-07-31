@@ -17,14 +17,12 @@ from __future__ import annotations
 
 import torch
 
-from tests.models.minicpm3_4b import config, reference
+from tests.models.decode_oracle import agrees_to_one_rounding
+from tests.models.minicpm3_4b import reference
 
-HIDDEN = config.REAL.hidden
-SEQ = config.SEQ_LEN
+HIDDEN = reference.CONFIG.hidden_size
 
 DEV = "cpu"
-ATOL = RTOL = 2e-4
-
 #: Two lengths, so a kernel that only works at the length it was authored
 #: against cannot pass. Neither is a multiple of the head count.
 CTX_LENGTHS = (24, 40)
@@ -37,12 +35,12 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
 
     For MLA that is the claim the whole cache design rests on -- the entry is the
     assembled per-head key and the up-projected value, which is what Hugging
-    Face's own cache holds (see ``config.py``). Checked against a rebuilt cache
+    Face's own cache holds (see ``reference.py``). Checked against a rebuilt cache
     rather than against the step's own inputs, so a step that returned its inputs
     unchanged would fail.
     """
     drawn = reference.decode_step_inputs(device=DEV)
-    _, k_new, v_new = drawn.loaded.decoder_layer(*drawn.args)
+    _out, k_new, v_new = drawn.loaded.decoder_layer(*drawn.args)
 
     want_k, want_v = reference.appended_cache_oracle(drawn)
     grown_k = torch.cat([drawn.k_cache, k_new], dim=1)
@@ -50,5 +48,7 @@ def test_decoder_layer_returns_the_cache_entry_to_append():
 
     assert tuple(grown_k.shape) == tuple(want_k.shape)
     assert tuple(grown_v.shape) == tuple(want_v.shape)
-    torch.testing.assert_close(grown_k.float(), want_k.float(), atol=ATOL, rtol=RTOL)
-    torch.testing.assert_close(grown_v.float(), want_v.float(), atol=ATOL, rtol=RTOL)
+    # The cache handed in is the oracle's own, so the entry appended to it is the
+    # only computed part and the one whose precision the bound follows.
+    agrees_to_one_rounding(grown_k, want_k)
+    agrees_to_one_rounding(grown_v, want_v)

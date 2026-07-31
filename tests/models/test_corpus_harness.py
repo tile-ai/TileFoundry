@@ -143,13 +143,13 @@ def test_untested_functions_come_from_the_built_model_not_a_written_list() -> No
 
     untested = QWEN3_1_7B.untested("schedule")
     assert set(untested) == set(inventory) - set(QWEN3_1_7B.selected("schedule"))
-    assert "tiled_mlp" in untested
+    assert "input_rms_norm" in untested
 
     grown = replace(
         QWEN3_1_7B,
-        schedule=(*QWEN3_1_7B.schedule, FunctionCase(id="x", selector="tiled_mlp")),
+        schedule=(*QWEN3_1_7B.schedule, FunctionCase(id="x", selector="input_rms_norm")),
     )
-    assert "tiled_mlp" not in grown.untested("schedule")
+    assert "input_rms_norm" not in grown.untested("schedule")
 
 
 def test_a_blocked_capability_must_say_why() -> None:
@@ -259,7 +259,7 @@ def test_an_unrun_function_is_untested_and_never_blocked() -> None:
     section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"]["h200_sxm"]
     statuses = {row["status"] for row in section["analyze"]["tested"]}
     assert statuses == {"PASS"}
-    assert "tiled_mlp" in section["analyze"]["untested"]
+    assert "self_attention" in section["analyze"]["untested"]
 
 
 def test_a_result_nobody_can_act_on_is_rejected() -> None:

@@ -54,26 +54,23 @@ query at the end of the context may attend every position there is -- which is
 also why Gemma-2's alternating sliding-window layers do not appear here. A
 window only removes positions from the front of the context, so for a context no
 longer than ``sliding_window`` a sliding layer and a full layer are the same
-computation; ``config.max_ctx`` is pinned to ``sliding_window`` so that stays
-true rather than being assumed (see ``config.py``).
+computation; ``MAX_CTX`` is pinned to ``sliding_window`` so that stays
+true rather than being assumed.
 
-Six Gemma-2-specific things to note (see ``tests/models/gemma2_2b/config.py``
-module docstring for the full rundown):
+Six Gemma-2-specific things to note:
 
 - ``Gemma2RMSNorm`` is ``normed * (1.0 + weight)``; ``tf.rms_norm`` is
-  ``normed * weight``. Every ``gamma*`` weight fed to ``tf.rms_norm`` below is
-  expected pre-adjusted by whatever loads it (``config.rms_gamma``) — the kernel
-  stays the plain ``tf.rms_norm`` semantics throughout.
+  ``normed * weight``. The ``1.0 +`` is this model's own semantics, so every norm
+  below adds it inline and a loader hands over the checkpoint's tensor untouched.
+  The widen to f32 first is HF's too — ``1.0 + self.weight.float()`` — and it
+  matters because adding one to a bf16 weight rounds most of the weight away.
 - attention scaling is ``query_pre_attn_scalar**-0.5`` (0.0625 @ 256), not
   ``head_dim**-0.5`` — passed in as the ``scale`` kernel input, same
   broadcast-scalar convention as qwen3_1_7b.
 - attention logits are soft-capped, on the raw scaled scores and before
   anything reduces them:
   ``attn_logit_softcapping * tanh(scores / attn_logit_softcapping)``. The
-  ``tf.tanh`` HIR op has no ``@register_eval`` handler (by design; not
-  touched here), so this composes the identity ``tanh(z) = 2*sigmoid(2z) - 1``
-  from ops that *do* have eval handlers (``sigmoid`` / ``mul`` / ``sub`` /
-  ``div``). Written out once per score group inside ``self_attention`` rather
+  Written out once per score group inside ``self_attention`` rather
   than factored out: the two groups are differently shaped, a ``@func`` binds
   its parameter shapes exactly (``hir.function.elaborate``), and a plain Python
   helper is not a callee the parser resolves at all — it accepts a
@@ -97,49 +94,85 @@ application since cos/sin depend only on (seq, head_dim), not the head axis).
 """
 from __future__ import annotations
 
-from tests.models.gemma2_2b.config import REAL as config
+import json
+from pathlib import Path
+
+from transformers import Gemma2Config
+
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.types.dim import DimVar
 
+
+def published(path: Path | None = None, **overrides) -> Gemma2Config:
+    """The checkpoint's own configuration, read by the class Hugging Face uses.
+
+    *overrides* are passed to the config class alongside the published fields.
+    The oracle is the one caller that uses them, and it asks for
+    ``attn_implementation="eager"``: Gemma-2 caps attention logits at 50.0 and
+    only the eager path applies the cap, so a reference built any other way is a
+    different model.
+    """
+    path = Path(__file__).parent / "config.json" if path is None else path
+    return Gemma2Config(**{**json.loads(path.read_text(encoding="utf-8")), **overrides})
+
+
+config = published()
+
+#: The longest prior cache these kernels are authored for -- the *window*, not the
+#: position envelope. Half of Gemma-2's layers attend within `sliding_window`
+#: rather than over the whole context, and these kernels describe full attention;
+#: past the window the two stop agreeing, so the envelope stops there too.
+MAX_CTX = config.sliding_window
+
+# The published dtype as the DSL spells it.
+_DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
+    str(config.dtype).removeprefix("torch.")
+]
+_Q_PROJ = config.num_attention_heads * config.head_dim
+_KV_PROJ = config.num_key_value_heads * config.head_dim
+_GQA = config.num_attention_heads // config.num_key_value_heads
+
+#: `Gemma2TextScaledWordEmbedding` multiplies the gathered row by this.
+_EMBED_SCALE = config.hidden_size ** 0.5
+
 # The prior cache this step reads: the only range this model carries. Zero is a
 # first step, and the exclusive upper bound is the window (max_ctx), so with this
 # step's own token the total is one `_within_window` admits.
-C = DimVar("ctx_len", 0, config.max_ctx)
+C = DimVar("ctx_len", 0, MAX_CTX)
 
 # One token per step.
 S = 1
 
-ATTN_SOFTCAP = config.attn_softcap
-LOGIT_SOFTCAP = config.final_logit_softcap
-EMBED_SCALE = config.embed_scale
+ATTN_SOFTCAP = config.attn_logit_softcapping
+LOGIT_SOFTCAP = config.final_logit_softcapping
+EMBED_SCALE = _EMBED_SCALE
 
 
 @module(entry="decoder_layer")
 class Gemma2_2B:
     @func
     def input_rms_norm(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # Pre-attention input RMSNorm; HF `Gemma2DecoderLayer.input_layernorm`.
-        # `gamma_in` is pre-adjusted to `1.0 + weight` test-side.
-        return tf.rms_norm(hidden, gamma_in)
+        return tf.rms_norm(hidden, tf.cast(gamma_in, dtype="f32") + 1.0)
 
     @func
     def self_attention(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_q: ConstTensor[(1, config.hidden, config.q_proj), config.dt],
-        w_k: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        w_v: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        cos_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
-        sin_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        w_q: ConstTensor[(1, config.hidden_size, _Q_PROJ), _DT],
+        w_k: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        w_v: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        cos_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
+        sin_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
         pos_ids: Tensor[(S,), "i32"],
-        k_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        v_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: ConstTensor[(1, config.q_proj, config.hidden), config.dt],
+        k_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        v_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        scale: Tensor[(1, 1, 1, 1), _DT],
+        w_o: ConstTensor[(1, _Q_PROJ, config.hidden_size), _DT],
     ):
         # Pure GQA + RoPE + attn-logit-softcap attention block: `hidden` is
         # already normalized (`decoder_layer` applies `input_rms_norm` before
@@ -148,9 +181,9 @@ class Gemma2_2B:
         #
         # Returns the attention output with this token's key and value, which are
         # what the caller appends to the cache.
-        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, S, config.n_q_heads, config.head_dim))
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, S, config.n_kv_heads, config.head_dim))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, S, config.n_kv_heads, config.head_dim))
+        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, S, config.num_attention_heads, config.head_dim))
+        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, S, config.num_key_value_heads, config.head_dim))
+        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, S, config.num_key_value_heads, config.head_dim))
         q_rope, _ = tf.rope(q, q, cos_cache, sin_cache, pos_ids)
         _, k_rope = tf.rope(k, k, cos_cache, sin_cache, pos_ids)
 
@@ -159,40 +192,36 @@ class Gemma2_2B:
         # attend every position there is.
         q_s = q_rope * scale
         k_ctx = tf.reshape(
-            tf.transpose(tf.repeat_interleave(k_cache, repeats=config.gqa_group, axis=2), perm=(0, 2, 1, 3)),
-            new_shape=(1, 1, config.n_q_heads, C, config.head_dim),
+            tf.transpose(tf.repeat_interleave(k_cache, repeats=_GQA, axis=2), perm=(0, 2, 1, 3)),
+            new_shape=(1, 1, config.num_attention_heads, C, config.head_dim),
         )
         v_ctx = tf.reshape(
-            tf.transpose(tf.repeat_interleave(v_cache, repeats=config.gqa_group, axis=2), perm=(0, 2, 1, 3)),
-            new_shape=(1, 1, config.n_q_heads, C, config.head_dim),
+            tf.transpose(tf.repeat_interleave(v_cache, repeats=_GQA, axis=2), perm=(0, 2, 1, 3)),
+            new_shape=(1, 1, config.num_attention_heads, C, config.head_dim),
         )
-        k_new = tf.repeat_interleave(k_rope, repeats=config.gqa_group, axis=2)
-        v_new = tf.repeat_interleave(v, repeats=config.gqa_group, axis=2)
+        k_new = tf.repeat_interleave(k_rope, repeats=_GQA, axis=2)
+        v_new = tf.repeat_interleave(v, repeats=_GQA, axis=2)
 
-        # Two score groups: one over the cache, one over the token itself, each
-        # soft-capped on its own raw logits -- `cap * tanh(score / cap)`, with
-        # tanh composed as `2*sigmoid(2z) - 1` because `tf.tanh` carries no
-        # evaluation handler. The cap is elementwise on a logit, so it goes
-        # before the maximum, where `eager_attention_forward` puts it; capping
-        # after the merge would cap a normalisation instead. Spelled out for both
-        # groups rather than shared, because the two are differently shaped: a
-        # @func binds its parameter shapes exactly, and a plain Python helper is
-        # not a callee the @func parser resolves.
-        q_e = tf.reshape(q_s, new_shape=(1, S, config.n_q_heads, 1, config.head_dim))
+        # Two score groups, each soft-capped on its own raw logits. The cap is
+        # elementwise on a logit, so it goes before the maximum, where
+        # `eager_attention_forward` puts it; capping after the merge would cap a
+        # normalisation instead. Written out per group because the two are
+        # differently shaped and a @func binds its parameter shapes exactly.
+        q_e = tf.reshape(q_s, new_shape=(1, S, config.num_attention_heads, 1, config.head_dim))
         z_ctx = (
             tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum") / ATTN_SOFTCAP
         )
-        score_ctx = (tf.sigmoid(z_ctx * 2.0) * 2.0 - 1.0) * ATTN_SOFTCAP
+        score_ctx = tf.tanh(z_ctx) * ATTN_SOFTCAP
         z_new = (
             tf.reduce(q_s * k_new, axes=(-1,), keepdim=True, kind="sum") / ATTN_SOFTCAP
         )
-        score_new = (tf.sigmoid(z_new * 2.0) * 2.0 - 1.0) * ATTN_SOFTCAP
+        score_new = tf.tanh(z_new) * ATTN_SOFTCAP
 
         # Log-sum-exp merge of the two groups against their joint max.
         peak = tf.max(
             tf.reduce(score_ctx, axes=(-2,), keepdim=False, kind="max"), score_new
         )
-        peak_e = tf.reshape(peak, new_shape=(1, S, config.n_q_heads, 1, 1))
+        peak_e = tf.reshape(peak, new_shape=(1, S, config.num_attention_heads, 1, 1))
         p_ctx = tf.exp(score_ctx - peak_e)
         p_new = tf.exp(score_new - peak)
         total = tf.reduce(p_ctx, axes=(-2,), keepdim=False, kind="sum") + p_new
@@ -201,16 +230,16 @@ class Gemma2_2B:
             + p_new * v_new
         )
         attn = weighted / total
-        out = tf.matmul(tf.reshape(attn, new_shape=(1, S, config.q_proj)), w_o)
+        out = tf.matmul(tf.reshape(attn, new_shape=(1, S, _Q_PROJ)), w_o)
         return out, k_rope, v
 
     @func
     def mlp(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        w_gate: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # Pure dense gelu_tanh-gated MLP (`hidden_activation="gelu_pytorch_tanh"`,
         # not SwiGLU's `silu`): `hidden` is already normalized
         # (`decoder_layer` applies `pre_feedforward_layernorm` first).
@@ -222,24 +251,24 @@ class Gemma2_2B:
 
     @func
     def decoder_layer(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_in: ConstTensor[(config.hidden,), config.dt],
-        w_q: ConstTensor[(1, config.hidden, config.q_proj), config.dt],
-        w_k: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        w_v: ConstTensor[(1, config.hidden, config.kv_proj), config.dt],
-        cos_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
-        sin_cache: Tensor[(config.max_pos, config.head_dim), config.dt],
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_in: ConstTensor[(config.hidden_size,), _DT],
+        w_q: ConstTensor[(1, config.hidden_size, _Q_PROJ), _DT],
+        w_k: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        w_v: ConstTensor[(1, config.hidden_size, _KV_PROJ), _DT],
+        cos_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
+        sin_cache: Tensor[(config.max_position_embeddings, config.head_dim), _DT],
         pos_ids: Tensor[(S,), "i32"],
-        k_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        v_cache: Tensor[(1, C, config.n_kv_heads, config.head_dim), config.dt],
-        scale: Tensor[(1, 1, 1, 1), config.dt],
-        w_o: ConstTensor[(1, config.q_proj, config.hidden), config.dt],
-        gamma_post_attn: ConstTensor[(config.hidden,), config.dt],
-        gamma_pre_ff: ConstTensor[(config.hidden,), config.dt],
-        w_gate: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_up: ConstTensor[(1, config.hidden, config.intermediate), config.dt],
-        w_down: ConstTensor[(1, config.intermediate, config.hidden), config.dt],
-        gamma_post_ff: ConstTensor[(config.hidden,), config.dt],
+        k_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        v_cache: Tensor[(1, C, config.num_key_value_heads, config.head_dim), _DT],
+        scale: Tensor[(1, 1, 1, 1), _DT],
+        w_o: ConstTensor[(1, _Q_PROJ, config.hidden_size), _DT],
+        gamma_post_attn: ConstTensor[(config.hidden_size,), _DT],
+        gamma_pre_ff: ConstTensor[(config.hidden_size,), _DT],
+        w_gate: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
+        gamma_post_ff: ConstTensor[(config.hidden_size,), _DT],
     ):
         # h = x + post_attn_norm(attn(input_norm(x)))
         # out = h + post_ff_norm(mlp(pre_ff_norm(h)))
@@ -250,12 +279,12 @@ class Gemma2_2B:
             h_in, w_q, w_k, w_v, cos_cache, sin_cache, pos_ids,
             k_cache, v_cache, scale, w_o,
         )
-        attn_out_n = tf.rms_norm(attn_out, gamma_post_attn)
+        attn_out_n = tf.rms_norm(attn_out, tf.cast(gamma_post_attn, dtype="f32") + 1.0)
         h1 = hidden + attn_out_n
 
-        ff_in = tf.rms_norm(h1, gamma_pre_ff)
+        ff_in = tf.rms_norm(h1, tf.cast(gamma_pre_ff, dtype="f32") + 1.0)
         mlp_out = mlp(ff_in, w_gate, w_up, w_down)
-        mlp_out_n = tf.rms_norm(mlp_out, gamma_post_ff)
+        mlp_out_n = tf.rms_norm(mlp_out, tf.cast(gamma_post_ff, dtype="f32") + 1.0)
         return h1 + mlp_out_n, k_new, v_new
 
 
@@ -266,45 +295,43 @@ class Gemma2_2B_Decoder:
 
     layers = tuple(
         Gemma2_2B.renamed(f"layer{index}")
-        for index in range(config.n_layers)
+        for index in range(config.num_hidden_layers)
     )
 
     @func
     def embed(
-        w_embed: ConstTensor[(config.vocab, config.hidden), config.dt],
+        w_embed: ConstTensor[(config.vocab_size, config.hidden_size), _DT],
         token_ids: Tensor[(S,), "i64"],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `Gemma2TextScaledWordEmbedding`: scaled by `hidden_size ** 0.5`.
         row = tf.reshape(
-            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden)
+            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden_size)
         )
         return row * EMBED_SCALE
 
     @func
     def final_rms_norm(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        gamma_final: ConstTensor[(config.hidden,), config.dt],
-    ) -> Tensor[(1, S, config.hidden), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_final: ConstTensor[(config.hidden_size,), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `Gemma2Model.norm`, applied once after the last layer.
-        # `gamma_final` is pre-adjusted to `1.0 + weight` test-side.
-        return tf.rms_norm(hidden, gamma_final)
+        return tf.rms_norm(hidden, tf.cast(gamma_final, dtype="f32") + 1.0)
 
     @func
     def lm_head(
-        hidden: Tensor[(1, S, config.hidden), config.dt],
-        w_head: ConstTensor[(config.hidden, config.vocab), config.dt],
-    ) -> Tensor[(1, config.vocab), config.dt]:
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        w_head: ConstTensor[(config.hidden_size, config.vocab_size), _DT],
+    ) -> Tensor[(1, config.vocab_size), _DT]:
         # Soft-capped as `Gemma2ForCausalLM.forward` caps it, at
-        # `final_logit_softcapping` rather than attention's cap. tanh composed as
-        # `2*sigmoid(2z) - 1`: `tf.tanh` carries no evaluation handler.
-        logits = tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden)), w_head)
+        # `final_logit_softcapping` rather than attention's cap.
+        logits = tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden_size)), w_head)
         z = logits / LOGIT_SOFTCAP
-        return (tf.sigmoid(z * 2.0) * 2.0 - 1.0) * LOGIT_SOFTCAP
+        return tf.tanh(z) * LOGIT_SOFTCAP
 
     @lm_head.converter("w_head")
     def _(
-        head_weight_raw: ConstTensor[(config.vocab, config.hidden), config.dt],
-    ) -> Tensor[(config.hidden, config.vocab), config.dt]:
+        head_weight_raw: ConstTensor[(config.vocab_size, config.hidden_size), _DT],
+    ) -> Tensor[(config.hidden_size, config.vocab_size), _DT]:
         # HF stores the head as (vocab, hidden); the matmul above wants it the
         # other way. Gemma-2 ties its head, so this input is the embedding table.
         return tf.transpose(head_weight_raw, perm=(1, 0))
@@ -367,12 +394,12 @@ class Gemma2_2B_Decoder:
         from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
         from tilefoundry.ir.types import DType  # noqa: PLC0415
 
-        empty = (1, 0, config.n_kv_heads, config.head_dim)
-        dtype = to_torch_dtype(DType.from_name(config.dt))
+        empty = (1, 0, config.num_key_value_heads, config.head_dim)
+        dtype = to_torch_dtype(DType.from_name(_DT))
         return tuple(
             (
                 torch.zeros(empty, device=device, dtype=dtype),
                 torch.zeros(empty, device=device, dtype=dtype),
             )
-            for _ in range(config.n_layers)
+            for _ in range(config.num_hidden_layers)
         )
