@@ -145,7 +145,7 @@ def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
     region = regions[0]
     assert (region.start, region.extent, region.step) == (0, 4096, 1)
     assert {value.name for value in region.carried_args} == {"m", "l", "o"}
-    assert static_online_attend.resolve_target() == CudaTarget()
+    assert static_online_attend.resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert tuple(
         (topology.name, topology.size) for topology in static_online_attend.effective_topologies()
     ) == (("cta", 132),)

@@ -65,7 +65,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import _expr_children
 from tilefoundry.target import CpuTarget, CudaTarget, Target
-from tilefoundry.target.cuda.spec import H200_SXM_ID, SM90_ID
+from tilefoundry.target.hardware.envelope import IncompatiblePairError
 
 # ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -1017,20 +1017,35 @@ def _target_str(target: Target) -> str:
     if isinstance(target, CpuTarget):
         return "CpuTarget()"
     if isinstance(target, CudaTarget):
+        concise = _concise_cuda(target)
+        if concise is not None:
+            return concise
         arguments = [
             f"{role}={value}"
             for role, value in (
-                ("architecture", _architecture_arg(target)),
                 ("device", _device_arg(target)),
+                ("architecture", _architecture_arg(target)),
             )
-            if value is not None
         ]
         return f"CudaTarget({', '.join(arguments)})"
     raise TypeError(f"unsupported target for Python printing: {type(target).__name__}")
 
 
-def _architecture_arg(target: CudaTarget) -> str | None:
-    """The ``architecture=`` argument, or ``None`` when it is the default.
+def _concise_cuda(target: CudaTarget) -> str | None:
+    """The device ID alone, when naming it rebuilds this target exactly."""
+    if target.device_id is None or target.architecture_id is None:
+        return None
+    try:
+        rebuilt = CudaTarget(target.device_id)
+    except (ValueError, IncompatiblePairError):
+        return None
+    if rebuilt != target or rebuilt.architecture_id != target.architecture_id:
+        return None
+    return f"CudaTarget({target.device_id!r})"
+
+
+def _architecture_arg(target: CudaTarget) -> str:
+    """The ``architecture=`` argument.
 
     A resource selected from the installed namespace prints as its ID, which is
     the authored surface. One supplied directly has no document behind it, so it
@@ -1038,8 +1053,6 @@ def _architecture_arg(target: CudaTarget) -> str | None:
     """
     architecture = target.architecture
     if target.architecture_id is not None:
-        if target.architecture_id == SM90_ID:
-            return None
         return repr(target.architecture_id)
     dtypes = ", ".join(
         f"DType.{dtype.name}" for dtype in architecture.supported_compute_dtypes
@@ -1064,12 +1077,10 @@ def _architecture_arg(target: CudaTarget) -> str | None:
     )
 
 
-def _device_arg(target: CudaTarget) -> str | None:
-    """The ``device=`` argument, or ``None`` when it is the default."""
+def _device_arg(target: CudaTarget) -> str:
+    """The ``device=`` argument."""
     device = target.device
     if target.device_id is not None:
-        if target.device_id == H200_SXM_ID:
-            return None
         return repr(target.device_id)
     flops = ", ".join(
         f"(DType.{dtype.name}, {value})"

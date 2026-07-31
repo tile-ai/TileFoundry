@@ -59,6 +59,7 @@ from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
 
@@ -313,12 +314,11 @@ class Qwen3_1_7B:
         )
 
 
-# The target its tree runs on, so a standalone analyze or schedule caller that
-# selects this as its root has one. The layer above is cloned into the children
-# here and so declares none: a child inherits its owner's.
-@module(target=CudaTarget())
+@module(target=CudaTarget("nvidia.h200_sxm"))
 class Qwen3_1_7B_Decoder:
     """The ordered layer stack plus the norm that closes it."""
+
+    topologies = (Topology("cta", 132),)
 
     layers = tuple(
         Qwen3_1_7B.renamed(f"layer{index}")

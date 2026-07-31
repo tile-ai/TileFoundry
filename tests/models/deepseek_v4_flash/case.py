@@ -45,7 +45,8 @@ ANALYZED_AT = {"ctx_len": 96}
 
 CASE = ModelCase(
     id="deepseek_v4_flash",
-    prototype=DeepseekV4ForCausalLM.layer0.attention,
+    prototype=DeepseekV4ForCausalLM,
+    scope="layer0.attention",
     reference=ReferenceCase(
         id="deepseek_v4_flash/reference/attention_decode",
         boundary=(

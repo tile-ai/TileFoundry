@@ -368,7 +368,7 @@ def test_a_shared_block_reports_what_the_program_leaves_the_cache() -> None:
 
     record = get_metadata(entry, MemoryMetadata)
     assert record is not None
-    block = CudaTarget().architecture.unified_l1_shared_per_sm_bytes
+    block = CudaTarget("nvidia.h200_sxm").architecture.unified_l1_shared_per_sm_bytes
     smem = record.level("smem")
     assert smem is not None and smem.peak_bytes > 0
     assert any(
@@ -396,7 +396,7 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     bound = get_metadata(call, RooflineMetadata)
     assert cost is not None and bound is not None
 
-    facts = TARGET_FACTS.project(CudaTarget(), ThroughputFacts)
+    facts = TARGET_FACTS.project(CudaTarget("nvidia.h200_sxm"), ThroughputFacts)
     rate = facts.peak_for(DType.f32)
     assert rate is not None
     expected = -(-cost.flops[0][1] * 1_000_000_000 // rate)
@@ -459,13 +459,13 @@ def test_the_gpu_memory_graph_is_not_a_tree() -> None:
     than carrying a stub edge, which is the case that would otherwise be modelled
     by a special one.
     """
-    facts = TARGET_FACTS.project(CudaTarget(), MemoryHierarchyFacts)
+    facts = TARGET_FACTS.project(CudaTarget("nvidia.h200_sxm"), MemoryHierarchyFacts)
 
     assert facts.cached_level("l1") == "l2"
     assert facts.cached_level("l2") == "gmem"
     assert facts.backing_level("l1") == "gmem"
     assert facts.capacity_sharers("l1") == (
-        ("smem", CudaTarget().architecture.unified_l1_shared_per_sm_bytes),
+        ("smem", CudaTarget("nvidia.h200_sxm").architecture.unified_l1_shared_per_sm_bytes),
     )
     assert {level.name for level in facts.explicit_levels} >= {"gmem", "smem", "rmem"}
     assert {level.name for level in facts.implicit_levels} == {"l1", "l2"}

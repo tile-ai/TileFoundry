@@ -19,7 +19,7 @@ _CTA = Topology("cta", 132)
 _THREAD = Topology("thread", 32)
 
 
-@module(entry="forward", target=CudaTarget())
+@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"))
 class _Tree:
     topologies = (_CTA,)
 
@@ -62,7 +62,7 @@ def test_the_root_declaration_and_its_functions_survive_the_round_trip() -> None
     assert isinstance(reparsed, Module)
     assert reparsed.name == "_Tree"
     assert reparsed.entry == "forward"
-    assert reparsed.target == CudaTarget()
+    assert reparsed.target == CudaTarget("nvidia.h200_sxm")
     assert reparsed.topologies == (_CTA,)
     # Every owned function, in the order the printer emits (callees first).
     assert [fn.name for fn in reparsed.functions] == ["spare", "forward"]
@@ -84,7 +84,7 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     inherits = _child(reparsed, "inherits")
     assert inherits.target is None
     assert inherits.topologies is None
-    assert inherits.resolve_target() == CudaTarget()
+    assert inherits.resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert inherits.effective_topologies() == (_CTA,)
 
     replaces = _child(reparsed, "replaces")

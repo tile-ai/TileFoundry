@@ -75,7 +75,7 @@ def _tree(node: dict[str, Any], depth: int) -> list[str]:
 
 
 def render_model(name: str) -> str:
-    """One model's whole forest, every top-level Module it declares.
+    """One model's whole forest, every root it publishes.
 
     `*` marks a leaf Module, one with no child Modules. A run of adjacent,
     identically shaped, consecutively numbered Modules is one entry naming its range

@@ -9,7 +9,7 @@ needs it would fix a shape no caller has asked for yet.
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import pytest
 
@@ -98,11 +98,11 @@ def test_lookup_is_exact_with_no_subclass_or_by_name_fallback() -> None:
     empty = TargetFactsRegistry()
     assert empty.registered_pairs() == ()
     with pytest.raises(UnknownFactsConversionError, match="no Facts conversion"):
-        empty.project(CudaTarget(), _HardwareFacts)
+        empty.project(CudaTarget("nvidia.h200_sxm"), _HardwareFacts)
 
     registry = _registry()
     assert ("CudaTarget", "_HardwareFacts") in registry.registered_pairs()
-    assert registry.project(CudaTarget(), _HardwareFacts) == _HardwareFacts(
+    assert registry.project(CudaTarget("nvidia.h200_sxm"), _HardwareFacts) == _HardwareFacts(
         parallel_units=132, bytes_per_second=4_800_000_000_000
     )
     with pytest.raises(DuplicateFactsConversionError, match="already registered"):
@@ -112,7 +112,7 @@ def test_lookup_is_exact_with_no_subclass_or_by_name_fallback() -> None:
         """A distinct target type that happens to share CudaTarget's base."""
 
     with pytest.raises(UnknownFactsConversionError, match="_TunedCuda"):
-        registry.project(_TunedCuda(), _HardwareFacts)
+        registry.project(_TunedCuda("nvidia.h200_sxm"), _HardwareFacts)
 
     # A different target family is likewise unregistered rather than coerced.
     with pytest.raises(UnknownFactsConversionError, match="AmxTarget"):
@@ -128,14 +128,14 @@ def test_lookup_is_exact_with_no_subclass_or_by_name_fallback() -> None:
 
     _HardwareFactsImpostor.__name__ = "_HardwareFacts"
     with pytest.raises(UnknownFactsConversionError):
-        registry.project(CudaTarget(), _HardwareFactsImpostor)
+        registry.project(CudaTarget("nvidia.h200_sxm"), _HardwareFactsImpostor)
 
 
 def test_both_call_shapes_work_without_a_common_query_base() -> None:
     """AC-2-3. A hardware-only projection takes no query; a program-dependent
     one validates its own private query type. Neither shares a query base."""
     registry = _registry()
-    target = CudaTarget()
+    target = CudaTarget("nvidia.h200_sxm")
 
     hardware = registry.project(target, _HardwareFacts)
     assert hardware.parallel_units == 132
@@ -161,8 +161,8 @@ def test_a_facts_aggregate_must_be_an_immutable_dataclass() -> None:
     exactly as they were.
     """
     projected = _registry()
-    target = CudaTarget()
-    before_target = replace(target)
+    target = CudaTarget("nvidia.h200_sxm")
+    before_target = CudaTarget("nvidia.h200_sxm")
     before_pairs = projected.registered_pairs()
 
     facts = projected.project(target, _HardwareFacts)
@@ -198,7 +198,7 @@ def test_a_conversion_returning_the_wrong_type_is_rejected() -> None:
         CudaTarget, _HardwareFacts, lambda target, query: _ShapeQuery(tile_elements=1)
     )
     with pytest.raises(TargetFactsError, match="returned _ShapeQuery"):
-        registry.project(CudaTarget(), _HardwareFacts)
+        registry.project(CudaTarget("nvidia.h200_sxm"), _HardwareFacts)
 
 
 def test_as_facts_delegates_to_the_shared_registry() -> None:
@@ -213,7 +213,7 @@ def test_as_facts_delegates_to_the_shared_registry() -> None:
         CudaTarget, _SharedFacts, lambda target, query: _SharedFacts(target.device.sm_count)
     )
     try:
-        assert CudaTarget().as_facts(_SharedFacts) == _SharedFacts(132)
+        assert CudaTarget("nvidia.h200_sxm").as_facts(_SharedFacts) == _SharedFacts(132)
         with pytest.raises(UnknownFactsConversionError):
             AmxTarget().as_facts(_SharedFacts)
     finally:

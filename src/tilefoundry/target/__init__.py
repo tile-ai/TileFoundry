@@ -5,8 +5,15 @@ from __future__ import annotations
 from tilefoundry.target.amx import AmxTarget, AppleAmx, AppleM2Pro
 from tilefoundry.target.base import Architecture, CpuTarget, Device, Target
 from tilefoundry.target.cuda import H200SXM, SM90, CudaTarget
+from tilefoundry.target.cuda.spec import H200_SXM_ID
 
-_STRING_TARGETS = {"amx": AmxTarget, "cuda": CudaTarget, "cpu": CpuTarget}
+
+def _cuda_fallback() -> CudaTarget:
+    """The machine compilation falls back to when a caller names only "cuda"."""
+    return CudaTarget(H200_SXM_ID)
+
+
+_STRING_TARGETS = {"amx": AmxTarget, "cuda": _cuda_fallback, "cpu": CpuTarget}
 
 
 def resolve_target(target: str | Target) -> Target:
@@ -26,7 +33,7 @@ def resolve_target(target: str | Target) -> Target:
 
 def default_target() -> Target:
     """Return the normal compile-entry default target."""
-    return CudaTarget()
+    return _cuda_fallback()
 
 
 def validate_cuda_topology_levels(names) -> None:
@@ -34,7 +41,7 @@ def validate_cuda_topology_levels(names) -> None:
 
     See docs/spec/target.md § Topology levels.
     """
-    target = CudaTarget()
+    target = _cuda_fallback()
     for name in names:
         if name not in target.topology_levels:
             raise ValueError(

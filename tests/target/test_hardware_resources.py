@@ -83,7 +83,7 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     assert not any(path.startswith("throughput.") for path in architecture.facts)
     assert not any(path.startswith("instruction.") for path in device.facts)
 
-    target = CudaTarget()
+    target = CudaTarget("nvidia.h200_sxm")
     assert (target.architecture_id, target.device_id) == (_SM90, _H200)
     assert target.architecture_digest == architecture.digest
     assert re.fullmatch(r"[0-9a-f]{64}", target.device_digest)
@@ -96,13 +96,21 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     )
     assert original.digest != edited.digest
 
-    supplied = CudaTarget(architecture=target.architecture, device=target.device)
+    with pytest.raises(TypeError):
+        CudaTarget()
+    with pytest.raises(ValueError, match="carries no document"):
+        CudaTarget(target.device)
+
+    supplied = CudaTarget(device=target.device, architecture=target.architecture)
     assert supplied.architecture_id is None and supplied.device_id is None
     assert supplied.architecture_digest is None
     assert target == supplied
     assert hash(target) == hash(supplied)
     # Differing facts still separate them.
-    assert target != CudaTarget(architecture=replace(target.architecture, name="other"))
+    assert target != CudaTarget(
+        "nvidia.h200_sxm",
+        architecture=replace(target.architecture, name="other"),
+    )
 
 
 def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(
@@ -226,7 +234,7 @@ def test_no_installed_number_is_repeated_as_a_python_default() -> None:
 
     # The one figure that had no installed record is now recorded, so the
     # public peak stays available without a Python literal behind it.
-    assert CudaTarget().device.peak_for(DType.f32) == 67_000_000_000_000
+    assert CudaTarget("nvidia.h200_sxm").device.peak_for(DType.f32) == 67_000_000_000_000
     assert HARDWARE_SPECS.document(_H200).fact("throughput.f32").origin == "vendor"
 
 

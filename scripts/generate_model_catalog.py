@@ -97,25 +97,16 @@ def _node(module: Any, counts: dict[str, int]) -> dict[str, Any]:
 
 
 def _roots(model: Any) -> list[Any]:
-    """The Modules a package defines that no other Module of it contains."""
+    """The Modules a package publishes: the ones that declare a Target."""
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415
 
-    declared: list[Any] = []
+    published: list[Any] = []
     seen: set[int] = set()
     for value in vars(model).values():
-        if isinstance(value, Module) and id(value) not in seen:
+        if isinstance(value, Module) and value.target is not None and id(value) not in seen:
             seen.add(id(value))
-            declared.append(value)
-
-    def walk(module: Any):
-        yield module
-        for child in module.modules:
-            yield from walk(child)
-
-    contained = {
-        id(child) for root in declared for node in walk(root) for child in node.modules
-    }
-    return [root for root in declared if id(root) not in contained]
+            published.append(value)
+    return published
 
 
 def catalog() -> dict[str, Any]:

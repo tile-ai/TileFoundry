@@ -20,6 +20,7 @@ from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 -- tf used by 
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare op bindings
 from tilefoundry.evaluator import to_torch_dtype
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
 
@@ -564,14 +565,13 @@ def advance_state(kind, state, fresh):
     return tuple(torch.cat([old, new], dim=1) for old, new in zip(state, fresh))
 
 
-# The target its tree runs on, so a standalone analyze or schedule caller that
-# selects this as its root has one. The layers above are cloned into the children
-# here and so declare none: a child inherits its owner's.
-@module(target=CudaTarget())
+@module(target=CudaTarget("nvidia.h200_sxm"))
 class Qwen3_5Decoder:
     """The layer stack in `config.layer_types` order, and the step around it --
     embedding, the walk, the closing norm, the head. Each layer is an independent
     copy, so an analysis of one annotates only it."""
+
+    topologies = (Topology("cta", 132),)
 
     # The published layer-type cycle determines each layer Module.
     layers = tuple(

@@ -134,6 +134,15 @@ through its owner chain.
     with `target="cuda"`.
   - A Module reused as an owned child and as an independently analysed root
     declares a target only in the latter role.
+  - A Module published as an independently analysable root MUST declare both
+    its target and the topology levels it is aimed at, so that Analyze and
+    Schedule answer it as it is published rather than after an edit. Naming the
+    device is enough; the architecture is derived from that device's document
+    ([target §4](./target.md#4-cudatarget)).
+  - Declaring a Module MUST NOT require a target. Whether a Module becomes an
+    owned child is decided by the owner, after the child has been constructed,
+    so a construction-time requirement would refuse trees whose children
+    correctly declare nothing.
 
 #### Default step
 

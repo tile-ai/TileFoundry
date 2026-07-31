@@ -103,6 +103,8 @@ from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.target import CudaTarget
 
 
 def published(path: Path | None = None, **overrides) -> Gemma2Config:
@@ -288,10 +290,12 @@ class Gemma2_2B:
         return h1 + mlp_out_n, k_new, v_new
 
 
-@module
+@module(target=CudaTarget("nvidia.h200_sxm"))
 class Gemma2_2B_Decoder:
     """The ordered layer stack, the norm that closes it, and the scaled embedding
     and soft-capped head that bracket it."""
+
+    topologies = (Topology("cta", 132),)
 
     layers = tuple(
         Gemma2_2B.renamed(f"layer{index}")

@@ -24,7 +24,7 @@ GQA_GROUP = NUM_Q_HEADS // NUM_KV_HEADS
 SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 
-@func(target=CudaTarget(), topologies=(Topology("cta", 132),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 def static_online_attend(
     q: Tensor[(1, S, NUM_Q_HEADS, HEAD_DIM), "bf16"],
     k_cache: Tensor[(1, C, NUM_KV_HEADS, HEAD_DIM), "bf16"],

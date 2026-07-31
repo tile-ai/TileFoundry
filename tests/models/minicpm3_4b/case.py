@@ -30,7 +30,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.minicpm3_4b.model import MAX_CTX, MiniCPM3_4B
+from tests.models.minicpm3_4b.model import MAX_CTX, MiniCPM3_4B_Decoder
 from tests.models.minicpm3_4b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -46,7 +46,8 @@ ANALYZED_AT = {"ctx_len": 1024}
 
 CASE = ModelCase(
     id="minicpm3_4b",
-    prototype=MiniCPM3_4B,
+    prototype=MiniCPM3_4B_Decoder,
+    scope="layer0",
     reference=ReferenceCase(
         id="minicpm3_4b/reference/full_decoder_decode",
         boundary=(

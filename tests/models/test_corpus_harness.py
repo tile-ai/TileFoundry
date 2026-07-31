@@ -24,8 +24,14 @@ from tests.models.report import CoverageCollector, build_report, render_report
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.facts import ParallelCapacityFacts
 from tilefoundry.ir.core import Call
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, select
 from tilefoundry.ir.types.shard import Topology
+
+
+def _source(case: ModelCase) -> Module:
+    """The authored Module a case is scoped to, reached the way the case reaches
+    it. What a build must share nothing with."""
+    return select(case.prototype, case.scope)
 
 
 def _analysis_records(function) -> int:
@@ -58,7 +64,7 @@ def test_a_build_shares_nothing_with_the_build_before_it() -> None:
 
     assert first is not second
     assert first.lookup("mlp") is not second.lookup("mlp")
-    assert first.lookup("mlp") is not QWEN3_1_7B.prototype.lookup("mlp")
+    assert first.lookup("mlp") is not _source(QWEN3_1_7B).lookup("mlp")
 
 
 def test_analysing_one_build_leaves_the_next_build_clean() -> None:
@@ -73,7 +79,7 @@ def test_analysing_one_build_leaves_the_next_build_clean() -> None:
 
     fresh = QWEN3_1_7B.build_for(fixture)
     assert _analysis_records(fresh.lookup("mlp")) == 0
-    assert _analysis_records(QWEN3_1_7B.prototype.lookup("mlp")) == 0
+    assert _analysis_records(_source(QWEN3_1_7B).lookup("mlp")) == 0
 
 
 def test_a_stack_analyses_one_layer_without_marking_its_neighbour() -> None:
@@ -103,7 +109,7 @@ def test_binding_a_target_does_not_reach_the_next_build() -> None:
 
 
 def test_one_model_answers_to_more_than_one_machine_in_one_run() -> None:
-    """A case is target-free, so the same model can be asked twice."""
+    """The fixture rebinds, so the same model can be asked twice."""
     cuda = QWEN3_1_7B.build_for(h200_sxm())
     amx = QWEN3_1_7B.build_for(apple_m2_pro())
 
@@ -111,12 +117,12 @@ def test_one_model_answers_to_more_than_one_machine_in_one_run() -> None:
     assert cuda.lookup("mlp") is not amx.lookup("mlp")
 
 
-def test_the_model_source_states_no_machine() -> None:
-    """Which hardware a model runs on is the fixture's to say, not the model's."""
+def test_a_case_is_aimed_by_its_fixture_whatever_its_source_declares() -> None:
+    fixture = apple_m2_pro()
     for model in CORPUS:
-        built = model.build()
-        assert built.target is None, f"{model.id} binds a Target in its source"
-        assert built.topologies is None, f"{model.id} binds topologies in its source"
+        bound = model.build_for(fixture)
+        assert bound.resolve_target() is fixture.target, model.id
+        assert bound.effective_topologies() == fixture.topologies, model.id
 
 
 def test_fixtures_take_their_extents_from_the_hardware_documents() -> None:
@@ -173,7 +179,7 @@ def test_a_case_that_cannot_be_resolved_says_so() -> None:
     question nobody asked; and dropping an empty segment would make two different
     paths name one node.
     """
-    not_a_module = ModelCase(id="missing", prototype=QWEN3_1_7B.prototype.lookup("mlp"))
+    not_a_module = ModelCase(id="missing", prototype=_source(QWEN3_1_7B).lookup("mlp"))
     with pytest.raises(CorpusError, match="prototype is a Function, not a Module"):
         not_a_module.build()
 
@@ -277,11 +283,12 @@ def test_a_target_fixture_binds_only_what_it_was_given() -> None:
         target=h200_sxm().target,
         topologies=(Topology("cta", 4),),
     )
+    declared = built.topologies
     bound = fixture.bind(built)
 
     assert isinstance(bound, Module)
     assert bound.effective_topologies() == (Topology("cta", 4),)
-    assert built.topologies is None
+    assert built.topologies == declared
 
 
 def test_a_blocked_case_that_starts_working_breaks_the_build() -> None:

@@ -12,7 +12,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.qwen2_5_1_5b.model import MAX_CTX, Qwen2_5_1_5B
+from tests.models.qwen2_5_1_5b.model import MAX_CTX, Qwen2_5_1_5B_Decoder
 from tests.models.qwen2_5_1_5b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -28,7 +28,8 @@ ANALYZED_AT = {"ctx_len": 1024}
 
 CASE = ModelCase(
     id="qwen2_5_1_5b",
-    prototype=Qwen2_5_1_5B,
+    prototype=Qwen2_5_1_5B_Decoder,
+    scope="layer0",
     reference=ReferenceCase(
         id="qwen2_5_1_5b/reference/full_decoder_decode",
         boundary=(

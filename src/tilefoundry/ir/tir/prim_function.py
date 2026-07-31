@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.target import CudaTarget, Target
+from tilefoundry.target import Target, default_target
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class PrimFunction(Stmt):
     params: tuple[Var, ...]
     body: Sequential
     output_count: int = 1
-    target: Target = field(default_factory=CudaTarget)
+    target: Target = field(default_factory=default_target)
 
 
 __all__ = ["PrimFunction"]

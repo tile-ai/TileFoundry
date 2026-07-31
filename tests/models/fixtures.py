@@ -39,7 +39,7 @@ def h200_sxm(*, threads_per_cta: int = 128) -> TargetFixture:
     launch shape rather than a hardware total, so it is a stated choice, bounded
     by what the architecture admits.
     """
-    target = CudaTarget()
+    target = CudaTarget("nvidia.h200_sxm")
     limit = target.topology_limit("thread")
     if limit is not None and not 1 <= threads_per_cta <= limit:
         raise ValueError(

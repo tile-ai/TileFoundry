@@ -165,8 +165,8 @@ class CudaTarget(Target):
 
     def __init__(
         self,
+        device: Device | str,
         architecture: Architecture | str | None = None,
-        device: Device | str | None = None,
     ) -> None: ...
 
     def topology_limit(self, name: str) -> int | None: ...
@@ -175,11 +175,17 @@ class CudaTarget(Target):
 ```
 
 - constraints:
-  - `architecture` and `device` MUST each accept an installed document ID or a
+  - `device` and `architecture` MUST each accept an installed document ID or a
     concrete value. An ID MUST resolve immediately to the typed value, and the
     resolved ID and content digest MUST be retained (§10.2).
-  - `CudaTarget()` MUST select the installed `nvidia.sm90` and
-    `nvidia.h200_sxm` documents, and `arch` MUST equal `architecture.name`.
+  - `device` MUST be required. The constructor MUST NOT select hardware for a
+    caller who named none: a target nobody stated would answer about a machine
+    nobody has.
+  - An omitted `architecture` MUST be read from the device document's declared
+    compatibility, and MUST fail unless that document names exactly one. A
+    `Device` supplied directly carries no document, so it MUST be given an
+    architecture as well.
+  - `arch` MUST equal `architecture.name`.
   - A pair selected by ID MUST be checked for declared compatibility. A value
     supplied directly carries no document, so it has no ID or digest and is
     exempt from that check: it is a distinct hardware value rather than a
@@ -248,7 +254,11 @@ class CpuTarget(Target):
 
 - `tilefoundry.target` MUST be the sole Target implementation package. The IR
   package MUST NOT own Target classes or Target imports.
-- `resolve_target("cuda")` MUST return a default `CudaTarget`,
+- `resolve_target("cuda")` and `default_target()` MUST return a `CudaTarget` on
+  the installed `nvidia.h200_sxm` device. Naming a backend is a compilation
+  fallback and MUST stay explicit about the machine it resolved to; it is not a
+  hardware default the `CudaTarget` constructor offers.
+- `resolve_target("cuda")` MUST return that `CudaTarget`,
   `resolve_target("amx")` MUST return a default `AmxTarget`,
   `resolve_target("cpu")` MUST return a `CpuTarget`, and a Target object MUST
   pass through unchanged.

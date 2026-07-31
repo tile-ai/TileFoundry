@@ -47,13 +47,13 @@ where = ["src"]
 # as read-only reference. One destination per model: data-files flattens, and
 # seven files all named model.py would land on each other.
 "share/tilefoundry/models" = ["tests/models/catalog.json"]
-"share/tilefoundry/models/deepseek_v4_flash" = ["tests/models/deepseek_v4_flash/model.py"]
-"share/tilefoundry/models/gemma2_2b" = ["tests/models/gemma2_2b/model.py"]
-"share/tilefoundry/models/kimi_linear_48b_a3b" = ["tests/models/kimi_linear_48b_a3b/model.py"]
-"share/tilefoundry/models/minicpm3_4b" = ["tests/models/minicpm3_4b/model.py"]
-"share/tilefoundry/models/qwen2_5_1_5b" = ["tests/models/qwen2_5_1_5b/model.py"]
-"share/tilefoundry/models/qwen3_1_7b" = ["tests/models/qwen3_1_7b/model.py"]
-"share/tilefoundry/models/qwen3_5_35b_a3b" = ["tests/models/qwen3_5_35b_a3b/model.py"]
+"share/tilefoundry/models/deepseek_v4_flash" = ["tests/models/deepseek_v4_flash/model.py", "tests/models/deepseek_v4_flash/config.json"]
+"share/tilefoundry/models/gemma2_2b" = ["tests/models/gemma2_2b/model.py", "tests/models/gemma2_2b/config.json"]
+"share/tilefoundry/models/kimi_linear_48b_a3b" = ["tests/models/kimi_linear_48b_a3b/model.py", "tests/models/kimi_linear_48b_a3b/config.json"]
+"share/tilefoundry/models/minicpm3_4b" = ["tests/models/minicpm3_4b/model.py", "tests/models/minicpm3_4b/config.json"]
+"share/tilefoundry/models/qwen2_5_1_5b" = ["tests/models/qwen2_5_1_5b/model.py", "tests/models/qwen2_5_1_5b/config.json"]
+"share/tilefoundry/models/qwen3_1_7b" = ["tests/models/qwen3_1_7b/model.py", "tests/models/qwen3_1_7b/config.json"]
+"share/tilefoundry/models/qwen3_5_35b_a3b" = ["tests/models/qwen3_5_35b_a3b/model.py", "tests/models/qwen3_5_35b_a3b/config.json"]
 
 [tool.pytest.ini_options]
 # Parallel is how this suite is run, on CI (`-n 4`) and locally: conftest's

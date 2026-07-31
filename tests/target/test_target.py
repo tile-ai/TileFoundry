@@ -44,10 +44,13 @@ def test_a_scheduler_is_reached_by_target_type_not_by_target_value() -> None:
     assert SCHEDULES.selectors_for(AmxTarget) == ("core",)
     assert SCHEDULES.selectors_for(CpuTarget) == ()
 
-    custom = CudaTarget(architecture=replace(_installed_sm90(), name="sm_90_custom"))
-    assert SCHEDULES.resolve(custom, "cta") is SCHEDULES.resolve(CudaTarget(), "cta")
-    assert SCHEDULES.resolve(CudaTarget(), "cta") is not SCHEDULES.resolve(
-        CudaTarget(), "thread"
+    custom = CudaTarget(
+        "nvidia.h200_sxm",
+        architecture=replace(_installed_sm90(), name="sm_90_custom"),
+    )
+    assert SCHEDULES.resolve(custom, "cta") is SCHEDULES.resolve(CudaTarget("nvidia.h200_sxm"), "cta")
+    assert SCHEDULES.resolve(CudaTarget("nvidia.h200_sxm"), "cta") is not SCHEDULES.resolve(
+        CudaTarget("nvidia.h200_sxm"), "thread"
     )
 
     with pytest.raises(UnknownAlgorithmError, match="no 'cta' registered for Target"):
@@ -55,8 +58,8 @@ def test_a_scheduler_is_reached_by_target_type_not_by_target_value() -> None:
     with pytest.raises(UnknownAlgorithmError, match=r"available: \['core'\]"):
         SCHEDULES.resolve(AmxTarget(), "amx")
 
-    assert CudaTarget() == CudaTarget()
-    assert hash(CudaTarget()) == hash(CudaTarget())
+    assert CudaTarget("nvidia.h200_sxm") == CudaTarget("nvidia.h200_sxm")
+    assert hash(CudaTarget("nvidia.h200_sxm")) == hash(CudaTarget("nvidia.h200_sxm"))
     assert AmxTarget() == AmxTarget()
 
 
@@ -65,7 +68,7 @@ def test_static_topologies_use_target_resource_facts() -> None:
     grid may be far wider than the machine's SMs and a block may not exceed the
     threads one supports, and a grid whose size is only known at launch is
     accepted as declared."""
-    target = CudaTarget()
+    target = CudaTarget("nvidia.h200_sxm")
     target.validate_program_topology(Topology("cta", 132))
     target.validate_program_topology(Topology("cta", 310_000))
     target.validate_program_topology(Topology("thread", 1024))
@@ -80,12 +83,15 @@ def test_group_functions_by_target_fact_matching() -> None:
     """CUDA functions must agree on Target facts before grouping; CPU
     functions are exempt from the CUDA fact-matching."""
     body = Sequential(body=())
-    first = PrimFunction(name="first", params=(), body=body, target=CudaTarget())
+    first = PrimFunction(name="first", params=(), body=body, target=CudaTarget("nvidia.h200_sxm"))
     second = PrimFunction(
         name="second",
         params=(),
         body=body,
-        target=CudaTarget(architecture=replace(_installed_sm90(), name="sm_90_alt")),
+        target=CudaTarget(
+            "nvidia.h200_sxm",
+            architecture=replace(_installed_sm90(), name="sm_90_alt"),
+        ),
     )
     with pytest.raises(ValueError, match="differing Target facts"):
         group_functions_by_target(

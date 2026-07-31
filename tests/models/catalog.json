@@ -7,89 +7,12 @@
   "models": [
     {
       "counts": {
-        "functions": 551,
-        "leaf_modules": 91
+        "functions": 519,
+        "leaf_modules": 86
       },
       "evidence": "tests/models/deepseek_v4_flash/test_causal_lm_e2e.py prepares a fabricated checkpoint and compares the twin against the evaluator",
       "level": "L2",
       "modules": [
-        {
-          "functions": [
-            "mla_kv_update(hidden: Tensor[(1, 1, 4096), \"bf16\"], gamma_kv: ConstTensor[(512,), \"bf16\"], w_kv: ConstTensor[(4096, 512), \"bf16\"], cos_pos: Tensor[(1, 1, 1, 32), \"f32\"], sin_pos: Tensor[(1, 1, 1, 32), \"f32\"])",
-            "mla_attend(hidden: Tensor[(1, 1, 4096), \"bf16\"], gamma_q_lora: ConstTensor[(1024,), \"bf16\"], w_q_a: ConstTensor[(4096, 1024), \"bf16\"], w_q_b: ConstTensor[(1024, 32768), \"bf16\"], ones_head_dim: Tensor[(512,), \"bf16\"], cos_pos: Tensor[(1, 1, 1, 32), \"f32\"], sin_pos: Tensor[(1, 1, 1, 32), \"f32\"], kv_cache: Tensor[(1, ctx_len, 1, 512), \"bf16\"], kv_new: Tensor[(1, 1, 1, 512), \"bf16\"], attn_sink: ConstTensor[(1, 1, 64, 1), \"f32\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o_a: ConstTensor[(8, 4096, 1024), \"bf16\"], w_o_b: ConstTensor[(8192, 4096), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "DeepseekV4Attention"
-          ]
-        },
-        {
-          "functions": [
-            "shared_fp8_dequant_w1(weight: Tensor[(2048, 4096), \"fp8e4m3\"], scale: Tensor[(16, 32), \"f8e8m0\"])",
-            "shared_fp8_dequant_w2(weight: Tensor[(4096, 2048), \"fp8e4m3\"], scale: Tensor[(32, 16), \"f8e8m0\"])",
-            "moe_experts_core(x: Tensor[(1, 1, 4096), \"bf16\"], gweights: Tensor[(1, 6), \"f32\"], eids: Tensor[(1, 6), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "moe_hash_gather(x: Tensor[(1, 1, 4096), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], tid2eid: ConstTensor[(129280, 6), \"i64\"], token_ids: Tensor[(1,), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "shared_expert(x: Tensor[(1, 1, 4096), \"bf16\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])",
-            "combine_expert_outputs(routed: Tensor[(1, 1, 4096), \"bf16\"], shared: Tensor[(1, 1, 4096), \"bf16\"])",
-            "deepseek_v4_flash_moe_hash(hidden: Tensor[(1, 1, 4096), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], tid2eid: ConstTensor[(129280, 6), \"i64\"], token_ids: Tensor[(1,), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "DeepseekV4MoE"
-          ]
-        },
-        {
-          "functions": [
-            "pre_moe_rms_norm(x: Tensor[(1, 1, 4096), \"bf16\"], rms_weight: ConstTensor[(4096,), \"bf16\"])",
-            "shared_fp8_dequant_w1(weight: Tensor[(2048, 4096), \"fp8e4m3\"], scale: Tensor[(16, 32), \"f8e8m0\"])",
-            "shared_fp8_dequant_w2(weight: Tensor[(4096, 2048), \"fp8e4m3\"], scale: Tensor[(32, 16), \"f8e8m0\"])",
-            "moe_experts_core(x: Tensor[(1, 1, 4096), \"bf16\"], gweights: Tensor[(1, 6), \"f32\"], eids: Tensor[(1, 6), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "moe_topk(x: Tensor[(1, 1, 4096), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], gate_bias: ConstTensor[(256,), \"f32\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "shared_expert(x: Tensor[(1, 1, 4096), \"bf16\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])",
-            "combine_expert_outputs(routed: Tensor[(1, 1, 4096), \"bf16\"], shared: Tensor[(1, 1, 4096), \"bf16\"])",
-            "deepseek_v4_flash_moe(x: Tensor[(1, 1, 4096), \"bf16\"], rms_weight: ConstTensor[(4096,), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], gate_bias: ConstTensor[(256,), \"f32\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "DeepseekV4NoauxTcMoE"
-          ]
-        },
-        {
-          "functions": [
-            "shared_fp8_dequant_w1(weight: Tensor[(2048, 4096), \"fp8e4m3\"], scale: Tensor[(16, 32), \"f8e8m0\"])",
-            "shared_fp8_dequant_w2(weight: Tensor[(4096, 2048), \"fp8e4m3\"], scale: Tensor[(32, 16), \"f8e8m0\"])",
-            "moe_experts_core(x: Tensor[(1, 1, 4096), \"bf16\"], gweights: Tensor[(1, 6), \"f32\"], eids: Tensor[(1, 6), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "moe_hash_gather(x: Tensor[(1, 1, 4096), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], tid2eid: ConstTensor[(129280, 6), \"i64\"], token_ids: Tensor[(1,), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "shared_expert(x: Tensor[(1, 1, 4096), \"bf16\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])",
-            "combine_expert_outputs(routed: Tensor[(1, 1, 4096), \"bf16\"], shared: Tensor[(1, 1, 4096), \"bf16\"])",
-            "deepseek_v4_flash_moe_hash(hidden: Tensor[(1, 1, 4096), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], tid2eid: ConstTensor[(129280, 6), \"i64\"], token_ids: Tensor[(1,), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "DeepseekV4MoE"
-          ]
-        },
-        {
-          "functions": [
-            "pre_moe_rms_norm(x: Tensor[(1, 1, 4096), \"bf16\"], rms_weight: ConstTensor[(4096,), \"bf16\"])",
-            "shared_fp8_dequant_w1(weight: Tensor[(2048, 4096), \"fp8e4m3\"], scale: Tensor[(16, 32), \"f8e8m0\"])",
-            "shared_fp8_dequant_w2(weight: Tensor[(4096, 2048), \"fp8e4m3\"], scale: Tensor[(32, 16), \"f8e8m0\"])",
-            "moe_experts_core(x: Tensor[(1, 1, 4096), \"bf16\"], gweights: Tensor[(1, 6), \"f32\"], eids: Tensor[(1, 6), \"i64\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "moe_topk(x: Tensor[(1, 1, 4096), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], gate_bias: ConstTensor[(256,), \"f32\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"])",
-            "shared_expert(x: Tensor[(1, 1, 4096), \"bf16\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])",
-            "combine_expert_outputs(routed: Tensor[(1, 1, 4096), \"bf16\"], shared: Tensor[(1, 1, 4096), \"bf16\"])",
-            "deepseek_v4_flash_moe(x: Tensor[(1, 1, 4096), \"bf16\"], rms_weight: ConstTensor[(4096,), \"bf16\"], gate_weight: ConstTensor[(256, 4096), \"bf16\"], gate_bias: ConstTensor[(256,), \"f32\"], w1_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w1_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w3_weight: ConstTensor[(256, 2048, 4096), \"fp8e4m3\"], w3_scale: ConstTensor[(256, 16, 32), \"f8e8m0\"], w2_weight: ConstTensor[(256, 4096, 2048), \"fp8e4m3\"], w2_scale: ConstTensor[(256, 32, 16), \"f8e8m0\"], shared_w1_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w1_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w3_weight: ConstTensor[(2048, 4096), \"fp8e4m3\"], shared_w3_scale: ConstTensor[(16, 32), \"f8e8m0\"], shared_w2_weight: ConstTensor[(4096, 2048), \"fp8e4m3\"], shared_w2_scale: ConstTensor[(32, 16), \"f8e8m0\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "DeepseekV4NoauxTcMoE"
-          ]
-        },
         {
           "functions": [
             "embed(table: ConstTensor[(129280, 4096), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
@@ -190,25 +113,12 @@
     },
     {
       "counts": {
-        "functions": 111,
-        "leaf_modules": 27
+        "functions": 107,
+        "leaf_modules": 26
       },
       "evidence": "tests/models/gemma2_2b/ compares the full stack against Hugging Face at random weights",
       "level": "L2",
       "modules": [
-        {
-          "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: ConstTensor[(2304,), \"bf16\"])",
-            "self_attention(hidden: Tensor[(1, 1, 2304), \"bf16\"], w_q: ConstTensor[(1, 2304, 2048), \"bf16\"], w_k: ConstTensor[(1, 2304, 1024), \"bf16\"], w_v: ConstTensor[(1, 2304, 1024), \"bf16\"], cos_cache: Tensor[(8192, 256), \"bf16\"], sin_cache: Tensor[(8192, 256), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2304), \"bf16\"])",
-            "mlp(hidden: Tensor[(1, 1, 2304), \"bf16\"], w_gate: ConstTensor[(1, 2304, 9216), \"bf16\"], w_up: ConstTensor[(1, 2304, 9216), \"bf16\"], w_down: ConstTensor[(1, 9216, 2304), \"bf16\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: ConstTensor[(2304,), \"bf16\"], w_q: ConstTensor[(1, 2304, 2048), \"bf16\"], w_k: ConstTensor[(1, 2304, 1024), \"bf16\"], w_v: ConstTensor[(1, 2304, 1024), \"bf16\"], cos_cache: Tensor[(8192, 256), \"bf16\"], sin_cache: Tensor[(8192, 256), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 4, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2304), \"bf16\"], gamma_post_attn: ConstTensor[(2304,), \"bf16\"], gamma_pre_ff: ConstTensor[(2304,), \"bf16\"], w_gate: ConstTensor[(1, 2304, 9216), \"bf16\"], w_up: ConstTensor[(1, 2304, 9216), \"bf16\"], w_down: ConstTensor[(1, 9216, 2304), \"bf16\"], gamma_post_ff: ConstTensor[(2304,), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "Gemma2_2B"
-          ]
-        },
         {
           "functions": [
             "embed(w_embed: ConstTensor[(256000, 2304), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
@@ -320,25 +230,12 @@
     },
     {
       "counts": {
-        "functions": 255,
-        "leaf_modules": 63
+        "functions": 251,
+        "leaf_modules": 62
       },
       "evidence": "tests/models/minicpm3_4b/ compares the full stack against Hugging Face at random weights",
       "level": "L2",
       "modules": [
-        {
-          "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"])",
-            "mla_attention(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"], w_q_a: ConstTensor[(1, 2560, 768), \"bf16\"], gamma_q_a: ConstTensor[(768,), \"bf16\"], w_q_b: ConstTensor[(1, 768, 3840), \"bf16\"], w_kv_a: ConstTensor[(1, 2560, 288), \"bf16\"], gamma_kv_a: ConstTensor[(256,), \"bf16\"], w_kv_b: ConstTensor[(1, 256, 5120), \"bf16\"], cos_cache: Tensor[(32768, 32), \"bf16\"], sin_cache: Tensor[(32768, 32), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"bf16\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2560, 2560), \"bf16\"])",
-            "mlp(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_post: ConstTensor[(2560,), \"bf16\"], w_gate: ConstTensor[(1, 2560, 6400), \"bf16\"], w_up: ConstTensor[(1, 2560, 6400), \"bf16\"], w_down: ConstTensor[(1, 6400, 2560), \"bf16\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 2560), \"bf16\"], gamma_in: ConstTensor[(2560,), \"bf16\"], w_q_a: ConstTensor[(1, 2560, 768), \"bf16\"], gamma_q_a: ConstTensor[(768,), \"bf16\"], w_q_b: ConstTensor[(1, 768, 3840), \"bf16\"], w_kv_a: ConstTensor[(1, 2560, 288), \"bf16\"], gamma_kv_a: ConstTensor[(256,), \"bf16\"], w_kv_b: ConstTensor[(1, 256, 5120), \"bf16\"], cos_cache: Tensor[(32768, 32), \"bf16\"], sin_cache: Tensor[(32768, 32), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 40, 96), \"bf16\"], v_cache: Tensor[(1, ctx_len, 40, 64), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2560, 2560), \"bf16\"], gamma_post: ConstTensor[(2560,), \"bf16\"], w_gate: ConstTensor[(1, 2560, 6400), \"bf16\"], w_up: ConstTensor[(1, 2560, 6400), \"bf16\"], w_down: ConstTensor[(1, 6400, 2560), \"bf16\"], residual_scale: Tensor[(1, 1, 1), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "MiniCPM3_4B"
-          ]
-        },
         {
           "functions": [
             "embed(w_embed: ConstTensor[(73448, 2560), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
@@ -431,25 +328,12 @@
     },
     {
       "counts": {
-        "functions": 119,
-        "leaf_modules": 29
+        "functions": 115,
+        "leaf_modules": 28
       },
       "evidence": "tests/models/qwen2_5_1_5b/ compares the full stack against Hugging Face at random weights",
       "level": "L2",
       "modules": [
-        {
-          "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"])",
-            "self_attention(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"], w_q: ConstTensor[(1, 1536, 1536), \"bf16\"], bias_q: ConstTensor[(1536,), \"bf16\"], w_k: ConstTensor[(1, 1536, 256), \"bf16\"], bias_k: ConstTensor[(256,), \"bf16\"], w_v: ConstTensor[(1, 1536, 256), \"bf16\"], bias_v: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(131072, 128), \"bf16\"], sin_cache: Tensor[(131072, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 1536, 1536), \"bf16\"])",
-            "mlp(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_post: ConstTensor[(1536,), \"bf16\"], w_gate: ConstTensor[(1, 1536, 8960), \"bf16\"], w_up: ConstTensor[(1, 1536, 8960), \"bf16\"], w_down: ConstTensor[(1, 8960, 1536), \"bf16\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 1536), \"bf16\"], gamma_in: ConstTensor[(1536,), \"bf16\"], w_q: ConstTensor[(1, 1536, 1536), \"bf16\"], bias_q: ConstTensor[(1536,), \"bf16\"], w_k: ConstTensor[(1, 1536, 256), \"bf16\"], bias_k: ConstTensor[(256,), \"bf16\"], w_v: ConstTensor[(1, 1536, 256), \"bf16\"], bias_v: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(131072, 128), \"bf16\"], sin_cache: Tensor[(131072, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 1536, 1536), \"bf16\"], gamma_post: ConstTensor[(1536,), \"bf16\"], w_gate: ConstTensor[(1, 1536, 8960), \"bf16\"], w_up: ConstTensor[(1, 1536, 8960), \"bf16\"], w_down: ConstTensor[(1, 8960, 1536), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "Qwen2_5_1_5B"
-          ]
-        },
         {
           "functions": [
             "embed(w_embed: ConstTensor[(151936, 1536), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
@@ -508,25 +392,12 @@
     },
     {
       "counts": {
-        "functions": 119,
-        "leaf_modules": 29
+        "functions": 115,
+        "leaf_modules": 28
       },
       "evidence": "tests/models/qwen3_1_7b/test_decoder.py compares all 28 layers against Hugging Face at random weights; the L3 case exists but has never run against a real mount",
       "level": "L2",
       "modules": [
-        {
-          "functions": [
-            "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"])",
-            "self_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"])",
-            "mlp(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])",
-            "decoder_layer(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_q: ConstTensor[(1, 2048, 2048), \"bf16\"], w_k: ConstTensor[(1, 2048, 1024), \"bf16\"], w_v: ConstTensor[(1, 2048, 1024), \"bf16\"], gamma_q: ConstTensor[(128,), \"bf16\"], gamma_k: ConstTensor[(128,), \"bf16\"], cos_cache: Tensor[(40960, 128), \"bf16\"], sin_cache: Tensor[(40960, 128), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], v_cache: Tensor[(1, ctx_len, 8, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 2048, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"], w_gate: ConstTensor[(1, 2048, 6144), \"bf16\"], w_up: ConstTensor[(1, 2048, 6144), \"bf16\"], w_down: ConstTensor[(1, 6144, 2048), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "Qwen3_1_7B"
-          ]
-        },
         {
           "functions": [
             "embed(w_embed: ConstTensor[(151936, 2048), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",
@@ -585,166 +456,12 @@
     },
     {
       "counts": {
-        "functions": 425,
-        "leaf_modules": 88
+        "functions": 393,
+        "leaf_modules": 80
       },
       "evidence": "declared, boundary-complete submodules rather than a stack; no complete-stack reference is built at this size",
       "level": "L1",
       "modules": [
-        {
-          "functions": [
-            "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
-            "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
-            "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
-            "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "Qwen3_5LinearAttention"
-          ]
-        },
-        {
-          "functions": [
-            "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-            "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-            "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "Qwen3_5FullAttention"
-          ]
-        },
-        {
-          "functions": [
-            "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
-          ],
-          "leaf": true,
-          "modules": [],
-          "names": [
-            "Qwen3_5Router"
-          ]
-        },
-        {
-          "functions": [
-            "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
-            "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
-            "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
-            "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
-          ],
-          "leaf": false,
-          "modules": [
-            {
-              "functions": [
-                "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
-              ],
-              "leaf": true,
-              "modules": [],
-              "names": [
-                "router"
-              ]
-            }
-          ],
-          "names": [
-            "Qwen3_5MoE"
-          ]
-        },
-        {
-          "functions": [
-            "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
-          ],
-          "leaf": false,
-          "modules": [
-            {
-              "functions": [
-                "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
-              ],
-              "leaf": true,
-              "modules": [],
-              "names": [
-                "mixer"
-              ]
-            },
-            {
-              "functions": [
-                "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
-                "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
-                "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
-                "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
-              ],
-              "leaf": false,
-              "modules": [
-                {
-                  "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
-                  ],
-                  "leaf": true,
-                  "modules": [],
-                  "names": [
-                    "router"
-                  ]
-                }
-              ],
-              "names": [
-                "moe"
-              ]
-            }
-          ],
-          "names": [
-            "Qwen3_5FullAttnLayer"
-          ]
-        },
-        {
-          "functions": [
-            "residual_add(a: Tensor[(1, 1, 2048), \"bf16\"], b: Tensor[(1, 1, 2048), \"bf16\"])"
-          ],
-          "leaf": false,
-          "modules": [
-            {
-              "functions": [
-                "conv_step(conv_state: Tensor[(1, 8192, 3), \"bf16\"], entry: Tensor[(1, 8192, 1), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"])",
-                "l2_normalise(x: Tensor[(1, 1, 32, 128), \"bf16\"])",
-                "delta_step(recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], q: Tensor[(1, 1, 32, 128), \"bf16\"], k: Tensor[(1, 1, 32, 128), \"bf16\"], v: Tensor[(1, 1, 32, 128), \"bf16\"], g: Tensor[(1, 1, 32), \"bf16\"], beta: Tensor[(1, 1, 32), \"bf16\"])",
-                "linear_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_in_qkv: ConstTensor[(1, 2048, 8192), \"bf16\"], w_in_z: ConstTensor[(1, 2048, 4096), \"bf16\"], w_in_b: ConstTensor[(1, 2048, 32), \"bf16\"], w_in_a: ConstTensor[(1, 2048, 32), \"bf16\"], conv_w: ConstTensor[(8192, 4), \"bf16\"], a_log: ConstTensor[(32,), \"bf16\"], dt_bias: ConstTensor[(32,), \"bf16\"], conv_state: Tensor[(1, 8192, 3), \"bf16\"], recurrent_state: Tensor[(1, 32, 128, 128), \"bf16\"], gamma_gdn: ConstTensor[(128,), \"bf16\"], w_out: ConstTensor[(1, 4096, 2048), \"bf16\"])"
-              ],
-              "leaf": true,
-              "modules": [],
-              "names": [
-                "mixer"
-              ]
-            },
-            {
-              "functions": [
-                "post_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_post: ConstTensor[(2048,), \"bf16\"])",
-                "routed_experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"])",
-                "shared_expert(tokens: Tensor[(1, 2048), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])",
-                "experts(tokens: Tensor[(1, 2048), \"bf16\"], weights: Tensor[(1, 8), \"bf16\"], indices: Tensor[(1, 8), \"i64\"], w_gate: ConstTensor[(256, 512, 2048), \"bf16\"], w_up: ConstTensor[(256, 512, 2048), \"bf16\"], w_down: ConstTensor[(256, 2048, 512), \"bf16\"], w_shared_gate: ConstTensor[(2048, 512), \"bf16\"], w_shared_up: ConstTensor[(2048, 512), \"bf16\"], w_shared_down: ConstTensor[(512, 2048), \"bf16\"], w_shared_scale: ConstTensor[(2048, 1), \"bf16\"])"
-              ],
-              "leaf": false,
-              "modules": [
-                {
-                  "functions": [
-                    "routing(tokens: Tensor[(1, 2048), \"bf16\"], w_router: ConstTensor[(2048, 256), \"bf16\"])"
-                  ],
-                  "leaf": true,
-                  "modules": [],
-                  "names": [
-                    "router"
-                  ]
-                }
-              ],
-              "names": [
-                "moe"
-              ]
-            }
-          ],
-          "names": [
-            "Qwen3_5LinearAttnLayer"
-          ]
-        },
         {
           "functions": [
             "embed(table: ConstTensor[(248320, 2048), \"bf16\"], token_ids: Tensor[(1,), \"i64\"])",

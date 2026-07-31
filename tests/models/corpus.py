@@ -6,9 +6,10 @@ end-to-end witnesses. Nothing here copies a model into a smaller graph for one
 subsystem's convenience, because a result measured on a copy says nothing about
 the program a user would actually hand us.
 
-A case is target-free on purpose. The model source states shapes and dtypes; a
-`TargetFixture` states the machine. They meet only when a test asks for it, so the
-same model can be asked about on more than one target in one run.
+A published root states the machine it ships aimed at, and a case names that root.
+A `TargetFixture` rebinds the root, so the same model can be asked about on more
+than one target in one run; the domain a case measures is selected out of the
+bound root and inherits from it.
 
 `build()` copies the model's prototype every time. That is not caution about
 mutation in the abstract -- an analysis attaches its records to the Call objects
@@ -140,9 +141,7 @@ class CapabilityGate:
 class TargetFixture:
     """One machine a model can be asked about, and the levels it declares.
 
-    The topologies belong here rather than in the model source: how many parallel
-    positions a program divides over is a property of the machine it was aimed
-    at, and the same model is aimed at more than one.
+    `bind` overrides whatever the source declares.
     """
 
     id: str
@@ -257,9 +256,13 @@ class SizedCase:
 class ModelCase:
     """One Module of one model, described once, for every kind of test.
 
-    `prototype` is the Module the model's own `model.py` defines, reached by an
-    ordinary import. It is the single source of truth and is never handed out:
-    `build()` copies it, because analysis annotates the IR it is given.
+    `prototype` is the published root the model's own `model.py` defines, reached
+    by an ordinary import. It is the single source of truth and is never handed
+    out: `build()` copies it, because analysis annotates the IR it is given.
+
+    `scope` names the domain below that root this case is about, and every
+    selector here is relative to it. A case whose domain is the root itself
+    states nothing.
 
     `id` names this Module's boundary and `model` names the model it belongs to.
     They differ only for a model whose kernels live in more than one Module -- a
@@ -277,10 +280,27 @@ class ModelCase:
     schedule: tuple[FunctionCase, ...] = ()
     sized: tuple[SizedCase, ...] = ()
     model: str = ""
+    scope: str = ""
 
     def __post_init__(self) -> None:
         if not self.model:
             object.__setattr__(self, "model", self.id)
+
+    def _root(self) -> Module:
+        """A copy of the published root that nothing else holds a reference to."""
+        if not isinstance(self.prototype, Module):
+            raise CorpusError(
+                f"model case {self.id!r}: prototype is a "
+                f"{type(self.prototype).__name__}, not a Module"
+            )
+        return self.prototype.cloned()
+
+    def _scoped(self, root: Module) -> Module:
+        """The domain `scope` names below *root*, which inherits *root*'s machine."""
+        try:
+            return select(root, self.scope)
+        except (TypeError, ValueError) as error:
+            raise CorpusError(f"model case {self.id!r}: {error}") from None
 
     def build(self) -> Module:
         """A Module nothing else holds a reference to.
@@ -289,16 +309,11 @@ class ModelCase:
         Function and no Call, so an analysis that annotates one is invisible to
         the other and to the prototype they both came from.
         """
-        if not isinstance(self.prototype, Module):
-            raise CorpusError(
-                f"model case {self.id!r}: prototype is a "
-                f"{type(self.prototype).__name__}, not a Module"
-            )
-        return self.prototype.cloned()
+        return self._scoped(self._root())
 
     def build_for(self, fixture: TargetFixture) -> Module:
         """A fresh Module aimed at one machine, in the one order that isolates."""
-        return fixture.bind(self.build())
+        return self._scoped(fixture.bind(self._root()))
 
     def inventory(self, module: Module | None = None) -> tuple[str, ...]:
         """Every HIR function this model really defines, as root-relative

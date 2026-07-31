@@ -41,7 +41,7 @@ SOLVER = ScheduleOptions(
 
 def _aimed():
     """The decode example, aimed at one machine."""
-    return replace(GqaOnline, target=CudaTarget(), topologies=(Topology("cta", 8),))
+    return replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),))
 
 
 @pytest.mark.parametrize("family", FAMILIES)

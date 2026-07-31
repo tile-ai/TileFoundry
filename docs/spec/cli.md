@@ -173,12 +173,17 @@ that runs before it can be read is a reference that decides what it describes.
   - A model MUST NOT be recorded at the oracle level except from a committed
     record of a run against a real checkpoint. A test that skipped because its
     inputs were absent MUST NOT be read as evidence.
-  - With a `NAME`, output MUST be that model's whole forest: every top-level
-    Module it declares, each Module's own functions with their signatures beneath
-    it, and the leaf Modules marked. A leaf is a Module with no child Modules, not
+  - With a `NAME`, output MUST be that model's whole forest: every root it
+    publishes, each Module's own functions with their signatures beneath it, and
+    the leaf Modules marked. A leaf is a Module with no child Modules, not
     a function — a runtime twin is written per Module and MUST cover all of that
     Module's functions at once, so marking functions would state the work at a
     granularity nobody implements at.
+  - A root MUST be a Module that declares the target its tree runs on, and a
+    Module that declares none MUST NOT be listed as one. Declaring the machine is
+    what makes a Module answerable on its own; a component or layer template
+    reached through the root that owns it would otherwise be offered as a selector
+    that Analyze and Schedule cannot answer.
   - A run of sibling Modules MAY be written once as the range it covers, and only
     when the run is adjacent, identically shaped down its whole subtree, named from
     one stem, and numbered consecutively. Such an entry MUST name every Module it

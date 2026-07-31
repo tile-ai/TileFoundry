@@ -48,7 +48,7 @@ scale; only the *scale* tensors need a converter (cast, F32 on disk ->
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from transformers import AutoConfig
@@ -1260,8 +1260,10 @@ def build_deepseek_v4_flash(config: DSV4Config):
     #: positions counting its own, so the context it is handed is one shorter.
     MAX_CTX = config.window - 1
 
-    @module(entry="lm_head")
+    @module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"))
     class DeepseekV4ForCausalLM:
+        topologies = (Topology("cta", 132),)
+
         @func
         def embed(
             table: ConstTensor[(config.vocab, config.dim), "bf16"],
@@ -1364,18 +1366,10 @@ def build_deepseek_v4_flash(config: DSV4Config):
     return DeepseekV4ForCausalLM
 
 
-#: The attention submodule at the real checkpoint's dimensions: what the corpus
-#: case analyses, schedules and compares against Hugging Face. Built on its own
-#: rather than read out of the tree below, so measuring it annotates nothing a
-#: layer holds.
-DeepseekV4Attention, _MOE_HASH, _MOE_NOAUX = _submodules(REAL)
-
-#: The MoE blocks as their own roots. The authored classes declare no Target --
-#: they are nested as children of a decoder layer, and only a root declares the
-#: Target its tree runs on -- so a standalone analysis or schedule caller, which
-#: selects one of these as its root, gets the declaration here.
-moe_hash_module = replace(_MOE_HASH, target=CudaTarget())
-deepseek_v4_flash_module = replace(_MOE_NOAUX, target=CudaTarget())
+#: The attention submodule and the ``noaux_tc`` MoE block at the real checkpoint's
+#: dimensions, built on their own for the tests that ask about a block rather than
+#: about the model. Neither declares a Target.
+DeepseekV4Attention, _, deepseek_v4_flash_module = _submodules(REAL)
 
 #: The published model, at the real checkpoint's shape. Any other shape is the
 #: caller's to name: ``build_deepseek_v4_flash(TINY)``.
@@ -1388,5 +1382,4 @@ __all__ = [
     "DeepseekV4ForCausalLM",
     "build_deepseek_v4_flash",
     "deepseek_v4_flash_module",
-    "moe_hash_module",
 ]

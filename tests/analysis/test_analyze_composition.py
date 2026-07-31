@@ -56,7 +56,7 @@ def _drop(function, kind) -> None:
 def _module() -> tuple[Module, object]:
     """A CUDA module holding one demo function."""
     function, _, _ = build_demo()
-    return Module("demo", (function,), function.name, target=CudaTarget()), function
+    return Module("demo", (function,), function.name, target=CudaTarget("nvidia.h200_sxm")), function
 
 
 @pytest.fixture
@@ -232,7 +232,7 @@ def test_a_failed_preflight_stops_every_analysis(registered, monkeypatch) -> Non
     )
 
     module, function = _module()
-    broken = Module("broken", (function,), function.name, target=CudaTarget())
+    broken = Module("broken", (function,), function.name, target=CudaTarget("nvidia.h200_sxm"))
 
     def _boom(*_args, **_kwargs):
         raise AnalysisError("preflight rejected this function")
@@ -282,7 +282,7 @@ def test_dispatch_is_exact_with_no_subclass_or_default_target_fallback(
         """A distinct target that happens to share CudaTarget's base."""
 
     on_subclass = Module(
-        "sub", (function,), function.name, target=_TunedCuda()
+        "sub", (function,), function.name, target=_TunedCuda("nvidia.h200_sxm")
     )
     with pytest.raises(AnalysisError, match="_TunedCuda"):
         analyze(on_subclass, function, analysis="exact.only")

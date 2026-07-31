@@ -40,7 +40,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.gemma2_2b.model import MAX_CTX, Gemma2_2B
+from tests.models.gemma2_2b.model import MAX_CTX, Gemma2_2B_Decoder
 from tests.models.gemma2_2b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -56,7 +56,8 @@ ANALYZED_AT = {"ctx_len": 1024}
 
 CASE = ModelCase(
     id="gemma2_2b",
-    prototype=Gemma2_2B,
+    prototype=Gemma2_2B_Decoder,
+    scope="layer0",
     reference=ReferenceCase(
         id="gemma2_2b/reference/full_decoder_decode",
         boundary=(

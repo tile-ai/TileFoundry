@@ -89,11 +89,15 @@ def _source_for(model: ModelCase, fixture: TargetFixture, directory) -> str:
     Modules. Stated rather than left to the CLI's default, because a root that
     composes child Modules declares no step of its own -- there is nothing for a
     default to pick -- and the corpus already says which kernel it means.
+
+    What is printed is the selected execution Module, which carries the machine it
+    resolved through its owners.
     """
-    built = model.build_for(fixture)
+    selector = model.schedule[0].selector
+    selected, _ = model.resolve(model.build_for(fixture), selector)
     path = directory / f"{model.id}.py"
-    path.write_text(as_script(built), encoding="utf-8")
-    return f"{path}:{built.name}.{model.schedule[0].selector}"
+    path.write_text(as_script(selected), encoding="utf-8")
+    return f"{path}:{selected.name}.{selector.rsplit('.', 1)[-1]}"
 
 
 def _models() -> list[ModelCase]:

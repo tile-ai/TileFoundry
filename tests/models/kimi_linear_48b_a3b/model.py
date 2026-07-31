@@ -59,6 +59,8 @@ from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.target import CudaTarget
 
 # ── the checkpoint's own configuration class ─────────────────────────────────
 #
@@ -628,11 +630,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             shared = shared_expert(tokens, sh_gate, sh_up, sh_down)
             return tf.reshape(routed + shared, new_shape=(1, S, config.hidden_size))
 
-    # No target: this root is the corpus case's own prototype, and which machine
-    # a model runs on is the fixture's to say rather than the source's. The three
-    # above are cloned into the children here and declare none either -- a child
-    # inherits its owner's.
-    @module
+    @module(target=CudaTarget("nvidia.h200_sxm"))
     class KimiLinear48BA3B:
         """The three kernels this model is, as one tree.
 
@@ -641,6 +639,8 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
         and one root is what lets a caller name any of them by the path it was
         reached through.
         """
+
+        topologies = (Topology("cta", 132),)
 
         kda = KimiKda
         mla = KimiMla

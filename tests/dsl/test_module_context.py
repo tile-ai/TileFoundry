@@ -27,7 +27,7 @@ _WARP = Topology("warp", 4)
 _THREAD = Topology("thread", 32)
 
 
-@module(entry="forward", target=CudaTarget())
+@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"))
 class _Root:
     topologies = (_CTA, _WARP)
 
@@ -62,15 +62,15 @@ def test_the_root_declaration_is_the_only_target_anywhere_below() -> None:
     """One Target is declared at the outermost Module and every Module below it
     resolves to that one; a child that declares its own is rejected rather than
     shadowing its owner, and a Module with none says which path it searched."""
-    assert _Root.resolve_target() == CudaTarget()
-    assert _Root.inherits.resolve_target() == CudaTarget()
-    assert _Root.topology_free.resolve_target() == CudaTarget()
-    assert _Root.replaces.resolve_target() == CudaTarget()
+    assert _Root.resolve_target() == CudaTarget("nvidia.h200_sxm")
+    assert _Root.inherits.resolve_target() == CudaTarget("nvidia.h200_sxm")
+    assert _Root.topology_free.resolve_target() == CudaTarget("nvidia.h200_sxm")
+    assert _Root.replaces.resolve_target() == CudaTarget("nvidia.h200_sxm")
 
     forward = _Root.lookup("forward")
     child = Module("child", (forward,), "forward", target=CpuTarget())
     with pytest.raises(ValueError, match="child module 'child' declares its own target"):
-        Module("root", (), "forward", modules=(child,), target=CudaTarget())
+        Module("root", (), "forward", modules=(child,), target=CudaTarget("nvidia.h200_sxm"))
 
     with pytest.raises(ValueError, match="Module 'bare'.*no target is declared"):
         Module("bare", (forward,), "forward").resolve_target()
@@ -81,10 +81,10 @@ def test_a_module_owns_its_children_so_a_copy_cannot_retarget_the_original() -> 
     that declares its own Target does -- must not change what the first
     owner's child resolves against."""
     child = Module("child", (_Root.lookup("forward"),), "forward")
-    on_cuda = Module("root", (), "forward", modules=(child,), target=CudaTarget())
+    on_cuda = Module("root", (), "forward", modules=(child,), target=CudaTarget("nvidia.h200_sxm"))
     on_cpu = replace(on_cuda, name="copy", target=CpuTarget())
 
-    assert on_cuda.modules[0].resolve_target() == CudaTarget()
+    assert on_cuda.modules[0].resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert on_cpu.modules[0].resolve_target() == CpuTarget()
     assert on_cuda.modules == on_cpu.modules
 
@@ -128,7 +128,7 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
     Target or a topology declaration (including an explicit empty one) yields the
     Module that owns it, and a plain ``@func`` stays a Function."""
 
-    @func(target=CudaTarget(), topologies=(_CTA,))
+    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
     def standalone(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return tf.relu(x)
 
@@ -142,7 +142,7 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
 
     assert isinstance(standalone, Module) and isinstance(empty, Module)
     assert (standalone.name, standalone.entry) == ("standalone", "standalone")
-    assert standalone.resolve_target() == CudaTarget()
+    assert standalone.resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert standalone.effective_topologies() == (_CTA,)
     assert empty.topologies == ()
     assert isinstance(plain, Function)

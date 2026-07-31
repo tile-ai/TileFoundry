@@ -11,7 +11,6 @@ from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types.shard import Broadcast, Split
-from tilefoundry.target import CudaTarget
 
 
 def _walk(expr, seen=None):
@@ -43,7 +42,6 @@ N_ROUTED = REAL.n_routed
 def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
     deepseek_v4_flash_moe = deepseek_v4_flash_module.lookup("deepseek_v4_flash_moe")
 
-    assert deepseek_v4_flash_module.resolve_target() == CudaTarget()
     assert tuple(
         (topology.name, topology.size)
         for topology in deepseek_v4_flash_module.effective_topologies()
@@ -114,7 +112,7 @@ def test_routed_path_is_ordinary_batched_dataflow() -> None:
 
 def test_root_printer_keeps_explicit_input_contracts() -> None:
     printed = as_script(deepseek_v4_flash_module)
-    assert '@module(entry="deepseek_v4_flash_moe", target=CudaTarget())' in printed
+    assert '@module(entry="deepseek_v4_flash_moe")' in printed
     assert 'topologies = (Topology("cta", 132),)' in printed
     assert f"routed_experts: where(layout=(_, 6 @ cta, {DIM}))" in printed
     assert f"combined: where(layout=((_, _, {DIM}), {{cta @ B()}}))" in printed

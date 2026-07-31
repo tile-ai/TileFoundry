@@ -39,9 +39,8 @@ from tests.models.corpus import (
 )
 from tests.models.qwen3_5_35b_a3b.model import (
     MAX_CTX,
-    Qwen3_5FullAttention,
-    Qwen3_5LinearAttention,
-    Qwen3_5MoE,
+    Qwen3_5Decoder,
+    config,
 )
 from tests.models.qwen3_5_35b_a3b.reference import (
     CTX_LEN,
@@ -60,12 +59,16 @@ from tests.models.qwen3_5_35b_a3b.reference import (
 #: answer neither.
 ANALYZED_AT = {"ctx_len": 1024}
 
+_LINEAR_LAYER = config.layer_types.index("linear_attention")
+_FULL_LAYER = config.layer_types.index("full_attention")
+
 #: The linear-attention layer is the model's own: three layers in four are one, and
 #: the Gated DeltaNet is the semantics no other model in the corpus has. So it is
 #: the case that carries the package's name.
 CASE = ModelCase(
     id="qwen3_5_35b_a3b",
-    prototype=Qwen3_5LinearAttention,
+    prototype=Qwen3_5Decoder,
+    scope=f"layer{_LINEAR_LAYER}.mixer",
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/linear_attention_decode",
         boundary=(
@@ -109,7 +112,8 @@ CASE = ModelCase(
 FULL_ATTENTION_CASE = ModelCase(
     id="qwen3_5_35b_a3b_full_attention",
     model="qwen3_5_35b_a3b",
-    prototype=Qwen3_5FullAttention,
+    prototype=Qwen3_5Decoder,
+    scope=f"layer{_FULL_LAYER}.mixer",
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/full_attention_decode",
         boundary=(
@@ -163,7 +167,8 @@ FULL_ATTENTION_CASE = ModelCase(
 MOE_CASE = ModelCase(
     id="qwen3_5_35b_a3b_moe",
     model="qwen3_5_35b_a3b",
-    prototype=Qwen3_5MoE,
+    prototype=Qwen3_5Decoder,
+    scope=f"layer{_LINEAR_LAYER}.moe",
     #: No harness reference. Drawing one means building a whole decoder layer for
     #: its block -- 805 million parameters, 3.3 GB in f32, essentially all of it the
     #: 256 experts -- which is by a wide margin the most expensive draw in this

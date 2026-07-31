@@ -62,7 +62,7 @@ def test_analysing_a_variant_gets_past_ownership() -> None:
     now is the thing that actually stops it: a variant still states its context
     length as a range, and an analysis has no answer for a range."""
     aimed = replace(
-        GqaOnline, target=CudaTarget(), topologies=(Topology("cta", 8),)
+        GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
     )
     variant = variant_for(aimed.entry_function(), DIMS)
 
@@ -73,7 +73,7 @@ def test_analysing_a_variant_gets_past_ownership() -> None:
 
 def test_analysing_a_function_from_elsewhere_is_still_refused() -> None:
     aimed = replace(
-        GqaOnline, target=CudaTarget(), topologies=(Topology("cta", 8),)
+        GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
     )
 
     with pytest.raises(AnalysisError, match="is not a function of module"):
@@ -121,7 +121,7 @@ def test_a_copy_of_an_owned_function_is_not_owned() -> None:
     is not the original. Answering ownership by equality lets the public
     boundary analyse a program the Module does not contain."""
     module = replace(
-        GqaOnline, target=CudaTarget(), topologies=(Topology("cta", 8),)
+        GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
     )
     owned = module.lookup("_ctx_partials")
     clone = replace(owned)

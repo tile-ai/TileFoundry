@@ -6,12 +6,29 @@ from dataclasses import dataclass, field
 
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target.base import Architecture, Device, Target
+from tilefoundry.target.hardware.envelope import IncompatiblePairError
 from tilefoundry.target.hardware.registry import check_compatible, select
+
+
+def _architecture_of(device: Device | str) -> str:
+    """The architecture *device*'s own document declares, when it declares one."""
+    if isinstance(device, Device):
+        raise ValueError(
+            "CudaTarget: a Device supplied directly carries no document to read a "
+            "compatible architecture from; name the architecture as well"
+        )
+    architectures = select(device, Device, role="CudaTarget.device").document.compatibility
+    if len(architectures) != 1:
+        raise IncompatiblePairError(
+            f"device {device!r} declares {list(architectures)} as compatible "
+            f"architectures; name the one to build against"
+        )
+    return architectures[0]
 
 
 @dataclass(frozen=True, init=False)
 class CudaTarget(Target):
-    """CUDA target composed from one architecture and one device."""
+    """CUDA target composed from one device and the architecture it runs."""
 
     name: str = field(default="cuda", init=False)
     architecture: Architecture = field(init=False)
@@ -27,23 +44,17 @@ class CudaTarget(Target):
 
     def __init__(
         self,
+        device: Device | str,
         architecture: Architecture | str | None = None,
-        device: Device | str | None = None,
         *,
         arch: str | None = None,
     ) -> None:
-        from .spec import H200_SXM_ID, SM90_ID  # noqa: PLC0415
-
+        if architecture is None:
+            architecture = _architecture_of(device)
         architecture = select(
-            SM90_ID if architecture is None else architecture,
-            Architecture,
-            role="CudaTarget.architecture",
+            architecture, Architecture, role="CudaTarget.architecture"
         )
-        device = select(
-            H200_SXM_ID if device is None else device,
-            Device,
-            role="CudaTarget.device",
-        )
+        device = select(device, Device, role="CudaTarget.device")
         architecture_id, device_id = architecture.id, device.id
         if arch is not None and arch != architecture.value.name:
             raise ValueError(

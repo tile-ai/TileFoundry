@@ -89,27 +89,28 @@ class TestPythonPrinterTargetRoundTrip:
         exec(compile(source, "<emitted>", "exec"), namespace)  # noqa: S102
         return namespace["result"]
 
-    def test_installed_selection_prints_as_the_bare_default(self):
-        installed = CudaTarget()
-        assert _target_str(installed) == "CudaTarget()"
+    def test_an_installed_pair_prints_as_the_device_that_names_it(self):
+        installed = CudaTarget("nvidia.h200_sxm")
+        assert _target_str(installed) == "CudaTarget('nvidia.h200_sxm')"
         assert _cuda_target_imports(installed) == ()
         assert self._rebuild(installed) == installed
 
     def test_a_directly_supplied_side_is_not_dropped(self):
-        """Deciding defaultness from the architecture alone would print a custom
-        device as a bare ``CudaTarget()`` and lose it outright, so each side is
-        checked alone and then together."""
-        installed = CudaTarget()
+        """A device ID alone rebuilds only the pair that device declares, so a
+        custom value on either side has to print in full or be lost."""
+        installed = CudaTarget("nvidia.h200_sxm")
 
         custom_arch = CudaTarget(
-            architecture=replace(installed.architecture, name="sm_90_custom")
+            "nvidia.h200_sxm",
+            architecture=replace(installed.architecture, name="sm_90_custom"),
         )
         rebuilt = self._rebuild(custom_arch)
         assert rebuilt == custom_arch
         assert rebuilt.architecture.name == "sm_90_custom"
 
         custom_device = CudaTarget(
-            device=replace(installed.device, name="h200_custom", sm_count=64)
+            device=replace(installed.device, name="h200_custom", sm_count=64),
+            architecture="nvidia.sm90",
         )
         rebuilt = self._rebuild(custom_device)
         assert rebuilt == custom_device
