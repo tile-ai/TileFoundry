@@ -19,7 +19,8 @@ class Topology:
         if self.size is None and self.name != _LAUNCH_PROVIDED_TOPOLOGY:
             raise ValueError(
                 f"Topology {self.name!r}: only a {_LAUNCH_PROVIDED_TOPOLOGY!r} "
-                f"topology may have a launch-provided (None) extent"
+                "topology may have a launch-provided (None) extent. The rule: "
+                "tilefoundry spec target topology-levels"
             )
 
 

@@ -49,12 +49,9 @@ class ScheduleResult:
 
 
 def _topology(module: Module, name: str) -> Topology:
-    """The one level of *module*'s hierarchy called *name*.
+    """Return one named level after the local scheduling preconditions.
 
-    A level whose extent arrives at launch is rejected: an algorithm places work
-    across a level by counting it, and there is nothing to count yet. What comes
-    back is the level the program declared, not a normalized copy of it, so the
-    caller sees its own hierarchy rather than one this layer rewrote.
+    The launch-extent rule is defined by docs/spec/target.md § Topology levels.
     """
     if not isinstance(name, str) or not name:
         raise ScheduleError(
@@ -69,7 +66,7 @@ def _topology(module: Module, name: str) -> Topology:
         raise ScheduleError(
             f"schedule: topology {name!r} has extent {level.size!r}, which is "
             "not known until launch; scheduling a level requires its static "
-            "extent"
+            "extent. The rule: tilefoundry spec target topology-levels"
         )
     if extent < 1:
         raise ScheduleError(
