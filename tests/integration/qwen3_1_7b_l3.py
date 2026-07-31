@@ -36,6 +36,9 @@ PROMPT = "Explain why the sky appears blue in one sentence."
 STEPS = 16
 DEV = "cuda"
 
+#: The dtype the checkpoint publishes, and so the dtype both sides decode at.
+DTYPE = torch.bfloat16
+
 # The published keys this run reads off the mounted checkpoint.
 _PUBLISHED = (
     "hidden_size",
@@ -117,9 +120,9 @@ def _emitted(venv: Path, work: Path, outside: Path, mount: Path) -> Path:
 
 
 def _oracle(mount: Path):
-    """The published model and tokenizer, at the f32 the kernels are authored at."""
+    """The published model and tokenizer, at the dtype the checkpoint publishes."""
     tokenizer = AutoTokenizer.from_pretrained(str(mount))
-    model = AutoModelForCausalLM.from_pretrained(str(mount), dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(str(mount), dtype=DTYPE)
     return tokenizer, model.to(DEV).eval()
 
 
@@ -130,20 +133,16 @@ def _rope_caches(config, rows: int):
     reproduces the cos / sin the published attention applies.
     """
     rotary = Qwen3RotaryEmbedding(config).to(DEV)
-    reference = torch.zeros(1, rows, config.hidden_size, device=DEV)
+    reference = torch.zeros(1, rows, config.hidden_size, device=DEV, dtype=DTYPE)
     cos, sin = rotary(reference, torch.arange(rows, device=DEV).unsqueeze(0))
-    return cos[0], sin[0]
+    return cos[0].to(DTYPE), sin[0].to(DTYPE)
 
 
 def _loaded(source: Path, work: Path, mount: Path, n_layers: int):
     """The emitted decoder with the published weights bound, through `prepare`."""
     root = runpy.run_path(str(source))["Qwen3_1_7B_Decoder"].cloned()
     alias = {**_ALIAS, **{f"layer{i}": f"model.layers.{i}" for i in range(n_layers)}}
-    raw = SafetensorsResource(
-        str(mount), device="cpu", alias=alias, dtype=torch.float32
-    )
-    # The canonical store is twice the checkpoint: published bf16 weights land at
-    # the f32 the kernels are authored at.
+    raw = SafetensorsResource(str(mount), device="cpu", alias=alias, dtype=DTYPE)
     prepared = work / "prepared"
     root.prepare(raw, str(prepared), device="cpu")
     return root.load(SafetensorsResource(str(prepared), device=DEV))
@@ -202,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.checkpoint.is_dir():
         raise SystemExit(f"--checkpoint {args.checkpoint} is not a directory")
     if not torch.cuda.is_available():
-        raise SystemExit("no CUDA device: this decodes two f32 copies of a 1.7B model")
+        raise SystemExit("no CUDA device: this decodes two copies of a 1.7B model")
 
     _installed(args.venv)
     published = _published(args.checkpoint)
@@ -220,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     context, want = _hf_greedy(model, prompt_ids)
     cos, sin = _rope_caches(model.config, published["max_position_embeddings"])
     scale = torch.full(
-        (1, 1, 1, 1), model.model.layers[0].self_attn.scaling, device=DEV
+        (1, 1, 1, 1), model.model.layers[0].self_attn.scaling, device=DEV, dtype=DTYPE
     )
 
     caches, token, got = context, prompt_ids[0, -1:], []
