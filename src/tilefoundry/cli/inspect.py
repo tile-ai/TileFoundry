@@ -7,8 +7,8 @@ import sys
 from tilefoundry.cli.source import load_authored_ir, selected_target
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.target import CudaTarget
-from tilefoundry.target.hardware import format_capabilities, hardware_documents
+from tilefoundry.target import _STRING_TARGETS, CudaTarget
+from tilefoundry.target.hardware import HARDWARE_SPECS, format_capabilities, hardware_documents
 
 
 def _grid_cta_count(ir: Module | Function) -> int | None:
@@ -22,8 +22,36 @@ def _grid_cta_count(ir: Module | Function) -> int | None:
     return next(iter(counts)) if len(counts) == 1 else None
 
 
-def run_capabilities(source: str) -> int:
+def _installed_capabilities() -> str:
+    """Describe the hardware documents and target names available to a module."""
+    documents = sorted(
+        (HARDWARE_SPECS.document(spec_id) for spec_id in HARDWARE_SPECS.installed_ids()),
+        key=lambda document: (document.kind, document.id),
+    )
+    lines = ["Installed hardware documents:"]
+    for document in documents:
+        compatibility = ""
+        if document.compatibility:
+            compatible_kind = "architectures" if document.kind == "device" else "devices"
+            compatibility = f"     {compatible_kind}: {', '.join(document.compatibility)}"
+        lines.append(
+            f"  {document.kind:<12}  {document.id:<17}{document.schema}{compatibility}"
+        )
+    lines += [
+        "",
+        f"Targets a module may declare: {', '.join(sorted(_STRING_TARGETS))}",
+        "",
+        "Name a SOURCE for the facts of the target that selection declares:",
+        "  tilefoundry inspect capabilities model.py:Model",
+    ]
+    return "\n".join(lines)
+
+
+def run_capabilities(source: str | None) -> int:
     """Print the capabilities of the target the selection declares."""
+    if source is None:
+        sys.stdout.write(_installed_capabilities() + "\n")
+        return 0
     ir = load_authored_ir(source)
     target = selected_target(ir)
     if not isinstance(target, CudaTarget):

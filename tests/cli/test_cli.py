@@ -223,6 +223,30 @@ def test_module_without_an_entry_names_its_functions_and_rule(tmp_path, capsys) 
     assert "The rule: tilefoundry spec core-ir default-step" in error
 
 
+def test_inspect_describes_its_commands(capsys) -> None:
+    assert cli.main(["inspect"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.startswith("tilefoundry inspect — inspect installed target facts\n")
+    assert "Usage:\n  tilefoundry inspect <command> [options]\n" in captured.out
+    assert "capabilities  the facts a selection's target was composed from" in captured.out
+    assert captured.err == ""
+
+
+def test_inspect_capabilities_lists_installed_documents(capsys) -> None:
+    assert cli.main(["inspect", "capabilities"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.startswith("Installed hardware documents:\n")
+    for document in ("apple.amx", "apple.m2_pro", "nvidia.sm90", "nvidia.h200_sxm"):
+        assert document in captured.out
+    assert "architectures: apple.amx" in captured.out
+    assert "architectures: nvidia.sm90" in captured.out
+    assert "Targets a module may declare: amx, cpu, cuda" in captured.out
+    assert "tilefoundry inspect capabilities model.py:Model" in captured.out
+    assert captured.err == ""
+
+
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:
     path = _write_module(tmp_path)
     assert cli.main(["inspect", "capabilities", f"{path}:Model.main"]) == 0

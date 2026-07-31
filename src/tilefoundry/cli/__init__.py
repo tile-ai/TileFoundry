@@ -34,6 +34,13 @@ _COMMANDS = {
     "inspect": "inspect installed target facts",
 }
 
+_INSPECT_COMMANDS = {
+    "capabilities": (
+        "the facts a selection's target was composed from, or the installed "
+        "hardware documents there are"
+    ),
+}
+
 
 def _project_summary() -> str:
     """The packaged one-line description of the project.
@@ -66,11 +73,39 @@ def overview() -> str:
     )
 
 
-def _add_source_argument(parser: argparse.ArgumentParser) -> None:
+def _inspect_overview() -> str:
+    """What ``tilefoundry inspect`` prints without a subcommand."""
+    width = max(len(name) for name in _INSPECT_COMMANDS)
+    commands = "\n".join(
+        f"  {name:<{width}}  {description}"
+        for name, description in _INSPECT_COMMANDS.items()
+    )
+    return (
+        f"tilefoundry inspect — {_COMMANDS['inspect']}\n"
+        f"\n"
+        f"Usage:\n"
+        f"  tilefoundry inspect <command> [options]\n"
+        f"\n"
+        f"Commands:\n"
+        f"{commands}\n"
+        f"\n"
+        f"Options:\n"
+        f"  -h, --help  print this, or a command's own help after the command\n"
+    )
+
+
+def _add_source_argument(
+    parser: argparse.ArgumentParser, *, optional: bool = False
+) -> None:
+    arguments = {
+        "metavar": "SOURCE",
+        "help": "model.py[:Module[.child_module...][.function]]",
+    }
+    if optional:
+        arguments["nargs"] = "?"
     parser.add_argument(
         "source",
-        metavar="SOURCE",
-        help="model.py[:Module[.child_module...][.function]]",
+        **arguments,
     )
 
 
@@ -176,9 +211,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     inspect = commands.add_parser("inspect", help=_COMMANDS["inspect"])
-    inspect_commands = inspect.add_subparsers(dest="inspect_command", required=True)
-    capabilities = inspect_commands.add_parser("capabilities", help="print target capabilities")
-    _add_source_argument(capabilities)
+    inspect_commands = inspect.add_subparsers(dest="inspect_command")
+    capabilities = inspect_commands.add_parser(
+        "capabilities", help=_INSPECT_COMMANDS["capabilities"]
+    )
+    _add_source_argument(capabilities, optional=True)
 
     return parser
 
@@ -213,6 +250,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"tilefoundry check: error: {error}", file=sys.stderr)
             return 1
     if args.command == "inspect":
+        if args.inspect_command is None:
+            sys.stdout.write(_inspect_overview())
+            return 0
         try:
             return run_capabilities(args.source)
         except Exception as error:

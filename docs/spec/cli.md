@@ -9,10 +9,13 @@ reference, and what an authored program costs. Python authoring syntax and
 grammar productions remain in the [parser specification](./parser.md); the
 authored IR itself is the [HIR specification](./hir.md).
 
-Naming no command MUST print an overview rather than an error: a one-line
-project summary taken from installed package metadata, the usage form, the
-commands in the order the work is done, and the options. The summary MUST NOT
-be restated in the command surface, so there is one copy of it.
+Naming no command at any command level MUST print that level's overview rather
+than an error. The top-level overview MUST include a one-line project summary
+taken from installed package metadata, the usage form, the commands in the order
+the work is done, and the options. A command overview MUST include its
+description, usage form, subcommands, and options, and its description MUST be
+the one shown by the command above it. The project summary MUST NOT be restated
+in the command surface, so there is one copy of it.
 
 ## Commands
 
@@ -32,7 +35,7 @@ tilefoundry schedule model.py[:Module[.child_module...][.function]] --topology L
     [--dim NAME=EXTENT ...] [--solver-timeout SECONDS] [--solver-workers COUNT]
     [--first-plan]
 
-tilefoundry inspect capabilities model.py[:Module[.child_module...][.function]]
+tilefoundry inspect [capabilities [SOURCE]]
 ```
 
 `SOURCE` is a Python file followed optionally by
@@ -349,8 +352,12 @@ decided different things.
 
 ## Inspect Capabilities
 
-`inspect capabilities` resolves the target from the selected Module and prints
-the installed compact hardware capability record. It does not emit compiler
+`inspect capabilities` with no `SOURCE` lists the installed architecture and
+device documents, including each document's compatibility declarations, and the
+target names a Module may declare. It also states how to ask for one selection.
+
+With a `SOURCE`, it resolves the target from the selected Module and prints the
+installed compact hardware capability record. It does not emit compiler
 operation coverage. The record names both the architecture and the device
 document behind the target, each with its content digest, then every recorded
 fact by its path. A fact identifies its unit, the conditions it holds under,
