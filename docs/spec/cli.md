@@ -17,6 +17,9 @@ description, usage form, subcommands, and options, and its description MUST be
 the one shown by the command above it. The project summary MUST NOT be restated
 in the command surface, so there is one copy of it.
 
+A command usage error MUST print the error followed by that command's complete
+help to standard error and exit with status 2.
+
 ## Commands
 
 ```text

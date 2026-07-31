@@ -42,6 +42,13 @@ _INSPECT_COMMANDS = {
 }
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self._print_message(f"{self.prog}: error: {message}\n\n", sys.stderr)
+        self.print_help(sys.stderr)
+        self.exit(2)
+
+
 def _project_summary() -> str:
     """The packaged one-line description of the project.
 
@@ -110,9 +117,9 @@ def _add_source_argument(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="tilefoundry")
+    parser = _Parser(prog="tilefoundry")
     # Not required: naming no command is how the overview is asked for.
-    commands = parser.add_subparsers(dest="command")
+    commands = parser.add_subparsers(dest="command", parser_class=_Parser)
 
     models = commands.add_parser("models", help=_COMMANDS["models"])
     models.add_argument(
@@ -211,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     inspect = commands.add_parser("inspect", help=_COMMANDS["inspect"])
-    inspect_commands = inspect.add_subparsers(dest="inspect_command")
+    inspect_commands = inspect.add_subparsers(dest="inspect_command", parser_class=_Parser)
     capabilities = inspect_commands.add_parser(
         "capabilities", help=_INSPECT_COMMANDS["capabilities"]
     )

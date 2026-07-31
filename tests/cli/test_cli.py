@@ -247,6 +247,21 @@ def test_inspect_capabilities_lists_installed_documents(capsys) -> None:
     assert captured.err == ""
 
 
+def test_usage_errors_include_the_command_help(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["analyze"])
+
+    assert error.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith(
+        "tilefoundry analyze: error: the following arguments are required: SOURCE\n\n"
+    )
+    assert "usage: tilefoundry analyze" in captured.err
+    assert "SOURCE" in captured.err
+    assert "model.py[:Module[.child_module...][.function]]" in captured.err
+
+
 def test_inspect_capabilities_is_compact(tmp_path, capsys) -> None:
     path = _write_module(tmp_path)
     assert cli.main(["inspect", "capabilities", f"{path}:Model.main"]) == 0
