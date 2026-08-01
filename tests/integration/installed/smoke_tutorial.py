@@ -44,3 +44,28 @@ def test_migrate_splices_the_shipped_model_source_verbatim(tf, shipped) -> None:
         encoding="utf-8"
     )
     assert "w_router: ConstTensor" in authored
+
+
+def test_orchestrator_lists_and_describes_its_shipped_family(tf) -> None:
+    listing = tf("tutorial", "orchestrator")
+    assert listing.returncode == 0, listing.stderr
+    assert (
+        "causal_lm  Autoregressive decode: one token per step; the caller owns the state."
+        in listing.stdout
+    )
+
+    detail = tf("tutorial", "orchestrator", "causal_lm")
+    assert detail.returncode == 0, detail.stderr
+    lines = detail.stdout.splitlines()
+    assert Path(lines[0]).is_absolute()
+    assert lines[0].endswith("/orchestrator/causal_lm")
+    assert lines[1:] == [
+        "generation.py  Autoregressive decode: one token per step; the caller owns the state."
+    ]
+
+
+def test_unknown_orchestrator_family_names_the_available_families(tf) -> None:
+    done = tf("tutorial", "orchestrator", "missing")
+    assert done.returncode == 1
+    assert "no orchestrator family 'missing'" in done.stderr
+    assert "causal_lm" in done.stderr

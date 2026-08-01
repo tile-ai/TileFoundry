@@ -153,6 +153,13 @@ granularity.
     itself, selected by what a declaration is called rather than by where it sits.
     A copy pasted into prose is a second source that drifts, and a line range
     silently quotes the wrong lines as soon as the model above it changes.
+  - `tutorial orchestrator` MUST list the shipped orchestrator families, and
+    `tutorial orchestrator FAMILY` MUST show that family's shipped directory and
+    every source file's leading docstring without importing or executing it. An
+    unknown family MUST name the available families. Checkout and installed
+    lookups MUST report the same shipped families and files.
+  - A family's list description MUST be the leading docstring of the first file
+    in its package data manifest order.
 
 ## Models
 

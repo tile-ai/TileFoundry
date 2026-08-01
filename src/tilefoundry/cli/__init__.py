@@ -136,9 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
     tutorial.add_argument(
         "page",
         nargs="?",
-        choices=PAGES[1:],
+        choices=(*PAGES[1:], "orchestrator"),
         metavar="PAGE",
         help="which page; with none, the overview and the pages there are",
+    )
+    tutorial.add_argument(
+        "family",
+        nargs="?",
+        metavar="FAMILY",
+        help="which orchestrator family to show",
     )
 
     spec = commands.add_parser("spec", help=_COMMANDS["spec"])
@@ -246,7 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     if args.command == "tutorial":
         try:
-            return run_tutorial(args.page)
+            return run_tutorial(args.page, args.family)
         except (OSError, ValueError) as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1

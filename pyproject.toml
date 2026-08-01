@@ -54,6 +54,7 @@ where = ["src"]
 "share/tilefoundry/models/qwen2_5_1_5b" = ["tests/models/qwen2_5_1_5b/model.py", "tests/models/qwen2_5_1_5b/config.json"]
 "share/tilefoundry/models/qwen3_1_7b" = ["tests/models/qwen3_1_7b/model.py", "tests/models/qwen3_1_7b/config.json"]
 "share/tilefoundry/models/qwen3_5_35b_a3b" = ["tests/models/qwen3_5_35b_a3b/model.py", "tests/models/qwen3_5_35b_a3b/config.json"]
+"share/tilefoundry/orchestrator/causal_lm" = ["tests/models/orchestrator/causal_lm/generation.py"]
 
 [tool.pytest.ini_options]
 # Parallel is how this suite is run, on CI (`-n 4`) and locally: conftest's

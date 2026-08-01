@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from tilefoundry.cli import data
@@ -93,7 +94,7 @@ def render_model(name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _summary(path: "Path") -> str:
+def source_summary(path: Path) -> str:
     """The first docstring line in *path*, or a marker when it has none."""
     try:
         source = ast.parse(path.read_text(encoding="utf-8"))
@@ -103,15 +104,20 @@ def _summary(path: "Path") -> str:
     return docstring.splitlines()[0] if docstring else "-"
 
 
+def render_source_directory(directory: Path, files: tuple[Path, ...]) -> str:
+    """One source directory followed by aligned leading file descriptions."""
+    width = max(len(path.name) for path in files)
+    lines = [str(directory)]
+    lines += [f"{path.name:<{width}}  {source_summary(path)}" for path in files]
+    return "\n".join(lines) + "\n"
+
+
 def model_source(name: str) -> str:
     """The shipped model directory followed by one source summary per file."""
     _find(name)
     files = data.model_files(name)
     directory = data.directory("models") / name
-    width = max(len(path.name) for path in files)
-    lines = [str(directory)]
-    lines += [f"{path.name:<{width}}  {_summary(path)}" for path in files]
-    return "\n".join(lines) + "\n"
+    return render_source_directory(directory, files)
 
 
 def run_models(name: str | None, *, source: bool = False) -> int:
@@ -127,4 +133,12 @@ def run_models(name: str | None, *, source: bool = False) -> int:
     return 0
 
 
-__all__ = ["catalog", "model_source", "render_model", "render_models", "run_models"]
+__all__ = [
+    "catalog",
+    "model_source",
+    "render_model",
+    "render_models",
+    "render_source_directory",
+    "run_models",
+    "source_summary",
+]
