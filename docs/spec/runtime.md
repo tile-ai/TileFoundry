@@ -520,6 +520,8 @@ def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
   - `check` runs `candidate(*inputs)`, and `reference(*inputs)` when there is a
     reference, and measures each output against the predicates *expect* states
     for it. Neither *reference* nor *expect* has a default.
+  - an input MAY be a bare tensor or an arbitrarily nested tuple of tensors. Every
+    leaf MUST be a tensor.
   - a result MAY be a bare tensor or an arbitrarily nested tuple of tensors
     (e.g. `forward`'s `(logits, past_key_values)`). `check` flattens both
     results and MUST reject a candidate whose flattened structure, shape or

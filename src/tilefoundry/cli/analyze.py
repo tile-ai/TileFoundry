@@ -6,7 +6,7 @@ import sys
 from typing import Mapping
 
 from tilefoundry.analysis.api import analyze
-from tilefoundry.cli.source import _spread, load_authored_ir
+from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
     render_json,
@@ -44,7 +44,7 @@ def run_authored_analysis(
     if unbound:
         guidance = "; ".join(
             f"{name} is declared as [{dim_var.lo}, {dim_var.hi}); bind it with "
-            f"--dim {name}=EXTENT (try {', '.join(map(str, _spread(dim_var.lo, dim_var.hi)))})"
+            f"--dim {name}=EXTENT (try {', '.join(map(str, suggested_extents(dim_var.lo, dim_var.hi)))})"
             for name, dim_var in unbound
         )
         raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")

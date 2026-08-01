@@ -319,6 +319,42 @@ class FusedTwin:
         return x * x - x
 
 
+@module(entry="add_pair", target=CpuTarget())
+class Orchestrated:
+    topologies = (Topology("cta", 168),)
+
+    @func
+    def add_pair(
+        x: Tensor[(168,), "f32"], a: Tensor[(168,), "f32"], b: Tensor[(168,), "f32"]
+    ) -> Tensor[(168,), "f32"]:
+        return x + a + b
+
+    @func
+    def affine_pair(
+        x: Tensor[(168,), "f32"], scale: Tensor[(168,), "f32"], bias: Tensor[(168,), "f32"]
+    ) -> Tensor[(168,), "f32"]:
+        return x * scale + bias
+
+    def forward(self, x, pair):
+        a, b, scale, bias = pair
+        return self.add_pair(x, a, b), self.affine_pair(x, scale, bias)
+
+
+@runtime_module(Orchestrated)
+class OrchestratedTwin:
+    @runtime_func
+    def add_pair(self, x, a, b):
+        return x + a + b
+
+    @runtime_func
+    def affine_pair(self, x, scale, bias):
+        return x * scale + bias
+
+    def forward(self, x, pair):
+        a, b, scale, bias = pair
+        return self.add_pair(x, a, b), self.affine_pair(x, scale, bias)
+
+
 @module(target=CpuTarget())
 class Nested:
     child = Weighted

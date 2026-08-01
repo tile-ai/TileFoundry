@@ -60,6 +60,73 @@ def test_a_whole_module_is_checked_against_an_expected_output_file(
     assert "elements 168" in done.stdout
 
 
+def test_a_nested_activation_file_supplies_one_orchestration_parameter(tf, twin, tmp_path) -> None:
+    hidden = torch.arange(168, dtype=torch.float32)
+    mixer_args = (
+        torch.ones(168),
+        torch.full((168,), 2.0),
+        torch.full((168,), 3.0),
+        torch.full((168,), 4.0),
+    )
+    torch.save(hidden, tmp_path / "hidden.pt")
+    torch.save(mixer_args, tmp_path / "mixer_args.pt")
+    torch.save(
+        (hidden + mixer_args[0] + mixer_args[1], hidden * mixer_args[2] + mixer_args[3]),
+        tmp_path / "expected.pt",
+    )
+
+    compared = tf(
+        "check", f"{twin}:OrchestratedTwin",
+        "--input", str(tmp_path / "hidden.pt"),
+        "--input", str(tmp_path / "mixer_args.pt"),
+        "--out", "output[0]", "--fn", "equal",
+        "--out", "output[1]", "--fn", "equal",
+    )
+    assert compared.returncode == 0, compared.stderr
+    assert "reference: evaluator on Orchestrated" in compared.stdout
+
+    expected = tf(
+        "check", f"{twin}:Orchestrated",
+        "--input", str(tmp_path / "hidden.pt"),
+        "--input", str(tmp_path / "mixer_args.pt"),
+        "--expected", str(tmp_path / "expected.pt"),
+        "--out", "output[0]", "--fn", "equal",
+        "--out", "output[1]", "--fn", "equal",
+    )
+    assert expected.returncode == 0, expected.stderr
+
+
+def test_a_non_tensor_nested_activation_leaf_names_its_position(tf, twin, tmp_path) -> None:
+    torch.save(torch.arange(168, dtype=torch.float32), tmp_path / "hidden.pt")
+    torch.save(
+        (torch.ones(168), ("not a tensor", torch.ones(168)), torch.ones(168), torch.ones(168)),
+        tmp_path / "mixer_args.pt",
+    )
+
+    done = tf(
+        "check", f"{twin}:OrchestratedTwin",
+        "--input", str(tmp_path / "hidden.pt"),
+        "--input", str(tmp_path / "mixer_args.pt"),
+        "--out", "output[0]", "--fn", "equal",
+        "--out", "output[1]", "--fn", "equal",
+    )
+    assert done.returncode == 1
+    assert "mixer_args.pt[1][0]" in done.stderr
+
+
+def test_an_orchestration_method_names_the_files_its_inputs_need(tf, twin) -> None:
+    done = tf(
+        "check", f"{twin}:OrchestratedTwin", "--inputs", "random",
+        "--out", "output", "--fn", "nan_inf",
+    )
+    assert done.returncode == 1
+    assert "orchestration method" in done.stderr
+    assert "2 activation parameters" in done.stderr
+    assert "x, pair" in done.stderr
+    assert "one --input=PATH per parameter" in done.stderr
+    assert 'torch.save((...), "mixer_args.pt")' in done.stderr
+
+
 def test_the_inputs_are_exactly_one_form(tf, twin, tmp_path) -> None:
     torch.save(torch.arange(168, dtype=torch.float32), tmp_path / "x.pt")
 

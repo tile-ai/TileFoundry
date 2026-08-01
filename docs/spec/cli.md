@@ -87,6 +87,12 @@ bounds the caller stated.
     declaration order. Output names MUST come from return position: one tensor is
     `output`; a tuple's tensors are `output[0]`, `output[1]`, and so on in return
     order. These are positions, not names authored in the function.
+  - One `--input` file MUST bind one parameter. Its value MAY be a bare tensor or
+    an arbitrarily nested tuple or list of tensors; every leaf MUST be a tensor.
+  - A target whose step is an orchestration method rather than a `@func` MUST
+    refuse `--inputs random` and `--inputs real`, because its activation shapes
+    and dtypes are not declared. The refusal MUST name the parameter count and
+    names in order, and say that one `--input` file binds each parameter.
   - Every output MUST be judged by at least one predicate the caller states, and
     there MUST be no default predicate and no default bound. A bound nobody can
     meet is worse than none: a single `f32`→`bf16` rounding already measures

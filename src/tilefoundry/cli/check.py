@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Any, Sequence
 import torch
 
 from tilefoundry.cli import data
-from tilefoundry.cli.source import _spread, load_namespace, parse_dims, select_ir
+from tilefoundry.cli.source import load_namespace, parse_dims, select_ir, suggested_extents
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function, canonical_specialization_signature
@@ -363,17 +364,27 @@ class RandomWeights:
         raise KeyError(seg)
 
 
-def _read(path: str, device: str) -> torch.Tensor:
-    """One tensor from a file: `.npy`, or anything `torch.load` reads."""
+def _read(path: str, device: str):
+    """One parameter tree from a file, moving every tensor leaf to *device*."""
     found = Path(path).expanduser()
     if found.suffix == ".npy":
         import numpy  # noqa: PLC0415 -- only this path needs it
 
-        return torch.from_numpy(numpy.load(found)).to(device)
-    loaded = torch.load(found, map_location=device, weights_only=True)
-    if not isinstance(loaded, torch.Tensor):
-        raise ValueError(f"{path}: expected one tensor, got {type(loaded).__name__}")
-    return loaded
+        loaded = torch.from_numpy(numpy.load(found))
+    else:
+        loaded = torch.load(found, map_location=device, weights_only=True)
+
+    def visit(value, position: str):
+        if isinstance(value, torch.Tensor):
+            return value.to(device)
+        if isinstance(value, (list, tuple)):
+            return tuple(visit(item, f"{position}[{index}]") for index, item in enumerate(value))
+        raise ValueError(
+            f"{position}: expected a tensor or nested tuple/list of tensors, "
+            f"got {type(value).__name__}"
+        )
+
+    return visit(loaded, path)
 
 
 def _weights_needed(module: Module) -> tuple[str, ...]:
@@ -432,7 +443,7 @@ def _pin(function: Function, stated: dict[str, int]) -> tuple[dict[str, int], li
                 "pinned": dim_var.lo,
                 "lo": dim_var.lo,
                 "hi": dim_var.hi,
-                "spread": _spread(dim_var.lo, dim_var.hi),
+                "spread": suggested_extents(dim_var.lo, dim_var.hi),
             }
         )
     unknown = sorted(set(stated) - set(declared))
@@ -490,6 +501,12 @@ def _sides(target: Target, resource, expected: Sequence[str] | None, device: str
     return candidate, evaluator, f"evaluator on {authored}"
 
 
+def _orchestration_parameter_names(target: Target) -> tuple[str, ...]:
+    """The activations the selected orchestration method actually accepts."""
+    method = target.twin.forward if target.twin is not None else target.module.methods["forward"]
+    return tuple(name for name in inspect.signature(method).parameters if name != "self")
+
+
 def _one_run(
     target: Target,
     stated: dict[str, int],
@@ -520,7 +537,7 @@ def _one_run(
         )
 
     generator = torch.Generator(device=device).manual_seed(SEED)
-    activations: tuple[torch.Tensor, ...]
+    activations: tuple[Any, ...]
     if arguments.input:
         activations = tuple(_read(path, device) for path in arguments.input)
         provided = f"{len(activations)} file(s): {', '.join(arguments.input)}"
@@ -531,10 +548,14 @@ def _one_run(
         )
     else:
         if concrete is None:
+            names = _orchestration_parameter_names(target)
             raise ValueError(
-                f"--inputs {arguments.inputs} needs a target whose parameters are "
-                f"declared; {target.module.name!r} runs an orchestration method, so "
-                f"pass its activations with --input=PATH"
+                f"--inputs {arguments.inputs} cannot make activations for "
+                f"{target.module.name!r}: it runs an orchestration method whose "
+                f"parameters have no declared shapes or dtypes. It takes {len(names)} "
+                f"activation parameters in order: {', '.join(names)}. Give one "
+                "--input=PATH per parameter; each file holds one tensor or a nested "
+                "tuple/list of tensors, for example torch.save((...), \"mixer_args.pt\")"
             )
         activations = _random_activations(concrete, generator, device)
         provided = f"random, seed {SEED}"
