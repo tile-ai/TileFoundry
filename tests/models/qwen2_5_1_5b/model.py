@@ -77,11 +77,6 @@ def published(path: Path | None = None) -> Qwen2Config:
 
 config = published()
 
-#: The longest prior cache these kernels are authored for. Not a published field:
-#: `max_position_embeddings` is where the checkpoint stops, and a position beyond
-#: the rotary cache has no embedding to gather, so the envelope is that limit.
-MAX_CTX = config.max_position_embeddings
-
 # The published dtype as the DSL spells it. The checkpoint stores its weights at
 # this precision, so it is what a kernel reading them consumes.
 _DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
@@ -108,9 +103,10 @@ _GQA = config.num_attention_heads // config.num_key_value_heads
 _EPS = config.rms_norm_eps
 
 # The prior cache this step reads: the only range this model carries. Zero is a
-# first step, and the exclusive upper bound is max_ctx because a position beyond
+# first step, and the exclusive upper bound is `config.max_position_embeddings`
+# because a position beyond
 # the rotary cache has no embedding to gather.
-C = DimVar("ctx_len", 0, MAX_CTX)
+C = DimVar("ctx_len", 0, config.max_position_embeddings)
 
 # One token per step.
 S = 1
@@ -133,7 +129,9 @@ def _generation_rope(device):
         config.rope_parameters["rope_theta"]
         ** (torch.arange(0, dim, 2, device=device, dtype=torch.float32) / dim)
     )
-    phases = torch.outer(torch.arange(MAX_CTX, device=device, dtype=torch.float32), inverse)
+    phases = torch.outer(
+        torch.arange(config.max_position_embeddings, device=device, dtype=torch.float32), inverse
+    )
     phases = torch.cat((phases, phases), dim=-1)
     return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
 

@@ -24,7 +24,7 @@ import torch
 from tests.models import decode_oracle as oracle
 from tests.models.decode_oracle import SEQ_LEN, agrees_as_a_component
 from tests.models.gemma2_2b import reference
-from tests.models.gemma2_2b.model import MAX_CTX, Gemma2_2B
+from tests.models.gemma2_2b.model import Gemma2_2B, config
 
 HIDDEN = reference.CONFIG.hidden_size
 
@@ -48,7 +48,7 @@ def test_generation_inputs_match_the_drawn_position() -> None:
     assert torch.equal(token_ids, source[step].reshape(1))
     assert torch.equal(cos[: step + 1], want_cos)
     assert torch.equal(sin[: step + 1], want_sin)
-    assert cos.shape == sin.shape == (MAX_CTX, reference.CONFIG.head_dim)
+    assert cos.shape == sin.shape == (config.sliding_window, reference.CONFIG.head_dim)
     assert torch.equal(pos_ids, torch.tensor([step], device=DEV, dtype=torch.int32))
     assert scale.shape == (1, 1, 1, 1)
     assert caches is sentinel

@@ -12,7 +12,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.qwen3_1_7b.model import MAX_CTX, Qwen3_1_7B
+from tests.models.qwen3_1_7b.model import Qwen3_1_7B, config
 from tests.models.qwen3_1_7b.reference import (
     CTX_LEN,
     decoder_step_inputs,
@@ -71,7 +71,7 @@ CASE = ModelCase(
             id="qwen3_1_7b/sized/decoder_layer",
             selector="decoder_layer",
             dims={"ctx_len": 1024},
-            ceiling={"ctx_len": MAX_CTX - 1},
+            ceiling={"ctx_len": config.max_position_embeddings - 1},
         ),
     ),
 )

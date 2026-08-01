@@ -21,9 +21,9 @@ import torch
 from tests.models import decode_oracle as oracle
 from tests.models import dense_decode
 from tests.models.gemma2_2b.model import (
-    MAX_CTX,
     Gemma2_2B,
     Gemma2_2B_DecoderLayer,
+    config,
     published,
 )
 from tilefoundry.runtime.resource import DictResource
@@ -96,7 +96,7 @@ def _rope_at(rows: int, device="cpu"):
 
 def rope_caches(device="cpu"):
     """The caches at the context envelope the kernels are authored for."""
-    return _rope_at(MAX_CTX, device)
+    return _rope_at(config.sliding_window, device)
 
 
 def _key_value_of(layer, normed):

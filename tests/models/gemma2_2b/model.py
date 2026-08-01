@@ -54,8 +54,8 @@ query at the end of the context may attend every position there is -- which is
 also why Gemma-2's alternating sliding-window layers do not appear here. A
 window only removes positions from the front of the context, so for a context no
 longer than ``sliding_window`` a sliding layer and a full layer are the same
-computation; ``MAX_CTX`` is pinned to ``sliding_window`` so that stays
-true rather than being assumed.
+computation; the kernels use that window as their context envelope so that
+stays true rather than being assumed.
 
 Six Gemma-2-specific things to note:
 
@@ -123,12 +123,6 @@ def published(path: Path | None = None, **overrides) -> Gemma2Config:
 
 config = published()
 
-#: The longest prior cache these kernels are authored for -- the *window*, not the
-#: position envelope. Half of Gemma-2's layers attend within `sliding_window`
-#: rather than over the whole context, and these kernels describe full attention;
-#: past the window the two stop agreeing, so the envelope stops there too.
-MAX_CTX = config.sliding_window
-
 # The published dtype as the DSL spells it.
 _DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
     str(config.dtype).removeprefix("torch.")
@@ -141,9 +135,9 @@ _GQA = config.num_attention_heads // config.num_key_value_heads
 _EMBED_SCALE = config.hidden_size ** 0.5
 
 # The prior cache this step reads: the only range this model carries. Zero is a
-# first step, and the exclusive upper bound is the window (max_ctx), so with this
+# first step, and the exclusive upper bound is `config.sliding_window`, so with this
 # step's own token the total is one `_within_window` admits.
-C = DimVar("ctx_len", 0, MAX_CTX)
+C = DimVar("ctx_len", 0, config.sliding_window)
 
 # One token per step.
 S = 1
@@ -168,7 +162,7 @@ def _generation_rope(device):
         config.rope_parameters["rope_theta"]
         ** (torch.arange(0, dim, 2, device=device, dtype=torch.float32) / dim)
     )
-    phases = torch.outer(torch.arange(MAX_CTX, device=device, dtype=torch.float32), inverse)
+    phases = torch.outer(torch.arange(config.sliding_window, device=device, dtype=torch.float32), inverse)
     phases = torch.cat((phases, phases), dim=-1)
     return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
 

@@ -29,9 +29,9 @@ import torch
 from tests.models import decode_oracle as oracle
 from tests.models import dense_decode
 from tests.models.minicpm3_4b.model import (
-    MAX_CTX,
     MiniCPM3_4B,
     MiniCPM3_4B_DecoderLayer,
+    config,
     published,
 )
 from tilefoundry.runtime.resource import DictResource
@@ -97,7 +97,7 @@ def _rope_at(rows: int, device="cpu"):
 
 def rope_caches(device="cpu"):
     """The caches at the context envelope the kernels are authored for."""
-    return _rope_at(MAX_CTX, device)
+    return _rope_at(config.max_position_embeddings, device)
 
 
 def _key_value_of(layer, normed):

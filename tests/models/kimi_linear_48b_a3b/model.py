@@ -227,11 +227,9 @@ def published(path: Path | None = None) -> KimiLinearConfig:
     return KimiLinearConfig(**json.loads(path.read_text(encoding="utf-8")))
 
 
-#: Envelope for the one dynamic dimension, and the position table's extent. Ours,
-#: not published: `max_position_embeddings` is 1048576, and the envelope only has
-#: to contain the lengths anything here is asked about -- a million-long bound
-#: costs analysis precision for nothing.
-MAX_CTX = MAX_POS = 4096
+#: The position table's extent. Ours, not published: `max_position_embeddings`
+#: is 1048576, and a million-long table costs analysis precision for nothing.
+MAX_POS = 4096
 
 
 def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
@@ -245,8 +243,8 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
     """
     # The prior cache this step reads: the only range this model carries, and only
     # the MLA submodule carries it. Zero is a first step, and the exclusive upper
-    # bound is MAX_CTX, which is also the position table's extent.
-    C = DimVar("ctx_len", 0, MAX_CTX)
+    # bound is MAX_POS, which is also the position table's extent.
+    C = DimVar("ctx_len", 0, MAX_POS)
 
     # One token per step.
     S = 1

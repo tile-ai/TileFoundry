@@ -41,13 +41,6 @@ def published(path: Path | None = None) -> Qwen3_5MoeTextConfig:
 
 config = published()
 
-#: The largest context the full-attention kernels are authored for. Not a
-#: published field: `max_position_embeddings` is 262144, and a decode kernel
-#: authored to that envelope is the same kernel as one authored to a smaller one
-#: -- what the envelope has to be is larger than any context a test draws, and
-#: stated rather than implied.
-MAX_CTX = 4096
-
 # The published dtype as the DSL spells it. The checkpoint stores its weights at
 # this precision, so it is what a kernel reading them consumes.
 _DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
@@ -105,7 +98,9 @@ _L2_EPS = 1e-6
 
 
 # Prior-cache length. The caller appends this step's returned K/V entry.
-C = DimVar("ctx_len", 0, MAX_CTX)
+# The full-attention kernels accept a 4096-position cache. This is our chosen
+# envelope, not a published field: `max_position_embeddings` is 262144.
+C = DimVar("ctx_len", 0, 4096)
 
 # One token per step.
 
@@ -118,9 +113,8 @@ _PASS = _PASS_DIM
 _G = _GQA
 
 # One row per position a step may be decoded at: `pos_ids` is the prior-cache
-# length, which stops one below ``max_ctx``. ``max_position_embeddings`` is 262144
-# and a cache that size is 67 MB of zeros nothing reads.
-_ROPE_ROWS = MAX_CTX
+# length, which stops one below the chosen 4096-row envelope.
+_ROPE_ROWS = 4096
 
 
 # One token per step.

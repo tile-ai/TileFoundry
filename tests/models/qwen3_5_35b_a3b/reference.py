@@ -47,8 +47,8 @@ import torch.nn.functional as F
 from tests.models import decode_oracle as oracle
 from tests.models.decode_oracle import linear_weight
 from tests.models.qwen3_5_35b_a3b.model import (
+    _ROPE_ROWS,
     LAYER_TYPE,
-    MAX_CTX,
     Qwen3_5FullAttention,
     Qwen3_5LinearAttention,
     Qwen3_5MoE,
@@ -214,7 +214,7 @@ def hf_layer(block_type: str, device: str = DEVICE, whole_layer: bool = False):
 @functools.lru_cache(maxsize=None)
 def rope_caches(device: str = DEVICE):
     """cos / sin caches covering every position a step may be decoded at."""
-    return rope_caches_at(total=MAX_CTX, device=device)
+    return rope_caches_at(total=_ROPE_ROWS, device=device)
 
 
 def drawn_hidden(ctx_len: int, device: str = DEVICE):

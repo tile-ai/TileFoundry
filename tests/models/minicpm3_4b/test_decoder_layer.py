@@ -19,7 +19,7 @@ import torch
 
 from tests.models.decode_oracle import agrees_to_one_rounding
 from tests.models.minicpm3_4b import reference
-from tests.models.minicpm3_4b.model import MAX_CTX, MiniCPM3_4B
+from tests.models.minicpm3_4b.model import MiniCPM3_4B, config
 
 HIDDEN = reference.CONFIG.hidden_size
 
@@ -43,7 +43,7 @@ def test_generation_inputs_match_the_drawn_position() -> None:
     assert torch.equal(token_ids, source[step].reshape(1))
     assert torch.equal(cos[: step + 1], want_cos)
     assert torch.equal(sin[: step + 1], want_sin)
-    assert cos.shape == sin.shape == (MAX_CTX, reference.CONFIG.head_dim)
+    assert cos.shape == sin.shape == (config.max_position_embeddings, reference.CONFIG.head_dim)
     assert torch.equal(pos_ids, torch.tensor([step], device=DEV, dtype=torch.int32))
     assert scale.shape == (1, 1, 1, 1)
     assert residual_scale.shape == (1, 1, 1)

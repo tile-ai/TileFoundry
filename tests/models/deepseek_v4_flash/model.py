@@ -1258,7 +1258,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
 
     #: How many positions the caller may keep: a query attends ``window``
     #: positions counting its own, so the context it is handed is one shorter.
-    MAX_CTX = config.window - 1
+    KEPT = config.window - 1
 
     @module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"))
     class DeepseekV4Flash:
@@ -1326,7 +1326,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
             appended = []
             for cache, kv_new in zip(caches, fresh):
                 grown = torch.cat([cache, kv_new], dim=1)
-                appended.append(grown[:, -MAX_CTX:] if grown.shape[1] > MAX_CTX else grown)
+                appended.append(grown[:, -KEPT:] if grown.shape[1] > KEPT else grown)
             return tuple(appended)
 
         def init_caches(self, device=None, mesh=None):
