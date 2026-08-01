@@ -31,7 +31,7 @@ def _parallel_units(target: Target, level: str) -> int:
     return facts.parallel_units
 
 
-def h200_sxm(*, threads_per_cta: int = 128) -> TargetFixture:
+def h200_sxm(*, threads_per_cta: int = 512) -> TargetFixture:
     """One H200 SXM, at both levels CUDA schedules.
 
     The CTA extent is the device's own SM count, so the fixture divides work over

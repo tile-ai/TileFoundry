@@ -295,7 +295,7 @@ class Gemma2_2B_Decoder:
     """The ordered layer stack, the norm that closes it, and the scaled embedding
     and soft-capped head that bracket it."""
 
-    topologies = (Topology("cta", 132),)
+    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
         Gemma2_2B.renamed(f"layer{index}")

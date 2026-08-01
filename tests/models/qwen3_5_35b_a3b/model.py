@@ -571,7 +571,7 @@ class Qwen3_5Decoder:
     embedding, the walk, the closing norm, the head. Each layer is an independent
     copy, so an analysis of one annotates only it."""
 
-    topologies = (Topology("cta", 132),)
+    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     # The published layer-type cycle determines each layer Module.
     layers = tuple(

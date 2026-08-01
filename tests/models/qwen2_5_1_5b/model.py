@@ -263,7 +263,7 @@ class Qwen2_5_1_5B:
 class Qwen2_5_1_5B_Decoder:
     """The ordered layer stack plus the norm that closes it."""
 
-    topologies = (Topology("cta", 132),)
+    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
         Qwen2_5_1_5B.renamed(f"layer{index}")

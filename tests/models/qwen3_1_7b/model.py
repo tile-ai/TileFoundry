@@ -318,7 +318,7 @@ class Qwen3_1_7B:
 class Qwen3_1_7B_Decoder:
     """The ordered layer stack plus the norm that closes it."""
 
-    topologies = (Topology("cta", 132),)
+    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
         Qwen3_1_7B.renamed(f"layer{index}")

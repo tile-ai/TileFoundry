@@ -140,6 +140,10 @@ def test_the_shipped_source_answers_the_public_commands_as_it_ships(
     assert scheduled.returncode == 0, scheduled.stderr
     assert "partition cta x132 on nvidia.h200_sxm" in scheduled.stdout
 
+    threaded = tf("schedule", static, "--topology", "thread")
+    assert threaded.returncode == 0, threaded.stderr
+    assert "pipeline schedule" in threaded.stdout
+
     # A selector whose extent is stated at launch takes it on the command line.
     dynamic = f"{source}:Qwen3_1_7B_Decoder.layer0.self_attention"
     sized = tf("analyze", dynamic, "--compute-cost", "--dim", "ctx_len=1024")

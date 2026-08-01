@@ -640,7 +640,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
         reached through.
         """
 
-        topologies = (Topology("cta", 132),)
+        topologies = (Topology("cta", 132), Topology("thread", 512))
 
         kda = KimiKda
         mla = KimiMla

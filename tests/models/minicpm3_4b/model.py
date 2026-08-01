@@ -328,7 +328,7 @@ class MiniCPM3_4B_Decoder:
     """The ordered layer stack, the norm that closes it, and the two scaled ends
     that bracket it."""
 
-    topologies = (Topology("cta", 132),)
+    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
         MiniCPM3_4B.renamed(f"layer{index}")

@@ -525,7 +525,7 @@ def _submodules(config: DSV4Config):
         ``forward``. Takes an already-normalized hidden state: the checkpoint's
         ``ffn_norm.weight`` is layer-level, so this component has no pre-MoE norm
         of its own (contrast ``DeepseekV4NoauxTcMoE`` below)."""
-        topologies = (Topology("cta", 132),)
+        topologies = (Topology("cta", 132), Topology("thread", 512))
 
 
         @func
@@ -869,7 +869,7 @@ def _submodules(config: DSV4Config):
         """The learned/``noaux_tc``-router MoE component (entry
         ``deepseek_v4_flash_moe``): keeps its own ``pre_moe_rms_norm`` (contrast
         ``DeepseekV4MoE`` above)."""
-        topologies = (Topology("cta", 132),)
+        topologies = (Topology("cta", 132), Topology("thread", 512))
 
 
         @func
@@ -1262,7 +1262,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
 
     @module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"))
     class DeepseekV4ForCausalLM:
-        topologies = (Topology("cta", 132),)
+        topologies = (Topology("cta", 132), Topology("thread", 512))
 
         @func
         def embed(
