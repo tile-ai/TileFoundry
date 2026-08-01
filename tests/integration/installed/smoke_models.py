@@ -69,7 +69,14 @@ def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, tm
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     checkout = subprocess.run(
-        [Path(sys.executable).with_name("tilefoundry"), "models", "qwen3_1_7b", "--source"],
+        [
+            sys.executable,
+            "-c",
+            "from tilefoundry.cli import main; raise SystemExit(main())",
+            "models",
+            "qwen3_1_7b",
+            "--source",
+        ],
         cwd=REPO,
         env=environment,
         capture_output=True,
