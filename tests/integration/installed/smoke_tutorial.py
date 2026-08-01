@@ -11,13 +11,13 @@ def test_the_overview_names_the_pages_and_the_commands_it_delegates_to(tf) -> No
     done = tf("tutorial")
     assert done.returncode == 0, done.stderr
     assert "source to source" in done.stdout
-    for page in ("migrate", "run", "optimize"):
+    for page in ("migrate", "optimize"):
         assert page in done.stdout, page
     assert "tilefoundry spec" in done.stdout
     assert "tilefoundry check --help" in done.stdout
 
 
-@pytest.mark.parametrize("page", ("migrate", "run", "optimize"))
+@pytest.mark.parametrize("page", ("migrate", "optimize"))
 def test_each_page_renders_from_the_installation(tf, page) -> None:
     """A rendered page has no unresolved source directive."""
     done = tf("tutorial", page)

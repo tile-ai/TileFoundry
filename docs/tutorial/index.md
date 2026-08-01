@@ -37,3 +37,6 @@ home:
   arithmetic for choosing a tolerance.
 - `tilefoundry models` — the models already described, and their authored source to
   copy from.
+- `tilefoundry tutorial orchestrator causal_lm` — the shipped autoregressive
+  decode loop. `tilefoundry models NAME --source` names the model directory to
+  copy from.

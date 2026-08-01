@@ -158,6 +158,8 @@ granularity.
     every source file's leading docstring without importing or executing it. An
     unknown family MUST name the available families. Checkout and installed
     lookups MUST report the same shipped families and files.
+  - Its workflow pages are `index`, `migrate`, and `optimize`; causal-LM decode
+    sources are listed through `tutorial orchestrator`.
   - A family's list description MUST be the leading docstring of the first file
     in its package data manifest order.
 
