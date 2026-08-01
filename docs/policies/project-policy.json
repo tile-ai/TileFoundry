@@ -2,22 +2,6 @@
   "version": 1,
   "policies": [
     {
-      "id": "comment_hygiene",
-      "name": "Comment hygiene",
-      "description": "Code comments only describe local logic; no plan / milestone / version / review / discussion narration.",
-      "when": {
-        "path_glob": ["src/**", "tests/**"]
-      },
-      "rules": {
-        "implementer": [
-          {"path": "docs/develop.md", "section": "Code comments"}
-        ],
-        "reviewer": [
-          {"path": "docs/develop.md", "section": "Code comments"}
-        ]
-      }
-    },
-    {
       "id": "scope_discipline",
       "name": "Scope discipline",
       "description": "One commit touches only what the current task requires; unrelated edits / submodule bumps / autoformat go in separate commits or are called out explicitly.",
@@ -42,7 +26,7 @@
       },
       "ac": [
         "Milestone MUST name a `#### Golden Reference` before implementation steps, with the source of truth and the observable functional points it determines.",
-        "Verification MUST exercise the Golden Reference's functional points through the smallest real workflow; one workflow MAY cover several ACs, and a new test requires a stated reachability gap.",
+        "The gate request MUST show the Golden Reference's functional points exercised through the smallest real workflow, naming the retained evidence; one workflow MAY cover several ACs, and a new test requires a stated reachability gap.",
         "Touched tests and comments MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract."
       ],
       "rules": {
@@ -59,12 +43,12 @@
     {
       "id": "spec_impact",
       "name": "Spec impact",
-      "description": "Every source milestone explicitly classifies whether it changes a public contract and names the owning specifications when it does.",
+      "description": "Every source milestone names the specifications it changes among its Related Files, so the public-contract surface is declared once.",
       "when": {
         "path_glob": ["src/**", "include/**"]
       },
       "ac": [
-        "Milestone MUST classify public-contract impact in `#### Spec Impact`: list owning `docs/spec/*.md` paths or exactly one reasoned `N/A:` entry."
+        "A milestone that changes a public contract MUST list the owning `docs/spec/*.md` path in its `#### Related Files`; one that changes none lists no spec path."
       ],
       "rules": {
         "implementer": [
@@ -72,22 +56,6 @@
         ],
         "reviewer": [
           {"path": "docs/develop.md", "section": "Spec impact"}
-        ]
-      }
-    },
-    {
-      "id": "forward_references",
-      "name": "Forward references",
-      "description": "Python type-only cycles use quoted forward references without `typing.TYPE_CHECKING` shims.",
-      "when": {
-        "path_glob": ["**/*.py"]
-      },
-      "rules": {
-        "implementer": [
-          {"path": "docs/develop.md", "section": "Forward references"}
-        ],
-        "reviewer": [
-          {"path": "docs/develop.md", "section": "Forward references"}
         ]
       }
     },
@@ -142,10 +110,7 @@
         "path_glob": ["docs/spec/**"]
       },
       "final_ac": [
-        "Spec section MUST NOT reference plans, milestones, task IDs, commit hashes, PR numbers, agent / human names, or thread / message IDs.",
-        "Spec section MUST NOT carry a `Non-Goals` / `Future / TODO` / `Out of scope` section.",
-        "Spec section MUST NOT carry a `Tests` / `Testing` / `Test plan` section or a list of test names.",
-        "Spec section MUST be in English."
+        "Spec section MUST NOT enumerate test names; the pre-commit `spec-rules-lint` and `english-only` hooks already reject forbidden section headers, plan / milestone / task / PR / commit references, agent names, and non-English text."
       ],
       "rules": {
         "implementer": [

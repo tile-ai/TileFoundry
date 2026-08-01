@@ -95,20 +95,18 @@ short bullet list — keep it that way.
 
 ### Spec impact
 
-- Every milestone declares `#### Spec Impact`, including documentation-only
-  and internal-only milestones.
-- A public-contract change lists its owning `docs/spec/*.md` files and repeats
-  those files in the milestone's effective `#### Related Files`.
-- A milestone without public-contract changes uses exactly one reasoned
-  `N/A:` entry; it never mixes `N/A:` with spec paths.
+- A milestone that changes a public contract lists its owning `docs/spec/*.md`
+  files in its `#### Related Files`; one that changes none lists no spec path.
+  There is no separate declaration to keep in step with that list.
 - Contract-changing implementation and its specification ship in the same
   milestone.
 
 ### Forward references
 
 - Break type-only import cycles with quoted forward-reference annotations.
-- Do not guard type-only imports with `typing.TYPE_CHECKING`; Ruff rejects that
-  shim.
+- Do not guard type-only imports with `typing.TYPE_CHECKING`; the
+  `forward-references` pre-commit hook rejects that shim. Ruff cannot be asked
+  to do it — its own `TC001`-`TC003` push the other way.
 - Import runtime dependencies normally or lazily at their point of use.
 
 ### Tests
@@ -122,7 +120,7 @@ short bullet list — keep it that way.
 - One workflow may evidence several acceptance criteria. An acceptance criterion
   describes behaviour, not a one-test obligation.
 - Add a new test only when no existing workflow can reach a public behaviour;
-  state that missing reachability in the plan's verification note.
+  state that missing reachability when you ask for the gate.
 - Lock contracts, not implementation detail. Do not test source text, AST shape,
   private calls, object identity, counts, or names merely to prevent a future
   refactor.

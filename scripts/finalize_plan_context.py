@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """Plan finalizer for `docs/plans/<name>.md`.
 
-Reads a plan written against `docs/plans/TEMPLATE.md`, matches the
-plan-level and per-milestone ``Related Files`` against
+Reads a plan written against `docs/plans/TEMPLATE.md`, matches each
+milestone's ``#### Related Files`` against
 `docs/policies/project-policy.json`, and rewrites two kinds of
 generated regions:
 
-- the plan-level ``<!-- policy_preflight:start --> ... <!-- policy_preflight:end -->``
-  block carries the plan-wide ``### Policy Rules & Knowledge``
-  subsection (refs-only — never the actual rule / knowledge text);
 - each milestone's ``<!-- policy_ac:start --> ... <!-- policy_ac:end -->``
   range carries the policy ACs whose ``when.path_glob`` matches that
-  milestone's ``#### Related Files`` (with explicit
-  ``- inherit: top-level`` fallback).
+  milestone's ``#### Related Files``;
 - the plan-level ``<!-- final_gate:start --> ... <!-- final_gate:end -->``
   range carries final-tree gates such as spec discipline and formatting.
 
+Rules and knowledge are NOT injected into the plan. They are asked for
+when they are needed: ``scripts/get_policy.py --type rules --role
+implementer --paths ...``. A rule restated in every plan is a rule
+nobody rereads.
+
 The finalizer never touches handwritten content outside the marker
 ranges. A ``policy_*`` HTML comment appearing outside any allowed
-range is a hard validation failure. Every milestone must declare its
-public-contract impact in ``Spec Impact`` as either owning
-``docs/spec/*.md`` paths or one reasoned ``N/A:`` entry, and must name
-its Golden Reference and behavioural verification boundary.
+range is a hard validation failure. Every milestone must name its
+Golden Reference; a milestone that changes a public contract declares
+so by listing the owning ``docs/spec/*.md`` path in its Related Files.
 """
 from __future__ import annotations
 
@@ -43,8 +43,6 @@ from get_policy import filter_policies, load_policies  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = REPO_ROOT / "docs" / "policies" / "project-policy.json"
 
-PREFLIGHT_START = "<!-- policy_preflight:start -->"
-PREFLIGHT_END = "<!-- policy_preflight:end -->"
 MILESTONE_AC_START = "<!-- policy_ac:start -->"
 MILESTONE_AC_END = "<!-- policy_ac:end -->"
 FINAL_GATE_START = "<!-- final_gate:start -->"
@@ -87,6 +85,24 @@ def _split_lines(text: str) -> list[str]:
 
 def _join_lines(lines: list[str]) -> str:
     return "\n".join(lines)
+
+
+def _mask_fenced(lines: list[str]) -> list[str]:
+    """The same lines with fenced blocks blanked, positions preserved.
+
+    Structure is read off this copy, so a fenced line is content whatever it
+    starts with. A plan quotes command output whose lines begin with `#`, and
+    reading one as a heading would end the section it belongs to.
+    """
+    masked: list[str] = []
+    in_fence = False
+    for line in lines:
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            masked.append("")
+            continue
+        masked.append("" if in_fence else line)
+    return masked
 
 
 def _heading_level(line: str) -> int | None:
@@ -175,52 +191,24 @@ def _strip_path_bullet(item: str) -> str:
     return s
 
 
-def _is_spec_path(path: str) -> bool:
-    """Return whether *path* is a repo-relative Markdown spec path."""
-    parts = Path(path).parts
-    return (
-        len(parts) >= 3
-        and parts[:2] == ("docs", "spec")
-        and all(part not in ("", ".", "..") for part in parts)
-        and path.endswith(".md")
-    )
-
-
 class PlanModel:
     def __init__(self, plan_path: Path) -> None:
         self.path = plan_path
         self.text = plan_path.read_text()
         self.lines = _split_lines(self.text)
+        # Headings, bullets and markers are located on the masked copy; the
+        # verbatim lines are what gets rewritten.
+        self.scan = _mask_fenced(self.lines)
         self._parse()
 
     def _parse(self) -> None:
-        lines = self.lines
+        lines = self.scan
 
-        # Plan-level Description / Related Files.
-        desc = _find_section(lines, 2, "Description")
-        if desc is None:
-            raise FinalizeError(
-                f"{self.path}: missing required `## Description` section."
-            )
-        rel = _find_section(lines, 3, "Related Files", desc[0] + 1, desc[1])
-        if rel is None:
-            raise FinalizeError(
-                f"{self.path}: missing required `### Related Files` under `## Description`."
-            )
-        rel_items = _related_files_from_section(lines, rel[0], rel[1])
-        if not rel_items:
-            raise FinalizeError(
-                f"{self.path}: `### Related Files` is empty."
-            )
-        self.plan_related_files: list[str] = [_strip_path_bullet(r) for r in rel_items]
+        # There is no plan-level touch surface to write down: it is the union of
+        # the milestones', filled in after they are parsed. `## Description`
+        # above is free prose, and nothing here reads it.
+        self.plan_related_files: list[str] = []
 
-        # Plan-level Preflight range.
-        self.preflight_start_idx = self._require_unique_line(PREFLIGHT_START)
-        self.preflight_end_idx = self._require_unique_line(PREFLIGHT_END)
-        if self.preflight_end_idx <= self.preflight_start_idx:
-            raise FinalizeError(
-                f"{self.path}: `policy_preflight:end` precedes `policy_preflight:start`."
-            )
         self.final_gate_start_idx = self._require_unique_line(FINAL_GATE_START)
         self.final_gate_end_idx = self._require_unique_line(FINAL_GATE_END)
         if self.final_gate_end_idx <= self.final_gate_start_idx:
@@ -234,9 +222,7 @@ class PlanModel:
         # Plan-level template sections: every level-2 heading the
         # template promises must exist (and have a non-empty body for
         # the prose ones).
-        for name in (
-            "Goal", "Constraints", "Milestones", "Execution Preflight", "Final Gate"
-        ):
+        for name in ("Description", "Milestones", "Final Gate"):
             span = _find_section(lines, 2, name)
             if span is None:
                 raise FinalizeError(
@@ -270,8 +256,17 @@ class PlanModel:
                 f"{self.path}: `## Milestones` block contains no `### Milestone …` entries."
             )
 
+        # The plan's touch surface is what its milestones touch -- stated once,
+        # per milestone, and unioned here in first-mention order.
+        seen: set[str] = set()
+        for m in self.milestones:
+            for path in m["related_files"]:
+                if path not in seen:
+                    seen.add(path)
+                    self.plan_related_files.append(path)
+
     def _require_unique_line(self, marker: str) -> int:
-        idxs = [i for i, line in enumerate(self.lines) if line.strip() == marker]
+        idxs = [i for i, line in enumerate(self.scan) if line.strip() == marker]
         if not idxs:
             raise FinalizeError(
                 f"{self.path}: marker {marker!r} missing — finalize_plan_context "
@@ -285,20 +280,18 @@ class PlanModel:
         return idxs[0]
 
     def _parse_milestone(self, ms_start: int, ms_end: int) -> dict[str, Any]:
-        lines = self.lines
-        name = _heading_text(lines[ms_start])  # e.g. "Milestone M0: Schema"
+        lines = self.scan
+        name = _heading_text(lines[ms_start])  # e.g. "Milestone M0: Schema"  comment-hygiene: allow
 
         # Every level-4 heading the template promises must exist and
         # carry a non-empty body.
         sections: dict[str, tuple[int, int]] = {}
         for required in (
             "Depends",
-            "Related Files",
-            "Spec Impact",
             "Golden Reference",
+            "Related Files",
             "Plan",
             "Acceptance Criteria",
-            "Verification",
         ):
             span = _find_section(lines, 4, required, ms_start + 1, ms_end)
             if span is None:
@@ -323,22 +316,18 @@ class PlanModel:
 
         related = sections["Related Files"]
         rel_items = _related_files_from_section(lines, related[0], related[1])
-
-        # Resolve inheritance.
         effective_paths: list[str] = []
         for item in rel_items:
             if item.lower() == "inherit: top-level":
-                effective_paths.extend(self.plan_related_files)
-            else:
-                effective_paths.append(_strip_path_bullet(item))
+                raise FinalizeError(
+                    f"{self.path}: milestone {name!r} says `inherit: top-level`, "
+                    "but there is no plan-level `Related Files` to inherit from -- "
+                    "the plan's touch surface is the union of its milestones'. "
+                    "List the paths this milestone touches."
+                )
+            effective_paths.append(_strip_path_bullet(item))
 
-        self._validate_spec_impact(
-            name,
-            sections["Spec Impact"],
-            effective_paths,
-        )
         self._validate_golden_reference(name, sections["Golden Reference"])
-        self._validate_verification(name, sections["Verification"])
 
         ac_section = sections["Acceptance Criteria"]
 
@@ -374,7 +363,7 @@ class PlanModel:
     def _validate_golden_reference(
         self, milestone_name: str, section: tuple[int, int]
     ) -> None:
-        items = _list_bullets(self.lines, section[0] + 1, section[1])
+        items = _list_bullets(self.scan, section[0] + 1, section[1])
         label = f"{self.path}: milestone {milestone_name!r} `#### Golden Reference`"
         required = ("Source:", "Functional points:")
         missing = [prefix for prefix in required if not any(item.startswith(prefix) for item in items)]
@@ -383,63 +372,6 @@ class PlanModel:
                 f"{label} must contain {', '.join(repr(prefix) for prefix in missing)} "
                 "bullet(s)."
             )
-
-    def _validate_verification(
-        self, milestone_name: str, section: tuple[int, int]
-    ) -> None:
-        items = _list_bullets(self.lines, section[0] + 1, section[1])
-        label = f"{self.path}: milestone {milestone_name!r} `#### Verification`"
-        required = ("Golden point(s) exercised:", "Evidence:")
-        missing = [prefix for prefix in required if not any(item.startswith(prefix) for item in items)]
-        if missing:
-            raise FinalizeError(
-                f"{label} must contain {', '.join(repr(prefix) for prefix in missing)} "
-                "bullet(s)."
-            )
-
-    def _validate_spec_impact(
-        self,
-        milestone_name: str,
-        section: tuple[int, int],
-        related_files: list[str],
-    ) -> None:
-        items = _list_bullets(self.lines, section[0] + 1, section[1])
-        label = f"{self.path}: milestone {milestone_name!r} `#### Spec Impact`"
-        if not items:
-            raise FinalizeError(
-                f"{label} must contain one or more bullet entries."
-            )
-
-        na_items = [item for item in items if item.upper().startswith("N/A")]
-        if na_items:
-            if len(items) != 1:
-                raise FinalizeError(
-                    f"{label} cannot mix an `N/A:` entry with spec paths."
-                )
-            if re.fullmatch(r"N/A:\s+\S(?:.*\S)?", items[0], re.IGNORECASE) is None:
-                raise FinalizeError(
-                    f"{label} must use one reasoned `N/A: <reason>` entry."
-                )
-            return
-
-        spec_paths: list[str] = []
-        for item in items:
-            path = _strip_path_bullet(item)
-            if not _is_spec_path(path):
-                raise FinalizeError(
-                    f"{label} entry {item!r} must be a `docs/spec/*.md` path "
-                    "or one reasoned `N/A:` entry."
-                )
-            spec_paths.append(path)
-
-        missing = [path for path in spec_paths if path not in related_files]
-        if missing:
-            formatted = ", ".join(repr(path) for path in missing)
-            raise FinalizeError(
-                f"{label} path(s) {formatted} must also appear in the milestone's "
-                "effective `#### Related Files`."
-            )
-
 
 # ---------------------------------------------------------------------------
 # Render
@@ -450,28 +382,6 @@ def _refs_phrase(refs: list[dict[str, str]]) -> str:
     parts = [f"`{r['path']} § {r['section']}`" for r in refs]
     return ", ".join(parts)
 
-
-def render_preflight_body(matched: list[dict[str, Any]], role: str) -> list[str]:
-    """Return the lines that go between the preflight markers
-    (exclusive). Empty list when no rules / knowledge applies.
-
-    The body is rendered deterministically: policies appear in their
-    original order in the policy file; within each policy, rules
-    precede knowledge.
-    """
-    items: list[str] = []
-    for p in matched:
-        for kind, marker in (("rules", "policy_rules"), ("knowledge", "policy_knowledge")):
-            refs = p.get(kind, {}).get(role) or []
-            if not refs:
-                continue
-            items.append(
-                f"- {p['name']} — {p['description']} (see {_refs_phrase(refs)}) "
-                f"<!-- {marker}: {p['id']} -->"
-            )
-    if not items:
-        return []
-    return ["", "### Policy Rules & Knowledge", "", *items]
 
 
 def render_policy_ac_body(
@@ -543,17 +453,15 @@ def finalize_plan(
     plan = PlanModel(plan_path)
     policies = load_policies(policy_path)
 
-    # Plan-level scope.
+    # Plan-level scope: the union of what the milestones touch, used for the
+    # final-tree gates.
     plan_matched = filter_policies(policies, plan.plan_related_files)
-    preflight_body = render_preflight_body(plan_matched, role)
 
     # Build the full list of (start, end, body) rewrites, then apply
     # them from highest-index to lowest. Higher-index rewrites do not
     # shift the positions of lower-index ranges, so a single descending
     # sort lets us splice without recomputing indices.
-    rewrites: list[tuple[int, int, list[str]]] = [
-        (plan.preflight_start_idx, plan.preflight_end_idx, preflight_body)
-    ]
+    rewrites: list[tuple[int, int, list[str]]] = []
     for m in plan.milestones:
         matched = filter_policies(policies, m["related_files"])
         body = render_policy_ac_body(matched, m["policy_states"])
@@ -579,13 +487,7 @@ def finalize_plan(
     # so a stale tag inside the now-generated range is naturally caught
     # as "inside an allowed range" while a tag living in author-written
     # prose is caught here.
-    final_preflight_start = next(
-        i for i, line in enumerate(new_lines) if line.strip() == PREFLIGHT_START
-    )
-    final_preflight_end = next(
-        i for i, line in enumerate(new_lines) if line.strip() == PREFLIGHT_END
-    )
-    allowed: list[tuple[int, int]] = [(final_preflight_start, final_preflight_end)]
+    allowed: list[tuple[int, int]] = []
     final_gate_start = next(
         i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_START
     )
