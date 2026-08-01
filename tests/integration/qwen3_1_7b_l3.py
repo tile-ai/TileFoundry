@@ -25,10 +25,17 @@ from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
 
 import tilefoundry
 from tilefoundry.runtime import SafetensorsResource
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+# This standalone script starts in tests/integration; keep continuation decode
+# in the shared driver rather than reproducing it here.
+from tests.models.orchestrator.causal_lm import generation  # noqa: E402
 
 CKPT_ENV = "TILEFOUNDRY_QWEN3_1_7B_CKPT"
 MODEL = "qwen3_1_7b"
@@ -133,21 +140,9 @@ def _oracle(mount: Path):
     return tokenizer, model.to(DEV).eval()
 
 
-def _rope_caches(config, rows: int):
-    """Full cos / sin caches `[rows, head_dim]` from the model's own rotary class.
-
-    Row `p` is the embedding for absolute position `p`, so gathering by `pos_ids`
-    reproduces the cos / sin the published attention applies.
-    """
-    rotary = Qwen3RotaryEmbedding(config).to(DEV)
-    reference = torch.zeros(1, rows, config.hidden_size, device=DEV, dtype=DTYPE)
-    cos, sin = rotary(reference, torch.arange(rows, device=DEV).unsqueeze(0))
-    return cos[0].to(DTYPE), sin[0].to(DTYPE)
-
-
 def _loaded(source: Path, work: Path, mount: Path, n_layers: int):
     """The emitted decoder with the published weights bound, through `prepare`."""
-    root = runpy.run_path(str(source))["Qwen3_1_7B_Decoder"].cloned()
+    root = runpy.run_path(str(source))["Qwen3_1_7B"].cloned()
     alias = {**_ALIAS, **{f"layer{i}": f"model.layers.{i}" for i in range(n_layers)}}
     raw = SafetensorsResource(str(mount), device="cpu", alias=alias, dtype=DTYPE)
     prepared = work / "prepared"
@@ -156,7 +151,7 @@ def _loaded(source: Path, work: Path, mount: Path, n_layers: int):
 
 
 def _hf_greedy(model, prompt_ids):
-    """Hugging Face's own 16 greedy continuations, and the prompt's cache.
+    """Hugging Face's own 16 greedy continuations.
 
     Stepped by hand rather than through `generate`, so both sides run 16 steps
     whatever the tokens are and no `generation_config` field decides what greedy
@@ -164,21 +159,29 @@ def _hf_greedy(model, prompt_ids):
     """
     with torch.no_grad():
         prefill = model(prompt_ids[:, :-1], use_cache=True)
-        context = tuple(
-            (
-                layer.keys.transpose(1, 2).contiguous(),
-                layer.values.transpose(1, 2).contiguous(),
-            )
-            for layer in prefill.past_key_values.layers
-        )
-
         cache, token, tokens = prefill.past_key_values, prompt_ids[:, -1:], []
         for _ in range(STEPS):
             step = model(token, past_key_values=cache, use_cache=True)
             cache = step.past_key_values
             token = torch.argmax(step.logits[:, -1], dim=-1, keepdim=True)
             tokens.append(int(token))
-    return context, tokens
+    return tokens
+
+
+def _recorded_greedy(tokens: list[int]):
+    """Return greedy sampling that skips decode's unmeasured warm sample."""
+    warmed = False
+
+    def sample(logits) -> int:
+        nonlocal warmed
+
+        token = generation.greedy(logits)
+        if warmed:
+            tokens.append(token)
+        warmed = True
+        return token
+
+    return sample
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -223,21 +226,16 @@ def main(argv: list[str] | None = None) -> int:
     if prompt_ids.shape[1] < 2:
         raise SystemExit("a continuation needs a token of context")
 
-    context, want = _hf_greedy(model, prompt_ids)
-    cos, sin = _rope_caches(model.config, published["max_position_embeddings"])
-    scale = torch.full(
-        (1, 1, 1, 1), model.model.layers[0].self_attn.scaling, device=DEV, dtype=DTYPE
+    want = _hf_greedy(model, prompt_ids)
+    got: list[int] = []
+    done = generation.decode(
+        loaded,
+        tokenizer,
+        PROMPT,
+        max_new=STEPS,
+        sampler=_recorded_greedy(got),
+        device=DEV,
     )
-
-    caches, token, got = context, prompt_ids[0, -1:], []
-    for offset in range(STEPS):
-        pos_ids = torch.tensor(
-            [prompt_ids.shape[1] - 1 + offset], device=DEV, dtype=torch.int32
-        )
-        logits, entries = loaded.forward(token, cos, sin, pos_ids, scale, caches)
-        caches = loaded.append_cache(caches, entries)
-        token = torch.argmax(logits[0]).reshape(1).to(torch.int64)
-        got.append(int(token))
 
     if got != want:
         step = next(i for i, (a, b) in enumerate(zip(got, want)) if a != b)
@@ -245,7 +243,10 @@ def main(argv: list[str] | None = None) -> int:
             f"diverged at step {step}: {tokenizer.decode(got)!r} "
             f"against {tokenizer.decode(want)!r}"
         )
-    print(f"{STEPS} greedy steps agree: {tokenizer.decode(got)!r}")
+    print(
+        f"{done.tokens} greedy steps agree at "
+        f"{done.tokens / done.seconds:.1f} tok/s: {tokenizer.decode(got)!r}"
+    )
     return 0
 
 

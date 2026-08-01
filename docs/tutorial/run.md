@@ -65,11 +65,11 @@ harness that assumes one shape is wrong for one of them.
 
 So the container is built per layer type, from the published cycle:
 
-{{fixture: qwen3_5_35b_a3b/model.py:Qwen3_5Decoder.init_caches}}
+{{fixture: qwen3_5_35b_a3b/model.py:Qwen3_5_35B_A3B.init_caches}}
 
 and advanced the same way:
 
-{{fixture: qwen3_5_35b_a3b/model.py:Qwen3_5Decoder.append_cache}}
+{{fixture: qwen3_5_35b_a3b/model.py:Qwen3_5_35B_A3B.append_cache}}
 
 The layer itself never learns which kind it got. State arrives as parameters, comes
 back as results, and passes through the boundary untouched — the **caller owns it**.

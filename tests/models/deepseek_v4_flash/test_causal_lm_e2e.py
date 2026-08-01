@@ -15,7 +15,7 @@ from tests.models.deepseek_v4_flash.hf_alias import hf_alias
 from tests.models.deepseek_v4_flash.model import build_deepseek_v4_flash
 from tests.models.deepseek_v4_flash.reference import small
 from tests.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
-from tests.models.generation import generate
+from tests.models.orchestrator.causal_lm import generation
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module
 from tilefoundry.runtime import (
@@ -34,6 +34,19 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires 
 #: read the previous one's output; the remaining steps only fill the window, and
 #: running the runtime side over all of them buys the same fact per step.
 TWINNED_STEPS = 2
+
+
+class _Tokeniser:
+    """The fixed token sequence this loop test gives both model twins."""
+
+    def __init__(self, ids):
+        self._ids = ids
+
+    def encode(self, _prompt):
+        return self._ids
+
+    def decode(self, ids):
+        return " ".join(str(token) for token in ids)
 
 #: bf16 end to end, one f32->bf16 landing per kernel: the two bounds the real
 #: bring-up ran on throughout. Stated here because there is no default bound.
@@ -283,30 +296,55 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
         assert "forward" not in vars(type(candidate)), name
 
 
-def test_the_generate_loop_threads_state_and_stops_at_the_window(config, twins):
-    """The decode loop over enough steps to fill the window, from three angles a
-    single run answers at once.
+def test_the_decode_loop_threads_state_across_both_twins(config, twins):
+    """One decode loop drives the loaded module and its runtime twin.
 
     State is held entirely by the caller and threaded functionally in and out, so
     the cache each step reads is the context before its token: what a step hands
     back is that token's own position, and the caller appending it is what makes
-    the second step read the first one's output. Past the window the caller stops
-    growing it -- eviction is a policy applied to a tensor, which is why the
-    description carries a range and not a fixed capacity, and why it is visible
-    here rather than buried in a write index. And the twin runs the same loop:
-    checked over the steps both sides take, so a runtime kernel that broke the
-    threading would disagree with the evaluator rather than merely look plausible.
+    the second step read the first one's output. The authored orchestration
+    methods bind on both sides, so this is one driver rather than twin loops.
     """
     semantic, runtime = twins
     steps = config.window + 2
     ids = torch.arange(steps, dtype=torch.int64, device="cuda") % config.vocab
     seed_ctx = semantic.init_caches(device="cuda")[0].shape[1]
+    tokenizer = _Tokeniser(ids.cpu().tolist())
 
-    reference_logits, reference_caches = generate(semantic, ids, steps, device="cuda")
-    candidate_logits, candidate_caches = generate(runtime, ids, TWINNED_STEPS, device="cuda")
+    reference = generation.decode(semantic, tokenizer, "", max_new=TWINNED_STEPS, device="cuda")
+    candidate = generation.decode(runtime, tokenizer, "", max_new=TWINNED_STEPS, device="cuda")
 
-    assert len(reference_logits) == steps
-    assert len(candidate_logits) == TWINNED_STEPS
+    assert reference.tokens == TWINNED_STEPS
+    assert candidate.tokens == TWINNED_STEPS
+    assert candidate.text == reference.text
+    assert reference.prompt_steps == steps
+    assert candidate.prompt_steps == steps
+
+    runs = {}
+    for name, model, count in (
+        ("reference", semantic, steps),
+        ("candidate", runtime, TWINNED_STEPS),
+    ):
+        caches = model.init_caches(device="cuda")
+        logits = []
+        for step in range(count):
+            prior = caches
+            args = model.prepare_inputs_for_generation(ids[: step + 1], step, caches, device="cuda")
+            output, fresh = model(*args)
+            caches = model.append_cache(caches, fresh)
+            if step == 0:
+                # A step hands back one position per layer -- this token's own
+                # latent -- and appending it leaves the context it was given
+                # unchanged with that position after it.
+                assert fresh[0].shape[1] == 1, type(model).__name__
+                assert caches[0].shape[1] == prior[0].shape[1] + 1, type(model).__name__
+                assert torch.equal(caches[0][:, :seed_ctx], prior[0])
+                assert caches[0][:, seed_ctx:].float().any()
+            logits.append(output)
+        runs[name] = tuple(logits), caches
+
+    reference_logits, reference_caches = runs["reference"]
+    candidate_logits, candidate_caches = runs["candidate"]
     report = check(
         lambda: candidate_logits,
         lambda: reference_logits[:TWINNED_STEPS],
@@ -317,23 +355,52 @@ def test_the_generate_loop_threads_state_and_stops_at_the_window(config, twins):
     for step, logits in enumerate(reference_logits):
         assert torch.isfinite(logits.float()).all(), step
 
-    # The window is a capacity: the context stops at what the layer can attend.
     assert reference_caches[0].shape[1] == config.max_ctx
     assert config.max_ctx == config.window - 1
     assert candidate_caches[0].shape[1] == seed_ctx + TWINNED_STEPS
 
-    for model in (semantic, runtime):
-        caches = model.init_caches(device="cuda")
-        args = model.prepare_inputs_for_generation(ids, 0, caches, device="cuda")
-        _, fresh = model(*args)
-        # A step hands back one position per layer -- this token's own latent --
-        # and appending it leaves the context it was given unchanged with that
-        # position after it.
-        assert fresh[0].shape[1] == 1, type(model).__name__
-        next_caches = model.append_cache(caches, fresh)
-        assert next_caches[0].shape[1] == caches[0].shape[1] + 1, type(model).__name__
-        assert torch.equal(next_caches[0][:, :seed_ctx], caches[0])
-        assert next_caches[0][:, seed_ctx:].float().any()
+
+def test_decode_times_only_the_sampled_steps(monkeypatch):
+    """The warm sample and detokenization sit outside the reported interval."""
+    events = []
+    timestamps = iter((10.0, 13.5))
+
+    class Tokenizer:
+        def encode(self, _prompt):
+            return [7]
+
+        def decode(self, ids):
+            events.append("decode")
+            return str(list(ids))
+
+    class Model:
+        def init_caches(self, device=None):
+            return ()
+
+        def prepare_inputs_for_generation(self, input_ids, step, caches, device=None):
+            return input_ids[step], caches
+
+        def forward(self, *_args):
+            return object(), ()
+
+        def append_cache(self, caches, fresh):
+            return caches
+
+    def sample(_logits):
+        events.append("sample")
+        return 1
+
+    def clock():
+        events.append("clock")
+        return next(timestamps)
+
+    monkeypatch.setattr(generation, "perf_counter", clock)
+    decoded = generation.decode(Model(), Tokenizer(), "prompt", max_new=1, sampler=sample, device="cpu")
+
+    assert events == ["sample", "clock", "sample", "clock", "decode"]
+    assert decoded.seconds == 3.5
+    assert decoded.tokens == 1
+    assert decoded.prompt_steps == 1
 
 
 def test_structure_mismatch_rejected(config, twins):

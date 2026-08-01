@@ -95,6 +95,7 @@ application since cos/sin depend only on (seq, head_dim), not the head axis).
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 from transformers import Gemma2Config
@@ -152,8 +153,28 @@ LOGIT_SOFTCAP = config.final_logit_softcapping
 EMBED_SCALE = _EMBED_SCALE
 
 
+def _generation_device(device):
+    import torch  # noqa: PLC0415
+
+    return torch.accelerator.current_accelerator() if device is None else device
+
+
+@lru_cache(maxsize=None)
+def _generation_rope(device):
+    import torch  # noqa: PLC0415
+
+    dim = config.head_dim
+    inverse = 1.0 / (
+        config.rope_parameters["rope_theta"]
+        ** (torch.arange(0, dim, 2, device=device, dtype=torch.float32) / dim)
+    )
+    phases = torch.outer(torch.arange(MAX_CTX, device=device, dtype=torch.float32), inverse)
+    phases = torch.cat((phases, phases), dim=-1)
+    return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
+
+
 @module(entry="decoder_layer")
-class Gemma2_2B:
+class Gemma2_2B_DecoderLayer:
     @func
     def input_rms_norm(
         hidden: Tensor[(1, S, config.hidden_size), _DT],
@@ -291,14 +312,14 @@ class Gemma2_2B:
 
 
 @module(target=CudaTarget("nvidia.h200_sxm"))
-class Gemma2_2B_Decoder:
+class Gemma2_2B:
     """The ordered layer stack, the norm that closes it, and the scaled embedding
     and soft-capped head that bracket it."""
 
     topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
-        Gemma2_2B.renamed(f"layer{index}")
+        Gemma2_2B_DecoderLayer.renamed(f"layer{index}")
         for index in range(config.num_hidden_layers)
     )
 
@@ -387,7 +408,7 @@ class Gemma2_2B_Decoder:
             for (k_cache, v_cache), (k_new, v_new) in zip(caches, fresh)
         )
 
-    def init_caches(self, device="cuda"):
+    def init_caches(self, device=None):
         """The per-layer cache container, zero positions long.
 
         `ctx_len` admits 0, so these are a decode start: the first step of a
@@ -398,6 +419,7 @@ class Gemma2_2B_Decoder:
         from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
         from tilefoundry.ir.types import DType  # noqa: PLC0415
 
+        device = _generation_device(device)
         empty = (1, 0, config.num_key_value_heads, config.head_dim)
         dtype = to_torch_dtype(DType.from_name(_DT))
         return tuple(
@@ -407,3 +429,16 @@ class Gemma2_2B_Decoder:
             )
             for _ in range(config.num_hidden_layers)
         )
+
+    def prepare_inputs_for_generation(self, input_ids, step, caches, device=None):
+        """The token and positional activations for one decode step."""
+        import torch  # noqa: PLC0415
+
+        device = _generation_device(device)
+        token_ids = input_ids[step].reshape(1).to(device=device, dtype=torch.int64)
+        cos_cache, sin_cache = _generation_rope(device)
+        pos_ids = torch.tensor([step], device=device, dtype=torch.int32)
+        scale = torch.full(
+            (1, 1, 1, 1), config.head_dim ** -0.5, device=device, dtype=config.dtype
+        )
+        return token_ids, cos_cache, sin_cache, pos_ids, scale, caches

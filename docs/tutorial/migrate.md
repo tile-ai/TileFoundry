@@ -73,7 +73,7 @@ A hybrid model publishes which kind each layer is. The root reads that list and
 builds the stack from it, so the cycle is a fact of the model rather than something
 a reader of the fixture has to work out.
 
-{{fixture: qwen3_5_35b_a3b/model.py:Qwen3_5Decoder}}
+{{fixture: qwen3_5_35b_a3b/model.py:Qwen3_5_35B_A3B}}
 
 ## When step one is finished
 

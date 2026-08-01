@@ -56,6 +56,7 @@ is added to is stated rather than inferred.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 from transformers import Qwen2Config
@@ -117,8 +118,28 @@ S = 1
 _G = _GQA
 
 
+def _generation_device(device):
+    import torch  # noqa: PLC0415
+
+    return torch.accelerator.current_accelerator() if device is None else device
+
+
+@lru_cache(maxsize=None)
+def _generation_rope(device):
+    import torch  # noqa: PLC0415
+
+    dim = config.hidden_size // config.num_attention_heads
+    inverse = 1.0 / (
+        config.rope_parameters["rope_theta"]
+        ** (torch.arange(0, dim, 2, device=device, dtype=torch.float32) / dim)
+    )
+    phases = torch.outer(torch.arange(MAX_CTX, device=device, dtype=torch.float32), inverse)
+    phases = torch.cat((phases, phases), dim=-1)
+    return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
+
+
 @module(entry="decoder_layer")
-class Qwen2_5_1_5B:
+class Qwen2_5_1_5B_DecoderLayer:
     @func
     def input_rms_norm(
         hidden: Tensor[(1, S, config.hidden_size), _DT],
@@ -260,13 +281,13 @@ class Qwen2_5_1_5B:
 
 
 @module(target=CudaTarget("nvidia.h200_sxm"))
-class Qwen2_5_1_5B_Decoder:
+class Qwen2_5_1_5B:
     """The ordered layer stack plus the norm that closes it."""
 
     topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
-        Qwen2_5_1_5B.renamed(f"layer{index}")
+        Qwen2_5_1_5B_DecoderLayer.renamed(f"layer{index}")
         for index in range(config.num_hidden_layers)
     )
 
@@ -353,7 +374,7 @@ class Qwen2_5_1_5B_Decoder:
             for (k_cache, v_cache), (k_new, v_new) in zip(caches, fresh)
         )
 
-    def init_caches(self, device="cuda"):
+    def init_caches(self, device=None):
         """The per-layer cache container, zero positions long.
 
         `ctx_len` admits 0, so these are a decode start: the first step of a
@@ -364,6 +385,7 @@ class Qwen2_5_1_5B_Decoder:
         from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
         from tilefoundry.ir.types import DType  # noqa: PLC0415
 
+        device = _generation_device(device)
         empty = (1, 0, config.num_key_value_heads, HEAD_DIM)
         dtype = to_torch_dtype(DType.from_name(_DT))
         return tuple(
@@ -373,3 +395,16 @@ class Qwen2_5_1_5B_Decoder:
             )
             for _ in range(config.num_hidden_layers)
         )
+
+    def prepare_inputs_for_generation(self, input_ids, step, caches, device=None):
+        """The token and positional activations for one decode step."""
+        import torch  # noqa: PLC0415
+
+        device = _generation_device(device)
+        token_ids = input_ids[step].reshape(1).to(device=device, dtype=torch.int64)
+        cos_cache, sin_cache = _generation_rope(device)
+        pos_ids = torch.tensor([step], device=device, dtype=torch.int32)
+        scale = torch.full(
+            (1, 1, 1, 1), HEAD_DIM ** -0.5, device=device, dtype=config.dtype
+        )
+        return token_ids, cos_cache, sin_cache, pos_ids, scale, caches

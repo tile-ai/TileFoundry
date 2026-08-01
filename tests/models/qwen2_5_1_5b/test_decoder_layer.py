@@ -19,6 +19,7 @@ import torch
 
 from tests.models.decode_oracle import agrees_to_one_rounding
 from tests.models.qwen2_5_1_5b import reference
+from tests.models.qwen2_5_1_5b.model import MAX_CTX, Qwen2_5_1_5B
 
 HIDDEN = reference.CONFIG.hidden_size
 
@@ -27,6 +28,26 @@ DEV = "cpu"
 #: Two lengths, so a kernel that only works at the length it was authored
 #: against cannot pass. Neither divides the key/value head count.
 CTX_LENGTHS = (24, 40)
+
+
+def test_generation_inputs_match_the_drawn_position() -> None:
+    """The root supplies its token and positional activations for a decode step."""
+    step = 24
+    source = torch.arange(step + 2, dtype=torch.int64, device=DEV)
+    sentinel = object()
+
+    token_ids, cos, sin, pos_ids, scale, caches = Qwen2_5_1_5B.prepare_inputs_for_generation(
+        source[: step + 1], step, sentinel, device=DEV
+    )
+    want_cos, want_sin = reference._rope_at(step + 1, DEV)
+
+    assert torch.equal(token_ids, source[step].reshape(1))
+    assert torch.equal(cos[: step + 1], want_cos)
+    assert torch.equal(sin[: step + 1], want_sin)
+    assert cos.shape == sin.shape == (MAX_CTX, reference.CONFIG.hidden_size // reference.CONFIG.num_attention_heads)
+    assert torch.equal(pos_ids, torch.tensor([step], device=DEV, dtype=torch.int32))
+    assert scale.shape == (1, 1, 1, 1)
+    assert caches is sentinel
 
 
 def test_decoder_layer_returns_the_cache_entry_to_append():

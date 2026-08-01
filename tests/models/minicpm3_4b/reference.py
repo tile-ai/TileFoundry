@@ -31,7 +31,7 @@ from tests.models import dense_decode
 from tests.models.minicpm3_4b.model import (
     MAX_CTX,
     MiniCPM3_4B,
-    MiniCPM3_4B_Decoder,
+    MiniCPM3_4B_DecoderLayer,
     published,
 )
 from tilefoundry.runtime.resource import DictResource
@@ -221,7 +221,7 @@ def _layer_constants(layer) -> dict:
 
 def load_layer(layer):
     """The layer Module with *layer*'s weights bound."""
-    return MiniCPM3_4B.cloned().load(DictResource(_layer_constants(layer)))
+    return MiniCPM3_4B_DecoderLayer.cloned().load(DictResource(_layer_constants(layer)))
 
 
 def load_decoder(model):
@@ -241,7 +241,7 @@ def load_decoder(model):
         constants.update(
             {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
         )
-    return MiniCPM3_4B_Decoder.cloned().load(DictResource(constants))
+    return MiniCPM3_4B.cloned().load(DictResource(constants))
 
 
 def _residual_scale(layer, device: str) -> tuple:

@@ -376,7 +376,7 @@ def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> RuntimeModule:
     for layer_ir in ir.modules:
         namespace[layer_ir.name] = decoder_layer_cls
 
-    root_cls = runtime_module(ir)(type("DeepseekV4ForCausalLMRT", (), namespace))
+    root_cls = runtime_module(ir)(type("DeepseekV4FlashRT", (), namespace))
     return root_cls(ir=ir)
 
 

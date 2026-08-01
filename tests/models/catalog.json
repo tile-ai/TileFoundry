@@ -105,7 +105,7 @@
             }
           ],
           "names": [
-            "DeepseekV4ForCausalLM"
+            "DeepseekV4Flash"
           ]
         }
       ],
@@ -167,7 +167,7 @@
             }
           ],
           "names": [
-            "Gemma2_2B_Decoder"
+            "Gemma2_2B"
           ]
         }
       ],
@@ -320,7 +320,7 @@
             }
           ],
           "names": [
-            "MiniCPM3_4B_Decoder"
+            "MiniCPM3_4B"
           ]
         }
       ],
@@ -384,7 +384,7 @@
             }
           ],
           "names": [
-            "Qwen2_5_1_5B_Decoder"
+            "Qwen2_5_1_5B"
           ]
         }
       ],
@@ -448,7 +448,7 @@
             }
           ],
           "names": [
-            "Qwen3_1_7B_Decoder"
+            "Qwen3_1_7B"
           ]
         }
       ],
@@ -1442,7 +1442,7 @@
             }
           ],
           "names": [
-            "Qwen3_5Decoder"
+            "Qwen3_5_35B_A3B"
           ]
         }
       ],

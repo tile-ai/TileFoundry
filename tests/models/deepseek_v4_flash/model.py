@@ -1261,7 +1261,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
     MAX_CTX = config.window - 1
 
     @module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"))
-    class DeepseekV4ForCausalLM:
+    class DeepseekV4Flash:
         topologies = (Topology("cta", 132), Topology("thread", 512))
 
         @func
@@ -1329,11 +1329,12 @@ def build_deepseek_v4_flash(config: DSV4Config):
                 appended.append(grown[:, -MAX_CTX:] if grown.shape[1] > MAX_CTX else grown)
             return tuple(appended)
 
-        def init_caches(self, device="cuda", mesh=None):
+        def init_caches(self, device=None, mesh=None):
             """The per-layer context the decode loop starts from, drawn at a fixed
             seed so every caller of this model starts from the same one."""
             import torch  # noqa: PLC0415
 
+            device = torch.accelerator.current_accelerator() if device is None else device
             generator = torch.Generator(device=device).manual_seed(SEED_CTX_SEED)
             return tuple(
                 (
@@ -1346,9 +1347,11 @@ def build_deepseek_v4_flash(config: DSV4Config):
                 for _ in range(config.n_layers)
             )
 
-        def prepare_inputs_for_generation(self, input_ids, step, past_key_values, device="cuda"):
+        def prepare_inputs_for_generation(self, input_ids, step, past_key_values, device=None):
+            """This step's token and positional activations, in forward order."""
             import torch  # noqa: PLC0415
 
+            device = torch.accelerator.current_accelerator() if device is None else device
             ids = input_ids.reshape(-1)
             token_ids = ids[step].reshape(1).to(device=device, dtype=torch.int64)
             # The step's own absolute position: the seed context occupies the ones
@@ -1363,7 +1366,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
             ones_head_dim = torch.ones(config.head_dim, device=device, dtype=torch.bfloat16)
             return (token_ids, cos_pos, sin_pos, past_key_values, scale, ones_head_dim)
 
-    return DeepseekV4ForCausalLM
+    return DeepseekV4Flash
 
 
 #: The attention submodule and the ``noaux_tc`` MoE block at the real checkpoint's
@@ -1373,13 +1376,13 @@ DeepseekV4Attention, _, deepseek_v4_flash_module = _submodules(REAL)
 
 #: The published model, at the real checkpoint's shape. Any other shape is the
 #: caller's to name: ``build_deepseek_v4_flash(TINY)``.
-DeepseekV4ForCausalLM = build_deepseek_v4_flash(REAL)
+DeepseekV4Flash = build_deepseek_v4_flash(REAL)
 
 __all__ = [
     "SEED_CTX_LEN",
     "SEED_CTX_SEED",
     "DeepseekV4Attention",
-    "DeepseekV4ForCausalLM",
+    "DeepseekV4Flash",
     "build_deepseek_v4_flash",
     "deepseek_v4_flash_module",
 ]

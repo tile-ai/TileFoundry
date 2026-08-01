@@ -22,12 +22,14 @@ import torch
 
 from tests.models.qwen3_5_35b_a3b import reference
 from tests.models.qwen3_5_35b_a3b.model import (
+    _ROPE_ROWS,
+    _ROT,
     LAYER_TYPE,
-    Qwen3_5Decoder,
+    Qwen3_5_35B_A3B,
     Qwen3_5FullAttention,
-    Qwen3_5FullAttnLayer,
+    Qwen3_5FullAttentionDecoderLayer,
     Qwen3_5LinearAttention,
-    Qwen3_5LinearAttnLayer,
+    Qwen3_5LinearAttentionDecoderLayer,
     Qwen3_5MoE,
     Qwen3_5Router,
 )
@@ -50,7 +52,7 @@ def test_the_stack_is_the_published_order_and_its_layers_are_independent():
     pass every component test in this package and fail here.
     """
     shape = reference.CONFIG
-    stack = Qwen3_5Decoder
+    stack = Qwen3_5_35B_A3B
     assert len(stack.modules) == shape.num_hidden_layers
     assert [child.name for child in stack.modules[:3]] == ["layer0", "layer1", "layer2"]
 
@@ -112,6 +114,32 @@ def test_mrope_degenerates_in_a_text_only_fixture():
     assert (plain.sin() - sin).abs().max().item() < 1e-9
 
 
+def test_generation_inputs_match_the_drawn_position():
+    """The root supplies positional activations to full-attention layers only."""
+    step = 24
+    source = torch.arange(step + 2, dtype=torch.int64, device=DEV)
+    sentinel = object()
+
+    token_ids, layer_args, caches = Qwen3_5_35B_A3B.prepare_inputs_for_generation(
+        source[: step + 1], step, sentinel, device=DEV
+    )
+    want_cos, want_sin = reference.rope_caches_at(total=step + 1, device=DEV)
+
+    assert torch.equal(token_ids, source[step].reshape(1))
+    assert len(layer_args) == len(reference.CONFIG.layer_types)
+    for kind, args in zip(reference.CONFIG.layer_types, layer_args):
+        if kind == "linear_attention":
+            assert args == ()
+            continue
+        cos, sin, pos_ids, scale = args
+        assert torch.equal(cos[: step + 1], want_cos)
+        assert torch.equal(sin[: step + 1], want_sin)
+        assert cos.shape == sin.shape == (_ROPE_ROWS, _ROT)
+        assert torch.equal(pos_ids, torch.tensor([step], device=DEV, dtype=torch.int32))
+        assert scale.shape == (1, 1, 1, 1)
+    assert caches is sentinel
+
+
 # ── the multi-token-prediction gap ──────────────────────────────────────
 
 
@@ -158,8 +186,8 @@ EXECUTED: dict[str, tuple[str, ...]] = {
     "Qwen3_5MoE": ("post_norm", "routed_experts", "shared_expert", "experts"),
     "Qwen3_5FullAttention": ("partial_rope", "full_attention"),
     "Qwen3_5LinearAttention": ("linear_attention",),
-    "Qwen3_5FullAttnLayer": ("residual_add",),
-    "Qwen3_5LinearAttnLayer": ("residual_add",),
+    "Qwen3_5FullAttentionDecoderLayer": ("residual_add",),
+    "Qwen3_5LinearAttentionDecoderLayer": ("residual_add",),
 }
 
 NOT_EXECUTED: dict[str, tuple[str, ...]] = {
@@ -177,7 +205,7 @@ NOT_EXECUTED: dict[str, tuple[str, ...]] = {
     # embedding and head at its two ends have anything to be compared with. They
     # are authored because the model has them, and without them the root would
     # describe a step that begins and ends nowhere.
-    "Qwen3_5Decoder": ("embed", "final_rms_norm", "lm_head"),
+    "Qwen3_5_35B_A3B": ("embed", "final_rms_norm", "lm_head"),
 }
 
 #: What no test in this package executes at all, with the reason. Not derived
@@ -193,7 +221,7 @@ UNCOVERED_SEMANTICS: dict[str, str] = {
         "vision_config and every Qwen3_5MoeVision* module are untouched."
     ),
     "the_40_layer_stack": (
-        "`Qwen3_5Decoder` composes the published order and orchestrates it, so the "
+        "`Qwen3_5_35B_A3B` composes the published order and orchestrates it, so the "
         "stack is described, its layer order is checked and its step is reachable "
         "-- but no complete-stack reference is built for a model this size, so the "
         "residual thread across 40 layers and the final norm are never compared "
@@ -235,9 +263,9 @@ def _authored_modules():
         Qwen3_5MoE,
         Qwen3_5FullAttention,
         Qwen3_5LinearAttention,
-        Qwen3_5FullAttnLayer,
-        Qwen3_5LinearAttnLayer,
-        Qwen3_5Decoder,
+        Qwen3_5FullAttentionDecoderLayer,
+        Qwen3_5LinearAttentionDecoderLayer,
+        Qwen3_5_35B_A3B,
     )
 
 

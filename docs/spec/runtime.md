@@ -254,6 +254,17 @@ class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
     left to fail as a shape error inside the evaluator. `check` compares the
     semantic and runtime forwards (§1.6). A multi-node composition is chained
     by the caller, one `forward` (or one named function call) per node.
+  - a causal-LM root MAY define `init_caches`,
+    `prepare_inputs_for_generation`, and `append_cache` orchestration methods.
+    `prepare_inputs_for_generation(input_ids, step, caches, *, device)` receives
+    a one-dimensional `torch.Tensor` of token IDs. The model selects the token
+    at `step`, reshapes and places it, creates all other activation inputs in
+    its own `forward` order, and returns that positional tuple. The caller owns
+    the cache and expands only the token-ID tensor; it MUST NOT reconstruct a
+    model's positional, rotary, scaling, or state inputs. It passes the active
+    token-ID prefix as a view; a method MUST NOT mutate that view or retain it
+    across steps. These methods bind on a `LoadedModule` and its runtime twin in
+    the same way as `forward`.
 
 ### 1.1.3 Internal Pipeline (compiled origin)
 

@@ -26,7 +26,7 @@ from tests.models import dense_decode
 from tests.models.qwen3_1_7b.model import (
     MAX_CTX,
     Qwen3_1_7B,
-    Qwen3_1_7B_Decoder,
+    Qwen3_1_7B_DecoderLayer,
     published,
 )
 from tilefoundry.runtime.resource import DictResource
@@ -181,7 +181,7 @@ def _layer_constants(layer) -> dict:
 
 def load_layer(layer):
     """The layer Module with *layer*'s weights bound."""
-    return Qwen3_1_7B.cloned().load(DictResource(_layer_constants(layer)))
+    return Qwen3_1_7B_DecoderLayer.cloned().load(DictResource(_layer_constants(layer)))
 
 
 def load_decoder(model):
@@ -201,7 +201,7 @@ def load_decoder(model):
         constants.update(
             {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
         )
-    return Qwen3_1_7B_Decoder.cloned().load(DictResource(constants))
+    return Qwen3_1_7B.cloned().load(DictResource(constants))
 
 
 SPEC = dense_decode.DenseDecode(

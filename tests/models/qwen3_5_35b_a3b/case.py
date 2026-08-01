@@ -39,7 +39,7 @@ from tests.models.corpus import (
 )
 from tests.models.qwen3_5_35b_a3b.model import (
     MAX_CTX,
-    Qwen3_5Decoder,
+    Qwen3_5_35B_A3B,
     config,
 )
 from tests.models.qwen3_5_35b_a3b.reference import (
@@ -67,7 +67,7 @@ _FULL_LAYER = config.layer_types.index("full_attention")
 #: the case that carries the package's name.
 CASE = ModelCase(
     id="qwen3_5_35b_a3b",
-    prototype=Qwen3_5Decoder,
+    prototype=Qwen3_5_35B_A3B,
     scope=f"layer{_LINEAR_LAYER}.mixer",
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/linear_attention_decode",
@@ -112,7 +112,7 @@ CASE = ModelCase(
 FULL_ATTENTION_CASE = ModelCase(
     id="qwen3_5_35b_a3b_full_attention",
     model="qwen3_5_35b_a3b",
-    prototype=Qwen3_5Decoder,
+    prototype=Qwen3_5_35B_A3B,
     scope=f"layer{_FULL_LAYER}.mixer",
     reference=ReferenceCase(
         id="qwen3_5_35b_a3b/reference/full_attention_decode",
@@ -167,7 +167,7 @@ FULL_ATTENTION_CASE = ModelCase(
 MOE_CASE = ModelCase(
     id="qwen3_5_35b_a3b_moe",
     model="qwen3_5_35b_a3b",
-    prototype=Qwen3_5Decoder,
+    prototype=Qwen3_5_35B_A3B,
     scope=f"layer{_LINEAR_LAYER}.moe",
     #: No harness reference. Drawing one means building a whole decoder layer for
     #: its block -- 805 million parameters, 3.3 GB in f32, essentially all of it the

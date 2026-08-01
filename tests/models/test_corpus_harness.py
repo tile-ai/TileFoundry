@@ -85,9 +85,9 @@ def test_analysing_one_build_leaves_the_next_build_clean() -> None:
 def test_a_stack_analyses_one_layer_without_marking_its_neighbour() -> None:
     """Adjacent layers of the real stack hold different Functions, so a record
     written on one lands nowhere near the other."""
-    from tests.models.qwen3_1_7b.model import Qwen3_1_7B_Decoder  # noqa: PLC0415
+    from tests.models.qwen3_1_7b.model import Qwen3_1_7B  # noqa: PLC0415
 
-    stack = h200_sxm().bind(Qwen3_1_7B_Decoder.cloned())
+    stack = h200_sxm().bind(Qwen3_1_7B.cloned())
     first, second = stack.modules[0], stack.modules[1]
     assert first.lookup("mlp") is not second.lookup("mlp")
 

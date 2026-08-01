@@ -44,7 +44,8 @@ import importlib
 
 from tests.models.corpus import ModelCase
 
-#: The models in the corpus, by package name under `tests/models/`.
+#: The models in the corpus, by package name under `tests/models/`.  The
+#: `orchestrator/` package holds shared family code, not a model case.
 MODELS: tuple[str, ...] = (
     "qwen3_1_7b",
     "qwen2_5_1_5b",
