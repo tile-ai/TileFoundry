@@ -227,11 +227,6 @@ def published(path: Path | None = None) -> KimiLinearConfig:
     return KimiLinearConfig(**json.loads(path.read_text(encoding="utf-8")))
 
 
-#: The position table's extent. Ours, not published: `max_position_embeddings`
-#: is 1048576, and a million-long table costs analysis precision for nothing.
-MAX_POS = 4096
-
-
 def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
     """This model at *config*: its three kernels, as the children of one root.
 
@@ -243,8 +238,8 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
     """
     # The prior cache this step reads: the only range this model carries, and only
     # the MLA submodule carries it. Zero is a first step, and the exclusive upper
-    # bound is MAX_POS, which is also the position table's extent.
-    C = DimVar("ctx_len", 0, MAX_POS)
+    # bound comes from the published configuration.
+    C = DimVar("ctx_len", 0, config.model_max_length)
 
     # One token per step.
     S = 1
@@ -296,8 +291,8 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             w_kv_a: Tensor[(1, config.hidden_size, (config.kv_lora_rank + _ROPE)), _DT],
             gamma_kv_a: Tensor[(config.kv_lora_rank,), _DT],
             w_kv_b: Tensor[(1, config.kv_lora_rank, (_H * _KVB)), _DT],
-            cos_cache: Tensor[(MAX_POS, config.qk_rope_head_dim), _DT],
-            sin_cache: Tensor[(MAX_POS, config.qk_rope_head_dim), _DT],
+            cos_cache: Tensor[(S, config.qk_rope_head_dim), _DT],
+            sin_cache: Tensor[(S, config.qk_rope_head_dim), _DT],
             pos_ids: Tensor[(S,), "i32"],
             k_cache: Tensor[(1, C, config.num_attention_heads, _QK), _DT],
             v_cache: Tensor[(1, C, config.num_attention_heads, config.v_head_dim), _DT],

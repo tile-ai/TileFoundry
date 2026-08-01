@@ -200,7 +200,7 @@
             },
             {
               "functions": [
-                "mla_attention(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: Tensor[(2304,), \"bf16\"], w_q: Tensor[(1, 2304, 6144), \"bf16\"], w_kv_a: Tensor[(1, 2304, 576), \"bf16\"], gamma_kv_a: Tensor[(512,), \"bf16\"], w_kv_b: Tensor[(1, 512, 8192), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 32, 192), \"bf16\"], v_cache: Tensor[(1, ctx_len, 32, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: Tensor[(1, 4096, 2304), \"bf16\"])"
+                "mla_attention(hidden: Tensor[(1, 1, 2304), \"bf16\"], gamma_in: Tensor[(2304,), \"bf16\"], w_q: Tensor[(1, 2304, 6144), \"bf16\"], w_kv_a: Tensor[(1, 2304, 576), \"bf16\"], gamma_kv_a: Tensor[(512,), \"bf16\"], w_kv_b: Tensor[(1, 512, 8192), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 32, 192), \"bf16\"], v_cache: Tensor[(1, ctx_len, 32, 128), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: Tensor[(1, 4096, 2304), \"bf16\"])"
               ],
               "leaf": true,
               "modules": [],
@@ -528,9 +528,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -625,9 +625,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -722,9 +722,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -819,9 +819,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -916,9 +916,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1013,9 +1013,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1110,9 +1110,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1207,9 +1207,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1304,9 +1304,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],
@@ -1401,9 +1401,9 @@
               "modules": [
                 {
                   "functions": [
-                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
-                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(4096, 64), \"bf16\"], sin_cache: Tensor[(4096, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
+                    "partial_rope(x: Tensor[(1, 1, 16, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "partial_rope_kv(x: Tensor[(1, 1, 2, 256), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"])",
+                    "full_attention(hidden: Tensor[(1, 1, 2048), \"bf16\"], gamma_in: ConstTensor[(2048,), \"bf16\"], w_qg: ConstTensor[(1, 2048, 8192), \"bf16\"], w_k: ConstTensor[(1, 2048, 512), \"bf16\"], w_v: ConstTensor[(1, 2048, 512), \"bf16\"], gamma_q: ConstTensor[(256,), \"bf16\"], gamma_k: ConstTensor[(256,), \"bf16\"], cos_cache: Tensor[(1, 64), \"bf16\"], sin_cache: Tensor[(1, 64), \"bf16\"], pos_ids: Tensor[(1,), \"i32\"], k_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], v_cache: Tensor[(1, ctx_len, 2, 256), \"bf16\"], scale: Tensor[(1, 1, 1, 1), \"bf16\"], w_o: ConstTensor[(1, 4096, 2048), \"bf16\"])"
                   ],
                   "leaf": true,
                   "modules": [],

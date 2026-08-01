@@ -21,11 +21,13 @@ def numel(type: Type) -> int:
         values = []
         for dim in type.shape:
             if not isinstance(dim, int) or isinstance(dim, bool):
-                name = getattr(dim, "name", "NAME")
-                raise ValueError(
-                    f"numel: tensor extent {dim!r} is not concrete; bind it with "
-                    f"--dim {name}=EXTENT"
+                from .substitute import dim_vars_by_name  # noqa: PLC0415
+
+                names = dim_vars_by_name(dim)
+                hint = (
+                    f"; bind it with --dim {next(iter(names))}=EXTENT" if names else ""
                 )
+                raise ValueError(f"numel: tensor extent {dim!r} is not concrete{hint}")
             if dim < 0:
                 raise ValueError(f"numel: tensor extent {dim} is negative")
             values.append(dim)

@@ -27,7 +27,7 @@ from tests.models.corpus import (
     ReferenceCase,
     SizedCase,
 )
-from tests.models.kimi_linear_48b_a3b.model import MAX_POS, KimiLinear48BA3B
+from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B, published
 from tests.models.kimi_linear_48b_a3b.reference import (
     CTX_LEN,
     KDA_BLOCK_REASON,
@@ -114,7 +114,7 @@ CASE = ModelCase(
             id="kimi_linear_48b_a3b/sized/mla_attention",
             selector="mla.mla_attention",
             dims=ANALYZED_AT,
-            ceiling={"ctx_len": MAX_POS - 1},
+            ceiling={"ctx_len": published().model_max_length - 1},
         ),
     ),
 )

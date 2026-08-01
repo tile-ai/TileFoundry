@@ -98,9 +98,7 @@ _L2_EPS = 1e-6
 
 
 # Prior-cache length. The caller appends this step's returned K/V entry.
-# The full-attention kernels accept a 4096-position cache. This is our chosen
-# envelope, not a published field: `max_position_embeddings` is 262144.
-C = DimVar("ctx_len", 0, 4096)
+C = DimVar("ctx_len", 0, config.max_position_embeddings)
 
 # One token per step.
 
@@ -111,11 +109,6 @@ _D = config.head_dim
 _ROT = _ROTARY_DIM
 _PASS = _PASS_DIM
 _G = _GQA
-
-# One row per position a step may be decoded at: `pos_ids` is the prior-cache
-# length, which stops one below the chosen 4096-row envelope.
-_ROPE_ROWS = 4096
-
 
 # One token per step.
 
@@ -241,8 +234,8 @@ class Qwen3_5FullAttention:
     @func
     def partial_rope(
         x: Tensor[(1, S, _HQ, _D), _DT],
-        cos_cache: Tensor[(_ROPE_ROWS, _ROT), _DT],
-        sin_cache: Tensor[(_ROPE_ROWS, _ROT), _DT],
+        cos_cache: Tensor[(S, _ROT), _DT],
+        sin_cache: Tensor[(S, _ROT), _DT],
         pos_ids: Tensor[(S,), "i32"],
     ) -> Tensor[(1, S, _HQ, _D), _DT]:
         # Rotate the leading `rotary_dim` of each head and concatenate the
@@ -257,8 +250,8 @@ class Qwen3_5FullAttention:
     @func
     def partial_rope_kv(
         x: Tensor[(1, S, _HKV, _D), _DT],
-        cos_cache: Tensor[(_ROPE_ROWS, _ROT), _DT],
-        sin_cache: Tensor[(_ROPE_ROWS, _ROT), _DT],
+        cos_cache: Tensor[(S, _ROT), _DT],
+        sin_cache: Tensor[(S, _ROT), _DT],
         pos_ids: Tensor[(S,), "i32"],
     ) -> Tensor[(1, S, _HKV, _D), _DT]:
         # The same rotation over the key's head count. Its own Function because a
@@ -277,8 +270,8 @@ class Qwen3_5FullAttention:
         w_v: ConstTensor[(1, _H, _HKV * _D), _DT],
         gamma_q: ConstTensor[(_D,), _DT],
         gamma_k: ConstTensor[(_D,), _DT],
-        cos_cache: Tensor[(_ROPE_ROWS, _ROT), _DT],
-        sin_cache: Tensor[(_ROPE_ROWS, _ROT), _DT],
+        cos_cache: Tensor[(S, _ROT), _DT],
+        sin_cache: Tensor[(S, _ROT), _DT],
         pos_ids: Tensor[(S,), "i32"],
         k_cache: Tensor[(1, C, _HKV, _D), _DT],
         v_cache: Tensor[(1, C, _HKV, _D), _DT],
@@ -524,8 +517,8 @@ _TORCH_DT = to_torch_dtype(DType.from_name(_DT))
 
 
 @lru_cache(maxsize=None)
-def _generation_rope(device):
-    """The text-only rotary tables each full-attention step reads."""
+def _generation_rope(step, device):
+    """The text-only rotary row each full-attention step reads."""
     import torch  # noqa: PLC0415
 
     inverse = 1.0 / (
@@ -535,8 +528,7 @@ def _generation_rope(device):
             / _ROTARY_DIM
         )
     )
-    phases = torch.outer(torch.arange(_ROPE_ROWS, device=device, dtype=torch.float32), inverse)
-    phases = torch.cat((phases, phases), dim=-1)
+    phases = torch.cat((step * inverse, step * inverse), dim=-1).unsqueeze(0)
     return phases.cos().to(_TORCH_DT), phases.sin().to(_TORCH_DT)
 
 
@@ -691,8 +683,8 @@ class Qwen3_5_35B_A3B:
 
         device = torch.accelerator.current_accelerator() if device is None else device
         token_ids = input_ids[step].reshape(1).to(device=device, dtype=torch.int64)
-        cos_cache, sin_cache = _generation_rope(device)
-        pos_ids = torch.tensor([step], device=device, dtype=torch.int32)
+        cos_cache, sin_cache = _generation_rope(step, device)
+        pos_ids = torch.zeros(S, device=device, dtype=torch.int32)
         scale = torch.full((1, 1, 1, 1), _D ** -0.5, device=device, dtype=_TORCH_DT)
         layer_args = tuple(
             (cos_cache, sin_cache, pos_ids, scale) if kind == "full_attention" else ()

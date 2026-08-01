@@ -20,7 +20,6 @@ import torch
 from tests.models import decode_oracle as oracle
 from tests.models.decode_oracle import SEQ_LEN, linear_weight
 from tests.models.kimi_linear_48b_a3b.model import (
-    MAX_POS,
     KimiLinearConfig,
     published,
 )
@@ -126,8 +125,8 @@ def build_mla_attention(seed=0, device="cpu", dtype=DTYPE, config: KimiLinearCon
     )
 
 
-def rope_caches(config: KimiLinearConfig = CONFIG, device="cpu", dtype=DTYPE):
-    """cos / sin caches `[max_pos, qk_rope_head_dim]` for the RoPE'd MLA form.
+def rope_caches(total: int, config: KimiLinearConfig = CONFIG, device="cpu", dtype=DTYPE):
+    """cos / sin caches `[total, qk_rope_head_dim]` for the RoPE'd MLA form.
 
     Built directly rather than through `DeepseekV3RotaryEmbedding`, because that
     class sizes its inverse frequencies from `config.head_dim` while MLA rotates
@@ -139,14 +138,16 @@ def rope_caches(config: KimiLinearConfig = CONFIG, device="cpu", dtype=DTYPE):
         config.rope_theta
         ** (torch.arange(0, half, dtype=torch.float32, device=device) / half)
     )
-    positions = torch.arange(MAX_POS, dtype=torch.float32, device=device)
+    positions = torch.arange(total, dtype=torch.float32, device=device)
     angles = positions.unsqueeze(1) * inv_freq.unsqueeze(0)
     cos = torch.cat([angles.cos(), angles.cos()], dim=-1)
     sin = torch.cat([angles.sin(), angles.sin()], dim=-1)
     return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
 
 
-def identity_rope_caches(config: KimiLinearConfig = CONFIG, device="cpu", dtype=DTYPE):
+def identity_rope_caches(
+    total: int, config: KimiLinearConfig = CONFIG, device="cpu", dtype=DTYPE
+):
     """cos = 1, sin = 0: the rotary that leaves q and k untouched.
 
     This is how `mla_use_nope: true` is expressed without a second attention
@@ -160,7 +161,7 @@ def identity_rope_caches(config: KimiLinearConfig = CONFIG, device="cpu", dtype=
     still enter the score and the scaling denominator.
     """
 
-    shape_2d = (MAX_POS, config.qk_rope_head_dim)
+    shape_2d = (total, config.qk_rope_head_dim)
     cos = torch.ones(shape_2d, dtype=torch.float32, device=device)
     sin = torch.zeros(shape_2d, dtype=torch.float32, device=device)
     return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
@@ -194,17 +195,15 @@ def mla_key_value(attention, hidden, cos, sin, config: KimiLinearConfig = CONFIG
     `DeepseekV3Attention` then expands over all 32 heads). Mirrors
     `DeepseekV3Attention.forward` lines 430-446.
 
-    *cos* / *sin* are the full `[max_pos, qk_rope_head_dim]` caches the kernel
-    takes, sliced here to the positions this call covers. The context starts at
-    absolute position 0, so a prefix is the right slice; the kernel makes the same
-    selection by `pos_ids` instead.
+    *cos* / *sin* are the exact `[seq, qk_rope_head_dim]` caches this context
+    covers. The context starts at absolute position 0, so each row is already at
+    the position the projection needs.
     """
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (  # noqa: PLC0415
         apply_rotary_pos_emb,
     )
 
     batch, seq = hidden.shape[:2]
-    cos, sin = cos[:seq], sin[:seq]
     with torch.no_grad():
         compressed = attention.kv_a_proj_with_mqa(hidden)
         latent, k_rot = torch.split(
@@ -243,12 +242,10 @@ def mla_decode_reference(attention, hidden_ctx, hidden_new, cos, sin):
     reference never constructs a cache. Causality makes that position's output
     depend on exactly the context before it.
 
-    *cos* / *sin* arrive as the full caches and are sliced to the sequence, as in
-    `mla_key_value`.
+    *cos* / *sin* arrive with exactly one row per sequence position.
     """
 
     total = hidden_ctx.shape[1] + hidden_new.shape[1]
-    cos, sin = cos[:total], sin[:total]
     mask = oracle.causal_mask(total, hidden_ctx.device.type, hidden_ctx.dtype)
     sequence = torch.cat([hidden_ctx, hidden_new], dim=1)
     with torch.no_grad():
@@ -443,7 +440,6 @@ def mla_step_inputs(
     """
     attention = build_mla_attention(seed=WEIGHT_SEED, device=device)
     caches = identity_rope_caches if nope else rope_caches
-    cos, sin = caches(CONFIG, device=device)
 
     torch.manual_seed(ACTIVATION_SEED)
     drawn = (torch.randn(1, ctx_len + 1, CONFIG.hidden_size, device=device) * 0.1).to(DTYPE)
@@ -458,10 +454,16 @@ def mla_step_inputs(
     gamma_in = (torch.randn(CONFIG.hidden_size, device=device) * 0.1 + 1.0).to(DTYPE)
     normed_ctx = rms_norm(hidden_ctx, gamma_in, CONFIG)
 
-    k_cache, v_cache = mla_context_kv(attention, normed_ctx, cos, sin, CONFIG)
+    context_cos, context_sin = caches(ctx_len, CONFIG, device=device)
+    k_cache, v_cache = mla_context_kv(
+        attention, normed_ctx, context_cos, context_sin, CONFIG
+    )
 
-    # The token being decoded sits immediately after the context.
-    pos_ids = torch.tensor([ctx_len], device=device, dtype=torch.int32)
+    # The caller selects the decoded token's absolute-position row, so the
+    # rank-2 cache is indexed from zero inside the kernel.
+    cos, sin = caches(ctx_len + 1, CONFIG, device=device)
+    cos, sin = cos[-1:], sin[-1:]
+    pos_ids = torch.zeros(1, device=device, dtype=torch.int32)
     scale = torch.full((1, 1, 1, 1), MLA_SCALING, device=device, dtype=DTYPE)
 
     return MlaStepInputs(
@@ -498,12 +500,14 @@ def mla_step_oracle(inputs: MlaStepInputs) -> torch.Tensor:
 
     Fed the normed states, because the HIR's kernel fuses the input RMSNorm.
     """
+    caches = identity_rope_caches if inputs.nope else rope_caches
+    cos, sin = caches(inputs.ctx_len + 1, CONFIG, device=inputs.hidden_new.device)
     return mla_decode_reference(
         inputs.attention,
         rms_norm(inputs.hidden_ctx, inputs.gamma_in, CONFIG),
         rms_norm(inputs.hidden_new, inputs.gamma_in, CONFIG),
-        inputs.cos,
-        inputs.sin,
+        cos,
+        sin,
     )
 
 
@@ -514,6 +518,8 @@ def mla_appended_cache_oracle(inputs: MlaStepInputs):
     token appended: the step's returned key and value are correct exactly when
     appending them reproduces this.
     """
+    caches = identity_rope_caches if inputs.nope else rope_caches
+    cos, sin = caches(inputs.ctx_len + 1, CONFIG, device=inputs.hidden_new.device)
     return mla_context_kv(
         inputs.attention,
         rms_norm(
@@ -521,8 +527,8 @@ def mla_appended_cache_oracle(inputs: MlaStepInputs):
             inputs.gamma_in,
             CONFIG,
         ),
-        inputs.cos,
-        inputs.sin,
+        cos,
+        sin,
         CONFIG,
     )
 

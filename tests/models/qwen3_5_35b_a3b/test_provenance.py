@@ -22,7 +22,6 @@ import torch
 
 from tests.models.qwen3_5_35b_a3b import reference
 from tests.models.qwen3_5_35b_a3b.model import (
-    _ROPE_ROWS,
     _ROT,
     LAYER_TYPE,
     Qwen3_5_35B_A3B,
@@ -132,10 +131,10 @@ def test_generation_inputs_match_the_drawn_position():
             assert args == ()
             continue
         cos, sin, pos_ids, scale = args
-        assert torch.equal(cos[: step + 1], want_cos)
-        assert torch.equal(sin[: step + 1], want_sin)
-        assert cos.shape == sin.shape == (_ROPE_ROWS, _ROT)
-        assert torch.equal(pos_ids, torch.tensor([step], device=DEV, dtype=torch.int32))
+        assert torch.equal(cos, want_cos[-1:])
+        assert torch.equal(sin, want_sin[-1:])
+        assert cos.shape == sin.shape == (1, _ROT)
+        assert torch.equal(pos_ids, torch.zeros(1, device=DEV, dtype=torch.int32))
         assert scale.shape == (1, 1, 1, 1)
     assert caches is sentinel
 

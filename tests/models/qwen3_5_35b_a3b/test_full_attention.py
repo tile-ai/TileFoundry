@@ -81,7 +81,6 @@ def test_only_the_leading_rotary_dims_carry_a_position():
     shape_rotary_dim = int(
         shape.head_dim * float(shape.rope_parameters["partial_rotary_factor"])
     )
-    cos, sin = reference.rope_caches(DEV)
     torch.manual_seed(3)
     x = torch.randn(
         1, 1, shape.num_attention_heads, shape.head_dim, device=DEV,
@@ -91,12 +90,14 @@ def test_only_the_leading_rotary_dims_carry_a_position():
         "full_attention", reference.hf_layer("full_attention", DEV)
     )
 
-    turned = [
-        loaded.partial_rope(
-            x, cos, sin, torch.tensor([position], device=DEV, dtype=torch.int32)
+    turned = []
+    for position in (7, 19):
+        cos, sin = reference.rope_caches(position + 1, DEV)
+        turned.append(
+            loaded.partial_rope(
+                x, cos[-1:], sin[-1:], torch.zeros(1, device=DEV, dtype=torch.int32)
+            )
         )
-        for position in (7, 19)
-    ]
     tail = [item[..., shape_rotary_dim:] for item in turned]
     head = [item[..., : shape_rotary_dim] for item in turned]
 

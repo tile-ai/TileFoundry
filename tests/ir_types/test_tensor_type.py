@@ -54,17 +54,19 @@ def test_zero_extent_has_zero_logical_and_local_size() -> None:
     assert tensor_bytes(type) == 0
 
     sharded = make_shard_tensor_type((0,), mesh=make_mesh((2,)), attrs=(Split(0),))
-    assert 0 in local_type_of(sharded).shape
+    assert local_type_of(sharded).shape == (1, 0)
 
 
 def test_size_rejects_symbolic_and_negative_extents() -> None:
-    symbolic = TensorType(
-        shape=(DimVar("ctx_len", 0, 4096),), dtype=DType.f32, layout=None, storage="gmem"
-    )
+    ctx_len = DimVar("ctx_len", 0, 4096)
+    symbolic = TensorType(shape=(ctx_len,), dtype=DType.f32, layout=None, storage="gmem")
+    compound = TensorType(shape=(ctx_len + 1,), dtype=DType.f32, layout=None, storage="gmem")
     negative = TensorType(shape=(-1,), dtype=DType.f32, layout=None, storage="gmem")
 
     with pytest.raises(ValueError, match=r"ctx_len.*bind it with --dim ctx_len=EXTENT"):
         numel(symbolic)
+    with pytest.raises(ValueError, match=r"ctx_len.*bind it with --dim ctx_len=EXTENT"):
+        numel(compound)
     with pytest.raises(ValueError, match="tensor extent -1 is negative"):
         numel(negative)
 

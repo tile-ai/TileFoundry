@@ -47,7 +47,6 @@ import torch.nn.functional as F
 from tests.models import decode_oracle as oracle
 from tests.models.qwen3_5_35b_a3b.hf_alias import hf_layout_only
 from tests.models.qwen3_5_35b_a3b.model import (
-    _ROPE_ROWS,
     LAYER_TYPE,
     Qwen3_5FullAttention,
     Qwen3_5LinearAttention,
@@ -202,9 +201,9 @@ def hf_layer(block_type: str, device: str = DEVICE, whole_layer: bool = False):
 
 
 @functools.lru_cache(maxsize=None)
-def rope_caches(device: str = DEVICE):
-    """cos / sin caches covering every position a step may be decoded at."""
-    return rope_caches_at(total=_ROPE_ROWS, device=device)
+def rope_caches(total: int, device: str = DEVICE):
+    """cos / sin caches for exactly ``total`` positions."""
+    return rope_caches_at(total=total, device=device)
 
 
 def drawn_hidden(ctx_len: int, device: str = DEVICE):
@@ -370,7 +369,7 @@ def context_kv(layer, hidden, device: str = DEVICE):
     )
 
     length = hidden.shape[1]
-    cos, sin = rope_caches(device)
+    cos, sin = rope_caches(length, device)
     attention = layer.self_attn
     with torch.no_grad():
         normed = layer.input_layernorm(hidden)
@@ -378,7 +377,7 @@ def context_kv(layer, hidden, device: str = DEVICE):
         key = attention.k_norm(attention.k_proj(normed).view(heads)).transpose(1, 2)
         value = attention.v_proj(normed).view(heads).transpose(1, 2)
         _query, key = apply_rotary_pos_emb(
-            key, key, cos[:length].unsqueeze(0), sin[:length].unsqueeze(0)
+            key, key, cos.unsqueeze(0), sin.unsqueeze(0)
         )
     return key.transpose(1, 2).contiguous(), value.transpose(1, 2).contiguous()
 
@@ -394,7 +393,7 @@ def full_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
     layer = hf_layer("full_attention", device, whole_layer)
     hidden_ctx, hidden_new = drawn_hidden(ctx_len, device)
     k_cache, v_cache = context_kv(layer, hidden_ctx, device)
-    cos, sin = rope_caches(device)
+    cos, sin = rope_caches(ctx_len + 1, device)
     return FullStep(
         layer=layer,
         ctx_len=ctx_len,
@@ -403,10 +402,10 @@ def full_step(*, ctx_len: int = CTX_LEN, device: str = DEVICE,
         k_cache=k_cache,
         v_cache=v_cache,
         mixer_acts=(
-            cos,
-            sin,
+            cos[-1:],
+            sin[-1:],
             # The token being decoded sits immediately after the context.
-            torch.tensor([ctx_len], device=device, dtype=torch.int32),
+            torch.zeros(1, device=device, dtype=torch.int32),
             k_cache,
             v_cache,
             torch.full(
@@ -428,8 +427,8 @@ def full_mixer_oracle(step: FullStep) -> torch.Tensor:
     forward; the kernel under test needs none, which is the point -- a single
     query at the end of the context may attend every position there is.
     """
-    cos, sin = rope_caches(step.hidden_new.device.type)
     total = step.ctx_len + 1
+    cos, sin = rope_caches(total, step.hidden_new.device.type)
     positions = torch.arange(total, device=step.hidden_new.device)
     mask = torch.where(
         positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
@@ -438,7 +437,7 @@ def full_mixer_oracle(step: FullStep) -> torch.Tensor:
         normed = step.layer.input_layernorm(_whole_sequence(step))
         out, _ = step.layer.self_attn(
             normed,
-            position_embeddings=(cos[:total].unsqueeze(0), sin[:total].unsqueeze(0)),
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
             attention_mask=mask,
         )
     return out[:, -1:, :]
@@ -446,8 +445,8 @@ def full_mixer_oracle(step: FullStep) -> torch.Tensor:
 
 def full_layer_oracle(step: FullStep) -> torch.Tensor:
     """The complete Hugging Face decoder layer at the decoded position."""
-    cos, sin = rope_caches(step.hidden_new.device.type)
     total = step.ctx_len + 1
+    cos, sin = rope_caches(total, step.hidden_new.device.type)
     positions = torch.arange(total, device=step.hidden_new.device)
     mask = torch.where(
         positions.unsqueeze(0) <= positions.unsqueeze(1), 0.0, float("-inf")
@@ -455,7 +454,7 @@ def full_layer_oracle(step: FullStep) -> torch.Tensor:
     with torch.no_grad():
         out = step.layer(
             _whole_sequence(step),
-            position_embeddings=(cos[:total].unsqueeze(0), sin[:total].unsqueeze(0)),
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
             attention_mask=mask,
         )
     return out[:, -1:, :]
