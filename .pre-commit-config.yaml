@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: ruff
         name: ruff
-        entry: ruff check --fix
+        entry: ruff check
         language: system
         types_or: [python]
       - id: clang-format
@@ -21,10 +21,23 @@ repos:
         entry: python scripts/spec_entropy_lint.py
         language: system
         files: ^src/.*\.py$
+      - id: forward-references
+        name: forward-references
+        entry: python scripts/forward_references_lint.py
+        language: system
+        types_or: [python]
+      - id: comment-hygiene
+        name: comment-hygiene
+        entry: python scripts/comment_hygiene_lint.py
+        language: system
+        types_or: [python]
       - id: no-machine-paths
         name: no-machine-paths
         entry: python scripts/no_machine_paths_lint.py
         language: system
-        # Every text file a commit touches, not only source: the paths that have
-        # been committed by mistake arrived in scripts, tests, and markdown.
+        exclude_types: [binary]
+      - id: english-only
+        name: english-only
+        entry: python scripts/english_only_lint.py
+        language: system
         exclude_types: [binary]

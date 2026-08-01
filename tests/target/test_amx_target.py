@@ -88,11 +88,6 @@ def bf16_gemm(
     return h
 
 
-# ---------------------------------------------------------------------------
-# AC-4-1
-# ---------------------------------------------------------------------------
-
-
 def test_amx_target_reports_and_validates_its_own_topology_levels():
     """The AMX levels are the core a tile stream runs on and the AMX unit inside
     it that issues one atom. The core limit is the measured performance-core
@@ -127,11 +122,6 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
         target.validate_program_topology(Topology("core", 0))
     with pytest.raises(ValueError, match="requires a positive static integer"):
         target.validate_program_topology(Topology("core", DimVar("cores", 1, 8)))
-
-
-# ---------------------------------------------------------------------------
-# AC-4-2
-# ---------------------------------------------------------------------------
 
 
 def test_both_catalogue_atoms_are_priced_at_their_own_measured_rates():
@@ -237,12 +227,8 @@ def test_the_hard_filter_is_per_atom_and_covers_storage_shape_and_dtype():
     assert candidate_atoms(bf16_gemm.entry_function().body, bf16_gemm.resolve_target()) == []
 
 
-# ---------------------------------------------------------------------------
-# AC-4-3
-# ---------------------------------------------------------------------------
-
 def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got():
-    """AC-4-3: the architecture carries the ISA geometry, the device the per-part
+    """The architecture carries the ISA geometry, the device the per-part
     resources, each built from its own installed document -- so a number moved to
     the other side would be claimed of the wrong thing.
 

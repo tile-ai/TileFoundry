@@ -40,6 +40,14 @@ _TOKEN_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bM\d+[a-z]?\b"), "a milestone identifier (e.g. M0 / M1a)"),
     (re.compile(r"\btask #\d+"), "a task id (task #N)"),
     (re.compile(r"\bPR #?\d+\b"), "a pull-request number (PR #N)"),
+    (
+        # A sha carries both a letter and a digit; requiring both keeps a plain
+        # decimal constant (`value = 4800000000000`) from reading as one.
+        re.compile(
+            r"\b(?=[0-9a-f]{7,40}\b)(?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b"
+        ),
+        "a commit hash",
+    ),
     (re.compile(r"\b(?:Alice|Bob|ZhengQiHang)\b"), "an agent / human name"),
     (
         re.compile(r"\bV\d+\b"),
@@ -51,8 +59,7 @@ _TOKEN_RULES: list[tuple[re.Pattern, str]] = [
 # Forbidden section-header terms (matched only on heading lines, so ordinary
 # prose like "in the future" is never flagged).
 _HEADER_TERMS = re.compile(
-    r"\b(?:Non-goals?|非目标|Future|TODO|Out of scope|Tests|Testing|"
-    r"Test plan|测试要求)\b",
+    r"\b(?:Non-goals?|Future|TODO|Out of scope|Tests|Testing|Test plan)\b",
     re.IGNORECASE,
 )
 _HEADING = re.compile(r"^\s*#{1,6}\s")
