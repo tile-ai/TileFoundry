@@ -517,17 +517,24 @@ _TORCH_DT = to_torch_dtype(DType.from_name(_DT))
 
 
 @lru_cache(maxsize=None)
-def _generation_rope(step, device):
-    """The text-only rotary row each full-attention step reads."""
+def _rope_inverse(device):
+    """The text-only rotary frequencies, shared by every decode step."""
     import torch  # noqa: PLC0415
 
-    inverse = 1.0 / (
+    return 1.0 / (
         _ROPE["rope_theta"]
         ** (
             torch.arange(0, _ROTARY_DIM, 2, device=device, dtype=torch.float32)
             / _ROTARY_DIM
         )
     )
+
+
+def _generation_rope(step, device):
+    """The text-only rotary row each full-attention step reads."""
+    import torch  # noqa: PLC0415
+
+    inverse = _rope_inverse(device)
     phases = torch.cat((step * inverse, step * inverse), dim=-1).unsqueeze(0)
     return phases.cos().to(_TORCH_DT), phases.sin().to(_TORCH_DT)
 
