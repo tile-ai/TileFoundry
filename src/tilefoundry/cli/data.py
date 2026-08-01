@@ -7,6 +7,7 @@ that ships, rather than one copy of the lookup per thing.
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,4 +55,21 @@ def path(kind: str, name: str) -> Path:
     return found
 
 
-__all__ = ["Kind", "directory", "path"]
+def model_files(name: str) -> tuple[Path, ...]:
+    """The files a shipped model directory carries, in its package order."""
+    models = directory("models")
+    found = models / name
+    if models == _REPOSITORY_ROOT / "tests" / "models":
+        with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as manifest:
+            data_files = tomllib.load(manifest)["tool"]["setuptools"]["data-files"]
+        destination = f"share/tilefoundry/models/{name}"
+        try:
+            return tuple(found / Path(entry).name for entry in data_files[destination])
+        except KeyError:
+            raise FileNotFoundError(f"installed TileFoundry model {name} was not found") from None
+    if not found.is_dir():
+        raise FileNotFoundError(f"installed TileFoundry model {name} was not found")
+    return tuple(entry for entry in found.iterdir() if entry.is_file())
+
+
+__all__ = ["Kind", "directory", "model_files", "path"]

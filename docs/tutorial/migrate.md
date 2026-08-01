@@ -9,7 +9,8 @@ source of `qwen3_5_35b_a3b`, quoted by name — a hybrid model, because a
 dense one cannot show you the thing that catches people out: layers of two
 different kinds in a published cycle.
 
-`tilefoundry models qwen3_5_35b_a3b --source` prints the whole of it.
+`tilefoundry models qwen3_5_35b_a3b --source` names the directory that holds it
+and lists the shipped files.
 
 ## The four things to get right
 

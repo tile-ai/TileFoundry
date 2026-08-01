@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from typing import Any
@@ -92,14 +93,29 @@ def render_model(name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _summary(path: "Path") -> str:
+    """The first docstring line in *path*, or a marker when it has none."""
+    try:
+        source = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return "-"
+    docstring = ast.get_docstring(source)
+    return docstring.splitlines()[0] if docstring else "-"
+
+
 def model_source(name: str) -> str:
-    """The model's authored source as it ships: the same bytes, read-only."""
+    """The shipped model directory followed by one source summary per file."""
     _find(name)
-    return data.path("models", f"{name}/model.py").read_text(encoding="utf-8")
+    files = data.model_files(name)
+    directory = data.directory("models") / name
+    width = max(len(path.name) for path in files)
+    lines = [str(directory)]
+    lines += [f"{path.name:<{width}}  {_summary(path)}" for path in files]
+    return "\n".join(lines) + "\n"
 
 
 def run_models(name: str | None, *, source: bool = False) -> int:
-    """Print the inventory, one model's forest, or one model's shipped source."""
+    """Print the inventory, one model's forest, or one shipped model directory."""
     if name is None:
         if source:
             raise ValueError("--source needs a model to print the source of")

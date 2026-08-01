@@ -56,12 +56,13 @@ would declare its context, rather than analysed or scheduled against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
 The file in `SOURCE` is any readable Python file. Nothing privileges the model
-sources this project ships: a reader who copies one out, merges two of a Module's
-functions into one and points a verb at the result MUST reach the same command
-surface, because coarsening a boundary is done by editing source and there is no
-other mechanism for it. What `models <name> --source` prints stays the reference to
-compare against, and it stays intact because an installation is not where anybody
-edits — no verb enforces that, and none should.
+sources this project ships: a reader who copies a shipped model directory, merges
+two of a Module's functions into one and points a verb at the copy MUST reach the
+same command surface, because coarsening a boundary is done by editing source and
+there is no other mechanism for it. The installed directory named by `models
+<name> --source` stays the reference to compare against, and it stays intact
+because an installation is not where anybody edits — no verb enforces that, and
+none should.
 
 A command MUST load `SOURCE` as a Python module. While loading it, the directory
 containing `SOURCE` MUST be first on the Python module search path, so a file beside
@@ -194,9 +195,16 @@ that runs before it can be read is a reference that decides what it describes.
   - The leaf-Module count and the function count MUST come from one traversal, so
     the numbers cannot disagree with the forest printed beside them, and they MUST
     count every Module a range stands for rather than the range as one.
-  - `--source` MUST print the authored source as it shipped, byte for byte, and
-    MUST NOT reformat or regenerate it: the installed copy is the reference, and a
-    rendered copy is a different artifact wearing its name.
+  - `--source` MUST print the absolute path of the shipped model directory first,
+    followed by one line for every file named in the package data manifest, in
+    manifest order. Each file line MUST give its filename and the first line of
+    its own docstring, or `-` when it has none. A checkout MUST read that manifest;
+    an installation MUST read its model directory, and both MUST name the same
+    files.
+  - `--source` MUST parse a file's text to read its docstring and MUST NOT import
+    or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
+    file: the installed directory is the reference, and a rendered copy is a
+    different artifact wearing its name.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers

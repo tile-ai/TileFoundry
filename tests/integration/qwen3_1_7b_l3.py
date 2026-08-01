@@ -3,9 +3,10 @@
     <venv>/bin/python tests/integration/qwen3_1_7b_l3.py --venv <venv> --work <dir>
 
 Sixteen greedy continuation steps against Hugging Face, compared as token IDs. The
-IR side is what `tilefoundry models qwen3_1_7b --source` emits out of an
-installation, executed here rather than imported from this checkout. Run by the
-installation's own interpreter, so the `tilefoundry` it imports is the one tested.
+IR side comes from the directory `tilefoundry models qwen3_1_7b --source` names in
+an installation, copied and executed here rather than imported from this checkout.
+Run by the installation's own interpreter, so the `tilefoundry` it imports is the
+one tested.
 
 Prefill is Hugging Face's: these kernels express one step at a time and not the
 prompt pass before it, so what is compared is continuation decode.
@@ -99,8 +100,8 @@ def _published(mount: Path) -> dict:
     return read
 
 
-def _emitted(venv: Path, work: Path, outside: Path, mount: Path) -> Path:
-    """Ask the installation for the model source, and write it where it will run."""
+def _emitted(venv: Path, work: Path, outside: Path) -> Path:
+    """Ask the installation for its model directory and copy it where it will run."""
     done = subprocess.run(
         [str(venv / "bin" / "tilefoundry"), "models", MODEL, "--source"],
         cwd=str(outside), capture_output=True, text=True, check=False,
@@ -110,12 +111,18 @@ def _emitted(venv: Path, work: Path, outside: Path, mount: Path) -> Path:
             f"`tilefoundry models {MODEL} --source` exited {done.returncode}\n"
             f"{done.stderr.strip()}"
         )
-    source = work / "model.py"
-    source.write_text(done.stdout, encoding="utf-8")
-    # The source reads its dimensions from a `config.json` beside it, so the
-    # mounted checkpoint's own file is what it binds to here.
-    shutil.copyfile(mount / "config.json", work / "config.json")
-    print(f"emitted {len(done.stdout)} characters of {MODEL} source to {source}")
+    lines = done.stdout.splitlines()
+    if not lines:
+        raise SystemExit(f"`tilefoundry models {MODEL} --source` printed no directory")
+    shipped = Path(lines[0])
+    if not shipped.is_dir():
+        raise SystemExit(f"`tilefoundry models {MODEL} --source` named no directory: {shipped}")
+    copied = work / shipped.name
+    shutil.copytree(shipped, copied)
+    source = copied / "model.py"
+    if not source.is_file():
+        raise SystemExit(f"copied model directory has no model.py: {copied}")
+    print(f"copied {MODEL} source directory to {copied}")
     return source
 
 
@@ -207,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     published = _published(args.checkpoint)
     args.work.mkdir(parents=True, exist_ok=True)
 
-    source = _emitted(args.venv, args.work, args.outside, args.checkpoint)
+    source = _emitted(args.venv, args.work, args.outside)
 
     tokenizer, model = _oracle(args.checkpoint)
     loaded = _loaded(source, args.work, args.checkpoint, published["num_hidden_layers"])
