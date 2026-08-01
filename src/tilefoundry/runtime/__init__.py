@@ -31,7 +31,7 @@ from .measure import (
     check,
 )
 from .module import CompiledModule, RuntimeModule
-from .resource import Absolute, DictResource, RuntimeResource, SafetensorsResource
+from .resource import Absolute, DictResource, Preprocessed, RuntimeResource, SafetensorsResource
 
 __all__ = [
     "PREDICATES",
@@ -49,6 +49,7 @@ __all__ = [
     "ParamABI",
     "Predicate",
     "PredicateResult",
+    "Preprocessed",
     "RelL2",
     "Report",
     "RuntimeFunction",

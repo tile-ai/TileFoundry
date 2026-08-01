@@ -20,6 +20,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
+from tilefoundry.runtime import Preprocessed
 from tilefoundry.runtime.resource import SafetensorsResource, _resolved_device
 
 
@@ -82,3 +83,19 @@ def test_the_stored_dtype_is_what_comes_back(tmp_path) -> None:
     read = SafetensorsResource(ckpt, device="cpu")
     assert read.load("w").dtype is torch.bfloat16
     assert read.subtree("nested").load("w").dtype is torch.bfloat16
+
+
+def test_preprocessed_rejects_a_group_at_construction() -> None:
+    """No existing M1 workflow constructs the public invalid one-to-many form."""
+    with pytest.raises(TypeError, match="converter"):
+        Preprocessed(("a", "b"), lambda value: value)
+
+
+def test_preprocessed_cannot_name_a_subtree_segment() -> None:
+    """M2 validates leaf preprocessing, so this public invalid segment needs coverage here."""
+    resource = SafetensorsResource("unused", alias={
+        "layer": Preprocessed("model.layers.0", lambda value: value),
+    })
+
+    with pytest.raises(TypeError, match="path, not a tensor"):
+        resource.subtree("layer")

@@ -1,12 +1,12 @@
 """``RuntimeResource`` — checkpoint access surface: load a tensor (or group)
 by name, scope to a child namespace. ``DictResource`` is an in-memory/test
 double; ``SafetensorsResource`` reads a repacked safetensors checkpoint
-directory. See docs/spec/runtime.md §1.4.
+directory. See docs/spec/runtime.md §1.5.
 """
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Mapping, Protocol, Union
+from typing import Any, Callable, Mapping, Protocol, Union
 
 import torch
 
@@ -18,8 +18,27 @@ class Absolute:
     name: str
 
 
+Convert = Callable[[torch.Tensor], torch.Tensor]
+
+
+@dataclasses.dataclass(frozen=True)
+class Preprocessed:
+    """One raw checkpoint name and the preprocessing its tensor needs."""
+
+    name: "str | Absolute"
+    read: Convert
+
+    def __post_init__(self) -> None:
+        if isinstance(self.name, tuple):
+            raise TypeError(
+                f"Preprocessed: {self.name!r} names a one-to-many group, whose "
+                "value is a function of several raw tensors; that is a weight "
+                "converter, run by prepare, not preprocessing on one tensor"
+            )
+
+
 # One raw name, or (one-to-many, e.g. per-expert) a tuple in declared order.
-AliasValue = Union[str, "tuple[str, ...]", Absolute]
+AliasValue = Union[str, "tuple[str, ...]", Absolute, Preprocessed]
 AliasMap = Mapping[str, AliasValue]
 
 
@@ -48,21 +67,31 @@ def _alias_lookup(alias: AliasMap, prefix: str, name: str) -> "AliasValue | None
     return None
 
 
-def _resolve_key(alias: AliasMap, prefix: str, name: str) -> AliasValue:
+def _resolve_key(
+    alias: AliasMap, prefix: str, name: str,
+) -> "tuple[str | tuple[str, ...], Convert | None]":
     hit = _alias_lookup(alias, prefix, name)
+    read = None
+    if isinstance(hit, Preprocessed):
+        hit, read = hit.name, hit.read
     if hit is None:
-        return f"{prefix}{name}"
+        return f"{prefix}{name}", read
     if isinstance(hit, Absolute):
-        return hit.name
+        return hit.name, read
     if isinstance(hit, tuple):
-        return tuple(f"{prefix}{one}" for one in hit)
-    return f"{prefix}{hit}"
+        return tuple(f"{prefix}{one}" for one in hit), read
+    return f"{prefix}{hit}", read
 
 
 def _resolve_segment(alias: AliasMap, prefix: str, seg: str) -> str:
     hit = _alias_lookup(alias, prefix, seg)
     if hit is None:
         return seg
+    if isinstance(hit, Preprocessed):
+        raise TypeError(
+            f"RuntimeResource.subtree: segment {seg!r} resolves to {hit!r}; a subtree "
+            "segment is a path, not a tensor"
+        )
     if isinstance(hit, tuple):
         raise TypeError(
             f"RuntimeResource.subtree: segment {seg!r} resolves to a "
@@ -78,7 +107,7 @@ def _resolve_segment(alias: AliasMap, prefix: str, seg: str) -> str:
     return hit
 
 
-def _reject_group(where: str, name: str, resolved: AliasValue) -> str:
+def _reject_group(where: str, name: str, resolved: "str | tuple[str, ...]") -> str:
     if isinstance(resolved, tuple):
         raise TypeError(
             f"{where}: {name!r} resolves to a tuple-valued alias "
@@ -115,18 +144,20 @@ class DictResource:
         self._alias = alias or {}
 
     def load(self, name: str) -> torch.Tensor:
-        resolved = _reject_group(
-            "DictResource.load", name, _resolve_key(self._alias, self._prefix, name)
+        resolved, read = _resolve_key(self._alias, self._prefix, name)
+        raw_key = _reject_group(
+            "DictResource.load", name, resolved
         )
         try:
-            return self._data[resolved]
+            value = self._data[raw_key]
         except KeyError:
             raise KeyError(
-                f"DictResource: no tensor named {name!r} (raw key {resolved!r})"
+                f"DictResource: no tensor named {name!r} (raw key {raw_key!r})"
             ) from None
+        return value if read is None else read(value)
 
     def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None":
-        resolved = _resolve_key(self._alias, self._prefix, name)
+        resolved, _ = _resolve_key(self._alias, self._prefix, name)
         if not isinstance(resolved, tuple):
             return None
         out = []
@@ -210,18 +241,20 @@ class SafetensorsResource:
         return handle.get_tensor(raw_key)
 
     def load(self, name: str) -> torch.Tensor:
-        resolved = _reject_group(
-            "SafetensorsResource.load", name, _resolve_key(self._alias, self._prefix, name)
+        resolved, read = _resolve_key(self._alias, self._prefix, name)
+        raw_key = _reject_group(
+            "SafetensorsResource.load", name, resolved
         )
         try:
-            return self._read_one(resolved)
+            value = self._read_one(raw_key)
         except KeyError:
             raise KeyError(
-                f"SafetensorsResource: no tensor named {name!r} (raw key {resolved!r})"
+                f"SafetensorsResource: no tensor named {name!r} (raw key {raw_key!r})"
             ) from None
+        return value if read is None else read(value)
 
     def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None":
-        resolved = _resolve_key(self._alias, self._prefix, name)
+        resolved, _ = _resolve_key(self._alias, self._prefix, name)
         if not isinstance(resolved, tuple):
             return None
         out = []
@@ -245,4 +278,4 @@ class SafetensorsResource:
         return child
 
 
-__all__ = ["Absolute", "DictResource", "RuntimeResource", "SafetensorsResource"]
+__all__ = ["Absolute", "DictResource", "Preprocessed", "RuntimeResource", "SafetensorsResource"]

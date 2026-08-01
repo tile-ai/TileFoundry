@@ -387,7 +387,11 @@ class: both implementations below take an `alias={canonical: raw}` table,
 resolved by the same lookup order.
 
 ```python
-AliasValue = str | tuple[str, ...] | Absolute
+AliasValue = str | tuple[str, ...] | Absolute | Preprocessed
+
+class Preprocessed:
+    name: str | Absolute
+    read: Callable[[torch.Tensor], torch.Tensor]
 
 class RuntimeResource(Protocol):
     def load(self, name: str) -> torch.Tensor: ...
@@ -396,6 +400,8 @@ class RuntimeResource(Protocol):
 ```
 
 - constraints:
+  - `Preprocessed` is a frozen dataclass carrying one raw name and its one-tensor
+    read transform.
   - `load(name)` returns the tensor for *name*; raises `KeyError` if absent,
     and MUST raise `TypeError` (naming `load_group`) if *name* resolves to a
     tuple-valued (one-to-many) alias.
@@ -407,9 +413,16 @@ class RuntimeResource(Protocol):
     (`seg` is itself alias-resolved), so a child `RuntimeModule` addresses
     its own weights by their bare (unprefixed) name — `RuntimeModule.__init__`
     never sees a dotted name.
-  - the resource only looks names up and returns tensors; it never stacks,
-    casts, or reshapes — assembling a one-to-many group into one tensor is
-    `prepare`'s job (§1.1.2), via `torch.stack`.
+  - the resource resolves names and reads tensors. It MUST NOT stack, and it
+    reshapes only where a `Preprocessed` alias entry states that the checkpoint
+    stores that one tensor differently from how the Module declares it — a
+    transpose, a slice of a fused tensor, or a dropped axis. Assembling a
+    one-to-many group into one tensor stays `prepare`'s job (§1.1.2), via
+    `torch.stack`, and so does any value that is a function of more than one raw
+    tensor. `Preprocessed` MUST resolve to one name: a tuple-valued name is
+    rejected at construction, naming the weight converter as the way to express
+    it. Precision is not preprocessing: a read MUST return the checkpoint's own
+    stored element type and be validated against the declaration (§1.1.2).
 
 An `alias` entry renames one path *segment* or *leaf* **within the current
 scope**, joined onto the caller's already-accumulated prefix: lookup order is
@@ -418,9 +431,10 @@ then identity (`f"{prefix}{name}"` unchanged). A bare entry therefore serves
 every instance at that level uniformly (e.g. `{"gamma_kv": "kv_norm.weight"}`
 fires under every layer); a per-instance name (one real decoder layer, one
 per-expert shard group) needs one literal entry per instance instead. A
-tuple value is the one-to-many group `load_group` reads; `subtree`'s own
-segment resolution rejects a tuple-valued hit (a subtree segment MUST
-resolve to one name).
+`Preprocessed` value is a one-to-one leaf: `load` applies its `read` callable
+to the raw tensor. A tuple value is the one-to-many group `load_group` reads;
+`subtree`'s own segment resolution rejects a tuple-valued or `Preprocessed` hit
+(a subtree segment MUST resolve to one relative path).
 
 Aliasing therefore only ever reaches **downward**: a name resolved inside a
 scope carries that scope's prefix, so a node cannot address a tensor its
