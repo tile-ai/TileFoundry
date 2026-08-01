@@ -30,6 +30,18 @@ from tilefoundry.inspection import as_script
 
 _ANALYSES = ("--compute-cost", "--memory", "--roofline", "--timeline")
 
+_ZERO_SIZED_BINDINGS = {
+    "qwen3_1_7b": frozenset(("k_cache", "v_cache")),
+    "qwen2_5_1_5b": frozenset(("k_cache", "v_cache")),
+    "gemma2_2b": frozenset(("k_cache", "v_cache")),
+    "minicpm3_4b": frozenset(("k_cache", "v_cache")),
+    "deepseek_v4_flash": frozenset(("kv_cache", "k_ctx", "score_ctx", "p_ctx", "weighted")),
+    "qwen3_5_35b_a3b_full_attention": frozenset(
+        ("k_cache", "v_cache", "k_ctx", "score_ctx", "p_ctx", "weighted")
+    ),
+    "kimi_linear_48b_a3b": frozenset(("k_cache", "v_cache", "score_ctx", "p_ctx", "weighted")),
+}
+
 #: The same solver budget the in-process schedule witnesses use, stated to the CLI
 #: rather than left to the library default.
 #:
@@ -81,19 +93,21 @@ def _dim_args(model: ModelCase) -> list[str]:
     return [f"--dim={name}={extent}" for name, extent in stated.items()]
 
 
-def _source_for(model: ModelCase, fixture: TargetFixture, directory) -> str:
+def _source_for(
+    model: ModelCase, fixture: TargetFixture, directory, selector: str | None = None
+) -> str:
     """The model, aimed at one machine, as source a user could have written, and
     the selector naming which kernel of it the CLI is asked about.
 
-    The model's own schedule selection, which is the entry of one of its execution
-    Modules. Stated rather than left to the CLI's default, because a root that
+    The corpus selection the caller asks about, defaulting to the model's schedule
+    selection. Stated rather than left to the CLI's default, because a root that
     composes child Modules declares no step of its own -- there is nothing for a
     default to pick -- and the corpus already says which kernel it means.
 
     What is printed is the selected execution Module, which carries the machine it
     resolved through its owners.
     """
-    selector = model.schedule[0].selector
+    selector = model.schedule[0].selector if selector is None else selector
     selected, _ = model.resolve(model.build_for(fixture), selector)
     path = directory / f"{model.id}.py"
     path.write_text(as_script(selected), encoding="utf-8")
@@ -138,6 +152,35 @@ def test_the_cli_reports_a_real_model_as_json(model, tmp_path, capsys) -> None:
         == 0
     )
     assert json.loads(capsys.readouterr().out)
+
+
+def _memory_lifetimes(source: str, dims: dict[str, int], capsys) -> dict[str, int]:
+    args = [f"--dim={name}={extent}" for name, extent in dims.items()]
+    assert cli.main(["analyze", source, "--memory", "--json", *args]) == 0
+    report = json.loads(capsys.readouterr().out)
+    return {
+        item["binding"]: item["bytes"]
+        for item in report["function_records"]["memory"]["lifetimes"]
+    }
+
+
+@pytest.mark.parametrize(
+    "model",
+    [model for model in CORPUS if any(case.dims for case in model.sized)],
+    ids=_identify,
+)
+def test_the_cli_analyzes_open_dimensions_at_zero(model, tmp_path, capsys) -> None:
+    case = next(case for case in model.sized if case.dims)
+    source = _source_for(model, ACCEPTANCE(), tmp_path, case.selector)
+    nonzero = dict(case.dims)
+    zero = {name: 0 for name in nonzero}
+    bindings = _ZERO_SIZED_BINDINGS[model.id]
+
+    zero_lifetimes = _memory_lifetimes(source, zero, capsys)
+    nonzero_lifetimes = _memory_lifetimes(source, nonzero, capsys)
+    assert bindings <= zero_lifetimes.keys()
+    assert all(zero_lifetimes[binding] == 0 for binding in bindings)
+    assert all(nonzero_lifetimes[binding] > 0 for binding in bindings)
 
 
 @pytest.mark.parametrize("model", _models(), ids=_identify)

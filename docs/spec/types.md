@@ -99,7 +99,7 @@ def local_type_of(type: IRType) -> IRType: ...
   - A resolved nested `ShardLayout` MUST be applied exactly once per layer.
   - The result MUST remain an ordinary IR Type and MUST NOT introduce a
     schedule-specific tensor type.
-  - Unresolved layouts and local extents that are not concrete positive
+  - Unresolved layouts and local extents that are not concrete non-negative
     integers MUST raise at the projection boundary.
 
 ### 2.2 Logical size
@@ -113,9 +113,9 @@ def tensor_bytes(type: IRType) -> int: ...
 - constraints:
   - Both MUST sum over the tensor leaves of a `TupleType` and MUST report `0`
     for a type with no tensor leaf.
-  - Both MUST reject a symbolic or non-positive extent rather than skip it: a
-    size that silently drops a dimension reads as a smaller tensor rather than as
-    an unknown one.
+  - Both MUST reject a symbolic or negative extent rather than skip it: a size
+    that silently drops a dimension reads as a smaller tensor rather than as an
+    unknown one. Both MUST report `0` for a concrete zero extent.
   - `tensor_bytes` MUST round a sub-byte dtype up to whole bytes per leaf,
     because a leaf is addressed on its own.
   - These MUST be the logical size the type states, so they MUST be the same

@@ -13,17 +13,21 @@ from .tensor_type import TensorType, TupleType, Type
 def numel(type: Type) -> int:
     """Element count of ``type``, summed over a tuple's leaves.
 
-    A symbolic or non-positive extent is rejected rather than skipped: a size
-    that silently drops a dimension reads as a smaller tensor, not as an
-    unknown one.
+    A symbolic or negative extent is rejected rather than skipped: a size that
+    silently drops a dimension reads as a smaller tensor, not as an unknown
+    one. A concrete zero extent is a zero-sized tensor.
     """
     if isinstance(type, TensorType):
         values = []
         for dim in type.shape:
-            if not isinstance(dim, int) or isinstance(dim, bool) or dim <= 0:
+            if not isinstance(dim, int) or isinstance(dim, bool):
+                name = getattr(dim, "name", "NAME")
                 raise ValueError(
-                    f"numel: tensor extent {dim!r} is not a concrete positive integer"
+                    f"numel: tensor extent {dim!r} is not concrete; bind it with "
+                    f"--dim {name}=EXTENT"
                 )
+            if dim < 0:
+                raise ValueError(f"numel: tensor extent {dim} is negative")
             values.append(dim)
         return math.prod(values)
     if isinstance(type, TupleType):
@@ -116,9 +120,9 @@ def _layout_shape(layout: object) -> tuple:
         return _local_layout_shape(layout)
     if isinstance(layout, (Layout, ComposedLayout)):
         shape = tuple(layout.shape)
-        if any(not isinstance(dim, int) or isinstance(dim, bool) or dim <= 0 for dim in shape):
+        if any(not isinstance(dim, int) or isinstance(dim, bool) or dim < 0 for dim in shape):
             raise ValueError(
-                "local_type_of: local tensor extent is not a concrete positive integer"
+                "local_type_of: local tensor extent is not a concrete non-negative integer"
             )
         return shape
     raise ValueError(
