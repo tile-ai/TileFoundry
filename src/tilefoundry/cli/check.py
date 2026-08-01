@@ -387,6 +387,39 @@ def _read(path: str, device: str):
     return visit(loaded, path)
 
 
+def _tensor_leaves(value):
+    """Every tensor in one activation tree, in its written order."""
+    if isinstance(value, torch.Tensor):
+        yield value
+        return
+    for item in value:
+        yield from _tensor_leaves(item)
+
+
+def _tensor_structure(value):
+    """The JSON-safe shape tree that an activation file supplied."""
+    if isinstance(value, torch.Tensor):
+        return {"dtype": str(value.dtype), "shape": list(value.shape)}
+    return [_tensor_structure(item) for item in value]
+
+
+def _dtype_names(values: Sequence[Any]) -> list[str]:
+    """Actual torch dtypes of every tensor across the supplied values."""
+    return [str(tensor.dtype) for value in values for tensor in _tensor_leaves(value)]
+
+
+def _input_files(paths: Sequence[str], activations: Sequence[Any]) -> list[dict[str, Any]]:
+    """The leaf count and structure that each stated activation file supplied."""
+    return [
+        {
+            "path": path,
+            "tensor_count": sum(1 for _ in _tensor_leaves(activation)),
+            "structure": _tensor_structure(activation),
+        }
+        for path, activation in zip(paths, activations, strict=True)
+    ]
+
+
 def _weights_needed(module: Module) -> tuple[str, ...]:
     """Every weight the selected Module declares, which is what a run binds."""
     return tuple(module.weights)
@@ -491,14 +524,14 @@ def _sides(target: Target, resource, expected: Sequence[str] | None, device: str
     if expected:
         tensors = tuple(_read(path, device) for path in expected)
         one = tensors[0] if len(tensors) == 1 else tensors
-        return candidate, (lambda *_: one), ", ".join(expected)
+        return candidate, (lambda *_: one), ", ".join(expected), loaded.constants
 
     if target.twin is None:
         # Nothing else states what this Module should produce, so only the
         # predicates that judge it on its own are available.
-        return candidate, None, None
+        return candidate, None, None, loaded.constants
     authored = target.module.name if name is None else f"{target.module.name}.{name}"
-    return candidate, evaluator, f"evaluator on {authored}"
+    return candidate, evaluator, f"evaluator on {authored}", loaded.constants
 
 
 def _orchestration_parameter_names(target: Target) -> tuple[str, ...]:
@@ -566,7 +599,7 @@ def _one_run(
     else:
         weights_from = "the checkpoint" if arguments.ckpt else f"random, seed {SEED}"
 
-    candidate, reference, reference_label = _sides(
+    candidate, reference, reference_label, loaded_weights = _sides(
         target, resource, arguments.expected, device
     )
     report = check(candidate, reference, activations, expect=expect)
@@ -574,7 +607,27 @@ def _one_run(
         "dims": dict(stated),
         "pinned": unstated,
         "variant": None if concrete is None else _variant(function, pinned),
-        "inputs": {"activations": provided, "weights": weights_from},
+        "inputs": {
+            "activations": {
+                "source": provided,
+                "actual_dtypes": _dtype_names(activations),
+                "declared_dtypes": (
+                    []
+                    if concrete is None
+                    else [
+                        parameter.type.dtype.name
+                        for parameter in concrete.params
+                        if not parameter.is_const
+                    ]
+                ),
+                "files": _input_files(arguments.input, activations) if arguments.input else [],
+            },
+            "weights": {
+                "source": weights_from,
+                "actual_dtypes": _dtype_names(tuple(loaded_weights.values())),
+                "declared_dtypes": [type_.dtype.name for type_ in target.module.weights.values()],
+            },
+        },
         "reference": reference_label,
         "outputs": [
             {
@@ -602,6 +655,30 @@ def _one_run(
     }
 
 
+def _shown_dtypes(dtypes: Sequence[str]) -> str:
+    """Dtypes as one readable field, including an honest empty declaration."""
+    return ", ".join(dtypes) if dtypes else "none"
+
+
+def _shown_structure(structure) -> str:
+    """One recursively-loaded input tree, compactly enough for the inputs line."""
+    if isinstance(structure, dict):
+        return f"{structure['dtype']}[{', '.join(str(extent) for extent in structure['shape'])}]"
+    return "(" + ", ".join(_shown_structure(item) for item in structure) + ")"
+
+
+def _shown_files(files: Sequence[dict[str, Any]]) -> str:
+    """Every file's count plus its tensor shape tree, for the text report."""
+    if not files:
+        return ""
+    descriptions = [
+        f"{Path(file['path']).name}: {file['tensor_count']} tensor(s) "
+        f"{_shown_structure(file['structure'])}"
+        for file in files
+    ]
+    return "; files " + "; ".join(descriptions)
+
+
 def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | None) -> str:
     """The runs as a person reads them: what ran, what it measured, the verdict."""
     where = f"{target.path.name}:{target.selector}" if target.selector else str(target.path.name)
@@ -611,7 +688,16 @@ def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | 
             lines.append("")
             lines.append(f"  {', '.join(f'{k}={v}' for k, v in run['dims'].items())}")
         lines.append(f"  reference: {run['reference'] or 'none — the candidate alone'}")
-        lines.append(f"  inputs:    {run['inputs']['activations']}; weights {run['inputs']['weights']}")
+        activations = run["inputs"]["activations"]
+        weights = run["inputs"]["weights"]
+        lines.append(
+            f"  inputs:    {activations['source']}; activations actual "
+            f"{_shown_dtypes(activations['actual_dtypes'])} (declared "
+            f"{_shown_dtypes(activations['declared_dtypes'])}); weights "
+            f"{weights['source']} actual {_shown_dtypes(weights['actual_dtypes'])} "
+            f"(declared {_shown_dtypes(weights['declared_dtypes'])})"
+            f"{_shown_files(activations['files'])}"
+        )
         if run["variant"] is not None:
             ranges = ", ".join(
                 f"{r['dim']} in [{r['lo']}, {r['hi']})" for r in run["variant"]["ranges"]

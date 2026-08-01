@@ -84,6 +84,11 @@ def test_a_nested_activation_file_supplies_one_orchestration_parameter(tf, twin,
     )
     assert compared.returncode == 0, compared.stderr
     assert "reference: evaluator on Orchestrated" in compared.stdout
+    assert (
+        "files hidden.pt: 1 tensor(s) torch.float32[168]; mixer_args.pt: 4 tensor(s) "
+        "(torch.float32[168], torch.float32[168], torch.float32[168], torch.float32[168])"
+        in compared.stdout
+    )
 
     expected = tf(
         "check", f"{twin}:Orchestrated",
@@ -168,6 +173,8 @@ def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
 
     assert "weights the checkpoint" in done.stdout
     assert "random, seed " in done.stdout
+    assert "activations actual torch.float32 (declared f32)" in done.stdout
+    assert "weights the checkpoint actual torch.float32 (declared f32)" in done.stdout
     assert "max_violation 0" in done.stdout
 
     refused = tf("check", f"{twin}:WeightedRootTwin.scaled", "--inputs", "real", *_ARGS[2:])
@@ -204,6 +211,19 @@ def test_check_reports_the_same_verdict_as_json(tf, mine) -> None:
     payload = json.loads(done.stdout)
     assert payload["passed"] is True
     assert payload["target"].endswith("runtime_model.py:MineTwin.main")
+    assert payload["runs"][0]["inputs"] == {
+        "activations": {
+            "source": "random, seed 0",
+            "actual_dtypes": ["torch.float32"],
+            "declared_dtypes": ["f32"],
+            "files": [],
+        },
+        "weights": {
+            "source": "none declared",
+            "actual_dtypes": [],
+            "declared_dtypes": [],
+        },
+    }
 
 
 def test_check_refuses_a_criterion_it_does_not_have(tf, mine) -> None:

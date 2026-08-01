@@ -117,6 +117,9 @@ bounds the caller stated.
   - Inputs MUST be stated: random, real weights from a checkpoint, or files, and
     no form MAY be the default. Weights MUST come from the same draw on both
     sides, and the report MUST say which form was used and what seed drew it.
+    It MUST also say the actual and declared dtype of every activation and of
+    every weight the selected Module declares, plus the tensor count and shape
+    tree each `--input` file supplied.
   - Reaching one leaf MUST read only that leaf Module's own weights. A comparison
     of one kernel MUST NOT materialise a whole model. A Module is the unit that
     loads, so what a run binds is everything the selected Module declares, not the
