@@ -144,7 +144,7 @@ def _loaded(source: Path, work: Path, mount: Path, n_layers: int):
     """The emitted decoder with the published weights bound, through `prepare`."""
     root = runpy.run_path(str(source))["Qwen3_1_7B"].cloned()
     alias = {**_ALIAS, **{f"layer{i}": f"model.layers.{i}" for i in range(n_layers)}}
-    raw = SafetensorsResource(str(mount), device="cpu", alias=alias, dtype=DTYPE)
+    raw = SafetensorsResource(str(mount), device="cpu", alias=alias)
     prepared = work / "prepared"
     root.prepare(raw, str(prepared), device="cpu")
     return root.load(SafetensorsResource(str(prepared), device=DEV))

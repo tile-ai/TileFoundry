@@ -204,14 +204,16 @@ class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
     from the directory this writes.
   - `Module.load(resource)`: read this node's `weights`
     ([core-ir §1](./core-ir.md#1-module)) by name from `resource` and recurse
-    into each child under `resource.subtree(child.name)`, **returning a
-    `LoadedModule` tree**. It MUST NOT write bindings onto the `Module`, which
-    stays pure IR: one `Module` may be read any number of times — two
-    checkpoints, two devices — and each reading is independent of the others.
-    A child reached from two owners therefore yields one `LoadedModule` per
-    owner rather than one binding the last owner wins. This is the
-    semantic-side counterpart of the `RuntimeModule` twin's own `load` (§1.1),
-    which still binds itself in place.
+    into each child under `resource.subtree(child.name)`, strictly validating
+    every read tensor's shape and dtype against its declared `ConstTensor`
+    type, **returning a `LoadedModule` tree**. It MUST NOT write bindings onto
+    the `Module`, which stays pure IR: one `Module` may be read any number of
+    times — two checkpoints, two devices — and each reading is independent of
+    the others. A child reached from two owners therefore yields one
+    `LoadedModule` per owner rather than one binding the last owner wins. This
+    is the semantic-side counterpart of the `RuntimeModule` twin's own `load`
+    (§1.1), which validates against the same declarations before binding in
+    place.
   - `LoadedModule` attribute access mirrors the `Module`'s
     ([core-ir §1.1](./core-ir.md#11-function-access)) against that reading: a
     function resolves to a callable taking **activations alone**, its
@@ -443,7 +445,6 @@ class SafetensorsResource:
     def __init__(
         self, ckpt_dir: str, prefix: str = "", device: str = "cuda",
         alias: "Mapping[str, AliasValue] | None" = None,
-        dtype: "torch.dtype | None" = None,
     ) -> None: ...
 ```
 
@@ -462,11 +463,10 @@ class SafetensorsResource:
     published checkpoint is only sharded once it outgrows the writer's limit,
     so requiring an index would refuse the small ones. A directory with
     neither MUST be reported as such rather than as a missing index.
-  - `dtype`, when given, is the dtype every tensor is read as, whatever the
-    checkpoint stores it as; the same value carries down to every `subtree`
-    view. Without it, a tensor keeps its stored dtype. This is what lets one
-    checkpoint serve modules that declare a different precision than it holds:
-    the alternative is a per-weight converter whose only work is a cast.
+  - every read tensor keeps the element type the checkpoint stores. A
+    declaration requiring a different precision uses a weight converter
+    (§1.1.2), and `load` validates the converted or raw result against that
+    declaration.
 
 ### 1.6 `check`
 

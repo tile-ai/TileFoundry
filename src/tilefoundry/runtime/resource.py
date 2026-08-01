@@ -150,19 +150,17 @@ class SafetensorsResource:
     Reads a safetensors checkpoint directory via mmap'd ``safe_open``: either
     N shards plus ``model.safetensors.index.json``, or a single unsharded
     ``model.safetensors`` with no index. One shard handle is opened at most once
-    and reused across ``subtree`` views. *dtype*, when given, is what every
-    tensor is read as, whatever the checkpoint stores.
+    and reused across ``subtree`` views.
     """
 
     def __init__(
         self, ckpt_dir: str, prefix: str = "", device: str = "cuda",
-        alias: AliasMap | None = None, dtype: "torch.dtype | None" = None,
+        alias: AliasMap | None = None,
     ) -> None:
         self._ckpt_dir = ckpt_dir
         self._prefix = prefix
         self._device = device
         self._alias = alias or {}
-        self._dtype = dtype
         self._handles: dict[str, Any] = {}
         self._weight_map: dict[str, str] | None = None
 
@@ -209,8 +207,7 @@ class SafetensorsResource:
                 device=_resolved_device(self._device),
             )
             self._handles[shard] = handle
-        tensor = handle.get_tensor(raw_key)
-        return tensor if self._dtype is None else tensor.to(self._dtype)
+        return handle.get_tensor(raw_key)
 
     def load(self, name: str) -> torch.Tensor:
         resolved = _reject_group(
@@ -241,7 +238,7 @@ class SafetensorsResource:
         resolved = _resolve_segment(self._alias, self._prefix, seg)
         child = SafetensorsResource(
             self._ckpt_dir, f"{self._prefix}{resolved}.", self._device,
-            alias=self._alias, dtype=self._dtype,
+            alias=self._alias,
         )
         child._weight_map = self._weight_map
         child._handles = self._handles

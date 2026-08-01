@@ -71,14 +71,14 @@ def test_a_directory_with_neither_says_so(tmp_path) -> None:
         SafetensorsResource(str(tmp_path), device="cpu").load("anything")
 
 
-def test_a_stated_dtype_is_what_comes_back(tmp_path) -> None:
-    """The stated dtype is what every read returns, in a subtree view as well."""
+def test_the_stored_dtype_is_what_comes_back(tmp_path) -> None:
+    """Every read preserves the checkpoint's dtype, including a subtree view."""
     ckpt = _unsharded(tmp_path, {
         "w": torch.ones(4, dtype=torch.bfloat16),
         "nested.w": torch.ones(4, dtype=torch.bfloat16),
     })
 
     assert SafetensorsResource(ckpt, device="cpu").load("w").dtype is torch.bfloat16
-    read = SafetensorsResource(ckpt, device="cpu", dtype=torch.float32)
-    assert read.load("w").dtype is torch.float32
-    assert read.subtree("nested").load("w").dtype is torch.float32
+    read = SafetensorsResource(ckpt, device="cpu")
+    assert read.load("w").dtype is torch.bfloat16
+    assert read.subtree("nested").load("w").dtype is torch.bfloat16

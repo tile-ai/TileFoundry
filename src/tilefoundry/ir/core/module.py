@@ -19,6 +19,24 @@ from tilefoundry.target import Target
 ModuleFunction = Union[HirFunction, PrimFunction]
 
 
+def _validate_declared(module_name, source, value, decl_type) -> None:
+    """Refuse a checkpoint value that disagrees with its declared tensor type."""
+    from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415 -- avoid evaluator cycle
+
+    if tuple(value.shape) != tuple(decl_type.shape):
+        raise ValueError(
+            f"Module {module_name!r}: {source} has shape "
+            f"{tuple(value.shape)}, declared {tuple(decl_type.shape)}"
+        )
+    expected_dtype = to_torch_dtype(decl_type.dtype)
+    if value.dtype != expected_dtype:
+        raise ValueError(
+            f"Module {module_name!r}: {source} has dtype {value.dtype}, declared "
+            f"{decl_type.dtype}; the way out is a weight converter on the model, "
+            "not a flag on the read side"
+        )
+
+
 def _refuse_bare_call(module: "Module", kind: str) -> None:
     """Refuse a bare call on a *kind* whose *module* has neither a ``forward``
     method nor an entry, naming what to call instead."""
@@ -305,11 +323,13 @@ class Module:
         of times. See docs/spec/runtime.md §1.1.2.
         """
         constants: dict[str, object] = {}
-        for name in self.weights:
+        for name, decl_type in self.weights.items():
             try:
-                constants[name] = resource.load(name)
+                value = resource.load(name)
             except KeyError as e:
                 raise KeyError(f"Module {self.name!r}: missing weight {name!r}") from e
+            _validate_declared(self.name, f"weight {name!r}", value, decl_type)
+            constants[name] = value
         return LoadedModule(
             module=self,
             constants=constants,
@@ -373,7 +393,6 @@ class Module:
         import torch  # noqa: PLC0415 -- optional runtime dep
 
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
-        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
 
         converter_map: dict[str, ModuleFunction] = {}
         for fn in self.functions:
@@ -399,17 +418,7 @@ class Module:
             else:
                 value = evaluate(conv, *[_fetch(p.name) for p in conv.params], device=device)
             source = f"converter for weight {key!r}" if conv is not None else f"raw weight {key!r}"
-            if tuple(value.shape) != tuple(decl_type.shape):
-                raise ValueError(
-                    f"Module {self.name!r}: {source} has shape "
-                    f"{tuple(value.shape)}, declared {tuple(decl_type.shape)}"
-                )
-            expected_dtype = to_torch_dtype(decl_type.dtype)
-            if value.dtype != expected_dtype:
-                raise ValueError(
-                    f"Module {self.name!r}: {source} has dtype "
-                    f"{value.dtype}, declared {decl_type.dtype}"
-                )
+            _validate_declared(self.name, source, value, decl_type)
             flat[key] = value.detach().contiguous().cpu()
 
         for child in self.modules:

@@ -7,7 +7,7 @@ import inspect
 import types
 from typing import Callable
 
-from tilefoundry.ir.core.module import Module, _refuse_bare_call
+from tilefoundry.ir.core.module import Module, _refuse_bare_call, _validate_declared
 from tilefoundry.runtime.function import RuntimeFunction
 from tilefoundry.runtime.module import RuntimeModule
 from tilefoundry.runtime.resource import RuntimeResource
@@ -78,13 +78,15 @@ class _Twin(RuntimeModule):
         return self._ir
 
     def load(self, resource: RuntimeResource) -> None:
-        for name in self._ir.weights:
+        for name, decl_type in self._ir.weights.items():
             try:
-                self._bound[name] = resource.load(name)
+                value = resource.load(name)
             except KeyError as e:
                 raise KeyError(
                     f"RuntimeModule {self.name!r}: missing weight {name!r}"
                 ) from e
+            _validate_declared(self.name, f"weight {name!r}", value, decl_type)
+            self._bound[name] = value
         for child in self.modules:
             child.load(resource.subtree(child.name))
 
