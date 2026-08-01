@@ -6,7 +6,7 @@ import sys
 from typing import Mapping
 
 from tilefoundry.analysis.api import analyze
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry.cli.source import _spread, load_authored_ir
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
     render_json,
@@ -14,6 +14,7 @@ from tilefoundry.inspection.analysis_report import (
     report,
     selected_types,
 )
+from tilefoundry.ir.hir.specialize import dim_vars_reached
 
 # The root analyses `analyze` can be asked for, in the order they are reported.
 ANALYSES = ("compute-cost", "memory", "roofline", "timeline")
@@ -34,6 +35,19 @@ def run_authored_analysis(
     """
     module = load_authored_ir(source)
     function = module.entry_function()
+    stated = {} if dims is None else dims
+    unbound = [
+        (name, dim_var)
+        for name, dim_var in dim_vars_reached(function).items()
+        if name not in stated
+    ]
+    if unbound:
+        guidance = "; ".join(
+            f"{name} is declared as [{dim_var.lo}, {dim_var.hi}); bind it with "
+            f"--dim {name}=EXTENT (try {', '.join(map(str, _spread(dim_var.lo, dim_var.hi)))})"
+            for name, dim_var in unbound
+        )
+        raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
     results = [
         analyze(module, function, analysis=name, dims=dims) for name in analyses
     ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 _BAD_MODULE = '''
 from tilefoundry import module
@@ -135,6 +136,24 @@ def test_a_dim_that_is_not_understood_is_refused(tf, cmine) -> None:
         done = tf("analyze", f"{cmine}:CMine.root", "--compute-cost", "--dim", bad)
         assert done.returncode != 0, bad
         assert done.stderr.strip(), bad
+
+
+def test_analyze_names_an_open_dimension_and_suggests_extents(tf, shipped) -> None:
+    model = f"{Path(shipped['models']) / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5_35B_A3B.layer3.mixer.full_attention"
+    done = tf("analyze", model, "--memory")
+    assert done.returncode == 1
+    assert done.stdout == ""
+    assert "ctx_len" in done.stderr
+    assert "[0, 262144)" in done.stderr
+    assert "0, 1, 131072, 262143" in done.stderr
+
+
+def test_analyze_rejects_several_extents_for_one_dimension(tf, shipped) -> None:
+    model = f"{Path(shipped['models']) / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5_35B_A3B.layer3.mixer.full_attention"
+    done = tf("analyze", model, "--dim", "ctx_len=0,1")
+    assert done.returncode == 1
+    assert done.stdout == ""
+    assert "ctx_len takes one EXTENT at a time" in done.stderr
 
 
 def test_a_selector_that_names_nothing_says_so(tf, cmine) -> None:

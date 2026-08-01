@@ -286,7 +286,9 @@ no ordinary `--target` option.
   - `--json` MUST print the report as JSON instead of text. Both formats MUST
     carry the same conclusions ([analysis §2](./analysis.md#2-authored-hir-metrics)).
   - `--dim NAME=EXTENT` MUST bind one dimension the selection leaves open, and
-    MUST be repeatable to bind several. It MUST be passed through as the
+    MUST be repeatable to bind several. One dimension MUST receive one extent;
+    a comma-separated list of extents for one dimension MUST be rejected because
+    several extents together are a `check` request. It MUST be passed through as the
     operation's `dims` ([analysis §2.2](./analysis.md#2-authored-hir-metrics));
     the CLI MUST NOT specialise the selection itself, because then what it
     printed would be about a program the operation never saw.
@@ -297,8 +299,9 @@ no ordinary `--target` option.
     later occurrence MUST NOT win, because both came from the caller and choosing
     between them silently answers a request that has no answer.
   - With no `--dim`, the selection MUST be analysed as authored. A selection that
-    leaves a dimension open MUST then fail naming the dimension: counting
-    elements requires an extent, and a range is not one.
+    leaves a dimension open MUST then fail naming the dimension, its declared
+    `[lo, hi)` interval, and concrete extents inside that interval the caller can
+    use: counting elements requires an extent, and a range is not one.
   - Every requested analysis MUST be reported together even when each was run at
     the stated extents, which builds one program per analysis. The report MUST
     accept those as one program when they were rebuilt from the same function at

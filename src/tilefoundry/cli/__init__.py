@@ -13,7 +13,7 @@ from tilefoundry.cli.check import guidance, run_check
 from tilefoundry.cli.inspect import run_capabilities
 from tilefoundry.cli.models import run_models
 from tilefoundry.cli.schedule import run_schedule
-from tilefoundry.cli.source import load_authored_ir, parse_dims
+from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
 from tilefoundry.cli.tutorial import PAGES, run_tutorial
 from tilefoundry.ir.core import VerifyError
@@ -277,7 +277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.source,
                 args.topology,
                 as_json=args.json,
-                dims=parse_dims(args.dim),
+                dims=one_extent_per_dim(parse_dims(args.dim)),
                 solver_timeout=args.solver_timeout,
                 solver_workers=args.solver_workers,
                 first_plan=args.first_plan,
@@ -299,7 +299,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         analyses = _ANALYSES
     try:
         return run_authored_analysis(
-            args.source, analyses, as_json=args.json, dims=parse_dims(args.dim)
+            args.source, analyses, as_json=args.json, dims=one_extent_per_dim(parse_dims(args.dim))
         )
     except (AnalysisError, VerifyError, OSError, TypeError, ValueError) as error:
         print(f"tilefoundry: error: {error}", file=sys.stderr)

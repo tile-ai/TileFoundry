@@ -7,7 +7,7 @@ import importlib.util
 import io
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from tilefoundry.ir.core.module import Module, select
 from tilefoundry.ir.hir.function import Function
@@ -165,41 +165,59 @@ def selected_target(ir: Module):
     return ir.resolve_target()
 
 
-def parse_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
-    """``NAME=EXTENT`` arguments as the mapping the operations take.
+def parse_dims(stated: Sequence[str] | None) -> dict[str, tuple[int, ...]] | None:
+    """``NAME=V[,V...]`` arguments as every extent each dimension was given.
 
     ``None`` when nothing was stated, which is not the same as an empty mapping:
     a caller who stated no size is asking about the program as authored, while an
     empty mapping is a caller who meant to choose sizes and named none.
     """
-    if not stated:
+    if stated is None:
         return None
-    dims: dict[str, int] = {}
+    dims: dict[str, tuple[int, ...]] = {}
     for entry in stated:
-        name, _, extent = entry.partition("=")
-        if not name or not extent:
-            raise ValueError(f"--dim takes NAME=EXTENT, got {entry!r}")
-        # Repeating the flag states another dimension, not another value for one
-        # already stated. Two extents for one dimension is a request with no
-        # answer, and taking the last would silently pick one of them.
+        name, _, values = entry.partition("=")
+        if not name or not values:
+            raise ValueError(f"--dim takes NAME=V[,V...], got {entry!r}")
         if name in dims:
-            raise ValueError(
-                f"--dim {name} was given twice, as {dims[name]} and {extent}; "
-                f"a dimension takes one extent"
-            )
+            raise ValueError(f"--dim {name} was given twice; list its values as NAME=V,V")
         try:
-            dims[name] = int(extent)
+            dims[name] = tuple(int(value) for value in values.split(","))
         except ValueError:
             raise ValueError(
-                f"--dim {name}: extent must be an integer, got {extent!r}"
+                f"--dim {name}: every value must be an integer, got {values!r}"
             ) from None
     return dims
+
+
+def one_extent_per_dim(
+    dims: Mapping[str, tuple[int, ...]] | None,
+) -> dict[str, int] | None:
+    """The one-extent mapping Analyze and Schedule give their operations."""
+    if dims is None:
+        return None
+    chosen: dict[str, int] = {}
+    for name, extents in dims.items():
+        if len(extents) != 1:
+            raise ValueError(
+                f"--dim {name} takes one EXTENT at a time; asking several EXTENTs "
+                "together is for check"
+            )
+        chosen[name] = extents[0]
+    return chosen
+
+
+def _spread(lo: int, hi: int) -> tuple[int, ...]:
+    """A few extents inside a declared range, for the suggestion that follows it."""
+    candidates = {lo, lo + 1, (lo + hi) // 2, hi - 1}
+    return tuple(sorted(value for value in candidates if lo <= value < hi))
 
 
 __all__ = [
     "entry_function",
     "load_authored_ir",
     "load_namespace",
+    "one_extent_per_dim",
     "parse_dims",
     "select_ir",
     "selected_target",

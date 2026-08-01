@@ -11,7 +11,7 @@ from typing import Any, Sequence
 import torch
 
 from tilefoundry.cli import data
-from tilefoundry.cli.source import load_namespace, select_ir
+from tilefoundry.cli.source import _spread, load_namespace, parse_dims, select_ir
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function, canonical_specialization_signature
@@ -165,22 +165,6 @@ def expectations(stated: Sequence[tuple[str, Any]] | None) -> dict[str, tuple[Pr
             made.append(PREDICATES[name](**bounds))
         built[path] = tuple(made)
     return built
-
-
-def parse_dims(stated: Sequence[str] | None) -> dict[str, tuple[int, ...]]:
-    """``NAME=V[,V...]`` arguments as every value each dimension was given."""
-    dims: dict[str, tuple[int, ...]] = {}
-    for entry in stated or ():
-        name, _, values = entry.partition("=")
-        if not name or not values:
-            raise ValueError(f"--dim takes NAME=V[,V...], got {entry!r}")
-        if name in dims:
-            raise ValueError(f"--dim {name} was given twice; list its values as NAME=V,V")
-        try:
-            dims[name] = tuple(int(value) for value in values.split(","))
-        except ValueError:
-            raise ValueError(f"--dim {name}: every value must be an integer, got {values!r}") from None
-    return dims
 
 
 def _combinations(dims: dict[str, tuple[int, ...]]) -> list[dict[str, int]]:
@@ -427,12 +411,6 @@ def _variant(function: Function, dims: dict[str, int]) -> dict[str, Any] | None:
     }
 
 
-def _spread(lo: int, hi: int) -> tuple[int, ...]:
-    """A few extents inside a declared range, for the suggestion that follows it."""
-    candidates = {lo, lo + 1, (lo + hi) // 2, hi - 1}
-    return tuple(sorted(value for value in candidates if lo <= value < hi))
-
-
 def _pin(function: Function, stated: dict[str, int]) -> tuple[dict[str, int], list[dict[str, Any]]]:
     """Every dimension this function states as a range, bound to one extent.
 
@@ -671,7 +649,7 @@ def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | 
 def run_check(arguments: argparse.Namespace) -> int:
     """Compare one target against its reference and report every output."""
     expect = expectations(getattr(arguments, "comparison", None))
-    stated = parse_dims(arguments.dim)
+    stated = parse_dims(arguments.dim) or {}
     if arguments.input and arguments.inputs is not None:
         raise ValueError(
             f"--input names the activations and --inputs {arguments.inputs} makes them; "
