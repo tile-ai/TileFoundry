@@ -43,7 +43,7 @@ def test_models_renders_the_whole_forest_with_leaf_modules_marked(tf) -> None:
     assert "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"]" in forest
 
 
-def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, tmp_path) -> None:
+def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, installation, tmp_path) -> None:
     done = tf("models", "qwen3_1_7b", "--source")
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()
@@ -80,6 +80,18 @@ def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, tm
 
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
+    driver = subprocess.run(
+        [str(installation / "bin" / "python"), "run.py", "--help"],
+        cwd=copied,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert driver.returncode == 0, driver.stderr
+    for option in ("--ckpt", "--prompt", "--max-new-tokens", "--device"):
+        assert option in driver.stdout
+
     checkout = subprocess.run(
         [
             sys.executable,
@@ -104,19 +116,20 @@ def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, tm
     ("qwen3_1_7b", "qwen2_5_1_5b", "gemma2_2b", "minicpm3_4b", "qwen3_5_35b_a3b"),
 )
 def test_models_source_lists_each_shipped_hf_alias(tf, capsys, name) -> None:
-    """A raw-checkpoint model ships its own table, in manifest order."""
+    """A raw-checkpoint model ships its own table in stable filename order."""
     done = tf("models", name, "--source")
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()
-    assert lines[1].startswith("model.py")
+    filenames = [line.split(maxsplit=1)[0] for line in lines[1:]]
+    assert filenames == sorted(filenames)
     assert any(
         line.startswith("hf_alias.py")
         and "The published checkpoint as this model's weights" in line
-        for line in lines[2:]
+        for line in lines[1:]
     )
 
     assert models.run_models(name, source=True) == 0
-    assert _listed_names(capsys.readouterr().out) == _listed_names(done.stdout)
+    assert capsys.readouterr().out.splitlines()[1:] == lines[1:]
 
 
 def test_models_source_follows_the_manifest_without_importing_files(

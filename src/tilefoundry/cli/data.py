@@ -57,11 +57,16 @@ def path(kind: str, name: str) -> Path:
 
 
 def _manifest_files(destination: str) -> tuple[Path, ...]:
-    """The checkout files named by one installed data-files destination."""
+    """The checkout files named by one data-files destination, sorted by name."""
     with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as manifest:
         data_files = tomllib.load(manifest)["tool"]["setuptools"]["data-files"]
     try:
-        return tuple(_REPOSITORY_ROOT / entry for entry in data_files[destination])
+        return tuple(
+            sorted(
+                (_REPOSITORY_ROOT / entry for entry in data_files[destination]),
+                key=lambda path: path.name,
+            )
+        )
     except KeyError:
         raise FileNotFoundError(
             f"installed TileFoundry data directory {destination} was not found"
@@ -88,7 +93,7 @@ def directories(kind: str) -> tuple[Path, ...]:
 
 
 def files(kind: str, name: str) -> tuple[Path, ...]:
-    """The files a shipped *kind* directory carries, in package order."""
+    """The files a shipped *kind* directory carries, sorted by filename."""
     known = _KINDS[kind]
     root = directory(kind)
     found = root / name
@@ -97,11 +102,11 @@ def files(kind: str, name: str) -> tuple[Path, ...]:
         return _manifest_files(destination)
     if not found.is_dir():
         raise FileNotFoundError(f"installed TileFoundry {kind} {name} was not found")
-    return tuple(entry for entry in found.iterdir() if entry.is_file())
+    return tuple(sorted((entry for entry in found.iterdir() if entry.is_file()), key=lambda path: path.name))
 
 
 def model_files(name: str) -> tuple[Path, ...]:
-    """The files a shipped model directory carries, in its package order."""
+    """The files a shipped model directory carries, sorted by filename."""
     return files("models", name)
 
 

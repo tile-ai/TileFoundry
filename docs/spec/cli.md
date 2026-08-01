@@ -161,7 +161,7 @@ granularity.
   - Its workflow pages are `index`, `migrate`, and `optimize`; causal-LM decode
     sources are listed through `tutorial orchestrator`.
   - A family's list description MUST be the leading docstring of the first file
-    in its package data manifest order.
+    in stable filename order.
 
 ## Models
 
@@ -206,7 +206,7 @@ that runs before it can be read is a reference that decides what it describes.
     count every Module a range stands for rather than the range as one.
   - `--source` MUST print the absolute path of the shipped model directory first,
     followed by one line for every file named in the package data manifest, in
-    manifest order. Each file line MUST give its filename and the first line of
+    a stable filename order. Each file line MUST give its filename and the first line of
     its own docstring, or `-` when it has none. A checkout MUST read that manifest;
     an installation MUST read its model directory, and both MUST name the same
     files.
@@ -214,6 +214,9 @@ that runs before it can be read is a reference that decides what it describes.
     or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
     file: the installed directory is the reference, and a rendered copy is a
     different artifact wearing its name.
+  - A shipped model source directory with `hf_alias.py` MUST carry the executable
+    `run.py` and its `generation.py` decode source, whose shapes MUST come only from
+    that directory's `config.json`.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers

@@ -33,3 +33,12 @@ def test_each_model_ships_its_source_and_its_config(shipped) -> None:
     for name in MODELS:
         assert (models / name / "model.py").is_file(), name
         assert (models / name / "config.json").is_file(), name
+
+
+def test_only_models_with_aliases_ship_decode_sources(shipped) -> None:
+    models = Path(shipped["models"])
+    for name in MODELS:
+        source = models / name
+        has_alias = (source / "hf_alias.py").is_file()
+        assert (source / "generation.py").is_file() == has_alias, name
+        assert (source / "run.py").is_file() == has_alias, name

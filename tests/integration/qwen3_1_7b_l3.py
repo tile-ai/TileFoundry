@@ -100,7 +100,7 @@ def _source_directory(venv: Path, *command: str, outside: Path) -> Path:
 
 
 def _emitted(venv: Path, work: Path, outside: Path) -> tuple[Path, Path]:
-    """Copy the shipped model, and locate the shipped decode driver."""
+    """Copy the shipped model and its decode driver."""
     shipped = _source_directory(venv, "models", MODEL, "--source", outside=outside)
     copied = work / shipped.name
     shutil.copytree(shipped, copied)
@@ -109,10 +109,9 @@ def _emitted(venv: Path, work: Path, outside: Path) -> tuple[Path, Path]:
     if not model_source.is_file() or not alias_source.is_file():
         raise SystemExit(f"copied model directory has no model.py: {copied}")
     print(f"copied {MODEL} source directory to {copied}")
-    driver = _source_directory(venv, "tutorial", "orchestrator", "causal_lm", outside=outside)
-    generation_source = driver / "generation.py"
+    generation_source = copied / "generation.py"
     if not generation_source.is_file():
-        raise SystemExit(f"shipped causal_lm source has no generation.py: {driver}")
+        raise SystemExit(f"copied model directory has no generation.py: {copied}")
     return model_source, generation_source
 
 

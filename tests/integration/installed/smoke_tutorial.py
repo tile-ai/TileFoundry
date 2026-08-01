@@ -60,7 +60,8 @@ def test_orchestrator_lists_and_describes_its_shipped_family(tf) -> None:
     assert Path(lines[0]).is_absolute()
     assert lines[0].endswith("/orchestrator/causal_lm")
     assert lines[1:] == [
-        "generation.py  Autoregressive decode: one token per step; the caller owns the state."
+        "generation.py  Autoregressive decode: one token per step; the caller owns the state.",
+        "run.py         Run a shipped causal-LM source directory against its published checkpoint.",
     ]
 
 
