@@ -28,6 +28,7 @@ import torch
 
 from tests.models import decode_oracle as oracle
 from tests.models import dense_decode
+from tests.models.minicpm3_4b.hf_alias import hf_layout_only
 from tests.models.minicpm3_4b.model import (
     MiniCPM3_4B,
     MiniCPM3_4B_DecoderLayer,
@@ -205,43 +206,45 @@ def _layer_constants(layer) -> dict:
     attention, mlp = layer.self_attn, layer.mlp
     return {
         "gamma_in": layer.input_layernorm.weight,
-        "w_q_a": oracle.linear_weight(attention.q_a_proj),
+        "w_q_a": attention.q_a_proj.weight,
         "gamma_q_a": attention.q_a_layernorm.weight,
-        "w_q_b": oracle.linear_weight(attention.q_b_proj),
-        "w_kv_a": oracle.linear_weight(attention.kv_a_proj_with_mqa),
+        "w_q_b": attention.q_b_proj.weight,
+        "w_kv_a": attention.kv_a_proj_with_mqa.weight,
         "gamma_kv_a": attention.kv_a_layernorm.weight,
-        "w_kv_b": oracle.linear_weight(attention.kv_b_proj),
-        "w_o": oracle.linear_weight(attention.o_proj),
+        "w_kv_b": attention.kv_b_proj.weight,
+        "w_o": attention.o_proj.weight,
         "gamma_post": layer.post_attention_layernorm.weight,
-        "w_gate": oracle.linear_weight(mlp.gate_proj),
-        "w_up": oracle.linear_weight(mlp.up_proj),
-        "w_down": oracle.linear_weight(mlp.down_proj),
+        "w_gate": mlp.gate_proj.weight,
+        "w_up": mlp.up_proj.weight,
+        "w_down": mlp.down_proj.weight,
     }
 
 
 def load_layer(layer):
     """The layer Module with *layer*'s weights bound."""
-    return MiniCPM3_4B_DecoderLayer.cloned().load(DictResource(_layer_constants(layer)))
+    return MiniCPM3_4B_DecoderLayer.cloned().load(
+        DictResource(_layer_constants(layer), alias=hf_layout_only(CONFIG))
+    )
 
 
 def load_decoder(model):
     """The decoder root with *model*'s weights bound, one entry per layer.
 
-    ``w_head`` is supplied in the layout `lm_head` declares: `DictResource` keys are
-    already canonical and its converters run in ``prepare``, not here. Reading the
-    head off the causal LM rather than deciding from a config field is what makes
-    this the same statement for a tied and an untied checkpoint.
+    The raw HF layout is supplied throughout; the shipped alias table changes it
+    into each declaration's layout. Reading the head off the causal LM rather
+    than deciding from a config field makes this the same statement for tied and
+    untied checkpoints.
     """
     constants = {
         "w_embed": model.model.embed_tokens.weight,
         "gamma_final": model.model.norm.weight,
-        "w_head": model.lm_head.weight.t(),
+        "w_head": model.lm_head.weight,
     }
     for index, layer in enumerate(model.model.layers):
         constants.update(
             {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
         )
-    return MiniCPM3_4B.cloned().load(DictResource(constants))
+    return MiniCPM3_4B.cloned().load(DictResource(constants, alias=hf_layout_only(CONFIG)))
 
 
 def _residual_scale(layer, device: str) -> tuple:

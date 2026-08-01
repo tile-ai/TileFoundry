@@ -20,6 +20,7 @@ import torch
 
 from tests.models import decode_oracle as oracle
 from tests.models import dense_decode
+from tests.models.gemma2_2b.hf_alias import hf_layout_only
 from tests.models.gemma2_2b.model import (
     Gemma2_2B,
     Gemma2_2B_DecoderLayer,
@@ -168,42 +169,44 @@ def _layer_constants(layer) -> dict:
     attention, mlp = layer.self_attn, layer.mlp
     return {
         "gamma_in": layer.input_layernorm.weight,
-        "w_q": oracle.linear_weight(attention.q_proj),
-        "w_k": oracle.linear_weight(attention.k_proj),
-        "w_v": oracle.linear_weight(attention.v_proj),
-        "w_o": oracle.linear_weight(attention.o_proj),
+        "w_q": attention.q_proj.weight,
+        "w_k": attention.k_proj.weight,
+        "w_v": attention.v_proj.weight,
+        "w_o": attention.o_proj.weight,
         "gamma_post_attn": layer.post_attention_layernorm.weight,
         "gamma_pre_ff": layer.pre_feedforward_layernorm.weight,
-        "w_gate": oracle.linear_weight(mlp.gate_proj),
-        "w_up": oracle.linear_weight(mlp.up_proj),
-        "w_down": oracle.linear_weight(mlp.down_proj),
+        "w_gate": mlp.gate_proj.weight,
+        "w_up": mlp.up_proj.weight,
+        "w_down": mlp.down_proj.weight,
         "gamma_post_ff": layer.post_feedforward_layernorm.weight,
     }
 
 
 def load_layer(layer):
     """The layer Module with *layer*'s weights bound."""
-    return Gemma2_2B_DecoderLayer.cloned().load(DictResource(_layer_constants(layer)))
+    return Gemma2_2B_DecoderLayer.cloned().load(
+        DictResource(_layer_constants(layer), alias=hf_layout_only(CONFIG))
+    )
 
 
 def load_decoder(model):
     """The decoder root with *model*'s weights bound, one entry per layer.
 
-    ``w_head`` is supplied in the layout `lm_head` declares: `DictResource` keys are
-    already canonical and its converters run in ``prepare``, not here. Reading the
-    head off the causal LM rather than deciding from a config field is what makes
-    this the same statement for a tied and an untied checkpoint.
+    The raw HF layout is supplied throughout; the shipped alias table changes it
+    into each declaration's layout. Reading the head off the causal LM rather
+    than deciding from a config field makes this the same statement for tied and
+    untied checkpoints.
     """
     constants = {
         "w_embed": model.model.embed_tokens.weight,
         "gamma_final": model.model.norm.weight,
-        "w_head": model.lm_head.weight.t(),
+        "w_head": model.lm_head.weight,
     }
     for index, layer in enumerate(model.model.layers):
         constants.update(
             {f"layer{index}.{name}": w for name, w in _layer_constants(layer).items()}
         )
-    return Gemma2_2B.cloned().load(DictResource(constants))
+    return Gemma2_2B.cloned().load(DictResource(constants, alias=hf_layout_only(CONFIG)))
 
 
 @dataclass(frozen=True)

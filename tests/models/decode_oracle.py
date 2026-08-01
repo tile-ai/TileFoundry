@@ -236,9 +236,8 @@ def randomised(build, seed: int, device: str = "cpu", dtype=None, sigma: float =
 def linear_weight(linear) -> torch.Tensor:
     """HF ``nn.Linear.weight`` ``[out, in]`` -> the kernels' ``[1, in, out]``.
 
-    The kernel convention is ``x[1, S, in] @ w[1, in, out]``, so the transpose is
-    weight preprocessing and belongs on this side of the boundary. A bias, where a
-    model has one, needs no such transpose and is used as it is.
+    Kimi's reference still constructs its constants at this layout. Models with a
+    shipped raw-checkpoint table instead use that table's ``Preprocessed`` entry.
     """
     return linear.weight.t().unsqueeze(0).contiguous()
 

@@ -29,14 +29,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import tilefoundry
 from tilefoundry.runtime import SafetensorsResource
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-if str(REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPOSITORY_ROOT))
-
-# This standalone script starts in tests/integration; keep continuation decode
-# in the shared driver rather than reproducing it here.
-from tests.models.orchestrator.causal_lm import generation  # noqa: E402
-
 CKPT_ENV = "TILEFOUNDRY_QWEN3_1_7B_CKPT"
 MODEL = "qwen3_1_7b"
 
@@ -58,26 +50,6 @@ _PUBLISHED = (
     "max_position_embeddings",
     "num_hidden_layers",
 )
-
-# Canonical name -> published key. The seven projections and the head resolve to
-# the keys their converters read; `layer{i}` is a subtree segment, not a leaf.
-_ALIAS = {
-    "w_embed": "model.embed_tokens.weight",
-    "gamma_final": "model.norm.weight",
-    "head_weight_raw": "lm_head.weight",
-    "gamma_in": "input_layernorm.weight",
-    "gamma_post": "post_attention_layernorm.weight",
-    "gamma_q": "self_attn.q_norm.weight",
-    "gamma_k": "self_attn.k_norm.weight",
-    "q_proj_weight": "self_attn.q_proj.weight",
-    "k_proj_weight": "self_attn.k_proj.weight",
-    "v_proj_weight": "self_attn.v_proj.weight",
-    "o_proj_weight": "self_attn.o_proj.weight",
-    "gate_proj_weight": "mlp.gate_proj.weight",
-    "up_proj_weight": "mlp.up_proj.weight",
-    "down_proj_weight": "mlp.down_proj.weight",
-}
-
 
 def _installed(venv: Path) -> None:
     """Refuse to run unless the `tilefoundry` imported here came out of *venv*."""
@@ -107,30 +79,41 @@ def _published(mount: Path) -> dict:
     return read
 
 
-def _emitted(venv: Path, work: Path, outside: Path) -> Path:
-    """Ask the installation for its model directory and copy it where it will run."""
+def _source_directory(venv: Path, *command: str, outside: Path) -> Path:
+    """The first directory a source-listing command from *venv* names."""
     done = subprocess.run(
-        [str(venv / "bin" / "tilefoundry"), "models", MODEL, "--source"],
+        [str(venv / "bin" / "tilefoundry"), *command],
         cwd=str(outside), capture_output=True, text=True, check=False,
     )
     if done.returncode != 0:
         raise SystemExit(
-            f"`tilefoundry models {MODEL} --source` exited {done.returncode}\n"
+            f"`tilefoundry {' '.join(command)}` exited {done.returncode}\n"
             f"{done.stderr.strip()}"
         )
     lines = done.stdout.splitlines()
     if not lines:
-        raise SystemExit(f"`tilefoundry models {MODEL} --source` printed no directory")
+        raise SystemExit(f"`tilefoundry {' '.join(command)}` printed no directory")
     shipped = Path(lines[0])
     if not shipped.is_dir():
-        raise SystemExit(f"`tilefoundry models {MODEL} --source` named no directory: {shipped}")
+        raise SystemExit(f"`tilefoundry {' '.join(command)}` named no directory: {shipped}")
+    return shipped
+
+
+def _emitted(venv: Path, work: Path, outside: Path) -> tuple[Path, Path]:
+    """Copy the shipped model, and locate the shipped decode driver."""
+    shipped = _source_directory(venv, "models", MODEL, "--source", outside=outside)
     copied = work / shipped.name
     shutil.copytree(shipped, copied)
-    source = copied / "model.py"
-    if not source.is_file():
+    model_source = copied / "model.py"
+    alias_source = copied / "hf_alias.py"
+    if not model_source.is_file() or not alias_source.is_file():
         raise SystemExit(f"copied model directory has no model.py: {copied}")
     print(f"copied {MODEL} source directory to {copied}")
-    return source
+    driver = _source_directory(venv, "tutorial", "orchestrator", "causal_lm", outside=outside)
+    generation_source = driver / "generation.py"
+    if not generation_source.is_file():
+        raise SystemExit(f"shipped causal_lm source has no generation.py: {driver}")
+    return model_source, generation_source
 
 
 def _oracle(mount: Path):
@@ -140,14 +123,14 @@ def _oracle(mount: Path):
     return tokenizer, model.to(DEV).eval()
 
 
-def _loaded(source: Path, work: Path, mount: Path, n_layers: int):
-    """The emitted decoder with the published weights bound, through `prepare`."""
-    root = runpy.run_path(str(source))["Qwen3_1_7B"].cloned()
-    alias = {**_ALIAS, **{f"layer{i}": f"model.layers.{i}" for i in range(n_layers)}}
-    raw = SafetensorsResource(str(mount), device="cpu", alias=alias)
-    prepared = work / "prepared"
-    root.prepare(raw, str(prepared), device="cpu")
-    return root.load(SafetensorsResource(str(prepared), device=DEV))
+def _loaded(source: Path, mount: Path):
+    """The emitted decoder with its published weights bound directly."""
+    namespace = runpy.run_path(str(source))
+    root = namespace["Qwen3_1_7B"].cloned()
+    alias = runpy.run_path(str(source.with_name("hf_alias.py")))["hf_alias"](
+        namespace["config"]
+    )
+    return root.load(SafetensorsResource(str(mount), device=DEV, alias=alias))
 
 
 def _hf_greedy(model, prompt_ids):
@@ -168,14 +151,14 @@ def _hf_greedy(model, prompt_ids):
     return tokens
 
 
-def _recorded_greedy(tokens: list[int]):
+def _recorded_greedy(generation: dict[str, object], tokens: list[int]):
     """Return greedy sampling that skips decode's unmeasured warm sample."""
     warmed = False
 
     def sample(logits) -> int:
         nonlocal warmed
 
-        token = generation.greedy(logits)
+        token = generation["greedy"](logits)
         if warmed:
             tokens.append(token)
         warmed = True
@@ -190,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         "--venv", required=True, type=Path, help="the installation under test"
     )
     parser.add_argument(
-        "--work", required=True, type=Path, help="scratch directory for the store"
+        "--work", required=True, type=Path, help="scratch directory for copied source"
     )
     parser.add_argument(
         "--checkpoint",
@@ -214,13 +197,15 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("no CUDA device: this decodes two copies of a 1.7B model")
 
     _installed(args.venv)
-    published = _published(args.checkpoint)
+    _published(args.checkpoint)
     args.work.mkdir(parents=True, exist_ok=True)
+    args.outside.mkdir(parents=True, exist_ok=True)
 
-    source = _emitted(args.venv, args.work, args.outside)
+    source, generation_source = _emitted(args.venv, args.work, args.outside)
 
     tokenizer, model = _oracle(args.checkpoint)
-    loaded = _loaded(source, args.work, args.checkpoint, published["num_hidden_layers"])
+    loaded = _loaded(source, args.checkpoint)
+    generation = runpy.run_path(str(generation_source))
 
     prompt_ids = tokenizer(PROMPT, return_tensors="pt").input_ids.to(DEV)
     if prompt_ids.shape[1] < 2:
@@ -228,12 +213,12 @@ def main(argv: list[str] | None = None) -> int:
 
     want = _hf_greedy(model, prompt_ids)
     got: list[int] = []
-    done = generation.decode(
+    done = generation["decode"](
         loaded,
         tokenizer,
         PROMPT,
         max_new=STEPS,
-        sampler=_recorded_greedy(got),
+        sampler=_recorded_greedy(generation, got),
         device=DEV,
     )
 

@@ -45,7 +45,7 @@ import torch
 import torch.nn.functional as F
 
 from tests.models import decode_oracle as oracle
-from tests.models.decode_oracle import linear_weight
+from tests.models.qwen3_5_35b_a3b.hf_alias import hf_layout_only
 from tests.models.qwen3_5_35b_a3b.model import (
     _ROPE_ROWS,
     LAYER_TYPE,
@@ -161,16 +161,6 @@ def rope_caches_at(total: int = 64, device="cpu", dtype=DTYPE):
     return (cos, sin) if dtype is None else (cos.to(dtype), sin.to(dtype))
 
 
-def matrix_weight(weight):
-    """A bare ``[out, in]`` parameter -> the kernels' ``[in, out]``.
-
-    The MoE router and Hugging Face's expert tensors are ``nn.Parameter``s
-    consumed by ``F.linear``, not ``nn.Linear`` modules, so they need the same
-    transpose without the module wrapper.
-    """
-    return weight.t().contiguous()
-
-
 #: The oracle's device. Every builder takes one; this is what the tests pass.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -237,12 +227,12 @@ def full_mixer_constants(layer) -> dict:
     attention = layer.self_attn
     return {
         "gamma_in": layer.input_layernorm.weight,
-        "w_qg": linear_weight(attention.q_proj),
-        "w_k": linear_weight(attention.k_proj),
-        "w_v": linear_weight(attention.v_proj),
+        "w_qg": attention.q_proj.weight,
+        "w_k": attention.k_proj.weight,
+        "w_v": attention.v_proj.weight,
         "gamma_q": attention.q_norm.weight,
         "gamma_k": attention.k_norm.weight,
-        "w_o": linear_weight(attention.o_proj),
+        "w_o": attention.o_proj.weight,
     }
 
 
@@ -251,19 +241,17 @@ def linear_mixer_constants(layer) -> dict:
     mixer = layer.linear_attn
     return {
         "gamma_in": layer.input_layernorm.weight,
-        "w_in_qkv": linear_weight(mixer.in_proj_qkv),
-        "w_in_z": linear_weight(mixer.in_proj_z),
-        "w_in_b": linear_weight(mixer.in_proj_b),
-        "w_in_a": linear_weight(mixer.in_proj_a),
-        # nn.Conv1d keeps a singleton in-channel axis a depthwise convolution
-        # never uses; the kernel takes [channels, kernel].
-        "conv_w": mixer.conv1d.weight.squeeze(1).contiguous(),
+        "w_in_qkv": mixer.in_proj_qkv.weight,
+        "w_in_z": mixer.in_proj_z.weight,
+        "w_in_b": mixer.in_proj_b.weight,
+        "w_in_a": mixer.in_proj_a.weight,
+        "conv_w": mixer.conv1d.weight,
         "a_log": mixer.A_log,
         "dt_bias": mixer.dt_bias,
         # `Qwen3_5MoeRMSNormGated` scales by its weight directly, not by
         # 1 + weight the way the layer-level norms do.
         "gamma_gdn": mixer.norm.weight,
-        "w_out": linear_weight(mixer.out_proj),
+        "w_out": mixer.out_proj.weight,
     }
 
 
@@ -272,27 +260,24 @@ def moe_constants(layer) -> dict:
 
     Hugging Face keeps the two SwiGLU halves in one ``gate_up_proj`` tensor, rows
     ``[:intermediate]`` the gate and ``[intermediate:]`` the up projection -- one
-    ``F.linear`` then a chunk. Splitting them here is weight preprocessing, the
-    same kind as transposing a projection, and it belongs on this side.
+    ``F.linear`` then a chunk. The shipped table splits it as it is read.
     """
     block = layer.mlp
-    width = CONFIG.moe_intermediate_size
-    gate_up = block.experts.gate_up_proj
     return {
         "gamma_post": layer.post_attention_layernorm.weight,
-        "w_gate": gate_up[:, :width, :].contiguous(),
-        "w_up": gate_up[:, width:, :].contiguous(),
-        "w_down": block.experts.down_proj.contiguous(),
-        "w_shared_gate": matrix_weight(block.shared_expert.gate_proj.weight),
-        "w_shared_up": matrix_weight(block.shared_expert.up_proj.weight),
-        "w_shared_down": matrix_weight(block.shared_expert.down_proj.weight),
-        "w_shared_scale": matrix_weight(block.shared_expert_gate.weight),
+        "w_gate": block.experts.gate_up_proj,
+        "w_up": block.experts.gate_up_proj,
+        "w_down": block.experts.down_proj,
+        "w_shared_gate": block.shared_expert.gate_proj.weight,
+        "w_shared_up": block.shared_expert.up_proj.weight,
+        "w_shared_down": block.shared_expert.down_proj.weight,
+        "w_shared_scale": block.shared_expert_gate.weight,
     }
 
 
 def router_constants(layer) -> dict:
     """*layer*'s router weight, keyed the way ``Qwen3_5Router`` names it."""
-    return {"w_router": matrix_weight(layer.mlp.gate.weight)}
+    return {"w_router": layer.mlp.gate.weight}
 
 
 def moe_weights(layer) -> dict:
@@ -320,12 +305,16 @@ def load_mixer(kind: str, layer):
     them on, and the activations a caller then passes have to be on that one too.
     """
     module, constants = _MIXER[kind]
-    return module.cloned().load(DictResource(constants(layer)))
+    return module.cloned().load(
+        DictResource(constants(layer), alias=hf_layout_only(CONFIG))
+    )
 
 
 def load_moe(layer):
     """The MoE Module with *layer*'s block weights bound, the router's included."""
-    return Qwen3_5MoE.cloned().load(DictResource(moe_weights(layer)))
+    return Qwen3_5MoE.cloned().load(
+        DictResource(moe_weights(layer), alias=hf_layout_only(CONFIG))
+    )
 
 
 def load_layer(kind: str, layer):
@@ -339,7 +328,7 @@ def load_layer(kind: str, layer):
     _module, constants = _MIXER[kind]
     flat = {f"mixer.{name}": w for name, w in constants(layer).items()}
     flat.update({f"moe.{name}": w for name, w in moe_weights(layer).items()})
-    return LAYER_TYPE[kind].cloned().load(DictResource(flat))
+    return LAYER_TYPE[kind].cloned().load(DictResource(flat, alias=hf_layout_only(CONFIG)))
 
 
 def moe_oracle(layer, hidden) -> torch.Tensor:

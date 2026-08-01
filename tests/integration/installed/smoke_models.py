@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tilefoundry.cli import data, models
 
 REPO = Path(__file__).resolve().parents[3]
@@ -56,6 +58,11 @@ def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, tm
         and "Qwen3-1.7B's dense decoder layer and the stack that closes it" in line
         for line in lines[1:]
     )
+    assert any(
+        line.startswith("hf_alias.py")
+        and "The published checkpoint as this model's weights" in line
+        for line in lines[1:]
+    )
     assert any(line.startswith("config.json") and line.endswith("-") for line in lines[1:])
 
     copied = tmp_path / "mine"
@@ -90,6 +97,26 @@ def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, tm
     )
     assert checkout.returncode == 0, checkout.stderr
     assert _listed_names(checkout.stdout) == _listed_names(done.stdout)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("qwen3_1_7b", "qwen2_5_1_5b", "gemma2_2b", "minicpm3_4b", "qwen3_5_35b_a3b"),
+)
+def test_models_source_lists_each_shipped_hf_alias(tf, capsys, name) -> None:
+    """A raw-checkpoint model ships its own table, in manifest order."""
+    done = tf("models", name, "--source")
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert lines[1].startswith("model.py")
+    assert any(
+        line.startswith("hf_alias.py")
+        and "The published checkpoint as this model's weights" in line
+        for line in lines[2:]
+    )
+
+    assert models.run_models(name, source=True) == 0
+    assert _listed_names(capsys.readouterr().out) == _listed_names(done.stdout)
 
 
 def test_models_source_follows_the_manifest_without_importing_files(

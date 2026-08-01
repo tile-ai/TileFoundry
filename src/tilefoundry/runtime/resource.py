@@ -1,6 +1,6 @@
 """``RuntimeResource`` — checkpoint access surface: load a tensor (or group)
 by name, scope to a child namespace. ``DictResource`` is an in-memory/test
-double; ``SafetensorsResource`` reads a repacked safetensors checkpoint
+double; ``SafetensorsResource`` reads a safetensors checkpoint
 directory. See docs/spec/runtime.md §1.5.
 """
 from __future__ import annotations
