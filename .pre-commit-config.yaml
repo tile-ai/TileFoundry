@@ -1,3 +1,4 @@
+exclude: '^examples/'
 repos:
   - repo: local
     hooks:

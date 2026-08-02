@@ -75,6 +75,8 @@ markers = [
 ]
 
 [tool.ruff]
+# Snapshot examples are evidence; reformatting them to satisfy lint would change that evidence.
+extend-exclude = ["examples"]
 line-length = 100
 target-version = "py312"
 
