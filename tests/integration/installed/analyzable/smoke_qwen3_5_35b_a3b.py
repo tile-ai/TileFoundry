@@ -11,6 +11,7 @@ import json
 
 import contract
 import pytest
+import torch
 
 from tests.models.qwen3_5_35b_a3b import reference
 
@@ -225,5 +226,97 @@ def test_the_moe_block_matches_hugging_face(tf, shipped_source, tmp_path) -> Non
         weights=contract.nested_constants(loaded),
         expected=(want,),
         held=(contract.three_roundings(want),),
+    )
+
+
+def _linear_disagrees(tf, work, source, step, loaded, activations) -> None:
+    """A perturbed linear step has to move away from the oracle it otherwise meets."""
+    want = reference.linear_mixer_oracle(step)
+    want_conv, want_state = reference.advanced_state_oracle(step)
+    entry = want_conv[..., -1:]
+
+    contract.disagreed(
+        tf, work, source, LINEAR, "linear_attention",
+        activations=activations,
+        weights=contract.nested_constants(loaded),
+        expected=(want, entry, want_state),
+        held=(
+            contract.three_roundings(want),
+            contract.three_roundings(entry),
+            contract.three_roundings(want_state),
+        ),
+    )
+
+
+def test_the_prior_state_is_read(tf, shipped_source, tmp_path) -> None:
+    """The recurrent matrix handed in reaches the answer.
+
+    A linear-attention step has no `ctx_len` in its signature, so nothing about its
+    shape says it consulted the context at all -- an implementation that dropped the
+    incoming matrix would produce a plausible tensor of the right size. Measured by
+    zeroing the matrix: that has to move the answer away from the oracle the
+    unperturbed step meets, or the kernel is not reading it and every agreement above
+    would be an agreement about one token in isolation.
+    """
+    step = reference.linear_step(device="cpu")
+    loaded = reference.load_mixer("linear_attention", step.layer)
+
+    _linear_disagrees(
+        tf, tmp_path, shipped_source(MODEL), step, loaded,
+        (step.hidden_new, step.conv_state, torch.zeros_like(step.recurrent_state)),
+    )
+
+
+def test_the_convolution_window_is_read(tf, shipped_source, tmp_path) -> None:
+    """The convolution's left context reaches the answer.
+
+    The same argument as the recurrent matrix, for the other half of the state: at
+    one token per step, a kernel that convolved only the current column would be a
+    kernel with a kernel size of one, and nothing about its output shape would say so.
+    """
+    step = reference.linear_step(device="cpu")
+    loaded = reference.load_mixer("linear_attention", step.layer)
+
+    _linear_disagrees(
+        tf, tmp_path, shipped_source(MODEL), step, loaded,
+        (step.hidden_new, torch.zeros_like(step.conv_state), step.recurrent_state),
+    )
+
+
+def test_the_output_gate_is_applied(tf, shipped_source, tmp_path) -> None:
+    """Half of `q_proj`'s fan-out never reaches a score, and this measures that it
+    reaches the output instead.
+
+    The gate is a sigmoid, so it lies strictly between 0 and 1: an implementation
+    that ignored it would be uniformly larger, and one that applied it twice
+    uniformly smaller. Both are caught by running the same step against a checkpoint
+    whose gate half is zeroed -- every gate becomes sigmoid(0) = 1/2, so if the
+    answer did not move, the gate is not being read.
+    """
+    step = reference.full_step(device="cpu")
+    loaded = reference.load_mixer("full_attention", step.layer)
+    shape = reference.CONFIG
+    want = reference.full_mixer_oracle(step)
+    want_key, want_value = reference.appended_cache_oracle(step)
+
+    # w_qg is [1, hidden, 2 * heads * head_dim] with the gate interleaved per head.
+    neutral = dict(loaded.constants)
+    gated = neutral["w_qg"].clone().reshape(
+        1, shape.hidden_size, shape.num_attention_heads, 2 * shape.head_dim
+    )
+    gated[..., shape.head_dim:] = 0.0
+    neutral["w_qg"] = gated.reshape(loaded.constants["w_qg"].shape)
+
+    contract.disagreed(
+        tf, tmp_path, shipped_source(MODEL), FULL, "full_attention",
+        activations=(step.hidden_new, *step.mixer_acts),
+        weights=neutral,
+        expected=(want, want_key[:, step.ctx_len:], want_value[:, step.ctx_len:]),
+        held=(
+            contract.three_roundings(want),
+            contract.three_roundings(want_key[:, step.ctx_len:]),
+            contract.three_roundings(want_value[:, step.ctx_len:]),
+        ),
+        dims={"ctx_len": step.ctx_len},
     )
 
