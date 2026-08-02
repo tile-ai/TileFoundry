@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -30,6 +31,28 @@ _KINDS = {
 }
 
 
+def _distribution_directory(known: Kind) -> Path | None:
+    """Find *known* through the installed distribution's data-file records."""
+    try:
+        installed = distribution("tilefoundry")
+    except PackageNotFoundError:
+        return None
+
+    records = installed.files or ()
+    prefix = ("share", "tilefoundry", known.installed)
+    for record in records:
+        parts = record.parts
+        for start in range(len(parts) - len(prefix) + 1):
+            if parts[start : start + len(prefix)] != prefix:
+                continue
+            found = Path(installed.locate_file(record))
+            for _ in parts[start + len(prefix) :]:
+                found = found.parent
+            if found.is_dir():
+                return found
+    return None
+
+
 def directory(kind: str) -> Path:
     """The directory *kind* is read from: this checkout when it is one, else the
     installation. The checkout comes first because it is the only place the two
@@ -44,6 +67,9 @@ def directory(kind: str) -> Path:
 
     installed = Path(get_path("data")) / "share" / "tilefoundry" / known.installed
     if installed.is_dir():
+        return installed
+    installed = _distribution_directory(known)
+    if installed is not None:
         return installed
     raise FileNotFoundError(f"installed TileFoundry {kind} directory was not found")
 
