@@ -149,7 +149,7 @@ def test_the_json_report_carries_the_same_facts_as_the_text(routing, capsys) -> 
     assert outputs[0]["fns"][0] == {
         "fn": "rel_l2", "max": 1e-3, "rel_l2": outputs[0]["fns"][0]["rel_l2"], "passed": True
     }
-    assert reported["verification"] == {"model": "qwen3_5_35b_a3b", "level": "L1"}
+    assert "verification" not in reported
 
 
 @pytest.mark.parametrize(
@@ -269,19 +269,24 @@ def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) ->
     assert "4096, 262144)" in refused
 
 
-def test_a_model_below_the_oracle_level_passes_with_a_warning(routing, capsys) -> None:
-    """PASS against a Module is not agreement with what the Module describes."""
+def test_a_passing_check_carries_no_verification_ranking(routing, capsys) -> None:
+    """A PASS says the candidate matches this Module, and claims nothing further.
+
+    It used to append a ranking read out of the shipped catalog. That was a claim
+    about tests, carried in data the command cannot check, and it outlived the test
+    it named -- so it is gone, and the warnings that are about *this run* stay.
+    """
     assert cli.main(_routing_argv(
         routing, "indices", "--out", "output[0]", "--fn", "rel_l2", "--max", "1e-3",
         "--out", "output[1]", "--fn", "equal",
     )) == 0
     reported = capsys.readouterr().out
 
-    assert "warning: qwen3_5_35b_a3b has no L3 verification on record" in reported
-    assert "not\n           that the Module matches what it describes" in reported
+    assert "PASS" in reported
+    for absent in ("verification on record", "L1", "L2", "L3", "usable as an oracle"):
+        assert absent not in reported
     assert "--inputs random makes each activation independently" not in reported
     assert "FAIL says the candidate and reference differ" not in reported
-
 
 def test_a_random_input_fail_against_a_reference_states_its_limits(routing, capsys) -> None:
     """A failed random-input comparison qualifies both limits through the CLI."""

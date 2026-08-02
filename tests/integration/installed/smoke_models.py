@@ -19,15 +19,17 @@ def _listed_names(output: str) -> set[str]:
     return {line.split(maxsplit=1)[0] for line in output.splitlines()[1:]}
 
 
-def test_models_separates_oracles_from_everything_else(tf) -> None:
+def test_models_lists_every_shipped_model_and_ranks_none(tf) -> None:
+    """The listing says what ships and how big each forest is, and grades nothing."""
     done = tf("models")
     assert done.returncode == 0, done.stderr
     listed = done.stdout
 
-    assert "usable as an oracle" in listed and "not usable as an oracle" in listed
     for name in ("qwen3_1_7b", "kimi_linear_48b_a3b"):
         assert name in listed
-    assert "L1" in listed and "L2" in listed and "L3" in listed
+    assert "leaf modules" in listed and "functions" in listed
+    for absent in ("usable as an oracle", "Levels:", "L1", "L2", "L3"):
+        assert absent not in listed
 
 
 def test_models_renders_the_whole_forest_with_leaf_modules_marked(tf) -> None:

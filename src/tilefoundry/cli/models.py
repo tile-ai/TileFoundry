@@ -32,29 +32,12 @@ def _counts(model: dict[str, Any]) -> str:
 
 
 def render_models() -> str:
-    """The inventory, oracles first and everything else marked as not one."""
-    known = catalog()
-    oracle = known["oracle_level"]
-    models = known["models"]
+    """Every model the installation describes, with the size of each forest."""
+    models = catalog()["models"]
     width = max(len(model["name"]) for model in models)
 
     lines = [f"Models in {data.directory('models')}:", ""]
-    for heading, chosen in (
-        (f"Verified at {oracle}, usable as an oracle:",
-         [m for m in models if m["level"] == oracle]),
-        ("Below that, and so not usable as an oracle:",
-         [m for m in models if m["level"] != oracle]),
-    ):
-        lines.append(heading)
-        if not chosen:
-            lines += ["  none", ""]
-            continue
-        for model in chosen:
-            lines.append(f"  {model['level']}  {model['name']:<{width}}  {_counts(model)}")
-        lines.append("")
-    lines.append("Levels:")
-    for level, meaning in sorted(known["levels"].items()):
-        lines.append(f"  {level}  {meaning}")
+    lines += [f"  {model['name']:<{width}}  {_counts(model)}" for model in models]
     return "\n".join(lines) + "\n"
 
 
@@ -84,11 +67,7 @@ def render_model(name: str) -> str:
     and how many it stands for.
     """
     model = _find(name)
-    lines = [
-        f"{model['name']}  ({model['level']}: {model['evidence']})",
-        _counts(model),
-        "",
-    ]
+    lines = [model["name"], _counts(model), ""]
     for root in model["modules"]:
         lines += _tree(root, 0)
     return "\n".join(lines) + "\n"

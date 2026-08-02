@@ -1,17 +1,10 @@
 {
-  "levels": {
-    "L1": "per-op or per-layer against Hugging Face with random weights",
-    "L2": "the whole chain against Hugging Face with synthetic or random weights",
-    "L3": "the whole chain against a real checkpoint and a real tokenizer, agreeing token for token"
-  },
   "models": [
     {
       "counts": {
         "functions": 519,
         "leaf_modules": 86
       },
-      "evidence": "tests/models/deepseek_v4_flash/test_causal_lm_e2e.py prepares a fabricated checkpoint and compares the twin against the evaluator",
-      "level": "L2",
       "modules": [
         {
           "functions": [
@@ -116,8 +109,6 @@
         "functions": 107,
         "leaf_modules": 26
       },
-      "evidence": "tests/models/gemma2_2b/ compares the full stack against Hugging Face at random weights",
-      "level": "L2",
       "modules": [
         {
           "functions": [
@@ -178,8 +169,6 @@
         "functions": 8,
         "leaf_modules": 3
       },
-      "evidence": "structure, types, executability and scheduling only; KDA has no obtainable oracle, so its numbers are not compared",
-      "level": "L1",
       "modules": [
         {
           "functions": [],
@@ -233,8 +222,6 @@
         "functions": 251,
         "leaf_modules": 62
       },
-      "evidence": "tests/models/minicpm3_4b/ compares the full stack against Hugging Face at random weights",
-      "level": "L2",
       "modules": [
         {
           "functions": [
@@ -331,8 +318,6 @@
         "functions": 115,
         "leaf_modules": 28
       },
-      "evidence": "tests/models/qwen2_5_1_5b/ compares the full stack against Hugging Face at random weights",
-      "level": "L2",
       "modules": [
         {
           "functions": [
@@ -395,8 +380,6 @@
         "functions": 115,
         "leaf_modules": 28
       },
-      "evidence": "tests/models/qwen3_1_7b/test_decoder.py compares all 28 layers against Hugging Face at random weights; the L3 case exists but has never run against a real mount",
-      "level": "L2",
       "modules": [
         {
           "functions": [
@@ -459,8 +442,6 @@
         "functions": 393,
         "leaf_modules": 80
       },
-      "evidence": "declared, boundary-complete submodules rather than a stack; no complete-stack reference is built at this size",
-      "level": "L1",
       "modules": [
         {
           "functions": [
@@ -1448,6 +1429,5 @@
       ],
       "name": "qwen3_5_35b_a3b"
     }
-  ],
-  "oracle_level": "L3"
+  ]
 }

@@ -26,16 +26,20 @@ def test_the_shipped_catalog_matches_the_live_corpus() -> None:
     )
 
 
-def test_every_model_states_a_level_and_the_evidence_for_it() -> None:
-    """A level with no evidence is a claim nobody can check, and a promotion to the
-    oracle level has to name the run that earned it."""
-    shipped = json.loads(_SHIPPED.read_text(encoding="utf-8"))
-    described = {model["name"] for model in shipped["models"]}
+def test_the_catalog_describes_every_model_and_ranks_none() -> None:
+    """Every model in the corpus is described, and nothing grades it.
 
-    assert described == set(MODELS)
+    The second half is the point: a verification ranking carried in shipped data is
+    a claim about tests that the shipped artifact cannot check, and one outlived the
+    test it named. So no record may carry a level, an evidence string or an oracle
+    identity, and this fails if one comes back.
+    """
+    shipped = json.loads(_SHIPPED.read_text(encoding="utf-8"))
+
+    assert {model["name"] for model in shipped["models"]} == set(MODELS)
+    assert set(shipped) == {"models"}
     for model in shipped["models"]:
-        assert model["level"] in shipped["levels"], model
-        assert len(model["evidence"].split()) >= 5, model
+        assert set(model) == {"name", "counts", "modules"}, model
 
 
 def _tally(node: dict) -> tuple[int, int]:

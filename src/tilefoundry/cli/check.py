@@ -12,7 +12,6 @@ from typing import Any, Sequence
 
 import torch
 
-from tilefoundry.cli import data
 from tilefoundry.cli.source import load_namespace, parse_dims, select_ir, suggested_extents
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module
@@ -489,24 +488,6 @@ def _pin(function: Function, stated: dict[str, int]) -> tuple[dict[str, int], li
     return bound, unstated
 
 
-def _level(path: Path) -> dict[str, Any] | None:
-    """The validation level on record for the model this file belongs to."""
-    try:
-        catalog = json.loads(data.path("models", "catalog.json").read_text(encoding="utf-8"))
-    except OSError:
-        return None
-    for model in catalog["models"]:
-        if model["name"] == path.parent.name:
-            return {
-                "model": model["name"],
-                "level": model["level"],
-                "evidence": model["evidence"],
-                "oracle": model["level"] == catalog["oracle_level"],
-                "levels": catalog["levels"],
-            }
-    return None
-
-
 def _sides(target: Target, resource, expected: Sequence[str] | None, device: str):
     """The two callables to compare, and how to say what the reference was.
 
@@ -705,7 +686,6 @@ def _failure_warnings(runs: Sequence[dict[str, Any]], input_kind: str | None) ->
 def _render(
     target: Target,
     runs: list[dict[str, Any]],
-    level: dict[str, Any] | None,
     warnings: Sequence[str],
 ) -> str:
     """The runs as a person reads them: what ran, what it measured, the verdict."""
@@ -770,14 +750,6 @@ def _render(
     passed = all(run["passed"] for run in runs)
     tally = f"  {sum(1 for run in runs if run['passed'])}/{len(runs)}" if len(runs) > 1 else ""
     lines.append(f"{'PASS' if passed else 'FAIL'}{tally}")
-    if passed and level is not None and not level["oracle"]:
-        lines += [
-            "",
-            f"  warning: {level['model']} has no {max(level['levels'])} verification on "
-            f"record ({level['level']}: {level['evidence']}).",
-            "           PASS here means your implementation matches this Module — not",
-            "           that the Module matches what it describes.",
-        ]
     for warning in warnings:
         wrapped = textwrap.wrap(warning, width=74)
         lines += ["", f"  warning: {wrapped[0]}", *(f"           {line}" for line in wrapped[1:])]
@@ -804,7 +776,6 @@ def run_check(arguments: argparse.Namespace) -> int:
         _one_run(target, combination, expect, arguments, device)
         for combination in _combinations(stated)
     ]
-    level = _level(target.path)
     warnings = _failure_warnings(runs, arguments.inputs)
 
     if arguments.json:
@@ -813,13 +784,11 @@ def run_check(arguments: argparse.Namespace) -> int:
             "runs": runs,
             "passed": all(run["passed"] for run in runs),
         }
-        if level is not None:
-            payload["verification"] = {"model": level["model"], "level": level["level"]}
         if warnings:
             payload["warnings"] = warnings
         sys.stdout.write(json.dumps(payload, indent=2, sort_keys=False) + "\n")
     else:
-        sys.stdout.write(_render(target, runs, level, warnings))
+        sys.stdout.write(_render(target, runs, warnings))
     return 0 if all(run["passed"] for run in runs) else 1
 
 

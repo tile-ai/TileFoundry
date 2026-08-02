@@ -149,9 +149,6 @@ bounds the caller stated.
   - The functions and their bounds in `--help` MUST be generated from the
     predicates themselves, so a predicate cannot exist without being listed.
   - Text and `--json` MUST carry the same facts.
-  - A target whose validation level is below the oracle level MUST still be
-    checked, and MUST carry a warning that agreement with a Module is not
-    agreement with what the Module describes.
 
 ## Tutorial
 
@@ -182,8 +179,8 @@ granularity.
 
 ## Models
 
-`models` reports the models this project has described and how far each has been
-verified, and hands back one model's authored source as a reference to copy from.
+`models` reports the models this project has described, and hands back one model's
+authored source as a reference to copy from.
 
 It reads a shipped catalog and MUST NOT import or execute a model's source. An
 installed package carries the authored sources as read-only data and nothing that
@@ -191,15 +188,10 @@ could make them importable, so executing them is not available; and a reference
 that runs before it can be read is a reference that decides what it describes.
 
 - constraints:
-  - With no `NAME`, output MUST list every described model with its verification
-    level and its counts, MUST present the models that can serve as an oracle
-    separately from those that cannot, and MUST state what each level means.
-  - A level below the oracle level MUST be reported rather than hidden. A model
-    withheld for being below the bar is a model somebody rebuilds; the ones below
-    it remain useful as operator-level references.
-  - A model MUST NOT be recorded at the oracle level except from a committed
-    record of a run against a real checkpoint. A test that skipped because its
-    inputs were absent MUST NOT be read as evidence.
+  - With no `NAME`, output MUST list every described model with its counts. The
+    catalog states what each model *is*, not how well it is verified: a ranking
+    carried in shipped data is a claim about tests that the shipped artifact
+    cannot check, and one that outlived the test it named is worse than none.
   - With a `NAME`, output MUST be that model's whole forest: every root it
     publishes, each Module's own functions with their signatures beneath it, and
     the leaf Modules marked. A leaf is a Module with no child Modules, not

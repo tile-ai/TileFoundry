@@ -2,8 +2,7 @@
 
 Run as `python -m scripts.generate_model_catalog`; it imports the corpus, so it
 only resolves as a module of this repository. Forest and counts come from the
-models; validation levels come from `tests/models/verified.json`. What the catalog
-is for is in [cli.md](../docs/spec/cli.md).
+models themselves. What the catalog is for is in [cli.md](../docs/spec/cli.md).
 """
 
 from __future__ import annotations
@@ -115,27 +114,15 @@ def catalog() -> dict[str, Any]:
 
     from tests.models.registry import MODELS  # noqa: PLC0415
 
-    verified = json.loads((_MODELS_ROOT / "verified.json").read_text(encoding="utf-8"))
     models = []
     for name in sorted(MODELS):
-        record = verified["models"][name]
         counts = {"leaf_modules": 0, "functions": 0}
         roots = _grouped([
             _node(root, counts)
             for root in _roots(importlib.import_module(f"tests.models.{name}.model"))
         ])
-        models.append({
-            "name": name,
-            "level": record["level"],
-            "evidence": record["evidence"],
-            "counts": counts,
-            "modules": roots,
-        })
-    return {
-        "levels": verified["levels"],
-        "oracle_level": verified["oracle_level"],
-        "models": models,
-    }
+        models.append({"name": name, "counts": counts, "modules": roots})
+    return {"models": models}
 
 
 def main(argv: list[str] | None = None) -> int:
