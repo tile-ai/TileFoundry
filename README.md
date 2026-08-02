@@ -10,9 +10,3 @@
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
-## Known Limitations
-
-The 0.0.1 CUDA code-generation path requires a source checkout. Installed distributions do
-not carry the project `include/` headers or the Cutlass submodule, so generated CUDA modules
-cannot be linked from the wheel alone.
