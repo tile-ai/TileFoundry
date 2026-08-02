@@ -6,6 +6,8 @@ import json
 import contract
 import pytest
 
+from tests.models.qwen2_5_1_5b import reference
+
 MODEL = "qwen2_5_1_5b"
 CASES = contract.model_cases(MODEL)
 
@@ -132,3 +134,48 @@ def test_the_command_reads_the_machine_off_the_shipped_source(
     done = contract.capabilities(tf, shipped_source(MODEL), case, planned.selector)
 
     assert done.stdout.strip()
+
+# ── against Hugging Face ─────────────────────────────────────────────────────
+def test_the_decode_step_and_the_cache_entry_it_hands_back(
+    tf, shipped_source, tmp_path
+) -> None:
+    """One decode step of one layer, and the state the step hands back.
+
+    The boundary: the whole layer -- the norms, GQA attention over the cache and
+    the new token, the residual and the MLP -- against `Qwen2DecoderLayer.forward`.
+
+    The returned key and value are this token's cache entry: they are compared
+    against a cache rebuilt over a context one token longer, not against the step's
+    own inputs, so a step that returned its inputs unchanged fails. The cache handed
+    in is the oracle's own, so the appended entry is the only computed part and the
+    one whose precision the bound follows.
+
+    The command requires a predicate for every output a function returns, so the
+    step's own output is judged here too rather than discarded.
+    """
+    drawn = reference.decode_step_inputs(device="cpu")
+    source, case = shipped_source(MODEL), CASES[0]
+    want_out = reference.decode_step_oracle(drawn)
+    want_k, want_v = reference.appended_cache_oracle(drawn)
+    entry_k, entry_v = want_k[:, drawn.ctx_len:], want_v[:, drawn.ctx_len:]
+
+    contract.compared(
+        tf, tmp_path, source, case, "decoder_layer",
+        activations=drawn.args,
+        weights=drawn.loaded.constants,
+        expected=(want_out, entry_k, entry_v),
+        held=(
+            # The layer's own output is a whole fused Function against the Hugging
+            # Face component it reproduces, so it carries that contract's three
+            # roundings rather than a single boundary's one: measured, it lands two
+            # ulps out. The cache entry is one boundary and holds at one, which is
+            # the bound the in-process comparison used and the only one it stated.
+            contract.three_roundings(want_out),
+            contract.one_rounding(entry_k),
+            contract.one_rounding(entry_v),
+        ),
+        dims={"ctx_len": drawn.ctx_len},
+    )
+
+    assert want_k.shape[1] == drawn.ctx_len + 1
+    assert entry_k.shape[1] == 1 and entry_v.shape[1] == 1

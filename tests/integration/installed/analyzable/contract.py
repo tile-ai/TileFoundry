@@ -13,10 +13,15 @@ level that stops being declared has nowhere to come from and the command fails.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import torch
+from safetensors.torch import save_file
+
 from tests.models.corpus import FunctionCase, ModelCase
+from tests.models.decode_oracle import one_ulp_at
 from tests.models.registry import cases_of
 
 #: The analyses the CLI offers as public flags, asked one at a time so each
@@ -129,6 +134,86 @@ def traffic_read(
     """How many bytes the memory analysis says one function reads from gmem."""
     report = reported(tf, source, case, selector, ("memory",), dims)
     return report["function_records"]["memory"]["traffic"]["gmem"]["read"]
+
+
+def one_rounding(want) -> tuple[str, dict[str, float]]:
+    """One representable step at *want*'s own scale, for a single primitive boundary."""
+    return "allclose", {"atol": one_ulp_at(want), "rtol": 0.0}
+
+
+def three_roundings(want) -> tuple[str, dict[str, float]]:
+    """Three, for a whole fused Function against the component it reproduces.
+
+    One uniform contract for every model here, not per-model or depth-scaled: the
+    Function rounds at each boundary it fuses.
+    """
+    return "allclose", {"atol": 3 * one_ulp_at(want), "rtol": 0.0}
+
+
+def exactly() -> tuple[str, dict[str, float]]:
+    """No tolerance. A gather or a copy reassociates nothing."""
+    return "equal", {}
+
+
+def _reached_through(case: ModelCase, selector: str) -> str:
+    """The Modules between the root and the function, as the checkpoint keys them.
+
+    ``check`` scopes the weights it reads to the child Modules the selector passes
+    through, so a checkpoint written for one of them has to key its tensors the same
+    way -- a bare weight name is not found at all.
+    """
+    inner = [part for part in (*case.scope.split("."), *selector.split(".")[:-1]) if part]
+    return f"{'.'.join(inner)}." if inner else ""
+
+
+def compared(
+    tf,
+    work: Path,
+    source: Path,
+    case: ModelCase,
+    selector: str,
+    *,
+    activations: Sequence,
+    weights: Mapping[str, object],
+    expected: Sequence,
+    held: Sequence[tuple[str, Mapping[str, float]]],
+    dims: Mapping[str, int] | None = None,
+):
+    """One ``check`` command: the shipped source against tensors produced here.
+
+    The oracle is run by the caller and written into *work*, so nothing long-lived
+    holds a frozen truth: a comparison that stopped agreeing cannot be made to pass
+    by an artifact somebody recorded once.
+
+    The weights travel as a checkpoint rather than as activations, because that is
+    the only door ``check`` has for them -- ``--input`` names the non-const
+    parameters, in the order the function declares them.
+    """
+    room = Path(tempfile.mkdtemp(dir=work))
+    argv = ["check", static(source, case, selector)]
+    for position, tensor in enumerate(activations):
+        path = room / f"in{position}.pt"
+        torch.save(tensor, path)
+        argv += ["--input", str(path)]
+    save_file(
+        {f"{_reached_through(case, selector)}{name}": value.contiguous()
+         for name, value in weights.items()},
+        str(room / "model.safetensors"),
+    )
+    argv += ["--ckpt", str(room), *dim_args(dims)]
+    for position, tensor in enumerate(expected):
+        path = room / f"want{position}.pt"
+        torch.save(tensor, path)
+        argv += ["--expected", str(path)]
+    for position, (predicate, bounds) in enumerate(held):
+        out = "output" if len(expected) == 1 else f"output[{position}]"
+        argv += ["--out", out, "--fn", predicate]
+        for bound, value in bounds.items():
+            argv += [f"--{bound}", repr(value)]
+
+    done = tf(*argv)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done
 
 
 def capabilities(tf, source: Path, case: ModelCase, selector: str):

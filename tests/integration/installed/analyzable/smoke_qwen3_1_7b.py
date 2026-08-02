@@ -14,6 +14,7 @@ import contract
 import pytest
 import torch
 
+from tests.models.qwen3_1_7b import reference
 from tests.models.qwen3_1_7b.model import published
 
 MODEL = "qwen3_1_7b"
@@ -141,6 +142,59 @@ def test_the_command_reads_the_machine_off_the_shipped_source(
     done = contract.capabilities(tf, shipped_source(MODEL), case, planned.selector)
 
     assert done.stdout.strip()
+
+
+# ── against Hugging Face ─────────────────────────────────────────────────────
+@pytest.mark.parametrize("ctx_len", [0, 24])
+def test_the_decode_step_and_the_cache_entry_it_hands_back(
+    tf, shipped_source, tmp_path, ctx_len
+) -> None:
+    """One decode step of one layer, and the state the step hands back.
+
+    The boundary: the fused `input_layernorm + self_attn` ending at `o_proj`, then
+    the layer's own output -- residual, post-attention norm and MLP -- against
+    `Qwen3DecoderLayer.forward`. Split that way so a disagreement localises to one
+    half instead of being reported against the composition.
+
+    The returned key and value are this token's cache entry: they are compared
+    against a cache rebuilt over a context one token longer, not against the step's
+    own inputs, so a step returning its inputs unchanged fails. A zero-length
+    context is the first step of a sequence, where the step attends only the token
+    it brings itself.
+
+    The command requires a predicate for every output a function returns, so the
+    attention half is judged on all three of its returns rather than only the first.
+    """
+    drawn = reference.decode_step_inputs(ctx_len=ctx_len, device="cpu")
+    source, case = shipped_source(MODEL), CASES[0]
+    want_k, want_v = reference.appended_cache_oracle(drawn)
+    entry_k, entry_v = want_k[:, ctx_len:], want_v[:, ctx_len:]
+    entry = (contract.one_rounding(entry_k), contract.one_rounding(entry_v))
+
+    want_attention = reference.attention_reference(
+        drawn.layer, drawn.hidden_ctx, drawn.hidden_new
+    )
+    contract.compared(
+        tf, tmp_path, source, case, "self_attention",
+        activations=drawn.args,
+        weights=drawn.loaded.constants,
+        expected=(want_attention, entry_k, entry_v),
+        held=(contract.one_rounding(want_attention), *entry),
+        dims={"ctx_len": ctx_len},
+    )
+
+    want_out = reference.decode_step_oracle(drawn)
+    contract.compared(
+        tf, tmp_path, source, case, "decoder_layer",
+        activations=drawn.args,
+        weights=drawn.loaded.constants,
+        expected=(want_out, entry_k, entry_v),
+        held=(contract.one_rounding(want_out), *entry),
+        dims={"ctx_len": ctx_len},
+    )
+
+    assert drawn.k_cache.shape[1] == ctx_len
+    assert entry_k.shape[1] == 1 and want_k.shape[1] == ctx_len + 1
 
 
 # ── the arithmetic ───────────────────────────────────────────────────────────
