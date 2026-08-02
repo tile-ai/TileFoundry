@@ -74,7 +74,7 @@ def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, in
     assert "flops" in analysed.stdout and "traffic gmem=" in analysed.stdout
 
     targetless = f"{copied / 'model.py'}:Qwen3_1_7B_DecoderLayer"
-    rejected = tf("analyze", targetless, "--compute-cost")
+    rejected = tf("analyze", targetless, "--compute-cost", "--dim", "ctx_len=128")
     assert rejected.returncode == 1
     assert "no target is declared" in rejected.stderr
 
