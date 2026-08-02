@@ -50,18 +50,21 @@ def test_spec_lists_and_prints_cache_update(tf) -> None:
 
 
 def test_spec_separates_two_sections_that_would_share_a_key(tf) -> None:
-    resolution = tf("spec", "parser", "shared-parsing-machinery/3.2")
-    assert resolution.returncode == 0, resolution.stderr
-    assert "Closure-then-registry callee resolution" in resolution.stdout
-    assert "classDiagram" not in resolution.stdout
+    """`tir.md` names a field `name` twice, under `SymbolRef` and under
+    `MmaOpSpec`. Each is reachable by its enclosing section; the bare key is
+    not, because it would have to pick one."""
+    symbol = tf("spec", "tir", "symbolref/name")
+    assert symbol.returncode == 0, symbol.stderr
+    assert "canonical name of a `PrimFunction`" in symbol.stdout
+    assert "uniquely identify the instruction" not in symbol.stdout
 
-    architecture = tf("spec", "parser", "parser-architecture/3.2")
-    assert architecture.returncode == 0, architecture.stderr
-    assert "classDiagram" in architecture.stdout
+    atom = tf("spec", "tir", "mmaopspec/name")
+    assert atom.returncode == 0, atom.stderr
+    assert "uniquely identify the instruction" in atom.stdout
 
-    bare = tf("spec", "parser", "3.2")
+    bare = tf("spec", "tir", "name")
     assert bare.returncode == 1
-    assert "no section '3.2'" in bare.stderr
+    assert "no section 'name'" in bare.stderr
 
 
 def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
