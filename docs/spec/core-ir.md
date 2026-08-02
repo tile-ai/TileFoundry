@@ -6,7 +6,7 @@ Defines the shared node algebra — `Module` / `Expr` / `IRMetadata` / `Op` /
 each extend it with their own `Function` container and their own `Op` / `Stmt`
 subclasses. Types carried by `Expr.type` are defined in [types](./types.md);
 the distributed layout layer is [shard](./shard.md); `Stmt` is not here — it
-lives only in [tir §1](./tir.md) as a TIR-only base class.
+lives only in [tir §1](./tir.md#1-tir-stmt-hierarchy) as a TIR-only base class.
 
 ```mermaid
 flowchart TB
@@ -62,7 +62,7 @@ class Module:
   - a `Module` owns its child subtree. Placing a child that already belongs to
     another owner MUST NOT change what the first owner's subtree resolves.
 
-- `parse_module` (see [parser §1](./parser.md)) returns a `Module`.
+- `parse_module` (see [parser §1](./parser.md#1-dsl-syntax)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
   `Module` whose `entry` is set to that function. A function that declares
   execution context of its own is therefore already a `Module`.
@@ -286,7 +286,8 @@ def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
 
 `Expr` always carries a `type`. The runtime class of `Expr.type` is
 one of `TensorType` / `TupleType` / `UnitType`
-([types §2 / §4 / §6](./types.md)). Concrete `Expr` subclasses are
+([types §2](./types.md#2-tensortype) / [types §4](./types.md#4-dim--symbolic-shape-dimensions)
+/ [types §6](./types.md#6-unittype)). Concrete `Expr` subclasses are
 not introduced per Op — value-producing Ops appear as `Call` nodes
 whose `target` carries the Op instance. Multi-output Ops produce a
 single `Call` whose `type` is `TupleType`; consumers project a single
@@ -338,7 +339,7 @@ class Tuple(Expr):
     changing its `TensorType`.
 
 `Tuple` is the value-level aggregate node; it pairs with `TupleType`
-([types §4](./types.md)) but is not the same — `Tuple` is an `Expr`
+([types §4](./types.md#4-dim--symbolic-shape-dimensions)) but is not the same — `Tuple` is an `Expr`
 in the IR graph, `TupleType` is the type carried by `Expr.type`.
 
 ### 2.3 `Op`
@@ -454,7 +455,7 @@ An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or
 `TupleType`. An Op is **effect-form** when it performs an in-place
 effect (e.g. `tir.memory.Copy` / `tir.cuda.nn.Mma`) and produces no
-readable value (`UnitType`, [types §6](./types.md)); in Stmt position
+readable value (`UnitType`, [types §6](./types.md#6-unittype)); in Stmt position
 it appears as `Evaluate(op, args)`
 ([tir §1.4](./tir.md#14-evaluate)).
 

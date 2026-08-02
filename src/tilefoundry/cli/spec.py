@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tilefoundry.cli import data
+from tilefoundry.utils.markdown import headings
 
 #: Topic names that differ from their document's filename.
 _SPEC_TOPICS = {
@@ -14,12 +15,8 @@ _SPEC_TOPICS = {
     "dsl": "hir",
 }
 
-#: A heading, outside a fenced block. `# example` inside a code fence is a comment.
-_HEADING = re.compile(r"^(#{2,6})\s+(.*?)\s*$")
-_FENCE = re.compile(r"^\s*(```|~~~)")
-
-#: A leading `1.` / `2.10.1` in a heading is that section's own key.
-_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.*)$")
+#: The document title is not a section anybody asks for by name.
+_ADDRESSABLE = 2
 
 
 def spec_path(topic: str) -> Path:
@@ -61,13 +58,12 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.replace("`", "").lower()).strip("-")
 
 
-def _key_and_title(heading: str) -> tuple[str, str]:
-    numbered = _NUMBER.match(heading)
-    if numbered:
-        return numbered.group(1), numbered.group(2)
+def _key_and_title(heading) -> tuple[str, str]:
+    if heading.number is not None:
+        return heading.number, heading.title
     # An unnumbered heading still has to be addressable: most of the op catalogue
     # is unnumbered, and a section nobody can name is a section nobody can read.
-    return _slug(heading), heading
+    return _slug(heading.title), heading.title
 
 
 def _disambiguate(bases: list[str], ancestries: list[tuple[str, ...]]) -> list[str]:
@@ -107,30 +103,23 @@ def _disambiguate(bases: list[str], ancestries: list[tuple[str, ...]]) -> list[s
 def sections(text: str) -> tuple[Section, ...]:
     """Every addressable section of *text*, in document order."""
     lines = text.splitlines()
-    headings: list[tuple[int, str, str, int]] = []
+    scanned: list[tuple[int, str, str, int]] = []
     ancestries: list[tuple[str, ...]] = []
     enclosing: dict[int, str] = {}
-    fenced = False
-    for number, line in enumerate(lines):
-        if _FENCE.match(line):
-            fenced = not fenced
+    for heading in headings(text):
+        if heading.level < _ADDRESSABLE:
             continue
-        if fenced:
-            continue
-        heading = _HEADING.match(line)
-        if heading is None:
-            continue
-        level = len(heading.group(1))
-        key, title = _key_and_title(heading.group(2))
+        level = heading.level
+        key, title = _key_and_title(heading)
         enclosing = {at: slug for at, slug in enclosing.items() if at < level}
         ancestries.append(tuple(enclosing[at] for at in sorted(enclosing)))
         enclosing[level] = _slug(title)
-        headings.append((level, key, title, number))
+        scanned.append((level, key, title, heading.line))
 
-    keys = _disambiguate([key for _, key, _, _ in headings], ancestries)
+    keys = _disambiguate([key for _, key, _, _ in scanned], ancestries)
     found = [
         Section(key=key, title=title, level=level, start=start, end=len(lines))
-        for key, (level, _, title, start) in zip(keys, headings)
+        for key, (level, _, title, start) in zip(keys, scanned)
     ]
     # A section ends where the next one at its level or above begins.
     for index, section in enumerate(found):

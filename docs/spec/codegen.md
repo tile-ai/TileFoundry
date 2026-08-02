@@ -67,11 +67,11 @@ def handler(call: Call, ctx: CodegenContext) -> None: ...   # Call (wrapped Op i
 
 - constraints:
   - a handler is registered on a target's emitter with the per-target
-    `register_codegen_*` decorator ([visitor-registry §6](./visitor-registry.md));
+    `register_codegen_*` decorator ([visitor-registry §6](./visitor-registry.md#6-instance-3--codegen_));
     dispatch (matching `Evaluate` and selecting the handler) is owned by
     visitor-registry.
 
-Dispatch is owned by [visitor-registry §6](./visitor-registry.md). A handler
+Dispatch is owned by [visitor-registry §6](./visitor-registry.md#6-instance-3--codegen_). A handler
 receives the `Call` (the wrapped Op inside `Evaluate`) plus a `CodegenContext`,
 and MUST emit through `ctx.emit(...)`; raw `print` / direct file writes are
 prohibited.
@@ -110,8 +110,7 @@ runtime template dispatches on those layouts at compile time; codegen does not
 select a tier, compute a per-tier parameter, or carry the selection on the TIR
 op. This is the codegen side of the runtime-owned dispatch principle, whose
 contract lives in [runtime.md §3](runtime.md#3-runtime-ops). The target-side
-emission that produces these calls is owned by
-[target §5](./target.md#5-target-driven-emission).
+emission that produces these calls is owned by [target](./target.md).
 
 ## 4. Codegen products
 

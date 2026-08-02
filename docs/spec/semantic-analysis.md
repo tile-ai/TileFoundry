@@ -13,7 +13,7 @@ this file links to it rather than redefining it.
 
 Type inference is registered per Op through
 `@register_typeinfer(<OpClass>)` and enforces its constraints via `ctx.error(...)`
-([visitor-registry §4](./visitor-registry.md)). A handler receives the op and a
+([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)). A handler receives the op and a
 typeinfer context, derives the output `IRType`, and reports violations through
 `ctx.error`. A `hir.Function` call composes these per-op rules under
 elaboration ([hir §1.1](./hir.md#11-function)): the callee body is
@@ -161,7 +161,7 @@ layout axis — it is a value state on the mesh axis that was reduced.
 
 A symmetric multi-input op (`Binary`, `MatMul`, `Concat`, `Stack`,
 `Mma`) resolves its output `storage` by **anchoring** on the concrete
-residency among its operands ([types §2](./types.md)). The rule does not
+residency among its operands ([types §2](./types.md#2-tensortype)). The rule does not
 appeal to any ordering of storage kinds and is independent of operand order:
 
 - An **unmaterialized** operand (`storage=umat`) does not constrain the

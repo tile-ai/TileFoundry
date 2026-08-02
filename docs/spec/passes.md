@@ -131,7 +131,7 @@ and dispatches on `type(stmt.callable)`.
 
 The visit-and-rewrite contract — including the `visit_Evaluate`
 entry form for TIR effect Ops — is owned by
-[visitor-mutator §7](./visitor-mutator.md).
+[visitor-mutator §7](./visitor-mutator.md#7-visitor-entry-forms-for-evaluate).
 
 ## 5. `PassManager`
 
@@ -368,8 +368,7 @@ Each lowered `PrimFunction` that references `ShapeOf(param, axis)`
 gains a hidden scalar parameter named `<param.name>_shape_<axis>` of
 `TensorType((), i32)`. The CUDA host wrapper extracts the value from
 the runtime tensor's shape; the parameter is invisible at the user
-FFI surface (see
-[target §6](./target.md#6-dispatch-and-shape-scalar-abi)).
+FFI surface (see [target](./target.md)).
 
 ### 7.2 `BufferizePass`
 

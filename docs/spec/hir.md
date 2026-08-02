@@ -5,7 +5,7 @@ Defines HIR, the pure SSA-as-DAG dataflow IR: its `Expr` constructs — the
 HIR Op subdirectories (math / tensor / nn / shape / sharding) — together with
 their HIR-specific typing rules. Mesh scope is authored in the parser
 ([parser](./parser.md)) and its `Mesh` / `Topology` are defined by shard
-([shard §5](./shard.md)); HIR links to those owners where a construct carries
+([shard §5](./shard.md#5-mesh)); HIR links to those owners where a construct carries
 the result.
 
 ```mermaid
@@ -23,7 +23,7 @@ flowchart TB
 
 ## 1. HIR Expr constructs
 
-HIR values are `Expr` nodes ([core-ir §2](./core-ir.md)): a `Function`
+HIR values are `Expr` nodes ([core-ir §2](./core-ir.md#2-expr)): a `Function`
 container, the loop-phi-shaped `GridRegionExpr`, and value `Op` calls. HIR is
 pure **SSA-as-DAG** — there are no `Region` / `Block` abstractions and no Stmt
 sequence; the single structured exception that carries loop-phi-shaped SSA is
@@ -54,7 +54,7 @@ class Function(Expr):
   - defined as a frozen dataclass — instances are immutable after construction.
   - a `Function` MUST NOT declare or override execution context. The `Module`
     that owns it declares the `Target` and the ordered `Topology` hierarchy its
-    body runs against ([core-ir §1](./core-ir.md)).
+    body runs against ([core-ir §1](./core-ir.md#1-module)).
 
 `Function.body` is a **single Expr** (usually a Call DAG, possibly
 nested inside a `GridRegionExpr`). HIR has no Stmt sequence; name
@@ -169,7 +169,7 @@ pure Call DAG.
 
 **Function typing rules.** Enforced by the registered
 `@register_typeinfer(Function)` body via `ctx.error(...)`
-([visitor-registry §4](./visitor-registry.md)):
+([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)):
 
 - `Function.body` is a single Expr; Stmts MUST NOT appear.
 - `Function.params` entries MUST be `Var`s.
@@ -215,7 +215,7 @@ freeze** below).
 - `variants` is a canonical IR field — it participates in structural
   equality, hashing, and canonical printing.
 - A variant MAY carry a **display label**, taken from the identifier its author
-  decorated ([parser.md §1.1](./parser.md#11-authoring-decorators)). The label is
+  decorated ([parser §1.1](./parser.md#11-decorators)). The label is
   non-canonical metadata: it MUST NOT participate in structural equality,
   hashing, or the canonical signature, and nothing MAY select an implementation
   by it. Printing a variant back to source MUST preserve it, since it is the only
@@ -293,16 +293,17 @@ class GridRegionExpr(Expr):
 `for i in range(...)` — lower to this one node; they share the domain
 `(start, extent, step)` and differ only in the loop-variable binding (`tile`
 2-arg binds a parser-side `RangeSlice`, everything else binds a scalar; see
-[parser §1.7](./parser.md)). `range` is not unrolled. `induction_var` ranges
+[parser §1.7](./parser.md#17-for-i-in-tile--for-i-in-range-hir-only)). `range` is not unrolled. `induction_var` ranges
 over `range(start, extent, step)`: `start` and `extent` are the **half-open**
 `[start, extent)` Python-range endpoints (so `extent` is the **stop** value,
 not a count). `start` defaults to `0` (`tile(...)` and `range(stop)`); the
 `range(start, stop[, step])` surface sets it. Each of `start` / `extent` /
-`step` is a `ShapeDim` ([types §4](./types.md)).
+`step` is a `ShapeDim` ([types §4](./types.md#4-dim--symbolic-shape-dimensions)).
 
 - When `start` / `extent` / `step` are static `int`, the trip count is
   recoverable from the node alone, without the parser-side
-  `RangeSlice` binding ([parser §5.6](./parser.md)).
+  `RangeSlice` binding
+  ([parser §1.7](./parser.md#17-for-i-in-tile--for-i-in-range-hir-only)).
 - Every `DimVar` referenced by a `ShapeDim` `start` / `extent` / `step` MUST
   be bound by the enclosing Function's parameter shapes. Resolution
   substitutes each such `DimVar` with the corresponding argument-shape
@@ -336,7 +337,8 @@ parser scope.
 
 `GridRegionExpr.type` is `TensorType` (single carry) or `TupleType`
 (multi-carry); the value is the Expr itself, not a `Call`.
-Parser-side rules: see [parser §5.6](./parser.md).
+Parser-side rules: see
+[parser §5.1](./parser.md#51-gridregionexpr-carry-out-lifting).
 
 **Minimal example** — loop-carried accumulator:
 
@@ -371,11 +373,11 @@ records its full contract (fields, typing / verifier rules, worked examples)
 in its catalog entry below; a **consensus Op** needs only one sentence or a
 grouped external reference, per [SPEC-RULES](../SPEC-RULES.md). The op name is
 the pointer — code carries no back-link to this catalog. `ParamDef` plumbing
-stays in code; the mechanism is owned by [core-ir §2.3](./core-ir.md).
+stays in code; the mechanism is owned by [core-ir §2.3](./core-ir.md#23-op).
 
 **HIR-specific typing hooks.** Each op's constraints are enforced by its
 registered `@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
-([visitor-registry §4](./visitor-registry.md)):
+([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)):
 
 - `Local(x)`: `x.type.layout` MUST be `ShardLayout`. The result
   shape contracts per the `Split` axes; dtype is preserved; layout
@@ -387,7 +389,7 @@ registered `@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
   the un-materialized (`strides=None`) parser sugar MUST be materialized by the
   owning typeinfer. The per-op `(layout, storage)` resolution table is in the
   `Reshard` op entry below.
-- Any HIR Op MUST be value-form ([core-ir §2.3](./core-ir.md));
+- Any HIR Op MUST be value-form ([core-ir §2.3](./core-ir.md#23-op));
   emitting an effect-form Call into HIR is a verify error.
 
 Generic, analysis-wide typing behavior is owned by
@@ -403,7 +405,7 @@ op that changes a value's layout / mesh.
 
 Pointwise arithmetic and comparison, torch semantics with TileFoundry
 type-promotion. User-callable names (`add` / `cmp_eq` / `logical_and` / …) are
-surface aliases ([core-ir §2.3](./core-ir.md)) over the kinded Ops; there are no
+surface aliases ([core-ir §2.3](./core-ir.md#23-op)) over the kinded Ops; there are no
 per-name IR classes.
 [torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
 
@@ -436,7 +438,7 @@ class Binary(Op):
   - Values follow torch pointwise semantics; dtypes do not promote. Both operands
     MUST already carry the same `dtype`, and typeinfer MUST reject a mismatch. A
     Python float scalar is given the other operand's float dtype by the authoring
-    surface, before it is an operand at all ([parser §1.9](./parser.md)); a Python
+    surface, before it is an operand at all ([parser §1.9](./parser.md#19-compile-time-values)); a Python
     integer is not.
   - The elementwise `min` / `max` kinds are also surfaced as `minimum` / `maximum`.
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
@@ -751,7 +753,7 @@ class TopK(Op):
 - constraints:
   - The result is a `(values, indices)` tuple; both shrink the selected axis to
     length `k`; `values` keep `x`'s dtype and `indices` are `i64`.
-  - `k` is a `ShapeDim` ([types §4](./types.md)): a static `int`, or a dynamic
+  - `k` is a `ShapeDim` ([types §4](./types.md#4-dim--symbolic-shape-dimensions)): a static `int`, or a dynamic
     k derived from a context-length `DimVar` (e.g. `dim_min(512, CTX_LEN //
     4)`) — a first-class value propagated as the selected axis's symbolic
     length in the output shape, not a pad+mask workaround. `k` MUST satisfy
@@ -909,7 +911,7 @@ class RoPE(Op):
 #### `ir/hir/shape/`
 
 Shape-level Ops on whole shape values (per-axis dim Ops are
-[types §3](./types.md)).
+[types §3](./types.md#3-dtype)).
 
 ##### ShapeExtract
 ```python
@@ -944,7 +946,7 @@ class ShapeCompose(Op):
 #### `ir/hir/sharding/`
 
 `ShardLayout` and `Mesh` are type-system constructs, not Expr inputs
-([shard §5](./shard.md)).
+([shard §5](./shard.md#5-mesh)).
 
 ##### Reshard
 ```python

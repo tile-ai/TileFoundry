@@ -598,13 +598,13 @@ template <TopologyScope T> auto program_id() noexcept;
 
 - constraints:
   - static vs dynamic (launch-provided CTA) behavior and the emission rule are
-    stated below ([target §7](./target.md#7-program-shape-and-dynamic-cta)).
+    stated below.
 
 For a static topology level, `program_shape<T>()` and `program_dim<T>()` are
 compile-time constants. For a launch-provided (dynamic) CTA count, no constexpr
 `program_shape<cta>` is emitted and `program_dim<cta>()` resolves to the
 launch-provided grid extent at runtime; the emission rule is owned by
-[target §7](./target.md#7-program-shape-and-dynamic-cta). `program_id<T>()` is
+[target](./target.md). `program_id<T>()` is
 always a runtime query returning the current execution instance id.
 
 ### 2.3 `tilefoundry::Mesh`

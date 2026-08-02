@@ -147,7 +147,7 @@ class Evaluate(Stmt):
 invocation that has no result value. The `callable` is one of:
 
 - an effect-form `Op` (e.g. `tir.memory.Copy`, `tir.cuda.nn.Mma`,
-  `tir.tensor.Reduce`, `tir.Launch` [§2.3](#launch)). `args` are
+  `tir.tensor.Reduce`, `tir.Launch` [§2.3](#23-tir-ops)). `args` are
   the Op's operands in `ParamDef` order; the per-Op verifier
   registered via `@register_verify_stmt(Op)` runs.
 - a `SymbolRef` ([§2.1](#21-symbolref)) — a reference to a callee
@@ -242,7 +242,7 @@ A valid participant set maps to exactly one hardware barrier:
 | whole block that is one warp | `__syncwarp()` |
 | a contiguous lane subset within one warp | `__syncwarp(mask)` under a participant predicate |
 | a warp-aligned contiguous multi-warp subset | a named `bar.sync <id>, <count>` under a participant predicate |
-| the full mesh over the `cta` topology (all CTAs of the grid) | the grid-wide software barrier ([`runtime.md §3`](runtime.md)) |
+| the full mesh over the `cta` topology (all CTAs of the grid) | the grid-wide software barrier ([runtime §3](./runtime.md#3-runtime-ops)) |
 
 Codegen MUST guard the `__syncwarp(mask)` and `bar.sync` cases with the
 participant predicate `base <= tid < base+count` (`tid =
@@ -258,7 +258,7 @@ supported barrier and MUST be rejected at verify. The grid barrier's correctness
 requires every CTA of the launch to be co-resident; that co-residency is the
 launch's occupancy contract, not something the barrier can enforce. The
 grid-barrier device helper and its counter protocol are specified in
-[`runtime.md §3`](runtime.md).
+[runtime §3](./runtime.md#3-runtime-ops).
 
 #### Named-barrier id allocation
 
@@ -378,7 +378,7 @@ class SymbolRef(Expr):
 `SymbolRef` is a leaf `Expr` naming a callee `PrimFunction` as a call
 target: the `callable` of an `Evaluate(SymbolRef, args)`
 ([§1.4](#14-evaluate)) function invocation and `args[0]` of a `Launch`
-([§2.3](#launch)).
+([§2.3](#23-tir-ops)).
 
 #### `name`
 - MUST be the canonical name of a `PrimFunction` in the enclosing
@@ -443,7 +443,7 @@ produced:
   tensor parameter / axis in which it occurs.
 - A CPU host entry MUST NOT expose such a scalar at its user-facing
   surface — it reads the extent from its tensor argument's runtime shape
-  and forwards it ([§2.3](#launch)).
+  and forwards it ([§2.3](#23-tir-ops)).
 
 ### 2.3 TIR Ops
 
@@ -454,9 +454,9 @@ below; code carries only a one-line purpose docstring
 ([SPEC-RULES](../SPEC-RULES.md)).
 
 - `TensorType.storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` /
-  `tmem`) or `None` ([types §2](./types.md)). `storage=None` is rank-0-only,
+  `tmem`) or `None` ([types §2](./types.md#2-tensortype)). `storage=None` is rank-0-only,
   reserved for shape-element tensors. A memory-resident TIR tensor MUST carry a
-  concrete level; the unmaterialized `umat` ([types §2](./types.md)) is an
+  concrete level; the unmaterialized `umat` ([types §2](./types.md#2-tensortype)) is an
   HIR-only value and MUST already be materialized to a concrete level by the
   time `HirToTirPass` produces TIR — it never appears in TIR.
 - `Reshard` does not appear in TIR; HIR-side `Reshard` is lowered
@@ -581,7 +581,7 @@ class Mma(Op):
 - constraints:
   - matrix-multiply-accumulate `acc += lhs @ rhs`; per-target PTX lowering lives in
     [target](./target.md), the atom calling convention in
-    [§2.3](#mma-atom-and-the-hand-written-calling-convention).
+    [§2.3](#23-tir-ops).
 
 ##### ReLU
 ```python
@@ -770,7 +770,7 @@ block_y, block_z, *forwarded_args)`:
 A hand-written kernel issues an MMA through an explicit **atom** — a
 realized instruction descriptor — instead of the bare `Mma` op whose
 fragment layouts the per-target lowering chooses
-([hir §1.3](./hir.md#irhirnn), [passes](./passes.md)). An MMA atom fixes a
+([hir §1.3](./hir.md#13-op), [passes](./passes.md)). An MMA atom fixes a
 concrete hardware instruction, so the whole MMA surface is **target-owned**:
 the `Mma` op and the `MmaOpSpec` / `MmaAtom` descriptors
 (`tilefoundry.ir.tir.cuda.nn`, mirroring the CuTe `MMA_Op` → `MMA_Atom`

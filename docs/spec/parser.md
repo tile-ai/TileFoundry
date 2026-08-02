@@ -350,7 +350,7 @@ loop-args   ::= extent-Expr                        # tile: extent / range: stop
 ```
 
 `tile(...)` and `range(...)` share **one** loop domain `(start, extent,
-step)` and lower to the **same** `GridRegionExpr` ([hir §1.2](./hir.md)) —
+step)` and lower to the **same** `GridRegionExpr` ([hir §1.2](./hir.md#12-gridregionexpr)) —
 `range` is not a separate construct and is **not** statically unrolled. The
 only difference is the loop-variable binding:
 
@@ -366,9 +366,9 @@ only difference is the loop-variable binding:
 
 `start-Expr` / `extent-Expr` (the **stop** endpoint, not a length — the
 domain is half-open `[start, extent)`) / `step-Expr` MAY be any `ShapeDim`
-([types §4](./types.md)), including a dim expression such as `C // N`; the
+([types §4](./types.md#4-dim--symbolic-shape-dimensions)), including a dim expression such as `C // N`; the
 value is carried verbatim into `GridRegionExpr.start` / `.extent` / `.step`
-and resolved at evaluate time ([hir §1.2](./hir.md)).
+and resolved at evaluate time ([hir §1.2](./hir.md#12-gridregionexpr)).
 
 A tensor subscript `x[slice0, …]` inside a loop body lifts to a
 `hir.tensor.Slice` Op call. An `ast.Assign` whose single Name target is
@@ -425,7 +425,7 @@ compile-time-expr ::= number-literal | identifier | compile-time-expr '.' identi
   parser MUST give it the float dtype of the operands it is used with, and MUST
   reject the call when those name more than one float dtype. A Python **integer**
   keeps its own dtype, so combining one with a float tensor MUST still be
-  rejected ([hir §1.3](./hir.md)).
+  rejected ([hir §1.3](./hir.md#13-op)).
 - Evaluation MUST NOT call anything reached from a speculative position: a value
   that is not statically reachable is parsed as IR instead.
 
@@ -600,7 +600,7 @@ registry.
   visibility (§2.5).
 - `T.cuda.mma` is the CUDA MMA surface: `T.cuda.mma.<NAME>` is an
   `MmaOpSpec` and `T.cuda.mma.atom(op=...)` an `MmaAtom`
-  ([tir §2.3](./tir.md#mma-atom-and-the-hand-written-calling-convention)).
+  ([tir §2.3](./tir.md#23-tir-ops)).
   The folder name (`cuda`) matches `codegen/cuda/` and the runtime tree.
 
 In a `@prim_func` body a chain rooted at a platform sub-namespace is a
@@ -872,7 +872,7 @@ legacy real-Op schema sharing the same name.
 
 A registered Op has one or more `OpSchema` entries indexed by
 `(dialect, name)`. Each schema lists the Op's `ParamDef` descriptors
-(see [core-ir §2.3](./core-ir.md)). When the parser sees a callee:
+(see [core-ir §2.3](./core-ir.md#23-op)). When the parser sees a callee:
 
 1. Look up the schema list via
    `op_registry.get_schemas(dialect, name)`.
@@ -938,7 +938,7 @@ Python statements that the parser folds into a single `Expr` tree.
 | `for i in tile(...)` | `GridRegionExpr` (see §1.7 and below). |
 | `with Mesh(...) as m` | Push `m` onto the parser-lexical stack; pop on exit. No IR node. |
 | `return expr` | Sets `Function.body`. A `return` without a value is rejected. |
-| `return (a, b)` / `return a, b` | A literal tuple return (both spellings are the same AST) folds to a core `Tuple` body ([core-ir §2.2](./core-ir.md)); `Function.return_type` is the `TupleType` of the element types. Callers destructure via the existing tuple-unpack rule (`o, s = f(...)`). |
+| `return (a, b)` / `return a, b` | A literal tuple return (both spellings are the same AST) folds to a core `Tuple` body ([core-ir §2.2](./core-ir.md#22-var--constant--tuple)); `Function.return_type` is the `TupleType` of the element types. Callers destructure via the existing tuple-unpack rule (`o, s = f(...)`). |
 | `pass` | Accepted only as the **entire** body: sets `Function.body = None`, declaring a dispatch prototype whose implementations are registered via `.specialize` (§8). A `pass` mixed with any other statement is rejected. |
 
 `for` / `if` / `while` over arbitrary ranges, conditionals, and other

@@ -16,6 +16,14 @@ repos:
         entry: python scripts/spec_rules_lint.py
         language: system
         files: ^docs/spec/.*\.md$
+      # Narrower than the references it will eventually cover: most of them live
+      # in `src/` and `tests/`, and are still bare `§x.y` at this point. Kept off
+      # `docs/SPEC-RULES.md`, which states the forbidden forms as examples.
+      - id: spec-refs-lint
+        name: spec-refs-lint
+        entry: python scripts/spec_refs_lint.py
+        language: system
+        files: ^docs/spec/.*\.md$
       - id: spec-entropy-lint
         name: spec-entropy-lint
         entry: python scripts/spec_entropy_lint.py

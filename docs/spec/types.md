@@ -77,13 +77,13 @@ class TensorType(IRType):
     preserves the logical shape; logical-shape rewrites go through
     `hir.tensor.Reshape`.
   - `Layout` / `ComposedLayout` MUST describe an injective mapping
-    ([shard §8.7](./shard.md)). Padding-style non-injective layouts are
+    ([shard §2](./shard.md#2-layout-hierarchy)). Padding-style non-injective layouts are
     not supported.
   - A rank-0 tensor is well-formed. A rank-0 tensor with `storage=None` is the
     shape-element form; a rank-0 tensor with a memory `StorageKind` is an
     ordinary scalar holding one element.
 
-Enforcement is owned by [tir §1.3](./tir.md#13-primfunction) / [hir §1.3](./hir.md);
+Enforcement is owned by [tir §1.3](./tir.md#13-primfunction) / [hir §1.3](./hir.md#13-op);
 dispatch is described in
 [visitor-registry](./visitor-registry.md).
 
@@ -308,12 +308,12 @@ class TupleType(IRType):
   - A multi-output Op (e.g. [hir](./hir.md) `tensor.Split`) has
     `Call.type: TupleType` whose fields correspond to the outputs. A
     single-output Op has `Call.type: TensorType`. The typeinfer rule
-    decides; see [visitor-registry §4](./visitor-registry.md).
+    decides; see [visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer).
   - `TupleType` MUST NOT appear as the input type of any other Op. A
     tuple is consumed only via the `tuple_get_item` Op
     ([core-ir](./core-ir.md)). The exception for tuple-of-`Expr` formal
     parameters (e.g. `Concat`, `Stack`) is owned by
-    [hir §1.3](./hir.md).
+    [hir §1.3](./hir.md#13-op).
 
 ---
 
@@ -333,7 +333,7 @@ class UnitType(IRType):    # no payload; result type of an effect-form Op
 consumers can read; in Stmt position such an Op appears as
 `Evaluate(op, args)` ([tir §1.4](./tir.md#14-evaluate)). The
 effect-form vs value-form classification is owned by
-[core-ir §2.3](./core-ir.md).
+[core-ir §2.3](./core-ir.md#23-op).
 
 ---
 
@@ -347,7 +347,7 @@ class CallableType(IRType):
 
 - constraints:
   - `CallableType` is the type of any Expr that represents a callable
-    value. Today the only producer is [hir §1.1](./hir.md) `Function`.
+    value. Today the only producer is [hir §1.1](./hir.md#11-function) `Function`.
   - `parameters` is a tuple of parameter **types**; parameter names
     are not part of the type. Names live on `Function.params`
     (`Var.name`) at the IR level.

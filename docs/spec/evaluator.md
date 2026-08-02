@@ -61,7 +61,7 @@ class TensorValue:
 
 - constraints:
   - `data` holds the value in its **logical shape** — the shape of
-    `type` ([types §2](./types.md)), not a layout-domain shape.
+    `type` ([types §2](./types.md#2-tensortype)), not a layout-domain shape.
   - `type.layout`, when a `ShardLayout` or `Layout`, drives the
     layout-domain projection of [§6](#6-layout-domain).
   - A scalar value is a rank-0 `data` with a rank-0 `TensorType`.
@@ -86,7 +86,7 @@ corresponding positional input:
   parameter `TensorType`'s dtype.
 - Weights and activations are bound identically — a weight is an
   ordinary `Function` parameter, not a distinct constant carrier.
-- Each `DimVar` ([types §3](./types.md)) appearing in a parameter's
+- Each `DimVar` ([types §3](./types.md#3-dtype)) appearing in a parameter's
   `TensorType.shape` is bound from the corresponding axis of the input
   tensor's concrete shape. A later occurrence of the same `DimVar` MUST
   agree with the first binding.
@@ -96,7 +96,7 @@ corresponding positional input:
 Each op's value semantics are a handler registered against the op
 class. The registry is local to the evaluator (it reuses the
 `AnalysisRegistry` container of
-[visitor-registry §2](./visitor-registry.md) but is not one of that
+[visitor-registry §2](./visitor-registry.md#2-core-contract) but is not one of that
 spec's module-level instances).
 
 ```python
@@ -124,8 +124,8 @@ rules; a handler MUST NOT depend on type inference having run.
 ## 4. Node evaluation
 
 Evaluation is an `ExprVisitor[Value]`
-([visitor-mutator §1](./visitor-mutator.md)) memoized on `id(expr)`, so
-a shared sub-DAG ([hir §1.1](./hir.md)) is evaluated once:
+([visitor-mutator §1](./visitor-mutator.md#1-role)) memoized on `id(expr)`, so
+a shared sub-DAG ([hir §1.1](./hir.md#11-function)) is evaluated once:
 
 ```python
 class Evaluator(ExprVisitor[Value]):             # memoized on id(expr): a shared sub-DAG is evaluated once
@@ -133,19 +133,19 @@ class Evaluator(ExprVisitor[Value]):             # memoized on id(expr): a share
 ```
 
 - A `Var` resolves to its binding in the current environment; a
-  `Constant` ([core-ir §2](./core-ir.md)) materialises to a backend
+  `Constant` ([core-ir §2](./core-ir.md#2-expr)) materialises to a backend
   tensor of its `TensorType` (a scalar becomes a rank-0 tensor).
 - A `Call` whose `target` is an `Op` evaluates its operands, then
   dispatches through `eval_registry`
   ([§3](#3-register_eval-and-the-eval-context)).
-- A `Call` whose `target` is a `Function` ([hir §1.1](./hir.md)) binds the
+- A `Call` whose `target` is a `Function` ([hir §1.1](./hir.md#11-function)) binds the
   evaluated arguments to the callee's parameters in a fresh environment
   and evaluates the callee `body` — the same value semantics a call site
   has under type inference.
 
 ## 5. `GridRegionExpr`
 
-A `GridRegionExpr` ([hir §1.2](./hir.md)) is a loop over its iteration
+A `GridRegionExpr` ([hir §1.2](./hir.md#12-gridregionexpr)) is a loop over its iteration
 domain whose carry chain starts from `init_args`:
 
 ```python
@@ -171,7 +171,7 @@ values:
   `axes` in the operand's **logical** `TensorType.shape`, regardless of
   `type.layout`. A computation that must group a logical axis differently
   (e.g. per-head normalisation) is expressed by a logical `Reshape`
-  ([hir §1.3](./hir.md)) to the target logical shape *before* the op; the
+  ([hir §1.3](./hir.md#13-op)) to the target logical shape *before* the op; the
   op's axis then indexes that reshaped logical shape. `Reshard` only
   changes distribution / layout and never changes which values an op
   reduces or indexes.
@@ -182,8 +182,8 @@ values:
   inverse. These are provided for an op explicitly defined to compute in
   the layout domain; no op in the current set is layout-domain, so none
   of them call these helpers.
-- `Reshard` ([hir §1.3](./hir.md)) preserves the logical value and MAY
+- `Reshard` ([hir §1.3](./hir.md#13-op)) preserves the logical value and MAY
   reshape it into the target layout's shape; it performs no
   cross-participant data movement.
-- `Local` ([hir §1.3](./hir.md)) returns its operand's value for the
+- `Local` ([hir §1.3](./hir.md#13-op)) returns its operand's value for the
   single modelled participant.

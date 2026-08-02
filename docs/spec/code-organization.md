@@ -59,6 +59,7 @@ truth for the directory's structure and invariants.
 | `dsl/` | [parser](./parser.md) (authoring namespace) | User-facing import surface: `tf/` (HIR namespace) / `T/` (TIR namespace) / `_stub_gen.py` / `__main__.py`. The `tf/__init__.pyi` and `T/__init__.pyi` stubs are produced by `python -m tilefoundry.dsl regen` and are gitignored. |
 | `compile.py` | [architecture](./architecture.md) | `tilefoundry.lower` / `build` / `compile` top-level public verbs. |
 | `script.py` | [parser](./parser.md) | `@func` / `@prim_func` / `@module` decorator entry points. |
+| `utils/` | [code-organization](./code-organization.md) | Shared leaf machinery: a module here MUST import nothing from `ir/`, `parser/`, `passes/`, `codegen/`, `runtime/` or `cli/`, and MUST name no layer. It is depended on and depends on nothing, which is what lets a consumer outside the package — a pre-commit hook under an interpreter with nothing installed — load one of these modules by path and get the same implementation the package uses. A helper that needs to know a layer belongs in that layer; this is not a home for anything that did not fit. |
 
 **Stage boundary.** The pipeline picture in
 [architecture §1](./architecture.md#1-spec-relationship-map) places
@@ -111,7 +112,7 @@ snake_case of the Op class CamelCase (`MatMul` → `matmul.py`,
 follow the same rule.
 
 **Rule 1a — surface-alias schemas have no per-name file.** A surface
-alias ([core-ir §2.3](./core-ir.md#surface-aliases-register_alias))
+alias ([core-ir §2.3](./core-ir.md#23-op))
 has no IR class — its builder routes to a kinded target Op. All
 aliases for a category live together in `aliases.py` (e.g. the 19
 HIR math sugar names `add` / `sub` / `cmp_eq` / `neg` / … all
@@ -151,7 +152,7 @@ each get their own file. Codegen consumes TIR only.
   `@register_typeinfer(Op)` (returning `UnitType`) +
   `@register_verify_stmt(Op)`. The verify rule keys on the Op class
   even though the invocation is an `Evaluate(op, args)` Stmt — see
-  [visitor-registry §5](./visitor-registry.md).
+  [visitor-registry §5](./visitor-registry.md#5-instance-2--verify).
 - **TIR-owned Expr Op file**
   (`ir/tir/memory/{alloc_tensor,ptr_of,memory_span,tensor_view}.py`,
   …): Op class + `@register_typeinfer(Op)` +
@@ -280,7 +281,7 @@ from tilefoundry.dsl import tf, T, Tensor
   sugar; it is owned by `tilefoundry.dsl` (defined under
   `tilefoundry.dsl._tensor`, re-exported as `tilefoundry.dsl.Tensor`). It
   is **not** the IR tensor type — the IR type carrier is
-  `tilefoundry.ir.types.TensorType`. See [parser §1.4](./parser.md) for
+  `tilefoundry.ir.types.TensorType`. See [parser §1.4](./parser.md#14-tensor-and-consttensor-annotations) for
   the annotation grammar.
 - `DType` is **not** re-exported. dtype values use string form in
   DSL source (`Tensor[(8,), "bf16"]`, `zeros((1, 64), "bf16", ...)`);

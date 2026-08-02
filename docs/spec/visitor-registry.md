@@ -376,7 +376,7 @@ dispatches `verify_stmt_registry.lookup(type(stmt.callable))`. The
 registry key is the Op class; the handler input shape is owned by the
 registry implementation. The stable IR shape is `Evaluate(op, args)`;
 the stable IR does not wrap a value-form `Call` inside `Evaluate`. See
-[visitor-mutator §7](./visitor-mutator.md)
+[visitor-mutator §7](./visitor-mutator.md#7-visitor-entry-forms-for-evaluate)
 for the matching visitor entry-form contract and
 [tir §1.4](./tir.md#14-evaluate) for the wrapper definition.
 

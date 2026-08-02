@@ -298,7 +298,7 @@ no ordinary `--target` option.
     MUST be repeatable to bind several. One dimension MUST receive one extent;
     a comma-separated list of extents for one dimension MUST be rejected because
     several extents together are a `check` request. It MUST be passed through as the
-    operation's `dims` ([analysis §2.2](./analysis.md#2-authored-hir-metrics));
+    operation's `dims` ([analysis §2.2](./analysis.md#22-analysis-families));
     the CLI MUST NOT specialise the selection itself, because then what it
     printed would be about a program the operation never saw.
   - A `--dim` argument that is not `NAME=EXTENT`, or whose extent is not an
@@ -348,7 +348,7 @@ Target, MUST be rejected -- `schedule` does not resolve an omission to a default
     algorithm's stages itself, so what it prints cannot drift from what the
     operation decided.
   - `--dim NAME=EXTENT` MUST behave as it does for `analyze`, passed through as
-    the operation's `dims` ([schedule §2.2](./schedule.md#2-public-operation)).
+    the operation's `dims` ([schedule §1](./schedule.md#1-the-public-schedule-operation)).
   - `--solver-timeout SECONDS` and `--solver-workers COUNT` MUST state the search
     budget the operation is given, and either omitted MUST leave that part of the
     budget at the operation's own default. A solver that sizes itself to the
