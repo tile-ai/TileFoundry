@@ -67,7 +67,7 @@ def test_analysing_a_variant_gets_past_ownership() -> None:
     variant = variant_for(aimed.entry_function(), DIMS)
 
     assert aimed.owns(variant)
-    with pytest.raises(ValueError, match="not a concrete positive integer"):
+    with pytest.raises(ValueError, match="ctx_len.*is not concrete"):
         analyze(aimed, variant, analysis="compute-cost")
 
 
