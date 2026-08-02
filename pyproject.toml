@@ -67,9 +67,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 # Parallel is how this suite is run, on CI (`-n 4`) and locally: conftest's
-# DumpScope isolates per xdist worker, the compile workdir is pid-keyed, and the
-# coverage plugin merges per-worker shards. No addopts default, because the worker
-# count is a property of the machine — the CI workflow states its own.
+# DumpScope isolates per xdist worker and the compile workdir is pid-keyed. No
+# addopts default, because the worker count is a property of the machine — the CI
+# workflow states its own.
 markers = [
     "no_dump: opt out of the autouse DumpScope for tests that emit excessive dump output",
 ]

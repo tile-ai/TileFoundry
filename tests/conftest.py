@@ -108,24 +108,6 @@ def _spread_workers_across_devices() -> None:
 _spread_workers_across_devices()
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Register the model coverage reporter.
-
-    Registered here rather than under `tests/models/` so it sees every test in the
-    run: the report says what this run established, and a plugin that only saw one
-    directory would answer a narrower question than the one it appears to answer.
-    """
-    from tests.models.coverage_artifact import ModelCoveragePlugin  # noqa: PLC0415
-
-    delegating = bool(getattr(config.option, "numprocesses", None)) or getattr(
-        config.option, "dist", "no"
-    ) not in ("no", None)
-    config.pluginmanager.register(
-        ModelCoveragePlugin(_RESULTS_ROOT.parent, delegating=delegating),
-        "tilefoundry-model-coverage",
-    )
-
-
 @pytest.fixture(autouse=True)
 def _tilefoundry_dump_scope(request: pytest.FixtureRequest):
     if request.node.get_closest_marker("no_dump") is not None:

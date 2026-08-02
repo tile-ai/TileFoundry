@@ -2,8 +2,8 @@
 
 Fewer functions appear here than in analysis, and that is a property of the
 algorithm rather than an omission: the device-wide partition decides the whole
-launch, so it admits only the module entry function. The report still lists the
-rest as untested, which is the truth -- nobody selected them.
+launch, so it admits only the module entry function. The rest were never
+selected, which is the truth about them.
 
 A plan that exists is not a plan that holds. Each case verifies its own plan
 against the module and topology it was solved for, because a solver that
@@ -16,10 +16,8 @@ from __future__ import annotations
 import pytest
 
 from tests.models.corpus import FunctionCase, ModelCase, TargetFixture
-from tests.models.coverage_artifact import declare
 from tests.models.fixtures import ACCEPTANCE
 from tests.models.registry import CORPUS
-from tests.models.report import CoverageCollector, build_report
 from tilefoundry.ir.core.module import select
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 
@@ -56,16 +54,8 @@ def _cases() -> list[object]:
 
 @pytest.mark.parametrize(("model", "fixture", "case"), _cases())
 def test_every_selected_function_plans_or_says_what_stopped_it(
-    model: ModelCase, fixture: TargetFixture, case: FunctionCase, record_property
+    model: ModelCase, fixture: TargetFixture, case: FunctionCase
 ) -> None:
-    declare(
-        record_property,
-        model=model.model,
-        target=fixture.id,
-        kind="schedule",
-        case=case.id,
-        function=case.selector,
-    )
     # The selected Module, not the root it was reached through: a plan divides a
     # function over the topology budget of the domain that owns it.
     selected, function = model.resolve(model.build_for(fixture), case.selector)
@@ -122,24 +112,3 @@ def test_the_functions_no_partition_can_take_are_untested_not_blocked() -> None:
         untested = model.untested("schedule", module)
         assert not set(chosen) & set(untested)
         assert len(untested) == len(model.inventory(module)) - len(chosen)
-
-
-def test_the_report_separates_what_ran_from_what_nobody_selected() -> None:
-    fixture = ACCEPTANCE()
-    collector = CoverageCollector()
-    for model, _, case in _selected():
-        collector.record_gate(
-            case.gate,
-            model=model.model,
-            target=fixture.id,
-            kind="schedule",
-            case=case.id,
-            function=case.selector,
-        )
-
-    section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"][fixture.id]
-    assert [row["function"] for row in section["schedule"]["tested"]] == [
-        "decoder_layer"
-    ]
-    assert "mlp" in section["schedule"]["untested"]
-    assert "decoder_layer" not in section["schedule"]["untested"]

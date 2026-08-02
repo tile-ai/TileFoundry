@@ -20,7 +20,6 @@ from tests.models.corpus import (
 from tests.models.fixtures import apple_m2_pro, h200_sxm
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tests.models.registry import CORPUS, case
-from tests.models.report import CoverageCollector, build_report, render_report
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.facts import ParallelCapacityFacts
 from tilefoundry.ir.core import Call
@@ -200,80 +199,6 @@ def test_the_registry_resolves_its_own_ids() -> None:
     assert case("qwen3_1_7b") is QWEN3_1_7B
     with pytest.raises(KeyError, match="no case 'nope'"):
         case("nope")
-
-
-def test_the_report_groups_model_then_target_then_kind() -> None:
-    collector = CoverageCollector()
-    fixture = h200_sxm()
-    collector.record(
-        model=QWEN3_1_7B.id,
-        target=fixture.id,
-        kind="reference",
-        case="qwen3_1_7b/reference/decoder",
-        status="PASS",
-    )
-    collector.record(
-        model=QWEN3_1_7B.id,
-        target=fixture.id,
-        kind="analyze",
-        case="qwen3_1_7b/analyze/mlp",
-        function="mlp",
-        status="PASS",
-    )
-    collector.record(
-        model=QWEN3_1_7B.id,
-        target=fixture.id,
-        kind="schedule",
-        case="qwen3_1_7b/schedule/self_attention",
-        function="self_attention",
-        status="BLOCKED",
-        reason="no atom covers this operation yet",
-    )
-
-    report = build_report(collector, CORPUS)
-    section = report["qwen3_1_7b"]["targets"]["h200_sxm"]
-
-    assert [row["case"] for row in section["reference"]] == [
-        "qwen3_1_7b/reference/decoder"
-    ]
-    assert [row["function"] for row in section["analyze"]["tested"]] == ["mlp"]
-    assert "mlp" not in section["analyze"]["untested"]
-    assert "decoder_layer" in section["analyze"]["untested"]
-    assert section["schedule"]["tested"][0]["status"] == "BLOCKED"
-    assert section["schedule"]["tested"][0]["reason"]
-
-    text = render_report(report)
-    assert "qwen3_1_7b" in text
-    assert "h200_sxm" in text
-    assert "untested" in text
-
-
-def test_an_unrun_function_is_untested_and_never_blocked() -> None:
-    """Nobody selected it, so the report must not claim a limit stopped it."""
-    collector = CoverageCollector()
-    report = build_report(collector, CORPUS)
-    assert report["qwen3_1_7b"]["targets"] == {}
-
-    collector.record(
-        model=QWEN3_1_7B.id,
-        target="h200_sxm",
-        kind="analyze",
-        case="qwen3_1_7b/analyze/mlp",
-        function="mlp",
-        status="PASS",
-    )
-    section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"]["h200_sxm"]
-    statuses = {row["status"] for row in section["analyze"]["tested"]}
-    assert statuses == {"PASS"}
-    assert "self_attention" in section["analyze"]["untested"]
-
-
-def test_a_result_nobody_can_act_on_is_rejected() -> None:
-    collector = CoverageCollector()
-    with pytest.raises(ValueError, match="without a reason"):
-        collector.record(
-            model="m", target="t", kind="analyze", case="c", status="FAIL"
-        )
 
 
 def test_a_target_fixture_binds_only_what_it_was_given() -> None:

@@ -40,25 +40,6 @@ jobs:
       # fit on the one pinned GPU; eight OOMed in PR #38 run 30478400012.
       - name: pytest tests/ -n 4
         run: pytest tests/ -n 4
-      # The coverage report is written by the test run itself, from what the runner
-      # reported rather than from the registry — so it exists only if the tests
-      # really executed, and it describes this machine. Uploaded rather than
-      # committed for the same reason: it is evidence from one run, not a property
-      # of the code.
-      - name: Upload model coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: model-coverage
-          path: |
-            test_results/model-coverage.json
-          if-no-files-found: error
-      # A report nobody looks at rots. Printing the summary in the log means a
-      # reader sees what the run established without downloading anything, and a
-      # model that stopped being covered shows up in the diff between two runs.
-      - name: Summarise model coverage
-        if: always()
-        run: python scripts/summarise_model_coverage.py test_results/model-coverage.json
 
   # Two runners against one installed environment: the shipped files must resolve
   # under it, then the model source it ships must decode a real checkpoint. After

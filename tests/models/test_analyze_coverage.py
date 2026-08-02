@@ -17,10 +17,8 @@ from __future__ import annotations
 import pytest
 
 from tests.models.corpus import FunctionCase, ModelCase, TargetFixture
-from tests.models.coverage_artifact import declare
 from tests.models.fixtures import ACCEPTANCE
 from tests.models.registry import CORPUS
-from tests.models.report import CoverageCollector, build_report, render_report
 from tilefoundry.analysis import ANALYSES, analyze
 from tilefoundry.analysis.api import AnalysisError
 
@@ -61,16 +59,7 @@ def test_every_selected_function_analyses_or_says_what_stopped_it(
     fixture: TargetFixture,
     case: FunctionCase,
     family: str,
-    record_property,
 ) -> None:
-    declare(
-        record_property,
-        model=model.model,
-        target=fixture.id,
-        kind="analyze",
-        case=f"{case.id}/{family}",
-        function=case.selector,
-    )
     # The selected Module, not the root it was reached through: an analysis
     # measures a function against the domain that owns it.
     selected, function = model.resolve(model.build_for(fixture), case.selector)
@@ -102,27 +91,3 @@ def test_an_analysis_family_is_asked_of_the_target_not_written_down() -> None:
     families = _families(fixture)
     assert families, f"{fixture.id} registers no analysis"
     assert "compute-cost" in families
-
-
-def test_the_report_states_the_matrix_the_registry_declares() -> None:
-    """Built from the registry rather than from what other tests happened to
-    record, so it says the same thing however the suite was distributed."""
-    fixture = ACCEPTANCE()
-    collector = CoverageCollector()
-    for model, _, case, family in _selected():
-        collector.record_gate(
-            case.gate,
-            model=model.model,
-            target=fixture.id,
-            kind="analyze",
-            case=f"{case.id}/{family}",
-            function=case.selector,
-        )
-
-    section = build_report(collector, CORPUS)["qwen3_1_7b"]["targets"][fixture.id]
-    assert section["analyze"]["untested"] == []
-    assert {row["status"] for row in section["analyze"]["tested"]} == {"PASS"}
-
-    text = render_report(build_report(collector, CORPUS))
-    assert "qwen3_1_7b" in text
-    assert fixture.id in text
