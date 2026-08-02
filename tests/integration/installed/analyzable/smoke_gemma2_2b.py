@@ -5,7 +5,9 @@ import json
 
 import contract
 import pytest
+import torch
 
+from tests.models.decode_oracle import SEQ_LEN, causal_mask
 from tests.models.gemma2_2b import reference
 
 MODEL = "gemma2_2b"
@@ -159,3 +161,47 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
 
     assert want_k.shape[1] == drawn.ctx_len + 1
     assert entry_k.shape[1] == 1 and entry_v.shape[1] == 1
+
+
+def test_the_attention_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
+    """`self_attention` -- input_layernorm plus Gemma2's GQA, RoPE and soft-capped
+    logits over the cache and the new token -- against Hugging Face's own attention
+    at the decoded position.
+
+    At the ordinary decode input scale, which is the scale the comparison means
+    something at: the soft cap is part of the computation being reproduced, not a
+    thing to be provoked, and driving the query past the cap only compresses the
+    reference range until the bound measures the compression.
+    """
+    drawn = reference.decode_step_inputs(device="cpu")
+    source, case = shipped_source(MODEL), CASES[0]
+
+    total = drawn.ctx_len + SEQ_LEN
+    cos, sin = reference._rope_at(total, "cpu")
+    sequence = torch.cat([drawn.hidden_ctx, drawn.hidden_new], dim=1)
+    # At the activations dtype: an f32 mask would promote HF attention and make this
+    # a bf16-against-f32 comparison rather than a comparison of two kernels.
+    mask = causal_mask(total, "cpu", sequence.dtype)
+    with torch.no_grad():
+        reference_out, _ = drawn.layer.self_attn(
+            drawn.layer.input_layernorm(sequence),
+            position_embeddings=(cos.unsqueeze(0), sin.unsqueeze(0)),
+            attention_mask=mask,
+        )
+    want = reference_out[:, -SEQ_LEN:, :]
+    want_k, want_v = reference.appended_cache_oracle(drawn)
+    entry_k, entry_v = want_k[:, drawn.ctx_len:], want_v[:, drawn.ctx_len:]
+
+    contract.compared(
+        tf, tmp_path, source, case, "self_attention",
+        activations=drawn.attention_args,
+        weights=drawn.loaded.constants,
+        expected=(want, entry_k, entry_v),
+        held=(
+            contract.three_roundings(want),
+            contract.one_rounding(entry_k),
+            contract.one_rounding(entry_v),
+        ),
+        dims={"ctx_len": drawn.ctx_len},
+    )
+
