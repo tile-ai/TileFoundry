@@ -130,8 +130,7 @@ def installation(tmp_path_factory) -> Path:
     build = tmp_path_factory.mktemp("installation")
     wheels, venv = build / "wheel", build / "venv"
     for argv in (
-        [sys.executable, "-m", "pip", "wheel", REPO, "--no-deps",
-         "--no-build-isolation", "--wheel-dir", wheels],
+        [sys.executable, "-m", "pip", "wheel", REPO, "--no-deps", "--wheel-dir", wheels],
         [sys.executable, "-m", "venv", "--system-site-packages", venv],
     ):
         done = _run(argv, build)

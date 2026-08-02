@@ -35,7 +35,7 @@ jobs:
       - name: Link baked cutlass headers
         run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
       - name: Install tilefoundry (editable, deps already in the image)
-        run: pip install -e '.[test]' --no-build-isolation
+        run: pip install -e '.[test]'
       # Each worker can instantiate an independent f32 HF reference model. Four
       # fit on the one pinned GPU; eight OOMed in PR #38 run 30478400012.
       - name: pytest tests/ -n 4
@@ -81,7 +81,7 @@ jobs:
       # to do with the wheel.
       - name: Build the wheel
         run: >-
-          pip wheel . --no-deps --no-build-isolation
+          pip wheel . --no-deps
           --wheel-dir ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}
       # Built once here; the shards reuse it through TF_SMOKE_VENV.
       - name: Install the wheel into a clean environment

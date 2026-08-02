@@ -1,13 +1,16 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "tilefoundry"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A tile-based, agentic platform for automatic high-performance program generation across hardware."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "tile-ai" }]
 dependencies = [
     "isl-python>=0.1.10",
     "jinja2>=3.0",
@@ -24,12 +27,18 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.urls]
+Homepage = "https://github.com/tile-ai/TileFoundry"
+Repository = "https://github.com/tile-ai/TileFoundry"
+
 [project.scripts]
 tilefoundry = "tilefoundry.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist>=3"]
 dev = ["pre-commit>=3"]
+
+[tool.setuptools_scm]
 
 [tool.setuptools.packages.find]
 where = ["src"]

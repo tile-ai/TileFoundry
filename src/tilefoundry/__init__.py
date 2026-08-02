@@ -6,7 +6,11 @@ Re-exports the stable public API from `tilefoundry.ir.*` for convenience.
 
 from __future__ import annotations
 
+from importlib.metadata import version as _distribution_version
+
 # ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
+
+__version__ = _distribution_version("tilefoundry")
 
 # Core IR
 from tilefoundry.ir.core import (
@@ -98,6 +102,7 @@ def view(root, *, port: int = 0, open_browser: bool = True) -> int:
     return _Viewer(root).serve(port=port, open_browser=open_browser)
 
 __all__ = [
+    "__version__",
     # core
     "Expr", "Var", "Constant", "Call", "Stmt", "TupleGetItem",
     "Op", "ParameterInfo",
