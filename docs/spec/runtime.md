@@ -543,6 +543,13 @@ def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
     `RuntimeModule` bound method, a raw torch callable, or an evaluator
     closure — anything callable on *inputs*.
 
+### 1.7 Missing prepared weight
+
+- constraints:
+  - `Module.load` MUST reject a resource that has no tensor for a weight the
+    Module declares. The refusal MUST name that weight and state that `prepare`
+    produces it ([runtime §1.1.2](#112-weight-converter-and-prepare--forward)).
+
 ## 2. C++ Runtime Surface
 
 Generated CUDA source includes the umbrella runtime header:

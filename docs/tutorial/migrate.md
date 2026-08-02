@@ -94,6 +94,8 @@ a reader of the fixture has to work out.
 
 ## When step one is finished
 
-When the authored Module agrees with the published implementation on real weights,
-at production dimensions. That is a comparison, which is what step two's tool does
-— so the next page is the one that runs it, and you will use it here first.
+Prepare real weights first ([runtime §1.1.2](../spec/runtime.md#112-weight-converter-and-prepare--forward)).
+Step one is finished when the authored Module agrees with the published
+implementation at production dimensions. That is a comparison, which is what step
+two's tool does — so the next page is the one that runs it, and you will use it here
+first.

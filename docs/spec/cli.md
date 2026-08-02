@@ -120,6 +120,14 @@ bounds the caller stated.
     It MUST also say the actual and declared dtype of every activation and of
     every weight the selected Module declares, plus the tensor count and shape
     tree each `--input` file supplied.
+  - A FAIL with `--inputs random` MUST state that the draw makes each activation
+    independently; a target that relies on semantic relationships between
+    activations MAY differ at ulp scale without either implementation being wrong,
+    and `--inputs real` is the re-run that decides the comparison.
+  - A FAIL measured against a reference MUST state that it proves disagreement,
+    not which side is closer to truth. A reference MAY carry its own rounding, and
+    establishing accuracy needs an independent high-precision reference that
+    `check` does not run.
   - Reaching one leaf MUST read only that leaf Module's own weights. A comparison
     of one kernel MUST NOT materialise a whole model. A Module is the unit that
     loads, so what a run binds is everything the selected Module declares, not the

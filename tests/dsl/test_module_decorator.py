@@ -19,6 +19,7 @@ from tilefoundry.dsl import T, Tensor, tf  # noqa: F401 — tf/T used by bodies
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.utils.spec_ref import spec_ref_render
 
 
 @module(entry="composed")
@@ -176,6 +177,15 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     with pytest.raises(TypeError, match=r"takes 1 activation") as excinfo:
         loaded.scale(ones, weight)
     assert "load(resource)" not in str(excinfo.value)
+
+    with pytest.raises(KeyError) as excinfo:
+        _Weighted.load(DictResource({}))
+    refused = str(excinfo.value)
+    assert "missing declared weight 'w'" in refused
+    assert "prepare produces it" in refused
+    assert spec_ref_render(
+        "[runtime §1.7](docs/spec/runtime.md#17-missing-prepared-weight)"
+    ) in refused
 
 
 def test_one_shared_child_binds_once_per_owner():

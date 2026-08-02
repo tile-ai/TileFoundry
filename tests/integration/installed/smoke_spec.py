@@ -80,9 +80,11 @@ def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
         ("target", "topology-levels", "Only `cta` MAY have a launch-provided"),
         ("core-ir", "target-inheritance", 'with `target="cuda"`'),
         ("core-ir", "default-step", "MUST have no default step"),
+        ("cli", "check", "A FAIL with `--inputs random`"),
+        ("runtime", "1.7", "The refusal MUST name that weight"),
     ),
 )
-def test_spec_answers_the_target_and_default_step_rules(
+def test_spec_answers_askable_rules(
     tf, topic, section, expected
 ) -> None:
     done = tf("spec", topic, section)

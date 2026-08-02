@@ -279,6 +279,42 @@ def test_a_model_below_the_oracle_level_passes_with_a_warning(routing, capsys) -
 
     assert "warning: qwen3_5_35b_a3b has no L3 verification on record" in reported
     assert "not\n           that the Module matches what it describes" in reported
+    assert "--inputs random makes each activation independently" not in reported
+    assert "FAIL says the candidate and reference differ" not in reported
+
+
+def test_a_random_input_fail_against_a_reference_states_its_limits(routing, capsys) -> None:
+    """A failed random-input comparison qualifies both limits through the CLI."""
+    argv = [
+        "check", ROUTING,
+        "--inputs", "random",
+        "--expected", str(routing["zeros"]),
+        "--expected", str(routing["indices"]),
+        "--out", "output[0]", "--fn", "allclose", "--atol", "1e-3", "--rtol", "4e-3",
+        "--out", "output[1]", "--fn", "equal",
+    ]
+
+    assert cli.main(argv) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    reported = captured.out
+    assert "--inputs random makes each activation independently" in reported
+    assert "Rerun with --inputs real" in reported
+    assert "FAIL says the candidate and reference differ" in reported
+    assert "Establishing accuracy needs an independent high-precision" in reported
+    assert "reference, which check does not run" in reported
+
+    assert cli.main([*argv, "--json"]) == 1
+    warnings = json.loads(capsys.readouterr().out)["warnings"]
+    assert warnings == [
+        "--inputs random makes each activation independently. A target that relies on "
+        "semantic relationships between activations can differ at ulp scale without either "
+        "implementation being wrong. Rerun with --inputs real to decide the comparison.",
+        "FAIL says the candidate and reference differ, not which side is closer to truth. "
+        "The reference may carry its own rounding; check compares only against it. "
+        "Establishing accuracy needs an independent high-precision reference, which check "
+        "does not run.",
+    ]
 
 
 def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsys) -> None:

@@ -6,6 +6,7 @@ import argparse
 import inspect
 import json
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -610,6 +611,7 @@ def _one_run(
         "inputs": {
             "activations": {
                 "source": provided,
+                "kind": arguments.inputs,
                 "actual_dtypes": _dtype_names(activations),
                 "declared_dtypes": (
                     []
@@ -677,6 +679,28 @@ def _shown_files(files: Sequence[dict[str, Any]]) -> str:
         for file in files
     ]
     return "; files " + "; ".join(descriptions)
+
+
+def _failure_warnings(runs: Sequence[dict[str, Any]]) -> list[str]:
+    """The limits that qualify a failed command-level comparison."""
+    if all(run["passed"] for run in runs):
+        return []
+
+    warnings = []
+    if any(run["inputs"]["activations"]["kind"] == "random" for run in runs):
+        warnings.append(
+            "--inputs random makes each activation independently. A target that relies on "
+            "semantic relationships between activations can differ at ulp scale without either "
+            "implementation being wrong. Rerun with --inputs real to decide the comparison."
+        )
+    if any(run["reference"] is not None for run in runs):
+        warnings.append(
+            "FAIL says the candidate and reference differ, not which side is closer to truth. "
+            "The reference may carry its own rounding; check compares only against it. "
+            "Establishing accuracy needs an independent high-precision reference, which check "
+            "does not run."
+        )
+    return warnings
 
 
 def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | None) -> str:
@@ -750,6 +774,9 @@ def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | 
             "           PASS here means your implementation matches this Module — not",
             "           that the Module matches what it describes.",
         ]
+    for warning in _failure_warnings(runs):
+        wrapped = textwrap.wrap(warning, width=74)
+        lines += ["", f"  warning: {wrapped[0]}", *(f"           {line}" for line in wrapped[1:])]
     return "\n".join(lines) + "\n"
 
 
@@ -774,6 +801,7 @@ def run_check(arguments: argparse.Namespace) -> int:
         for combination in _combinations(stated)
     ]
     level = _level(target.path)
+    warnings = _failure_warnings(runs)
 
     if arguments.json:
         payload = {
@@ -783,6 +811,8 @@ def run_check(arguments: argparse.Namespace) -> int:
         }
         if level is not None:
             payload["verification"] = {"model": level["model"], "level": level["level"]}
+        if warnings:
+            payload["warnings"] = warnings
         sys.stdout.write(json.dumps(payload, indent=2, sort_keys=False) + "\n")
     else:
         sys.stdout.write(_render(target, runs, level))

@@ -39,6 +39,8 @@ def test_migrate_splices_the_shipped_model_source_verbatim(tf, shipped) -> None:
     done = tf("tutorial", "migrate")
     assert done.returncode == 0, done.stderr
     assert "w_router: ConstTensor" in done.stdout
+    assert "Prepare real weights first" in done.stdout
+    assert "../spec/runtime.md#112-weight-converter-and-prepare--forward" in done.stdout
 
     authored = (Path(shipped["models"]) / "qwen3_5_35b_a3b" / "model.py").read_text(
         encoding="utf-8"

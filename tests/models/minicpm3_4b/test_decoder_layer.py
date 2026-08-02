@@ -19,7 +19,7 @@ import torch
 
 from tests.models.decode_oracle import agrees_to_one_rounding
 from tests.models.minicpm3_4b import reference
-from tests.models.minicpm3_4b.model import MiniCPM3_4B, config
+from tests.models.minicpm3_4b.model import _QK_HEAD_DIM, MiniCPM3_4B, config
 
 HIDDEN = reference.CONFIG.hidden_size
 
@@ -46,6 +46,7 @@ def test_generation_inputs_match_the_drawn_position() -> None:
     assert cos.shape == sin.shape == (config.max_position_embeddings, reference.CONFIG.head_dim)
     assert torch.equal(pos_ids, torch.tensor([step], device=DEV, dtype=torch.int32))
     assert scale.shape == (1, 1, 1, 1)
+    torch.testing.assert_close(scale, torch.full_like(scale, _QK_HEAD_DIM ** -0.5))
     assert residual_scale.shape == (1, 1, 1)
     assert caches is sentinel
 

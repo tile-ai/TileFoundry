@@ -67,8 +67,7 @@ cache across heads on the way in.
    k_rope_broadcast)``, nope first, restoring each head's 64/32 layout.
 7. **Attend** the cache and the token itself, online-softmax merged, then
    ``@ Wo``. ``scaling = qk_head_dim ** -0.5`` (96, not 64 or 32) arrives as the
-   ``scale`` tensor, read off ``layer.self_attn.scaling`` by the test rather than
-   recomputed here.
+   ``scale`` tensor, computed here from ``_QK_HEAD_DIM``.
 
 ``mla_attention`` fuses the preceding ``input_layernorm`` and ``mlp`` the
 post-attention one, so each fused kernel lines up with one HF
@@ -482,7 +481,7 @@ class MiniCPM3_4B:
         cos_cache, sin_cache = _generation_rope(device)
         pos_ids = torch.tensor([step], device=device, dtype=torch.int32)
         scale = torch.full(
-            (1, 1, 1, 1), config.head_dim ** -0.5, device=device, dtype=config.dtype
+            (1, 1, 1, 1), _QK_HEAD_DIM ** -0.5, device=device, dtype=config.dtype
         )
         residual_scale = torch.full(
             (1, 1, 1),

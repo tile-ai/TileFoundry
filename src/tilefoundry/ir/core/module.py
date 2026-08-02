@@ -15,8 +15,11 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.target import Target
+from tilefoundry.utils.spec_ref import spec_ref_render
 
 ModuleFunction = Union[HirFunction, PrimFunction]
+
+_MISSING_PREPARED_WEIGHT = "[runtime §1.7](docs/spec/runtime.md#17-missing-prepared-weight)"
 
 
 def _validate_declared(module_name, source, value, decl_type) -> None:
@@ -327,7 +330,10 @@ class Module:
             try:
                 value = resource.load(name)
             except KeyError as e:
-                raise KeyError(f"Module {self.name!r}: missing weight {name!r}") from e
+                raise KeyError(
+                    f"Module {self.name!r}: missing declared weight {name!r}; prepare produces it "
+                    f"({spec_ref_render(_MISSING_PREPARED_WEIGHT)})"
+                ) from e
             _validate_declared(self.name, f"weight {name!r}", value, decl_type)
             constants[name] = value
         return LoadedModule(
