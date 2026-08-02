@@ -111,6 +111,13 @@ def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
         if spec is None or spec.loader is None:
             raise ImportError(f"could not load source module {path}")
         module = importlib.util.module_from_spec(spec)
+        # Registered before it runs, because a class defined in it records this
+        # module's name and `dataclasses` resolves a string annotation by looking
+        # that name up in `sys.modules`. A file pairing `from __future__ import
+        # annotations` with a `@dataclass` is otherwise unloadable: the lookup
+        # returns None and the decorator raises. The `finally` below removes it
+        # again, `path.stem` being one of the sibling names.
+        sys.modules[spec.name] = module
         captured_stdout = io.StringIO()
         with contextlib.redirect_stdout(captured_stdout):
             try:

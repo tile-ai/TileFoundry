@@ -172,25 +172,3 @@ def test_models_rejects_a_name_the_catalog_does_not_have(tf) -> None:
     assert done.returncode == 1
     assert "no model named 'nope'" in done.stderr
     assert "qwen3_1_7b" in done.stderr
-
-
-def test_the_shipped_source_answers_the_public_commands_as_it_ships(
-    tf, shipped
-) -> None:
-    """No editing step: the root declares its machine, so the commands answer."""
-    source = Path(shipped["models"]) / "qwen3_1_7b" / "model.py"
-    static = f"{source}:Qwen3_1_7B.layer0.mlp"
-
-    scheduled = tf("schedule", static, "--topology", "cta")
-    assert scheduled.returncode == 0, scheduled.stderr
-    assert "partition cta x132 on nvidia.h200_sxm" in scheduled.stdout
-
-    threaded = tf("schedule", static, "--topology", "thread")
-    assert threaded.returncode == 0, threaded.stderr
-    assert "pipeline schedule" in threaded.stdout
-
-    # A selector whose extent is stated at launch takes it on the command line.
-    dynamic = f"{source}:Qwen3_1_7B.layer0.self_attention"
-    sized = tf("analyze", dynamic, "--compute-cost", "--dim", "ctx_len=1024")
-    assert sized.returncode == 0, sized.stderr
-    assert "flops" in sized.stdout

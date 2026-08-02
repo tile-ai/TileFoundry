@@ -86,6 +86,37 @@ def _label(expr: Expr, position: int) -> str:
     return binding_name(expr) or f"<value {position}>"
 
 
+def _unique_labels(order: list[Expr]) -> dict[int, str]:
+    """One unambiguous label per value, in the function's own value order.
+
+    An authored name does not identify one value: the parser attaches the
+    assignment's name to every nested expression of its right-hand side, so a
+    statement built from four operations produces four values all answering to the
+    same name. A row keyed by that name says less than it appears to -- a reader,
+    or a caller indexing the records, cannot tell which of the four it has.
+
+    So a repeated name takes the numeric suffix the printed form of the same
+    program already uses, first occurrence keeping the bare name. Assigned over the
+    whole value order rather than over the rows that get emitted, so which levels a
+    value occupies cannot renumber anything.
+
+    Temporary: the labels collide because of where the parser attaches the name, and
+    that is the thing to fix. Scoped value identity is tracked as follow-up work;
+    until then this keeps the report readable without touching the parser.
+    """
+    taken: set[str] = set()
+    labels: dict[int, str] = {}
+    for position, expr in enumerate(order):
+        base = _label(expr, position)
+        name, suffix = base, 2
+        while name in taken:
+            name = f"{base}_{suffix}"
+            suffix += 1
+        taken.add(name)
+        labels[id(expr)] = name
+    return labels
+
+
 def _residencies(fn: Function) -> tuple[tuple[_Residency, ...], int]:
     """Every allocation resident in *fn*, with the length of its value order.
 
@@ -109,6 +140,8 @@ def _residencies(fn: Function) -> tuple[tuple[_Residency, ...], int]:
     if fn.body is not None and id(fn.body) in last_use:
         last_use[id(fn.body)] = len(order) - 1
 
+    labels = _unique_labels(order)
+
     result: list[_Residency] = []
     for expr in order:
         if _is_view(expr):
@@ -117,7 +150,7 @@ def _residencies(fn: Function) -> tuple[tuple[_Residency, ...], int]:
         for level, amount in bytes_by_storage(expr.type).items():
             result.append(
                 _Residency(
-                    binding=_label(expr, position[id(expr)]),
+                    binding=labels[id(expr)],
                     level=level,
                     bytes=amount,
                     defined_at=position[id(expr)],

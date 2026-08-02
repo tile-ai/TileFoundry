@@ -384,7 +384,7 @@ class ValueLifetime:
     """One value's residency, as positions in the function's value order.
 
     Attributes:
-        binding: attribute; The parameter or authored binding name.
+        binding: attribute; The parameter or authored binding name, unique in the function.
         level: attribute; The memory level the value occupies.
         bytes: attribute; Bytes the value occupies at that level.
         defined_at: attribute; Position the value becomes resident.
@@ -466,6 +466,13 @@ class TimelineMetadata(IRMetadata):
   - The execution count MUST be the product of the execution-topology extents the
     call's value meshes carry and the owning Module declares. Conflicting extents
     for one topology name MUST raise rather than be reconciled.
+  - `ValueLifetime.binding` MUST identify one value within its function. An
+    authored name does not: the parser attaches an assignment's name to every
+    nested expression of its right-hand side, so several values answer to one name
+    and a row keyed by it says less than it appears to. A repeated name MUST take
+    the numeric suffix the printed form of the same program uses, the first
+    occurrence keeping the bare name, so a reader can line a row up with the value
+    it measures ([inspection](./inspection.md)).
   - `operands` MUST be positional against `(*call.args, call)`: one entry per
     argument in order, then the result. Each entry MUST be the amount the op's
     cost evaluator reported for that operand, unmodified. Two operands MAY name
