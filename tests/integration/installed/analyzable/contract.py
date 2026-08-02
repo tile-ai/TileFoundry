@@ -166,6 +166,24 @@ def _reached_through(case: ModelCase, selector: str) -> str:
     return f"{'.'.join(inner)}." if inner else ""
 
 
+def split_by_declaration(case: ModelCase, selector: str, args: Sequence):
+    """One positional argument list, split the way the command takes it.
+
+    An in-process call may hand every parameter over positionally, weights and all.
+    ``check`` does not: ``--input`` names the non-const parameters in declared order
+    and the rest arrive as a checkpoint. Split here from the declaration itself, so
+    a parameter that changes kind moves sides on its own.
+    """
+    _module, function = case.resolve(case.build(), selector)
+    activations, weights = [], {}
+    for parameter, value in zip(function.params, args, strict=True):
+        if getattr(parameter, "is_const", False):
+            weights[parameter.name] = value
+        else:
+            activations.append(value)
+    return activations, weights
+
+
 def compared(
     tf,
     work: Path,
@@ -178,6 +196,7 @@ def compared(
     expected: Sequence,
     held: Sequence[tuple[str, Mapping[str, float]]],
     dims: Mapping[str, int] | None = None,
+    _refuse: bool = False,
 ):
     """One ``check`` command: the shipped source against tensors produced here.
 
@@ -195,12 +214,16 @@ def compared(
         path = room / f"in{position}.pt"
         torch.save(tensor, path)
         argv += ["--input", str(path)]
-    save_file(
-        {f"{_reached_through(case, selector)}{name}": value.contiguous()
-         for name, value in weights.items()},
-        str(room / "model.safetensors"),
-    )
-    argv += ["--ckpt", str(room), *dim_args(dims)]
+    # A function that declares no ConstTensor needs no checkpoint, and an empty one
+    # is not a thing to write: every parameter it has arrived as an activation.
+    if weights:
+        save_file(
+            {f"{_reached_through(case, selector)}{name}": value.contiguous()
+             for name, value in weights.items()},
+            str(room / "model.safetensors"),
+        )
+        argv += ["--ckpt", str(room)]
+    argv += dim_args(dims)
     for position, tensor in enumerate(expected):
         path = room / f"want{position}.pt"
         torch.save(tensor, path)
@@ -212,7 +235,22 @@ def compared(
             argv += [f"--{bound}", repr(value)]
 
     done = tf(*argv)
-    assert done.returncode == 0, done.stdout + done.stderr
+    if not _refuse:
+        assert done.returncode == 0, done.stdout + done.stderr
+    return done
+
+
+def disagreed(tf, work: Path, source: Path, case: ModelCase, selector: str, **asked):
+    """The same command, held to reporting FAIL.
+
+    A parity comparison is only worth its tolerance if a wrong input breaks it, so
+    the perturbed runs assert the command refuses rather than that it agrees. The
+    bound they carry is far above the rounding the parity runs accept, which is what
+    makes "it changed" something other than round-off.
+    """
+    done = compared(tf, work, source, case, selector, _refuse=True, **asked)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "FAIL" in done.stdout, done.stdout
     return done
 
 
