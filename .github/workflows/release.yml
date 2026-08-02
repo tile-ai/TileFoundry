@@ -21,9 +21,6 @@ permissions:
 jobs:
   build-and-verify:
     runs-on: [self-hosted, tilefoundry]
-    env:
-      EVIDENCE_DIR: ${{ runner.temp }}/release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-      WHEEL_VENV: ${{ runner.temp }}/release-wheel-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,6 +40,9 @@ jobs:
       - name: Link baked cutlass headers
         run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
       - name: Verify the distribution wheel
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          WHEEL_VENV: ${{ runner.temp }}/release-wheel-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           mkdir -p "$EVIDENCE_DIR"
           python -m venv --system-site-packages "$WHEEL_VENV"
@@ -55,7 +55,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-verification
-          path: ${{ env.EVIDENCE_DIR }}/
+          path: ${{ runner.temp }}/release-evidence-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: warn
       - name: Upload distributions
         uses: actions/upload-artifact@v4
