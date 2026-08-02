@@ -12,6 +12,8 @@ import json
 import contract
 import pytest
 
+from tests.models.qwen3_5_35b_a3b import reference
+
 MODEL = "qwen3_5_35b_a3b"
 CASES = contract.model_cases(MODEL)
 
@@ -127,3 +129,78 @@ def test_the_command_reads_the_machine_off_the_shipped_source(
     done = contract.capabilities(tf, shipped_source(MODEL), case, planned.selector)
 
     assert done.stdout.strip()
+
+
+# ── against Hugging Face ─────────────────────────────────────────────────────
+#: Two lengths, so a mixer that only works at the length it was authored against
+#: cannot pass.
+CTX_LENGTHS = (25, 40)
+
+FULL = next(case for case in CASES if case.id.endswith("full_attention"))
+LINEAR = next(case for case in CASES if case.id == "qwen3_5_35b_a3b")
+
+
+@pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
+def test_full_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
+    """`full_attention` -- input_layernorm plus GQA with per-head q_norm/k_norm,
+    partial RoPE and the output gate, over the cache and the new token -- against
+    Hugging Face's own attention at the decoded position, at two lengths.
+
+    The returned key and value are this token's cache entry, compared against a
+    cache rebuilt one token longer rather than against the step's own inputs. The
+    cache each entry is appended to is the oracle's own, so this token's entry is
+    the only computed part and the one the bound follows.
+    """
+    step = reference.full_step(ctx_len=ctx_len, device="cpu")
+    loaded = reference.load_mixer("full_attention", step.layer)
+    want = reference.full_mixer_oracle(step)
+    want_key, want_value = reference.appended_cache_oracle(step)
+    entry_key, entry_value = want_key[:, ctx_len:], want_value[:, ctx_len:]
+
+    assert want_key.shape[1] == ctx_len + 1
+    contract.compared(
+        tf, tmp_path, shipped_source(MODEL), FULL, "full_attention",
+        activations=(step.hidden_new, *step.mixer_acts),
+        weights=loaded.constants,
+        expected=(want, entry_key, entry_value),
+        held=(
+            contract.three_roundings(want),
+            contract.three_roundings(entry_key),
+            contract.three_roundings(entry_value),
+        ),
+        dims={"ctx_len": ctx_len},
+    )
+
+
+@pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
+def test_linear_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
+    """`linear_attention` -- input_layernorm plus the causal convolution,
+    L2-normalised query and key, the gated delta rule and the gated output norm --
+    against Hugging Face's own mixer at the decoded position, at two lengths.
+
+    The returned convolution column and recurrent matrix are the state a caller
+    holds afterwards, compared against a state rebuilt one token longer. For the
+    recurrent matrix that is the failure worth guarding, since its shape gives
+    nothing away. No `--dim`: this mixer's state is a fixed-size recurrent matrix
+    rather than a growing cache, so it leaves no dimension open to bind -- the two
+    lengths differ in the context the oracle was drawn over, not in the kernel.
+    """
+    step = reference.linear_step(ctx_len=ctx_len, device="cpu")
+    loaded = reference.load_mixer("linear_attention", step.layer)
+    want = reference.linear_mixer_oracle(step)
+    want_conv, want_state = reference.advanced_state_oracle(step)
+    # The window slides on its last axis, so this token's column is the newest one.
+    entry = want_conv[..., -1:]
+
+    contract.compared(
+        tf, tmp_path, shipped_source(MODEL), LINEAR, "linear_attention",
+        activations=(step.hidden_new, *step.mixer_acts),
+        weights=loaded.constants,
+        expected=(want, entry, want_state),
+        held=(
+            contract.three_roundings(want),
+            contract.three_roundings(entry),
+            contract.three_roundings(want_state),
+        ),
+    )
+
