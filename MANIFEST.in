@@ -1,5 +1,2 @@
-# Git archive metadata is meaningful only after export substitution.
-exclude .git_archival.txt
-
 # Examples ship with the repository tag, not with the Python source distribution.
 prune examples
