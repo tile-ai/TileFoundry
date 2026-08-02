@@ -245,3 +245,29 @@ def test_mla_cache_pairing_is_load_bearing(tf, shipped_source, tmp_path) -> None
     values[10] = step.v_cache[:, perm]
     _mla(tf, tmp_path, source, step, args=values, refuse=True)
 
+
+@pytest.mark.parametrize("act_seed", reference.MOE_DRAWS)
+def test_moe_matches_hugging_face_at_the_published_expert_count(
+    tf, shipped_source, tmp_path, act_seed
+) -> None:
+    """The full 256-expert MoE, over four independent draws.
+
+    Four draws rather than one batch of four tokens: the decode contract fixes the
+    token count at the literal 1, so breadth over which experts get selected has to
+    come from redrawing. The four draws select genuinely different expert sets.
+    """
+    hf_moe = reference.build_hf_moe(device="cpu")
+    try:
+        step = reference.moe_inputs(device="cpu", act_seed=act_seed, hf_moe=hf_moe)
+        want = reference.moe_oracle(step)
+        activations, weights = contract.split_by_declaration(CASES[0], "moe.moe", step.args)
+        contract.compared(
+            tf, tmp_path, shipped_source(MODEL), CASES[0], "moe.moe",
+            activations=activations,
+            weights=weights,
+            expected=(want,),
+            held=(contract.three_roundings(want),),
+        )
+    finally:
+        del hf_moe
+

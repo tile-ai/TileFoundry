@@ -204,3 +204,26 @@ def test_linear_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx
         ),
     )
 
+
+MOE = next(case for case in CASES if case.id.endswith("_moe"))
+
+
+def test_the_moe_block_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
+    """The whole block -- post_attention_layernorm plus `Qwen3_5MoeSparseMoeBlock`,
+    routed experts and the shared expert together -- against Hugging Face's own.
+
+    Named as a Module so `check` compares the block's own orchestration rather than
+    one of its functions: the routed and shared halves are summed inside it.
+    """
+    step = reference.linear_step(device="cpu", whole_layer=True)
+    loaded = reference.load_moe(step.layer)
+    want = reference.moe_oracle(step.layer, step.hidden_new)
+
+    contract.compared(
+        tf, tmp_path, shipped_source(MODEL), MOE, "",
+        activations=(step.hidden_new,),
+        weights=contract.nested_constants(loaded),
+        expected=(want,),
+        held=(contract.three_roundings(want),),
+    )
+

@@ -184,6 +184,20 @@ def split_by_declaration(case: ModelCase, selector: str, args: Sequence):
     return activations, weights
 
 
+def nested_constants(loaded, prefix: str = "") -> dict:
+    """Every weight a loaded Module holds, its children's included.
+
+    A Module names only its own; a checkpoint has to carry the children's too, keyed
+    by the path they are reached through, or the child is loaded with nothing.
+    """
+    found = {f"{prefix}{name}": value for name, value in loaded.constants.items()}
+    for child in getattr(loaded, "modules", ()) or ():
+        inner = getattr(loaded, child.name, None)
+        if inner is not None and hasattr(inner, "constants"):
+            found.update(nested_constants(inner, f"{prefix}{child.name}."))
+    return found
+
+
 def compared(
     tf,
     work: Path,
