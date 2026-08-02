@@ -47,7 +47,7 @@ class Mesh:
     ``topologies``. ``__post_init__`` normalizes ``topologies`` to a
     non-empty ``tuple[Topology, ...]`` (a single Topology or a non-empty
     tuple accepted; a raw string rejected) and coerces a ``(s0, s1, ...)``
-    layout shorthand to a C-order ``Layout`` — see ``docs/spec/shard.md`` §5.
+    layout shorthand to a C-order ``Layout`` — see ``docs/spec/shard.md`` [shard §5](docs/spec/shard.md#5-mesh).
 
     ``layout`` is a plain ``Layout`` for an un-sliced mesh. A constant slice
     (``m[1:3, :]``, used by ``T.sync``) replaces ``layout`` with a

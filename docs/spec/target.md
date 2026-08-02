@@ -112,7 +112,7 @@ class SM90:
     compute DTypes by SM90.
   - Device-frequency-dependent FLOP/s values MUST NOT be stored on SM90.
   - No field MAY carry a default: every value comes from the installed
-    document (§10), so the class declares shape and never content.
+    document ([§1](#1-target)0), so the class declares shape and never content.
 
 ## 3. `H200SXM`
 
@@ -133,7 +133,7 @@ class H200SXM:
   - H200SXM MUST describe one device and MUST NOT carry a GPU count.
   - H200SXM MUST describe how many SMs the product has and how its memory
     system and compute units perform. Per-SM structural limits belong to the
-    architecture (§2).
+    architecture ([§2](#2-sm90)).
   - `peak_for` MUST expose a dense integer FLOP/s entry for each of `f32`,
     `f16`, `bf16`, and `fp8e4m3`, each value taken from the installed document.
   - `f4e2m1` and `f8e8m0` MUST have no compute-throughput entry.
@@ -142,7 +142,7 @@ class H200SXM:
     value for it. A recorded absence and a number are both statements about the
     product; a substituted figure would not be.
   - No field MAY carry a default, and no resource value MAY be written as a
-    Python literal: the installed document is the single source (§10).
+    Python literal: the installed document is the single source ([§1](#1-target)0).
     Selecting a different installed document by ID is not an override; supplying
     a partial or edited number without a document behind it is, and is not
     admitted.
@@ -177,7 +177,7 @@ class CudaTarget(Target):
 - constraints:
   - `device` and `architecture` MUST each accept an installed document ID or a
     concrete value. An ID MUST resolve immediately to the typed value, and the
-    resolved ID and content digest MUST be retained (§10.2).
+    resolved ID and content digest MUST be retained ([§1](#1-target)0.2).
   - `device` MUST be required. The constructor MUST NOT select hardware for a
     caller who named none: a target nobody stated would answer about a machine
     nobody has.
@@ -317,7 +317,7 @@ class AppleAmx:
     AppleAmx.
   - AMX has no CTA thread level, so AppleAmx MUST carry no CTA thread limit.
   - No field MAY carry a default: every value comes from the installed
-    document (§10).
+    document ([§1](#1-target)0).
 
 ## 8. `AppleM2Pro`
 
@@ -348,7 +348,7 @@ class AppleM2Pro:
     MUST NOT exceed `performance_core_count`.
   - Cache and core facts MUST distinguish the performance core from the
     efficiency core, and every value MUST come from the installed document
-    (§10). No field MAY carry a default.
+    ([§1](#1-target)0). No field MAY carry a default.
   - A core-level tile's resident footprint MUST be bounded by
     `l1d_bytes_per_performance_core`. The AMX register files bound one atom
     instance instead, which the storage filter enforces rather than a per-tile
@@ -390,7 +390,7 @@ class AmxTarget(Target):
 
 - constraints:
   - `architecture` and `device` MUST accept an installed document ID or a
-    concrete value, on the same terms as §4.
+    concrete value, on the same terms as [§4](#4-cudatarget).
   - `AmxTarget()` MUST select the installed `apple.amx` and `apple.m2_pro`
     documents, and `arch` MUST equal
     `architecture.name`.
@@ -562,5 +562,5 @@ def register_target_facts(
   - The registry MUST be generic: the common code MUST NOT import or name a
     concrete target, architecture, or device class, so adding a backend adds a
     registration rather than a branch.
-  - The hardware-specification registry (§10.2), the algorithm registry, and the
+  - The hardware-specification registry ([§1](#1-target)0.2), the algorithm registry, and the
     Target Facts registry MUST remain distinct module-level registries.

@@ -1,4 +1,4 @@
-"""String dtype / reduce-kind authoring surface (parser.md §2.4).
+"""String dtype / reduce-kind authoring surface ([parser §2.4](docs/spec/parser.md#24-pyi-stub-regeneration)).
 
 The DSL surface accepts the string form (`dtype="f32"`, `kind="sum"`); the
 parser normalizes it to the IR-canonical descriptor or enum at the call

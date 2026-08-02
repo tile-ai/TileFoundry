@@ -1,5 +1,5 @@
 """``Module`` — top-level compilation unit: functions, child modules, and plain
-orchestration methods. See docs/spec/core-ir.md §1.
+orchestration methods. See [core-ir §1](docs/spec/core-ir.md#1-module).
 """
 from __future__ import annotations
 
@@ -320,7 +320,7 @@ class Module:
         """This Module's constants read from *resource*, as a ``LoadedModule``.
 
         Returns rather than mutates: the Module is IR and may be read any number
-        of times. See docs/spec/runtime.md §1.1.2.
+        of times. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
         """
         constants: dict[str, object] = {}
         for name, decl_type in self.weights.items():
@@ -372,7 +372,7 @@ class Module:
     def prepare(self, raw, out_dir: str, *, device: str = "cpu") -> None:
         """Run every node's per-weight converters over *raw* and write the
         canonical weights to *out_dir* as one safetensors shard plus an index.
-        See docs/spec/runtime.md §1.1.2."""
+        See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)."""
         flat: dict[str, object] = {}
         self._prepare_into(raw, "", flat, device)
 
@@ -449,7 +449,7 @@ class LoadedModule:
     Two may stand over one Module and neither sees what the other bound. Attribute
     access mirrors ``Module``'s, except that a function resolves to a runner
     filling ``ConstTensor`` parameters from these constants, so the caller passes
-    activations alone. See docs/spec/runtime.md §1.1.2.
+    activations alone. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
     """
 
     module: Module
@@ -497,7 +497,7 @@ class LoadedModule:
         name from these bindings.
 
         Weights and activations must already agree on one device, which is where
-        this runs; nothing is moved implicitly. See docs/spec/runtime.md §1.1.2.
+        this runs; nothing is moved implicitly. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
         """
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
@@ -525,7 +525,7 @@ class LoadedModule:
 
     def _placement(self, fn: ModuleFunction, acts: tuple) -> str | None:
         """The one device every bound constant and tensor activation agrees on,
-        or ``None`` when none names one. See docs/spec/runtime.md §1.1.2."""
+        or ``None`` when none names one. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)."""
         where: dict[str, list[str]] = {}
         for name, value in self.constants.items():
             device = getattr(value, "device", None)
@@ -585,7 +585,7 @@ def select(module: Module, path: str) -> Module:
     at it, so what comes back is always something with a Target and a topology
     hierarchy to be measured against. An empty *path* is *module* itself.
 
-    See docs/spec/core-ir.md §1.2.
+    See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
     """
     selected = module
     segments = path.split(".") if path else []
@@ -624,7 +624,7 @@ def function_selectors(
     A ``PrimFunction`` is not one of these: it is an implementation of a function
     rather than a function of the model.
 
-    See docs/spec/core-ir.md §1.2.
+    See [core-ir §1.2](docs/spec/core-ir.md#12-selecting-a-node-by-path).
     """
     found: list[tuple[str, HirFunction]] = [
         (f"{prefix}{function.name}", function)

@@ -55,7 +55,7 @@ def test_plain_formal_specializes_per_call_site():
 def test_carrying_loop_propagates_split():
     """A callee whose body is a single-carry loop-phi ``GridRegionExpr``
     (``acc = x + x`` before the loop, ``acc = acc + x`` inside it): the loop-phi's
-    own type must re-derive from the elaborated init value (hir.md §1.2), not stay
+    own type must re-derive from the elaborated init value ([hir §1.2](docs/spec/hir.md#12-gridregionexpr)), not stay
     at the callee's parse-time unsharded type."""
     param_type = make_tensor_type((8,), _F)
     x = Var(type=param_type, name="x")

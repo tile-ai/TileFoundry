@@ -60,7 +60,7 @@ class Constant(Expr):
 
 @dataclass(frozen=True)
 class Call(Expr):
-    """Call to an Op. Produces a value. Cannot be top-level Stmt in tir (§8.5)."""
+    """Call to an Op. Produces a value. Cannot be top-level Stmt in tir."""
     target: Op
     args: tuple[Expr, ...]
 

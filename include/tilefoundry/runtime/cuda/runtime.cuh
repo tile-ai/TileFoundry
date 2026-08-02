@@ -1,4 +1,4 @@
-// tilefoundry runtime — thin wrapper around CuTe (spec 010 §5 / §6).
+// tilefoundry runtime — thin wrapper around CuTe.
 //
 // Provides our own `tilefoundry::Mesh` / `tilefoundry::TopologyScope` /
 // `tilefoundry::ShardLayout` / `tilefoundry::ShardTensor` template surface.
@@ -54,7 +54,8 @@ CUTE_HOST_DEVICE size_t program_id<TopologyScope::thread>() noexcept {
 // No program_id<TopologyScope::warp> specialization: codegen only admits
 // ("cta", "thread") program topology levels (target/cuda/target.py
 // topology_levels()), so this is never instantiated. The TopologyScope::warp
-// enumerator itself stays (spec runtime.md §2.1's fixed enumeration); a real
+// enumerator itself stays ([runtime
+// §2.1](docs/spec/runtime.md#21-topologyscope)'s fixed enumeration); a real
 // warp-scoped program_id (thread id >> 5) belongs with whichever milestone
 // wires warp-scoped meshes, together with a test.
 

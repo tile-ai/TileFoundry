@@ -135,8 +135,7 @@ def test_two_mesh_axes_on_same_output_axis_factorize():
 
 def test_a_synthesised_layout_agrees_with_a_from_scratch_one():
     """``make_shard_tensor_type`` (a from-scratch sharding) and
-    ``derive_output_shard_layout`` (a propagated one) both build a shard.md
-    §7.1.1 layout through the shared ``canonical_shard_layout``, so for the same
+    ``derive_output_shard_layout`` (a propagated one) both build a [shard §7.1.1](docs/spec/shard.md#711-layoutshape) layout through the shared ``canonical_shard_layout``, so for the same
     logical sharding they must compare equal -- otherwise a propagated value and
     an authored one describing the same distribution would need a reshard between
     them.

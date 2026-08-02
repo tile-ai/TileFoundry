@@ -30,8 +30,12 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
 )
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .static_eval import eval_static
+
+#: The section stating the per-mesh-axis `attrs` rule the refusal below quotes.
+_SHARD_ATTR = "[shard §6](docs/spec/shard.md#6-shardattr)"
 
 
 class LayoutSugarError(VerifyError):
@@ -351,13 +355,13 @@ def parse_shard_layout_sugar(
     - ``{mesh.axis @ P("reduction"), ...}`` → mesh-axis Partial value states
     A mesh axis named in no Split and no Partial is Broadcast (the default).
 
-    Returns a ``ShardLayout`` with mesh-rank ``attrs`` (§8.2).
+    Returns a ``ShardLayout`` with mesh-rank ``attrs`` ([shard §6](docs/spec/shard.md#6-shardattr)).
     """
     axis_node, strides, value_set_node = _split_layout_outer(node)
 
     dim_nodes = _get_dim_nodes(axis_node)
     # Verbose ``((dims), (strides))`` form (user-supplied strides) MUST NOT
-    # be canonicalized; see parser.md §1.5.
+    # be canonicalized; see [parser §1.5](docs/spec/parser.md#15-layout-sugar).
     canonicalize = strides is None
     parsed: list[_LayoutItem] = []
     for dn in dim_nodes:
@@ -409,7 +413,7 @@ def parse_shard_layout_sugar(
             if not isinstance(attrs_list[m_axis], Broadcast):
                 raise VerifyError(
                     f"mesh axis {m_axis} already bound; "
-                    "one layout dim per mesh axis (§8.4)"
+                    f"one layout dim per mesh axis ({spec_ref_render(_SHARD_ATTR)})"
                 )
             attrs_list[m_axis] = Split(layout_axis)
 
@@ -422,7 +426,7 @@ def parse_shard_layout_sugar(
 
     # Sugar (`strides is None`) leaves the layout strides un-materialized;
     # `Reshard` typeinfer / `Function` signature binding discharges them
-    # per spec docs/spec/hir.md §3 / §1. Verbose `((shape),(strides))`
+    # per [parser §1.5](docs/spec/parser.md#15-layout-sugar). Verbose `((shape),(strides))`
     # carries explicit strides verbatim.
     return ShardLayout(
         layout=Layout(shape=tuple(shape), strides=strides),
@@ -624,7 +628,7 @@ def _canonicalize_single_axis(
 ) -> list[_LayoutItem]:
     """Canonicalize ``N @ m.a`` into the factorised pair when ``N > mesh_extent(a)``.
 
-    Per parser.md §1.5 / shard.md §7.1.1: surface sugar ``N @ m.a`` where
+    Per [parser §1.5](docs/spec/parser.md#15-layout-sugar) / [shard §7.1.1](docs/spec/shard.md#711-layoutshape): surface sugar ``N @ m.a`` where
     ``N > mesh_extent(a)`` MUST be expanded into
     ``(mesh_extent(a) @ m.a, N // mesh_extent(a))`` so every Split-bound
     layout dim has ``local_shape == 1``. ``N % mesh_extent(a) == 0`` is

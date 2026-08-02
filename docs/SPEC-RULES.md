@@ -65,6 +65,30 @@ A construct has one owning section. Other specs link to that section instead of
 restating its definition. Keep examples only when they pin down an otherwise
 ambiguous contract corner.
 
+## Referring To A Section
+
+Every reference to a spec section is a markdown link:
+
+    [<doc> §<number>](<path>#<github-anchor>)
+
+*path* is relative inside `docs/spec` (`./runtime.md`), repository-root
+everywhere else (`docs/spec/runtime.md`). The anchor MUST name the section the
+display text numbers, never a heading nested under it. A bare `§2.3` records
+which section was true once; the link breaks when the heading moves, which is
+the point.
+
+`scripts/spec_refs_lint.py` enforces this over `docs/spec/*.md`, `src/`,
+`tests/` and `include/`; a `§` inside a fenced block is example text.
+`tilefoundry.utils.spec_ref.spec_ref_render` renders one as
+`spec runtime §1.1.2` for a refusal message.
+
+**Append a section; do not renumber one.** A number is an address that code,
+sibling specs and the `spec` command all reach a section by. Duplicates are
+worse than gaps: two `3.1` headings make both unreachable by
+`tilefoundry spec <topic> 3.1`. Gaps and out-of-order numbering are the accepted
+cost — `docs/spec/runtime.md` numbers `2.10` before `2.9`. This part is habit:
+the lint catches a renamed heading, not a renumbered one.
+
 ## Entropy And Close Tracking
 
 `scripts/spec_entropy_lint.py` guards Python code comments/docstrings from

@@ -233,7 +233,7 @@ def _launch_entry_with_grid_x(extent):
 
 def test_launch_extent_rejects_raw_dimvar() -> None:
     """A grid/block extent slot must be an Expr; a raw ``DimVar`` Op (which is
-    not an Expr) is rejected by verify (tir.md §3.6)."""
+    not an Expr) is rejected by verify ([tir §1.3](docs/spec/tir.md#13-primfunction))."""
     from tilefoundry.ir.core import VerifyError  # noqa: PLC0415
     from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
 

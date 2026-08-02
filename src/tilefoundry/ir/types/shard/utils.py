@@ -18,7 +18,7 @@ def make_mesh(
     ``topology`` accepts an explicit ``Topology`` or the ``"gpu"``-shorthand
     default; a raw string is resolved here into a real ``Topology`` sized to
     the domain (``Mesh`` itself rejects a string — ``docs/spec/shard.md``
-    §5).
+    [shard §5](docs/spec/shard.md#5-mesh)).
     """
     if names is None:
         names = ("g",) if len(layout_shape) == 1 else tuple("abcdef"[: len(layout_shape)])

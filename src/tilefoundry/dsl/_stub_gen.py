@@ -198,7 +198,7 @@ def _module_header(dialect: str, types_seen: set[str]) -> str:
 
 # Parser intrinsics that are NOT OpSchema-backed (handled directly by the
 # parser, e.g. the loop-domain builtin ``for i in tile(...)`` — see
-# parser.md §1.7). They are accessed through the same ``from tilefoundry.dsl.tf
+# [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only)). They are accessed through the same ``from tilefoundry.dsl.tf
 # import *`` surface as ops, so the stub declares them for editor/type
 # completion. ``range`` is intentionally absent — the HIR loop form reuses
 # Python's builtin ``range``.

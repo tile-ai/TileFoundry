@@ -41,7 +41,7 @@ def _constant_type(value: object) -> TensorType:
 
 @dataclass
 class TypeInferContext:
-    """Walk-local type-of cache + error helper. Spec §4.
+    """Walk-local type-of cache + error helper. Spec [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
 
     The actual per-``Expr``-kind derivation rules live on
     ``TypeInferVisitor`` (visitor_registry.visitors); this context is only
@@ -102,7 +102,7 @@ class VerifyContext(TypeInferContext):
 
     VerifyVisitor pushes/pops the enclosing `MeshScope.mesh` as it traverses,
     so per-stmt verify handlers can check that any `ShardLayout.mesh`
-    referenced at the current point is in scope (see tir spec §6.6).
+    referenced at the current point is in scope (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
 
     mesh_stack: list = field(default_factory=list)

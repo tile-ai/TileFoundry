@@ -1,10 +1,10 @@
 """Shared ``__getattr__`` / ``__dir__`` factory for the ``tf`` / ``T`` DSL
-namespace modules (parser.md §2.1-§2.3).
+namespace modules ([parser §2.1](docs/spec/parser.md#21-model)-[parser §2.3](docs/spec/parser.md#23-resolution-algorithm)).
 
 Both dialect namespaces resolve names on demand against the OpSchema
 registry with the same algorithm; this module ships that algorithm once so
 ``dsl.tf`` / ``dsl.T`` shrink to a dialect string (and, for ``T``, a
-platform-sub-namespace pre-resolver, §2.6).
+platform-sub-namespace pre-resolver, [parser §2.6](docs/spec/parser.md#26-platform-sub-namespaces)).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from tilefoundry.ir.core.op_registry import get_schemas, iter_schema_names
 from tilefoundry.parser.overload import resolve
 
 # Tried in order, before the OpSchema registry lookup; returns the resolved
-# value or ``None`` to fall through (e.g. T's platform sub-namespaces, §2.6).
+# value or ``None`` to fall through (e.g. T's platform sub-namespaces, [parser §2.6](docs/spec/parser.md#26-platform-sub-namespaces)).
 PreResolver = Callable[[str], Any]
 
 

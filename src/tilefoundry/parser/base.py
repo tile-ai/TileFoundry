@@ -144,7 +144,7 @@ def _is_const_tensor_annotation(node: ast.AST) -> bool:
 
 def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
     """Resolve a tensor type annotation. Shared by ``@func`` and
-    ``@prim_func`` param / return annotations (parser.md §1.4) so a layout-
+    ``@prim_func`` param / return annotations ([parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations)) so a layout-
     sugar ``Tensor[...]`` annotation resolves identically in both dialects.
 
     Supports two forms:
@@ -722,9 +722,8 @@ class BaseExprVisitor:
           ``@register_op`` on Op classes and by ``@register_alias``
           on alias builder functions, both of which
           ``tilefoundry.dsl.tf.<name>`` returns). When the closure path
-          misses, ``dispatch.resolve_callable`` is consulted (parser.md
-          §3.2/§3.3) — dialect-strict registry dispatch honouring the
-          TIR-only trailing-underscore effect-form selector (§1.3/§4.6).
+          misses, ``dispatch.resolve_callable`` is consulted ([parser §3.2](docs/spec/parser.md#32-class-diagram)/[parser §3.3](docs/spec/parser.md#33-description)) — dialect-strict registry dispatch honouring the
+          TIR-only trailing-underscore effect-form selector ([parser §1.3](docs/spec/parser.md#13-op-call)/[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution)).
         - ``ast.Attribute(value=ast.Name(<ns>))``: ``tf.add(...)``
           / ``T.copy(...)``. The leading Name resolves to the
           ``tilefoundry.dsl.tf`` / ``T`` namespace module (matched by
@@ -789,7 +788,7 @@ class BaseExprVisitor:
         """Build a ``Call(target=<hir.Function>, args=...)`` for a nested
         ``@func`` → ``@func`` call site. Arg-count enforcement lives in
         the parser; argument *types* are bound by elaboration
-        (``tilefoundry.ir.hir.function.elaborate``, hir.md §1.1) before the
+        (``tilefoundry.ir.hir.function.elaborate``, [hir §1.1](docs/spec/hir.md#11-function)) before the
         ``Call`` is built, so ``Call.target`` is the actual per-call-site
         instance (needed for the viewer/printer to read correctly-propagated
         types off ``call.target.body``), not just ``Call.type``.

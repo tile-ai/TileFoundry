@@ -1,5 +1,5 @@
 """Emitter for `tir.MeshScope` — emits a C++ block + comment marker +
-constexpr Mesh type alias (spec 010 §5)."""
+constexpr Mesh type alias ([runtime §2.3](docs/spec/runtime.md#23-tilefoundrymesh))."""
 
 from __future__ import annotations
 

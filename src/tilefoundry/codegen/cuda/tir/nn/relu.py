@@ -21,7 +21,7 @@ def _materialised_shape_dyn(ty) -> tuple:
     runtime element count can be derived via ``shape_runtime_total``."""
     layout = getattr(ty, "layout", None)
     if isinstance(layout, ShardLayout):
-        # spec §7: ``layout.shape`` is global; derive per-thread local.
+        # [shard §7.1.1](docs/spec/shard.md#711-layoutshape): ``layout.shape`` is global; derive per-thread local.
         return shard_layout_local_shape(layout)
     return tuple(ty.shape)
 

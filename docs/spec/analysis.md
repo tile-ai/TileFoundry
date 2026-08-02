@@ -98,7 +98,7 @@ class TileGraph:
     MUST NOT be a single unnamed set: the schedule tree needs one named tuple
     per statement.
   - `deps` MUST relate statement *instances* and MUST be derived from
-    `reads` / `writes` by the extraction itself (§1.3), never supplied by a
+    `reads` / `writes` by the extraction itself ([§1.3](#13-extract)), never supplied by a
     caller.
   - `units` MUST be ordered so that every dependence runs forwards: the order
     is the body's SSA-DAG postorder, which makes sequencing the statements in
@@ -110,7 +110,7 @@ class TileGraph:
     relation names, so a byte count over an access relation needs no second
     walk of the HIR.
   - `parallel_dims` MUST carry exactly one flag per own domain dimension of
-    every statement, and MUST be measured from `domain` + `deps` (§1.7) rather
+    every statement, and MUST be measured from `domain` + `deps` ([§1.7](#17-parallel-dimensions)) rather
     than reported by a scheduler.
   - `tree`, `ring` and `decisions` MUST be empty (`None` / `{}`) as returned by
     `extract`, and MUST be filled only by the schedule stages that decide them
@@ -137,7 +137,7 @@ dependents) and classifies every node it meets:
 | `Call` of `TupleGetItem` / `Reshape` / `Gather` | structural view — no statement. It resolves to its source's buffer name, and the coordinate change it expresses is folded into every consumer's access map |
 | `Call` of `Zeros` / `FullLike` | buffer declaration — no statement and no access relation: it names a fresh buffer and gives it a starting value |
 | `Call` whose target is a `Function` | penetrated, not rejected: the callee's params bind to the caller's already-resolved argument expressions, its body is walked in place, and every statement and buffer it contributes is prefixed with the callee name plus a per-call-site index |
-| `GridRegionExpr` | not a statement — it contributes one leading domain dimension to every statement it encloses (§1.4) |
+| `GridRegionExpr` | not a statement — it contributes one leading domain dimension to every statement it encloses ([§1.4](#14-authored-loops)) |
 | `Tuple` | resolved through the same substitution table; no statement |
 
 - constraints:
@@ -308,7 +308,7 @@ rather than obtained from a scheduler.
 
 ## 2. Authored-HIR metrics
 
-The measurement entry is the composed operation (§3). What a human or a tool
+The measurement entry is the composed operation ([§3](#3-composed-analysis)). What a human or a tool
 reads is a *rendering* of its semantic result and of the records it left on the
 IR ([inspection](./inspection.md)); the command line composes one call per
 requested analysis and renders the results together
@@ -321,7 +321,7 @@ requested analysis and renders the results together
   - A rendering MUST report what the caller *requested*. A requested analysis
     pulls its dependencies in, so records reach the IR that nobody asked to see;
     those records MUST stay on the IR and MUST NOT be reported. Which records an
-    analysis owns MUST be read from its registration (§3.1) rather than from a
+    analysis owns MUST be read from its registration ([§3.1](#31-analysis-registration)) rather than from a
     second table.
   - Every rendering of one run MUST make that selection through one shared
     decision. A summary and an annotated program are two views of the same run,

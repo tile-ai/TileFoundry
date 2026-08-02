@@ -33,6 +33,7 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
 from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.target import Target, resolve_target
+from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (
     BaseExprVisitor,
@@ -45,6 +46,11 @@ from .range_slice import RangeSlice
 from .static_eval import eval_static
 from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar
 from .symtab import LexicalEnv
+
+#: Sections whose rules the refusals below quote, held whole so they are
+#: checked, rendered short into the message a user reads.
+_HIR_FUNCTION = "[hir §1.1](docs/spec/hir.md#11-function)"
+_PARSER_MESH = "[parser §1.6](docs/spec/parser.md#16-with-mesh-as-m)"
 
 # Python AST binary ops → dim ops, for resolving loop bounds (tile/range
 # extent / step / start) that mix DimVars with ints, e.g. ``C // NUM_SPLITS``.
@@ -187,7 +193,7 @@ def _parse_func_node(
     )
     if _is_pass_body(node.body):
         # A `pass` body declares a dispatch prototype: signature + envelope
-        # only, no implementation (hir §5). Its variants carry the bodies.
+        # only, no implementation (hir [parser §5](docs/spec/parser.md#5-hir-parser)). Its variants carry the bodies.
         body_expr = None
     else:
         body_expr = visitor.visit_body(node.body)
@@ -531,7 +537,7 @@ class _HirBodyVisitor(BaseExprVisitor):
         self.pending_constraints: dict[int, ScheduleConstraintMetadata] = {}
 
     # Function body: assignment statements only update the symtab; hir is
-    # SSA-as-DAG (§8.6), so variable sharing is expressed by the tail Expr
+    # SSA-as-DAG ([hir §1](docs/spec/hir.md#1-hir-expr-constructs)), so variable sharing is expressed by the tail Expr
     # referencing the same Expr object via env lookup. The body returns the
     # tail `return` expression directly — no LetExpr node emitted.
     def visit_body(self, stmts: list[ast.stmt]) -> Expr:
@@ -567,7 +573,9 @@ class _HirBodyVisitor(BaseExprVisitor):
         node = stmts[idx]
         if isinstance(node, ast.Return):
             if node.value is None:
-                raise VerifyError("§8.2: @tilefoundry.func return must carry a value")
+                raise VerifyError(
+                f"{spec_ref_render(_HIR_FUNCTION)}: @tilefoundry.func return must carry a value"
+            )
             if isinstance(node.value, ast.Tuple):
                 return self._tuple_expr_expr(node.value)
             return self.expr(node.value)
@@ -802,7 +810,7 @@ class _HirBodyVisitor(BaseExprVisitor):
         return self._eval_static(node)
 
     def _visit_loop_for(self, node: ast.For, stmts, idx, require_return: bool = True):
-        """§3.3 / §5.4: `for i in tile(...)` / `for i in range(...)` →
+        """[parser §3.3](docs/spec/parser.md#33-description) / [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only): `for i in tile(...)` / `for i in range(...)` →
         GridRegionExpr, then continue the statement chain.
 
         ``tile`` and ``range`` share the same loop domain ``(start, extent,
@@ -1112,10 +1120,11 @@ class _HirBodyVisitor(BaseExprVisitor):
         mesh = self._resolve_mesh_context(item.context_expr)
         if not isinstance(mesh, Mesh):
             raise VerifyError(
-                f"hir: `with` context must evaluate to a Mesh (§3.4), got {type(mesh).__name__}"
+                f"hir: `with` context must evaluate to a Mesh "
+                f"({spec_ref_render(_PARSER_MESH)}), got {type(mesh).__name__}"
             )
         name = item.optional_vars.id
-        # hir `with Mesh(...) as m` is an active mesh context (parser.md §1.6):
+        # hir `with Mesh(...) as m` is an active mesh context ([parser §1.6](docs/spec/parser.md#16-with-mesh-as-m)):
         # a parser-lexical alias, not a tensor-binding scope and no IR node.
         #
         # The mesh binding name `m` is suite-local: it lives in a frame pushed

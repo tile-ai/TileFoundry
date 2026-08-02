@@ -75,7 +75,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
         # so the cute rank matches ``local()``'s coalesced view), then
         # wrapped as a ``tilefoundry::ShardTensor`` with the full
         # ShardLayout type.  ``layout.layout.shape`` itself is the
-        # **global / unsharded** shape (spec §7).
+        # **global / unsharded** shape ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
         local_shape = shard_layout_local_shape(layout_obj)
         local_shape = tuple(s for s in local_shape if s != 1) or (1,)
         # Emit the per-thread cute tensor under a ``_buf`` name —

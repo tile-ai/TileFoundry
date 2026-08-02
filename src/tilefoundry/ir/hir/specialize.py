@@ -52,7 +52,7 @@ PROVENANCE = "_specialized_from"
 BOUND_DIMS = "_specialized_dims"
 
 #: A variant's display label, out of band like the two records above: it takes no
-#: part in equality, hashing or canonical printing. See parser.md §1.1.
+#: part in equality, hashing or canonical printing. See [parser §1.1](docs/spec/parser.md#11-decorators).
 DISPLAY_NAME = "_display_name"
 
 

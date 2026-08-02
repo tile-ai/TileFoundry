@@ -1,5 +1,5 @@
 """``@runtime_func`` / ``@runtime_module`` — authoring surface for the runtime
-twin of a semantic ``Module``. See docs/spec/runtime.md §1.1.
+twin of a semantic ``Module``. See [runtime §1.1](docs/spec/runtime.md#11-runtimemodule).
 """
 from __future__ import annotations
 

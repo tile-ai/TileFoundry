@@ -8,7 +8,8 @@ from tilefoundry.ir.types.shard.mesh import Mesh
 class LexicalEnv:
     """Stack of dict frames for parser-time name resolution.
 
-    Used by hir parser for Mesh scope (§3.4 parser-only lexical env) and
+    Used by hir parser for Mesh scope ([parser §1.6](docs/spec/parser.md#16-with-mesh-as-m),
+    parser-only lexical env) and
     by tir parser for Var / Mesh tracking.
     """
 

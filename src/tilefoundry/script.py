@@ -1,4 +1,4 @@
-"""`@tilefoundry.func` / `@tilefoundry.prim_func` decorator entry (spec 011 §1).
+"""`@tilefoundry.func` / `@tilefoundry.prim_func` decorator entry (spec 011 [parser §1](docs/spec/parser.md#1-dsl-syntax)).
 Wraps the parser in `tilefoundry.parser` and verifies the resulting IR; the
 decorator evaluates to the parsed IR node, not the original function."""
 
@@ -172,7 +172,7 @@ HirFunction.specialize = _specialize
 
 def _converter(self: HirFunction, weight_name: str):
     """``@base.converter(weight_name)`` — register a per-weight offline
-    converter. See docs/spec/runtime.md §1.1.2."""
+    converter. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)."""
     _validate_converter_weight_name(self, weight_name)
 
     def _wrap_converter(fn_inner):

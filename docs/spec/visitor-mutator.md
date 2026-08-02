@@ -143,7 +143,7 @@ class StmtMutator:                                    # identity-preserving Stmt
 - constraints:
   - `StmtMutator`'s identity-preservation invariant is identical to `ExprMutator`.
   - `StmtVisitor` / `StmtMutator` do not descend into Expr fields embedded in
-    Stmts; those are visited only through `StmtExprMutator` (§6).
+    Stmts; those are visited only through `StmtExprMutator` ([§6](#6-stmtexprmutator)).
 
 `_stmt_children(stmt)` enumerates child Stmts only (Expr fields
 come back via `StmtExprMutator`):
@@ -163,7 +163,7 @@ come back via `StmtExprMutator`):
 embedded in Stmts — `For.start` / `For.stop` / `For.step` /
 `While.cond` / `If.cond` / `LetStmt.value` / `Evaluate.args` (and
 `Evaluate.callable` when it is a `SymbolRef`) are visited only when
-`StmtExprMutator` is used (§6).
+`StmtExprMutator` is used ([§6](#6-stmtexprmutator)).
 
 ## 6. `StmtExprMutator`
 

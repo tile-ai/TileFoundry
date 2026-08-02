@@ -78,7 +78,7 @@ class ModulePass(Pass):                             # runs over the whole Module
 
 - constraints:
   - `run` returns a new `Module`; inherits the `Pass` no-mutation / no-global-state
-    contract (§2).
+    contract ([§2](#2-pass-base-class)).
 
 ### 3.2 `FunctionPass`
 
@@ -96,7 +96,7 @@ class FunctionPass(Pass):                                                       
 ```
 
 - constraints:
-  - inherits the `Pass` contract (§2); the default `run` reassembles the `Module`
+  - inherits the `Pass` contract ([§2](#2-pass-base-class)); the default `run` reassembles the `Module`
     from `run_function` results.
 
 ### 3.3 `PrimFuncPass`
@@ -114,7 +114,7 @@ class PrimFuncPass(Pass):                                                       
 ```
 
 - constraints:
-  - inherits the `Pass` contract (§2); same shape as `FunctionPass` over
+  - inherits the `Pass` contract ([§2](#2-pass-base-class)); same shape as `FunctionPass` over
     `tir.PrimFunction`.
 
 ## 4. Transform pass idiom
@@ -234,7 +234,7 @@ no return-tensor form. After this pass, `PassManager` reruns HIR
 #### Per-op lowering dispatch
 
 Per-op lowering is **registry-dispatched**, not a hand-written `isinstance`
-chain (§4): each HIR op registers its lowering handler keyed by op class
+chain ([§4](#4-transform-pass-idiom)): each HIR op registers its lowering handler keyed by op class
 (`register_hir_lowering(OpClass)`), and the pass looks the handler up by
 `type(call.target)`. A target-owned op (e.g. the CUDA `Mma`) registers its own
 lowering, so the pass core depends on the registry contract, not on importing

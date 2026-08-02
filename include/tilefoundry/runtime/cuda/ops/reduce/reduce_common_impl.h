@@ -84,8 +84,9 @@ __device__ cell_decomp_t cell_decomp(SrcT const &s, DstT const &d) {
 // cell axis at all): it flattens across cute's *entire* multi-mode domain via
 // single-index addressing (``s(k)``), which stays correct however many cute
 // axes the per-thread layout carries — including residual axes introduced by
-// single-axis sugar factorisation (spec shard §7.1.2) — because ``s(k)``
-// always visits every coordinate of ``s`` exactly once regardless of its mode
+// single-axis sugar factorisation ([shard
+// §7.1.2](docs/spec/shard.md#712-layoutstrides)) — because ``s(k)`` always
+// visits every coordinate of ``s`` exactly once regardless of its mode
 // structure.
 //
 // Otherwise (``n_cells > 1``, e.g. IntraWarp / CrossWarp, where each thread

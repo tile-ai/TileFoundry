@@ -8,7 +8,7 @@ is what makes the reference survive editing: rename a heading and its anchor sto
 resolving, renumber one and the display text stops agreeing with what it points
 at. A bare `§2.3` has neither property -- it is a number that was true once.
 
-Four things are refused:
+Five things are refused:
 
 * an anchor that names no heading in the target document;
 * an anchor that names a heading other than the section the display text numbers,
@@ -16,11 +16,13 @@ Four things are refused:
   to one of its subsections;
 * a display text naming a different document than the target;
 * a reference link with no anchor at all, `[types §4](./types.md)`, which has
-  nothing in it that can break when a heading is renamed.
+  nothing in it that can break when a heading is renamed;
+* a bare `§2.3`, outside a fenced block, where a link belongs.
 
-Headings come from `tilefoundry.cli.spec.sections`, so a `#` line inside a fenced
-block is a comment here exactly as it is there, and there is one answer in this
-repository to what sections a document has.
+Headings come from `tilefoundry.utils.markdown`, the same scan
+`tilefoundry.cli.spec.sections` reads a document through, so a `#` line inside a
+fenced block is a comment here exactly as it is there and the two cannot grow
+separate answers to what sections a document has.
 
 Run over the files a commit touches (the pre-commit hook passes them); a
 reference is reported with the line it is on, and the exit status is non-zero if
@@ -40,6 +42,18 @@ _ROOT = Path(__file__).resolve().parent.parent
 #: classes admit newlines, so a reference reflowed across two lines is still one
 #: reference rather than two halves that each look like prose.
 _REFERENCE = re.compile(r"\[([^\[\]]*?§[0-9][^\[\]]*?)\]\(([^()]*?)\)", re.DOTALL)
+
+#: A section number standing on its own, once the references around it are out
+#: of the way. `§2.3` says which section was true when it was written and stops
+#: saying anything the moment one is inserted above it.
+_BARE = re.compile(r"§[0-9](?:\.[0-9]+)*")
+
+#: A line break plus whatever the next line opens with: a C++ `//`, a block
+#: comment `*`, or nothing at all.
+_CONTINUATION = re.compile(r"\s*\n\s*(?://+|\*)?\s*")
+
+#: A fence opens or closes a block in which `§2.3` is example text.
+_FENCE = re.compile(r"^\s*(```|~~~)")
 
 #: The display text: an optional document, then the number. The document may be
 #: written with or without `.md`, and the whole may be wrapped in backticks.
@@ -100,6 +114,27 @@ def _target_document(source: Path, path: str) -> Path | None:
     return (source.parent / path).resolve()
 
 
+def _outside_references(text: str, markdown: bool) -> str:
+    """*text* with every reference, and every fenced block, blanked out.
+
+    What is left is prose, so a `§` still standing in it is a bare reference.
+    Blanking rather than deleting keeps every offset, so a line number computed
+    against this string is a line number in the file. Inside a fence a `§` is
+    example text, the same call a heading gets.
+    """
+    blanked = _REFERENCE.sub(lambda m: " " * len(m.group(0)), text)
+    if not markdown:
+        return blanked
+    lines = blanked.splitlines(keepends=True)
+    fenced = False
+    for index, line in enumerate(lines):
+        if _FENCE.match(line):
+            fenced = not fenced
+        elif fenced:
+            lines[index] = " " * len(line)
+    return "".join(lines)
+
+
 def findings(path: Path) -> list[tuple[int, str, str]]:
     """Every reference in *path* that does not resolve, as (line, why, text)."""
     try:
@@ -110,16 +145,36 @@ def findings(path: Path) -> list[tuple[int, str, str]]:
     found = []
     for match in _REFERENCE.finditer(text):
         number = text.count("\n", 0, match.start()) + 1
-        whole = " ".join(match.group(0).split())
+        whole = _unwrap(match.group(0))
         why = _why(source, match.group(1), match.group(2))
         if why:
             found.append((number, why, whole))
-    return found
+    prose = _outside_references(text, path.suffix == ".md")
+    for match in _BARE.finditer(prose):
+        number = prose.count("\n", 0, match.start()) + 1
+        found.append((
+            number,
+            f"bare `{match.group(0)}`; a reference MUST name its heading",
+            text.splitlines()[number - 1].strip(),
+        ))
+    return sorted(found)
+
+
+def _unwrap(text: str) -> str:
+    """*text* as one line, whatever a reflow put at the start of the next.
+
+    `clang-format` owns the C++ comments a reference sits in and will break one
+    across lines wherever it likes, continuing with `//` or ` * `. Reading those
+    as part of the display text would fail a reference that is correct and that
+    no author can keep on one line. A markdown or Python wrap has no prefix and
+    goes through the same path.
+    """
+    return _CONTINUATION.sub(" ", text).strip()
 
 
 def _why(source: Path, display: str, target: str) -> str:
     """Why this reference is refused, or the empty string if it is not."""
-    spelled = _DISPLAY.match(display)
+    spelled = _DISPLAY.match(_unwrap(display))
     if spelled is None:
         return "display text is not `<doc> §<number>`"
     if "#" not in target:

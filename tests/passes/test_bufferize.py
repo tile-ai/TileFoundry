@@ -43,7 +43,7 @@ def test_bufferize_returns_module_unchanged():
 def test_lifetime_collector_finds_buffer_inside_dispatch_call_fallback():
     """A buffer allocated inside a ``DispatchCall``'s ``fallback`` arm must
     be collected. A hand-rolled Stmt walk without ``DispatchCall`` coverage
-    silently skips it (docs/spec/visitor-mutator.md §1)."""
+    silently skips it ([visitor-mutator §1](docs/spec/visitor-mutator.md#1-role))."""
     buf_type = TensorType(shape=(4,), dtype=DType.f32, layout=None, storage=StorageKind.RMEM)
     buf_var = Var(type=buf_type, name="buf")
     alloc_call = Call(type=buf_type, target=AllocTensorOp(tensor_type=buf_type), args=())

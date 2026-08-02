@@ -12,7 +12,7 @@ from tilefoundry.target import Target, default_target
 class PrimFunction(Stmt):
     """tir function container. No return value (@prim_func is effect-only).
 
-    Inherits ``Stmt`` per tir.md §2 — PrimFunction sits inside the tir
+    Inherits ``Stmt`` per [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs) — PrimFunction sits inside the tir
     stmt tree rather than outside it. Body is a ``Sequential`` wrapper.
 
     ``output_count`` records the number of trailing output parameters (set

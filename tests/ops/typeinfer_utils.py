@@ -39,8 +39,7 @@ def raw_shard_tensor_type(
 
 def split_local_extents(ty) -> list:
     """`shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s
-    layout — every entry MUST be 1 on a canonical layout (`docs/spec/shard.md`
-    §7.1.1)."""
+    layout — every entry MUST be 1 on a canonical layout ([shard §7.1.1](docs/spec/shard.md#711-layoutshape))."""
     local = shard_layout_local_shape(ty.layout)
     return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
 

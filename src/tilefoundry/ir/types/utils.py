@@ -71,13 +71,13 @@ def make_shard_tensor_type(
     attrs: tuple = (),
 ) -> "TensorType":
     """Build the canonical sharded ``TensorType`` (``docs/spec/shard.md``
-    §7.1.1) from a logical description: ``shape`` is the logical tensor
+    [shard §7.1.1](docs/spec/shard.md#711-layoutshape)) from a logical description: ``shape`` is the logical tensor
     shape, ``attrs`` is one entry per mesh axis (``Split(logical_axis)`` /
     ``Broadcast()`` / ``Partial(reduction)``). ``mesh=None`` / ``attrs=()``
     yields a plain (unsharded) ``TensorType``; otherwise the layout is built
     by the shared :func:`canonical_shard_layout` (also used by
     ``derive_output_shard_layout``'s synthesis fallback, so the two
-    producers of a §7.1.1 layout always agree).
+    producers of a [shard §7.1.1](docs/spec/shard.md#711-layoutshape) layout always agree).
     """
     shape = tuple(shape)
     if mesh is None or not attrs:

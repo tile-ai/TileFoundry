@@ -50,7 +50,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     divisible by the bound mesh extent: the sub-factor itself further
     factors into `(mesh_ext, sub_factor // mesh_ext)` — `Split` relocates to
     the `mesh_ext`-sized position (local extent 1, per
-    `docs/spec/shard.md` §7.1.1), and both the `sub_factor // mesh_ext`
+    [shard §7.1.1](docs/spec/shard.md#711-layoutshape)), and both the `sub_factor // mesh_ext`
     remainder and the inner residual carry forward as plain (non-`Split`)
     layout positions. A plain (non-`Split`) position may divide at any
     boundary that evenly factors it; only a `Split`-bound position whose

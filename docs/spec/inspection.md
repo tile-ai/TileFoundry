@@ -83,15 +83,15 @@ omit the quotes, but MUST NOT use the descriptor's raw `repr()`.
 ### 2.4 Pretty-print / debug display contract
 
 Pretty print is the core presentation layer.  Sugar, debug dumps, and
-viewer type/value text reuse the same DSL text forms in §2.3.  That keeps
+viewer type/value text reuse the same DSL text forms in [§2.3](#23-dsl-text-forms).  That keeps
 round-trippable source, labels, and detail panes semantically aligned.
 
 - op attributes that are `DType`, `TensorType`, `Layout`, or `ShardLayout` are
-  rendered through the §2.3 printer; `DType` uses its canonical name and these
+  rendered through the [§2.3](#23-dsl-text-forms) printer; `DType` uses its canonical name and these
   values do not use raw `repr()` output
 
 `repr()` is a debug surface, not the source of truth.  It may delegate to
-the §2.3 implementation for context-free values, but context-dependent
+the [§2.3](#23-dsl-text-forms) implementation for context-free values, but context-dependent
 printing (for example, choosing stable mesh names across a whole function)
 must use an explicit pretty-printer API rather than relying on no-argument
 `repr()`.
@@ -125,7 +125,7 @@ other `Pattern` subclasses fall back to `repr(pattern)`). The emitted form
 mirrors the authoring surface
 ([parser.md §1.1](./parser.md#11-decorators)). Because a
 dispatch prototype has a `DimVar` parameter, its rendering is a
-**display-only** surface (§2.7): human-readable, not a round-trip
+**display-only** surface ([§2.7](#27-round-trip-contract)): human-readable, not a round-trip
 validation artifact.
 
 ### 2.7 Round-trip contract
@@ -140,11 +140,11 @@ MUST round-trip: `print → parse → structural_equal` holds over
 - DType annotations and op attributes preserve the selected descriptor singleton
   through their canonical names
 - Partial layouts preserve mesh names through the canonical
-  parser §1.5 value-state form, and preserve `Partial.reduction` plus the
+  [parser §1.5](./parser.md#15-layout-sugar) value-state form, and preserve `Partial.reduction` plus the
   attrs-position mesh axis in the underlying IR
 
 **Display-only** — the rendering of a function with a `DimVar` parameter, and
-therefore of any dispatch prototype and its `.specialize` variants (§2.6). A
+therefore of any dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)). A
 display-only rendering is human-readable and MUST NOT be used as a
 `parse_script` validation artifact: it is held to importing, not to
 `structural_equal`.
@@ -254,11 +254,11 @@ graph; an id that was collapsed away returns 404.
 - **Var / Constant / Tuple.** `Var` shows its name; `Constant` uses the
   compact pretty value (`const(0)` / `const([1.0f, …])`, truncated past 8
   elements); `Tuple` bundles its elements. Op attributes that are
-  constants / types render through the §2.4 pretty-print, never raw
+  constants / types render through the [§2.4](#24-pretty-print--debug-display-contract) pretty-print, never raw
   `repr`.
-- **Type text.** Graph labels use the §2.3 **compact** pretty mode
+- **Type text.** Graph labels use the [§2.3](#23-dsl-text-forms) **compact** pretty mode
   (`bf16[4 @ trd.l, 64] {trd.t @ P("sum")} @smem`) with inline split /
-  DimVar / storage colour; the detail panel uses the §2.3 **canonical**
+  DimVar / storage colour; the detail panel uses the [§2.3](#23-dsl-text-forms) **canonical**
   mode (`Tensor[(4, 64), "f32", ((4 @ trd.l, 64), {trd.t @ P("sum")}),
   "smem"]`). `Reshard` / layout attrs render through the same core (never
   raw `repr`). DimVar is a single token-class colour;
@@ -270,7 +270,7 @@ graph; an id that was collapsed away returns 404.
 - **Detail panel.** Clicking a node title fetches `/api/expr/<visual_id>`
   and renders `params` (name | type), `returns` (idx | type) and `attrs`
   (key | value), formatted on demand from the live HIR expr. Type text is
-  canonical (§3.3); DimVar / `@storage` tokens are re-coloured client-side
+  canonical ([§3.3](#33-node-rendering)); DimVar / `@storage` tokens are re-coloured client-side
   from `/api/palette` using the same rule as the graph. A stale id (after
   a collapse changed the index) yields 404 and the panel clears.
 - **Upstream / downstream highlight.** Clicking a node also highlights its
@@ -313,7 +313,7 @@ Vendored browser JS lives only in the user cache, never in the repo.
 ## 4. Dump Integration
 
 `tilefoundry.dump.DumpScope` + `FileDumper` / `MemoryDumper` / `NullDumper`
-provide per-test, per-pass IR dumping (see [passes](./passes.md) §6).
+provide per-test, per-pass IR dumping (see [passes §6](./passes.md#6-top-level-api)).
 
 ```python
 from tilefoundry.dump import DumpFlags, dump, current_scope

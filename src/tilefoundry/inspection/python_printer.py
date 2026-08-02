@@ -1191,7 +1191,7 @@ def _emit_decorated_defs(
     fn: HirFunction, mesh_map: dict[int, str], indent: str, options: PythonPrintOptions,
 ) -> list[str]:
     """Base ``@func`` decorator + ``def`` block, followed by one
-    ``@<name>.specialize(pattern)`` block per variant (§2.6). Shared by
+    ``@<name>.specialize(pattern)`` block per variant ([inspection §2.6](docs/spec/inspection.md#26-specialization-printing)). Shared by
     standalone and module-wrapped output so a dispatch prototype prints
     identically in both."""
     lines: list[str] = ["@func"]

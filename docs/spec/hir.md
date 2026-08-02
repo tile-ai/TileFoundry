@@ -558,7 +558,7 @@ class Cast(Op):
   - Identity in shape / storage / layout; only the element dtype changes to
     `dtype`. A `ShardLayout` input keeps its layout (the relation is the identity).
   - `Cast` is the conversion boundary for the low-precision dtypes (`fp8e4m3` /
-    `f8e8m0` / `f4e2m1`, see types.md §3), accepted as either the input or the
+    `f8e8m0` / `f4e2m1`, see [types §3](./types.md#3-dtype)), accepted as either the input or the
     target dtype.
   - The evaluator supports a `dtype` in `{f32, f16, bf16, fp8e4m3, f8e8m0, i32,
     i64, bool}`; evaluating a `Cast` to a dtype outside this set (e.g. `f4e2m1`)

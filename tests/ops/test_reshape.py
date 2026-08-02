@@ -5,7 +5,7 @@ new axis, or when a ``Split``-bound position divides across a new-axis boundary
 at a point its bound mesh extent evenly divides (``Split`` relocates to the
 mesh-extent-sized sub-position, keeping local extent 1, with any remainder
 carried forward as a plain layout position); a reshape that cannot be expressed
-either way fails closed (no fake layout). See ``docs/spec/hir.md`` §1.3
+either way fails closed (no fake layout). See ``docs/spec/hir.md`` [hir §1.3](docs/spec/hir.md#13-op)
 ``Reshape``.
 """
 from __future__ import annotations
@@ -94,7 +94,7 @@ def test_split_remaps_partial_carries():
 def test_split_divides_carries():
     """layout position 0 (size 16) divides across the new size-4 boundary: the
     outer sub-factor (4) is exactly the mesh extent, so the Split-bound mesh
-    axis survives with local extent 1 (`docs/spec/shard.md` §7.1.1)."""
+    axis survives with local extent 1 ([shard §7.1.1](docs/spec/shard.md#711-layoutshape))."""
     ty = infer_call(_reshape((4, 32)), make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)))
     assert tuple(ty.shape) == (4, 32)
     assert _split_mesh_axes(ty) == {0}
@@ -104,7 +104,7 @@ def test_split_divides_carries():
 def test_reshape_then_reshard_rmem_no_split_aliasing():
     """A flat split dim (4096) splits into (32, 128): the outer sub-factor (32)
     is divisible by the mesh extent (4) but exceeds it, so the `Split`-bound mesh
-    axis must still keep local extent 1 (`docs/spec/shard.md` §7.1.1) after the
+    axis must still keep local extent 1 ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)) after the
     further factorization — and a follow-on `Reshard(rmem)`, which assigns
     stride 0 to every `Split`-bound layout dim, is what makes a lost local
     extent observable: it would alias distinct per-device coordinates onto one

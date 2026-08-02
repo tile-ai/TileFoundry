@@ -6,7 +6,7 @@ source tree layout.
 ## 1. Directory skeleton
 
 > This spec describes the **stable layers** only — whether a single
-> `.py` file exists is decided by the naming rules in §2 and is not
+> `.py` file exists is decided by the naming rules in [§2](#2-file-naming-and-content-rules) and is not
 > enumerated here (so adding a new Op does not require a spec edit).
 > The current file list is whatever `git ls-files src/tilefoundry`
 > reports.
@@ -21,12 +21,12 @@ truth for the directory's structure and invariants.
 | `ir/types/` | [types](./types.md) | Type-system root: `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / `dim.*` (with their typeinfer). |
 | `ir/types/shard/` | [shard](./shard.md) | Shard / layout sublayer: `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`). The physical nesting reflects the spec's "sublayer" relationship. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprVisitor` / `ExprMutator` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`. |
-| `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` (§2 rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` (§2 rule 5). |
-| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per §2 Rule 1c. |
+| `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` ([§2](#2-file-naming-and-content-rules) rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` ([§2](#2-file-naming-and-content-rules) rule 5). |
+| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per [§2](#2-file-naming-and-content-rules) Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
 | `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: `poly.py` (the polyhedral model — `extract` / `TileGraph` and the facts measured over a time relation), and one module per analysis family. The compact public surface lives in `analysis/__init__.py`; per-target atom catalogues and Facts projections live with their owning Target. |
 | `schedule/` | [schedule](./schedule.md) | The public Schedule boundary in `schedule/__init__.py` -- the `schedule()` operation, immutable options, result, and plan base. One directory per algorithm family: `pipeline/` for asynchronous overlap within a cooperating unit, `partition/` for spatial division across a device. Each owns its private program view, projected Facts, closed problem, solve, and typed plan export; concrete Target packages register which families serve which exact levels. |
-| `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, §2 rule 6). |
+| `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, [§2](#2-file-naming-and-content-rules) rule 6). |
 | `target/` | [target](./target.md) | Compilation target capability descriptors and architecture/device facts: `Architecture` / `Device` / `Target` / `CudaTarget` / `CpuTarget` / `resolve_target`, plus the deferred loaders that let each backend's Facts projections and scheduling algorithms register themselves on import. |
 | `target/hardware/` | [target](./target.md) | The installed hardware database and its generic machinery: the authored Architecture / Device documents, the envelope and evidence-leaf loader, `HardwareSpecRegistry`, and the exact-key schema reader. It fixes the envelope only; the fact namespace below `facts` belongs to the target package named by a document's `schema`. |
 | `target/<backend>/spec.py` | [target](./target.md) | One backend's typed hardware schemas and the documents it installs, registered into the shared registry as an import side effect. This is where a fact path, its unit, and its cross-field invariants are validated, and where a document becomes an immutable `Architecture` / `Device` value. |
@@ -53,7 +53,7 @@ truth for the directory's structure and invariants.
 | `inspection/analysis_report.py` | [inspection](./inspection.md) | Text and JSON renderings of an analysis result and the records it left on the IR, both built from one report structure so the two cannot disagree. Analyses do not format their own output. |
 | `target/<backend>/facts.py` | [target](./target.md) | One backend's Facts projections: what that target tells each analysis family, registered under exact `(Target concrete type, Facts type)` pairs. Restates the installed documents in the shape a family declared and measures nothing. |
 | `target/facts.py` | [target](./target.md) | `TargetFactsRegistry` and the `Target.as_facts` projection boundary: conversions from a concrete Target to the immutable aggregate a requesting algorithm declares, keyed by the exact `(Target concrete type, Facts type)` pair. Generic — it names no concrete target, so a backend adds a registration rather than a branch here. Distinct from the hardware-specification and algorithm registries. |
-| `codegen/` | [codegen](./codegen.md) | Code generation: the emitter registry, the linkable / linked products and the linker, and per-target emitters under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, §2 rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only (kernel shells / host stubs). |
+| `codegen/` | [codegen](./codegen.md) | Code generation: the emitter registry, the linkable / linked products and the linker, and per-target emitters under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, [§2](#2-file-naming-and-content-rules) rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only (kernel shells / host stubs). |
 | `runtime/` | [runtime](./runtime.md) | Runtime support (per-target headers, function templates, launch helpers). |
 | `inspection/` | [inspection](./inspection.md) | IR visualisation: DOT, Python printer, web viewer. |
 | `dsl/` | [parser](./parser.md) (authoring namespace) | User-facing import surface: `tf/` (HIR namespace) / `T/` (TIR namespace) / `_stub_gen.py` / `__main__.py`. The `tf/__init__.pyi` and `T/__init__.pyi` stubs are produced by `python -m tilefoundry.dsl regen` and are gitignored. |
@@ -196,7 +196,7 @@ in `codegen/<target>/tir/.../*.py` as Python walkers (see
 ## 3. Multi-agent parallelism guarantee
 
 The lock granularity is a single `(node, target)` pair. The naming
-rules in §2 imply that two agents working on different
+rules in [§2](#2-file-naming-and-content-rules) imply that two agents working on different
 `(node, target)` pairs touch disjoint files; cross-cutting changes
 (`shard/` fields, kernel templates, pass framework) confine
 themselves to the owning directory. Representative scenarios:

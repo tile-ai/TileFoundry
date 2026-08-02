@@ -103,7 +103,7 @@ chain and is not copied onto each Module or Function.
   `forward` / `init_caches`; full collection rule in
   [parser §2.7](./parser.md#27-module-authoring-surface)). A function name,
   a child module name, and a method name MUST be disjoint at one `Module`'s
-  own level — all three resolve through the same attribute surface (§1.1
+  own level — all three resolve through the same attribute surface ([§1.1](#11-function-access)
   below), so a name used by more than one would be ambiguous.
 - `weights` is a derived property, not a stored field: each access unions
   every function's `ConstTensor` params (`Var.is_const`), in (function
@@ -111,7 +111,7 @@ chain and is not copied onto each Module or Function.
   identical `TensorType`, or the access raises. There is no `states` field
   or persistent-state concept in the IR — a tensor that must survive across
   steps (e.g. a KV cache) is an ordinary `Tensor` param the caller passes in
-  and receives back explicitly (docs/spec/runtime.md §1.1.2).
+  and receives back explicitly ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)).
 - Constructing a `Module` **seals** its functions: each base function and
   its specialization variants are finalized. Variants may be added to a
   base only during authoring, before the base enters a `Module`; once
@@ -192,7 +192,7 @@ entries — so name resolution is always single-valued.
   takes **one argument per declared param**, a `ConstTensor` one included; the
   callable that fills constants from bindings instead belongs to
   `LoadedModule`, which runs on the one device its bindings and activations
-  agree on (docs/spec/runtime.md §1.1.2). A **child module** name
+  agree on ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)). A **child module** name
   resolves to that child `Module`. A **method** name resolves to the
   class-body function bound like an instance method (`m.forward(...)`). Names
   beginning with `_` are never functions, modules, or methods and resolve by
@@ -475,7 +475,7 @@ class Pattern:
 
 Two consumer surfaces:
 
-- **Parser dispatch** — `ParamDef.pattern` (§2.3) is matched against an
+- **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
   argument's `Expr.type` during overload resolution. Subclasses used:
   `ScalarPat` (rank-0), `TensorPat(rank?, dtype?)` (non-scalar), and
   `AndPat(parts)` (conjunction). Two singletons are exported as

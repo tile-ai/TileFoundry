@@ -7,8 +7,8 @@ algorithm decides is its own vocabulary: two algorithms placing different
 hardware over different levels do not decide the same things, and a shared result
 schema would either describe neither or force both to pretend.
 
-The public surface (§1–§2) is the `schedule` package. The construction stages an
-algorithm composes its solve from (§4) are imported from their own modules; they
+The public surface ([§1](#1-the-public-schedule-operation)–[§2](#2-public-structures)) is the `schedule` package. The construction stages an
+algorithm composes its solve from ([§4](#4-kernel-schedule-construction)) are imported from their own modules; they
 read [analysis](./analysis.md) facts, and the dependency is one-way — nothing in
 the analysis layer imports the schedule layer.
 
@@ -62,7 +62,7 @@ def schedule(
     complete before the algorithm runs, so a request that cannot be served never
     leaves a partial solve behind.
   - `options=None` MUST mean a fresh default `ScheduleOptions()` for that call.
-  - The returned Plan MUST be verified (§2.3) before the result reaches the
+  - The returned Plan MUST be verified ([§2.3](#23-scheduleplan)) before the result reaches the
     caller.
   - The common Schedule code MUST NOT import a concrete Target implementation.
 
@@ -446,7 +446,7 @@ extract(root)  ──▶  build_schedule_tree  ──▶  emit_scaffold
 ```
 
 Each stage lives in its own module of the `schedule` package and is imported
-from there; the compact public package surface (§1–§2) carries the public
+from there; the compact public package surface ([§1](#1-the-public-schedule-operation)–[§2](#2-public-structures)) carries the public
 operation and its results only.
 
 | Stage | Signature | Error |

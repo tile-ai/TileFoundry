@@ -3,7 +3,7 @@
 > Architectural entry point. This document is the **map**: the
 > pipeline shape, the support network, and the spec-ownership table.
 > Concrete fields, invariants, and procedures live in the owner specs
-> (§8). Whenever a downstream spec is revised, check it against this
+> ([§8](#8-spec-ownership)). Whenever a downstream spec is revised, check it against this
 > document first; whenever a structural change here lands, the
 > downstream owner must follow.
 

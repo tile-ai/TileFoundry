@@ -121,9 +121,11 @@ CUTE_HOST_DEVICE auto local_impl(ShardTensor<T, GL, SL> const &st,
     auto const proj = shard_axis_projection(st);
     constexpr int t_rank = decltype(proj)::t_rank;
 
-    // spec runtime.md §2.10.2: offset = Σ_{m : A[m]=Split(k)} coord[m]·S[k].
-    // Valid under the §7.1.1 canonical-layout precondition (every Split
-    // position's own extent already equals its mesh axis's extent); see
+    // [runtime §2.10.2](docs/spec/runtime.md#2102-computation):
+    // offset = Σ_{m : A[m]=Split(k)} coord[m]·S[k].
+    // Valid under the [shard §7.1.1](docs/spec/shard.md#711-layoutshape)
+    // canonical-layout precondition (every Split position's own extent already
+    // equals its mesh axis's extent); see
     // ``local_offset`` below for a distinct, loc-scaled quantity.
     int loc_shape[t_rank];
     int loc_stride[t_rank];
@@ -170,15 +172,18 @@ CUTE_HOST_DEVICE decltype(auto) local(ShardTensor<T, GL, SL> const &st) {
 // elements than the source's and each thread's slice must land at its own
 // sub-range.
 //
-// Unlike ``local_impl``'s pointer offset above (spec §2.10.2's
-// Σ coord[m]·S[k]), this additionally scales by
+// Unlike ``local_impl``'s pointer offset above ([runtime
+// §2.10.2](docs/spec/runtime.md#2102-computation)'s Σ coord[m]·S[k]), this
+// additionally scales by
 // ``loc = g_dim[i]/m_ext[m]`` (clamped to ``g_dim[i]`` when smaller) before
-// multiplying by the stride. Under the §7.1.1 canonical-layout precondition
+// multiplying by the stride. Under the [shard
+// §7.1.1](docs/spec/shard.md#711-layoutshape) canonical-layout precondition
 // every Split position's extent already equals its mesh axis's extent, so
 // ``loc`` is always 1 there and the two formulas coincide; the extra factor
 // only has effect for a Split position whose own extent exceeds its mesh
-// axis's extent (a shape the §7.1.1-canonical form should not produce — see
-// repo-dedup-and-test-trim.findings.md F28/F43). This divergence predates
+// axis's extent (a shape the [shard
+// §7.1.1](docs/spec/shard.md#711-layoutshape)-canonical form should not produce
+// — see repo-dedup-and-test-trim.findings.md F28/F43). This divergence predates
 // this refactor and is intentionally left as-is here (documented, not
 // resolved) rather than risk a silent behavior change.
 template <class T, class GL, class SL>

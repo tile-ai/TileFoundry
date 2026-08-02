@@ -2,7 +2,7 @@
 (authored with ``@runtime_module`` / ``@runtime_func``), the
 ``RuntimeFunction`` implementation base, the compiled-path ``CompiledModule``,
 checkpoint ``RuntimeResource``s, and ``check``. See
-docs/spec/runtime.md §1.
+[runtime §1](docs/spec/runtime.md#1-python-runtime-surface).
 """
 from __future__ import annotations
 

@@ -11,7 +11,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 
 @register_op
 class Split(Op):
-    """Multi-output op. `Call.type` is `TupleType` (§2.9 / §6.3.1)."""
+    """Multi-output op. `Call.type` is `TupleType` ([types §5](docs/spec/types.md#5-tupletype))."""
     x = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
     num_splits = ParamDef(kind="attribute", annotation=int)

@@ -152,7 +152,7 @@ def test_dispatch_call_rejects_non_abort_fallback() -> None:
 
 def test_symbol_call_rejects_nonempty_nested() -> None:
     """verify rejects an ``Evaluate(SymbolRef)`` whose ``nested`` is non-empty
-    (tir.md §9: nested MUST be empty under the top-level-only module)."""
+    (nested MUST be empty under the top-level-only module)."""
     x_callee = Var(type=_x_type(), name="x")
     callee = PrimFunction(
         name="callee", params=(x_callee,), body=Sequential(body=(Return(),))

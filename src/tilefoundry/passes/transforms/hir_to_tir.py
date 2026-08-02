@@ -795,7 +795,7 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
     src_override = ctx._reshard_cross_cta_sync(expr)
     src = src_override if src_override is not None else ctx.lower(expr.args[0])
     src_ty = src.type
-    # docs/spec/hir.md §3: the dest view layout is the
+    # [hir §1.1](docs/spec/hir.md#11-function): the dest view layout is the
     # post-typeinfer materialized form on ``expr.type``. The
     # source-side ``TensorView`` reads ``src`` using whichever
     # stride form already materialized for ``src``:
@@ -805,7 +805,7 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
     #   surface) → fall back to shared-engine C-order over
     #   the dest layout's canonical shape, matching the
     #   "plain inputs are kernel-boundary shared engines"
-    #   rule in spec hir §3 / function-signature binding.
+    #   rule in [hir §1.1](docs/spec/hir.md#11-function) / function-signature binding.
     sl = expr.type.layout
     dst_shape = expr.type.shape
     view_src = src

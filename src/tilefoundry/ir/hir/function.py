@@ -143,7 +143,7 @@ def _bind_param_type(
     the bound type is the argument's own full type (including any
     ``ShardLayout``), once its logical shape/dtype match. Any other
     parameter type is an explicit contract: the argument MUST match it
-    exactly (hir.md §1.1). ``call``, when given, anchors a bind error at the
+    exactly ([hir §1.1](docs/spec/hir.md#11-function)). ``call``, when given, anchors a bind error at the
     call site's binding/span metadata instead of the callee declaration.
     """
     error_node = call if call is not None else callee
@@ -171,7 +171,7 @@ def elaborate(
     call: Call | None = None,
 ) -> "Function":
     """Construct the concrete callee instance for one call site's argument
-    types (hir.md §1.1). The template lives at the Python-source level;
+    types ([hir §1.1](docs/spec/hir.md#11-function)). The template lives at the Python-source level;
     every differently-typed call gets its own IR construction here.
 
     Returns ``callee`` unchanged for a dispatch prototype (``variants !=
@@ -268,7 +268,7 @@ def _elaborate_from_bound_types(
             """Rebuild args as usual; additionally, a Call whose target is
             a hir Function is re-elaborated against the rewritten arg
             types so ``.target`` (not just ``.type``) reflects the fresh
-            instance — required per hir.md §1.1 for a viewer/printer read
+            instance — required per [hir §1.1](docs/spec/hir.md#11-function) for a viewer/printer read
             of ``call.target.body`` under a wildcard chain."""
             new_args = tuple(self.visit(a) for a in call_expr.args)
             args_changed = any(na is not oa for na, oa in zip(new_args, call_expr.args))
@@ -304,7 +304,7 @@ def _elaborate_from_bound_types(
 
         def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
             """Re-stamp the loop-phi ``carried_args`` from the rewritten
-            ``init_args`` (hir.md §1.2: "the first-iteration value of each
+            ``init_args`` ([hir §1.2](docs/spec/hir.md#12-gridregionexpr): "the first-iteration value of each
             carried_args phi is its init_args entry"), the same rule the
             parser applies when constructing the node, then substitute the
             fresh phi into the body/yield_values before rebuilding them."""
@@ -460,7 +460,7 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
 @register_typeinfer(Function)
 def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
     """Typeinfer handler for ``Call(target=hir.Function, args=...)``:
-    derive the type by elaboration (hir.md §1.1). The Call's type is always
+    derive the type by elaboration ([hir §1.1](docs/spec/hir.md#11-function)). The Call's type is always
     the freshly re-derived type of the (possibly deduped) instance's body —
     never a possibly-stale ``Function.return_type`` field — except for a
     dispatch prototype, whose ``None`` body is never inspected."""

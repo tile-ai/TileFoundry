@@ -28,6 +28,7 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
+from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
 
 from .dispatch import DispatchCall
@@ -48,9 +49,13 @@ from .stmts import (
 )
 from .symbol_ref import SymbolRef
 
+#: The section stating the rules below. Held whole so it is checked like every
+#: other reference, and rendered short into the message a user reads.
+_PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
+
 
 def verify_prim_function(fn: PrimFunction, *, module_fns: Iterable[PrimFunction] = ()) -> None:
-    """Per Spec §6 / §8.1 / §8.3 / §8.4 / §8.7 / §8.8 / §8.9 / §8.10."""
+    """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list."""
     _check_param_homogeneity(fn)
     ctx = TypeInferContext()
     scope: list[Mesh] = []
@@ -61,15 +66,15 @@ def verify_prim_function(fn: PrimFunction, *, module_fns: Iterable[PrimFunction]
     for f in module_fns:
         module_fn_map[f.name] = (*module_fn_map.get(f.name, ()), f)
     # Track Var object identities that have already been bound, so we can
-    # reject LetStmt/For/MeshScope binding the same Var twice (§6.2.1:
-    # "var must be a fresh Var"). Params seed this set.
+    # reject LetStmt/For/MeshScope binding the same Var twice
+    # ([tir §1.3](docs/spec/tir.md#13-primfunction), "Fresh `Var` identity"). Params seed this set.
     bound_var_ids: set[int] = {id(p) for p in fn.params}
     _walk_stmt(fn.body, ctx, scope, fn, module_fn_map, bound_var_ids)
 
 
 def _check_param_homogeneity(fn: PrimFunction) -> None:
-    """§8.1: all params' layouts must be consistently ShardLayout or all
-    non-ShardLayout. Mixed is error."""
+    """Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)): all params' layouts must be
+    consistently ShardLayout or all non-ShardLayout. Mixed is error."""
     kinds = []
     for p in fn.params:
         ty = p.type
@@ -78,8 +83,8 @@ def _check_param_homogeneity(fn: PrimFunction) -> None:
         kinds.append(isinstance(ty.layout, ShardLayout))
     if kinds and len(set(kinds)) > 1:
         raise VerifyError(
-            f"PrimFunction {fn.name!r}: §8.1 param layouts must be homogeneously "
-            f"ShardLayout or non-ShardLayout, got mixed"
+            f"PrimFunction {fn.name!r}: {spec_ref_render(_PRIM_FUNCTION)} param layouts "
+            f"must be homogeneously ShardLayout or non-ShardLayout, got mixed"
         )
 
 
@@ -90,26 +95,27 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 _walk_stmt(s, ctx, scope, fn, module_fn_map, bound_var_ids)
             return
         case LetStmt():
-            # §6.2.1: var must be a fresh Var — reject binding the same Var
+            # Fresh `Var` identity — reject binding the same Var
             # object twice anywhere in the tir tree (outer param / prior let /
             # enclosing For / MeshScope).
             if id(stmt.var) in bound_var_ids:
                 raise VerifyError(
-                    f"LetStmt binding {stmt.var.name!r}: §6.2.1 var must be a "
-                    f"fresh Var; this Var is already bound in an outer scope"
+                    f"LetStmt binding {stmt.var.name!r}: "
+                    f"{spec_ref_render(_PRIM_FUNCTION)} var must be a fresh Var; this Var "
+                    f"is already bound in an outer scope"
                 )
-            # §6.2.1: var.type == type_of(value).
+            # `LetStmt` typing: var.type == type_of(value).
             value_ty = ctx.type_of(stmt.value)
             if stmt.var.type != value_ty:
                 raise VerifyError(
                     f"LetStmt binding {stmt.var.name!r}: var.type {stmt.var.type} "
                     f"!= value.type {value_ty}"
                 )
-            # §6.2.2: `Call(AllocTensor, ...)` may only appear directly as
+            # `AllocTensor` placement: it may only appear directly as
             # `LetStmt.value`. Nested inside other Exprs is illegal.
             _reject_nested_alloc_tensor(stmt.value, at_letstmt_value=True)
             _check_embedded_sharding(stmt.value, scope, fn)
-            # §6.2.1 requires fresh Var identity across the whole function —
+            # Fresh `Var` identity holds across the whole function —
             # NOT merely within the current lexical scope. Once seen, never
             # remove; sibling LetStmts rebinding the same Var object must also
             # fail.
@@ -121,10 +127,10 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
             _check_rank0_int(ctx, stmt, stmt.stop, "For.stop")
             _check_rank0_int(ctx, stmt, stmt.step, "For.step")
             if isinstance(stmt.step, Constant) and stmt.step.value == 0:
-                raise VerifyError("For.step must not be 0 (§8.8)")
+                raise VerifyError("For.step must not be 0")
             iv_ty = stmt.induction_var.type
             if not (isinstance(iv_ty, TensorType) and iv_ty.shape == () and iv_ty.dtype in (DType.i32, DType.i64)):
-                raise VerifyError("For.induction_var must be rank-0 integer (§8.8)")
+                raise VerifyError("For.induction_var must be rank-0 integer")
             _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
             return
         case While():
@@ -211,8 +217,8 @@ def _check_rank0_bool(ctx, stmt, expr):
 
 
 def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
-    """§6.2.2: `Call(AllocTensor, ...)` may only appear directly as
-    `LetStmt.value`. Raise if it appears nested inside any other Expr."""
+    """`AllocTensor` placement ([tir §1.3](docs/spec/tir.md#13-primfunction)): `Call(AllocTensor, ...)` may only
+    appear directly as `LetStmt.value`. Raise if nested in any other Expr."""
     if isinstance(expr, Call) and isinstance(expr.target, AllocTensorOp):
         if at_letstmt_value:
             # Top-level LetStmt value — legal. Still scan args (none expected).
@@ -220,8 +226,8 @@ def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
                 _reject_nested_alloc_tensor(a, at_letstmt_value=False)
             return
         raise VerifyError(
-            "§6.2.2: Call(AllocTensor, ...) may only appear as a direct "
-            "LetStmt.value; found nested inside another Expr"
+            f"{spec_ref_render(_PRIM_FUNCTION)}: Call(AllocTensor, ...) may only appear "
+            f"as a direct LetStmt.value; found nested inside another Expr"
         )
     if isinstance(expr, Call):
         for a in expr.args:
@@ -229,8 +235,8 @@ def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
 
 
 def _check_embedded_sharding(expr: Expr, scope, fn):
-    """§8.4 tir branch: for any ShardLayout encountered inside Exprs, its
-    mesh must be on the current scope stack or equal to a param mesh."""
+    """`MeshScope` mesh in scope ([tir §1.3](docs/spec/tir.md#13-primfunction)), tir branch: for any ShardLayout
+    inside an Expr, its mesh must be on the current scope stack or a param's."""
     to_visit = [expr]
     while to_visit:
         e = to_visit.pop()
@@ -256,8 +262,8 @@ def _assert_mesh_in_scope(mesh: Mesh, scope, fn):
             if p.type.layout.mesh == mesh:
                 return
     raise VerifyError(
-        f"§8.4: ShardLayout references mesh {mesh!r} that is not in current MeshScope "
-        f"stack nor bound by any param"
+        f"{spec_ref_render(_PRIM_FUNCTION)}: ShardLayout references mesh {mesh!r} that is "
+        f"not in current MeshScope stack nor bound by any param"
     )
 
 
@@ -380,7 +386,7 @@ def _verify_symbol_call(stmt: Evaluate, fn, module_fn_map, ctx):
             f"CallableType {expected_type}"
         )
     if callee is fn:
-        raise VerifyError("Evaluate(SymbolRef): recursion not allowed (§8.10 DAG)")
+        raise VerifyError("Evaluate(SymbolRef): recursion not allowed")
     _assert_no_path_back(callee, fn, module_fn_map, visited=set())
     if len(stmt.args) != len(callee.params):
         raise VerifyError(
@@ -585,7 +591,8 @@ def verify_module(fns) -> None:
     """V1 helper: fns is a list mixing hir.Function and tir.PrimFunction.
 
     Each name maps to exactly one entry. Specialization variants live on a
-    dispatch prototype's ``variants`` field (hir §5), never as separate
+    dispatch prototype's ``variants`` field
+    ([hir §1.1](docs/spec/hir.md#11-function)), never as separate
     same-name entries. Sealed-module structural invariants: a top-level entry
     is never a variant, and every entry is callable (``body is None`` only when
     it carries variants).

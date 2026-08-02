@@ -1,7 +1,7 @@
 """TileFoundry top-level package.
 
 Re-exports the stable public API from `tilefoundry.ir.*` for convenience.
-Spec 011 §1 is authoritative on physical layout.
+[code-organization §1](docs/spec/code-organization.md#1-directory-skeleton) is authoritative on physical layout.
 """
 
 from __future__ import annotations

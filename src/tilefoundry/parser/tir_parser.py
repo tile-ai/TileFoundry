@@ -31,6 +31,7 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.visitor import StmtVisitor
 from tilefoundry.target import CudaTarget, default_target
+from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (
     BaseExprVisitor,
@@ -42,6 +43,9 @@ from .base import (
 )
 from .dispatch import resolve_callable
 from .symtab import LexicalEnv
+
+#: The section stating the PrimFunction rules the refusal below quotes.
+_TIR_PRIM = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
 def _module_target(mod: Module):
@@ -224,7 +228,10 @@ class _TirBodyVisitor(BaseExprVisitor):
 
         if isinstance(node, ast.Return):
             if node.value is not None:
-                raise VerifyError("§8.3: @tilefoundry.prim_func return must be bare (no value)")
+                raise VerifyError(
+            f"{spec_ref_render(_TIR_PRIM)}: @tilefoundry.prim_func return must be bare "
+            f"(no value)"
+        )
             return Return()
 
         if isinstance(node, ast.For):
@@ -255,7 +262,7 @@ class _TirBodyVisitor(BaseExprVisitor):
                 return self._launch_as_stmt(node)
             # A genuine (non-schema) Stmt intrinsic — dispatch.resolve_callable
             # resolves it by name (honouring the trailing-underscore
-            # effect-form selector, parser.md §1.3/§4.6), and it is built by
+            # effect-form selector, [parser §1.3](docs/spec/parser.md#13-op-call)/[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution)), and it is built by
             # binding its dataclass fields directly (no OpSchema/ParamDef).
             # A schema-based effect Op (``copy`` / ``mma`` / ...) shares the
             # same resolver but has no dataclass fields of its own — it falls
@@ -290,7 +297,7 @@ class _TirBodyVisitor(BaseExprVisitor):
             return Evaluate(callable=expr.target, args=expr.args)
         disp = node.func.id if isinstance(node.func, ast.Name) else ast.unparse(node.func)
         raise VerifyError(
-            f"tir: §8.5 value op {disp!r} cannot be top-level Stmt; wrap with `=`"
+            f"tir: value op {disp!r} cannot be top-level Stmt; wrap with `=`"
         )
 
     def _is_platform_rooted(self, node: ast.AST) -> bool:

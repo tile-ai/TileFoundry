@@ -2,9 +2,9 @@
 
 The parser turns Python source decorated with TileFoundry's IR decorators
 into a `core_ir.Module`. This document covers the user-facing DSL
-syntax (§1), the DSL namespace surface (§2), the parser architecture
-(§3), the shared machinery both IRs use (§4), and the per-IR parser
-bodies (§5 / §6). Validation and rejection rules are in §7.
+syntax ([§1](#1-dsl-syntax)), the DSL namespace surface ([§2](#2-dsl-namespace-surface)), the parser architecture
+([§3](#3-parser-architecture)), the shared machinery both IRs use ([§4](#4-shared-parsing-machinery)), and the per-IR parser
+bodies ([§5](#5-hir-parser) / [§6](#6-tir-parser)). Validation and rejection rules are in [§7](#7-validation-and-rejection).
 
 ## 1. DSL syntax
 
@@ -138,7 +138,7 @@ namespace-callee    ::= ('tf' | 'T') '.' op-name
 
 `tilefoundry.dsl.tf` (HIR) and `tilefoundry.dsl.T` (TIR) are the only
 DSL-facing entries to the Op catalogue. The mechanism that backs
-this surface is described in §2.
+this surface is described in [§2](#2-dsl-namespace-surface).
 
 ### 1.3 Op call
 
@@ -154,12 +154,13 @@ A bare-name callee MUST resolve to an `_op_schema`-bearing surface
 value (an `Op` class for real-Op schemas, or an alias builder
 function carrying `_op_schema` for surface-alias schemas) through
 the function's closure (typically established by an `import-form`) or,
-failing that, through `dispatch.resolve_callable` (§3.2/§3.3) — the
+failing that, through `dispatch.resolve_callable`
+([§4.2](#42-closure-then-registry-callee-resolution)/[§4.3](#43-opschema-and-overload-resolution)) — the
 path a trailing-underscore `op-name` always takes, since nothing binds
 a literal `foo_` name in the closure. The namespace-callee form
-resolves on the namespace package directly (§2). When `op-name` is
+resolves on the namespace package directly ([§2](#2-dsl-namespace-surface)). When `op-name` is
 registered with multiple schemas ("overloads"), the parser uses
-first-match dispatch (§4.3). The trailing-underscore selector is
+first-match dispatch ([§4.3](#43-opschema-and-overload-resolution)). The trailing-underscore selector is
 gated to the TIR token; using it in HIR is a verify error.
 
 ### 1.4 `Tensor[...]` and `ConstTensor[...]` annotations
@@ -184,7 +185,7 @@ storage        ::= '"host"' | '"gmem"' | '"smem"' | '"rmem"' | '"tmem"'
 the latter sets `Var.is_const=True` on a function parameter. `is_const` marks
 external residency semantics only and does not embed a payload. `Tensor[...]` is
 the carrier of optional layout sugar; it does not
-own the sugar (which lives at §1.5). A rank-0 (scalar) tensor is
+own the sugar (which lives at [§1.5](#15-layout-sugar)). A rank-0 (scalar) tensor is
 written `Tensor[(), "bf16"]`; the form `Tensor["bf16"]` (without
 shape) is rejected.
 
@@ -296,7 +297,7 @@ Spec: [shard.md §7.1.1](./shard.md#711-layoutshape),
 [hir.md §1.3](./hir.md#13-op).
 
 Layout sugar is accepted **anywhere the expected surface value is
-a `ShardLayout`**. Dispatch is annotation-driven (see §4.4): the
+a `ShardLayout`**. Dispatch is annotation-driven (see [§4.4](#44-annotation-driven-sugar-dispatch)): the
 parser consults the position's expected `ParamDef.annotation` (or
 the `Tensor[...]` layout slot) to decide whether to invoke the
 sugar parser. Omitted mesh axes default to `Broadcast`. Sugar
@@ -325,7 +326,7 @@ binding name `m` is visible only inside `suite`. The two dialects differ
 in what it lowers to:
 
 - **HIR** treats it as an **active mesh context** — a parser-lexical
-  alias for the constructed `Mesh`, so layout sugar (§1.5) may bind axes
+  alias for the constructed `Mesh`, so layout sugar ([§1.5](#15-layout-sugar)) may bind axes
   with `… @ m.axis` and tensors authored under it reuse the one `Mesh`.
   It is not a tensor-binding scope and emits **no IR node**. Ordinary
   values assigned inside `suite` follow normal function-body visibility
@@ -336,7 +337,7 @@ in what it lowers to:
   the explicit boundary, and op typeinfer
   ([hir §1.3](./hir.md#13-op)) decides whether values
   combine.
-- **TIR** lowers it to an explicit `MeshScope` Stmt (§6) carrying the
+- **TIR** lowers it to an explicit `MeshScope` Stmt ([§6](#6-tir-parser)) carrying the
   `Mesh` and the binding `Var`.
 
 ### 1.7 `for i in tile(...)` / `for i in range(...)` (HIR-only)
@@ -372,7 +373,7 @@ and resolved at evaluate time ([hir §1.2](./hir.md#12-gridregionexpr)).
 
 A tensor subscript `x[slice0, …]` inside a loop body lifts to a
 `hir.tensor.Slice` Op call. An `ast.Assign` whose single Name target is
-bound in *outer* scope is a loop-carried rebinding (see §5 for the carry-out
+bound in *outer* scope is a loop-carried rebinding (see [§5](#5-hir-parser) for the carry-out
 lift). A **nested** `for ... in tile/range(...)` is allowed and lifts to a
 nested `GridRegionExpr`; the carry scan recurses into nested loops, so an
 outer-scope name rebound only inside a nested loop is still carried across the
@@ -443,7 +444,7 @@ compile-time-list ::= '[' expr (',' expr)* ']'
 - Subscripting the bound name with a compile-time integer selects one element.
   Python's negative indexing applies.
 - The comprehension form is the fixed-length unrolled spelling; it does not
-  affect `for` (§1.7), which always builds a `GridRegionExpr`.
+  affect `for` ([§1.7](#17-for-i-in-tile--for-i-in-range-hir-only)), which always builds a `GridRegionExpr`.
 
 A tensor subscript resolves per axis: an `ast.Slice` keeps the axis, a
 compile-time integer **drops** it (as in torch), and a negative integer counts
@@ -562,14 +563,14 @@ Conventions:
   at the call boundary.
 
 Stubs are not part of the runtime resolution path; the parser still
-goes through §2.3. They exist solely so editors can show typed
+goes through [§2.3](#23-resolution-algorithm). They exist solely so editors can show typed
 completions for `tf.<name>(...)`.
 
 ### 2.5 Invariants
 
 - **Dialect isolation**. `tilefoundry.dsl.tf` MUST surface only
   schemas with `dialect="tf"`; `tilefoundry.dsl.T` MUST surface only
-  schemas with `dialect="T"`. §4.6's strict per-dialect resolution
+  schemas with `dialect="T"`. [§4.6](#46-per-dialect-strict-resolution)'s strict per-dialect resolution
   depends on this.
 - **Late-registration visibility**. An Op registered after the
   namespace module is first imported is visible on the next
@@ -587,17 +588,17 @@ completions for `tf.<name>(...)`.
 `tilefoundry.dsl.T` exposes platform-specific instruction and atom
 surfaces under a fixed set of **platform sub-namespaces** (e.g.
 `T.cuda`). `dsl.T.__getattr__` resolves a platform name **before** the
-OpSchema registry lookup (§2.3): a name in the platform set returns the
+OpSchema registry lookup ([§2.3](#23-resolution-algorithm)): a name in the platform set returns the
 platform namespace object; every other name falls through to the
 registry.
 
 - A platform sub-namespace is not an `Op` and carries no `_op_schema`.
   It surfaces platform-specific descriptors (instruction specs, atoms)
-  only, never catalogue Ops. §2.5's dialect-isolation invariant is
+  only, never catalogue Ops. [§2.5](#25-invariants)'s dialect-isolation invariant is
   unaffected — the platform set is disjoint from registered Op names.
 - The platform set is fixed; a name outside it MUST resolve as an
   ordinary `dialect="T"` Op name, preserving late-registration
-  visibility (§2.5).
+  visibility ([§2.5](#25-invariants)).
 - `T.cuda.mma` is the CUDA MMA surface: `T.cuda.mma.<NAME>` is an
   `MmaOpSpec` and `T.cuda.mma.atom(op=...)` an `MmaAtom`
   ([tir §2.3](./tir.md#23-tir-ops)).
@@ -609,7 +610,7 @@ and `atom = T.cuda.mma.atom(op=op)` bind Python descriptor objects in
 the parser environment and emit no `LetStmt`. A subsequent `atom.A/B/C`
 attribute access resolves statically against the bound descriptor.
 
-The `.pyi` stub generator (§2.4) emits the platform sub-namespace
+The `.pyi` stub generator ([§2.4](#24-pyi-stub-regeneration)) emits the platform sub-namespace
 surface so editors complete `T.cuda.mma.<NAME>` and `.atom(...)`.
 
 ### 2.7 `@module` authoring surface
@@ -808,7 +809,7 @@ the *definition frame* when the decorator runs — for a
 `@tilefoundry.module` class body, that is the sibling methods declared
 above the one being parsed. Each such binding **is** the sibling's
 `hir.Function` / `tir.PrimFunction` IR node (the decorator evaluates to
-the IR directly, §1.1), so a sibling callee resolves to that `Function`
+the IR directly, [§1.1](#11-decorators)), so a sibling callee resolves to that `Function`
 and becomes the `Call` target directly. This is what makes
 callee-before-caller sibling calls work; a forward reference is simply
 absent from the closure and fails as an unresolved callee. The merge is
@@ -834,20 +835,20 @@ directly into `core_ir` nodes plus dialect-specific subclasses.
 
 ## 4. Shared parsing machinery
 
-### 3.1 Lexical environment
+### 4.1 Lexical environment
 
 Both parsers use the same lexical-env stack. `define(name, expr_node)`
 binds a Python name to an `Expr` object. Subsequent uses of that name
 reuse the same `Expr`, which is how HIR's SSA-as-DAG sharing falls
 out for free.
 
-### 3.2 Closure-then-registry callee resolution
+### 4.2 Closure-then-registry callee resolution
 
 Bare-name callees resolve through the lexical env + the function's
 closure first — the common case, covering every name reached via a
 star-import or an explicit `tf.<name>` / `T.<name>` binding. When that
 misses, resolution falls through to `dispatch.resolve_callable(name,
-token)` (§3.3): dialect-strict dispatch against the Op / Stmt / intrinsic
+token)` ([§4.6](#46-per-dialect-strict-resolution)): dialect-strict dispatch against the Op / Stmt / intrinsic
 catalogue, not an arbitrary-name lookup, so a name that is neither bound
 in the closure nor cataloged under the body's own dialect still raises
 *unknown Op name*.
@@ -868,7 +869,7 @@ go directly through `dispatch.resolve_schema(name, dialect)`, which
 honours alias prepend order — an alias schema (if any) wins over a
 legacy real-Op schema sharing the same name.
 
-### 3.3 OpSchema and overload resolution
+### 4.3 OpSchema and overload resolution
 
 A registered Op has one or more `OpSchema` entries indexed by
 `(dialect, name)`. Each schema lists the Op's `ParamDef` descriptors
@@ -884,7 +885,7 @@ A registered Op has one or more `OpSchema` entries indexed by
    Registration order is the tiebreaker; there is no "best match"
    search.
 
-### 3.4 Annotation-driven sugar dispatch
+### 4.4 Annotation-driven sugar dispatch
 
 At each attribute slot of a call, the parser consults the matched
 schema's `ParamDef.annotation`:
@@ -905,19 +906,19 @@ Attribute string normalization is also annotation-driven:
 - A string-valued Enum annotation resolves by Enum value and rejects any other
   string with a `VerifyError`.
 
-### 3.5 `Tensor[...]` annotation surface
+### 4.5 `Tensor[...]` annotation surface
 
 `Tensor[shape, dtype, layout, storage]` is recognised by
 `try_parse_sugar_tensor_type`, which is the entry point shared by
 both `@func` and `@prim_func` parsers when reading parameter and
 return-type annotations. The shape and dtype slots are required;
 the layout and storage slots are optional. The same routine reads
-the layout sugar described in §1.4.
+the layout sugar described in [§1.4](#14-tensor-and-consttensor-annotations).
 
 The dtype slot MUST resolve to the canonical descriptor named by its string.
 Unknown names MUST be rejected and MUST NOT silently select `DType.f32`.
 
-### 3.6 Per-dialect strict resolution
+### 4.6 Per-dialect strict resolution
 
 `parser.dispatch.resolve_callable(name, token)` does NOT fall back
 across dialects. An HIR-only Op (e.g. `rope`) raises *unknown TIR
@@ -934,12 +935,13 @@ Python statements that the parser folds into a single `Expr` tree.
 |---|---|
 | `x = expr` | `define(x, expr_node)`; no IR node. Subsequent `x` reuses the same `Expr` (SSA-as-DAG). |
 | `x + y` | `Call(Binary(kind=ADD), (x, y))`; the parser maps Python AST `BinOp` / `Compare` / `BoolOp` directly to a `Binary` instance with the matching `BinaryKind`. `UnaryOp` USub / Not maps similarly to `Unary(kind=NEG)` / `Unary(kind=NOT)`. AST `@` (matmul) routes to `MatMul` (a real Op, not kinded). |
-| `foo(a, b)` | `Call(target_op, args)` where `target_op` is constructed by the resolved schema's `builder` (§4.2 / §4.3). For surface aliases (e.g. `add` / `cmp_eq` / `neg`), the alias's builder returns the kinded target Op (`Binary(kind=...)` / `Unary(kind=...)`); for real Ops, the default builder is the Op class itself. |
-| `for i in tile(...)` | `GridRegionExpr` (see §1.7 and below). |
+| `foo(a, b)` | `Call(target_op, args)` where `target_op` is constructed by the resolved schema's `builder` ([§4.2](#42-closure-then-registry-callee-resolution) / [§4.3](#43-opschema-and-overload-resolution)). For surface aliases (e.g. `add` / `cmp_eq` / `neg`), the alias's builder returns the kinded target Op (`Binary(kind=...)` / `Unary(kind=...)`); for real Ops, the default builder is the Op class itself. |
+| `for i in tile(...)` | `GridRegionExpr` (see [§1.7](#17-for-i-in-tile--for-i-in-range-hir-only) and below). |
 | `with Mesh(...) as m` | Push `m` onto the parser-lexical stack; pop on exit. No IR node. |
 | `return expr` | Sets `Function.body`. A `return` without a value is rejected. |
 | `return (a, b)` / `return a, b` | A literal tuple return (both spellings are the same AST) folds to a core `Tuple` body ([core-ir §2.2](./core-ir.md#22-var--constant--tuple)); `Function.return_type` is the `TupleType` of the element types. Callers destructure via the existing tuple-unpack rule (`o, s = f(...)`). |
-| `pass` | Accepted only as the **entire** body: sets `Function.body = None`, declaring a dispatch prototype whose implementations are registered via `.specialize` (§8). A `pass` mixed with any other statement is rejected. |
+| `pass` | Accepted only as the **entire** body: sets `Function.body = None`, declaring a dispatch prototype whose implementations are registered via `.specialize`
+([hir §1.1](./hir.md#11-function)). A `pass` mixed with any other statement is rejected. |
 
 `for` / `if` / `while` over arbitrary ranges, conditionals, and other
 Stmt forms are TIR-only. They are rejected by the HIR parser.
@@ -1007,10 +1009,10 @@ TIR has no SSA-as-DAG sharing rule; every binding is an explicit
 
 ## 7. Validation and rejection
 
-- Any `ast` node not in §4 / §5 is rejected — the unsupported
+- Any `ast` node not in [§4](#4-shared-parsing-machinery) / [§5](#5-hir-parser) is rejected — the unsupported
   forms include `try` / `with` over non-Mesh contexts / `lambda` /
   list / dict / set comprehensions / `yield` / `async`.
-- Cross-dialect callees fall through to *unknown callable* (§4.6).
+- Cross-dialect callees fall through to *unknown callable* ([§4.6](#46-per-dialect-strict-resolution)).
 - A bare-name callee that the lexical env / closure does not
   resolve to an `_op_schema`-bearing surface value (`Op` subclass or
   alias builder function) is *unknown Op name*.
@@ -1019,8 +1021,8 @@ TIR has no SSA-as-DAG sharing rule; every binding is an explicit
   rejected.
 - `for tile` is HIR-only; emitting it inside a `@prim_func` is
   rejected. `with Mesh(...) as m` is accepted in both dialects — in a
-  `@prim_func` it lowers to a `MeshScope` Stmt (§6), unlike the
-  no-IR-node HIR sugar (§1.6).
+  `@prim_func` it lowers to a `MeshScope` Stmt ([§6](#6-tir-parser)), unlike the
+  no-IR-node HIR sugar ([§1.6](#16-with-mesh-as-m)).
 - Layout sugar that would lose mesh information falls through to the
-  verbose form (§1.4); if neither is acceptable, the type is
+  verbose form ([§1.4](#14-tensor-and-consttensor-annotations)); if neither is acceptable, the type is
   rejected.

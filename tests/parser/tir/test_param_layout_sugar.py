@@ -1,4 +1,4 @@
-"""``Tensor[...]`` layout sugar on ``@prim_func`` params (parser.md §1.4/§1.5).
+"""``Tensor[...]`` layout sugar on ``@prim_func`` params ([parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations)/[parser §1.5](docs/spec/parser.md#15-layout-sugar)).
 
 ``_build_params`` (parser/base.py) is now the single HIR+TIR parameter walk,
 routing both through the same ``_resolve_tensor_type`` — this locks that a

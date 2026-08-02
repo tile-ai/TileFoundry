@@ -2,7 +2,7 @@
 
 Walks a ``hir.Function`` expression tree and produces a Graphviz DOT
 string. Each ``Var`` / ``Call`` / ``Constant`` gets a numbered node.
-Type / shard-layout labels reuse the canonical §2.3 renderers from
+Type / shard-layout labels reuse the canonical [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms) renderers from
 ``python_printer`` (the same core the viewer uses) so a DOT label agrees
 with the printer / viewer instead of drifting on its own.
 
@@ -25,7 +25,7 @@ from .python_printer import _collect_meshes, _mesh_name_map, _op_display_name, _
 
 def _type_lines(ty, mesh_name_map: dict[int, str]) -> list[str]:
     """Type-annotation lines for a node label: the shared canonical
-    ``Tensor[...]`` text (§2.3), split on newline for the verbose multi-line
+    ``Tensor[...]`` text ([inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)), split on newline for the verbose multi-line
     ``ShardLayout(...)`` fallback."""
     text = _tensor_annotation(ty, mesh_name_map=mesh_name_map) if isinstance(ty, TensorType) else str(ty)
     return text.split("\n")

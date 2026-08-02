@@ -1,5 +1,5 @@
 """ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the
-implementation base class). See docs/spec/runtime.md §1.1.1."""
+implementation base class). See [runtime §1.1.1](docs/spec/runtime.md#111-runtimefunction)."""
 from __future__ import annotations
 
 from dataclasses import dataclass

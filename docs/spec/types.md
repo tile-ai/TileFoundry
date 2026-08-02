@@ -242,7 +242,7 @@ The canonical descriptors are:
 
 ## 4. `dim.*` — symbolic shape dimensions
 
-`shape` elements are values of the `ShapeDim` family (see §2's
+`shape` elements are values of the `ShapeDim` family (see [§2](#2-tensortype)'s
 field declaration: `ShapeDim = int | DimVar | Expr`):
 
 - a plain Python `int` for fully static dims;

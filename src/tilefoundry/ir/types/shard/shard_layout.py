@@ -57,7 +57,7 @@ class ShardLayout(LayoutBase):
 
 
 def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
-    """Build the canonical ``ShardLayout`` (``docs/spec/shard.md`` §7.1.1)
+    """Build the canonical ``ShardLayout`` (``docs/spec/shard.md`` [shard §7.1.1](docs/spec/shard.md#711-layoutshape))
     binding ``attrs`` (one entry per mesh axis; each ``Split`` names a
     ``logical_shape`` axis) to ``mesh``.
 
@@ -67,7 +67,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
     (``logical_size // Π(extents)``, omitted when 1, an error when the
     division is not exact) — every ``Split``-bound position in the
     resulting ``Layout`` ends up sized exactly to its mesh extent
-    (``G[k] == mesh.shape[a]``), the §7.1.1 canonical form, *even when a
+    (``G[k] == mesh.shape[a]``), the [shard §7.1.1](docs/spec/shard.md#711-layoutshape) canonical form, *even when a
     single mesh axis splits the axis*. A single mesh-axis split is instead
     kept whole (one Split-bound position, no residual) when it cannot be
     factored into a static extent + residual: either the mesh extent is
@@ -81,7 +81,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
     unchanged. Strides are freshly built C-order (``None`` when the
     resulting shape is dynamic).
 
-    This is the single canonicalizer for a §7.1.1 layout: both
+    This is the single canonicalizer for a [shard §7.1.1](docs/spec/shard.md#711-layoutshape) layout: both
     ``make_shard_tensor_type`` (a from-scratch sharding) and
     ``derive_output_shard_layout``'s synthesis fallback (a propagated one)
     call it, so a layout built by either for the same logical sharding

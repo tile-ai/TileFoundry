@@ -8,7 +8,7 @@ dimension — designed up to ``MAX_CTX`` = 256K — and the one the GQA prototyp
 specializes on. Each step is handed the cache before it plus its own ``k_new`` /
 ``v_new``, so a step with no prior cache still attends one position: itself.
 
-Authoring surface (per docs/spec/parser.md §8): ``gqa_online_attend`` is a
+Authoring surface (per [hir §1.1](docs/spec/hir.md#11-function)): ``gqa_online_attend`` is a
 ``pass``-bodied dispatch **prototype**; the two strategies are registered as
 ``@gqa_online_attend.specialize(...)`` variants, selected by the runtime
 ``ctx_len``:

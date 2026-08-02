@@ -98,7 +98,7 @@ def resolve_callable(name: str, token: Token) -> tuple[str, type]:
 
     Returns ``("op" | "stmt", cls)`` or raises ``VerifyError``.
 
-    Trailing-underscore convention (spec §5.3 rule 3): ``foo_`` is an
+    Trailing-underscore convention ([parser §1.3](docs/spec/parser.md#13-op-call)): ``foo_`` is an
     explicit effect-form selector.
 
     Strict dialect routing (no cross-dialect fallback):

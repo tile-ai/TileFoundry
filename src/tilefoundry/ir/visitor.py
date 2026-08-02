@@ -106,7 +106,7 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
     scope / binding Stmts report their body as a single child Sequential.
     ``Sequential`` itself reports its packed ``body`` tuple as children.
 
-    Per tir.md §2 ``PrimFunction`` is itself a Stmt — its single child is
+    Per [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs) ``PrimFunction`` is itself a Stmt — its single child is
     the body Sequential.
     """
     match stmt:
@@ -351,7 +351,7 @@ def _rewrite_stmt_exprs(stmt: Stmt, fn) -> Stmt:
 # ---------------------------------------------------------------------------
 # Function-level helpers
 #
-# PrimFunction is itself a Stmt (tir.md §2); these helpers remain as the
+# PrimFunction is itself a Stmt ([tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs)); these helpers remain as the
 # canonical entry points for per-function traversal so pass code doesn't
 # have to distinguish "call visit(pf) vs walk inside body".
 # ---------------------------------------------------------------------------

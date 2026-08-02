@@ -215,7 +215,7 @@ def _format_dim(dim) -> list[Span]:
     ``python_printer._DIM_INFIX_OPS`` / ``_DIM_FUNC_OPS`` tables that
     ``shape_entry_str`` uses — so a compact graph label renders
     ``DimFloorDiv`` / ``DimMod`` / ``min`` / ``max`` exactly like the
-    canonical §2.3 text instead of a raw ``Call`` repr. ``DimVar`` gets a
+    canonical [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms) text instead of a raw ``Call`` repr. ``DimVar`` gets a
     colored ``<FONT>`` wrap; bare ``int`` stays plain.
 
     Every ``DimVar`` renders in the same ``DIMVAR_COLOR`` — the colour
@@ -260,7 +260,7 @@ def _shard_inline(ty: TensorType, mesh_name_map: dict[int, str] | None):
 
 
 def _compact_type_spans(ty, mesh_name_map: dict[int, str] | None = None) -> list[Span]:
-    """The **compact** pretty mode (spec §2.3) as inline coloured spans —
+    """The **compact** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) as inline coloured spans —
     DimVar / storage tinted for the graph node label. ``type_to_compact_pretty``
     joins these to plain text.
 
@@ -304,13 +304,13 @@ def _compact_type_spans(ty, mesh_name_map: dict[int, str] | None = None) -> list
 
 
 def type_to_compact_pretty(ty, mesh_name_map: dict[int, str] | None = None) -> str:
-    """**Compact** pretty mode (spec §2.3) as plain text — e.g.
+    """**Compact** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) as plain text — e.g.
     ``bf16[4 @ trd.l, 64] {trd.t @ P("sum")} @smem`` — for the graph node label."""
     return "".join(s.text for s in _compact_type_spans(ty, mesh_name_map))
 
 
 def type_to_canonical_pretty(ty, mesh_name_map: dict[int, str] | None = None) -> str:
-    """**Canonical** pretty mode (spec §2.3) — the round-trippable DSL
+    """**Canonical** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) — the round-trippable DSL
     annotation ``Tensor[(1, 2, CTX_LEN + 1, 256), "bf16", ...]`` (with shard
     layout / non-default storage when present) — for the detail panel."""
     if isinstance(ty, TensorType):

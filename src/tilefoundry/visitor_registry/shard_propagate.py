@@ -319,11 +319,11 @@ def derive_output_shard_layout(
 
     # Otherwise synthesise the output layout from the per-mesh-axis bindings
     # (combining partial shards from several inputs) via the same
-    # canonicalizer make_shard_tensor_type uses (docs/spec/shard.md §7.1.1):
+    # canonicalizer make_shard_tensor_type uses ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)):
     # an output axis split by one mesh axis is factored into an extent-sized
     # position (+ residual) exactly like a from-scratch sharding, and one
     # split by several mesh axes factorizes into one sub-position per mesh
-    # extent (per shard.md §6) plus a remainder — so a carried-through layout
+    # extent (per [shard §6](docs/spec/shard.md#6-shardattr)) plus a remainder — so a carried-through layout
     # and a synthesised one for the same logical sharding always compare
     # equal. `Split.axis` in `attrs` still names an *output tensor* axis here
     # (canonical_shard_layout's expected input), not yet a layout position.

@@ -1,7 +1,8 @@
 """Emitter for ``tir.PrimFunction`` — produces the `__global__` kernel plus
 a ``tvm::ffi::Tensor``-parameterised host wrapper.
 
-Host entry signature and launch config follow ``docs/spec/codegen.md §6``:
+Host entry signature and launch config follow
+[codegen §1](docs/spec/codegen.md#1-pipeline):
 - Wrapper parameters are ``tvm::ffi::Tensor``; raw pointers are extracted
   via ``.data_ptr<float>()`` before the kernel launch.
 - Grid / block dims are derived from the outermost ``MeshScope`` topologies

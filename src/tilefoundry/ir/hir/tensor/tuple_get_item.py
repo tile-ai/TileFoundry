@@ -18,7 +18,7 @@ class TupleGetItem(Op):
     """Extracts a field of a tuple-typed Expr by static index.
 
     Replaces the former `core_ir.expr.TupleGetItem` Expr subclass. Using Call
-    + Op here unifies the shape of multi-output op consumers (§8.6 hir = SSA
+    + Op here unifies the shape of multi-output op consumers ([hir §1](docs/spec/hir.md#1-hir-expr-constructs), hir = SSA
     DAG; only Call and leaves).
     """
     tuple_value = ParamDef(kind="input", pattern=Tensor)

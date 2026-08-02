@@ -71,7 +71,7 @@ A `shape` / `stride` entry is not restricted to a static `int`: it may be a
 symbolic / dynamic dim (a `DimVar` or dim `Expr` — a `ShapeDim`), or `None`
 for a launch-provided (dynamic-CTA) extent (`Layout(shape=(None,),
 strides=(1,))`). Consumers that need a concrete integer — `Mesh.__getitem__`
-and `T.sync` participation (tir.md §1.5) — require static `int` entries and
+and `T.sync` participation ([tir §1.5](./tir.md#15-sync)) — require static `int` entries and
 **fail closed** on a symbolic / dynamic one rather than guessing.
 
 ---
@@ -128,12 +128,12 @@ Field meanings:
   sits inside `ShardLayout.layout`, this describes the **global,
   unsharded** layout shape — i.e., the shape *before* mesh
   dividing. The per-thread local layout shape is derived from
-  `layout.shape` ÷ mesh extents per `Split` (see §7).
+  `layout.shape` ÷ mesh extents per `Split` (see [§7](#7-shardlayout)).
 - `stride` — the step rule from layout domain to physical index. When
   not explicitly given, it defaults to `prefix_product(shape)` in the
   pycute style. When a `Layout` sits inside `ShardLayout.layout`,
   `stride[k]` is the **storage-physical** step on the engine attached
-  to that `ShardTensor` (see §7).
+  to that `ShardTensor` (see [§7](#7-shardlayout)).
 
 Semantics:
 
@@ -220,11 +220,10 @@ Field meanings:
   `num_devices`)
 - `layout` — the mesh's own shape / strides (a `Layout`); a constant slice
   (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
-  (tir.md §1.5)
+  ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 - `MeshAxis` — single-axis object retrieved via `mesh.x` / `mesh.y` /
   `mesh.axes[i]`, used by parser static evaluation
-  ([hir](./hir.md) §4)
 
 `Mesh` describes the parallel device domain; it is not a tensor layout
 object.
@@ -276,7 +275,7 @@ Field meanings:
   Across a single `ShardLayout.attrs`, an underlying-layout axis MAY
   be bound by at most one mesh axis: two `Split` attrs sharing the
   same `axis` are illegal. Since `layout.shape` is the **global
-  unsharded shape** (§7), the binding constraint is
+  unsharded shape** ([§7](#7-shardlayout)), the binding constraint is
   `mesh.shape[mesh_axis_position] | layout.shape[axis]`
   (mesh extent must divide the global layout extent). The per-thread
   local extent on this layout dim is then
@@ -294,7 +293,8 @@ Field meanings:
   A `Partial` carries no layout axis — it is a value state on the mesh
   axis given by its position in `attrs`. How a `Partial` propagates,
   resolves, and must not be silently lost is part of relation-driven
-  propagation (§9).
+  propagation
+([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
 
 Surface syntax sugar:
 
@@ -319,23 +319,23 @@ class ShardLayout(LayoutBase):
 
 - constraints:
   - the distributed binding layer; binds an underlying layout's domain axes to mesh
-    axes without a new layout-algebra primitive. Sub-field contracts in §7.1–§7.5.
+    axes without a new layout-algebra primitive. Sub-field contracts in [§7.1](#71-layout)–[§7.5](#75-example).
 
 The distribution-changing transformation (redistribute / sharding) is
-itself an IR op (`hir.sharding.Reshard`, see [hir](./hir.md) §2.5).
+itself an IR op (`hir.sharding.Reshard`, see [hir §1.3](./hir.md#13-op)).
 
 ### 7.1 `layout`
 
-The underlying `LayoutBase`. `Layout` / `ComposedLayout` (§3, §4) own
+The underlying `LayoutBase`. `Layout` / `ComposedLayout` ([§3](#3-layout-pure-primitive), [§4](#4-composedlayout)) own
 the layout algebra; `ShardLayout` binds their stable `shape` and
 `domain_rank` to a mesh without redefining that algebra. Nested stage
 layouts remain represented through the `LayoutBase` hierarchy.
 
 When a `Layout` sits inside `ShardLayout.layout`, its `shape` and
 `stride` carry **additional, narrower semantics** beyond the plain
-§3 meaning — they describe the *distributed* form of the tensor, not a
+[§3](#3-layout-pure-primitive) meaning — they describe the *distributed* form of the tensor, not a
 free-standing primitive layout. These narrower meanings are defined in
-§7.1.1 and §7.1.2 and refine (not replace) the §3 contract.
+[§7.1.1](#711-layoutshape) and [§7.1.2](#712-layoutstrides) and refine (not replace) the [§3](#3-layout-pure-primitive) contract.
 
 #### 7.1.1 `layout.shape`
 
@@ -359,7 +359,7 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
 - `local_shape(sl)[k] = G[k] / sl.mesh.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
 - `local_shape(sl)[k] = G[k]` otherwise.
-- The canonical regroup rule (§8) defines how `T.shape` aligns with
+- The canonical regroup rule ([§8](#8-layout-propagation)) defines how `T.shape` aligns with
   `G`.
 
 #### 7.1.2 `layout.strides`
@@ -392,7 +392,7 @@ relevant mesh axis.
 - `S[k] > 0` ⇒ mesh axis `a` contributes `i · S[k]` elements to
   intra-engine offset on dim `k`. Typical: `engine(i)` shares one
   base ptr across instances.
-- For layout dims `k` with no `Split` binding, `S[k]` follows §3
+- For layout dims `k` with no `Split` binding, `S[k]` follows [§3](#3-layout-pure-primitive)
   semantics, evaluated on the engine's physical storage.
 - Layouts requiring more than one stride per `Split` axis (cyclic /
   interleaved) MUST be rejected by `ShardLayout` construction.
@@ -404,7 +404,7 @@ ordered by mesh axis. `len(attrs)` MUST equal `rank(mesh)`.
 
 A `Split(k)` substitutes the current `mesh_coord` into layout dim `k` of
 `layout`, producing the local projection on the current device. See
-§6 for individual `ShardAttr` semantics.
+[§6](#6-shardattr) for individual `ShardAttr` semantics.
 
 ### 7.3 `mesh`
 
@@ -423,11 +423,11 @@ not `Reshard`.
 
 Logical tensor `(2, 1536)` reshards via surface sugar
 `(2 @ m.x, 12 @ m.y, 128 @ m.t)` with `mesh=(x=2, y=4, t=32)`. Parser
-canonicalization (§7.1.1, parser §1.5) expands `12 @ m.y` into
+canonicalization ([§7.1.1](#711-layoutshape), [parser §1.5](./parser.md#15-layout-sugar)) expands `12 @ m.y` into
 `(4 @ m.y, 3)` and `128 @ m.t` into `(32 @ m.t, 4)` and emits
 `Layout(shape=(2, 4, 3, 32, 4), strides=None)` — un-materialized
-because the user wrote sugar (§7.1.2, §7.6). Reshard typeinfer then
-materializes `strides` via the direction rule (§7.6); the resulting
+because the user wrote sugar ([§7.1.2](#712-layoutstrides)). Reshard typeinfer
+then materializes `strides` via the direction rule; the resulting
 form depends on the `(src.storage, dst.storage)` pair.
 
 For `reshard(a:gmem, ..., storage='rmem')` (high → low, per-instance
@@ -440,7 +440,8 @@ mesh   = Mesh(layout=Layout(shape=(2, 4, 32), ...))
 ```
 
 `shard_layout_local_shape(sl)` yields `(1, 1, 3, 1, 4)`. Each `Split`
-axis has `local_shape = 1` by construction, so §2.10's offset sum
+axis has `local_shape = 1` by construction, so
+[runtime §2.10.2](./runtime.md#2102-computation)'s offset sum
 reduces to `0` and every mesh instance receives its own engine
 holding `3 × 4 = 12` elements laid out in C-order.
 

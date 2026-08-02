@@ -19,7 +19,7 @@ a `RuntimeModule` (the runtime instance — kernel bodies) are twins: same
 `name`, same child tree, same `entry`. `@runtime_module` / `@runtime_func`
 (`tilefoundry.runtime.decorator`, below) build one twin mechanically from the
 other, validated one-to-one at decoration time; the correspondence is
-additionally held by comparing the two numerically (§1.6), against bounds the
+additionally held by comparing the two numerically ([§1.6](#16-check)), against bounds the
 comparison's caller states — a `RuntimeModule` never runs the HIR evaluator.
 
 ```python
@@ -41,16 +41,16 @@ class RuntimeModule:
     attributes called from `forward`. `@runtime_module` (below) generates
     this subclass mechanically from a semantic `Module` and is the normal
     authoring path; a direct subclass remains available for special cases
-    (e.g. `CompiledModule`, §1.1.3).
+    (e.g. `CompiledModule`, [§1.1.3](#113-internal-pipeline-compiled-origin)).
   - `load(resource)` (base class): recurses into each child with
     `resource.subtree(child.name)`; the base class itself resolves nothing.
     Weight prefixes follow module paths, matching ir attribute addressing.
     Lifecycle: construct (structure) → `load` (materialize) → call. A
     `RuntimeModule` does **not** run `prepare`; it loads straight from the
-    directory the semantic side prepared (§1.1.2).
+    directory the semantic side prepared ([§1.1.2](#112-weight-converter-and-prepare--forward)).
   - correspondence contract: the twin `RuntimeModule` and the semantic
     `Module` both have a `forward`, and on the same inputs the two must agree
-    — `measure.check` comparing them against stated bounds (§1.6) is that
+    — `measure.check` comparing them against stated bounds ([§1.6](#16-check)) is that
     contract.
   - `module` names the authored `Module` a twin was generated from, so a
     caller holding an implementation can reach what it is judged against. A
@@ -66,9 +66,9 @@ class RuntimeModule:
     HIR evaluator.
   - two origins: compiled — `tilefoundry.build` / `compile` / `jit` →
     `LinkedModule` → the loader binds a `CompiledModule` (a `RuntimeModule`,
-    not a `RuntimeFunction`) (§1.1.3); handwritten — a `@runtime_module`
+    not a `RuntimeFunction`) ([§1.1.3](#113-internal-pipeline-compiled-origin)); handwritten — a `@runtime_module`
     class (below), loading from a prepared checkpoint directory via a
-    `RuntimeResource` (§1.5).
+    `RuntimeResource` ([§1.5](#15-runtimeresource)).
 
 #### `@runtime_module` / `@runtime_func`
 
@@ -106,7 +106,7 @@ class Attention:
     kernel method's caller passes only activations — the same call shape the
     semantic side answers with once it has been read, i.e. `LoadedModule`'s
     attribute-access callable rather than the `Module`'s, which takes every
-    declared param (§1.1.2, [core-ir §1.1](./core-ir.md#11-function-access)).
+    declared param ([§1.1.2](#112-weight-converter-and-prepare--forward), [core-ir §1.1](./core-ir.md#11-function-access)).
   - orchestration methods (`forward` / `init_caches` / …) are reused from the
     semantic `Module.methods` verbatim and are never rewritten on the
     runtime side: inside them, `self.<fn>` / `self.<child>` resolve to the
@@ -114,7 +114,7 @@ class Attention:
     body serve both sides. Absent an own `forward`, the generated class runs
     `sem.methods["forward"]` if present, else calls the entry function by
     name — the same dispatch both semantic-side `forward`s make, on the
-    activations-alone convention `LoadedModule.forward` uses (§1.1.2).
+    activations-alone convention `LoadedModule.forward` uses ([§1.1.2](#112-weight-converter-and-prepare--forward)).
 
 ### 1.1.1 `RuntimeFunction`
 
@@ -212,7 +212,7 @@ class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
     the others. A child reached from two owners therefore yields one
     `LoadedModule` per owner rather than one binding the last owner wins. This
     is the semantic-side counterpart of the `RuntimeModule` twin's own `load`
-    (§1.1), which validates against the same declarations before binding in
+    ([§1.1](#11-runtimemodule)), which validates against the same declarations before binding in
     place.
   - `LoadedModule` attribute access mirrors the `Module`'s
     ([core-ir §1.1](./core-ir.md#11-function-access)) against that reading: a
@@ -254,7 +254,7 @@ class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
     ([core-ir §1.1](./core-ir.md#11-function-access)). Calling one with the
     other's argument list MUST be rejected naming the runner it wanted, not
     left to fail as a shape error inside the evaluator. `check` compares the
-    semantic and runtime forwards (§1.6). A multi-node composition is chained
+    semantic and runtime forwards ([§1.6](#16-check)). A multi-node composition is chained
     by the caller, one `forward` (or one named function call) per node.
   - a causal-LM root MAY define `init_caches`,
     `prepare_inputs_for_generation`, and `append_cache` orchestration methods.
@@ -281,7 +281,7 @@ LinkedModule → load → CompiledModule (fully-loaded, public, callable Runtime
 API; only `CompiledModule` (a `RuntimeModule`) is. `load_linked_module` returns
 `CompiledModule(type=linked.entry, fn=entry_callable)`; `name` / `entry` are
 both `linked.entry.name`. Its `forward` implements the out-param calling
-convention directly (§1.2) — there is no separate function-body object it
+convention directly ([§1.2](#12-calling-convention-compiledmodule)) — there is no separate function-body object it
 delegates to. The compiled path has no `resource` / `weights` / `states`
 (weights are ordinary entry arguments), so its `load` is the inherited no-op.
 
@@ -417,12 +417,12 @@ class RuntimeResource(Protocol):
     reshapes only where a `Preprocessed` alias entry states that the checkpoint
     stores that one tensor differently from how the Module declares it — a
     transpose, a slice of a fused tensor, or a dropped axis. Assembling a
-    one-to-many group into one tensor stays `prepare`'s job (§1.1.2), via
+    one-to-many group into one tensor stays `prepare`'s job ([§1.1.2](#112-weight-converter-and-prepare--forward)), via
     `torch.stack`, and so does any value that is a function of more than one raw
     tensor. `Preprocessed` MUST resolve to one name: a tuple-valued name is
     rejected at construction, naming the weight converter as the way to express
     it. Precision is not preprocessing: a read MUST return the checkpoint's own
-    stored element type and be validated against the declaration (§1.1.2).
+    stored element type and be validated against the declaration ([§1.1.2](#112-weight-converter-and-prepare--forward)).
 
 An `alias` entry renames one path *segment* or *leaf* **within the current
 scope**, joined onto the caller's already-accumulated prefix: lookup order is
@@ -479,7 +479,7 @@ class SafetensorsResource:
     neither MUST be reported as such rather than as a missing index.
   - every read tensor keeps the element type the checkpoint stores. A
     declaration requiring a different precision uses a weight converter
-    (§1.1.2), and `load` validates the converted or raw result against that
+    ([§1.1.2](#112-weight-converter-and-prepare--forward)), and `load` validates the converted or raw result against that
     declaration.
 
 ### 1.6 `check`
@@ -780,7 +780,7 @@ Let `t: ShardTensor`, `sl = t.shard_layout`, `S = sl.layout.strides`,
 
 #### 2.10.3 Single path across storages
 
-For every `A[m] = Split(k)`, by shard §7.1.2:
+For every `A[m] = Split(k)`, by [shard §7.1.2](./shard.md#712-layoutstrides):
 
     S[k] = 0  ⇒  contribution = 0
     S[k] > 0  ⇒  contribution = coord[m] · S[k]

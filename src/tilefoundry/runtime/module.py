@@ -1,5 +1,5 @@
 """``RuntimeModule`` — the runtime twin of an ir ``Module``; ``CompiledModule``
-is the compiled-path variant the loader binds. See docs/spec/runtime.md §1.1."""
+is the compiled-path variant the loader binds. See [runtime §1.1](docs/spec/runtime.md#11-runtimemodule)."""
 from __future__ import annotations
 
 from typing import Callable

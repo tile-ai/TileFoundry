@@ -138,7 +138,7 @@ def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
     )
 
 
-# ── ExprVisitor-based HIR walks reach every child (docs/spec/visitor-mutator.md §1)
+# ── ExprVisitor-based HIR walks reach every child ([visitor-mutator §1](docs/spec/visitor-mutator.md#1-role))
 
 
 def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:

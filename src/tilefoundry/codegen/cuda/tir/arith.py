@@ -39,7 +39,7 @@ def _materialised_shape(ty) -> tuple:
     """
     layout = getattr(ty, "layout", None)
     if isinstance(layout, ShardLayout):
-        # spec §7: ``layout.shape`` is global; derive per-thread local.
+        # [shard §7.1.1](docs/spec/shard.md#711-layoutshape): ``layout.shape`` is global; derive per-thread local.
         return shard_layout_local_shape(layout)
     return shape_upper_bound(ty.shape)
 
