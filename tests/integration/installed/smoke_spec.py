@@ -81,7 +81,6 @@ def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
         ("core-ir", "target-inheritance", 'with `target="cuda"`'),
         ("core-ir", "default-step", "MUST have no default step"),
         ("cli", "check", "A FAIL with `--inputs random`"),
-        ("runtime", "1.7", "The refusal MUST name that weight"),
     ),
 )
 def test_spec_answers_askable_rules(

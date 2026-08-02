@@ -611,7 +611,6 @@ def _one_run(
         "inputs": {
             "activations": {
                 "source": provided,
-                "kind": arguments.inputs,
                 "actual_dtypes": _dtype_names(activations),
                 "declared_dtypes": (
                     []
@@ -681,13 +680,13 @@ def _shown_files(files: Sequence[dict[str, Any]]) -> str:
     return "; files " + "; ".join(descriptions)
 
 
-def _failure_warnings(runs: Sequence[dict[str, Any]]) -> list[str]:
+def _failure_warnings(runs: Sequence[dict[str, Any]], input_kind: str | None) -> list[str]:
     """The limits that qualify a failed command-level comparison."""
     if all(run["passed"] for run in runs):
         return []
 
     warnings = []
-    if any(run["inputs"]["activations"]["kind"] == "random" for run in runs):
+    if input_kind == "random":
         warnings.append(
             "--inputs random makes each activation independently. A target that relies on "
             "semantic relationships between activations can differ at ulp scale without either "
@@ -703,7 +702,12 @@ def _failure_warnings(runs: Sequence[dict[str, Any]]) -> list[str]:
     return warnings
 
 
-def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | None) -> str:
+def _render(
+    target: Target,
+    runs: list[dict[str, Any]],
+    level: dict[str, Any] | None,
+    warnings: Sequence[str],
+) -> str:
     """The runs as a person reads them: what ran, what it measured, the verdict."""
     where = f"{target.path.name}:{target.selector}" if target.selector else str(target.path.name)
     lines = [where]
@@ -774,7 +778,7 @@ def _render(target: Target, runs: list[dict[str, Any]], level: dict[str, Any] | 
             "           PASS here means your implementation matches this Module — not",
             "           that the Module matches what it describes.",
         ]
-    for warning in _failure_warnings(runs):
+    for warning in warnings:
         wrapped = textwrap.wrap(warning, width=74)
         lines += ["", f"  warning: {wrapped[0]}", *(f"           {line}" for line in wrapped[1:])]
     return "\n".join(lines) + "\n"
@@ -801,7 +805,7 @@ def run_check(arguments: argparse.Namespace) -> int:
         for combination in _combinations(stated)
     ]
     level = _level(target.path)
-    warnings = _failure_warnings(runs)
+    warnings = _failure_warnings(runs, arguments.inputs)
 
     if arguments.json:
         payload = {
@@ -815,7 +819,7 @@ def run_check(arguments: argparse.Namespace) -> int:
             payload["warnings"] = warnings
         sys.stdout.write(json.dumps(payload, indent=2, sort_keys=False) + "\n")
     else:
-        sys.stdout.write(_render(target, runs, level))
+        sys.stdout.write(_render(target, runs, level, warnings))
     return 0 if all(run["passed"] for run in runs) else 1
 
 

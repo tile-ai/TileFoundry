@@ -19,7 +19,7 @@ from tilefoundry.utils.spec_ref import spec_ref_render
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
-_MISSING_PREPARED_WEIGHT = "[runtime §1.7](docs/spec/runtime.md#17-missing-prepared-weight)"
+_MISSING_PREPARED_WEIGHT = "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
 
 
 def _validate_declared(module_name, source, value, decl_type) -> None:

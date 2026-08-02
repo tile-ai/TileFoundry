@@ -184,7 +184,7 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     assert "missing declared weight 'w'" in refused
     assert "prepare produces it" in refused
     assert spec_ref_render(
-        "[runtime §1.7](docs/spec/runtime.md#17-missing-prepared-weight)"
+        "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
     ) in refused
 
 
