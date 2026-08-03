@@ -292,4 +292,3 @@ def test_the_step_returns_the_cache_entry_to_append(tf, shipped_source, tmp_path
         tf, tmp_path, shipped_source(MODEL), step,
         out_held=("allclose", {"atol": _bf16_ulps(want), "rtol": 0.0}),
     )
-

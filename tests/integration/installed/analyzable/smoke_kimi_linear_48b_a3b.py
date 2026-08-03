@@ -338,4 +338,3 @@ def test_the_router_and_the_shared_expert_are_load_bearing(
         _moe(tf, tmp_path, source, step, want, args=unshared, refuse=True)
     finally:
         del hf_moe
-

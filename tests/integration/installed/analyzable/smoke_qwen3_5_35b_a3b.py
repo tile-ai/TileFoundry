@@ -319,4 +319,3 @@ def test_the_output_gate_is_applied(tf, shipped_source, tmp_path) -> None:
         ),
         dims={"ctx_len": step.ctx_len},
     )
-

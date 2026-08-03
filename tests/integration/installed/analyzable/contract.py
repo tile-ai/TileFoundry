@@ -258,9 +258,14 @@ def disagreed(tf, work: Path, source: Path, case: ModelCase, selector: str, **as
     """The same command, held to reporting FAIL.
 
     A parity comparison is only worth its tolerance if a wrong input breaks it, so
-    the perturbed runs assert the command refuses rather than that it agrees. The
-    bound they carry is far above the rounding the parity runs accept, which is what
-    makes "it changed" something other than round-off.
+    the perturbed runs assert the command refuses rather than that it agrees.
+
+    The bound a caller passes must be the one its parity run passes, not a tighter
+    one. A tighter bound is met by an *unperturbed* run too, so the command refuses
+    either way and the test passes without perturbing anything. That is not a
+    hypothetical: migrating these runs with a fixed 1e-3 did exactly that to five of
+    them, against parity bounds of 0.00586 and 0.0234 -- one of which passed while
+    permuting a cache by the identity.
     """
     done = compared(tf, work, source, case, selector, _refuse=True, **asked)
     assert done.returncode == 1, done.stdout + done.stderr
