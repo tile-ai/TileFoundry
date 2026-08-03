@@ -197,6 +197,12 @@ def _asked(tf, work, source, step, *, out_held):
 def test_the_decode_step_matches_hugging_faces_own_attention(tf, shipped_source, tmp_path) -> None:
     """The step's output is what HF's attention produces at the decoded position.
 
+    The boundary, as this model's `ReferenceCase` declares it: one decode step of the
+    complete sliding-window MLA attention submodule -- the fp8 KV latent this token
+    writes and the online-softmax attention over the context it was given, with the
+    weights bound by name the way the checkpoint binds them -- at production
+    dimensions.
+
     Both sides in the model's own dtype: same weights, same context, same rotation,
     no cache object on either side. Held to one representable step apart and to what
     the corpus asks of a reference, which is two separate bounds on one output.

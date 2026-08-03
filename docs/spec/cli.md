@@ -230,10 +230,10 @@ that runs before it can be read is a reference that decides what it describes.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers
     drifts silently from what it claims to describe.
-  - A validation level MUST NOT be generated. Nothing in a model says how far it
-    has been compared against anything, so the level comes from a committed record
-    that a person wrote and a reviewer read. Deriving it would mean inferring
-    evidence from the presence of a test rather than from its having run.
+  - The catalog MUST NOT carry how far a model has been compared against anything,
+    generated or committed. Nothing in a model says it, so such a field can only be
+    a claim about tests, and a claim the shipped artifact cannot check is one that
+    goes on being shipped after the test it named is gone.
 
 ## Spec
 
