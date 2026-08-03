@@ -41,8 +41,9 @@ from tests.models.deepseek_v4_flash.model import (
 from tilefoundry.runtime import DictResource
 
 #: The model is bf16 with an fp8 KV cache; the oracle is asked in the dtype the
-#: model is authored in, and `test_attention_decode.py` states separately what
-#: it costs against an f32 accumulation of the same numbers.
+#: model is authored in, and
+#: `tests/integration/installed/analyzable/smoke_deepseek_v4_flash.py` states
+#: separately what it costs against an f32 accumulation of the same numbers.
 DTYPE = torch.bfloat16
 DEVICE = "cuda"
 

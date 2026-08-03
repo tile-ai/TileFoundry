@@ -8,9 +8,11 @@ than by naming three models.
 The `reference` is spent on KDA, which is BLOCKED. That is deliberate: of the three
 kernels it is the one that distinguishes this model, and a capability matrix that
 recorded only the two with oracles would report this model as covered. MLA (both
-forms) and the MoE are measured in `test_mla.py` and `test_moe.py`, at f32
+forms) and the MoE are measured against Hugging Face in
+`tests/integration/installed/analyzable/smoke_kimi_linear_48b_a3b.py`, at f32
 round-off, each with perturbation tests establishing that those comparisons can
-fail.
+fail: two for MLA, and three for the MoE covering the router bias, the order the
+routed scaling is applied in, and the shared expert's contribution.
 
 Schedule admits one function per execution Module, so it selects each child's
 entry and not its leaves; analyze selects everything the tree defines. What is not

@@ -15,14 +15,18 @@ would observe and these do not -- layer order, the residual thread, the final no
 -- is recorded as untested in `test_provenance.py` rather than approximated.
 
 Two of the three carry a reference. The MoE block does not, for a measured reason
-stated at its case; it is compared against Hugging Face in `test_moe.py`.
+stated at its case; it is compared against Hugging Face in
+`tests/integration/installed/analyzable/smoke_qwen3_5_35b_a3b.py`.
 
 Two things this deliberately does not state at all:
 
 - **No decoder-layer case.** Each published layer type is its own class holding
   its own mixer, so there are two of them and no single case names the layer.
   Their composition -- the two residuals, and the MoE reading the mixer's output --
-  is measured in `test_decoder_layer.py` across both types.
+  is not compared numerically as a whole: each mixer is compared against Hugging
+  Face on its own in
+  `tests/integration/installed/analyzable/smoke_qwen3_5_35b_a3b.py`, and the shape
+  of the stack that holds them is asserted in `test_provenance.py`.
 - **No multi-token-prediction case.** `mtp_num_hidden_layers` is 1 and the
   installed transformers implements no head for it, so there is no oracle; a
   reference would be this repository's reading of a config compared against this
@@ -172,10 +176,14 @@ MOE_CASE = ModelCase(
     #: its block -- 805 million parameters, 3.3 GB in f32, essentially all of it the
     #: 256 experts -- which is by a wide margin the most expensive draw in this
     #: package, and the harness draws inputs for every model in one place. The block
-    #: is compared against `Qwen3_5MoeSparseMoeBlock` in `test_moe.py` instead, with
-    #: perturbation tests establishing that the comparison can fail; what this case
-    #: contributes here is the block's analysis and schedule coverage and its
-    #: function inventory.
+    #: is compared against `Qwen3_5MoeSparseMoeBlock` in
+    #: `tests/integration/installed/analyzable/smoke_qwen3_5_35b_a3b.py` instead.
+    #: That comparison carries no perturbation test. The two it had are not askable
+    #: through a command: one read the selected experts back as a *set*, and every
+    #: predicate `check` offers compares positionally; the other required the routed
+    #: branch and the shared branch to sum to the whole block, which is two commands'
+    #: outputs added together. What this case contributes here is the block's analysis
+    #: and schedule coverage and its function inventory.
     analyze=(
         FunctionCase(id="qwen3_5_35b_a3b/analyze/experts", selector="experts"),
         FunctionCase(id="qwen3_5_35b_a3b/analyze/post_norm", selector="post_norm"),

@@ -152,8 +152,10 @@ def identity_rope_caches(
 
     This is how `mla_use_nope: true` is expressed without a second attention
     implementation. `apply_rotary_pos_emb(x, x, ones, zeros)` returns
-    `x * 1 + rotate_half(x) * 0`, and that it is *exactly* the identity is
-    measured in `test_mla.py` (max abs diff 0.0 on both q and k), not assumed.
+    `x * 1 + rotate_half(x) * 0`, so it is *exactly* the identity by arithmetic.
+    That was once measured here (max abs diff 0.0 on both q and k); the
+    measurement compared Hugging Face against itself, asking nothing of this
+    repository's kernels, and did not survive the move to the shipped source.
 
     vLLM's `KimiMLAAttention` sets `rotary_emb=None` yet keeps
     `qk_head_dim = 192` and `kv_a_proj_with_mqa` at `512 + 64` out, so NoPE
@@ -435,8 +437,8 @@ def mla_step_inputs(
 
     *nope* selects Kimi's own form. It is not a different kernel: the same
     `mla_attention` runs either way, and NoPE is expressed by handing it
-    `cos = 1, sin = 0`. `test_mla.py` measures that this rotary is exactly the
-    identity, which is what makes the substitution a fact rather than a hope.
+    `cos = 1, sin = 0`, which `identity_rope_caches` above explains is the
+    identity by arithmetic rather than by measurement.
     """
     attention = build_mla_attention(seed=WEIGHT_SEED, device=device)
     caches = identity_rope_caches if nope else rope_caches
@@ -552,7 +554,6 @@ def build_hf_moe(
     seed: int = WEIGHT_SEED,
     device: str = "cuda",
     config: KimiLinearConfig | None = None,
-    n_experts: int | None = None,
 ):
     """A `DeepseekV3MoE` at Kimi's numbers, with a NONZERO router bias.
 
@@ -563,16 +564,17 @@ def build_hf_moe(
     indistinguishable from a correct one. Measured: with the bias drawn nonzero
     the selected expert set changes for 16/16 tokens and gathering the biased
     scores instead moves the weights by 1.08e-01; at bias = 0 it moves them by
-    exactly 0.
+    exactly 0. That the bias is load-bearing is held by
+    `smoke_kimi_linear_48b_a3b.py::test_the_router_and_the_shared_expert_are_load_bearing`,
+    which zeroes it and requires the comparison to break.
     """
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (  # noqa: PLC0415
         DeepseekV3MoE,
     )
 
     config = config or CONFIG
-    n_experts = config.num_experts if n_experts is None else n_experts
     cfg = build_mla_hf_config(config)
-    cfg.num_local_experts = n_experts
+    cfg.num_local_experts = config.num_experts
     cfg.num_experts_per_tok = config.num_experts_per_token
     cfg.n_shared_experts = config.num_shared_experts
     cfg.n_group = 1
@@ -595,7 +597,7 @@ def build_hf_moe(
 
 def moe_inputs(
     *, act_seed: int = ACTIVATION_SEED, device: str = "cuda", seed: int = WEIGHT_SEED,
-    hf_moe=None, n_experts: int | None = None,
+    hf_moe=None,
 ) -> MoeInputs:
     """One deterministic MoE call for one token.
 
@@ -603,7 +605,7 @@ def moe_inputs(
     weights are about 7 GB, so rebuilding it per draw dominates the test.
     """
     moe = (
-        build_hf_moe(seed=seed, device=device, config=CONFIG, n_experts=n_experts)
+        build_hf_moe(seed=seed, device=device, config=CONFIG)
         if hf_moe is None
         else hf_moe
     )

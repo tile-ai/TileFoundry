@@ -44,8 +44,10 @@ Kimi's MLA is NoPE (``mla_use_nope: true``), which does not remove the 64
 rotary-half dimensions -- it stops rotating them. They still enter the score and
 the ``qk_head_dim = 192`` scaling denominator. So ``mla_attention`` is authored
 once, with the rotary always applied, and NoPE is driven by handing it
-``cos = 1, sin = 0``; that this is exactly the identity is measured in
-``test_mla.py``, not assumed.
+``cos = 1, sin = 0``, which is the identity by the arithmetic of
+``apply_rotary_pos_emb``. That identity is no longer measured anywhere: the test
+that measured it compared two Hugging Face calls to each other and asked nothing
+of this description, so it does not survive being asked of the shipped source.
 """
 from __future__ import annotations
 

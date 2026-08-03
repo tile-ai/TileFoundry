@@ -132,16 +132,19 @@ def test_the_command_reads_the_machine_off_the_shipped_source(
 #: cannot pass. Neither is a multiple of the 32 heads.
 CTX_LENGTHS = (24, 40)
 
-#: What a perturbed run has to move the output by before the parity runs above count
-#: as discriminating. Far above the rounding they accept, so "it changed" cannot be
-#: round-off.
-DISCRIMINATION = 1e-3
-
 MLA = "mla.mla_attention"
 
 
 def _mla(tf, work, source, step, *, args=None, refuse=False):
-    """One `check` of the MLA step, judging its output and its cache entry."""
+    """One `check` of the MLA step, judging its output and its cache entry.
+
+    A perturbed run is held to breaking exactly the comparison the unperturbed run
+    passes, so the two modes differ only in the verdict expected, never in the bound.
+    A bound tighter than parity would be met by an unperturbed run as well, and the
+    perturbation tests would pass without perturbing anything: measured, a fixed 1e-3
+    refuses this step's output whose own parity bound is 0.00586, and the cache-pairing
+    test passed under an identity permutation.
+    """
     activations, weights = contract.split_by_declaration(
         CASES[0], MLA, args if args is not None else step.args
     )
@@ -149,19 +152,16 @@ def _mla(tf, work, source, step, *, args=None, refuse=False):
     want_k, want_v = reference.mla_appended_cache_oracle(step)
     entry_k, entry_v = want_k[:, step.ctx_len:], want_v[:, step.ctx_len:]
     ask = contract.disagreed if refuse else contract.compared
-    held = (
-        ("allclose", {"atol": DISCRIMINATION, "rtol": 0.0})
-        if refuse
-        else contract.three_roundings(want),
-        contract.three_roundings(entry_k),
-        contract.three_roundings(entry_v),
-    )
     return ask(
         tf, work, source, CASES[0], MLA,
         activations=activations,
         weights=weights,
         expected=(want, entry_k, entry_v),
-        held=held,
+        held=(
+            contract.three_roundings(want),
+            contract.three_roundings(entry_k),
+            contract.three_roundings(entry_v),
+        ),
         dims={"ctx_len": step.ctx_len},
     )
 
@@ -246,6 +246,29 @@ def test_mla_cache_pairing_is_load_bearing(tf, shipped_source, tmp_path) -> None
     _mla(tf, tmp_path, source, step, args=values, refuse=True)
 
 
+MOE = "moe.moe"
+
+
+def _moe(tf, work, source, step, want, *, args=None, refuse=False):
+    """One `check` of the MoE block against the oracle for the token it was drawn for.
+
+    A perturbed run is held to breaking *this* comparison, for the reason `_mla` gives:
+    this block's parity bound is `3 * one_ulp_at(want)` = 0.0234 at an oracle whose
+    largest entry is 1.70, so a tighter fixed bound would refuse an unperturbed run too.
+    """
+    activations, weights = contract.split_by_declaration(
+        CASES[0], MOE, args if args is not None else step.args
+    )
+    ask = contract.disagreed if refuse else contract.compared
+    return ask(
+        tf, work, source, CASES[0], MOE,
+        activations=activations,
+        weights=weights,
+        expected=(want,),
+        held=(contract.three_roundings(want),),
+    )
+
+
 @pytest.mark.parametrize("act_seed", reference.MOE_DRAWS)
 def test_moe_matches_hugging_face_at_the_published_expert_count(
     tf, shipped_source, tmp_path, act_seed
@@ -259,15 +282,60 @@ def test_moe_matches_hugging_face_at_the_published_expert_count(
     hf_moe = reference.build_hf_moe(device="cpu")
     try:
         step = reference.moe_inputs(device="cpu", act_seed=act_seed, hf_moe=hf_moe)
-        want = reference.moe_oracle(step)
-        activations, weights = contract.split_by_declaration(CASES[0], "moe.moe", step.args)
-        contract.compared(
-            tf, tmp_path, shipped_source(MODEL), CASES[0], "moe.moe",
-            activations=activations,
-            weights=weights,
-            expected=(want,),
-            held=(contract.three_roundings(want),),
+        _moe(tf, tmp_path, shipped_source(MODEL), step, reference.moe_oracle(step))
+    finally:
+        del hf_moe
+
+
+def test_the_router_and_the_shared_expert_are_load_bearing(
+    tf, shipped_source, tmp_path
+) -> None:
+    """Three perturbations of one MoE call, each held to breaking the parity above.
+
+    Asked at the published expert count, by perturbing an input rather than by
+    shrinking the model: every parameter `moe` declares is non-const, so each arrives
+    as `--input` and a perturbation is one tensor written to disk. The originals of
+    these three instead rebuilt the block at a reduced expert count, which the shipped
+    source cannot be asked for -- it reads `num_experts` from its own `config.json`
+    and no flag overrides it.
+
+    Three questions in one test, and one draw rather than four, because this block is
+    1.82 billion parameters and 14 s to build on CPU; the three share the one oracle
+    and are asked in sequence, so the first to agree when it should not fails the test
+    at its own line.
+    """
+    hf_moe = reference.build_hf_moe(device="cpu")
+    try:
+        step = reference.moe_inputs(
+            device="cpu", act_seed=reference.ACTIVATION_SEED, hf_moe=hf_moe
         )
+        want = reference.moe_oracle(step)
+        source = shipped_source(MODEL)
+
+        # The router selects on `sigmoid(logits) + bias` but takes the routing weights
+        # from the *unbiased* scores. At bias = 0 those are the same tensor, so a
+        # kernel that gathered the biased scores would be indistinguishable from a
+        # correct one -- which is why the fixture draws the bias nonzero, and why that
+        # must not be "simplified" to the zeros the class defaults to.
+        biasless = list(step.args)
+        biasless[3] = torch.zeros_like(step.args[3])
+        _moe(tf, tmp_path, source, step, want, args=biasless, refuse=True)
+
+        # `moe_renormalize: true` means normalise, *then* scale. The two orders are
+        # different functions: scaling the selected scores before dividing by their sum
+        # cancels the factor entirely, leaving what a factor of 1.0 would give. So a
+        # kernel that folded the factor into the denominator has to fail here.
+        unscaled = list(step.args)
+        unscaled[4] = torch.full((1, 1), 1.0, dtype=reference.DTYPE)
+        _moe(tf, tmp_path, source, step, want, args=unscaled, refuse=True)
+
+        # `num_shared_experts: 1`, and it is unscaled -- `routed_scaling_factor`
+        # applies to the routed branch only. Zeroing its gate projection drops the
+        # shared branch's contribution, and a kernel that never added it could not pass
+        # the parity runs above.
+        unshared = list(step.args)
+        unshared[8] = torch.zeros_like(step.args[8])
+        _moe(tf, tmp_path, source, step, want, args=unshared, refuse=True)
     finally:
         del hf_moe
 
