@@ -1,13 +1,17 @@
-"""The machines the corpus can ask a model about.
+"""The machines a model can be asked about besides the one its own source declares.
 
 Each fixture states its levels by asking the target what it has rather than by
 repeating a number: a device whose SM count changes should move the fixture with
 it, and a fixture that disagreed with the hardware documents would be measuring
 something nobody owns.
 
-H200 is the acceptance machine. The Apple fixture is a local convenience, and
-saying so here is deliberate -- it produces no CUDA evidence and no performance
-claim, so a report that shows it must not read as if it did.
+No fixture is a default. Every model declares the machine its tree runs on and a
+build answers with that declaration, so a fixture serves only the separate question
+of aiming one model at a second machine in the same run. `apple_m2_pro` is the one
+asked that way, and saying so here is deliberate -- it produces no CUDA evidence and
+no performance claim, so a report that shows it must not read as if it did.
+`h200_sxm` is reached only by the tests that check a fixture agrees with the hardware
+documents: asking a corpus model about H200 is what its own source already does.
 """
 
 from __future__ import annotations
