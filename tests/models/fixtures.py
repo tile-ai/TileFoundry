@@ -74,8 +74,4 @@ def apple_m2_pro() -> TargetFixture:
     )
 
 
-#: The machine every model in the corpus is accepted on.
-ACCEPTANCE = h200_sxm
-
-
-__all__ = ["ACCEPTANCE", "apple_m2_pro", "h200_sxm"]
+__all__ = ["apple_m2_pro", "h200_sxm"]

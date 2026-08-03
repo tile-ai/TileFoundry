@@ -17,7 +17,6 @@ from dataclasses import replace
 import pytest
 
 from tests.fixtures.gqa_online import MAX_CTX, GqaOnline
-from tests.models.fixtures import h200_sxm
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.errors import AnalysisError
@@ -119,7 +118,7 @@ def test_a_report_at_a_size_carries_the_per_call_records_of_every_family() -> No
 
 def test_without_a_size_the_call_is_what_it_was() -> None:
     """A statically shaped program is unaffected: the result is its own input."""
-    module = QWEN3_1_7B.build_for(h200_sxm())
+    module = QWEN3_1_7B.build()
     function = module.lookup("mlp")
 
     result = analyze(module, function, analysis="compute-cost")
