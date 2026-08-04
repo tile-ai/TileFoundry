@@ -30,7 +30,10 @@ from pathlib import Path
 #: matched -- pointing inside the repository is what paths here are for.
 _MACHINE_PATHS = re.compile(
     r"""
-    (?:^|[^\w./-])                 # not mid-token, so a URL or a longer word is safe
+    (?:^|(?<=[^\w./])|(?<=-)(?=/))  # not mid-token, so a URL or a longer word is
+                                    # safe -- but a `-` immediately before the
+                                    # slash is `${VAR:-/path}` or `--ckpt=-`-style
+                                    # punctuation, not a token this path is part of
     (
         /(?:home|Users)/[\w.-]+    # a named home directory
       | /data\d*/(?:shared/)?[\w.-]+/[\w.-]+   # a site-local scratch mount

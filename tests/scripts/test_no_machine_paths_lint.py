@@ -49,6 +49,11 @@ CAUGHT = [
     f'BASE = "{_USERS}/someone/envs/dev"',
     # The fallback form: configurable-looking, hardcoded for everyone else.
     f'os.environ.get("TF_CKPT", "{_SCRATCH}/someone/prepared")',
+    # The same fallback in shell, which reached a shipped example unreported: the
+    # `-` of `:-` sat where a token character would, so the whole default was
+    # invisible to the guard that keeps this off the middle of a URL.
+    f"CKPT=${{CKPT:-{_SCRATCH}/someone/Qwen3-1.7B}}",
+    f"python run.py --ckpt={_HOME}/someone/models",
 ]
 
 #: Shapes that resemble the above and are not machine-specific.
