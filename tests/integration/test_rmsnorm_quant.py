@@ -6,6 +6,7 @@ against ``torch.nn.functional.rms_norm``.
 """
 
 
+import pytest
 import torch
 
 import tilefoundry
@@ -73,18 +74,31 @@ class RmsnormQuantSeq2Module:
                 tf.reshard(a_scale, (2 @ m.x, 12 @ m.y), 'gmem'),
             )
 
-def test_rmsnorm_quant_e2e_gpu_run() -> None:
-    """Full compile → GPU run → numerical match vs
-    ``torch.nn.functional.rms_norm``. A single ``thread`` topology with
-    mesh layout shape ``(6, 32)`` (named axes) gives a single CTA with
-    192 threads each holding 8 contiguous bf16 lanes of the 1536-element
-    input; reduce stages through intra-warp shfl + cross-warp shmem
-    workspace."""
+#: Each plain rmsnorm module, and the batch it is compiled for. The single-axis one
+#: is a ``thread`` topology of mesh layout shape ``(6, 32)``: one CTA of 192 threads,
+#: each holding 8 contiguous bf16 lanes of the 1536-element input, reducing through
+#: intra-warp shfl + a cross-warp shmem workspace. ``seq_2`` is a 3-axis mesh with a
+#: multi-axis Split -- ``x`` is non-reduced (2 groups) while ``y`` and ``t`` share the
+#: reduced logical axis.
+NORMALISED = [
+    pytest.param(RmsnormModule, 1, id="one_reduced_axis"),
+    pytest.param(RmsnormSeq2Module, 2, id="seq_2_multi_axis_split"),
+]
 
-    rm = tilefoundry.compile(RmsnormModule, target="cuda")
+
+@pytest.mark.parametrize(("normaliser", "batch"), NORMALISED)
+def test_a_compiled_rmsnorm_matches_torch(normaliser, batch) -> None:
+    """Full compile → GPU run → numerical match vs ``torch.nn.functional.rms_norm``.
+
+    bf16 tolerance is ~0.2 absolute, ~5% relative: the reduction order differs
+    between tilefoundry's local-fold/shuffle/shmem chain and torch's monolithic
+    reduce, so this accepts a wider bf16-realistic tolerance than the f32 mma path
+    uses.
+    """
+    rm = tilefoundry.compile(normaliser, target="cuda")
 
     torch.manual_seed(42)
-    a = torch.randn(1, 1536, dtype=torch.bfloat16, device="cuda") * 0.1
+    a = torch.randn(batch, 1536, dtype=torch.bfloat16, device="cuda") * 0.1
     out = torch.empty_like(a)
     rm(a, out)
     torch.cuda.synchronize()
@@ -93,35 +107,8 @@ def test_rmsnorm_quant_e2e_gpu_run() -> None:
         a.float(), normalized_shape=(1536,), eps=1e-6
     ).to(torch.bfloat16)
 
-    # bf16 tolerance: ~0.2 absolute, ~5% relative — the reduction
-    # order differs between tilefoundry's local-fold/shuffle/shmem
-    # chain and torch's monolithic reduce, so we accept a wider
-    # bf16-realistic tolerance than the f32 mma path uses.
     assert torch.allclose(out, expected, rtol=5e-2, atol=2e-1), (
         f"tilefoundry rmsnorm output does not match torch reference; "
-        f"max abs diff = {(out.float() - expected.float()).abs().max().item()}"
-    )
-
-
-def test_rmsnorm_seq_2_e2e_gpu_run() -> None:
-    """seq_2 3-axis mesh + multi-axis Split rmsnorm end-to-end on GPU.
-    ``x`` is non-reduced (2 groups),
-    ``y`` and ``t`` share the reduced logical axis."""
-
-    rm = tilefoundry.compile(RmsnormSeq2Module, target="cuda")
-
-    torch.manual_seed(42)
-    a = torch.randn(2, 1536, dtype=torch.bfloat16, device="cuda") * 0.1
-    out = torch.empty_like(a)
-    rm(a, out)
-    torch.cuda.synchronize()
-
-    expected = torch.nn.functional.rms_norm(
-        a.float(), normalized_shape=(1536,), eps=1e-6
-    ).to(torch.bfloat16)
-
-    assert torch.allclose(out, expected, rtol=5e-2, atol=2e-1), (
-        f"tilefoundry rmsnorm_seq_2 output does not match torch reference; "
         f"max abs diff = {(out.float() - expected.float()).abs().max().item()}"
     )
 

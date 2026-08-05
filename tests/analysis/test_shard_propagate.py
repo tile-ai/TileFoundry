@@ -112,12 +112,50 @@ def test_a_split_contraction_dim_becomes_a_value_state(rhs_layout, partial_dims,
     assert out.attrs == attrs
 
 
-def test_incompatible_split_errors():
-    # lhs splits M, rhs splits N on the SAME mesh axis -> conflict.
-    lhs_t = make_tensor_type((16, 4), layout=_shard((16, 4), Split(0)))
-    rhs_t = make_tensor_type((4, 8), layout=_shard((4, 8), Split(1)))
-    with pytest.raises(ValueError, match="incompatible output shard"):
-        derive_output_shard_layout((lhs_t, rhs_t), _matmul_relation(), (16, 8))
+#: What propagation refuses rather than answering. The first is a conflict: lhs
+#: splits M and rhs splits N on the SAME mesh axis, so no single output sharding
+#: satisfies both. The other two are accesses that are not projections -- a rank-1
+#: input read at ``m + n`` of a 2-D domain, then a surviving input Split whose
+#: output is written at ``m + n``. Each must fail closed; deriving Broadcast instead
+#: would silently drop the shard.
+REFUSED = [
+    pytest.param(
+        (
+            make_tensor_type((16, 4), layout=_shard((16, 4), Split(0))),
+            make_tensor_type((4, 8), layout=_shard((4, 8), Split(1))),
+        ),
+        _matmul_relation(),
+        (16, 8),
+        "incompatible output shard",
+        id="incompatible_split",
+    ),
+    pytest.param(
+        (make_tensor_type((12,), layout=_shard((12,), Split(0))),),
+        AccessRelationResult(
+            domain=build_domain((4, 8)),
+            maps=(isl.map("{ [m, n] -> [m + n] }"), isl.map("{ [m, n] -> [m, n] }")),
+        ),
+        (4, 8),
+        "non-projection access",
+        id="split_on_non_projection_access",
+    ),
+    pytest.param(
+        (make_tensor_type((4, 8), layout=_shard((4, 8), Split(0))),),
+        AccessRelationResult(
+            domain=build_domain((4, 8)),
+            maps=(isl.map("{ [m, n] -> [m, n] }"), isl.map("{ [m, n] -> [m + n] }")),
+        ),
+        (12,),
+        "non-projection output access",
+        id="split_surviving_via_complex_output",
+    ),
+]
+
+
+@pytest.mark.parametrize(("operands", "relation", "shape", "refusal"), REFUSED)
+def test_what_cannot_be_derived_fails_closed(operands, relation, shape, refusal):
+    with pytest.raises(ValueError, match=refusal):
+        derive_output_shard_layout(operands, relation, shape)
 
 
 def test_two_mesh_axes_on_same_output_axis_factorize():
@@ -154,30 +192,6 @@ def test_a_synthesised_layout_agrees_with_a_from_scratch_one():
 
     expected = make_shard_tensor_type((8, 8), mesh=_GPU2, attrs=(Split(0), Split(1)))
     assert out == expected.layout
-
-
-def test_split_on_non_projection_access_errors():
-    # Input is rank-1 and accesses (m + n) of a 2-D domain — not a projection;
-    # a Split on it must fail closed rather than silently drop as broadcast.
-    rel = AccessRelationResult(
-        domain=build_domain((4, 8)),
-        maps=(isl.map("{ [m, n] -> [m + n] }"), isl.map("{ [m, n] -> [m, n] }")),
-    )
-    x_t = make_tensor_type((12,), layout=_shard((12,), Split(0)))
-    with pytest.raises(ValueError, match="non-projection access"):
-        derive_output_shard_layout((x_t,), rel, (4, 8))
-
-
-def test_split_surviving_via_complex_output_errors():
-    # Input Split(m) survives in the output, but the output accesses (m + n),
-    # so the output layout axis is underivable — fail closed, not Broadcast.
-    rel = AccessRelationResult(
-        domain=build_domain((4, 8)),
-        maps=(isl.map("{ [m, n] -> [m, n] }"), isl.map("{ [m, n] -> [m + n] }")),
-    )
-    x_t = make_tensor_type((4, 8), layout=_shard((4, 8), Split(0)))
-    with pytest.raises(ValueError, match="non-projection output access"):
-        derive_output_shard_layout((x_t,), rel, (12,))
 
 
 def test_an_input_partial_propagates_on_its_own_mesh_axis():

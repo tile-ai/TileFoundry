@@ -75,26 +75,37 @@ def test_unary_typeinfer(case):
     run_typeinfer_case(case)
 
 
-def test_unary_evaluate_abs():
-    """No corpus model calls ``abs``, so its value oracle stays here."""
+#: The value oracles the corpus does not provide: no model calls ``abs``, and f16 is
+#: a precision it never builds (bf16 sits beside f16 so a divergence between the two
+#: low-precision paths is visible here). ``ROUND`` is torch's banker's rounding,
+#: ties to even rather than half-away-from-zero, so it is asked on exact `.5` ties,
+#: which a random input will not reliably hit: -2.5/-1.5 -> -2, -0.5/0.5 -> 0,
+#: 1.5/2.5 -> 2.
+ORACLES = [
+    pytest.param("abs", _ABS, lambda: torch.randn(4), torch.abs, id="abs_f32"),
+    pytest.param(
+        "round_ties_to_even",
+        Unary(kind=UnaryKind.ROUND),
+        lambda: torch.tensor([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]),
+        torch.round,
+        id="round_ties_to_even",
+    ),
+    pytest.param(
+        "exp", _EXP, lambda: torch.randn(4, dtype=torch.float16), torch.exp, id="exp_f16"
+    ),
+    pytest.param(
+        "exp",
+        _EXP,
+        lambda: torch.randn(4, dtype=torch.bfloat16),
+        torch.exp,
+        id="exp_bf16",
+    ),
+]
+
+
+@pytest.mark.parametrize(("name", "op", "drawn", "oracle"), ORACLES)
+def test_a_unary_evaluates_to_its_oracle(name, op, drawn, oracle):
     torch.manual_seed(0)
-    x = torch.randn(4)
-    run_eval_case(EvalCase("abs", _ABS, (x,), x.abs()))
+    x = drawn()
 
-
-def test_unary_evaluate_round_half_to_even():
-    """``ROUND`` uses torch's banker's rounding (ties to even), not
-    round-half-away-from-zero -- exercised on exact `.5` ties, which a random
-    input will not reliably hit. Expected values: -2.5/-1.5 -> -2, -0.5/0.5 -> 0,
-    1.5/2.5 -> 2 (each tie rounds to the nearest *even* integer)."""
-    x = torch.tensor([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5])
-    run_eval_case(EvalCase("round_ties_to_even", Unary(kind=UnaryKind.ROUND), (x,), x.round()))
-
-
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16], ids=["f16", "bf16"])
-def test_unary_evaluate_dtypes(dtype):
-    """The corpus runs bf16 and f32; f16 it never builds. bf16 stays alongside it
-    so a divergence between the two low-precision paths is visible here."""
-    torch.manual_seed(0)
-    x = torch.randn(4, dtype=dtype)
-    run_eval_case(EvalCase("exp", _EXP, (x,), torch.exp(x)))
+    run_eval_case(EvalCase(name, op, (x,), oracle(x)))

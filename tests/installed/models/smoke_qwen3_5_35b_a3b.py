@@ -166,38 +166,29 @@ def _linear_disagrees(tf, work, source, step, loaded, activations) -> None:
     )
 
 
-def test_the_prior_state_is_read(tf, shipped_source, tmp_path) -> None:
-    """The recurrent matrix handed in reaches the answer.
+#: Each half of the state a linear-attention step is handed, zeroed. The step has no
+#: `ctx_len` in its signature, so nothing about its shape says it consulted the
+#: context at all -- an implementation that dropped either half would produce a
+#: plausible tensor of the right size. Zeroing has to move the answer away from the
+#: oracle the unperturbed step meets: for the recurrent matrix, otherwise every
+#: agreement above is an agreement about one token in isolation; for the convolution's
+#: left context, a kernel that convolved only the current column would be a kernel of
+#: kernel size one, and its output shape would not say so either.
+ZEROED = ["recurrent_state", "conv_state"]
 
-    A linear-attention step has no `ctx_len` in its signature, so nothing about its
-    shape says it consulted the context at all -- an implementation that dropped the
-    incoming matrix would produce a plausible tensor of the right size. Measured by
-    zeroing the matrix: that has to move the answer away from the oracle the
-    unperturbed step meets, or the kernel is not reading it and every agreement above
-    would be an agreement about one token in isolation.
-    """
+
+@pytest.mark.parametrize("zeroed", ZEROED)
+def test_each_half_of_the_state_reaches_the_answer(
+    tf, shipped_source, tmp_path, zeroed
+) -> None:
     step = reference.linear_step(device="cpu")
     loaded = reference.load_mixer("linear_attention", step.layer)
+    held = {"conv_state": step.conv_state, "recurrent_state": step.recurrent_state}
+    held[zeroed] = torch.zeros_like(held[zeroed])
 
     _linear_disagrees(
         tf, tmp_path, shipped_source(MODEL), step, loaded,
-        (step.hidden_new, step.conv_state, torch.zeros_like(step.recurrent_state)),
-    )
-
-
-def test_the_convolution_window_is_read(tf, shipped_source, tmp_path) -> None:
-    """The convolution's left context reaches the answer.
-
-    The same argument as the recurrent matrix, for the other half of the state: at
-    one token per step, a kernel that convolved only the current column would be a
-    kernel with a kernel size of one, and nothing about its output shape would say so.
-    """
-    step = reference.linear_step(device="cpu")
-    loaded = reference.load_mixer("linear_attention", step.layer)
-
-    _linear_disagrees(
-        tf, tmp_path, shipped_source(MODEL), step, loaded,
-        (step.hidden_new, torch.zeros_like(step.conv_state), step.recurrent_state),
+        (step.hidden_new, held["conv_state"], held["recurrent_state"]),
     )
 
 

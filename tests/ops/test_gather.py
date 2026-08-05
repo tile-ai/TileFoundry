@@ -44,23 +44,28 @@ def _gather_ref(x, axis, idx):
 # attrs (the actual contract) rather than the derived layout.
 
 
-def test_gather_shard_leading_axis_scalar_remaps_split():
-    """A non-sharded LEADING axis scalar-gather renumbers the Split from axis
-    1 -> 0 (axis 0 is removed by the gather)."""
-    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(1),)), make_tensor_type((), DType.i32))
-    assert tuple(ty.shape) == (4, 8)
-    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (Split(0),)
+#: Where the input Split lands once the gather has removed axis 0. Off the sharded
+#: axis it renumbers, 1 -> 0. Along it the gather is masked: every device already
+#: holds a zero-filled partial of the gathered rows, so the output sums to the true
+#: gather across that mesh axis.
+GATHERED = [
+    pytest.param((Split(1),), (Split(0),), id="leading_axis_scalar_remaps_split"),
+    pytest.param(
+        (Split(0),), (Partial(reduction="sum"),), id="shard_axis_gather_derives_partial"
+    ),
+]
 
 
-def test_gather_shard_axis_gather_derives_partial():
-    """A gather ALONG the Split (sharded) axis is a masked-gather: every
-    device already holds a zero-filled partial of the gathered rows, so the
-    output sums to the true gather across that mesh axis."""
-    ty = infer_call(Gather(axis=0), make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((), DType.i32))
-    assert tuple(ty.shape) == (4, 8)
-    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == (
-        Partial(reduction="sum"),
+@pytest.mark.parametrize(("attrs", "expected"), GATHERED)
+def test_a_scalar_gather_carries_the_shard(attrs, expected):
+    ty = infer_call(
+        Gather(axis=0),
+        make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=attrs),
+        make_tensor_type((), DType.i32),
     )
+
+    assert tuple(ty.shape) == (4, 8)
+    assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == expected
 
 
 # ── batched gather (explicit TF-style ``batch_dims``) ────────────────────────

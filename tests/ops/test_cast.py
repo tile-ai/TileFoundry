@@ -54,21 +54,35 @@ def _double_cast_fn(n: int, io_dtype: str, mid_dtype: str):
     return parse_script(src)
 
 
-def test_cast_fp8e4m3_double_roundtrip_matches_torch():
-    # Includes fp8e4m3's finite-range boundary (max normal 448.0).
-    x = torch.tensor(
-        [1.5, 448.0, -448.0, 0.0, 256.0, -3.0, 100.0, 7.0], dtype=torch.bfloat16
-    )
-    out = evaluate(_double_cast_fn(8, "bf16", "fp8e4m3"), x, device="cpu")
-    ref = x.to(torch.float8_e4m3fn).to(torch.bfloat16)
-    torch.testing.assert_close(out, ref)
+#: The low-precision dtypes the evaluator does support, each against torch's own.
+#: fp8e4m3's values include its finite-range boundary, max normal 448.0.
+ROUNDTRIPS = [
+    pytest.param(
+        "bf16",
+        "fp8e4m3",
+        torch.bfloat16,
+        torch.float8_e4m3fn,
+        [1.5, 448.0, -448.0, 0.0, 256.0, -3.0, 100.0, 7.0],
+        id="fp8e4m3",
+    ),
+    pytest.param(
+        "f32",
+        "f8e8m0",
+        torch.float32,
+        torch.float8_e8m0fnu,
+        [1.0, 2.0, 4.0, 0.5, 3.0, 100.0],
+        id="f8e8m0",
+    ),
+]
 
 
-def test_cast_f8e8m0_double_roundtrip_matches_torch():
-    x = torch.tensor([1.0, 2.0, 4.0, 0.5, 3.0, 100.0], dtype=torch.float32)
-    out = evaluate(_double_cast_fn(6, "f32", "f8e8m0"), x, device="cpu")
-    ref = x.to(torch.float8_e8m0fnu).to(torch.float32)
-    torch.testing.assert_close(out, ref)
+@pytest.mark.parametrize(("io_dtype", "mid_dtype", "io_torch", "mid_torch", "values"), ROUNDTRIPS)
+def test_a_double_roundtrip_matches_torch(io_dtype, mid_dtype, io_torch, mid_torch, values):
+    x = torch.tensor(values, dtype=io_torch)
+
+    out = evaluate(_double_cast_fn(len(values), io_dtype, mid_dtype), x, device="cpu")
+
+    torch.testing.assert_close(out, x.to(mid_torch).to(io_torch))
 
 
 def test_cast_f4e2m1_has_no_evaluator_support():

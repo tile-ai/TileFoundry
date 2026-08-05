@@ -62,42 +62,28 @@ def _inputs(ctx):
     return q, k, v, k_new, v_new
 
 
-# ── head-on-CTA: evaluator == reference, empty / small / mid prior cache ───
-# The zero row is the first step of a sequence: nothing cached yet, so the
-# context scan runs zero times and the only position is the step's own K/V.
+#: What is evaluated, and the prior-cache lengths it is asked at. A zero-length
+#: cache is the first step of a sequence: the context scan runs zero times and the
+#: only position is the step's own K/V. The split-KV variant is asked only at
+#: split-aligned lengths, which reshape into NUM_SPLITS blocks exactly; the
+#: unaligned case is the fail-closed test below. The prototype's lengths land it on
+#: head-on-CTA, and it too starts at 0, so dispatch admits an empty cache.
+EVALUATED = [
+    *[pytest.param(_HEAD_VARIANT, ctx, id=f"head/{ctx}") for ctx in (0, 1, 37, 256)],
+    *[
+        pytest.param(_CTX_VARIANT, ctx, id=f"splitkv/{ctx}")
+        for ctx in (NUM_SPLITS, NUM_SPLITS * 8)
+    ],
+    *[pytest.param(gqa_online_attend, ctx, id=f"prototype/{ctx}") for ctx in (0, 64)],
+]
 
 
-@pytest.mark.parametrize("ctx", [0, 1, 37, 256], ids=lambda v: str(v))
-def test_head_variant_matches_reference(ctx):
+@pytest.mark.parametrize(("selected", "ctx"), EVALUATED)
+def test_what_is_selected_matches_the_reference(selected, ctx):
     step = _inputs(ctx)
-    out = evaluate(_HEAD_VARIANT, *step, device="cpu")
+    out = evaluate(selected, *step, device="cpu")
+
     assert out.shape == (1, 1, Hq, D)
-    assert torch.allclose(out.float(), _ref(*step), atol=2e-2, rtol=2e-2)
-
-
-# ── context-on-CTA split-KV: evaluator == reference, aligned prior cache ───
-# The context is cut into NUM_SPLITS contiguous blocks by reshape; a
-# split-aligned ctx (ctx_len % NUM_SPLITS == 0) reshapes exactly, so the
-# two-pass math matches the reference.
-
-
-@pytest.mark.parametrize("ctx", [NUM_SPLITS, NUM_SPLITS * 8], ids=lambda v: str(v))
-def test_context_variant_splitkv_matches_reference(ctx):
-    step = _inputs(ctx)
-    out = evaluate(_CTX_VARIANT, *step, device="cpu")
-    assert out.shape == (1, 1, Hq, D)
-    assert torch.allclose(out.float(), _ref(*step), atol=2e-2, rtol=2e-2)
-
-
-# ── dispatch prototype: evaluator == reference (small ctx → head-on-CTA) ───
-
-
-@pytest.mark.parametrize("ctx", [0, 64], ids=lambda v: str(v))
-def test_prototype_dispatches_and_matches_reference(ctx):
-    """Dispatch admits an empty prior cache: the envelope starts at 0, so the
-    first step of a sequence picks an implementation like any other length."""
-    step = _inputs(ctx)
-    out = evaluate(gqa_online_attend, *step, device="cpu")
     assert torch.allclose(out.float(), _ref(*step), atol=2e-2, rtol=2e-2)
 
 

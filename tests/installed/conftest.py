@@ -2,7 +2,7 @@
 
 Named ``smoke_*.py``, so default collection misses them::
 
-    pytest tests/integration/installed -o python_files='smoke_*.py' -q
+    pytest tests/installed -o python_files='smoke_*.py' -q
 
 Every command runs from outside the checkout with ``PYTHONPATH`` removed, or it
 would reach unshipped source.
@@ -126,6 +126,15 @@ def installation(tmp_path_factory) -> Path:
         if not (venv / "bin" / "tilefoundry").is_file():
             pytest.fail(f"TF_SMOKE_VENV={venv} holds no installed tilefoundry")
         return venv
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        # This fixture is session-scoped per worker, so every worker would build a
+        # wheel from the same checkout at once, and setuptools' build directory sits
+        # inside it: one build removes what another is still copying into, and the
+        # whole run errors in the fixture with a missing file.
+        pytest.fail(
+            "-n needs one environment for the workers to share: build it and point "
+            "TF_SMOKE_VENV at it, as .github/workflows/ci.yml does"
+        )
 
     build = tmp_path_factory.mktemp("installation")
     wheels, venv = build / "wheel", build / "venv"

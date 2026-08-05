@@ -91,27 +91,22 @@ def _mla(tf, work, source, step, *, args=None, refuse=False):
     )
 
 
-@pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
-def test_mla_nope_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
-    """Kimi's own MLA form: NoPE, at two context lengths.
+#: Kimi's own MLA form is NoPE, which does not drop the 64 rotary dimensions -- it
+#: stops rotating them. They still enter the score and the `qk_head_dim = 192` scaling
+#: denominator, which is why the scaling test below can tell the difference. A real
+#: rotary is not a configuration Kimi ships, but it exercises the rotary path of the
+#: same kernel, and its agreement is what shows `tf.rope` and the oracle share the
+#: rotate-half convention.
+ROTATED = [
+    *[pytest.param(ctx_len, True, id=f"nope/{ctx_len}") for ctx_len in CTX_LENGTHS],
+    *[pytest.param(ctx_len, False, id=f"rope/{ctx_len}") for ctx_len in CTX_LENGTHS],
+]
 
-    NoPE does not drop the 64 rotary dimensions -- it stops rotating them. They still
-    enter the score and the `qk_head_dim = 192` scaling denominator, which is why the
-    scaling test below can tell the difference.
-    """
-    step = reference.mla_step_inputs(ctx_len=ctx_len, device="cpu", nope=True)
-    _mla(tf, tmp_path, shipped_source(MODEL), step)
 
+@pytest.mark.parametrize(("ctx_len", "nope"), ROTATED)
+def test_mla_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len, nope) -> None:
+    step = reference.mla_step_inputs(ctx_len=ctx_len, device="cpu", nope=nope)
 
-@pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
-def test_mla_rope_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
-    """The same kernel with a real rotary, at two context lengths.
-
-    Not a configuration Kimi ships -- it is NoPE -- but it exercises the rotary path
-    of the same kernel, and its agreement is what shows `tf.rope` and the oracle share
-    the rotate-half convention.
-    """
-    step = reference.mla_step_inputs(ctx_len=ctx_len, device="cpu", nope=False)
     _mla(tf, tmp_path, shipped_source(MODEL), step)
 
 

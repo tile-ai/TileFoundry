@@ -57,39 +57,41 @@ def _wait_pf(n: int) -> PrimFunction:
     )
 
 
-def test_verify_rejects_non_smem_destination() -> None:
-    with pytest.raises(VerifyError, match="destination must be smem"):
-        verify_prim_function(
-            _copy_async_pf(
-                make_tensor_type((128, 4), DType.f32, storage=StorageKind.GMEM),
-                make_tensor_type((128, 4), DType.f32, storage=StorageKind.GMEM),
-            )
-        )
+#: Every way an async copy can be stated wrong: the hardware instruction moves gmem
+#: into smem, in one dtype, and waits on a count of outstanding groups.
+REJECTED = [
+    pytest.param(
+        _copy_async_pf(
+            make_tensor_type((128, 4), DType.f32, storage=StorageKind.GMEM),
+            make_tensor_type((128, 4), DType.f32, storage=StorageKind.GMEM),
+        ),
+        "destination must be smem",
+        id="non_smem_destination",
+    ),
+    pytest.param(
+        _copy_async_pf(
+            make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM),
+            make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM),
+        ),
+        "source must be gmem",
+        id="non_gmem_source",
+    ),
+    pytest.param(
+        _copy_async_pf(
+            make_tensor_type((128, 4), DType.f16, storage=StorageKind.GMEM),
+            make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM),
+        ),
+        "dtype mismatch",
+        id="dtype_mismatch",
+    ),
+    pytest.param(_wait_pf(-1), "non-negative", id="negative_wait"),
+]
 
 
-def test_verify_rejects_non_gmem_source() -> None:
-    with pytest.raises(VerifyError, match="source must be gmem"):
-        verify_prim_function(
-            _copy_async_pf(
-                make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM),
-                make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM),
-            )
-        )
-
-
-def test_verify_rejects_dtype_mismatch() -> None:
-    with pytest.raises(VerifyError, match="dtype mismatch"):
-        verify_prim_function(
-            _copy_async_pf(
-                make_tensor_type((128, 4), DType.f16, storage=StorageKind.GMEM),
-                make_tensor_type((128, 4), DType.f32, storage=StorageKind.SMEM),
-            )
-        )
-
-
-def test_verify_rejects_negative_wait() -> None:
-    with pytest.raises(VerifyError, match="non-negative"):
-        verify_prim_function(_wait_pf(-1))
+@pytest.mark.parametrize(("stated", "refusal"), REJECTED)
+def test_verify_rejects_what_the_instruction_cannot_do(stated, refusal) -> None:
+    with pytest.raises(VerifyError, match=refusal):
+        verify_prim_function(stated)
 
 
 # ── module for emit + GPU staging ────────────────────────────────────────────
