@@ -260,15 +260,7 @@ def _moe(tf, work, source, step, want, *, args=None, refuse=False):
     )
 
 
-#: The 256-expert block, built once for every test below that draws from it. It is
-#: 1.82 billion bf16 parameters, 16 s to build on CPU and 9.5 GB resident while it
-#: builds, and the five tests below each used to build their own -- measured at 88 s
-#: of the file's 367 s.
-#:
-#: Module scope rather than session, so a run selecting none of these never builds
-#: it. The `xdist_group` below is what makes one build one build: under the default
-#: per-test distribution these five land on up to five workers, each holding its own
-#: copy, which costs more memory in parallel than the serial run it replaces.
+#: One worker for every test drawing on `hf_moe`, so the block is built once.
 MOE_GROUP = pytest.mark.xdist_group("kimi-moe")
 
 

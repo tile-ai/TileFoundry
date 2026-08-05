@@ -141,9 +141,7 @@ def _timeline_evidence(report: dict) -> str | None:
     return None
 
 
-#: The field each family has to have filled in, so a family that runs but answers
-#: with nothing is a failure rather than a zero nobody reads. Held as data because
-#: what is asked of each family is the family's own, not one shared shape.
+#: The field each family has to have filled in, one entry per family in FAMILIES.
 _EVIDENCE = {
     "compute-cost": _compute_cost_evidence,
     "memory": _memory_evidence,
@@ -157,14 +155,8 @@ def analysed_every_family(
 ) -> dict:
     """Every family asked about one function, in one command, judged one by one.
 
-    One command rather than one per family: ``analyze`` runs an independent analysis
-    per requested family and composes the renderings from the results afterwards, so
-    requesting all four cannot change what any one of them reports. The four also
-    share the closure roofline and timeline each need, which four commands recompute
-    from scratch -- measured at 21.0 s apart against 7.0 s together.
-
-    Every family is judged even after an earlier one fails, and the failure names
-    each family that failed, so this is still four verdicts and not one.
+    Each family is judged even after an earlier one fails, and the failure names every
+    family that failed, so the verdict stays per family.
     """
     report = reported(tf, source, case, selector, FAMILIES, dims)
     assert report["executed"] == list(FAMILIES), (

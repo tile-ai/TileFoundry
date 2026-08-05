@@ -43,13 +43,8 @@ from tilefoundry.schedule.partition import (
 from tilefoundry.schedule.partition import solve as solve_module
 from tilefoundry.schedule.pipeline.problem import PipelineProblemError
 
-#: A plan to read the shape of, so the first feasible one is what is wanted: every
-#: assertion below is about how a plan states a move, and holds of any plan that
-#: verifies. Asking for the best plan instead costs the whole budget -- the search
-#: keeps improving a makespan it cannot prove optimal -- and makes the result a
-#: function of how many cores the run happened to get, which is not a property of
-#: the scheduler. One worker for the same reason `analysis/timeline.py` uses one:
-#: several of these at once otherwise each size themselves to the whole machine.
+#: What the assertions below read is how a plan states a move, which any plan that
+#: verifies states the same way.
 _SOLVER = ScheduleOptions(workers=1, stop_at_first_solution=True)
 
 
