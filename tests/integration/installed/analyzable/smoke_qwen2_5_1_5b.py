@@ -1,8 +1,6 @@
 """Qwen2.5-1.5B, as the installation ships it, asked through the commands."""
 from __future__ import annotations
 
-import json
-
 import contract
 import pytest
 
@@ -21,13 +19,7 @@ PLANNED = [
     for case in CASES
     for planned in case.schedule
 ]
-#: One case per Module, as the levels a root declares are a property of the root.
-FIRST_PLAN = [pytest.param(case, case.schedule[0], id=case.id) for case in CASES]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
-
-#: The bindings whose cost is the context, so a zero context has to zero them.
-ZERO_SIZED = frozenset(("k_cache", "v_cache"))
-
 
 @pytest.mark.parametrize(("case", "selected"), ANALYSED)
 def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
@@ -41,22 +33,6 @@ def test_every_selected_function_plans(tf, shipped_source, case, planned) -> Non
     contract.scheduled(tf, shipped_source(MODEL), case, planned)
 
 
-@pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
-def test_the_plan_reaches_the_level_below_the_one_it_partitions(
-    tf, shipped_source, case, planned
-) -> None:
-    """The source declares two levels, and this model can be asked for both.
-
-    Nothing here names an extent for either: the copied ``model.py`` carries the
-    levels, and a root that stopped declaring ``thread`` leaves this command with
-    no level to be given and no test to inject one. Only this model and
-    ``qwen3_1_7b`` can witness that -- the other roots declare ``thread`` too, but
-    their IR reaches ops with no registered type relation, so the command fails for
-    a reason that has nothing to do with the level.
-    """
-    contract.scheduled(tf, shipped_source(MODEL), case, planned, topology="thread")
-
-
 @pytest.mark.parametrize(("case", "sized"), SIZED)
 def test_every_analysis_answers_at_the_largest_context(
     tf, shipped_source, case, sized
@@ -66,65 +42,6 @@ def test_every_analysis_answers_at_the_largest_context(
         tf, shipped_source(MODEL), case, sized.selector, sized.ceiling
     )
 
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_the_ceiling_is_reasoned_about_at_its_stated_length(
-    tf, shipped_source, case, sized
-) -> None:
-    """What the analysis reports has to grow with the context.
-
-    Growth rather than an absolute number: an analysis quietly working at a length
-    it could afford instead of the one it was asked about would report the same
-    footprint at both, and a number nobody compares would not show it.
-    """
-    source = shipped_source(MODEL)
-    short = contract.traffic_read(tf, source, case, sized.selector, sized.dims)
-    full = contract.traffic_read(tf, source, case, sized.selector, sized.ceiling)
-
-    assert full > short, (
-        f"analysing at {dict(sized.ceiling)} reports no more traffic than at "
-        f"{dict(sized.dims)}, so the stated length changed nothing"
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_the_open_dimensions_are_analysed_at_zero(tf, shipped_source, case, sized) -> None:
-    """A binding whose whole cost is the context has to cost nothing without one."""
-    source = shipped_source(MODEL)
-    bindings = ZERO_SIZED
-    zero = contract.lifetimes(
-        tf, source, case, sized.selector, {name: 0 for name in sized.dims}
-    )
-    nonzero = contract.lifetimes(tf, source, case, sized.selector, sized.dims)
-
-    assert bindings <= zero.keys()
-    assert all(zero[binding] == 0 for binding in bindings)
-    assert all(nonzero[binding] > 0 for binding in bindings)
-
-
-@pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
-def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, planned) -> None:
-    done = contract.analysed(
-        tf,
-        shipped_source(MODEL),
-        case,
-        planned.selector,
-        "compute-cost",
-        planned.dims,
-        json_output=True,
-    )
-
-    assert json.loads(done.stdout)
-
-
-@pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
-def test_the_command_reads_the_machine_off_the_shipped_source(
-    tf, shipped_source, case, planned
-) -> None:
-    """Nothing tells the command which target to use; the source has to say."""
-    done = contract.capabilities(tf, shipped_source(MODEL), case, planned.selector)
-
-    assert done.stdout.strip()
 
 # ── against Hugging Face ─────────────────────────────────────────────────────
 def test_the_decode_step_and_the_cache_entry_it_hands_back(

@@ -39,10 +39,13 @@ def test_pass_manager_runs_in_registered_order_and_enforces_requires():
     pm.run(Module(name="m", functions=(), entry="x"))
     assert trace == ["a", "b", "c"]
 
+    ran: list[str] = []
+
     class _A(ModulePass):
         name = "a"
 
         def run(self, module):
+            ran.append("a")
             return module
 
     class _B(ModulePass):
@@ -50,10 +53,13 @@ def test_pass_manager_runs_in_registered_order_and_enforces_requires():
         requires = ("a",)
 
         def run(self, module):
+            ran.append("b")
             return module
 
-    PassManager(passes=[_A(), _B()])._check_requires()  # should not raise
+    empty = Module(name="m", functions=(), entry="x")
+    assert PassManager(passes=[_A(), _B()]).run(empty) is empty
+    assert ran == ["a", "b"]
 
-    wrong = PassManager(passes=[_B(), _A()])
     with pytest.raises(ValueError, match="requires 'a' not registered before it"):
-        wrong._check_requires()
+        PassManager(passes=[_B(), _A()]).run(empty)
+    assert ran == ["a", "b"]

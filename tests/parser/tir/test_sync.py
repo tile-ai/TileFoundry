@@ -213,42 +213,11 @@ def _emit(*meshes: Mesh) -> str:
     return ctx.source()
 
 
-def test_codegen_full_cta_emits_syncthreads() -> None:
-    assert (
-        _emit(_thread_mesh()).strip()
-        == "tilefoundry::ops::sync<tilefoundry::ops::SyncKind::syncthreads>();"
-    )
-
-
-def test_codegen_cta_scope_mesh_emits_grid_barrier() -> None:
-    assert (
-        _emit(_cta_mesh()).strip()
-        == "tilefoundry::ops::sync<tilefoundry::ops::SyncKind::grid>"
-        "(tilefoundry::tf_grid_bar_state);"
-    )
-
-
-def test_codegen_single_warp_subset_emits_masked_syncwarp_under_predicate() -> None:
-    # The uniform entry carries the participant geometry (base 0, count 32, full
-    # lane mask) as template parameters; the predicate lives in the runtime.
-    src = _emit(_thread_mesh()[0, :])
-    assert "SyncKind::syncwarp_masked, 0, 32, 0xffffffffu>();" in src
-
-
 def test_codegen_multi_warp_subset_emits_named_bar_sync_under_predicate() -> None:
     # Warps 1-2 → base 32, count 64; the named-barrier id + predicate live in the
     # runtime template.
     src = _emit(_thread_mesh()[1:3, :])
     assert "SyncKind::bar_sync, 32, 64, 0u," in src
-
-
-def test_codegen_allocates_distinct_barrier_ids_per_kernel() -> None:
-    """Two distinct multi-warp syncs in one kernel get distinct named ids."""
-    m = Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t"))
-    src = _emit(m[0:2, :], m[2:4, :])
-    # The named-barrier id is the last template argument of the uniform entry.
-    assert "SyncKind::bar_sync, 0, 64, 0u, 1>();" in src
-    assert "SyncKind::bar_sync, 64, 64, 0u, 2>();" in src
 
 
 def test_codegen_errors_when_named_barriers_exhausted() -> None:

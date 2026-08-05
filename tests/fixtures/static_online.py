@@ -81,11 +81,4 @@ def static_online_attend(
         return tf.cast(o / l, dtype="bf16")
 
 
-__all__ = [
-    "C",
-    "HEAD_DIM",
-    "NUM_KV_HEADS",
-    "NUM_Q_HEADS",
-    "S",
-    "static_online_attend",
-]
+__all__ = ["static_online_attend"]

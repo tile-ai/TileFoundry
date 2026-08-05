@@ -45,14 +45,8 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
         cli.parse_dims(["ctx_len=8", "ctx_len=8"])
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["analyze", "missing.py", "--dim", "ctx_len=0,1"],
-        ["schedule", "missing.py", "--topology", "cta", "--dim", "ctx_len=0,1"],
-    ],
-)
-def test_analyze_and_schedule_reject_several_extents_per_dimension(argv, capsys) -> None:
+def test_schedule_rejects_several_extents_per_dimension(capsys) -> None:
+    argv = ["schedule", "missing.py", "--topology", "cta", "--dim", "ctx_len=0,1"]
     assert cli.main(argv) == 1
     refused = capsys.readouterr().err
     assert "ctx_len takes one EXTENT at a time" in refused

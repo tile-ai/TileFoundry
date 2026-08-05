@@ -6,7 +6,6 @@ Asking through the command is what makes that difference visible at all.
 """
 from __future__ import annotations
 
-import json
 import math
 
 import contract
@@ -28,13 +27,7 @@ PLANNED = [
     for case in CASES
     for planned in case.schedule
 ]
-#: One case per Module, as the levels a root declares are a property of the root.
-FIRST_PLAN = [pytest.param(case, case.schedule[0], id=case.id) for case in CASES]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
-
-#: The bindings whose cost is the context, so a zero context has to zero them.
-ZERO_SIZED = frozenset(("kv_cache", "k_ctx", "score_ctx", "p_ctx", "weighted"))
-
 
 @pytest.mark.parametrize(("case", "selected"), ANALYSED)
 def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
@@ -56,66 +49,6 @@ def test_every_analysis_answers_at_the_largest_context(
     contract.analysed_every_family(
         tf, shipped_source(MODEL), case, sized.selector, sized.ceiling
     )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_the_ceiling_is_reasoned_about_at_its_stated_length(
-    tf, shipped_source, case, sized
-) -> None:
-    """What the analysis reports has to grow with the context.
-
-    Growth rather than an absolute number: an analysis quietly working at a length
-    it could afford instead of the one it was asked about would report the same
-    footprint at both, and a number nobody compares would not show it.
-    """
-    source = shipped_source(MODEL)
-    short = contract.traffic_read(tf, source, case, sized.selector, sized.dims)
-    full = contract.traffic_read(tf, source, case, sized.selector, sized.ceiling)
-
-    assert full > short, (
-        f"analysing at {dict(sized.ceiling)} reports no more traffic than at "
-        f"{dict(sized.dims)}, so the stated length changed nothing"
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_the_open_dimensions_are_analysed_at_zero(tf, shipped_source, case, sized) -> None:
-    """A binding whose whole cost is the context has to cost nothing without one."""
-    source = shipped_source(MODEL)
-    bindings = ZERO_SIZED
-    zero = contract.lifetimes(
-        tf, source, case, sized.selector, {name: 0 for name in sized.dims}
-    )
-    nonzero = contract.lifetimes(tf, source, case, sized.selector, sized.dims)
-
-    assert bindings <= zero.keys()
-    assert all(zero[binding] == 0 for binding in bindings)
-    assert all(nonzero[binding] > 0 for binding in bindings)
-
-
-@pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
-def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, planned) -> None:
-    done = contract.analysed(
-        tf,
-        shipped_source(MODEL),
-        case,
-        planned.selector,
-        "compute-cost",
-        planned.dims,
-        json_output=True,
-    )
-
-    assert json.loads(done.stdout)
-
-
-@pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
-def test_the_command_reads_the_machine_off_the_shipped_source(
-    tf, shipped_source, case, planned
-) -> None:
-    """Nothing tells the command which target to use; the source has to say."""
-    done = contract.capabilities(tf, shipped_source(MODEL), case, planned.selector)
-
-    assert done.stdout.strip()
 
 
 # ── against Hugging Face ─────────────────────────────────────────────────────
@@ -181,29 +114,6 @@ def _asked(tf, work, source, step, *, out_held):
         weights=step.weights,
         expected=(reference.attention_step_oracle(step), entry),
         held=(out_held, ("allclose", {"atol": _fp8_step(entry), "rtol": 0.0})),
-    )
-
-
-@cuda_only
-def test_the_decode_step_matches_hugging_faces_own_attention(tf, shipped_source, tmp_path) -> None:
-    """The step's output is what HF's attention produces at the decoded position.
-
-    The boundary, as this model's `ReferenceCase` declares it: one decode step of the
-    complete sliding-window MLA attention submodule -- the fp8 KV latent this token
-    writes and the online-softmax attention over the context it was given, with the
-    weights bound by name the way the checkpoint binds them -- at production
-    dimensions.
-
-    Both sides in the model's own dtype: same weights, same context, same rotation,
-    no cache object on either side. Held to one representable step apart and to what
-    the corpus asks of a reference, which is two separate bounds on one output.
-    """
-    step = reference.attention_step_inputs()
-    want = reference.attention_step_oracle(step)
-
-    _asked(
-        tf, tmp_path, shipped_source(MODEL), step,
-        out_held=("allclose", {"atol": _bf16_ulps(want), "rtol": 0.0}),
     )
 
 

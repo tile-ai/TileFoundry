@@ -272,7 +272,6 @@ __all__ = [
     "GqaOnline",
     "gqa_online_attend",
     "SMALL_CONTEXT_T",
-    "NUM_CTA",
     "NUM_SPLITS",
     "MAX_CTX",
     "HEAD_DIM",
