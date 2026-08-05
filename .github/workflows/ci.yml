@@ -17,8 +17,13 @@ permissions:
 # Jobs run directly inside the self-hosted runner container, which carries the
 # toolchain (torch, CUDA, cutlass headers at /opt/cutlass/include, ruff,
 # clang-format, pre-commit). The runner container is launched pinned to one GPU
-# (e.g. --gpus device=4), so no per-job GPU selection is needed. `tilefoundry`
+# (--gpus device=1), so no per-job GPU selection is needed. `tilefoundry`
 # is the runner label — set it in the runner's RUNNER_LABELS at launch.
+#
+# That GPU must be in the default compute mode. Under `Exclusive_Process` only one
+# process may hold a context, and `-n 4` below is four of them: three workers fail
+# to initialise CUDA with `cudaErrorDevicesUnavailable`, which reads like a broken
+# toolchain rather than a busy card.
 jobs:
   lint:
     runs-on: [self-hosted, tilefoundry]
