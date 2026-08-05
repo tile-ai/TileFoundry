@@ -21,10 +21,9 @@ MODEL = "qwen3_1_7b"
 CASES = contract.model_cases(MODEL)
 
 ANALYSED = [
-    pytest.param(case, selected, family, id=f"{selected.id}/{family}")
+    pytest.param(case, selected, id=selected.id)
     for case in CASES
     for selected in case.analyze
-    for family in contract.FAMILIES
 ]
 PLANNED = [
     pytest.param(case, planned, id=planned.id)
@@ -39,10 +38,10 @@ SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in c
 ZERO_SIZED = frozenset(("k_cache", "v_cache"))
 
 
-@pytest.mark.parametrize(("case", "selected", "family"), ANALYSED)
-def test_every_selected_function_analyses(tf, shipped_source, case, selected, family) -> None:
-    contract.analysed(
-        tf, shipped_source(MODEL), case, selected.selector, family, selected.dims
+@pytest.mark.parametrize(("case", "selected"), ANALYSED)
+def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
+    contract.analysed_every_family(
+        tf, shipped_source(MODEL), case, selected.selector, selected.dims
     )
 
 
@@ -68,20 +67,12 @@ def test_the_plan_reaches_the_level_below_the_one_it_partitions(
 
 
 @pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_each_model_is_asked_at_a_size(tf, shipped_source, case, sized) -> None:
-    contract.analysed(
-        tf, shipped_source(MODEL), case, sized.selector, "compute-cost", sized.dims
-    )
-
-
-@pytest.mark.parametrize(("case", "sized"), SIZED)
-@pytest.mark.parametrize("family", contract.FAMILIES)
 def test_every_analysis_answers_at_the_largest_context(
-    tf, shipped_source, case, sized, family
+    tf, shipped_source, case, sized
 ) -> None:
     """At the ceiling the case states, not at a sample of it."""
-    contract.analysed(
-        tf, shipped_source(MODEL), case, sized.selector, family, sized.ceiling
+    contract.analysed_every_family(
+        tf, shipped_source(MODEL), case, sized.selector, sized.ceiling
     )
 
 

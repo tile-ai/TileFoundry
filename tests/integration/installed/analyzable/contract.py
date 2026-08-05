@@ -102,6 +102,86 @@ def reported(
     return json.loads(done.stdout)
 
 
+def _compute_cost_evidence(report: dict) -> str | None:
+    """What `compute-cost` must have counted: flops, bucketed by dtype."""
+    flops = report["totals"]["flops"]
+    if not flops or not any(count > 0 for count in flops.values()):
+        return f"reported no flops at all ({flops!r})"
+    return None
+
+
+def _memory_evidence(report: dict) -> str | None:
+    """What `memory` must have measured: bytes moved, and per-binding lifetimes."""
+    record = report["function_records"]["memory"]
+    gmem = record["traffic"]["gmem"]
+    if not gmem.get("read", 0) > 0:
+        return f"reported no gmem read ({gmem!r})"
+    if not record["lifetimes"]:
+        return "reported no binding lifetimes"
+    return None
+
+
+def _roofline_evidence(report: dict) -> str | None:
+    """What `roofline` must have decided: which side bounds, and the time it implies."""
+    record = report["function_records"]["roofline"]
+    if record["bound_by"] not in ("compute", "memory"):
+        return f"bound_by is {record['bound_by']!r}, neither side"
+    if not record["theoretical_ns"] > 0:
+        return f"theoretical_ns is {record['theoretical_ns']!r}"
+    return None
+
+
+def _timeline_evidence(report: dict) -> str | None:
+    """What `timeline` must have laid out: an interval, over some grid."""
+    record = report["function_records"]["timeline"]
+    if not record["end_ns"] > record["start_ns"]:
+        return f"spans no time ({record['start_ns']}..{record['end_ns']})"
+    if not record["grid_units"] > 0:
+        return f"grid_units is {record['grid_units']!r}"
+    return None
+
+
+#: The field each family has to have filled in, so a family that runs but answers
+#: with nothing is a failure rather than a zero nobody reads. Held as data because
+#: what is asked of each family is the family's own, not one shared shape.
+_EVIDENCE = {
+    "compute-cost": _compute_cost_evidence,
+    "memory": _memory_evidence,
+    "roofline": _roofline_evidence,
+    "timeline": _timeline_evidence,
+}
+
+
+def analysed_every_family(
+    tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int] | None = None
+) -> dict:
+    """Every family asked about one function, in one command, judged one by one.
+
+    One command rather than one per family: ``analyze`` runs an independent analysis
+    per requested family and composes the renderings from the results afterwards, so
+    requesting all four cannot change what any one of them reports. The four also
+    share the closure roofline and timeline each need, which four commands recompute
+    from scratch -- measured at 21.0 s apart against 7.0 s together.
+
+    Every family is judged even after an earlier one fails, and the failure names
+    each family that failed, so this is still four verdicts and not one.
+    """
+    report = reported(tf, source, case, selector, FAMILIES, dims)
+    assert report["executed"] == list(FAMILIES), (
+        f"asked for {list(FAMILIES)}, the command ran {report['executed']}"
+    )
+    failed = {
+        family: complaint
+        for family, evidence in _EVIDENCE.items()
+        if (complaint := evidence(report)) is not None
+    }
+    assert not failed, (
+        f"{selector} at {dict(dims or {})}: "
+        + "; ".join(f"{family} {complaint}" for family, complaint in sorted(failed.items()))
+    )
+    return report
+
+
 def scheduled(tf, source: Path, case: ModelCase, planned: FunctionCase, *, topology: str = ""):
     """One ``schedule`` command at a level the source has to declare itself."""
     level = topology or planned.topology
