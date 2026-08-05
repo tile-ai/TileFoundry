@@ -12,7 +12,7 @@ import pytest
 
 from tilefoundry.cli import data, models
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _listed_names(output: str) -> set[str]:

@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 #: The checkout to build a wheel from.
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[2]
 
 # Every kind that ships, looked up inside the installation.
 _PROBE = """\

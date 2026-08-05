@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from tests.ops.eval_utils import EvalCase, run_eval_case
+from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,

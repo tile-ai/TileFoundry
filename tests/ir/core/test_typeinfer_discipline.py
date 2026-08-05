@@ -7,7 +7,7 @@ import ast
 import pathlib
 
 _HIR_ROOT = (
-    pathlib.Path(__file__).resolve().parents[2] / "src" / "tilefoundry" / "ir" / "hir"
+    pathlib.Path(__file__).resolve().parents[3] / "src" / "tilefoundry" / "ir" / "hir"
 )
 
 

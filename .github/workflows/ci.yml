@@ -81,12 +81,12 @@ jobs:
         env:
           TF_SMOKE_VENV: ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: >-
-          pytest tests/integration/installed -o python_files='smoke_*.py' -q -n 8
+          pytest tests/installed -o python_files='smoke_*.py' -q -n 8
       # Run by the environment above. `--work` holds the emitted source and the
       # canonical store `prepare` writes.
       - name: Decode the published checkpoint with the shipped source
         run: >-
           ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/python
-          tests/integration/qwen3_1_7b_l3.py
+          tests/installed/qwen3_1_7b_l3.py
           --venv ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
           --work ${{ runner.temp }}/l3-${{ github.run_id }}-${{ github.run_attempt }}
