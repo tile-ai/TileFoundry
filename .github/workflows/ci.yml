@@ -75,16 +75,13 @@ jobs:
       - name: Install pytest-xdist
         run: pip install 'pytest-xdist>=3'
       # Default collection misses smoke_*.py, so the pattern is named here. These tests
-      # spend their time in `tilefoundry` subprocesses and build their references on
-      # CPU, so the workers share the container's cores rather than the pinned GPU.
-      # `loadgroup` distributes per test but keeps a marked group on one worker, which
-      # is how the MoE reference is built once.
+      # spend their time in `tilefoundry` subprocesses, so the workers share the
+      # container's cores.
       - name: Verify the installed surface
         env:
           TF_SMOKE_VENV: ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: >-
-          pytest tests/integration/installed -o python_files='smoke_*.py' -q
-          -n 8 --dist loadgroup
+          pytest tests/integration/installed -o python_files='smoke_*.py' -q -n 8
       # Run by the environment above. `--work` holds the emitted source and the
       # canonical store `prepare` writes.
       - name: Decode the published checkpoint with the shipped source

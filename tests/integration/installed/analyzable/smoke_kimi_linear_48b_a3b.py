@@ -260,52 +260,28 @@ def _moe(tf, work, source, step, want, *, args=None, refuse=False):
     )
 
 
-#: One worker for every test drawing on `hf_moe`, so the block is built once.
-MOE_GROUP = pytest.mark.xdist_group("kimi-moe")
+def test_moe_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
+    """The full 256-expert MoE: four draws that agree, then three that must not.
 
+    Four draws rather than one batch of four tokens, because the decode contract fixes
+    the token count at the literal 1, so breadth over which experts get selected comes
+    from redrawing. The three perturbations are asked at the published expert count by
+    perturbing an input: every parameter `moe` declares is non-const, so each arrives
+    as `--input`.
 
-@pytest.fixture(scope="module")
-def hf_moe():
-    return reference.build_hf_moe(device="cpu")
-
-
-@MOE_GROUP
-@pytest.mark.parametrize("act_seed", reference.MOE_DRAWS)
-def test_moe_matches_hugging_face_at_the_published_expert_count(
-    tf, shipped_source, tmp_path, hf_moe, act_seed
-) -> None:
-    """The full 256-expert MoE, over four independent draws.
-
-    Four draws rather than one batch of four tokens: the decode contract fixes the
-    token count at the literal 1, so breadth over which experts get selected has to
-    come from redrawing. The four draws select genuinely different expert sets.
+    One test, because the 256-expert block is the expensive part and all seven
+    questions share it. They are asked in sequence, so the first to disagree -- or to
+    agree when it should not -- fails at its own line.
     """
-    step = reference.moe_inputs(device="cpu", act_seed=act_seed, hf_moe=hf_moe)
-    _moe(tf, tmp_path, shipped_source(MODEL), step, reference.moe_oracle(step))
-
-
-@MOE_GROUP
-def test_the_router_and_the_shared_expert_are_load_bearing(
-    tf, shipped_source, tmp_path, hf_moe
-) -> None:
-    """Three perturbations of one MoE call, each held to breaking the parity above.
-
-    Asked at the published expert count, by perturbing an input rather than by
-    shrinking the model: every parameter `moe` declares is non-const, so each arrives
-    as `--input` and a perturbation is one tensor written to disk. The originals of
-    these three instead rebuilt the block at a reduced expert count, which the shipped
-    source cannot be asked for -- it reads `num_experts` from its own `config.json`
-    and no flag overrides it.
-
-    Three questions in one test, and one draw rather than four, because the block the
-    three share is the expensive part; they are asked in sequence, so the first to
-    agree when it should not fails the test at its own line.
-    """
-    step = reference.moe_inputs(
-        device="cpu", act_seed=reference.ACTIVATION_SEED, hf_moe=hf_moe
-    )
-    want = reference.moe_oracle(step)
+    hf_moe = reference.build_hf_moe()
     source = shipped_source(MODEL)
+    drawn = {}
+    for act_seed in reference.MOE_DRAWS:
+        step = reference.moe_inputs(act_seed=act_seed, hf_moe=hf_moe)
+        drawn[act_seed] = (step, reference.moe_oracle(step))
+        _moe(tf, tmp_path, source, step, drawn[act_seed][1])
+
+    step, want = drawn[reference.ACTIVATION_SEED]
 
     # The router selects on `sigmoid(logits) + bias` but takes the routing weights
     # from the *unbiased* scores. At bias = 0 those are the same tensor, so a
@@ -321,7 +297,7 @@ def test_the_router_and_the_shared_expert_are_load_bearing(
     # cancels the factor entirely, leaving what a factor of 1.0 would give. So a
     # kernel that folded the factor into the denominator has to fail here.
     unscaled = list(step.args)
-    unscaled[4] = torch.full((1, 1), 1.0, dtype=reference.DTYPE)
+    unscaled[4] = torch.full_like(step.args[4], 1.0)
     _moe(tf, tmp_path, source, step, want, args=unscaled, refuse=True)
 
     # `num_shared_experts: 1`, and it is unscaled -- `routed_scaling_factor`
