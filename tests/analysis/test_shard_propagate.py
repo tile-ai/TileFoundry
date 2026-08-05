@@ -89,27 +89,27 @@ def test_a_split_of_a_surviving_axis_reaches_the_output():
     )
 
 
-def test_a_split_contraction_dim_becomes_a_partial_value_state():
-    # Both lhs[M,K] (K = layout axis 1) and rhs[K,N] (K = layout axis 0) split on K
-    # -> the Split of the contraction dim becomes a mesh-axis Partial value
-    # state on that mesh axis (no layout axis).
-    lhs_t = make_tensor_type((16, 4), layout=_shard((16, 4), Split(1)))
-    rhs_t = make_tensor_type((4, 8), layout=_shard((4, 8), Split(0)))
-    out = derive_output_shard_layout(
-        (lhs_t, rhs_t), _matmul_relation(), (16, 8), partial_reduction_dims=frozenset({2})
-    )
-    assert out.attrs == (Partial("sum"),)
+#: What a split contraction dim leaves on the output, by whether the reduction over
+#: it is partial. Partial: the Split becomes a mesh-axis value state with no layout
+#: axis. Complete: every point ends up holding the whole result.
+CONTRACTION_SPLITS = [
+    pytest.param(
+        # Both lhs[M,K] (K = layout axis 1) and rhs[K,N] (K = layout axis 0) split on K.
+        _shard((4, 8), Split(0)), frozenset({2}), (Partial("sum"),), id="partial_reduction",
+    ),
+    pytest.param(None, frozenset(), (Broadcast(),), id="complete_reduction"),
+]
 
 
-def test_a_complete_reduction_over_a_split_axis_is_a_broadcast():
-    # K split but the reduction effect is complete (K not in the partial set):
-    # every point ends up holding the whole result.
+@pytest.mark.parametrize(("rhs_layout", "partial_dims", "attrs"), CONTRACTION_SPLITS)
+def test_a_split_contraction_dim_becomes_a_value_state(rhs_layout, partial_dims, attrs):
     lhs_t = make_tensor_type((16, 4), layout=_shard((16, 4), Split(1)))
+    rhs_t = make_tensor_type((4, 8), layout=rhs_layout) if rhs_layout else make_tensor_type((4, 8))
     out = derive_output_shard_layout(
-        (lhs_t, make_tensor_type((4, 8))), _matmul_relation(), (16, 8),
-        partial_reduction_dims=frozenset(),
+        (lhs_t, rhs_t), _matmul_relation(), (16, 8), partial_reduction_dims=partial_dims
     )
-    assert out.attrs == (Broadcast(),)
+
+    assert out.attrs == attrs
 
 
 def test_incompatible_split_errors():
