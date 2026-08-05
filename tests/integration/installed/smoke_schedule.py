@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import json
 
+#: The only solving call in this file, so the only one with a budget to state. The
+#: worker count is stated rather than defaulted for the reason
+#: ``analyzable/contract.py`` states it: the default sizes itself to the machine, and
+#: several of these at once under ``-n`` each ask for the whole of it. ``--first-plan``
+#: because what is asked below is that the level answers, not that it answers best.
+#:
+#: The ``thread`` calls take no budget: that level runs the pipeline algorithm, which
+#: reads none of these and never reaches a solver.
+_CTA_SOLVER = ("--first-plan", "--solver-workers=2")
+
 
 def test_schedule_answers_at_each_level_the_target_schedules(tf, cmine) -> None:
-    partition = tf("schedule", f"{cmine}:CMine.root", "--topology", "cta")
+    partition = tf("schedule", f"{cmine}:CMine.root", "--topology", "cta", *_CTA_SOLVER)
     assert partition.returncode == 0, partition.stderr
     assert "nvidia.h200_sxm" in partition.stdout
 

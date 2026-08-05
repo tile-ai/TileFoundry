@@ -260,9 +260,27 @@ def _moe(tf, work, source, step, want, *, args=None, refuse=False):
     )
 
 
+#: The 256-expert block, built once for every test below that draws from it. It is
+#: 1.82 billion bf16 parameters, 16 s to build on CPU and 9.5 GB resident while it
+#: builds, and the five tests below each used to build their own -- measured at 88 s
+#: of the file's 367 s.
+#:
+#: Module scope rather than session, so a run selecting none of these never builds
+#: it. The `xdist_group` below is what makes one build one build: under the default
+#: per-test distribution these five land on up to five workers, each holding its own
+#: copy, which costs more memory in parallel than the serial run it replaces.
+MOE_GROUP = pytest.mark.xdist_group("kimi-moe")
+
+
+@pytest.fixture(scope="module")
+def hf_moe():
+    return reference.build_hf_moe(device="cpu")
+
+
+@MOE_GROUP
 @pytest.mark.parametrize("act_seed", reference.MOE_DRAWS)
 def test_moe_matches_hugging_face_at_the_published_expert_count(
-    tf, shipped_source, tmp_path, act_seed
+    tf, shipped_source, tmp_path, hf_moe, act_seed
 ) -> None:
     """The full 256-expert MoE, over four independent draws.
 
@@ -270,16 +288,13 @@ def test_moe_matches_hugging_face_at_the_published_expert_count(
     token count at the literal 1, so breadth over which experts get selected has to
     come from redrawing. The four draws select genuinely different expert sets.
     """
-    hf_moe = reference.build_hf_moe(device="cpu")
-    try:
-        step = reference.moe_inputs(device="cpu", act_seed=act_seed, hf_moe=hf_moe)
-        _moe(tf, tmp_path, shipped_source(MODEL), step, reference.moe_oracle(step))
-    finally:
-        del hf_moe
+    step = reference.moe_inputs(device="cpu", act_seed=act_seed, hf_moe=hf_moe)
+    _moe(tf, tmp_path, shipped_source(MODEL), step, reference.moe_oracle(step))
 
 
+@MOE_GROUP
 def test_the_router_and_the_shared_expert_are_load_bearing(
-    tf, shipped_source, tmp_path
+    tf, shipped_source, tmp_path, hf_moe
 ) -> None:
     """Three perturbations of one MoE call, each held to breaking the parity above.
 
@@ -290,42 +305,37 @@ def test_the_router_and_the_shared_expert_are_load_bearing(
     source cannot be asked for -- it reads `num_experts` from its own `config.json`
     and no flag overrides it.
 
-    Three questions in one test, and one draw rather than four, because this block is
-    1.82 billion parameters and 14 s to build on CPU; the three share the one oracle
-    and are asked in sequence, so the first to agree when it should not fails the test
-    at its own line.
+    Three questions in one test, and one draw rather than four, because the block the
+    three share is the expensive part; they are asked in sequence, so the first to
+    agree when it should not fails the test at its own line.
     """
-    hf_moe = reference.build_hf_moe(device="cpu")
-    try:
-        step = reference.moe_inputs(
-            device="cpu", act_seed=reference.ACTIVATION_SEED, hf_moe=hf_moe
-        )
-        want = reference.moe_oracle(step)
-        source = shipped_source(MODEL)
+    step = reference.moe_inputs(
+        device="cpu", act_seed=reference.ACTIVATION_SEED, hf_moe=hf_moe
+    )
+    want = reference.moe_oracle(step)
+    source = shipped_source(MODEL)
 
-        # The router selects on `sigmoid(logits) + bias` but takes the routing weights
-        # from the *unbiased* scores. At bias = 0 those are the same tensor, so a
-        # kernel that gathered the biased scores would be indistinguishable from a
-        # correct one -- which is why the fixture draws the bias nonzero, and why that
-        # must not be "simplified" to the zeros the class defaults to.
-        biasless = list(step.args)
-        biasless[3] = torch.zeros_like(step.args[3])
-        _moe(tf, tmp_path, source, step, want, args=biasless, refuse=True)
+    # The router selects on `sigmoid(logits) + bias` but takes the routing weights
+    # from the *unbiased* scores. At bias = 0 those are the same tensor, so a
+    # kernel that gathered the biased scores would be indistinguishable from a
+    # correct one -- which is why the fixture draws the bias nonzero, and why that
+    # must not be "simplified" to the zeros the class defaults to.
+    biasless = list(step.args)
+    biasless[3] = torch.zeros_like(step.args[3])
+    _moe(tf, tmp_path, source, step, want, args=biasless, refuse=True)
 
-        # `moe_renormalize: true` means normalise, *then* scale. The two orders are
-        # different functions: scaling the selected scores before dividing by their sum
-        # cancels the factor entirely, leaving what a factor of 1.0 would give. So a
-        # kernel that folded the factor into the denominator has to fail here.
-        unscaled = list(step.args)
-        unscaled[4] = torch.full((1, 1), 1.0, dtype=reference.DTYPE)
-        _moe(tf, tmp_path, source, step, want, args=unscaled, refuse=True)
+    # `moe_renormalize: true` means normalise, *then* scale. The two orders are
+    # different functions: scaling the selected scores before dividing by their sum
+    # cancels the factor entirely, leaving what a factor of 1.0 would give. So a
+    # kernel that folded the factor into the denominator has to fail here.
+    unscaled = list(step.args)
+    unscaled[4] = torch.full((1, 1), 1.0, dtype=reference.DTYPE)
+    _moe(tf, tmp_path, source, step, want, args=unscaled, refuse=True)
 
-        # `num_shared_experts: 1`, and it is unscaled -- `routed_scaling_factor`
-        # applies to the routed branch only. Zeroing its gate projection drops the
-        # shared branch's contribution, and a kernel that never added it could not pass
-        # the parity runs above.
-        unshared = list(step.args)
-        unshared[8] = torch.zeros_like(step.args[8])
-        _moe(tf, tmp_path, source, step, want, args=unshared, refuse=True)
-    finally:
-        del hf_moe
+    # `num_shared_experts: 1`, and it is unscaled -- `routed_scaling_factor`
+    # applies to the routed branch only. Zeroing its gate projection drops the
+    # shared branch's contribution, and a kernel that never added it could not pass
+    # the parity runs above.
+    unshared = list(step.args)
+    unshared[8] = torch.zeros_like(step.args[8])
+    _moe(tf, tmp_path, source, step, want, args=unshared, refuse=True)

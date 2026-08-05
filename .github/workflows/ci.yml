@@ -70,12 +70,38 @@ jobs:
           python -m venv --system-site-packages ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
           ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/pip install --no-deps \
             ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}/tilefoundry-*.whl
+      # This job never runs `pip install -e '.[test]'` -- that is the `test` job --
+      # and the image carries pytest without xdist, so `-n` below has nothing to
+      # resolve unless it is asked for here.
+      - name: Install pytest-xdist
+        run: pip install 'pytest-xdist>=3'
+      # The worker count below is a share of these two numbers, so they are on the
+      # record next to the run that used them.
+      - name: Report the container's CPU and memory
+        run: |
+          echo "nproc: $(nproc)"
+          free -g | head -2
       # Default collection misses smoke_*.py, so the pattern is named here.
+      #
+      # Every test here spends its time in `tilefoundry` subprocesses, so the work
+      # parallelises across the container's CPU rather than across the one pinned
+      # GPU: the Hugging Face references are built on CPU, and the GPU is reached
+      # only inside a `check` subprocess.
+      #
+      # `--dist loadgroup` rather than the default: it is per-test, except that tests
+      # marked into a group stay on one worker. Only the MoE group uses that, so it
+      # builds its 9.5 GB reference once instead of once per worker, while everything
+      # else still spreads per test. `--dist loadfile` would instead pin the whole run
+      # to its slowest file, measured at 367 s of 1309 s.
+      #
+      # Eight workers because the MoE group is then the critical path at about 156 s
+      # and more workers buy nothing.
       - name: Verify the installed surface
         env:
           TF_SMOKE_VENV: ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: >-
           pytest tests/integration/installed -o python_files='smoke_*.py' -q
+          -n 8 --dist loadgroup
       # Run by the environment above. `--work` holds the emitted source and the
       # canonical store `prepare` writes.
       - name: Decode the published checkpoint with the shipped source
