@@ -20,13 +20,11 @@
     {
       "id": "milestone_review",
       "name": "Milestone review",
-      "description": "Each milestone names its Golden Reference, verifies its functional points through real workflows, and removes redundant test/comment scaffolding.",
+      "description": "Touched tests and comments retain only meaningful contract coverage after each milestone.",
       "when": {
         "path_glob": ["**"]
       },
       "ac": [
-        "Milestone MUST name a `#### Golden Reference` before implementation steps, with the source of truth and the observable functional points it determines.",
-        "The gate request MUST show the Golden Reference's functional points exercised through the smallest real workflow, naming the retained evidence; one workflow MAY cover several ACs, and a new test requires a stated reachability gap.",
         "Touched tests and comments MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract."
       ],
       "rules": {
