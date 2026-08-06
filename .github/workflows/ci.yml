@@ -48,7 +48,10 @@ jobs:
           .wheel-venv/bin/python -m pip install --no-deps \
             "$RUNNER_TEMP"/wheel/tilefoundry-*.whl
       - name: Verify the installed surface
-        run: .wheel-venv/bin/python -m pytest tests/installed -o python_files='smoke_*.py' -q -n 8
+        run: |
+          TF_SMOKE_VENV="$PWD/.wheel-venv" \
+            .wheel-venv/bin/python -m pytest tests/installed \
+            -o python_files='smoke_*.py' -q -n 8
       - name: Decode the published checkpoint with the shipped source
         run: |
           .wheel-venv/bin/python tests/installed/qwen3_1_7b_l3.py \
