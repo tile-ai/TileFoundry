@@ -42,13 +42,14 @@ from tilefoundry.schedule.partition import (
 )
 from tilefoundry.schedule.partition import solve as solve_module
 from tilefoundry.schedule.pipeline.problem import PipelineProblemError
+from tilefoundry.target import CudaTarget
 
 #: What the assertions below read is how a plan states a move, which any plan that
 #: verifies states the same way.
 _SOLVER = ScheduleOptions(workers=1, stop_at_first_solution=True)
 
 
-@func(target="cuda")
+@func(target=CudaTarget("nvidia.h200_sxm"))
 def gemm_norm(
     x: Tensor[(64, 128), "bf16"],
     w: Tensor[(128, 64), "bf16"],
@@ -66,7 +67,7 @@ def _closed(extent: int = 4):
     module = _module(extent)
     function = module.entry_function()
     program = build_partition_program(module, function)
-    facts = module.resolve_target().as_facts(
+    facts = module.resolve_target().get_facts(
         PartitionFacts, program.facts_query("cta")
     )
     return module, function, program, facts
@@ -180,7 +181,7 @@ def test_partition_refuses_a_level_the_facts_and_the_program_do_not_share() -> N
         build_partition_problem(program, replace(facts, topology="core"), Topology("cta", 4))
 
     with pytest.raises(ValueError, match="no partition facts for 'thread'"):
-        module.resolve_target().as_facts(
+        module.resolve_target().get_facts(
             PartitionFacts, program.facts_query("thread")
         )
 

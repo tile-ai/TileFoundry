@@ -352,7 +352,10 @@ Scheduling this CUDA kernel at the level its Module divides over:
 
 ```python
 # example
-@func(target="cuda", topologies=(Topology("cta", 4),))
+@func(
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 4),),
+)
 def blocked_matmul(
     x: Tensor[(64, 128), "bf16"],
     w: Tensor[(128, 64), "bf16"],

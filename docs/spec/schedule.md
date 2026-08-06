@@ -2,7 +2,7 @@
 
 Scheduling decides how one Function is placed over one level of the parallel
 hierarchy its Module declares. One public operation names the program and the
-level; one registered algorithm answers with a Plan it owns entirely. What an
+level; one Target-selected Scheduler answers with a Plan it owns entirely. What an
 algorithm decides is its own vocabulary: two algorithms placing different
 hardware over different levels do not decide the same things, and a shared result
 schema would either describe neither or force both to pretend.
@@ -70,22 +70,32 @@ def schedule(
     caller.
   - The common Schedule code MUST NOT import a concrete Target implementation.
 
-### 1.1 Algorithm registration
+### 1.1 Target-selected Scheduler
 
-An algorithm is registered for the exact `(concrete Target type, topology name)`
-pair in the shared algorithm registry contract
-([code-organization](./code-organization.md)).
+```python
+class Scheduler:
+    topology: str
+    solve: Callable[
+        [Module, Function, Target, Topology, object | None], SchedulePlan
+    ]
+
+
+class Target:
+    def get_scheduler(self, topology: str) -> Scheduler: ...
+```
 
 - constraints:
-  - Resolution MUST match both halves of the key exactly. A registration for a
-    base class MUST NOT serve a subclass: two targets that share a base can need
-    different algorithms, and inheriting one would silently run the wrong one.
-  - Registering the same pair twice MUST fail, so which hardware is schedulable
-    at which level is single-valued and readable off the registrations.
-  - A Target MUST NOT own a scheduling method, a scheduling service object, or a
-    `target.schedule()` wrapper. Registration is the only support declaration.
-  - There MUST be no public stage selector, no automatic level selection, and no
-    generic service-lookup facade for scheduling.
+  - The public operation MUST call `get_scheduler` on the exact Target resolved
+    from the Module only after ownership, specialization, Target, and topology
+    resolution succeed.
+  - A Target subclass MUST inherit its base Schedulers through normal Python
+    inheritance. It MAY override one topology, delegate other requests to
+    `super()`, or refuse inherited behavior that is invalid for its hardware.
+  - The Target selects only the immutable descriptor. The public operation MUST
+    retain orchestration, returned-plan type checking, verification, and result
+    construction.
+  - There MUST be no public scheduler registration step, exact-concrete-Target
+    table, `target.schedule()` wrapper, or automatic level selection.
   - An algorithm MUST own its whole problem: its private program view, its Facts
     query, its constraint problem, its solve, and its Plan type. Those names MUST
     remain private to the algorithm's own package.
@@ -841,7 +851,7 @@ class PipelineFacts:
   - `instructions` MUST contain one entry per requested statement. Each atom is
     carried through `AtomFact` and remains opaque to the common scheduler.
   - Like `PartitionFacts`, this aggregate is projected once with
-    `Target.as_facts`; the closed problem MUST NOT retain a `Target` callback.
+    `Target.get_facts`; the closed problem MUST NOT retain a `Target` callback.
 
 ## 6. Public errors
 

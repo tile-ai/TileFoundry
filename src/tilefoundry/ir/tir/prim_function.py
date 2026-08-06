@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.target import Target, default_target
+from tilefoundry.target import Target, default_target, require_target
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,9 @@ class PrimFunction(Stmt):
     body: Sequential
     output_count: int = 1
     target: Target = field(default_factory=default_target)
+
+    def __post_init__(self) -> None:
+        require_target(self.target)
 
 
 __all__ = ["PrimFunction"]

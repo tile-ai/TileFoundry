@@ -9,7 +9,7 @@ host-callable shared library. Loading that artifact and exposing it as a
 ```mermaid
 flowchart LR
     TIR["verified <b>tir.PrimFunction</b>s"]
-    Emit["per-target <b>Emitter</b>"]
+    Emit["Target-selected <b>CodeGenerator</b>"]
     LM["<b>LinkableModule</b><br/>(per target)"]
     Link["<b>link</b>"]
     Linked["<b>LinkedModule</b><br/>artifact + metadata"]
@@ -22,8 +22,9 @@ flowchart LR
 ## 1. Pipeline
 
 - **Input** is verified TIR. HIR Ops MUST NOT reach codegen.
-- A module's functions are grouped by their `target` (`cuda` / `cpu`). Each
-  group is emitted by its target's emitter into one `LinkableModule`.
+- A module's functions are grouped by equal Target values in source order. Each
+  group is emitted by the exact Target's CodeGenerator into one
+  `LinkableModule`.
 - The link step compiles every `LinkableModule` with its own toolchain and
   links them into one `LinkedModule` — a host-callable shared library plus the
   host-visible metadata the loader needs.
@@ -34,34 +35,47 @@ flowchart LR
   C-ABI launch shims. The host module invokes device code only through that
   C-ABI shim.
 
-The target-specific emitter behavior — how a `cpu` vs `cuda` function emits, the
+The target-specific generator behavior — how a CPU vs CUDA function emits, the
 dispatch and shape-scalar ABI, program-shape / dynamic-CTA accessors, and the
 `ShardLayout` runtime mapping — is owned by [target](./target.md).
 
-## 2. Emitter
+## 2. CodeGenerator
 
-
-An emitter walks a verified `tir.PrimFunction` and produces source plus the
+A generator walks verified `tir.PrimFunction`s and produces source plus the
 metadata the link step needs.
 
-### 2.1 Emitter registry
+### 2.1 Target-selected service
 
 ```python
-def get_emitter(target: str | Target) -> Callable: ...
-def emit_cuda_module(cuda_fns: tuple[PrimFunction, ...]) -> LinkableModule: ...
-def emit_host_module(entry: PrimFunction, module) -> LinkableModule: ...
+class CodeGenerator:
+    emit: Callable[
+        [Module, tuple[PrimFunction, ...], Target], LinkableModule
+    ]
+
+
+class Target:
+    def get_code_generator(self) -> CodeGenerator: ...
+
+
+def emit_cuda_module(
+    module: Module,
+    functions: tuple[PrimFunction, ...],
+    target: Target,
+) -> LinkableModule: ...
 ```
 
 - constraints:
-  - Each target registers one callable emitter, resolved by target object or
-    target name.
-  - Emitters do not share one callable shape. The CUDA emitter consumes the
-    grouped CUDA functions; the CPU emitter consumes the host entry plus the
-    module whose device functions it launches. Callers MUST invoke the resolved
-    emitter according to its target-owned contract.
+  - A Target MUST return one immutable CodeGenerator descriptor. A subclass MAY
+    inherit its base generator without another registration step.
+  - All generators MUST share the `(module, functions, target)` callable shape.
+  - Generator selection MUST NOT branch on `Target.name`. There MUST be no
+    emitter registry or string-to-emitter lookup.
+  - A second unequal CUDA Target group MUST fail before any generator emits;
+    multiple device translation units or architectures in one linked artifact
+    are unsupported.
 
-An emitter MUST consume only TIR and MUST return a `LinkableModule` for its
-target. The emitter file layout mirrors the IR file layout
+A generator MUST consume only TIR and MUST return a `LinkableModule` for its
+backend. The emitter file layout mirrors the IR file layout
 (`codegen/<target>/tir/...` parallels `ir/tir/...`); the mirror rule is owned
 by [code-organization](./code-organization.md).
 
@@ -72,7 +86,7 @@ def handler(call: Call, ctx: CodegenContext) -> None: ...
 ```
 
 - constraints:
-  - a handler is registered on a target's emitter with the per-target
+  - a handler is registered inside a concrete generator with the per-backend
     `register_codegen_*` decorator ([visitor-registry §6](./visitor-registry.md#6-instance-3--codegen_));
     dispatch (matching `Evaluate` and selecting the handler) is owned by
     visitor-registry.
@@ -167,7 +181,7 @@ class LinkableModule:
     """One target's pre-link translation unit.
 
     Attributes:
-        target: attribute; function target name.
+        target: attribute; generator/linker backend label.
         language: attribute; source language.
         source: attribute; assembled translation-unit text.
         functions: attribute; constituent linkable functions in emission order.
@@ -180,6 +194,8 @@ class LinkableModule:
 ```
 
 - constraints:
+  - `target` MUST be the generator/linker backend label (`"cuda"` or `"cpu"`
+    for the built-ins), never an external Target registration name.
   - MUST be the source language: `cu` for a CUDA translation unit, `cpp` for a
     host translation unit.
   - MUST list the module's constituent `LinkableFunction`s, in emission order.

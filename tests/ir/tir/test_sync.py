@@ -26,11 +26,12 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CpuTarget, CudaTarget
 
 
 @module(entry="sync_square_host")
 class SyncSquare:
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def sync_square_device(a: Tensor[(4, 32), "f32"]):
         with Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
             view = T.tensor_view(
@@ -61,7 +62,7 @@ class SyncSquare:
             T.binary(reg, reg, reg, kind=BinaryKind.MUL)
             T.copy(reg, view)
 
-    @prim_func(target="cpu")
+    @prim_func(target=CpuTarget())
     def sync_square_host(a: Tensor[(4, 32), "f32"]):
         launch(sync_square_device, a, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
 
@@ -72,8 +73,10 @@ def test_sync_barrier_forms_emit_expected_cuda() -> None:
     from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
     from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
 
-    lowered = tilefoundry.lower(SyncSquare, target="cuda")
-    src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
+    lowered = tilefoundry.lower(SyncSquare, target=CudaTarget("nvidia.h200_sxm"))
+    groups = group_functions_by_target(lowered)
+    target, functions = next(iter(groups.items()))
+    src = emit_cuda_module(lowered, functions, target).source
 
     # Codegen emits one uniform sync<Kind, geometry...> entry per barrier; the
     # participant predicate + hardware impl live in the runtime.
@@ -86,12 +89,12 @@ def test_sync_barrier_forms_emit_expected_cuda() -> None:
 
 @module(entry="grid_sync_host")
 class GridSync:
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def grid_sync_device(a: Tensor[(128,), "f32"]):
         with Mesh(Topology("cta", 4), Layout(shape=(4,), strides=(1,))) as m:
             T.sync(m)
 
-    @prim_func(target="cpu")
+    @prim_func(target=CpuTarget())
     def grid_sync_host(a: Tensor[(128,), "f32"]):
         launch(grid_sync_device, a, grid=(4, 1, 1), block=(128, 1, 1))  # noqa: F821
 
@@ -103,8 +106,10 @@ def test_grid_scope_sync_emits_grid_barrier() -> None:
     from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
     from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
 
-    lowered = tilefoundry.lower(GridSync, target="cuda")
-    src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
+    lowered = tilefoundry.lower(GridSync, target=CudaTarget("nvidia.h200_sxm"))
+    groups = group_functions_by_target(lowered)
+    target, functions = next(iter(groups.items()))
+    src = emit_cuda_module(lowered, functions, target).source
     assert (
         "tilefoundry::ops::sync<tilefoundry::ops::SyncKind::grid>"
         "(tilefoundry::tf_grid_bar_state);" in src
@@ -117,7 +122,7 @@ def test_grid_scope_sync_emits_grid_barrier() -> None:
 def test_sync_kernel_runs_and_squares() -> None:
     """All four barrier forms compile and run on GPU without deadlock/fault,
     and the elementwise square is correct."""
-    rm = tilefoundry.compile(SyncSquare, target="cuda")
+    rm = tilefoundry.compile(SyncSquare, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
     expected = x * x

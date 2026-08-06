@@ -90,10 +90,8 @@ def _fold_items(items: list[_Item]) -> Sequential:
 
 
 def _is_device_target(target) -> bool:
-    """A device (kernel) target — anything but the host ``cpu`` target. Host
-    entries read shapes from their tensor args at runtime, so they never carry
-    hidden shape scalars."""
-    return target is not None and getattr(target, "name", None) != "cpu"
+    """Whether *target* is a CUDA device Target, including subclasses."""
+    return isinstance(target, CudaTarget)
 
 
 def _dim_var_names_in_type(ty: Any) -> set[str]:

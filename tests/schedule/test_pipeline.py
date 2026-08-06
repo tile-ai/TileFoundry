@@ -26,9 +26,10 @@ from tilefoundry.schedule.pipeline.solve import (
     PipelineSolveError,
     solve_pipeline_problem,
 )
+from tilefoundry.target import CudaTarget
 
 
-@func(target="cuda")
+@func(target=CudaTarget("nvidia.h200_sxm"))
 def bf16_gemm_rmsnorm(
     x: Tensor[(64, 128), "bf16"],
     w: Tensor[(128, 64), "bf16"],
@@ -46,7 +47,7 @@ def test_pipeline_closes_target_facts_before_solving_and_exports_stable_values()
     module = _module()
     function = module.entry_function()
     program = build_pipeline_program(module, function)
-    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("thread"))
+    facts = module.resolve_target().get_facts(PipelineFacts, program.facts_query("thread"))
     problem = build_pipeline_problem(program, facts, Topology("thread", 128))
 
     assert tuple(item.id for item in problem.statements) == ("MM", "RN")
@@ -65,7 +66,7 @@ def test_pipeline_closes_target_facts_before_solving_and_exports_stable_values()
 def _problem():
     module = _module()
     program = build_pipeline_program(module, module.entry_function())
-    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("thread"))
+    facts = module.resolve_target().get_facts(PipelineFacts, program.facts_query("thread"))
     return build_pipeline_problem(program, facts, Topology("thread", 128))
 
 
@@ -159,14 +160,14 @@ def _candidate():
     """The one thing the solver reads off a candidate: how long it takes."""
     module = _module()
     program = build_pipeline_program(module, module.entry_function())
-    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("thread"))
+    facts = module.resolve_target().get_facts(PipelineFacts, program.facts_query("thread"))
     return facts.instructions[0].candidates[0]
 
 
 def test_pipeline_rejects_missing_statement_facts_before_solving() -> None:
     module = _module()
     program = build_pipeline_program(module, module.entry_function())
-    facts = module.resolve_target().as_facts(PipelineFacts, program.facts_query("thread"))
+    facts = module.resolve_target().get_facts(PipelineFacts, program.facts_query("thread"))
     incomplete = replace(facts, instructions=facts.instructions[:-1])
 
     with pytest.raises(PipelineProblemError, match="do not match"):

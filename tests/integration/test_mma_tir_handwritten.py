@@ -19,13 +19,14 @@ from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CpuTarget, CudaTarget
 
 _OP = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
 
 
 @module(entry="mm_host")
 class MmHandwritten:
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def mm_device(
         a: Tensor[(16, 16), "bf16"],
         b: Tensor[(16, 8), "bf16"],
@@ -53,7 +54,7 @@ class MmHandwritten:
             c_view = T.tensor_view(c, layout=atom.C)
             T.copy(acc, c_view)
 
-    @prim_func(target="cpu")
+    @prim_func(target=CpuTarget())
     def mm_host(
         a: Tensor[(16, 16), "bf16"],
         b: Tensor[(16, 8), "bf16"],
@@ -63,7 +64,7 @@ class MmHandwritten:
 
 
 def test_handwritten_tir_mma_matches_torch_matmul() -> None:
-    rm = tilefoundry.compile(MmHandwritten, target="cuda")
+    rm = tilefoundry.compile(MmHandwritten, target=CudaTarget("nvidia.h200_sxm"))
     a = torch.randn(16, 16, dtype=torch.bfloat16, device="cuda")
     b = torch.randn(16, 8, dtype=torch.bfloat16, device="cuda")
     out = torch.empty(16, 8, dtype=torch.float32, device="cuda")

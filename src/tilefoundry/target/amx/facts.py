@@ -25,7 +25,6 @@ from tilefoundry.schedule.pipeline.facts import (
     PipelineFactsQuery,
     PipelineInstructionFacts,
 )
-from tilefoundry.target.facts import register_target_facts
 
 from .atoms import candidate_atoms
 from .target import AmxTarget
@@ -164,12 +163,6 @@ def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFact
         max_threads_per_warp=1,
         instructions=tuple(instructions),
     )
-
-
-register_target_facts(AmxTarget, MemoryHierarchyFacts, memory_hierarchy)
-register_target_facts(AmxTarget, ThroughputFacts, throughput)
-register_target_facts(AmxTarget, ParallelCapacityFacts, parallel_capacity)
-register_target_facts(AmxTarget, PipelineFacts, pipeline_facts)
 
 
 __all__ = [

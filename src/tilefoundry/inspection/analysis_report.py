@@ -23,7 +23,6 @@ from tilefoundry.analysis import (
     TrafficBytes,
 )
 from tilefoundry.analysis.api import AnalysisResult
-from tilefoundry.analysis.registry import ANALYSES
 from tilefoundry.analysis.walk import postorder, tensor_types
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
@@ -167,7 +166,8 @@ def selected_types(
     A requested root pulls its dependencies in, so records land on the IR that
     nobody asked to see. What is shown is what the *requested* analyses own,
     intersected with what was actually written: ownership comes from the
-    registrations rather than a hand-kept table, and the intersection keeps a
+    Target-selected Analyzer descriptors rather than a hand-kept table, and the
+    intersection keeps a
     reader from looking for a record that is not there.
 
     Every rendering of one run goes through here, so the report and the annotated
@@ -178,7 +178,7 @@ def selected_types(
     target = results[0].module.resolve_target()
     owned: set[type[IRMetadata]] = set()
     for item in results:
-        owned.update(ANALYSES.resolve(target, item.analysis).produces)
+        owned.update(target.get_analyzer(item.analysis).produces)
     order: list[type[IRMetadata]] = []
     for item in results:
         for metadata_type in item.metadata_types:

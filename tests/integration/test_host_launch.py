@@ -3,7 +3,7 @@
 Exercises non-MMA kernels through the explicit host/device boundary:
 - a multi-CTA elementwise kernel (each CTA owns a distinct output row) run via
   both the implicit auto-inserted CPU entry and an explicit
-  ``@prim_func(target="cpu")`` + ``launch``;
+  ``@prim_func(target=CpuTarget())`` + ``launch``;
 - a within-CTA per-row reduce;
 - a device-placement negative (a CPU tensor handed to a CUDA launch errors at
   the host wrapper);
@@ -24,6 +24,7 @@ from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.dsl.tf import *  # noqa: F401,F403  -- bind bare op names (reshard, relu, ...)
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
+from tilefoundry.target import CpuTarget, CudaTarget
 
 _ROWS = 128
 _COLS = 12
@@ -41,7 +42,7 @@ def double_rows(a: Tensor[(_ROWS, _COLS), "f32"]) -> Tensor[(_ROWS, _COLS), "f32
 
 
 # Explicit host entry launching the device kernel above.
-@prim_func(target="cpu")
+@prim_func(target=CpuTarget())
 def host_double(a: Tensor[(_ROWS, _COLS), "f32"], out: Tensor[(_ROWS, _COLS), "f32"]):
     launch(double_rows, a, out, grid=(_ROWS, 1, 1), block=(1, 1, 1))  # noqa: F821
 
@@ -65,7 +66,7 @@ def test_implicit_entry_elementwise_multi_cta() -> None:
     """Multi-CTA elementwise via the implicit auto-inserted host entry."""
     rm = tilefoundry.compile(
         double_rows,
-        target="cuda",
+        target=CudaTarget("nvidia.h200_sxm"),
     )
     x = _randn_rows()
     out = torch.empty_like(x)
@@ -75,7 +76,7 @@ def test_implicit_entry_elementwise_multi_cta() -> None:
 
 
 def test_explicit_host_entry_elementwise_multi_cta() -> None:
-    """Same kernel launched from an explicit ``@prim_func(target="cpu")`` entry."""
+    """Same kernel launched from an explicit ``@prim_func(target=CpuTarget())`` entry."""
     rm = tilefoundry.compile(
         Module(
             name="m",
@@ -83,7 +84,7 @@ def test_explicit_host_entry_elementwise_multi_cta() -> None:
             entry="host_double",
             topologies=double_rows.effective_topologies(),
         ),
-        target="cuda",
+        target=CudaTarget("nvidia.h200_sxm"),
     )
     assert rm.entry == "host_double"
     x = _randn_rows()
@@ -97,7 +98,7 @@ def test_implicit_entry_within_cta_reduce() -> None:
     """Within-CTA per-row reduce via the implicit host entry."""
     rm = tilefoundry.compile(
         row_mean,
-        target="cuda",
+        target=CudaTarget("nvidia.h200_sxm"),
     )
     torch.manual_seed(1)
     x = torch.randn(1, 1536, dtype=torch.float32, device="cuda")
@@ -112,7 +113,7 @@ def test_launch_rejects_cpu_tensor_at_host_wrapper() -> None:
     device-placement check (naming the argument and the expected device)."""
     rm = tilefoundry.compile(
         double_rows,
-        target="cuda",
+        target=CudaTarget("nvidia.h200_sxm"),
     )
     x_cpu = torch.randn(_ROWS, _COLS, dtype=torch.float32)  # host tensor
     out = torch.empty(_ROWS, _COLS, dtype=torch.float32, device="cuda")
@@ -160,7 +161,7 @@ def dyn_double(a: Tensor[(_NT, _TILE), "f32"]) -> Tensor[(_NT, _TILE), "f32"]:
 
 # A dynamic CTA extent has no compile-time grid, so it must be launched
 # explicitly — the host wrapper reads the grid from the tensor's runtime shape.
-@prim_func(target="cpu")
+@prim_func(target=CpuTarget())
 def host_dyn_double(a: Tensor[(_NT, _TILE), "f32"], out: Tensor[(_NT, _TILE), "f32"]):
     launch(dyn_double, a, out, grid=(_NT, 1, 1), block=(1, 1, 1))  # noqa: F821
 
@@ -178,7 +179,7 @@ def test_dynamic_cta_two_shapes_one_compile() -> None:
     """One compiled artifact launches the dynamic-CTA kernel at two different
     ``Ntile`` shapes via the host-computed grid; both match torch with no
     recompile."""
-    rm = tilefoundry.compile(_dyn_module(), target="cuda")
+    rm = tilefoundry.compile(_dyn_module(), target=CudaTarget("nvidia.h200_sxm"))
     for nt in (4, 8):
         torch.manual_seed(nt)
         x = torch.randn(nt, _TILE, dtype=torch.float32, device="cuda")
@@ -197,7 +198,7 @@ def test_dynamic_cta_rejects_implicit_entry() -> None:
         topologies=dyn_double.effective_topologies()
     )
     with pytest.raises(Exception, match=r"cannot derive its grid"):
-        tilefoundry.compile(mod, target="cuda")
+        tilefoundry.compile(mod, target=CudaTarget("nvidia.h200_sxm"))
 
 
 def test_dynamic_thread_topology_rejected() -> None:

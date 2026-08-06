@@ -33,6 +33,7 @@ from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.shard.shard_layout import Broadcast
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CpuTarget, CudaTarget
 
 # ── verify ───────────────────────────────────────────────────────────────────
 
@@ -99,7 +100,7 @@ def test_verify_rejects_what_the_instruction_cannot_do(stated, refusal) -> None:
 
 @module(entry="async_stage_host")
 class AsyncStage:
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def async_stage_device(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):
         with Mesh(Topology("thread", 128), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
             a_view = T.tensor_view(
@@ -133,7 +134,7 @@ class AsyncStage:
             # to the plain output (the sync-copy reference result).
             T.copy(s, b)
 
-    @prim_func(target="cpu")
+    @prim_func(target=CpuTarget())
     def async_stage_host(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):
         launch(async_stage_device, a, b, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
 
@@ -144,8 +145,10 @@ def test_async_copy_emits_cp_async() -> None:
     from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
     from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
 
-    lowered = tilefoundry.lower(AsyncStage, target="cuda")
-    src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
+    lowered = tilefoundry.lower(AsyncStage, target=CudaTarget("nvidia.h200_sxm"))
+    groups = group_functions_by_target(lowered)
+    target, functions = next(iter(groups.items()))
+    src = emit_cuda_module(lowered, functions, target).source
     assert "tilefoundry::ops::copy_async(" in src
     assert "cp.async.commit_group;" in src
     assert "cp.async.wait_group %0;" in src
@@ -155,7 +158,7 @@ def test_async_copy_emits_cp_async() -> None:
 def test_async_copy_stage_matches_input() -> None:
     """A ``copy_async -> commit -> wait`` staging of a Split gmem source into a
     full shared tile reproduces the input (matches a synchronous copy)."""
-    rm = tilefoundry.compile(AsyncStage, target="cuda")
+    rm = tilefoundry.compile(AsyncStage, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     a = torch.randn(128, 4, dtype=torch.float32, device="cuda")
     b = torch.empty_like(a)

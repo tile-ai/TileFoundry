@@ -14,14 +14,11 @@ from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.target.amx.target import AmxTarget
-from tilefoundry.target.cuda.target import CudaTarget
-from tilefoundry.target.facts import TARGET_FACTS
+from tilefoundry.target import Target
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
 from .metadata import ComputeCostMetadata, RooflineMetadata, TrafficBytes
-from .registry import register_analysis
 from .walk import attach, describe, postorder, reachable_functions
 
 SELECTOR = "roofline"
@@ -100,11 +97,11 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
 def analyze_roofline(
     module: Module,
     function: Function,
-    target: object,
+    target: Target,
     options: object | None = None,
 ) -> None:
     """Attach a bound to every Call, and one to every Function, reachable here."""
-    facts = TARGET_FACTS.project(target, ThroughputFacts)
+    facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
         total_flops: dict[str, int] = {}
         total_traffic = TrafficBytes()
@@ -143,15 +140,6 @@ def analyze_roofline(
                 has_work=bool(total_flops or total_traffic.total_bytes),
             ),
         )
-
-
-for _target_type in (CudaTarget, AmxTarget):
-    register_analysis(
-        _target_type,
-        SELECTOR,
-        requires=("memory", "compute-cost"),
-        produces=(RooflineMetadata,),
-    )(analyze_roofline)
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]

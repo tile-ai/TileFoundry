@@ -463,15 +463,22 @@ Visitor:
 
 ```python
 class CodegenVisitor:
-    def __init__(self, ctx: CodegenContext, target: str): ...   # target selects the per-target registry
+    def __init__(
+        self,
+        ctx: CodegenContext,
+        registry: AnalysisRegistry,
+        *,
+        backend: str,
+    ): ...
     def emit_stmt(self, stmt: Stmt) -> None: ...   # Stmt-side entry; unregistered Stmt falls back to target default emit
     def emit_expr(self, expr: Expr) -> str: ...    # Op-side entry; unregistered Op raises
 ```
 
 - constraints:
   - combines the `StmtVisitor` + `ExprVisitor` sides; routes per node class through
-    the per-target registry; an unregistered Op raises, an unregistered Stmt falls
+    the concrete generator's registry; an unregistered Op raises, an unregistered Stmt falls
     back to the target-owned default emit.
+  - `backend` is diagnostic text only. It MUST NOT select a registry or a Target.
 
 User extension path — adding a new Stmt `MyIntrinsic`:
 

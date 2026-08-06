@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import cache
+
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule import ScheduleError, ScheduleOptions
@@ -13,7 +15,7 @@ from tilefoundry.schedule.pipeline import (
     export_pipeline_plan,
     solve_pipeline_problem,
 )
-from tilefoundry.schedule.registry import register_schedule
+from tilefoundry.schedule.registry import Scheduler
 
 from .target import AmxTarget
 
@@ -39,13 +41,16 @@ def schedule_core(
             f"{type(options).__name__}"
         )
     program = build_pipeline_program(module, function)
-    facts = target.as_facts(PipelineFacts, program.facts_query(TOPOLOGY))
+    facts = target.get_facts(PipelineFacts, program.facts_query(TOPOLOGY))
     problem = build_pipeline_problem(program, facts, topology)
     solution = solve_pipeline_problem(problem)
     return export_pipeline_plan(program, solution, target)
 
 
-register_schedule(AmxTarget, TOPOLOGY)(schedule_core)
+@cache
+def amx_schedulers() -> dict[str, Scheduler]:
+    """Return the scheduler service inherited by AMX Target subclasses."""
+    return {TOPOLOGY: Scheduler(TOPOLOGY, schedule_core)}
 
 
-__all__ = ["TOPOLOGY", "schedule_core"]
+__all__ = ["TOPOLOGY", "amx_schedulers", "schedule_core"]

@@ -638,7 +638,9 @@ surface so editors complete `T.cuda.mma.<NAME>` and `.atom(...)`.
 
 `@module(entry="<name>", target=...)` collects a class body into a `Module`
 ([core-ir §1](./core-ir.md#1-module)). The decorated name binds to the
-resulting `Module`. `target` declares the hardware the domain runs on; the
+resulting `Module`. `target` MUST be a constructed, registered Target instance;
+a string MUST be refused and MUST NOT be resolved or constructed. The value
+declares the hardware the domain runs on; the
 ordered `Topology` hierarchy is declared by a `topologies` assignment in the
 class body instead (see below).
 

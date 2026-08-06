@@ -90,6 +90,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.passes.pass_base import ModulePass
+from tilefoundry.target import CudaTarget, Target, default_target
 from tilefoundry.visitor_registry.registries import (
     hir_lowering_registry,
     register_hir_lowering,
@@ -1403,6 +1404,7 @@ def _lower_single_output(
 def _lower_function(
     fn: HirFunction,
     *,
+    target: Target,
     cta_mesh: Mesh | None,
     thread_mesh: Mesh | None,
     cta_var_name: str = "block",
@@ -1535,12 +1537,14 @@ def _lower_function(
         params=final_params,
         body=body,
         output_count=len(out_vars),
+        target=target,
     )
 
 
 def _build_dispatch_entry(
     group: tuple[HirFunction, ...],
     mangled_pfs: list[PrimFunction],
+    target: Target,
 ) -> PrimFunction:
     """Build the unmangled entry PrimFunction holding the DispatchCall.
 
@@ -1633,6 +1637,7 @@ def _build_dispatch_entry(
         params=(*entry_params, *out_vars, shape_param),
         body=body,
         output_count=len(out_vars),
+        target=target,
     )
 
 
@@ -1773,6 +1778,15 @@ class HirToTirPass(ModulePass):
         # through the dispatch path: ``dispatch_view`` maps its name to its
         # variant tuple. A normal function (no variants, real body) lowers on
         # the single-body path; non-HIR functions pass through unchanged.
+        try:
+            target = module.resolve_target()
+        except ValueError:
+            # Direct pass use is an existing compiler-owned omitted-target
+            # boundary. Materialize the same explicit built-in value used by
+            # ``tilefoundry.lower`` so every emitted PrimFunction and the
+            # returned Module share one exact Target instance.
+            target = default_target()
+            module = replace(module, target=target)
         dispatch_view: dict[str, tuple[HirFunction, ...]] = {}
         for fn in module.functions:
             if isinstance(fn, HirFunction) and fn.variants:
@@ -1804,6 +1818,7 @@ class HirToTirPass(ModulePass):
                 mangled_name = _mangle_variant_name(variant)
                 pf = _lower_function(
                     variant,
+                    target=target,
                     cta_mesh=cta_mesh,
                     thread_mesh=thread_mesh,
                     cta_var_name=self.cta_var_name,
@@ -1841,7 +1856,7 @@ class HirToTirPass(ModulePass):
                 new_fns.extend(mangled_for_group)
                 new_fns.append(
                     _build_dispatch_entry(
-                        dispatch_view[group_name], mangled_for_group
+                        dispatch_view[group_name], mangled_for_group, target
                     )
                 )
                 continue
@@ -1854,6 +1869,7 @@ class HirToTirPass(ModulePass):
             new_fns.append(
                 _lower_function(
                     fn,
+                    target=target,
                     cta_mesh=cta_mesh,
                     thread_mesh=thread_mesh,
                     cta_var_name=self.cta_var_name,
@@ -1885,7 +1901,7 @@ def _retarget_launch_callees(fns: list) -> list:
     for f in fns:
         if (
             isinstance(f, PrimFunction)
-            and f.target.name == "cuda"
+            and isinstance(f.target, CudaTarget)
             and not _is_dispatch_entry_shape(f)
         ):
             lowered_by_name.setdefault(f.name, []).append(f)

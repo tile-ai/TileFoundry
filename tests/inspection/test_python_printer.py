@@ -11,7 +11,7 @@ from dataclasses import replace
 from tests.fixtures.demo_ir import build_demo
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.python_printer import (
-    _cuda_target_imports,
+    _target_imports,
     _target_str,
 )
 from tilefoundry.ir.core import BindingMetadata, Call, Var
@@ -19,7 +19,13 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.target import register_target
 from tilefoundry.target.cuda import CudaTarget
+
+
+@register_target
+class PrinterCudaTarget(CudaTarget):
+    name = "tests.printer.cuda"
 
 
 def test_inspection_types_are_opt_in_same_line_comments():
@@ -85,8 +91,7 @@ class TestPythonPrinterTargetRoundTrip:
         """Execute just the target portion of the emitted header and value."""
         source = "\n".join(
             [
-                "from tilefoundry.target import CpuTarget, CudaTarget",
-                *_cuda_target_imports(target),
+                *_target_imports(target),
                 f"result = {_target_str(target)}",
             ]
         )
@@ -97,7 +102,9 @@ class TestPythonPrinterTargetRoundTrip:
     def test_an_installed_pair_prints_as_the_device_that_names_it(self):
         installed = CudaTarget("nvidia.h200_sxm")
         assert _target_str(installed) == "CudaTarget('nvidia.h200_sxm')"
-        assert _cuda_target_imports(installed) == ()
+        assert _target_imports(installed) == (
+            "from tilefoundry.target import CudaTarget",
+        )
         assert self._rebuild(installed) == installed
 
     def test_a_directly_supplied_side_is_not_dropped(self):
@@ -130,3 +137,14 @@ class TestPythonPrinterTargetRoundTrip:
         assert rebuilt == both
         assert rebuilt.architecture.name == "arch_custom"
         assert rebuilt.device.name == "device_custom"
+
+    def test_an_external_cuda_subclass_prints_as_its_concrete_provider(self):
+        target = PrinterCudaTarget("nvidia.h200_sxm")
+
+        assert _target_str(target) == "PrinterCudaTarget('nvidia.h200_sxm')"
+        assert _target_imports(target)[0] == (
+            "from tests.inspection.test_python_printer import PrinterCudaTarget"
+        )
+        rebuilt = self._rebuild(target)
+        assert type(rebuilt) is PrinterCudaTarget
+        assert rebuilt == target

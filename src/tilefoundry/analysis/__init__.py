@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-# ruff: noqa: I001 -- curated order: the families register themselves on import
-# and must load after the registry they register into.
+# ruff: noqa: I001 -- curated public import order.
 
 from .errors import AnalysisError
 from .facts import (
@@ -24,8 +23,7 @@ from .metadata import (
     TrafficBytes,
     ValueLifetime,
 )
-from .registry import ANALYSES, AnalysisAlgorithm, register_analysis
-from . import compute_cost, memory, roofline, timeline  # noqa: F401
+from .registry import Analyzer
 from .api import AnalysisResult, analyze
 from .poly import (
     AccessFootprint,
@@ -42,9 +40,8 @@ from .poly import (
 
 
 __all__ = [
-    "ANALYSES",
     "AccessFootprint",
-    "AnalysisAlgorithm",
+    "Analyzer",
     "AnalysisError",
     "AnalysisResult",
     "AxisExtent",
@@ -69,7 +66,6 @@ __all__ = [
     "analyze",
     "carried_distances",
     "extract",
-    "register_analysis",
     "statement_time_dims",
     "time_extents",
 ]

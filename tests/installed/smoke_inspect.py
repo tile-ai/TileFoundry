@@ -26,7 +26,7 @@ def test_inspect_capabilities_lists_installed_documents(tf) -> None:
         assert document in done.stdout
     assert "architectures: apple.amx" in done.stdout
     assert "architectures: nvidia.sm90" in done.stdout
-    assert "Targets a module may declare: amx, cpu, cuda" in done.stdout
+    assert "Registered Target classes: amx, cpu, cuda" in done.stdout
     assert "tilefoundry inspect capabilities model.py:Model" in done.stdout
     assert done.stderr == ""
 

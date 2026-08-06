@@ -28,6 +28,7 @@ from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Mesh, Topology
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
+from tilefoundry.target import CudaTarget
 
 
 def _thread_mesh() -> Mesh:
@@ -66,7 +67,7 @@ def _syncs(body) -> list[Sync]:
 def test_parse_sync_builds_evaluate_wrapped_op() -> None:
     """``T.sync(m)`` lowers to ``Evaluate(Sync(mesh=m))`` carrying the mesh."""
 
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001 — body-only smoke
         with Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
             T.sync(m)
@@ -83,7 +84,7 @@ def test_parse_sync_slice_records_offset_and_extent() -> None:
     origin) in a composed-layout ``layout``; the full sync's ``layout`` is a
     plain ``Layout``."""
 
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001
         with Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
             T.sync(m)
@@ -104,7 +105,7 @@ def test_parse_sync_accepts_only_mesh() -> None:
             T.sync(a)
 
     with pytest.raises(VerifyError):
-        prim_func(target="cuda")(kernel)
+        prim_func(target=CudaTarget("nvidia.h200_sxm"))(kernel)
 
 
 # --- verify --------------------------------------------------------------

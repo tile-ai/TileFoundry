@@ -19,6 +19,7 @@ from tilefoundry.dsl import T, Tensor, tf  # noqa: F401 — tf/T used by bodies
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 
@@ -256,12 +257,12 @@ def test_prim_func_host_resolves_sibling_device_in_class_body():
 
     @module(entry="host")
     class _Launch:
-        @prim_func(target="cuda")
+        @prim_func(target=CudaTarget("nvidia.h200_sxm"))
         def dev(a: Tensor[(8,), "f32"]):  # noqa: ARG001
             with Mesh(Topology("thread", 8), Layout(shape=(8,), strides=(1,))) as m:
                 T.sync(m)
 
-        @prim_func(target="cpu")
+        @prim_func(target=CpuTarget())
         def host(a: Tensor[(8,), "f32"]):
             launch(dev, a, grid=(1, 1, 1), block=(8, 1, 1))  # noqa: F821
 

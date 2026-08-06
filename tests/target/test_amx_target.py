@@ -21,7 +21,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.schedule.pipeline.facts import PipelineFacts, PipelineFactsQuery
-from tilefoundry.target import AmxTarget, resolve_target
+from tilefoundry.target import AmxTarget
 from tilefoundry.target.amx.atoms import (
     AMX_REGISTERS,
     CORE_CACHE,
@@ -30,11 +30,10 @@ from tilefoundry.target.amx.atoms import (
     NEON_FMLA_4x4x1_F32,
     candidate_atoms,
 )
-from tilefoundry.target.facts import TARGET_FACTS
 from tilefoundry.target.hardware import HARDWARE_SPECS
 
 
-@func(target="amx")
+@func(target=AmxTarget())
 def f32_gemm(
     x: Tensor[(64, 128), "f32"],
     w: Tensor[(128, 64), "f32"],
@@ -43,7 +42,7 @@ def f32_gemm(
     return h
 
 
-@func(target="amx")
+@func(target=AmxTarget())
 def register_sized_f32_gemm(
     x: Tensor[(16, 8), "f32"],
     w: Tensor[(8, 16), "f32"],
@@ -52,7 +51,7 @@ def register_sized_f32_gemm(
     return h
 
 
-@func(target="amx")
+@func(target=AmxTarget())
 def coarse_m_f32_gemm(
     x: Tensor[(8, 8), "f32"],
     w: Tensor[(8, 16), "f32"],
@@ -61,7 +60,7 @@ def coarse_m_f32_gemm(
     return h
 
 
-@func(target="amx")
+@func(target=AmxTarget())
 def odd_m_f32_gemm(
     x: Tensor[(18, 128), "f32"],
     w: Tensor[(128, 64), "f32"],
@@ -70,7 +69,7 @@ def odd_m_f32_gemm(
     return h
 
 
-@func(target="amx")
+@func(target=AmxTarget())
 def odd_n_f32_gemm(
     x: Tensor[(64, 128), "f32"],
     w: Tensor[(128, 18), "f32"],
@@ -79,7 +78,7 @@ def odd_n_f32_gemm(
     return h
 
 
-@func(target="amx")
+@func(target=AmxTarget())
 def bf16_gemm(
     x: Tensor[(64, 128), "bf16"],
     w: Tensor[(128, 64), "bf16"],
@@ -104,7 +103,7 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     assert target.topology_levels == ("core", "amx")
     assert target.topology_limit("core") == 8
     assert target.topology_limit("amx") == 1
-    assert resolve_target("amx").topology_levels == target.topology_levels
+    assert AmxTarget().topology_levels == target.topology_levels
 
     with pytest.raises(ValueError) as limit_error:
         target.topology_limit("cta")
@@ -276,8 +275,8 @@ def test_a_core_tile_is_bounded_by_the_l1d_not_by_the_register_files():
     core's L1d; the register files bound one atom instance instead, which the
     storage filter enforces rather than a per-tile capacity."""
     target = AmxTarget()
-    facts = TARGET_FACTS.project(
-        target, PipelineFacts, PipelineFactsQuery(topology="core", statements=())
+    facts = target.get_facts(
+        PipelineFacts, PipelineFactsQuery(topology="core", statements=())
     )
     assert facts.tile_capacity_bytes == target.device.l1d_bytes_per_performance_core
     assert facts.tile_capacity_scope == "core"

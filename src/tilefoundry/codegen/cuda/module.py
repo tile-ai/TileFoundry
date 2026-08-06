@@ -15,7 +15,10 @@ from tilefoundry.codegen.cuda.tir.prim_function import (
     _is_dispatch_entry_shape,
 )
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
+from tilefoundry.codegen.registry import CodeGenerator
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.target import Target
 
 
 def shim_symbol(kernel_name: str) -> str:
@@ -60,7 +63,9 @@ def _emit_kernel_and_shim(fields) -> str:
     )
 
 
-def emit_cuda_module(cuda_fns: tuple[PrimFunction, ...]) -> LinkableModule:
+def emit_cuda_module(
+    module: Module, cuda_fns: tuple[PrimFunction, ...], target: Target
+) -> LinkableModule:
     """Emit the device ``.cu`` linkable module for *cuda_fns* (the CUDA-target
     PrimFunctions of a module)."""
     from tilefoundry.codegen.cuda.emit import _topology_shape_specializations  # noqa: PLC0415
@@ -117,4 +122,7 @@ def emit_cuda_module(cuda_fns: tuple[PrimFunction, ...]) -> LinkableModule:
     )
 
 
-__all__ = ["emit_cuda_module", "shim_symbol"]
+CUDA_CODE_GENERATOR = CodeGenerator(emit_cuda_module)
+
+
+__all__ = ["CUDA_CODE_GENERATOR", "emit_cuda_module", "shim_symbol"]

@@ -9,30 +9,53 @@ answers only by projecting the facts an asking algorithm declared.
 ## 1. `Target`
 
 ```python
+TargetT = TypeVar("TargetT", bound="Target")
+FactsT = TypeVar("FactsT")
+
+
 class Target:
     """Identify a compilation backend."""
 
-    name: str
+    name: ClassVar[str]
 
-    def as_facts(self, facts_type: type, query: object = None) -> object: ...
+    def get_analyzer(self, selector: str) -> Analyzer: ...
+    def get_scheduler(self, topology: str) -> Scheduler: ...
+    def get_code_generator(self) -> CodeGenerator: ...
+    def get_facts(
+        self,
+        facts_type: type[FactsT],
+        query: object | None = None,
+    ) -> FactsT: ...
+
+
+def register_target(cls: type[TargetT]) -> type[TargetT]: ...
+
+
+def registered_targets() -> Mapping[str, type[Target]]: ...
 ```
 
 - constraints:
-  - `name` MUST be the stable backend identifier used for target resolution and
-    codegen grouping.
-  - `as_facts` MUST project this target's specification into the immutable
-    aggregate a requesting algorithm declares, under the rules of
-    [§11](#11-target-facts-projection). Projection MUST be the only way an
-    algorithm reads a target.
-  - A Target MUST carry no mutable state, no bound service table, and no
-    per-target registration. It is a value: two equal targets MUST be
-    interchangeable everywhere, so nothing about which code runs for a target MAY
-    be stored on the target.
-  - Which algorithm schedules which hardware at which level MUST be declared by
-    registration ([schedule §1.1](./schedule.md#11-algorithm-registration)),
-    keyed on the target's concrete type rather than on any target value.
+  - `name` MUST be a non-empty class variable declared directly by every
+    concrete registered Target class. It is the stable class registration
+    identity, not a backend-family selector and not an instance value field.
+  - `@register_target` MUST be the only Target registration form. It takes the
+    class directly, accepts no decorator arguments, never constructs the class,
+    and returns it unchanged.
+  - Re-registering a class with the same module, qualified name, and registered
+    name MUST be idempotent, including after a provider reload. A different
+    provider claiming the same name MUST fail rather than replace the owner.
+  - `registered_targets()` MUST expose one read-only `name -> class` view. The
+    view MAY be used for inspection but MUST NOT construct a Target.
+  - Authored Target parameters MUST accept a constructed, registered Target
+    instance or their documented omitted state. A string MUST fail and MUST NOT
+    be resolved through registration.
+  - Target values MUST remain immutable hardware values. Their service getters
+    select immutable descriptors and Facts; normal Python inheritance carries
+    those selections to a subclass unless it overrides or refuses them.
+  - A missing getter capability MUST fail and name the concrete Target class,
+    its registration name, and the requested selector, topology, or Facts type.
   - Target values MUST NOT own code emission, linking, loading, or the public
-    compile/build/jit entry points.
+    Analyze, Schedule, compile, build, or jit orchestration.
 
 ### 1.1 `Architecture`
 
@@ -154,7 +177,7 @@ class H200SXM:
 class CudaTarget(Target):
     """CUDA target composed from one architecture and one device."""
 
-    name: str = "cuda"
+    name: ClassVar[str] = "cuda"
     architecture: Architecture
     device: Device
     architecture_id: str | None
@@ -175,6 +198,11 @@ class CudaTarget(Target):
     def topology_limit(self, name: str) -> int | None: ...
 
     def validate_program_topology(self, topology: Topology) -> None: ...
+    def get_analyzer(self, selector: str) -> Analyzer: ...
+    def get_scheduler(self, topology: str) -> Scheduler: ...
+    def get_code_generator(self) -> CodeGenerator: ...
+    def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
+    def __repr__(self) -> str: ...
 ```
 
 - constraints:
@@ -195,15 +223,19 @@ class CudaTarget(Target):
     supplied directly carries no document, so it has no ID or digest and is
     exempt from that check: it is a distinct hardware value rather than a
     revision of an installed one.
-  - CUDA MUST register one scheduling algorithm per level it schedules, and both
-    at the exact `(CudaTarget, level)` pair
-    ([schedule §1.1](./schedule.md#11-algorithm-registration)): the pipeline
-    family at `thread`, whose decision is how the threads of one CTA overlap
-    their work, and the partition family at `cta`, whose decision is how work and
-    its tensors divide across the device. They are registered for the
-    `CudaTarget` type, so an instance constructed with custom `Device` or
-    `Architecture` values resolves the same algorithms. Those algorithms and their
-    Plan types are not part of the public `schedule` package.
+  - CUDA MUST select the pipeline Scheduler at `thread` and the partition
+    Scheduler at `cta` through `get_scheduler`. A CUDA subclass MUST inherit
+    those services through ordinary Python inheritance unless it overrides or
+    refuses one. The algorithms and their Plan types are not part of the public
+    `schedule` package.
+  - CUDA MUST select its standard Analyzer, Facts, and CodeGenerator services
+    through the corresponding getters. These selections MUST NOT use
+    `Target.name`, an exact-concrete-type table, or a second extension
+    registration.
+  - `__repr__` MUST use the concrete class name and return a constructor
+    expression that rebuilds an equal Target. A subclass retaining the CUDA
+    constructor shape inherits it; a subclass with another constructor MUST
+    override `__repr__`.
   - The store the threads of one CTA cooperate in MUST be projected as
     `architecture.shared_memory_per_cta_bytes`, and MUST be reported as belonging
     to the `cta` scope even when the level being scheduled is `thread`
@@ -247,7 +279,7 @@ thread mesh layouts.
 class CpuTarget(Target):
     """Identify the CPU host backend."""
 
-    name: str = "cpu"
+    name: ClassVar[str] = "cpu"
 ```
 
 - constraints:
@@ -259,14 +291,12 @@ class CpuTarget(Target):
 
 - `tilefoundry.target` MUST be the sole Target implementation package. The IR
   package MUST NOT own Target classes or Target imports.
-- `resolve_target("cuda")` and `default_target()` MUST return a `CudaTarget` on
-  the installed `nvidia.h200_sxm` device. Naming a backend is a compilation
-  fallback and MUST stay explicit about the machine it resolved to; it is not a
-  hardware default the `CudaTarget` constructor offers.
-- `resolve_target("cuda")` MUST return that `CudaTarget`,
-  `resolve_target("amx")` MUST return a default `AmxTarget`,
-  `resolve_target("cpu")` MUST return a `CpuTarget`, and a Target object MUST
-  pass through unchanged.
+- `default_target()` MUST return a new `CudaTarget` on the installed
+  `nvidia.h200_sxm` device. It is a compiler-owned omitted-target policy, not a
+  string lookup and not a default offered by the `CudaTarget` constructor.
+- There MUST be no global string-to-Target resolver. A registered name returns
+  class identity only through `registered_targets()` and never constructs a
+  value.
 - A `Target` belongs to a `Module` rather than an authored HIR `Function`.
   Target inheritance and its declaration rules are defined by
   [core-ir `target-inheritance`](./core-ir.md#target-inheritance).
@@ -279,17 +309,16 @@ class CpuTarget(Target):
   is the codegen boundary's own record
   ([passes §6](./passes.md#6-top-level-api)), not a Target source
   for Analyze or Schedule.
-- The compile boundary MAY resolve that omission to the default CUDA target
-  for lowering, because `jit(fn)` on a plain Function is a documented entry
-  point ([runtime §1.3](./runtime.md#13-jit-api)) and codegen selects
-  its emitter from the lowered `PrimFunction.target` rather than from the
-  Module.
+- The compile boundary MAY resolve an omitted Module Target to
+  `default_target()` for lowering, because `jit(fn)` on a plain Function is a
+  documented entry point ([runtime §1.3](./runtime.md#13-jit-api)). It MUST
+  attach that exact value to the normalized Module before lowering.
 - A lowered TIR `PrimFunction` retains its own `target`: after lowering it
-  selects the emitter that lowers it, which is how one Module's host and
-  device functions reach different backends.
-- After target resolution, CUDA Functions in one compilation group MUST carry
-     equal architecture and device facts. A mismatch MUST fail before codegen
-     grouping.
+  MUST be the exact Target instance resolved from its Module. It selects the
+  CodeGenerator service that emits it. A synthesized host entry carries a
+  `CpuTarget()`.
+- CUDA Functions are grouped by equal Target values in source order. More than
+  one unequal CUDA Target group MUST fail before any generator runs.
 
 ## 7. `AppleAmx`
 
@@ -373,7 +402,7 @@ class AppleM2Pro:
 class AmxTarget(Target):
     """Compose one AMX target from one architecture and one device."""
 
-    name: str = "amx"
+    name: ClassVar[str] = "amx"
     architecture: Architecture
     device: Device
     architecture_id: str | None
@@ -392,6 +421,9 @@ class AmxTarget(Target):
     def topology_limit(self, name: str) -> int: ...
 
     def validate_program_topology(self, topology: Topology) -> None: ...
+    def get_analyzer(self, selector: str) -> Analyzer: ...
+    def get_scheduler(self, topology: str) -> Scheduler: ...
+    def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
 ```
 
 - constraints:
@@ -409,12 +441,12 @@ class AmxTarget(Target):
     MUST NOT be admitted at either level.
   - Unsupported topology levels MUST raise an actionable error naming the
     supported levels, from both the limit lookup and topology validation.
-  - AMX MUST register exactly one scheduling algorithm, for the `core` level
-    ([schedule §1.1](./schedule.md#11-algorithm-registration)). A core both runs
-    the work and owns the store its tile lives in, so the level asked about and
-    the capacity's scope are the same one. The `amx` level issues one atom at a
-    time, so there is nothing to place across it and no algorithm for it. That algorithm and its Plan type are not part of the public
-    `schedule` package.
+  - AMX MUST select exactly one Scheduler, for the `core` level, through
+    `get_scheduler`. A core both runs the work and owns the store its tile lives
+    in, so the level asked about and the capacity's scope are the same one. The
+    `amx` level issues one atom at a time, so there is nothing to place across it
+    and no Scheduler for it. The algorithm and its Plan type are not part of the
+    public `schedule` package.
   - The core atom-candidate projection MUST list an op's candidates by hard
     filtering the registered catalogue, and MUST NOT rank them. The filter is
     shape divisibility, operand DType, operand layout, and the storage level
@@ -518,55 +550,35 @@ conditions = "No validated number."
 
 ## 11. Target Facts projection
 
-A target-aware algorithm declares the immutable aggregate of facts it needs; the
-Target package registers the conversion that builds it.
-[`Target.as_facts`](#1-target) is the one boundary between a hardware
-specification and an algorithm's own view of it, and delegates to this registry.
+A target-aware algorithm declares the immutable aggregate of facts it needs;
+the concrete Target's `get_facts` method builds that aggregate. This is the one
+boundary between a hardware specification and an algorithm's own view of it.
 
 ```python
-class TargetFactsRegistry:
-    """Conversions from a concrete Target to an algorithm's Facts aggregate."""
-
-    def register(
-        self, target_type: type, facts_type: type, conversion: FactsConversion
-    ) -> None: ...
-
-    def project(
-        self, target: Target, facts_type: type, query: object = None
-    ) -> object: ...
-
-
-def register_target_facts(
-    target_type: type, facts_type: type, conversion: FactsConversion
-) -> None: ...
+class Target:
+    def get_facts(
+        self,
+        facts_type: type[FactsT],
+        query: object | None = None,
+    ) -> FactsT: ...
 ```
 
 - constraints:
-  - A conversion MUST be registered under the exact
-    `(Target concrete type, Facts type)` pair. Resolution MUST use the target's
-    exact concrete type: a base-class registration MUST NOT serve a subclass,
-    because two targets sharing a base can describe different hardware, and a
-    Facts type MUST be identified by the class itself rather than by its name.
-  - A missing conversion MUST fail immediately. A target-aware algorithm MUST
-    NOT fall back to a default projection; only an algorithm explicitly declared
-    target-independent may run without Target Facts.
-  - A duplicate registration for one exact pair MUST fail, so a projection
-    cannot depend on import order.
-  - A Facts aggregate MUST be a frozen dataclass. The constraint MUST be checked
-    when the conversion is registered rather than trusted at each projection.
-    Aggregates MUST NOT inherit one universal Facts base.
-  - Every conversion MUST have the same call shape, `as_facts(FactsType,
-    query=None)`. `query` is owned by the requesting algorithm: a hardware-only
+  - A subclass MUST inherit its base Target's projections through normal Python
+    inheritance. It MAY override `get_facts` for hardware that differs and
+    delegate unknown requests to `super()`.
+  - A missing projection MUST fail immediately and MUST NOT fall back to a
+    built-in Target or substitute built-in hardware values.
+  - A Facts aggregate MUST be a frozen dataclass. Aggregates MUST NOT inherit
+    one universal Facts base.
+  - `query` is owned by the requesting algorithm. A hardware-only
     projection MUST require it to be absent, while a program-dependent one MAY
-    validate its own private query type. There MUST be no common query base and
-    no mandatory public program-view type.
-  - A conversion returning a value that is not an instance of the requested
-    Facts type MUST fail at the boundary, not inside the algorithm.
+    validate its own private query type. There is no common query base or
+    mandatory public program-view type.
+  - A returned value that is not an instance of the requested Facts type MUST
+    fail at the projection boundary, not inside the consuming algorithm.
   - Projection MUST be a read. It MUST NOT analyze IR, build a constraint model,
-    solve, export a plan, or mutate the Target, the IR, the registry, or runtime
+    solve, export a plan, or mutate the Target, the IR, or runtime
     state. It only converts what the specification already records.
-  - The registry MUST be generic: the common code MUST NOT import or name a
-    concrete target, architecture, or device class, so adding a backend adds a
-    registration rather than a branch.
-  - The hardware-specification registry ([§1](#1-target)0.2), the algorithm registry, and the
-    Target Facts registry MUST remain distinct module-level registries.
+  - There MUST be no public Facts registration step or global Target Facts
+    table. A custom Target provider registers only its Target class.
