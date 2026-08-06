@@ -18,15 +18,26 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-and-verify:
     runs-on: [self-hosted, tilefoundry]
+    container: tilefoundry-ci-runner:local
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Prepare release environment
+        run: |
+          release_venv="$RUNNER_TEMP/release-venv"
+          python -m venv --system-site-packages "$release_venv"
+          "$release_venv/bin/python" -m pip install --upgrade build twine
+          echo "$release_venv/bin" >> "$GITHUB_PATH"
       - name: Install packaging tools
-        run: python -m pip install --upgrade build twine
+        run: python -c 'import build, twine'
       - name: Build tag distributions
         if: github.event_name == 'push'
         run: python -m build
@@ -38,16 +49,19 @@ jobs:
       - name: Check distribution metadata
         run: twine check dist/*
       - name: Link baked cutlass headers
-        run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
+        run: |
+          mkdir -p third_party/cutlass
+          ln -sfnT /opt/cutlass/include third_party/cutlass/include
       - name: Verify the distribution wheel
         env:
-          EVIDENCE_DIR: ${{ runner.temp }}/release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          WHEEL_VENV: ${{ runner.temp }}/release-wheel-${{ github.run_id }}-${{ github.run_attempt }}
+          EVIDENCE_DIR: ${{ runner.temp }}/release-evidence
         run: |
           mkdir -p "$EVIDENCE_DIR"
-          python -m venv --system-site-packages "$WHEEL_VENV"
-          "$WHEEL_VENV/bin/pip" install --no-deps dist/*.whl
-          TF_SMOKE_VENV="$WHEEL_VENV" pytest tests/integration/installed \
+          wheel_venv="$RUNNER_TEMP/release-wheel"
+          python -m venv --system-site-packages "$wheel_venv"
+          "$wheel_venv/bin/python" -m pip install --no-deps dist/*.whl
+          PATH="$wheel_venv/bin:$PATH" TF_SMOKE_VENV="$wheel_venv" \
+            python -m pytest tests/integration/installed \
             -o python_files='smoke_*.py' -q -n 4 --tb=short \
             --junitxml="$EVIDENCE_DIR/direct.xml" > "$EVIDENCE_DIR/direct.txt" 2>&1
       - name: Upload verification evidence
@@ -55,7 +69,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-verification
-          path: ${{ runner.temp }}/release-evidence-${{ github.run_id }}-${{ github.run_attempt }}/
+          path: ${{ runner.temp }}/release-evidence/
           if-no-files-found: warn
       - name: Upload distributions
         uses: actions/upload-artifact@v4

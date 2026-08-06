@@ -14,13 +14,14 @@ concurrency:
 permissions:
   contents: read
 
-# The runner image provides Python, CUDA, the selected GPU, and the large
-# read-only assets. This workflow only checks out the repository and runs the
-# project commands.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   lint:
     runs-on: [self-hosted, tilefoundry]
+    container: tilefoundry-ci-runner:local
     steps:
       - uses: actions/checkout@v4
       - name: pre-commit run --all-files
@@ -29,62 +30,46 @@ jobs:
   test:
     needs: lint
     runs-on: [self-hosted, tilefoundry]
+    container: tilefoundry-ci-runner:local
     steps:
       - uses: actions/checkout@v4
+      - name: Install the checkout
+        run: |
+          test_venv="$RUNNER_TEMP/test-venv"
+          python -m venv --system-site-packages "$test_venv"
+          "$test_venv/bin/python" -m pip install \
+            --no-deps --no-build-isolation --editable .
+          echo "$test_venv/bin" >> "$GITHUB_PATH"
       - name: Link CUTLASS headers
-        shell: bash
         run: |
           mkdir -p third_party/cutlass
-          if [[ -e third_party/cutlass/include && ! -L third_party/cutlass/include ]]; then
-            echo 'third_party/cutlass/include is not an empty link target' >&2
-            exit 1
-          fi
-          rm -f third_party/cutlass/include
-          ln -s /opt/cutlass/include third_party/cutlass/include
-      # Each worker can instantiate an independent f32 HF reference model. Four
-      # fit on the one pinned GPU; eight OOMed in PR #38 run 30478400012.
+          ln -sfnT /opt/cutlass/include third_party/cutlass/include
       - name: pytest tests/ -n 4
         run: python -m pytest tests/ -n 4
 
-  # Two runners against one installed environment: the shipped files must resolve
-  # under it, then the model source it ships must decode a real checkpoint. After
-  # `test` because the decode wants the whole card, and `lint` is upstream of that.
   install-smoke:
     needs: test
     runs-on: [self-hosted, tilefoundry]
+    container: tilefoundry-ci-runner:local
     steps:
       - uses: actions/checkout@v4
-      # Built here and read off disk. Handing it between jobs as an artifact needs
-      # the runner to reach GitHub's artifact API, which failed with ECONNRESET and
-      # skipped both steps below — a hop that can break for reasons having nothing
-      # to do with the wheel.
       - name: Build the wheel
-        run: >-
-          pip wheel . --no-deps --no-build-isolation
-          --wheel-dir ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}
-      # Built once here; the shards reuse it through TF_SMOKE_VENV.
+        run: |
+          mkdir -p "$RUNNER_TEMP/wheel"
+          pip wheel . --no-deps --no-build-isolation \
+            --wheel-dir "$RUNNER_TEMP/wheel"
       - name: Install the wheel into a clean environment
         run: |
-          smoke_venv=${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          smoke_venv="$RUNNER_TEMP/smoke-venv"
           python -m venv --system-site-packages "$smoke_venv"
-          "$smoke_venv/bin/pip" install --no-deps \
-            ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}/tilefoundry-*.whl
-      # pytest and pytest-xdist come from the read-only runner environment. The
-      # smoke venv only receives the project wheel and remains disposable.
-      # Default collection misses smoke_*.py, so the pattern is named here. These tests
-      # spend their time in `tilefoundry` subprocesses, so the workers share the
-      # container's cores.
+          "$smoke_venv/bin/python" -m pip install --no-deps \
+            "$RUNNER_TEMP"/wheel/tilefoundry-*.whl
+          echo "$smoke_venv/bin" >> "$GITHUB_PATH"
+          echo "TF_SMOKE_VENV=$smoke_venv" >> "$GITHUB_ENV"
       - name: Verify the installed surface
-        env:
-          TF_SMOKE_VENV: ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
-        run: >-
-          ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/python
-          -m pytest tests/installed -o python_files='smoke_*.py' -q -n 8
-      # Run by the environment above. `--work` holds the emitted source and the
-      # canonical store `prepare` writes.
+        run: python -m pytest tests/installed -o python_files='smoke_*.py' -q -n 8
       - name: Decode the published checkpoint with the shipped source
-        run: >-
-          ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/python
-          tests/installed/qwen3_1_7b_l3.py
-          --venv ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          --work ${{ runner.temp }}/l3-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          python tests/installed/qwen3_1_7b_l3.py \
+            --venv "$TF_SMOKE_VENV" \
+            --work "$RUNNER_TEMP/l3"
