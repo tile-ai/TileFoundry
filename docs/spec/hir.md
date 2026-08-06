@@ -36,16 +36,22 @@ class Function(Expr):
     """HIR's function container; its value type is the function signature.
 
     Attributes:
-        name: the function name; call sites resolve through Module's symbol table.
-        params: each Var carries a type annotation.
-        body: a single Expr — typically a Call DAG; None for a dispatch prototype.
-        return_type: TensorType for single output, TupleType for multi.
+        name: attribute; the function name; call sites resolve through Module's symbol table.
+        params: attribute; each Var carries a type annotation.
+        body: attribute; a single Expr — typically a Call DAG; None for a dispatch prototype.
+        return_type: attribute; TensorType for single output, TupleType for multi.
+        specializations: attribute; Dispatch patterns carried by a variant.
+        variants: attribute; Shape-specialized implementations carried by a prototype.
+        converters: attribute; Weight names paired with offline converter functions.
     """
 
     name: str
     params: tuple[Var, ...]
     body: Expr | None
-    return_type: IRType
+    return_type: Type
+    specializations: tuple[Pattern, ...] = field(default_factory=tuple)
+    variants: tuple["Function", ...] = field(default_factory=tuple)
+    converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple)
 ```
 - constraints:
   - an `Expr` subclass whose value type is the function signature; always returns
@@ -122,12 +128,8 @@ explicit `Reshard` or allreduce may complete that state.
 
 When the body cannot express a propagated sharding (e.g. a reshape
 whose layout factorization straddles a new axis), typeinfer fails at that
-op, not at the boundary. Reconstructing IR for every call is unnecessary
-when nothing would change: elaborating with argument types that already
-equal the callee's current parameter types returns the same `Function`
-instance (dedup) rather than a clone — an optimization, not a semantic;
-callers MUST NOT rely on getting a distinct instance. A dispatch-prototype
-callee (`variants != ()`, `body is None`) is not elaborated: the call's
+op, not at the boundary. A dispatch-prototype callee
+(`variants != ()`, `body is None`) is not elaborated: the call's
 result is the declared `return_type` and the `None` body is never inspected
 (variant selection is **Shape dispatch and specializations** below).
 
@@ -186,12 +188,9 @@ single **base** `Function` through its `variants` field; there is no
 separate specialized-function type. The field is the IR-side carrier for
 the parser surface ([parser.md](./parser.md)).
 
-```python
-class Function(Expr):
-    ...
-    specializations: tuple[Pattern, ...] = ()
-    variants: tuple["Function", ...] = ()
-```
+The `specializations`, `variants`, and `converters` tuples are canonical
+`Function` fields. `converters` records `(weight_name, converter)` pairs in
+registration order and is sealed recursively with the base and its variants.
 
 *Structure.* A `Function` is exactly one of three shapes:
 
@@ -264,14 +263,14 @@ class GridRegionExpr(Expr):
     """Loop-phi-shaped structured SSA folding a tile-style loop into one Expr value.
 
     Attributes:
-        induction_var: loop induction Var, ranging over range(start, extent, step).
-        carried_args: loop-phi carry chain (equal lengths).
-        init_args: loop-phi carry chain (equal lengths).
-        body: the loop body Expr.
-        yield_values: loop-phi carry chain (equal lengths).
-        extent: iteration-domain stop (half-open).
-        step: induction-var stride.
-        start: iteration-domain start (default 0).
+        induction_var: attribute; loop induction Var, ranging over range(start, extent, step).
+        carried_args: attribute; loop-phi carry chain (equal lengths).
+        init_args: attribute; loop-phi carry chain (equal lengths).
+        body: attribute; the loop body Expr.
+        yield_values: attribute; loop-phi carry chain (equal lengths).
+        extent: attribute; iteration-domain stop (half-open).
+        step: attribute; induction-var stride.
+        start: attribute; iteration-domain start (default 0).
     """
 
     induction_var: Var
@@ -495,11 +494,186 @@ class Unary(Op):
     `logical_not` are not proven to commute with any `reduction` and reject a
     `Partial` operand unconditionally.
 
+##### Clamp
+
+```python
+class Clamp(Op):
+    """Clamp every element to a closed interval; produces a Tensor.
+
+    Attributes:
+        x: input; Source tensor.
+        min_val: attribute; Lower bound.
+        max_val: attribute; Upper bound.
+    """
+
+    x: Tensor
+    min_val: float
+    max_val: float
+```
+
+- constraints:
+  - The result MUST preserve `x`'s shape, dtype, layout, and storage.
+  - Clamp is monotone non-decreasing, so it MAY preserve a `Partial(max)` or
+    `Partial(min)` state and MUST reject `Partial(sum)`.
+
+##### Softplus
+
+```python
+class Softplus(Op):
+    """Apply pointwise softplus; produces a Tensor.
+
+    Attributes:
+        x: input; Source tensor.
+    """
+
+    x: Tensor
+```
+
+- constraints:
+  - The result MUST preserve `x`'s type.
+  - Softplus is monotone non-decreasing, so it MAY preserve a `Partial(max)`
+    or `Partial(min)` state and MUST reject `Partial(sum)`.
+
 #### `ir/hir/tensor/`
 
 Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 / `Stack` / `ShapeOf` / `Rank`) follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
+
+##### ArgMax
+
+```python
+class ArgMax(Op):
+    """Produce indices of maximum values along an axis.
+
+    Attributes:
+        x: input; Source tensor.
+        axis: attribute; Reduction axis.
+    """
+
+    x: Tensor
+    axis: int = -1
+```
+
+- constraints:
+  - `x` MUST have rank at least one and `axis` MUST resolve within that rank.
+  - The result MUST remove `axis`, use dtype `i64`, and preserve `x`'s layout
+    and storage.
+  - `x` MUST NOT carry a `Partial` state because a winning index cannot be
+    recovered from an unpaired per-device partial reduction.
+
+##### FullLike
+
+```python
+class FullLike(Op):
+    """Produce a tensor like an input filled with a scalar constant.
+
+    Attributes:
+        x: input; Type and shape template.
+        value: attribute; Fill value.
+    """
+
+    x: Tensor
+    value: float
+```
+
+- constraints:
+  - The result MUST have exactly `x`'s type and every element MUST equal
+    `value` converted to that dtype.
+
+##### Quant
+
+```python
+class Quant(Op):
+    """Produce per-token-group quantized values and scales.
+
+    Attributes:
+        x: input; Source tensor.
+        scheme: attribute; Quantization scheme.
+        group: attribute; Last-axis group size.
+        target_dtype: attribute; Quantized element dtype.
+    """
+
+    x: Tensor
+    scheme: str = "per_token_group"
+    group: int = 128
+    target_dtype: DType = DType.fp8e4m3
+```
+
+- constraints:
+  - `x` MUST have rank at least one and MUST NOT carry a `Partial` state.
+  - For a static last extent, `group` MUST divide that extent.
+  - The result MUST be `(x_q, x_scale)`: `x_q` preserves `x.shape` with
+    `target_dtype`; `x_scale` has dtype `f32` and, for a static last extent,
+    replaces it by `x.shape[-1] // group`. For a symbolic last extent,
+    `x_scale` retains the original last extent. Both fields preserve layout
+    and storage.
+
+##### RepeatInterleave
+
+```python
+class RepeatInterleave(Op):
+    """Repeat elements along one axis; produces a Tensor.
+
+    Attributes:
+        x: input; Source tensor.
+        repeats: attribute; Repetitions per source element.
+        axis: attribute; Axis to expand.
+    """
+
+    x: Tensor
+    repeats: int
+    axis: int
+```
+
+- constraints:
+  - `axis` MUST resolve within the rank and its result extent MUST be the input
+    extent multiplied by `repeats`; all other extents and storage are preserved.
+  - The result layout is unsharded. A genuinely sharded input MUST be refused;
+    an unsharded or fully broadcast input is accepted.
+
+##### Split
+
+```python
+class Split(Op):
+    """Split a tensor into equal parts; produces a Tuple.
+
+    Attributes:
+        x: input; Source tensor.
+        axis: attribute; Split axis.
+        num_splits: attribute; Number of outputs.
+    """
+
+    x: Tensor
+    axis: int
+    num_splits: int
+```
+
+- constraints:
+  - A static selected extent MUST be divisible by `num_splits`; every output
+    field has that extent divided by `num_splits` and otherwise preserves the
+    input type.
+  - A symbolic selected extent is retained in each output until a tighter
+    symbolic quotient is available.
+
+##### TupleGetItem
+
+```python
+class TupleGetItem(Op):
+    """Extract one field from a tuple-typed expression.
+
+    Attributes:
+        tuple_value: input; Tuple-typed expression.
+        index: attribute; Static field index.
+    """
+
+    tuple_value: Expr
+    index: int
+```
+
+- constraints:
+  - `tuple_value.type` MUST be `TupleType` and `index` MUST be in range.
+  - The result type MUST be exactly the selected field type.
 
 ##### Reshape
 ```python
@@ -908,6 +1082,65 @@ class RoPE(Op):
   - A non-`sum` Partial, multiple value-carrying Partials, or a Partial on a
     secondary cache/index input MUST be rejected with a `Reshard` remedy.
 
+##### CUDA matrix multiply-accumulate family
+
+```python
+class Mma(Op):
+    """Provide the marker base for HIR CUDA matrix operations."""
+
+
+class Mma_SM80_16x8x16(Mma):
+    """Produce an SM80 16-by-8 accumulator fragment.
+
+    Attributes:
+        a: input; Left 16-by-16 fragment.
+        b: input; Right 16-by-8 fragment.
+        dtype_a: attribute; Left operand dtype.
+        dtype_b: attribute; Right operand dtype.
+        dtype_acc: attribute; Accumulator dtype.
+        a_layout: attribute; Left matrix orientation.
+        b_layout: attribute; Right matrix orientation.
+    """
+
+    a: Tensor
+    b: Tensor
+    dtype_a: DType
+    dtype_b: DType
+    dtype_acc: DType
+    a_layout: str = "T"
+    b_layout: str = "N"
+
+
+class Wgmma_SM90_64x128x16(Mma):
+    """Produce an SM90 64-by-128 accumulator fragment.
+
+    Attributes:
+        a: input; Left fragment.
+        b: input; Right fragment.
+        dtype_a: attribute; Left operand dtype.
+        dtype_b: attribute; Right operand dtype.
+        dtype_acc: attribute; Accumulator dtype.
+        a_layout: attribute; Left matrix orientation.
+        b_layout: attribute; Right matrix orientation.
+    """
+
+    a: Tensor
+    b: Tensor
+    dtype_a: DType
+    dtype_b: DType
+    dtype_acc: DType
+    a_layout: str = "T"
+    b_layout: str = "N"
+```
+
+- constraints:
+  - `Mma` is a marker base used for family dispatch and has no independent
+    callable parameter surface.
+  - Both concrete operations MUST return a value-form tensor in `dtype_acc`,
+    preserving `a`'s layout and resolving storage from both operands.
+  - `Mma_SM80_16x8x16` returns shape `(16, 8)` and is warp-level;
+    `Wgmma_SM90_64x128x16` returns shape `(64, 128)` and is four-warp-level.
+
 #### `ir/hir/shape/`
 
 Shape-level Ops on whole shape values (per-axis dim Ops are
@@ -936,9 +1169,11 @@ class ShapeCompose(Op):
 
     Attributes:
         dims: input; per-axis dimensions.
+        is_variadic: attribute; Whether the input parameter consumes all args.
     """
 
     dims: Tensor
+    is_variadic: ClassVar[bool] = True
 ```
 - constraints:
   - The result is a shape value assembled in input order.
@@ -1016,3 +1251,136 @@ class Local(Op):
   - `dtype` and `storage` are preserved.
   - The shard wrapper is stripped, leaving the base `Layout`.
   - Static split sizes divide by mesh extent; symbolic sizes pass through.
+
+## 2. Function specialization API
+
+```python
+class SpecializationError(ValueError):
+    """Report that a function cannot be specialized as requested."""
+
+
+PROVENANCE = "_specialized_from"
+BOUND_DIMS = "_specialized_dims"
+
+
+def origin_of(function: object) -> Function | None:
+    """Return the source function of a derived specialization.
+
+    Args:
+        function: Candidate derived function.
+
+    Returns:
+        Its recorded origin, or None.
+    """
+    ...
+
+
+def bound_dims_of(function: object) -> tuple[tuple[str, int], ...] | None:
+    """Return the sorted dimensions bound on a derived specialization.
+
+    Args:
+        function: Candidate derived function.
+
+    Returns:
+        Recorded bindings, or None.
+    """
+    ...
+
+
+def variant_for(fn: Function, dims: Mapping[str, int]) -> Function:
+    """Select the unique implementation covering concrete dimensions.
+
+    Args:
+        fn: Function or dispatch prototype.
+        dims: Concrete extents by dimension name.
+
+    Returns:
+        The selected implementation.
+    """
+    ...
+
+
+def specialize_function(
+    fn: Function,
+    dims: Mapping[str, int],
+    *,
+    ctx: TypeInferContext | None = None,
+) -> Function:
+    """Bind stated dimensions and rebuild the selected implementation.
+
+    Args:
+        fn: Function or dispatch prototype.
+        dims: Dimensions to bind.
+        ctx: Optional shared type-inference context.
+
+    Returns:
+        The selected and partially or fully specialized function.
+    """
+    ...
+
+
+def specialize_concretely(fn: Function, dims: Mapping[str, int]) -> Function:
+    """Specialize a function with no residual symbolic dimensions.
+
+    Args:
+        fn: Function or dispatch prototype.
+        dims: Complete concrete dimension bindings.
+
+    Returns:
+        A concrete function.
+    """
+    ...
+
+
+def residual_dims(fn: Function) -> tuple[str, ...]:
+    """Return every dimension still stated as a range.
+
+    Args:
+        fn: Function to inspect recursively.
+
+    Returns:
+        Residual dimension names.
+    """
+    ...
+
+
+def dim_vars_reached(fn: Function) -> dict[str, object]:
+    """Return residual dimension declarations by name.
+
+    Args:
+        fn: Function to inspect recursively.
+
+    Returns:
+        Residual dimension declarations.
+    """
+    ...
+
+
+def is_concrete(fn: Function) -> bool:
+    """Return whether no required extent remains symbolic.
+
+    Args:
+        fn: Function to inspect.
+
+    Returns:
+        Whether the function is concrete.
+    """
+    ...
+```
+
+- constraints:
+  - `variant_for` MUST return an ordinary function unchanged and otherwise
+    MUST select exactly one matching variant. Missing or ambiguous coverage and
+    an unstated dimension used by a pattern MUST raise `SpecializationError`.
+  - `specialize_function` MUST reject an empty binding, an unknown dimension,
+    or a selected implementation with no body. It MUST record the chosen
+    implementation and sorted bindings on a rebuilt function so `origin_of`
+    and `bound_dims_of` can recover them.
+  - `specialize_concretely` MUST require a non-empty string-to-integer mapping
+    and MUST reject any residual dimension after specialization.
+  - Provenance and bound-dimension records MUST NOT participate in structural
+    equality or hashing; ownership checks use the recorded origin rather than
+    a function name.
+  - `residual_dims` and `dim_vars_reached` MUST inspect the whole function
+    graph, including signatures, bodies, Op attributes, loop bounds, variants,
+    and called functions. `is_concrete` additionally checks the return type.

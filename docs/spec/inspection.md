@@ -5,23 +5,44 @@
 Developer-facing inspection facilities for TileFoundry IR: DOT graph,
 Python DSL printer (round-trippable), interactive HTML viewer, and dump
 integration.
-Implementation: `src/tilefoundry/inspection/`.
 
 ## 1. HIR DOT
 
-`hir_function_to_dot(fn: hir.Function) -> str` produces a Graphviz DOT
-digraph from an SSA HIR function.  Each `Var`, `Call`, and `Constant`
-node is rendered with its type, shape, dtype, and `ShardLayout`
-distribution annotations (mesh axes, attrs).  Shared subexpressions are
-deduplicated by object identity.
+```python
+def hir_function_to_dot(fn: hir.Function) -> str:
+    """Render an SSA HIR function as Graphviz DOT.
+
+    Args:
+        fn: Function to render.
+
+    Returns:
+        Graphviz DOT text.
+    """
+    ...
+
+
+def module_entry_to_dot(module: Module) -> str:
+    """Render a Module's entry function as Graphviz DOT.
+
+    Args:
+        module: Module whose entry is rendered.
+
+    Returns:
+        Graphviz DOT text.
+    """
+    ...
+```
+
+- constraints:
+  - Each `Var`, `Call`, and `Constant` node MUST show its type, shape, dtype,
+    and sharding annotations. Shared expressions MUST be deduplicated by
+    object identity.
 
 ```python
+# example
 from tilefoundry.inspection import hir_function_to_dot
 print(hir_function_to_dot(fn))
 ```
-
-`module_entry_to_dot(mod: Module) -> str` renders the entry function of
-a module.
 
 ## 2. Python DSL Printer
 
@@ -32,18 +53,77 @@ IR.
 
 ### 2.1 Function printer
 
-`hir_function_to_python(fn: hir.Function) -> str` — standalone
-`@func` DSL output.  Produces imports, `@func` signature with full
-`Tensor[...]` type annotations, and SSA body with op calls.
+```python
+class PythonPrintOptions:
+    """Control optional non-canonical printer annotations.
+
+    Attributes:
+        show_types: attribute; Whether to append inferred types.
+        comment_metadata_types: attribute; Metadata classes rendered as comments.
+    """
+
+    show_types: bool = False
+    comment_metadata_types: tuple[type[IRMetadata], ...] = ()
+
+
+def hir_function_to_python(
+    fn: hir.Function, *, options: PythonPrintOptions | None = None
+) -> str:
+    """Render a HIR function as Python DSL source.
+
+    Args:
+        fn: Function to render.
+        options: Optional inspection annotations.
+
+    Returns:
+        Python DSL source.
+    """
+    ...
+```
+
+- constraints:
+  - The output MUST include imports, a bare `@func` signature with complete
+    `Tensor[...]` annotations, and the SSA body.
 
 ### 2.2 Module printer
 
-`as_script(module: hir.Module)` and
-`module_to_python(fn: hir.Function, module_name: str = "M") -> str` — wrap one
-or more HIR Functions in `@module(entry="<fn>") class Name:`. Module input
-emits all HIR Functions, preserving shared `Mesh` / `Topology` definitions at
-module level (before the class); sugar annotations are preserved. Mixed
-HIR/TIR Modules are rejected by the Python HIR printer.
+```python
+def as_script(
+    fn: hir.Function | Module,
+    *,
+    module: str | None = None,
+    options: PythonPrintOptions | None = None,
+) -> str:
+    """Render a HIR function or Module as Python DSL source.
+
+    Args:
+        fn: Function or Module to render.
+        module: Optional wrapper class name for a Function.
+        options: Optional inspection annotations.
+
+    Returns:
+        Python DSL source.
+    """
+    ...
+
+
+def module_to_python(fn: hir.Function, module_name: str = "M") -> str:
+    """Render a function through the module-wrapper compatibility alias.
+
+    Args:
+        fn: Function to render.
+        module_name: Wrapper class name.
+
+    Returns:
+        Python DSL source.
+    """
+    ...
+```
+
+- constraints:
+  - Module input MUST emit every HIR Function and preserve shared `Mesh` and
+    `Topology` definitions before the class. Mixed HIR/TIR Modules MUST be
+    rejected.
 
 The printer MUST emit a Module's whole tree: each nested Module prints as a
 `@module` class inside its owner's body, so a re-parse rebuilds the same
@@ -106,12 +186,12 @@ definitions are emitted in the module prelude / standalone header.
 ### 2.6 Specialization printing
 
 A dispatch prototype ([hir.md §1.1](./hir.md#11-function))
-prints as its base `@tilefoundry.func` with a `pass` body, followed by each
+prints as its base `@func` with a `pass` body, followed by each
 variant as an `@<name>.specialize(pattern)` block in declared order:
 
 ```python
 # example
-@tilefoundry.func
+@func
 def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     pass
 
@@ -133,7 +213,8 @@ validation artifact.
 A rendering is one of two surfaces:
 
 **Canonical** — the rendering of a function with no `DimVar` parameter. It
-MUST round-trip: `print → parse → structural_equal` holds over
+MUST round-trip: printing, parsing, and the test-side structural comparison
+MUST agree over
 
 - Params: shape, dtype, storage, layout.attrs, layout.shape, layout.strides, mesh identity (topology name/size, layout shape, names)
 - Body: op class, args, keyword attrs, types
@@ -147,7 +228,7 @@ MUST round-trip: `print → parse → structural_equal` holds over
 therefore of any dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)). A
 display-only rendering is human-readable and MUST NOT be used as a
 `parse_script` validation artifact: it is held to importing, not to
-`structural_equal`.
+the same structural comparison.
 
 A `DimVar` shape entry prints as its bare name, and a shape-valued op attribute
 holding one MUST print it the same way rather than as its repr. The rendering
@@ -293,21 +374,6 @@ graph; an id that was collapsed away returns 404.
 
 ### 3.5 File layout
 
-```
-src/tilefoundry/inspection/viewer/
-  __init__.py        # Viewer.serve()
-  builder.py         # HIR/Module → graphviz.Digraph; DetailIndex; format_detail
-  htmltable.py       # typed Table / Row / Cell / Span for DOT HTML labels
-  palette.py         # colour palette (also served at /api/palette)
-  server.py          # HTTP routes (no server-side dot)
-  assets.py          # vendored-JS manifest + ensure_assets()
-  static/
-    index.html       # first-party page (committed)
-    viewer.js        # first-party client (committed)
-    .gitignore       # allowlist: only index.html / viewer.js / .gitignore
-scripts/fetch_viewer_assets.py   # CLI to pre-populate the asset cache
-```
-
 Vendored browser JS lives only in the user cache, never in the repo.
 
 ## 4. Dump Integration
@@ -316,9 +382,108 @@ Vendored browser JS lives only in the user cache, never in the repo.
 provide per-test, per-pass IR dumping (see [passes §6](./passes.md#6-top-level-api)).
 
 ```python
+# example
 from tilefoundry.dump import DumpFlags, dump, current_scope
 dump("ir.py", src, DumpFlags.PASS_IR)
 ```
 
-Output rooted at `test_results/{worker_id}/{nodeid}/` (per-test
-subdirectory).  `pytest.mark.no_dump` opt-out available.
+```python
+class DumpFlags(IntFlag):
+    """Enumerate dump categories."""
+
+    NONE = 0
+    PASS_IR = 1
+    CODEGEN_SOURCE = 2
+    BUILD_LOG = 4
+    ALL = PASS_IR | CODEGEN_SOURCE | BUILD_LOG
+
+
+class DumpScope:
+    """Install or narrow a dynamically scoped dump destination."""
+
+    def __init__(
+        self,
+        subdir: str | None = None,
+        flags: DumpFlags | None = None,
+        *,
+        dumper: IDumpper | None = None,
+    ) -> None: ...
+```
+
+- constraints:
+  - `DumpScope(subdir, flags)` MUST nest beneath the active scope and intersect
+    its flags with the parent's. Without a parent it MUST remain a no-op.
+  - `DumpScope(dumper=..., flags=...)` MUST replace the active scope.
+  - Plain child threads MUST start without the parent's scope; asyncio tasks
+    MUST inherit a copy of the creating context.
+  - Test output MUST be rooted at `test_results/<file-stem>/<test-name>/`.
+    A non-master worker appends `__<worker-id>` to the test-name leaf rather
+    than adding a worker directory. `pytest.mark.no_dump` disables it.
+
+## 5. Compact TIR rendering
+
+```python
+def format_expr(expr) -> str:
+    """Render one supported TIR expression compactly.
+
+    Args:
+        expr: Expression to render.
+
+    Returns:
+        Compact text.
+    """
+    ...
+
+
+def format_pattern(pat: Pattern) -> str:
+    """Render one dispatch pattern compactly.
+
+    Args:
+        pat: Pattern to render.
+
+    Returns:
+        Compact text.
+    """
+    ...
+
+
+def format_symbol_call(call: Evaluate) -> str:
+    """Render one symbol invocation compactly.
+
+    Args:
+        call: Function-call statement.
+
+    Returns:
+        Compact text.
+    """
+    ...
+
+
+def format_abort(stmt: Abort) -> str:
+    """Render one abort statement compactly.
+
+    Args:
+        stmt: Abort statement.
+
+    Returns:
+        Compact text.
+    """
+    ...
+
+
+def format_dispatch_call(stmt: DispatchCall, indent: str = "") -> str:
+    """Render a dispatch statement compactly.
+
+    Args:
+        stmt: Dispatch statement.
+        indent: Prefix for each emitted line.
+
+    Returns:
+        Compact multiline text.
+    """
+    ...
+```
+
+- constraints:
+  - These functions are display-only and MUST NOT be treated as parser input.
+  - `format_dispatch_call` MUST preserve case order and render the fallback.

@@ -125,6 +125,7 @@ class H200SXM:
     hbm_capacity_bytes: int
     hbm_bandwidth_bytes_per_second: int
     l2_capacity_bytes: int | None
+    _dense_flops: tuple[tuple[DType, int], ...]
 
     def peak_for(self, dtype: DType) -> int: ...
 ```
@@ -167,6 +168,8 @@ class CudaTarget(Target):
         self,
         device: Device | str,
         architecture: Architecture | str | None = None,
+        *,
+        arch: str | None = None,
     ) -> None: ...
 
     def topology_limit(self, name: str) -> int | None: ...
@@ -178,6 +181,8 @@ class CudaTarget(Target):
   - `device` and `architecture` MUST each accept an installed document ID or a
     concrete value. An ID MUST resolve immediately to the typed value, and the
     resolved ID and content digest MUST be retained ([§1](#1-target)0.2).
+  - `arch`, when provided, MUST equal the resolved architecture's `name`; it is
+    a consistency check and MUST NOT select or override an architecture.
   - `device` MUST be required. The constructor MUST NOT select hardware for a
     caller who named none: a target nobody stated would answer about a machine
     nobody has.
@@ -336,6 +341,7 @@ class AppleM2Pro:
     cache_line_bytes: int
     unified_memory_capacity_bytes: int
     unified_memory_bandwidth_bytes_per_second: int
+    _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
 
     def throughput_for(self, unit: str, dtype: DType) -> int: ...
 ```

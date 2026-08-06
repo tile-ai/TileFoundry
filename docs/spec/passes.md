@@ -45,10 +45,14 @@ class Pass(ABC):
     Side-effect logging is allowed, but the input Module MUST NOT be
     mutated — Module is a frozen dataclass, so a mutator returns a new
     instance.
+
+    Attributes:
+        name: attribute; Stable dump and log name.
+        requires: attribute; Ordered dependency assertion.
     """
 
-    name: str                               # for dump / log
-    requires: tuple[str, ...] = ()          # ordered dependency assertion (no scheduling)
+    name: str = ""
+    requires: tuple[str, ...] = ()
 
     @abstractmethod
     def run(self, module: Module) -> Module: ...
@@ -71,7 +75,9 @@ HIR → TIR replacement (substitute `tir.PrimFunction` for
 `hir.Function`).
 
 ```python
-class ModulePass(Pass):                             # runs over the whole Module; may add / remove / reorder functions
+class ModulePass(Pass):
+    """Run over a complete Module."""
+
     @abstractmethod
     def run(self, module: Module) -> Module: ...
 ```
@@ -89,10 +95,12 @@ entries, and reassembles the `Module`.
 ```python
 from tilefoundry.ir.hir import Function as HirFunction
 
-class FunctionPass(Pass):                                                       # visits each hir.Function; framework supplies the default run
+class FunctionPass(Pass):
+    """Run independently over each HIR Function."""
+
     @abstractmethod
-    def run_function(self, fn: HirFunction, module: Module) -> HirFunction: ...  # visit one HIR function
-    def run(self, module: Module) -> Module: ...                                # default reassembles the Module from run_function results
+    def run_function(self, fn: HirFunction, module: Module) -> HirFunction: ...
+    def run(self, module: Module) -> Module: ...
 ```
 
 - constraints:
@@ -101,16 +109,17 @@ class FunctionPass(Pass):                                                       
 
 ### 3.3 `PrimFuncPass`
 
-Same shape as `FunctionPass`, but visits `tir.PrimFunction`. Mirrors
-nncase's `PrimFuncPass.cs`.
+Same shape as `FunctionPass`, but visits `tir.PrimFunction`.
 
 ```python
 from tilefoundry.ir.tir import PrimFunction
 
-class PrimFuncPass(Pass):                                                       # visits each tir.PrimFunction (mirrors FunctionPass)
+class PrimFuncPass(Pass):
+    """Run independently over each TIR PrimFunction."""
+
     @abstractmethod
     def run_prim_func(self, fn: PrimFunction, module: Module) -> PrimFunction: ...
-    def run(self, module: Module) -> Module: ...   # default mirrors FunctionPass
+    def run(self, module: Module) -> Module: ...
 ```
 
 - constraints:
@@ -144,10 +153,10 @@ class PassManager:
     """Ordered pass pipeline.
 
     Attributes:
-        passes: the registered passes, run in registration order.
+        passes: attribute; the registered passes, run in registration order.
     """
 
-    passes: list[Pass]
+    passes: list[Pass] = field(default_factory=list)
 
     def add(self, p: Pass) -> "PassManager": ...      # register a pass; returns self for chaining
     def run(self, module: Module) -> Module: ...      # run passes in registration order
@@ -168,10 +177,21 @@ Three public verbs operate on `Module` (no bare `HirFunction` /
 `PrimFunction`):
 
 ```python
-def lower(mod: Module, /, *, target: str, options: CompilerOptions | None = None) -> Module: ...
+class CompilerOptions:
+    """Carry deterministic compiler configuration.
+
+    Attributes:
+        target: attribute; Compilation target name.
+    """
+
+    target: str = "cuda"
+
+    def canonical_text(self) -> str: ...
+
+
+def lower(mod: Module, /, *, target: str = "cuda") -> Module: ...
 def build(mod: Module, /, *, target: str | None = None) -> RuntimeModule: ...
-def compile(mod: Module, /, *, target: str, options: CompilerOptions | None = None) -> RuntimeModule: ...
-def jit(fn_or_mod: Function | Module, /, *, target: str = "cuda", options: CompilerOptions | None = None) -> RuntimeModule: ...
+def compile(mod: Module, /, *, target: str = "cuda") -> RuntimeModule: ...
 ```
 
 `lower` runs the default pipeline (`HirToTirPass → BufferizePass →
@@ -185,10 +205,8 @@ keyword is omitted; an explicit `target` that disagrees with
 runs codegen → toolchain link → loader and returns a
 `RuntimeModule` ([runtime](./runtime.md)).
 
-`compile` is `build(lower(mod, ...))`. `jit` accepts a `Module` or
-an `hir.Function` (single-function convenience: it normalises into a
-single-function `Module` that declares no execution context) and caches
-on the canonical module text + target + options hash.
+`compile` is `build(lower(mod, ...))`. The `jit` convenience and cache contract
+are owned by [runtime §1.3](./runtime.md#13-jit-api).
 
 ### Dirty-scope retype / verify
 
@@ -372,43 +390,63 @@ FFI surface (see [target](./target.md)).
 
 ### 7.2 `BufferizePass`
 
-`PrimFuncPass` (or `ModulePass` when crossing `Evaluate(SymbolRef)`
-callee boundaries). Runs after `HirToTirPass`, before codegen. The input
+`PrimFuncPass`. Runs after `HirToTirPass`, before codegen. The input
 is already an explicit-buffer-param `PrimFunction`; this pass does
 **not** perform an MLIR-style value → buffer IR conversion.
 
-Responsibility: collect logical-buffer lifetime, assign each
-logical buffer a physical offset / size, and write the result back
-into the `tir.memory.*` descriptors. Policy: every logical buffer
-gets an independent physical allocation; no reuse, pool, or lifetime
-overlap. Buffer planning is not a codegen responsibility.
+Responsibility: collect logical-buffer lifetimes and run the placement-policy
+hook. The independent-allocation policy is already represented by one
+`AllocTensor` per logical buffer, so the pass returns the `PrimFunction`
+unchanged and does not write placement records into `tir.memory.*` descriptors.
 
 ```python
-class BufferizePass(PrimFuncPass):                  # assigns each logical buffer a physical offset / size after HirToTirPass
-    name = "bufferize"
-    requires = ("hir_to_tir",)
+class BufferizePass(PrimFuncPass):
+    """Collect lifetimes and validate independent allocation placement.
+
+    Attributes:
+        collector: attribute; lifetime collector, defaulted during initialization.
+        scheduler: attribute; placement scheduler, defaulted during initialization.
+        name: attribute; pass name.
+        requires: attribute; required predecessor passes.
+    """
+
+    collector: LifetimeCollector = None
+    scheduler: BufferScheduler = None
+    name: str = "bufferize"
+    requires: tuple[str, ...] = ("hir_to_tir",)
 ```
 
 - constraints:
   - every logical buffer gets an independent physical allocation; no reuse, pool,
     or lifetime overlap. Buffer planning is not a codegen responsibility.
+  - The scheduler's placement result is advisory under this policy;
+    `run_prim_func` MUST return the input function unchanged.
+
+### 7.3 `insert_default_host_entry`
+
+```python
+def insert_default_host_entry(module: Module) -> Module:
+    """Return a Module whose entry is host-callable.
+
+    Args:
+        module: Lowered Module to normalize.
+
+    Returns:
+        The unchanged or host-entry-normalized Module.
+    """
+    ...
+```
+
+- constraints:
+  - A CPU entry MUST pass through unchanged.
+  - A dispatch entry MUST be retargeted to CPU while its launched variants
+    remain device functions.
+  - With no CPU entry and exactly one CUDA device function, the transform MUST
+    synthesize a CPU entry that mirrors the parameters and launches that
+    function. It MUST reject ambiguous device-function sets, a non-entry CPU
+    function, or a launch-provided dynamic CTA extent.
 
 ## 8. Directory layout
 
-```
-src/tilefoundry/passes/
-├── __init__.py              # re-exports Pass / PassManager
-├── pass_base.py             # Pass / FunctionPass / PrimFuncPass / ModulePass
-├── pass_manager.py          # PassManager
-└── transforms/
-    ├── __init__.py
-    ├── hir_to_tir.py        # HirToTirPass
-    └── bufferize.py         # BufferizePass
-```
-
-`passes/analysis/` is reserved but currently unused — the analysis
-registries (`typeinfer` / `verify` / `cost_evaluator`) live in
-[visitor-registry](./visitor-registry.md) and do not move into
-`passes/`. Only a standalone analysis pass that needs to run
-independently and cache its result (such as an `AliasAnalysisPass`)
-lands under `passes/analysis/`.
+File layout is implementation-owned. Analysis registry ownership is defined by
+[visitor-registry](./visitor-registry.md).

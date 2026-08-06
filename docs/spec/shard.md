@@ -63,10 +63,6 @@ IntTuple = int | tuple[IntTuple, ...]    # entry: an `int`, a symbolic/dynamic d
   - admits both a unique flat `int`-tuple view and a unique nested-structure view;
     the `shape` / `strides` of `Layout` and `ShardLayout` are `IntTuple`.
 
-Flatten-equivalence: every `IntTuple` admits both a unique flat
-`int`-tuple view and a unique nested-structure view. The `shape` and
-`strides` of `Layout` and `ShardLayout` are `IntTuple`.
-
 A `shape` / `stride` entry is not restricted to a static `int`: it may be a
 symbolic / dynamic dim (a `DimVar` or dim `Expr` — a `ShapeDim`), or `None`
 for a launch-provided (dynamic-CTA) extent (`Layout(shape=(None,),
@@ -82,10 +78,20 @@ and `T.sync` participation ([tir §1.5](./tir.md#15-sync)) — require static `i
 the `Layout` hierarchy:
 
 ```python
-class LayoutBase: ...                    # abstract base
-class Layout(LayoutBase): ...            # concrete `LayoutBase` member
-class ComposedLayout(LayoutBase): ...    # concrete `LayoutBase` member
-class ShardLayout(LayoutBase): ...       # concrete `LayoutBase` member
+class LayoutBase:
+    """Provide the abstract base for legal tensor layouts."""
+
+
+class Layout(LayoutBase):
+    """Provide a primitive coordinate-to-offset layout."""
+
+
+class ComposedLayout(LayoutBase):
+    """Provide a composition of two layout mappings."""
+
+
+class ShardLayout(LayoutBase):
+    """Bind a layout domain to a device mesh."""
 ```
 
 - constraints:
@@ -114,8 +120,15 @@ Mirrors `pycute.layout.Layout`:
 
 ```python
 class Layout(LayoutBase):
-    shape: IntTuple                 # layout-domain shape (entries `ShapeDim | None`)
-    stride: IntTuple | None = None  # step rule from domain to physical index; whole tuple `None` = un-materialized
+    """Describe a primitive coordinate-to-offset mapping.
+
+    Attributes:
+        shape: attribute; Layout-domain shape.
+        strides: attribute; Per-domain-axis step rule, or None when unmaterialized.
+    """
+
+    shape: IntTuple
+    strides: IntTuple | None = None
 ```
 
 - constraints:
@@ -129,16 +142,16 @@ Field meanings:
   unsharded** layout shape — i.e., the shape *before* mesh
   dividing. The per-thread local layout shape is derived from
   `layout.shape` ÷ mesh extents per `Split` (see [§7](#7-shardlayout)).
-- `stride` — the step rule from layout domain to physical index. When
+- `strides` — the step rule from layout domain to physical index. When
   not explicitly given, it defaults to `prefix_product(shape)` in the
   pycute style. When a `Layout` sits inside `ShardLayout.layout`,
-  `stride[k]` is the **storage-physical** step on the engine attached
+  `strides[k]` is the **storage-physical** step on the engine attached
   to that `ShardTensor` (see [§7](#7-shardlayout)).
 
 Semantics:
 
 ```python
-idx = crd2idx(coord, shape, stride)
+idx = crd2idx(coord, shape, strides)
 ```
 
 The primitive `Layout` has **no** `offset` field. `offset` belongs to
@@ -152,9 +165,17 @@ Mirrors CuTeDSL `make_composed_layout(inner, offset, outer)`:
 
 ```python
 class ComposedLayout(LayoutBase):
-    inner: LayoutBase | None   # applied last (output-side layout); `None` is identity
-    offset: int                # intermediate scalar offset (a property of the composition)
-    outer: LayoutBase | None   # applied first (input / domain-side layout); `None` is identity
+    """Describe a composition of two layout mappings.
+
+    Attributes:
+        inner: attribute; Output-side layout applied last, or identity.
+        offset: attribute; Intermediate scalar offset.
+        outer: attribute; Domain-side layout applied first, or identity.
+    """
+
+    inner: LayoutBase | None
+    offset: int
+    outer: LayoutBase | None
 ```
 
 - constraints:
@@ -174,13 +195,6 @@ Field meanings:
 - `inner` — applied **last** (the output-side layout); `None` applies
   the identity mapping
 
-Minimum semantics:
-
-```python
-idx = apply(inner, offset + apply(outer, coord))
-assert apply(None, value) == value
-```
-
 A `ComposedLayout` normally inherits its domain shape and axis numbering
 from `outer`. When `outer=None`, the identity mapping contributes no explicit
 domain, so the composition inherits them from `inner`. Therefore, when an
@@ -192,22 +206,46 @@ references the composition's stable `shape` / `domain_rank` contract.
 ## 5. `Mesh`
 
 ```python
-class Topology:                            # device-domain description
+class Topology:
+    """Describe one parallel-resource level.
+
+    Attributes:
+        name: attribute; Stable topology-level name.
+        size: attribute; Static, symbolic, or launch-provided extent.
+    """
+
     name: str
-    num_devices: int | None                # `None` only for a launch-provided (dynamic) `cta` extent
+    size: ShapeDim | None
 
-class Mesh:                                # the parallel device domain
-    topology: Topology                     # primary (first) Topology
-    topologies: tuple[Topology, ...]       # full Topology sequence; normalized non-empty, `topologies[0] is topology`
-    layout: Layout | ComposedLayout        # a plain `Layout` (un-sliced) or a `ComposedLayout` (a constant `m[...]` slice)
-    names: tuple[str, ...] | None = None
+class Mesh:
+    """Describe a parallel device domain.
 
-    def topology_domain(self) -> int | None: ...  # product of `topologies[i].num_devices`; `None` if any is dynamic
+    Attributes:
+        topology: attribute; Primary topology level.
+        layout: attribute; Mesh layout or constant sliced layout.
+        names: attribute; Human-readable layout-axis names.
+        topologies: attribute; Full normalized topology sequence.
+    """
 
-class MeshAxis:                            # single-axis object via `mesh.x` / `mesh.axes[i]`
+    topology: Topology
+    layout: Layout | ComposedLayout
+    names: tuple[str, ...] = ()
+    topologies: tuple[Topology, ...] = ()
+
+    def topology_domain(self) -> int | None: ...
+
+class MeshAxis:
+    """Describe one named or indexed mesh axis.
+
+    Attributes:
+        mesh: attribute; Owning mesh.
+        index: attribute; Layout-axis index.
+        size: attribute; Static or symbolic layout-axis extent.
+    """
+
     mesh: Mesh
     index: int
-    size: int
+    size: ShapeDim
 ```
 
 - constraints:
@@ -217,7 +255,7 @@ class MeshAxis:                            # single-axis object via `mesh.x` / `
 Field meanings:
 
 - `topology` — the primary (first) device-domain description (`name` +
-  `num_devices`)
+  `size`)
 - `layout` — the mesh's own shape / strides (a `Layout`); a constant slice
   (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
   ([tir §1.5](./tir.md#15-sync))
@@ -247,15 +285,66 @@ full sequence is `topologies`, and `topology` is always its first entry.
 ## 6. `ShardAttr`
 
 ```python
-class Split:                          # binds the current mesh axis to the layout's `axis`-th layout domain axis
+class ShardAttr:
+    """Provide the base for per-mesh-axis sharding attributes."""
+
+
+class Split(ShardAttr):
+    """Bind a mesh axis to a layout-domain axis.
+
+    Attributes:
+        axis: attribute; Layout-domain axis index.
+    """
+
     axis: int
 
-class Broadcast: ...                  # the value is replicated across this mesh axis
+class Broadcast(ShardAttr):
+    """Mark the value replicated across this mesh axis."""
 
-class Dynamic: ...                    # the distribution policy is not yet resolved
+class Dynamic(ShardAttr):
+    """Mark the distribution policy unresolved on this mesh axis."""
 
-class Partial:                        # an un-reduced partial value (`sum` / `max` / `min`)
+class Partial(ShardAttr):
+    """Mark an unreduced partial value.
+
+    Attributes:
+        reduction: attribute; Reduction required to obtain the full value.
+    """
+
     reduction: str = "sum"
+
+
+def S(axis: int) -> Split:
+    """Build a split attribute.
+
+    Args:
+        axis: Layout-domain axis index.
+
+    Returns:
+        The split attribute.
+    """
+    ...
+
+
+def P(reduction: str = "sum") -> Partial:
+    """Build a partial attribute.
+
+    Args:
+        reduction: Required reduction.
+
+    Returns:
+        The partial attribute.
+    """
+    ...
+
+
+def B() -> Broadcast:
+    """Build a broadcast attribute.
+
+    Returns:
+        The broadcast attribute.
+    """
+    ...
 ```
 
 - constraints:
@@ -272,14 +361,12 @@ Field meanings:
 - `Split(axis)` — the current mesh axis is bound to the underlying
   layout's `axis`-th layout domain axis (i.e., `layout.shape[axis]`).
   `axis` MUST satisfy `0 <= axis < rank(flatten(domain(layout)))`.
-  Across a single `ShardLayout.attrs`, an underlying-layout axis MAY
-  be bound by at most one mesh axis: two `Split` attrs sharing the
-  same `axis` are illegal. Since `layout.shape` is the **global
-  unsharded shape** ([§7](#7-shardlayout)), the binding constraint is
-  `mesh.shape[mesh_axis_position] | layout.shape[axis]`
-  (mesh extent must divide the global layout extent). The per-thread
-  local extent on this layout dim is then
-  `layout.shape[axis] // mesh.shape[mesh_axis_position]`.
+  Multiple mesh axes MAY bind the same layout axis. Each static mesh extent
+  must divide the remaining extent in mesh-axis order, and the local extent is
+  `layout.shape[axis] // product(mesh extents bound to axis)`. The canonical
+  constructor normally factorizes such bindings into distinct layout
+  positions, but `shard_layout_local_shape` also accepts and composes the
+  unfactorized form.
 - `Broadcast` — the current mesh axis does not participate in
   splitting; the value is replicated across this mesh axis.
 - `Dynamic` — the distribution policy of the current mesh axis is not
@@ -300,6 +387,7 @@ Surface syntax sugar:
 
 - `S(i)` ≡ `Split(axis=i)`
 - `P()` / `P("sum")` ≡ `Partial(reduction="sum")`
+- `B()` ≡ `Broadcast()`
 - omitted mesh axes are `Broadcast`
 
 ---
@@ -312,9 +400,17 @@ axes to mesh axes.
 
 ```python
 class ShardLayout(LayoutBase):
-    layout: LayoutBase                                        # the underlying layout-family member being bound
-    attrs: tuple[Split | Broadcast | Dynamic | Partial, ...]  # per-mesh-axis attributes, ordered by mesh axis
-    mesh: Mesh                                                # the device-domain `Mesh`
+    """Bind a layout domain to a device mesh.
+
+    Attributes:
+        layout: attribute; Underlying layout-family member.
+        attrs: attribute; Shard attributes in mesh-axis order.
+        mesh: attribute; Device-domain mesh.
+    """
+
+    layout: LayoutBase
+    attrs: tuple[ShardAttr, ...]
+    mesh: Mesh
 ```
 
 - constraints:
@@ -434,6 +530,7 @@ For `reshard(a:gmem, ..., storage='rmem')` (high → low, per-instance
 default):
 
 ```
+# example
 layout = Layout(shape=(2, 4, 3, 32, 4), strides=(0, 0, 4, 0, 1))
 attrs  = (Split(0), Split(1), Broadcast, Split(3), Broadcast)
 mesh   = Mesh(layout=Layout(shape=(2, 4, 32), ...))
@@ -468,3 +565,169 @@ logical shape → layout domain in
 [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain), and
 relation-driven propagation in
 [semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation).
+
+---
+
+## 9. Layout construction and mesh-scope projection
+
+```python
+class NotProjectable(ValueError):
+    """Report that a layout cannot serve as a mesh execution scope."""
+
+
+def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Return exclusive prefix-product strides.
+
+    Args:
+        shape: Static flat shape.
+
+    Returns:
+        Column-major natural strides.
+    """
+    ...
+
+
+def c_order_strides(shape: tuple, *, mul=None) -> tuple:
+    """Return row-major contiguous strides.
+
+    Args:
+        shape: Flat shape.
+        mul: Optional multiplication operation for symbolic entries.
+
+    Returns:
+        C-order strides.
+    """
+    ...
+
+
+def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
+    """Return static C-order strides when possible.
+
+    Args:
+        shape: Candidate flat shape.
+
+    Returns:
+        Static strides, or None for a symbolic or dynamic shape.
+    """
+    ...
+
+
+def canonical_shard_layout(
+    logical_shape: tuple, mesh: Mesh, attrs: tuple[ShardAttr, ...]
+) -> ShardLayout:
+    """Build the canonical factorized sharding layout.
+
+    Args:
+        logical_shape: Logical tensor shape.
+        mesh: Device mesh.
+        attrs: Shard attributes naming logical axes.
+
+    Returns:
+        The canonical sharding layout.
+    """
+    ...
+
+
+def shard_layout_local_shape(sl: ShardLayout) -> tuple[int, ...]:
+    """Project a global sharding layout to its local shape.
+
+    Args:
+        sl: Sharding layout to project.
+
+    Returns:
+        The per-shard static shape.
+    """
+    ...
+
+
+def is_inverse_projectable(layout: Layout) -> bool:
+    """Return whether a layout admits the supported inverse projection.
+
+    Args:
+        layout: Primitive layout to inspect.
+
+    Returns:
+        Whether it is injective and compact-ordered.
+    """
+    ...
+
+
+def left_inverse(layout: Layout | ComposedLayout):
+    """Build the supported CuTe left inverse.
+
+    Args:
+        layout: Layout to invert.
+
+    Returns:
+        Its left-inverse layout.
+    """
+    ...
+
+
+def right_inverse(layout: Layout | ComposedLayout):
+    """Build the supported CuTe right inverse.
+
+    Args:
+        layout: Layout to invert.
+
+    Returns:
+        Its right-inverse layout.
+    """
+    ...
+
+
+def image(scope: ComposedLayout, coord: int) -> int:
+    """Map a domain coordinate into a mesh execution scope.
+
+    Args:
+        scope: Admissible composed mesh scope.
+        coord: Flat domain coordinate.
+
+    Returns:
+        Runtime thread index.
+    """
+    ...
+
+
+def project(scope: ComposedLayout, t: int) -> tuple[int, ...] | None:
+    """Project a runtime thread into a mesh execution scope.
+
+    Args:
+        scope: Admissible composed mesh scope.
+        t: Runtime thread index.
+
+    Returns:
+        The multidimensional coordinate, or None when outside the scope.
+    """
+    ...
+
+
+def contains(scope: ComposedLayout, t: int) -> bool:
+    """Return whether a runtime thread participates in a mesh scope.
+
+    Args:
+        scope: Admissible composed mesh scope.
+        t: Runtime thread index.
+
+    Returns:
+        Whether the thread participates.
+    """
+    ...
+```
+
+- constraints:
+  - `canonical_shard_layout` MUST factor each logical axis split by one or more
+    static mesh axes in mesh-axis order, remap each `Split` to its factor, and
+    append a non-unit residual factor. It MUST reject indivisible or
+    unrepresentable dynamic multi-axis splits.
+  - `shard_layout_local_shape` MUST multiply the divisors of multiple `Split`
+    attributes that name the same layout axis and MUST reject a remaining
+    non-static local extent.
+  - `try_c_order_strides` MUST return `None` unless every shape entry is a
+    non-boolean integer.
+  - Mesh-scope projection MUST accept only an identity inner mapping and an
+    inverse-projectable primitive outer layout; other layouts MUST raise
+    `NotProjectable` rather than guess a projection.
+  - `project` MUST return `None` for an index outside the scope or outside the
+    outer layout's round-tripping image; `contains` MUST report the same test as
+    a boolean.

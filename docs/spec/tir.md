@@ -5,7 +5,7 @@ into TIR; the lowering pass `HirToTirPass` ([passes](./passes.md))
 also produces TIR. TIR has no value return; effect-form Ops carry
 the work, structural Stmts carry control flow.
 
-- **Container**: `tir.PrimFunction(name, params, body, output_count)`.
+- **Container**: `tir.PrimFunction(name, params, body, output_count, target)`.
   `body` is a `Sequential`; the function returns no value.
 - **Stmt tree**: function bodies are nested Stmts only. Exprs appear
   inside Stmt fields (e.g. `LetStmt.value`, `For.start`).
@@ -25,15 +25,17 @@ the work, structural Stmts carry control flow.
 
 ```python
 class Stmt:
-    loc: str | None = None    # optional debug location; not load-bearing for semantics
+    """Provide the abstract base for every TIR statement.
+
+    Attributes:
+        loc: attribute; Optional non-semantic debug location.
+    """
+
+    loc: str | None = None
 ```
 
 - constraints:
   - the abstract base of every TIR Stmt subclass; HIR has no `Stmt`.
-
-`Stmt` is the abstract base of every TIR Stmt subclass. HIR has no
-`Stmt`. `loc` is a debug surface; it is not load-bearing for
-semantics.
 
 ```mermaid
 flowchart TB
@@ -53,36 +55,83 @@ flowchart TB
 
 ```python
 class Sequential(Stmt):
-    body: tuple[Stmt, ...]            # a Stmt sequence (__iter__ / __len__ / __getitem__ provided)
+    """Contain a statement sequence.
+
+    Attributes:
+        body: attribute; Statements in execution order.
+    """
+
+    body: tuple[Stmt, ...]
 
 class LetStmt(Stmt):
-    var: Var                          # binds var to value; let chains nest body
+    """Bind a variable to an expression before a nested body.
+
+    Attributes:
+        var: attribute; Bound variable.
+        value: attribute; Bound expression.
+        body: attribute; Nested statements.
+    """
+
+    var: Var
     value: Expr
     body: Sequential
 
 class For(Stmt):
-    induction_var: Var                # counted loop
+    """Represent a counted loop.
+
+    Attributes:
+        induction_var: attribute; Loop variable.
+        start: attribute; Initial value.
+        stop: attribute; Exclusive bound.
+        step: attribute; Increment.
+        body: attribute; Loop body.
+    """
+
+    induction_var: Var
     start: Expr
     stop: Expr
     step: Expr
     body: Sequential
 
-class While(Stmt):                    # control flow
+class While(Stmt):
+    """Represent a conditional loop.
+
+    Attributes:
+        cond: attribute; Loop condition.
+        body: attribute; Loop body.
+    """
+
     cond: Expr
     body: Sequential
 
-class If(Stmt):                       # control flow
+class If(Stmt):
+    """Represent conditional control flow.
+
+    Attributes:
+        cond: attribute; Branch condition.
+        then_body: attribute; Taken body.
+        else_body: attribute; Untaken body.
+    """
+
     cond: Expr
     then_body: Sequential
     else_body: Sequential
 
 class MeshScope(Stmt):
-    mesh: Mesh                        # scopes a mesh binding over body
+    """Scope a mesh binding over a body.
+
+    Attributes:
+        mesh: attribute; Compile-time mesh.
+        binding: attribute; Lexical mesh binding.
+        body: attribute; Scoped statements.
+    """
+
+    mesh: Mesh
     binding: Var
     body: Sequential
 
 class Return(Stmt):
-    ...                               # @prim_func has no value return
+    """Terminate a value-less primitive function."""
 ```
 
 - constraints:
@@ -95,18 +144,26 @@ class Return(Stmt):
 
 ```python
 class PrimFunction(Stmt):
-    name: str                         # the function name
-    params: tuple[Var, ...]           # parameter Vars (the trailing output_count are outputs)
-    body: Sequential                  # the function body
-    output_count: int = 1             # number of trailing output params
+    """Contain one effect-only TIR function.
+
+    Attributes:
+        name: attribute; Function name.
+        params: attribute; Parameters, with trailing outputs.
+        body: attribute; Function body.
+        output_count: attribute; Number of trailing output parameters.
+        target: attribute; Compilation target for this function.
+    """
+
+    name: str
+    params: tuple[Var, ...]
+    body: Sequential
+    output_count: int = 1
+    target: Target = field(default_factory=default_target)
 ```
 
 - constraints:
   - itself a `Stmt`, not a separate top-level node; returns no value.
     `verify_prim_function` enforces the rules below.
-
-`PrimFunction` is itself a `Stmt`, not a separate top-level node;
-it sits inside the TIR Stmt tree along with everything else.
 
 `tir.verify.verify_prim_function(fn, *, module_fns=())` enforces:
 
@@ -143,8 +200,7 @@ class Evaluate(Stmt):
   - TIR's single Stmt-position wrapper for a no-result invocation; verify and
     lowering dispatch on `type(callable)`.
 
-`Evaluate` is TIR's single Stmt-position wrapper for a callable
-invocation that has no result value. The `callable` is one of:
+The `callable` is one of:
 
 - an effect-form `Op` (e.g. `tir.memory.Copy`, `tir.cuda.nn.Mma`,
   `tir.tensor.Reduce`, `tir.Launch` [§2.3](#23-tir-ops)). `args` are
@@ -156,8 +212,7 @@ invocation that has no result value. The `callable` is one of:
   buffers; the callee is resolved uniquely at module level
   ([§1.3](#13-primfunction)).
 
-Verify and lowering MUST dispatch on `type(callable)`. The per-Op
-verify / codegen handlers are keyed by `Op` type and receive the Op
+The per-Op verify / codegen handlers are keyed by `Op` type and receive the Op
 together with `args`; an `Op` callable carries no result, so its
 `Call` form is unit-typed.
 
@@ -334,13 +389,9 @@ class Abort(Stmt):
 - constraints:
   - a terminating Stmt on believed-unreachable paths (notably `DispatchCall.fallback`).
 
-- `Abort` is terminating. It exists in code paths the compiler
-  believes are unreachable (notably `DispatchCall.fallback`).
 - The CUDA emitter renders `Abort` as `__trap();` in device contexts
   and `assert(false);` in host contexts so a runtime hit is loud
   rather than silent.
-- `message` is a debug surface; it does not carry semantics.
-
 ### 1.8 `@intrinsic` — user-defined effect Stmts
 
 ```python
@@ -354,21 +405,21 @@ def <name>(<param>: Expr, ...) -> None: ...    # decorated function's signature 
     parser dispatch under the snake-case name; parameters are annotated `Expr` and
     the return annotation is `None`.
 
-`tilefoundry.ir.tir.intrinsic.intrinsic` synthesises a Stmt subclass
-from the decorated function's signature, registers the function
-body as the Stmt's verifier, and wires the parser dispatch entry
-under the function's snake-case name. Parameters MUST be annotated
-`Expr`; the return annotation MUST be `None`.
-
 ## 2. TIR Expr and callable constructs
 
 ### 2.1 `SymbolRef`
 
 ```python
 class SymbolRef(Expr):
-    name: str                       # canonical name of the callee PrimFunction (may be a mangled specialization name)
-    nested: tuple[str, ...] = ()    # empty — the Module holds only top-level functions
-    # type: CallableType — the resolved callee's CallableType, set at construction
+    """Name a primitive-function callee.
+
+    Attributes:
+        name: attribute; Canonical callee name.
+        nested: attribute; Nested path, empty for the flat Module symbol table.
+    """
+
+    name: str
+    nested: tuple[str, ...] = ()
 ```
 
 - constraints:
@@ -416,8 +467,15 @@ carries its `type` directly.
 
 ```python
 class ShapeOf(Expr):
-    param: Var    # a parameter Var of the enclosing PrimFunction
-    axis: int     # a valid axis index of param.type
+    """Produce one runtime tensor extent.
+
+    Attributes:
+        param: attribute; Enclosing primitive-function tensor parameter.
+        axis: attribute; Tensor axis.
+    """
+
+    param: Var
+    axis: int
 ```
 
 - constraints:
@@ -459,9 +517,10 @@ below; code carries only a one-line purpose docstring
   concrete level; the unmaterialized `umat` ([types §2](./types.md#2-tensortype)) is an
   HIR-only value and MUST already be materialized to a concrete level by the
   time `HirToTirPass` produces TIR — it never appears in TIR.
-- `Reshard` does not appear in TIR; HIR-side `Reshard` is lowered
-  into `LetStmt(AllocTensor)` + `Evaluate(Copy, ...)` chains
-  during `HirToTirPass` ([passes](./passes.md)).
+- `Reshard` does not appear in TIR. HIR-side `Reshard` without a storage change
+  lowers to a `TensorView` and performs no allocation or copy; a storage change
+  lowers to `LetStmt(AllocTensor)` plus `Evaluate(Copy, ...)` during
+  `HirToTirPass` ([passes §7.1](./passes.md#71-hirtotirpass)).
 
 #### Memory Ops (`tir.memory.*`)
 
@@ -490,8 +549,7 @@ class MemorySpan(Op):
 
     x: Tensor
 ```
-- constraints:
-  - re-interpret a memory region as a typed tensor; a value Op.
+- constraints: []
 
 ##### PtrOf
 ```python
@@ -504,8 +562,7 @@ class PtrOf(Op):
 
     x: Tensor
 ```
-- constraints:
-  - take the device address of a tensor for downstream view ops; a value Op.
+- constraints: []
 
 ##### TensorView
 ```python
@@ -523,8 +580,7 @@ class TensorView(Op):
     layout: object
     shape: tuple | None = None
 ```
-- constraints:
-  - derive a sub-view of a tensor; a value Op.
+- constraints: []
 
 ##### Copy
 ```python
@@ -532,15 +588,14 @@ class Copy(Op):
     """Effect form; byte-equivalent copy between two tensors.
 
     Attributes:
-        source: input; copy source.
-        destination: input; copy destination.
+        src: input; Copy source.
+        dst: input; Copy destination.
     """
 
-    source: Tensor
-    destination: Tensor
+    src: Tensor
+    dst: Tensor
 ```
-- constraints:
-  - byte-equivalent copy between two tensors.
+- constraints: []
 
 ##### Fill
 ```python
@@ -555,8 +610,7 @@ class Fill(Op):
     tensor: Tensor
     value: Tensor
 ```
-- constraints:
-  - broadcast a scalar value into a tensor.
+- constraints: []
 
 #### NN Ops (`tir.nn.*`)
 
@@ -596,8 +650,7 @@ class ReLU(Op):
     src: Tensor
     dst: Tensor
 ```
-- constraints:
-  - pointwise `max(x, 0)`.
+- constraints: []
 
 ##### RMSNorm
 ```python
@@ -616,8 +669,7 @@ class RMSNorm(Op):
     weight: Tensor
     eps: float
 ```
-- constraints:
-  - fused RMS normalisation.
+- constraints: []
 
 #### Tensor Ops (`tir.tensor.*`)
 
@@ -653,7 +705,31 @@ class Reduce(Op):
 `Binary` / `Unary` are effect-form Ops that dispatch on a kind enum rather than
 per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
 `UnaryKind` / `ReduceKind` are compiler-wide tag enums shared across HIR and
-TIR; lowering preserves the kind value without re-mapping.
+TIR; lowering preserves the kind value without re-mapping. Their owning
+definitions are [core-ir §4](./core-ir.md#4-shared-operation-kinds).
+
+##### Clamp
+
+```python
+class Clamp(Op):
+    """Effect form; clamp a source tensor into a destination.
+
+    Attributes:
+        min_val: attribute; Lower bound.
+        max_val: attribute; Upper bound.
+        src: input; Source tensor.
+        dst: input; Destination tensor.
+    """
+
+    min_val: float
+    max_val: float
+    src: Tensor
+    dst: Tensor
+```
+
+- constraints:
+  - `src` and `dst` MUST carry the same dtype; the effect writes
+    `min(max(src, min_val), max_val)` elementwise into `dst`.
 
 ##### Binary
 ```python
@@ -709,7 +785,11 @@ class CudaLaunchAttr(IntEnum):
 
 
 class LaunchAttrs:
-    """Authored launch attribute selector/value pairs."""
+    """Carry authored launch attribute selector/value pairs.
+
+    Attributes:
+        entries: attribute; Selector/value pairs interpreted by target lowering.
+    """
 
     entries: tuple[tuple[CudaLaunchAttr, object], ...] = ()
 ```
@@ -880,6 +960,7 @@ an enclosing `MeshScope` ([§1.2](#12-structural-stmts-tirstmts)); `T.mma` is
 verify-only and MUST NOT fuse the loads or the store.
 
 ```python
+# example
 atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
 with Mesh(Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))) as warp:
     a_frag = T.alloc_tensor(TensorType(..., layout=atom.A, storage=rmem))

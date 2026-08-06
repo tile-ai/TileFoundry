@@ -172,21 +172,25 @@ exactly the one declared `ConstTensor`'s shape / dtype. A weight needing no
 transform has no converter. Two converters registered for the same weight
 name is an error.
 
-`load`, `forward`, and `prepare` are **methods on the ir `Module`** — the same
-authoring surface as its `RuntimeModule` twin, which also has a `forward`:
+`load`, `forward`, and `prepare` are methods on the IR `Module` owned by
+[core-ir §1](./core-ir.md#1-module). This section defines their runtime-facing
+behavior and the distinct loaded view:
 
 ```python
-class Module:      # tilefoundry.ir.core.module
-    def load(self, resource: RuntimeResource) -> "LoadedModule": ...
-    def forward(self, *args): ...                                              # __call__ = forward
-    def prepare(self, raw: RuntimeResource, out_dir: str, *, device="cpu") -> None: ...
+class LoadedModule:
+    """Bind one reading of an IR Module to loaded constants.
 
+    Attributes:
+        module: attribute; Source IR Module.
+        constants: attribute; Loaded constants by declared weight name.
+        modules: attribute; Recursively loaded children.
+    """
 
-class LoadedModule:  # tilefoundry.ir.core.module — one reading of a Module
     module: Module
     constants: Mapping[str, torch.Tensor]
     modules: tuple["LoadedModule", ...]
-    def forward(self, *acts): ...                                              # __call__ = forward
+
+    def forward(self, *acts): ...
 ```
 
 - constraints:
@@ -305,13 +309,21 @@ implementations are not bound by it.
 ### 1.3 `jit()` API
 
 ```python
-def jit(fn_or_mod: Function | Module, *, target: str = "cuda", options: CompilerOptions | None = None) -> RuntimeModule:
+def jit(
+    fn_or_mod: Function | Module,
+    /,
+    *,
+    target: str = "cuda",
+    options: CompilerOptions | None = None,
+    **kwargs,
+) -> RuntimeModule:
     """Compile *fn_or_mod* and return the callable runtime module.
 
     Args:
         fn_or_mod: a hir.Function or Module (normalized to a Module).
         target: the back-end target.
         options: optional CompilerOptions.
+        kwargs: rejected compatibility catch-all for unexpected keywords.
 
     Returns:
         The callable RuntimeModule.
@@ -335,8 +347,8 @@ entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
 - Mesh layout is expressed in the DSL with lexical `with Mesh(...) as mesh` scopes.
 - `jit()` has no `cta_mesh` / `thread_mesh` parameters.
 
-**Pipeline**: `jit()` reuses the existing `lower()` → `build()` pipeline
-(`compile()`).  It auto-wraps a bare `Function` input into a single-function
+**Pipeline**: `jit()` reuses [passes §6](./passes.md#6-top-level-api)'s
+`lower()` → `build()` pipeline (`compile()`). It auto-wraps a bare `Function` input into a single-function
 `Module` that declares no execution context.
 
 **Cache**: in-process dict cache keyed by
@@ -375,10 +387,9 @@ The exported function accepts flattened input/output tensor arguments. HIR
 functions may be written as `Function(params) -> tensor`, but by the runtime
 boundary the TIR/codegen surface is explicit input/output parameters.
 
-Launch geometry (grid / block extents) is derived internally by
-`codegen/cuda/emit.py::_derive_launch_config` and embedded into the generated
-host entry (or supplied by an authored `launch(...)`); it is never carried as
-metadata past codegen.
+Launch geometry (grid / block extents) is embedded into the generated host entry
+or supplied by an authored `launch(...)`; it is never carried as metadata past
+codegen.
 
 ### 1.5 `RuntimeResource`
 
@@ -388,6 +399,16 @@ resolved by the same lookup order.
 
 ```python
 AliasValue = str | tuple[str, ...] | Absolute | Preprocessed
+
+class Absolute:
+    """Name a raw checkpoint key from the resource root.
+
+    Attributes:
+        name: attribute; Absolute raw key.
+    """
+
+    name: str
+
 
 class Preprocessed:
     name: str | Absolute
@@ -485,38 +506,79 @@ class SafetensorsResource:
 ### 1.6 `check`
 
 ```python
-class Predicate:                                # one comparison and its bound
-    name: ClassVar[str]                         # how it is named
-    bounds: ClassVar[tuple[str, ...]]           # the bound fields it takes
-    needs_reference: ClassVar[bool]             # false: it judges the candidate alone
-    discrete: ClassVar[bool]                    # true: meaningful on integers
+class Predicate:
+    """Carry one comparison and its bounds.
 
-PREDICATES: Mapping[str, type[Predicate]]       # allclose rel_l2 cosine equal
-                                                # ulp max_abs max_rel nan_inf
+    Attributes:
+        name: attribute; Registry and report name.
+        bounds: attribute; Bound fields in surface order.
+        needs_reference: attribute; Whether the comparison consumes a reference.
+        discrete: attribute; Whether it is meaningful on integer outputs.
+        guidance: attribute; One-line CLI guidance.
+    """
+
+    name: ClassVar[str] = ""
+    bounds: ClassVar[tuple[str, ...]] = ()
+    needs_reference: ClassVar[bool] = True
+    discrete: ClassVar[bool] = True
+    guidance: ClassVar[str] = ""
+
+PREDICATES: Mapping[str, type[Predicate]]
 
 class PredicateResult:
+    """Record one predicate measurement.
+
+    Attributes:
+        predicate: attribute; Predicate that ran.
+        values: attribute; Named measurements.
+        passed: attribute; Whether its bound held.
+        note: attribute; Optional interpretation note.
+    """
+
     predicate: Predicate
-    values: Mapping[str, float]                 # what it measured
+    values: Mapping[str, float]
     passed: bool
-    note: str | None                            # when the measure changed meaning
+    note: str | None = None
 
 class OutputCheck:
-    path: str                                   # "output", "output[0]", ...
+    """Record predicate results for one output.
+
+    Attributes:
+        path: attribute; Structural output path.
+        shape: attribute; Runtime output shape.
+        dtype: attribute; Runtime output dtype.
+        ref_norm: attribute; Reference norm when a reference exists.
+        results: attribute; Predicate results.
+        passed: attribute; Derived read-only verdict over the results.
+    """
+
+    path: str
     shape: tuple[int, ...]
     dtype: str
-    ref_norm: float | None                      # None without a reference
+    ref_norm: float | None
     results: tuple[PredicateResult, ...]
-    passed: bool
+
+    def passed(self) -> bool: ...
 
 class Report:
+    """Record all checked outputs.
+
+    Attributes:
+        outputs: attribute; Output checks in structural order.
+        passed: attribute; Derived read-only verdict over the outputs.
+    """
+
     outputs: tuple[OutputCheck, ...]
-    passed: bool
+
+    def passed(self) -> bool: ...
 
 def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
           expect: Mapping[str, Sequence[Predicate]]) -> Report: ...
 ```
 
 - constraints:
+  - `PREDICATES` MUST contain the built-in `allclose`, `rel_l2`, `cosine`,
+    `equal`, `ulp`, `max_abs`, `max_rel`, and `nan_inf` predicates by name.
   - `check` runs `candidate(*inputs)`, and `reference(*inputs)` when there is a
     reference, and measures each output against the predicates *expect* states
     for it. Neither *reference* nor *expect* has a default.
@@ -537,8 +599,9 @@ def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
     distance against a zero reference, a direction between two zero vectors — the
     result MUST state what was measured instead through its `note`, rather than
     return a number whose scale is an artefact of a clamp.
-  - `passed` is `all` of its parts, at both levels, so a verdict cannot disagree
-    with the measurements printed beside it.
+  - `OutputCheck.passed` and `Report.passed` are read-only properties derived
+    as `all` of their parts; neither is accepted as a constructor field, so a
+    verdict cannot disagree with the measurements printed beside it.
   - it is not specific to `RuntimeModule`: *candidate* / *reference* may be a
     `RuntimeModule` bound method, a raw torch callable, or an evaluator
     closure — anything callable on *inputs*.
@@ -572,7 +635,7 @@ enum class TopologyScope {
 };
 ```
 
-- constraints: none — a fixed enumeration of program topology levels
+- constraints: none
 
 ### 2.2 Topology Metadata
 
@@ -647,7 +710,7 @@ struct ShardLayout {
 };
 ```
 
-- constraints: none — a plain layout / attrs / mesh aggregate
+- constraints: none
 
 ### 2.5 `tilefoundry::shard` — Shard Attributes
 
@@ -660,7 +723,7 @@ namespace tilefoundry::shard {
 }
 ```
 
-- constraints: none — compile-time shard-attribute tags
+- constraints: none
 
 Shorthand: `S<Axis>` = Split, `B` = Broadcast, `P<Reduction>` = Partial.
 
@@ -738,7 +801,7 @@ void copy(ST const& src, ShardTensor<T, GL, SL>& dst);
 ```
 
 - constraints:
-  - Copies the full tensor between a shard tensor and a plain tensor.
+  - No additional constraints.
 
 ### 2.10 `local()`
 
@@ -868,7 +931,6 @@ void copy(SrcTensor const& src, DstTensor& dst);
 ```
 
 - constraints:
-  - copies data from `src` to `dst`
   - `size(src) == size(dst)`
   - source and destination dtypes are compatible
 
@@ -884,8 +946,7 @@ template <class Tensor, class Value>
 void fill(Tensor& tensor, Value val);
 ```
 
-- constraints:
-  - fills `tensor` with scalar `val`
+- constraints: none
 
 ### 3.3 `tilefoundry::shard_partition`
 

@@ -22,25 +22,6 @@ help to standard error and exit with status 2.
 
 ## Commands
 
-```text
-tilefoundry models [NAME] [--source]
-
-tilefoundry spec [TOPIC [SECTION]]
-
-tilefoundry check TARGET (--inputs random | --inputs real --ckpt DIR | --input=PATH ...)
-    [--expected=PATH ...] --out OUTPUT --fn F [bounds] [--fn F [bounds]] ...
-    [--out OUTPUT ...] [--dim NAME=V[,V...] ...] [--json]
-
-tilefoundry analyze model.py[:Module[.child_module...][.function]]
-    [--roofline] [--footprint] [--timeline] [--dim NAME=EXTENT ...]
-
-tilefoundry schedule model.py[:Module[.child_module...][.function]] --topology LEVEL [--json]
-    [--dim NAME=EXTENT ...] [--solver-timeout SECONDS] [--solver-workers COUNT]
-    [--first-plan]
-
-tilefoundry inspect [capabilities [SOURCE]]
-```
-
 `SOURCE` is a Python file followed optionally by
 `:Module[.child_module...][.function]`. Without a selector, the source must
 define exactly one top-level HIR Module or Function. A selector chooses the
@@ -146,8 +127,6 @@ bounds the caller stated.
     covered. Choosing a neighbouring implementation instead would answer about a
     program nobody selected, and the failure is only actionable if the reader can
     see where the coverage stops.
-  - The functions and their bounds in `--help` MUST be generated from the
-    predicates themselves, so a predicate cannot exist without being listed.
   - Text and `--json` MUST carry the same facts.
 
 ## Tutorial
@@ -223,9 +202,11 @@ that runs before it can be read is a reference that decides what it describes.
     or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
     file: the installed directory is the reference, and a rendered copy is a
     different artifact wearing its name.
-  - A shipped model source directory with `hf_alias.py` MUST carry the executable
-    `run.py` and its `generation.py` decode source, whose shapes MUST come only from
-    that directory's `config.json`.
+  - Catalog membership and `--source` describe a model and its shipped authored
+    files; neither claims that the model has a runnable decode path. The package
+    data manifest alone defines those files. Repository-only helpers such as
+    `hf_alias.py` MUST NOT create an implicit requirement to ship `run.py` or
+    `generation.py`.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers

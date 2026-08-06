@@ -29,6 +29,7 @@ def evaluate(
     fn_or_call: "Function | Call",
     *inputs: "torch.Tensor",
     backend: str = "torch",
+    device: str | None = None,
 ) -> "torch.Tensor | tuple[torch.Tensor, ...]":
     ...
 ```
@@ -37,6 +38,8 @@ def evaluate(
 order, walks the body, and returns the logical tensor for a single
 output or a tuple for a `TupleType` result. `backend` selects the
 tensor engine; `"torch"` is the defined backend.
+`device` selects the torch device; when omitted it chooses CUDA when available
+and otherwise CPU.
 
 ## 1. `Value`
 
@@ -46,7 +49,8 @@ single-output node produces a `TensorValue`; a multi-output node (a
 produces a `TupleValue`.
 
 ```python
-class Value: ...    # base of every evaluated value
+class Value:
+    """Provide the base of every evaluated value."""
 ```
 
 - constraints: none — abstract base; concrete values are `TensorValue` / `TupleValue`
@@ -54,9 +58,16 @@ class Value: ...    # base of every evaluated value
 ### `TensorValue`
 
 ```python
-class TensorValue:
-    data: torch.Tensor    # the logical tensor value
-    type: TensorType      # the HIR type of this value (carries layout)
+class TensorValue(Value):
+    """Pair a logical tensor value with its HIR type.
+
+    Attributes:
+        data: attribute; Logical tensor value.
+        type: attribute; HIR tensor type, including layout.
+    """
+
+    data: torch.Tensor
+    type: TensorType
 ```
 
 - constraints:
@@ -69,8 +80,14 @@ class TensorValue:
 ### `TupleValue`
 
 ```python
-class TupleValue:
-    elements: tuple[Value, ...]    # the per-field `Value`s
+class TupleValue(Value):
+    """Aggregate evaluated values.
+
+    Attributes:
+        elements: attribute; Values in field order.
+    """
+
+    elements: tuple[Value, ...]
 ```
 
 - constraints:
@@ -102,19 +119,32 @@ spec's module-level instances).
 ```python
 eval_registry: AnalysisRegistry[type[Op]]
 
-def register_eval(op_cls: type[Op]): ...   # decorator
+def register_eval(op_cls: type[Op]):
+    """Return the evaluator registration decorator for an Op class."""
+    ...
 ```
 
 A handler receives an `EvalContext` and returns a `Value`:
 
 ```python
 class EvalContext:
-    args: tuple[Value, ...]    # already-evaluated operands in `Call.args` order (TensorValue / TupleValue)
-    op: Op                     # the op instance; attributes read as fields (e.g. `ctx.op.kind`, `ctx.op.index`)
-    result_type: Type          # the `Call`'s result type
-    device: torch.device       # backend device; a handler materialising a new tensor (e.g. `Zeros`) creates it there
+    """Carry one registered evaluator invocation.
 
-def handler(ctx: EvalContext) -> Value: ...    # a registered per-op value handler
+    Attributes:
+        op: attribute; Operation instance.
+        args: attribute; Evaluated operands in Call-argument order.
+        result_type: attribute; Call result type.
+        device: attribute; Backend device name.
+    """
+
+    op: Any
+    args: tuple[Any, ...]
+    result_type: Any
+    device: str = "cpu"
+
+def handler(ctx: EvalContext) -> Value:
+    """Evaluate one registered Op invocation."""
+    ...
 ```
 
 A `Call` whose op class has no registered handler raises an error that
@@ -128,8 +158,11 @@ Evaluation is an `ExprVisitor[Value]`
 a shared sub-DAG ([hir §1.1](./hir.md#11-function)) is evaluated once:
 
 ```python
-class Evaluator(ExprVisitor[Value]):             # memoized on id(expr): a shared sub-DAG is evaluated once
-    def visit(self, expr: Expr) -> Value: ...    # dispatch by expr kind: Var / Constant / Tuple / Call(Op) / Call(Function) / GridRegionExpr
+class Evaluator(ExprVisitor):
+    """Evaluate expressions with identity-based memoization."""
+
+    def visit(self, expr: Expr) -> Value: ...
+    def visit_GridRegionExpr(self, region: GridRegionExpr) -> Value: ...
 ```
 
 - A `Var` resolves to its binding in the current environment; a
@@ -148,9 +181,8 @@ class Evaluator(ExprVisitor[Value]):             # memoized on id(expr): a share
 A `GridRegionExpr` ([hir §1.2](./hir.md#12-gridregionexpr)) is a loop over its iteration
 domain whose carry chain starts from `init_args`:
 
-```python
-def eval_grid(region: GridRegionExpr) -> Value: ...    # loop over the iteration domain; carry chain starts from init_args
-```
+`Evaluator.visit_GridRegionExpr(region)` implements the loop; there is no
+separate `eval_grid` function.
 
 - The first iteration binds each `carried_args` phi to the matching
   `init_args` value; each later iteration binds it to the previous

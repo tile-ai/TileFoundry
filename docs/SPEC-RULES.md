@@ -2,9 +2,11 @@
 
 ## Principles
 
-The spec is the single source of truth for TileFoundry public contracts. If a
-different implementation of the same public construct would need to know a fact,
-that fact belongs in `docs/spec/*.md`, not in code comments or plan files.
+- The spec records decisions every implementation must preserve: public semantics,
+  cross-module boundaries, and internal design invariants required for correctness,
+  extensibility, or operability.
+- It does not repeat self-describing declarations or incidental details that may
+  change without a design decision.
 
 Runtime ops use one public entry per op/family. Target runtime headers may split
 the implementation into internal helpers, traits, or impl classes, but generated

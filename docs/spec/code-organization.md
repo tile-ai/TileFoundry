@@ -18,11 +18,12 @@ truth for the directory's structure and invariants.
 | Directory | Owning spec | Contents |
 |---|---|---|
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / `@register_op` / `@register_alias` / `op_registry` / `errors`. |
-| `ir/types/` | [types](./types.md) | Type-system root: `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / `dim.*` (with their typeinfer). |
+| `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / `dim.*` (with their typeinfer). |
 | `ir/types/shard/` | [shard](./shard.md) | Shard / layout sublayer: `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`). The physical nesting reflects the spec's "sublayer" relationship. |
-| `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprVisitor` / `ExprMutator` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`. |
+| `ir/constraints/` | [schedule](./schedule.md) | Authored scheduling constraints: the shared base plus layout, mesh, and storage constraint records. |
+| `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprVisitor` / `ExprMutator` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`, plus the canonical `PrimFunction` walk and rewrite entries. |
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` ([§2](#2-file-naming-and-content-rules) rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` ([§2](#2-file-naming-and-content-rules) rule 5). |
-| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …); `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per [§2](#2-file-naming-and-content-rules) Rule 1c. |
+| `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …), while specialized statement families such as `DispatchCall` may live in their own file; `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per [§2](#2-file-naming-and-content-rules) Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
 | `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: `poly.py` (the polyhedral model — `extract` / `TileGraph` and the facts measured over a time relation), and one module per analysis family. The compact public surface lives in `analysis/__init__.py`; per-target atom catalogues and Facts projections live with their owning Target. |
 | `schedule/` | [schedule](./schedule.md) | The public Schedule boundary in `schedule/__init__.py` -- the `schedule()` operation, immutable options, result, and plan base. One directory per algorithm family: `pipeline/` for asynchronous overlap within a cooperating unit, `partition/` for spatial division across a device. Each owns its private program view, projected Facts, closed problem, solve, and typed plan export; concrete Target packages register which families serve which exact levels. |
@@ -42,10 +43,13 @@ truth for the directory's structure and invariants.
 | `analysis/memory.py` | [analysis](./analysis.md) | The `memory` family: value lifetimes, per-level peaks, and the capacity comparisons against a target's hierarchy — failing on an over-full addressable level and advising on an over-full cache. |
 | `analysis/roofline.py` | [analysis](./analysis.md) | The `roofline` family: the recorded work divided by the target's published rates, per Call and aggregated per Function. Adds no count of its own. |
 | `analysis/timeline.py` | [analysis](./analysis.md) | The `timeline` family: execution-unit fusion, wave decomposition against a parallel capacity, and the placement the scheduling model solves for. |
+| `visitor_registry/` | [visitor-registry](./visitor-registry.md) | Shared registry instances and derived visitors: access-relation construction, contexts, ISL helpers, relation building, shard propagation, type inference, verification, code generation, and cost evaluation. |
 | `schedule/api.py` | [schedule](./schedule.md) | The public `schedule()` operation and `ScheduleResult`: resolve the Target and the requested level from the Module, dispatch once on the exact pair, and verify the returned Plan. Generic -- it names no concrete target. |
 | `schedule/plan.py` | [schedule](./schedule.md) | `SchedulePlan`, the extensible semantic base every algorithm's result derives from, and `PlanVerificationError`. It fixes three operations and no shape: there is no shared schema, version, deserializer, or renderer registry. |
 | `schedule/registry.py` | [schedule](./schedule.md) | The Schedule instance of the shared exact-key `AlgorithmRegistry`, keyed on `(concrete Target type, topology name)`, and the registration decorator. |
 | `schedule/errors.py` | [schedule](./schedule.md) | `ScheduleError`, the one diagnostic the schedule layer raises for a request it cannot serve or a solve that failed. Distinct from `PlanVerificationError`, which says a plan was produced and does not hold together. |
+| `schedule/kernel_schedule.py` | [schedule](./schedule.md) | ISL schedule-tree construction, band discovery, tiling, and kernel-schedule validation. |
+| `schedule/render.py` | [schedule](./schedule.md) | Scaffold emission from a graph, its independently built schedule tree, and selected ring depths. |
 | `target/<backend>/schedule.py` | [target](./target.md) | One backend's scheduling algorithms, registered for the exact levels it schedules as an import side effect. This is where that backend's private problem construction, solve, and Plan export are composed. |
 | `schedule/partition/` | [schedule](./schedule.md) | The spatial partition family: program extraction, `PartitionFacts`, the closed candidate problem, the CP-SAT solve, and the `PartitionSchedulePlan` export. Every hardware number enters through the Facts, so no module below the family entry holds a Target, and nothing in it rewrites the program it decided about. |
 | `visitor_registry/op_cost.py` | [analysis](./analysis.md) | Each operation's per-instance flops and bytes, registered into the shared cost-evaluator registry. Owned here rather than by any target package, because the work an operation asks for follows from its own semantics and operand types on every backend. |
@@ -56,9 +60,12 @@ truth for the directory's structure and invariants.
 | `codegen/` | [codegen](./codegen.md) | Code generation: the emitter registry, the linkable / linked products and the linker, and per-target emitters under `<target>/` (mirroring `ir/tir/` file layout — `tir/<category>/<name>.py` emitter, [§2](#2-file-naming-and-content-rules) rule 2). **Not under `ir/`** — codegen is a consumer of IR; `templates/` holds boilerplate only (kernel shells / host stubs). |
 | `runtime/` | [runtime](./runtime.md) | Runtime support (per-target headers, function templates, launch helpers). |
 | `inspection/` | [inspection](./inspection.md) | IR visualisation: DOT, Python printer, web viewer. |
-| `dsl/` | [parser](./parser.md) (authoring namespace) | User-facing import surface: `tf/` (HIR namespace) / `T/` (TIR namespace) / `_stub_gen.py` / `__main__.py`. The `tf/__init__.pyi` and `T/__init__.pyi` stubs are produced by `python -m tilefoundry.dsl regen` and are gitignored. |
-| `compile.py` | [architecture](./architecture.md) | `tilefoundry.lower` / `build` / `compile` top-level public verbs. |
-| `script.py` | [parser](./parser.md) | `@func` / `@prim_func` / `@module` decorator entry points. |
+| `dump/` | [inspection](./inspection.md) | Dump flags, dynamically scoped dump contexts, and file/null dump sinks used by inspection and test integration. |
+| `dsl/` | [parser](./parser.md) (authoring namespace) | User-facing import surface: `tf/` (HIR namespace) / `T/` (TIR namespace, including `_platforms.py`) / `_namespace.py` / `_stub_gen.py` / `storage.py` / `__main__.py`. The `tf/__init__.pyi` and `T/__init__.pyi` stubs are produced by `python -m tilefoundry.dsl regen` and are gitignored. |
+| `compile.py` | [architecture](./architecture.md) | `tilefoundry.lower` / `build` / `compile` / `jit` top-level public verbs. |
+| `module.py` | [parser](./parser.md) | The `@module` decorator entry point and module-level topology authoring constants. |
+| `script.py` | [parser](./parser.md) | `@func` / `@prim_func` / `@intrinsic` decorator entry points. |
+| `__init__.py` | [inspection](./inspection.md) | The top-level `view` convenience entry and re-exports of public compiler surfaces. |
 | `utils/` | [code-organization](./code-organization.md) | Shared leaf machinery: a module here MUST import nothing from `ir/`, `parser/`, `passes/`, `codegen/`, `runtime/` or `cli/`, and MUST name no layer. It is depended on and depends on nothing, which is what lets a consumer outside the package — a pre-commit hook under an interpreter with nothing installed — load one of these modules by path and get the same implementation the package uses. A helper that needs to know a layer belongs in that layer; this is not a home for anything that did not fit. |
 
 **Stage boundary.** The pipeline picture in
@@ -102,6 +109,11 @@ layout reflects that boundary directly.
   than carried past it as a runtime-owned metadata type. The two launch
   contracts are distinct even though both are consumed across the codegen
   boundary.
+
+`ir/constraints/`, `visitor_registry/`, and `dump/` are cross-cutting packages;
+their stable responsibilities are owned by [schedule](./schedule.md),
+[visitor-registry](./visitor-registry.md), and [inspection](./inspection.md),
+respectively. Their internal file layout is not a per-Op contract.
 
 ## 2. File naming and content rules
 
@@ -153,126 +165,58 @@ each get their own file. Codegen consumes TIR only.
   `@register_verify_stmt(Op)`. The verify rule keys on the Op class
   even though the invocation is an `Evaluate(op, args)` Stmt — see
   [visitor-registry §5](./visitor-registry.md#5-instance-2--verify).
-- **TIR-owned Expr Op file**
-  (`ir/tir/memory/{alloc_tensor,ptr_of,memory_span,tensor_view}.py`,
-  …): Op class + `@register_typeinfer(Op)` +
-  `@register_cost_evaluator(Op)` (if any). Call-position constraints
-  (e.g. `AllocTensor` may only appear as `LetStmt.value`) are
-  checked by the **enclosing Stmt's** `@register_verify_stmt`; there
-  is no separate Op-level verify decorator for these.
-- **`<category>/aliases.py` file** (Rule 1a): a list of
-  `@register_alias(...)` declarations whose builders construct the
-  target Op instance. Alias files hold no IR class and participate
-  in neither typeinfer nor verify.
+- **TIR-owned Expr Op file** (`ir/tir/memory/{alloc_tensor,ptr_of,memory_span,tensor_view}.py`,
+  …): Op class + `@register_typeinfer(Op)` + `@register_cost_evaluator(Op)`
+  (if any). Call-position constraints are checked by the enclosing Stmt's
+  `@register_verify_stmt`.
+- **`<category>/aliases.py` file** (Rule 1a): `@register_alias(...)`
+  declarations whose builders construct the target Op instance.
 
 **Rule 4 — what a target codegen file contains:** the
-`@register_codegen_<target>` for that (op / stmt) pair, and nothing
-else.
+`@register_codegen_<target>` for that (op / stmt) pair, and nothing else.
 
-**Rule 5 — `<category>/__init__.py` re-export rules:**
-
-- Real Op submodules are re-exported via `from .<file> import <Cls>`
-  (maintained by hand; new Ops add their import here).
-- `aliases.py` is imported only for its `@register_alias`
-  side-effects; nothing is re-exported from it (aliases have no
-  class to expose).
-- User imports go through the `tilefoundry.dsl.tf` /
-  `tilefoundry.dsl.T` namespaces' `__getattr__`, not through the
-  per-category `__init__.py`
-  ([parser §2](./parser.md#2-dsl-namespace-surface)).
+**Rule 5 — `<category>/__init__.py` re-export rules:** real Op submodules are
+re-exported; aliases are imported only for registration side effects; user imports
+go through [parser §2](./parser.md#2-dsl-namespace-surface).
 
 **Rule 6 — one pass = one file.** A pass class lives in
-`passes/transforms/<pass_name>.py` (snake_case file name = pass
-class CamelCase in snake form: `HirToTirPass` → `hir_to_tir.py`).
-Internal visitors / mutators stay in the same file.
+`passes/transforms/<pass_name>.py`; internal visitors / mutators stay in that file.
 
-**Rule 7 — what template files contain.**
-`codegen/<target>/templates/*.j2` carry boilerplate assembly only
-(kernel shells, host stubs, fixed-shape per-target wrappers).
-Stmt-level and Op-level emitters are not template-driven; they live
-in `codegen/<target>/tir/.../*.py` as Python walkers (see
-[codegen](./codegen.md)).
+**Rule 7 — what template files contain.** `codegen/<target>/templates/*.j2`
+carry boilerplate assembly only; emitters live in Python walkers.
 
 ## 3. Multi-agent parallelism guarantee
 
-The lock granularity is a single `(node, target)` pair. The naming
-rules in [§2](#2-file-naming-and-content-rules) imply that two agents working on different
-`(node, target)` pairs touch disjoint files; cross-cutting changes
-(`shard/` fields, kernel templates, pass framework) confine
-themselves to the owning directory. Representative scenarios:
-
-| Scenario | Files affected |
-|---|---|
-| Agent A adds `Conv2D`, Agent B adds `RMSNorm` | `ir/hir/nn/conv2d.py` + `ir/hir/nn/rms_norm.py` — no conflict |
-| Agent A edits `MatMul.typeinfer`, Agent B adds `tir.cuda.nn.Mma` CUDA codegen | `ir/hir/nn/matmul.py` + `codegen/cuda/tir/nn/mma.py` — no conflict |
-| Agent A adds a new target `cpu` | a fresh `codegen/cpu/` subtree — no conflict |
-
-Anything that fits the "one Op = one file" / "one (node, target) =
-one file" / "one pass = one file" rules above shares the same
-property by construction.
+The lock granularity is a single `(node, target)` pair. The naming rules in
+[§2](#2-file-naming-and-content-rules) imply that two agents working on different
+`(node, target)` pairs touch disjoint files; cross-cutting changes confine
+themselves to the owning directory.
 
 ## 4. DSL package layout
 
-The author-facing surface is delivered as a namespace package:
-
-```
-src/tilefoundry/dsl/
-  __init__.py           # exports `tf` and `T` sub-namespaces
-  __main__.py           # `python -m tilefoundry.dsl regen` CLI
-  _stub_gen.py          # `.pyi` generator (run by regen)
-  py.typed              # PEP 561 marker
-  tf/
-    __init__.py         # module-level __getattr__ → OpSchema lookup
-    __init__.pyi        # AUTO-GENERATED, gitignored
-  T/
-    __init__.py         # same pattern for TIR
-    __init__.pyi        # AUTO-GENERATED, gitignored
-```
-
-The two sub-packages (`tf` and `T`) follow the same pattern:
-`__getattr__(name)` looks `name` up in the OpSchema registry for the
-corresponding dialect and returns either the Op class (for real-Op
-schemas) or the alias builder fn (for surface-alias schemas).
-Unknown names raise `AttributeError`.
+The author-facing surface is delivered as a namespace package. The two
+sub-packages (`tf` and `T`) use the OpSchema registry for their corresponding
+dialect and return an Op class or alias builder; unknown names raise `AttributeError`.
 
 ### 4.1 Built-in op-class location convention
 
-For `@register_op` to auto-derive `dialect` + `category`, an Op
-class MUST live under:
-
-```
-src/tilefoundry/ir/<hir|tir>/<category>/<file>.py
-```
-
-with `cls.__module__` matching `tilefoundry.ir.<hir|tir>.<category>.*`.
-The 4th segment of the dotted path is the category. Outside that
-path, the decorator requires explicit `dialect=` and `category=`
-kwargs.
-
-`cls.__name__.lower()` is the default canonical Op name. When the
-canonical name diverges from the class lowercase (e.g. `RMSNorm` →
-`rms_norm`), pass `name="..."` explicitly.
+For `@register_op` to auto-derive `dialect` + `category`, an Op class MUST live
+under `src/tilefoundry/ir/<hir|tir>/<category>/<file>.py`, with its module name
+matching that path. Outside it the decorator requires explicit values.
 
 ### 4.2 `.pyi` stub regeneration
 
-The `.pyi` stubs reflect the registered schemas only. After adding
-a new `@register_op` / `@register_alias`, regenerate stubs via:
-
-```
-python -m tilefoundry.dsl regen
-```
-
-The CLI imports `tilefoundry.ir` (forcing every built-in schema to
-register) and writes `tf/__init__.pyi` / `T/__init__.pyi`. Stubs
-are gitignored — IDEs that need them locally SHOULD run `regen` on
-package install.
+The `.pyi` stubs reflect registered schemas only. After adding a new
+`@register_op` / `@register_alias`, regenerate them with
+`python -m tilefoundry.dsl regen`.
 
 ## 5. DSL import surface
 
 The author-facing exports route through `tilefoundry.dsl`:
 
 ```python
-# canonical authoring imports
+# example
+# Canonical authoring imports.
 from tilefoundry import func, prim_func
 from tilefoundry.dsl import tf, T, Tensor
 ```

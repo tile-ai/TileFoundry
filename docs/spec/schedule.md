@@ -7,8 +7,12 @@ algorithm decides is its own vocabulary: two algorithms placing different
 hardware over different levels do not decide the same things, and a shared result
 schema would either describe neither or force both to pretend.
 
-The public surface ([§1](#1-the-public-schedule-operation)–[§2](#2-public-structures)) is the `schedule` package. The construction stages an
-algorithm composes its solve from ([§4](#4-kernel-schedule-construction)) are imported from their own modules; they
+The top-level `schedule` package exports the operation in [§1](#1-the-public-schedule-operation),
+its request/result/base-plan types, and the public errors in [§6](#6-public-errors).
+Algorithm-specific plan structures in [§2](#2-public-structures) are public from their owning
+submodules and are not necessarily re-exported at package top level. The
+construction stages an algorithm composes its solve from
+([§4](#4-kernel-schedule-construction)) are imported from their own modules; they
 read [analysis](./analysis.md) facts, and the dependency is one-way — nothing in
 the analysis layer imports the schedule layer.
 
@@ -211,6 +215,8 @@ class TargetSpecRef:
     architecture_digest: str
     device_id: str
     device_digest: str
+
+    def of(cls, target: object) -> TargetSpecRef: ...
 ```
 
 - constraints:
@@ -219,10 +225,69 @@ class TargetSpecRef:
     differently.
   - A Target constructed directly rather than installed from documents MUST state
     an empty digest rather than a fabricated one.
+  - `TargetSpecRef` is public from `tilefoundry.schedule.plan`, not re-exported
+    from `tilefoundry.schedule`. `of` derives IDs and digests from the supplied
+    target as a classmethod, falling back to architecture/device names and
+    empty digests.
 
 ### 2.4 `PipelineSchedulePlan`
 
 ```python
+class ScheduledStatement:
+    """One selected instruction and execution interval.
+
+    Attributes:
+        id: attribute; stable statement identity.
+        instruction: attribute; selected instruction name.
+        tile: attribute; selected tile extents.
+        resources: attribute; selected resource counts.
+        start: attribute; inclusive start of the execution interval.
+        end: attribute; exclusive end of the execution interval.
+        footprint_bytes: attribute; ring-adjusted buffer footprint.
+        fits_capacity: attribute; whether the footprint fits tile capacity.
+    """
+
+    id: str
+    instruction: str
+    tile: tuple[int, ...]
+    resources: tuple[tuple[str, int], ...]
+    start: int
+    end: int
+    footprint_bytes: int
+    fits_capacity: bool
+
+class ScheduledBuffer:
+    """One storage object and its ring allocation.
+
+    Attributes:
+        id: attribute; stable buffer identity.
+        storage: attribute; selected storage name.
+        ring_depth: attribute; dependency-safe positive ring depth.
+        producer_ids: attribute; producing statement identities.
+        consumer_ids: attribute; consuming statement identities.
+    """
+
+    id: str
+    storage: str
+    ring_depth: int
+    producer_ids: tuple[str, ...]
+    consumer_ids: tuple[str, ...]
+
+class KernelHole:
+    """One statement reference with serialized boundary relations.
+
+    Attributes:
+        statement_id: attribute; referenced statement identity.
+        inputs: attribute; input buffer identities.
+        outputs: attribute; output buffer identities.
+        relations: attribute; serialized ISL boundary relations.
+    """
+
+    statement_id: str
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    relations: tuple[str, ...]
+
 class PipelineSchedulePlan(SchedulePlan):
     """Export one closed pipeline schedule."""
 
@@ -407,42 +472,61 @@ constraint base and source-location fields.
 
 ```python
 class LayoutConstraint(ScheduleConstraint):
-    """Fix a physical Layout pattern and ShardAttr bindings."""
+    """Fix a physical layout pattern and shard bindings.
 
-    layout: Layout
-    bindings: tuple[tuple[str, ShardAttr], ...]
+    Attributes:
+        layout: attribute; required physical layout pattern.
+        bindings: attribute; named shard-attribute bindings.
+    """
+
+    layout: Layout = Layout(shape=())
+    bindings: tuple[tuple[str, ShardAttr], ...] = ()
 
 class MeshConstraint(ScheduleConstraint):
-    """Filter an eventual ShardLayout by one Mesh value."""
+    """Filter an eventual shard layout by one mesh.
 
-    mesh: Mesh
+    Attributes:
+        mesh: attribute; required mesh value.
+    """
+
+    mesh: Mesh | None = None
 
 class StorageConstraint(ScheduleConstraint):
-    """Filter a value by one current StorageKind."""
+    """Filter a value by one storage kind.
 
-    storage: StorageKind
+    Attributes:
+        storage: attribute; required storage kind.
+    """
+
+    storage: StorageKind | None = None
 ```
 
-`LayoutConstraint.layout` is constraint-owned and may contain the private
-wildcard sentinel. Its `bindings` reuse `Split`, `Broadcast`, and `Partial`
-from [shard](./shard.md). A wildcard is never stored as `Layout(None)` and
-never enters a `TensorType.layout`. Metadata is not part of expression
-equality, hashing, or the printed `repr`.
-
-These values are hard filters for later scheduling stages. They carry no
-preferences, candidate rows, costs, solver state, or CTA capability
-decisions, and they do not register a scheduling algorithm for a `CudaTarget`.
+- constraints:
+  - `LayoutConstraint.layout` is constraint-owned and MAY contain the private
+    wildcard sentinel. Its `bindings` reuse `Split`, `Broadcast`, and `Partial`
+    from [shard](./shard.md).
+  - A wildcard MUST NOT be stored as `Layout(None)` and MUST NOT enter a
+    `TensorType.layout`.
+  - Constraint metadata MUST NOT participate in expression equality, hashing,
+    or the printed `repr`.
+  - These values are hard filters for later scheduling stages. They carry no
+    preferences, candidate rows, costs, solver state, or CTA capability
+    decisions, and they do not register a scheduling algorithm for a
+    `CudaTarget`.
 
 ## 4. Kernel schedule construction
 
-An algorithm composes its solve from these stages over one
-`TileGraph` ([analysis §1.2](./analysis.md#12-tilegraph)). Each takes the graph
-and returns it enriched; none of them re-derives a fact the analysis layer
-already states.
+An algorithm composes its solve from these stages over one immutable
+`TileGraph` ([analysis §1.2](./analysis.md#12-tilegraph)). Scheduling state is
+held separately; no stage mutates or enriches the analysis graph, and none
+re-derives a fact the analysis layer already states.
 
 ```text
-extract(root)  ──▶  build_schedule_tree  ──▶  emit_scaffold
-  (analysis)          tg.tree                 Skeleton / Swimlane / HoleContract
+extract(root) ──▶ graph ──▶ build_schedule_tree(graph) ──▶ tree
+                       graph + tree + solved ring ──▶ emit_scaffold
+                                                        │
+                                                        ▼
+                                         Skeleton / Swimlane / HoleContract
 ```
 
 Each stage lives in its own module of the `schedule` package and is imported
@@ -451,13 +535,13 @@ operation and its results only.
 
 | Stage | Signature | Error |
 |---|---|---|
-| tree construction | `build_schedule_tree(tg: TileGraph) -> TileGraph` | `KernelScheduleError` |
-| scaffold emission | `emit_scaffold(tg: TileGraph) -> tuple[Skeleton, Swimlane, list[HoleContract]]` | `EmitScaffoldError` |
+| tree construction | `build_schedule_tree(tg: TileGraph) -> isl.schedule` | `KernelScheduleError` |
+| scaffold emission | `emit_scaffold(graph: TileGraph, tree: isl.schedule, ring: dict[str, int]) -> tuple[Skeleton, Swimlane, list[HoleContract]]` | `EmitScaffoldError` |
 
 ### 4.1 Tree construction
 
 ```python
-def build_schedule_tree(tg: TileGraph) -> TileGraph: ...
+def build_schedule_tree(tg: TileGraph) -> "isl.schedule": ...
 
 def schedule_bands(tree: "isl.schedule") -> tuple["isl.schedule_node_band", ...]: ...
 
@@ -484,9 +568,9 @@ class KernelScheduleError(RuntimeError):
   - Each band's `coincident` members MUST be written from
     `tg.parallel_dims` ([analysis §1.7](./analysis.md#17-parallel-dimensions)) —
     the flags are read, never recomputed.
-  - `build_schedule_tree` MUST return `tg` with `tree` filled in and every other
-    field unchanged. An empty `tg.units`, or a unit with no matching piece of
-    `tg.domain`, MUST raise `KernelScheduleError`.
+  - `build_schedule_tree` MUST return a new ISL schedule and MUST NOT mutate
+    `tg`. An empty `tg.units`, or a unit with no matching piece of `tg.domain`,
+    MUST raise `KernelScheduleError`.
   - `schedule_bands` MUST return every band of the tree in top-down order, which
     for a constructed tree is `tg.units` order, and MUST raise when the tree
     carries no band.
@@ -554,7 +638,11 @@ class HoleContract:
     output: BufferAccess
     coords: tuple[str, ...]
 
-def emit_scaffold(tg: TileGraph) -> tuple[Skeleton, Swimlane, list[HoleContract]]: ...
+def emit_scaffold(
+    graph: TileGraph,
+    tree: "isl.schedule",
+    ring: dict[str, int],
+) -> tuple[Skeleton, Swimlane, list[HoleContract]]: ...
 
 class EmitScaffoldError(RuntimeError):
     """A construct emit_scaffold does not render, or a TileGraph precondition that did not hold."""
@@ -562,18 +650,18 @@ class EmitScaffoldError(RuntimeError):
 
 - constraints:
   - Every structure MUST be immutable.
-  - The skeleton MUST be isl code generation over `tg.tree`, with each naked
-    statement call replaced by its hole call. `tg.tree is None` MUST raise
-    `EmitScaffoldError`.
+  - The skeleton MUST be ISL code generation over `tree`, with each naked
+    statement call replaced by its hole call. `graph`, `tree`, and `ring` are
+    separate inputs; the function MUST NOT read scheduling state from or write
+    scheduling state to the `TileGraph`.
   - A hole call MUST name its inputs, its output, and its raw schedule
     coordinates, each behind its own marker, so the three groups are
     distinguishable without re-deriving them.
   - A read-modify-write self-read on the output buffer MUST appear among the
     inputs rather than be silently dropped.
-  - A buffer whose decided ring depth is above `1` MUST be referenced through
-    that ring, indexed by the innermost coordinate modulo the depth. Before atom
-    selection has run `tg.ring` is empty, and every reference MUST then be the
-    bare buffer name.
+  - A buffer whose `ring` depth is above `1` MUST be referenced through that
+    ring, indexed by the innermost coordinate modulo the depth. An empty `ring`
+    mapping makes every reference the bare buffer name.
   - Exactly one `HoleContract` MUST be produced per statement, not per call site
     in the generated text, and its `coords` MUST come from the first occurrence.
   - A statement whose name has no matching `TileUnit`, or that writes more than
@@ -699,3 +787,75 @@ class PartitionFacts:
   - Compiler policy MUST stay in `ScheduleOptions`, not in these facts: what the
     hardware is does not depend on how aggressively the compiler was asked to
     schedule it.
+
+### 5.3 `PipelineFacts`
+
+```python
+class PipelineFactsQuery:
+    """Facts requested for one pipeline projection.
+
+    Attributes:
+        topology: attribute; topology level the pipeline is scheduled over.
+        statements: attribute; stable statement IDs paired with their ops.
+    """
+
+    topology: str
+    statements: tuple[tuple[str, object], ...]
+
+class PipelineInstructionFacts:
+    """Instruction choices for one statement.
+
+    Attributes:
+        statement_id: attribute; stable statement identity.
+        candidates: attribute; supported atom choices for that statement.
+    """
+
+    statement_id: str
+    candidates: tuple[AtomFact, ...]
+
+class PipelineFacts:
+    """All concrete information required to close a pipeline problem.
+
+    Attributes:
+        topology: attribute; level the pipeline is scheduled over.
+        tile_capacity_scope: attribute; level that owns the bounded tile store.
+        tile_capacity_bytes: attribute; capacity of that tile store in bytes.
+        max_threads_per_warp: attribute; target warp-width limit.
+        instructions: attribute; instruction choices by statement identity.
+    """
+
+    topology: str
+    tile_capacity_scope: str
+    tile_capacity_bytes: int
+    max_threads_per_warp: int
+    instructions: tuple[PipelineInstructionFacts, ...]
+```
+
+- constraints:
+  - Every structure MUST be immutable.
+  - `PipelineFactsQuery.statements` MUST preserve program statement order and
+    MUST use the stable IDs later used by the plan.
+  - `topology` and `tile_capacity_scope` MUST remain distinct: the level whose
+    threads are scheduled need not own the capacity that bounds their shared
+    tile.
+  - `instructions` MUST contain one entry per requested statement. Each atom is
+    carried through `AtomFact` and remains opaque to the common scheduler.
+  - Like `PartitionFacts`, this aggregate is projected once with
+    `Target.as_facts`; the closed problem MUST NOT retain a `Target` callback.
+
+## 6. Public errors
+
+```python
+class ScheduleError(ValueError):
+    """A scheduling request that cannot be served, or a solve that failed."""
+
+class PlanVerificationError(ValueError):
+    """A plan that refers to missing state or contradicts itself."""
+```
+
+- constraints:
+  - Both errors are public from `tilefoundry.schedule`.
+  - Request validation, algorithm resolution, and solve failures MUST surface as
+    `ScheduleError`.
+  - `SchedulePlan.verify` failures MUST surface as `PlanVerificationError`, so a
+    caller can distinguish an unserviceable request from a malformed result.

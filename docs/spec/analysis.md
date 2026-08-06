@@ -60,7 +60,7 @@ class TileUnit:
 
 ```python
 class TileGraph:
-    """Polyhedral model of one HIR Function body, plus its schedule.
+    """Provide the polyhedral model of one HIR Function body.
 
     Attributes:
         domain: attribute; Union of every statement's iteration domain, one named tuple per statement.
@@ -71,9 +71,6 @@ class TileGraph:
         params: attribute; isl parameter name to the ShapeDim it stands for.
         buffer_dtypes: attribute; Buffer tuple name to the DType its elements carry.
         parallel_dims: attribute; Statement name to one flag per own domain dimension, set when that dimension carries no dependence.
-        tree: attribute; isl schedule tree over this model, or None before one is built.
-        ring: attribute; Buffer name to its decided ring depth; empty until atom selection decides it.
-        decisions: attribute; Recorded per-statement decisions, or None until atom selection records them.
     """
 
     domain: "isl.union_set"
@@ -82,11 +79,8 @@ class TileGraph:
     writes: "isl.union_map"
     units: tuple[TileUnit, ...]
     params: dict
-    buffer_dtypes: dict = {}
-    parallel_dims: dict = {}
-    tree: "isl.schedule | None" = None
-    ring: dict = {}
-    decisions: dict | None = None
+    buffer_dtypes: dict = field(default_factory=dict)
+    parallel_dims: dict = field(default_factory=dict)
 ```
 
 - constraints:
@@ -112,12 +106,10 @@ class TileGraph:
   - `parallel_dims` MUST carry exactly one flag per own domain dimension of
     every statement, and MUST be measured from `domain` + `deps` ([§1.7](#17-parallel-dimensions)) rather
     than reported by a scheduler.
-  - `tree`, `ring` and `decisions` MUST be empty (`None` / `{}`) as returned by
-    `extract`, and MUST be filled only by the schedule stages that decide them
+  - Schedule trees, ring depths, and decisions MUST remain schedule-owned state
+    outside `TileGraph`; schedule program views pair those values with the
+    immutable analysis graph without mutating it
     ([schedule §4](./schedule.md#4-kernel-schedule-construction)).
-  - `ring` and `decisions` MUST be plain fields. Neither MAY be carried as an
-    isl mark payload: isl marks are process-global state and MUST NOT hold a
-    Python object.
 
 ### 1.3 `extract`
 
@@ -338,18 +330,10 @@ requested analysis and renders the results together
 
 ### 2.1 Metadata records
 
+`TrafficBytes` is the shared cost-context record defined by
+[visitor-registry §7](./visitor-registry.md#7-instance-4--cost).
+
 ```python
-class TrafficBytes:
-    """Read and write byte counts for one memory hierarchy level.
-
-    Attributes:
-        read: attribute; Bytes read at this level.
-        write: attribute; Bytes written at this level.
-    """
-
-    read: int = 0
-    write: int = 0
-
 class ComputeCostMetadata(IRMetadata):
     """One Call's logical work, as the authored program states it.
 
@@ -616,6 +600,45 @@ class MemoryHierarchyFacts:
     capacity MUST be recorded as an advisory and MUST NOT fail the call, because
     a working set larger than a cache still runs.
 
+### 2.4 Throughput and parallel-capacity facts
+
+```python
+class ThroughputFacts:
+    """Carry the rates used by roofline analysis.
+
+    Attributes:
+        peak_flops_per_second: attribute; Published compute rates by dtype.
+        memory_bandwidth_bytes_per_second: attribute; Published memory bandwidth.
+        bandwidth_level: attribute; Memory level whose traffic the bandwidth measures.
+    """
+
+    peak_flops_per_second: tuple[tuple[DType, int], ...]
+    memory_bandwidth_bytes_per_second: int | None
+    bandwidth_level: str
+
+    def peak_for(self, dtype: DType) -> int | None: ...
+
+
+class ParallelCapacityFacts:
+    """Carry the parallel capacity assumed by timeline analysis.
+
+    Attributes:
+        topology: attribute; Topology level being scheduled.
+        parallel_units: attribute; Instances admitted concurrently.
+    """
+
+    topology: str
+    parallel_units: int
+```
+
+- constraints:
+  - `ThroughputFacts.peak_for` MUST return `None` for a dtype with no published
+    rate; analysis MUST NOT substitute an assumed rate.
+  - `bandwidth_level` MUST select the traffic level divided by the published
+    bandwidth rather than summing traffic across levels.
+  - `parallel_units` is compiler policy over hardware facts and MUST be a
+    capacity used to form waves, not a program rewrite.
+
 ## 3. Composed analysis
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
@@ -624,7 +647,15 @@ what that root transitively needs, runs each member once, and reports what ran.
 
 ```python
 class AnalysisResult:
-    """What one composed Analyze call computed."""
+    """Record what one composed Analyze call computed.
+
+    Attributes:
+        module: attribute; Source Module.
+        function: attribute; Function that received records.
+        analysis: attribute; Requested root analysis.
+        executed: attribute; Analyses executed in dependency order.
+        metadata_types: attribute; Metadata classes actually written.
+    """
 
     module: "Module"
     function: "Function"
@@ -706,12 +737,19 @@ def analyze(
 
 ```python
 class AnalysisAlgorithm:
-    """One registered analysis: its identity, needs, and owned Metadata."""
+    """Describe one registered analysis.
+
+    Attributes:
+        selector: attribute; Public analysis selector.
+        run: attribute; Analysis implementation.
+        requires: attribute; Dependency selectors.
+        produces: attribute; Owned metadata classes.
+    """
 
     selector: str
     run: AnalysisCallable
-    requires: tuple[str, ...]
-    produces: tuple[type[IRMetadata], ...]
+    requires: tuple[str, ...] = ()
+    produces: tuple[type[IRMetadata], ...] = field(default=())
 
 
 def register_analysis(

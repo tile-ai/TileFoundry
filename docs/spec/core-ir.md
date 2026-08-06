@@ -37,21 +37,38 @@ Exprs.
 
 ```python
 class Module:
-    name: str                                               # the module name
-    functions: tuple[hir.Function | tir.PrimFunction, ...]  # the heterogeneous hir.Function | tir.PrimFunction container
-    entry: str                                              # name of the public entry function (a name present in functions)
-    modules: tuple["Module", ...]                           # child modules, each named by the attribute it is attached under
-    target: Target | None                                   # the hardware this execution domain runs on; None inherits from the owner
-    topologies: tuple[Topology, ...] | None                 # the complete ordered parallel-resource hierarchy; None inherits, () declares none
-    metadata: dict[str, object]                             # target / option metadata, never semantic mesh bindings
-    methods: Mapping[str, object]                           # plain Python orchestration methods (e.g. forward), bound like instance methods
+    """Contain one execution domain and its owned module tree.
 
-    @property
-    def weights(self) -> Mapping[str, TensorType]: ...     # derived — see below; there is no `states` field
+    Attributes:
+        name: attribute; Module name within its owner.
+        functions: attribute; Heterogeneous HIR and TIR function container.
+        entry: attribute; Optional public entry-function name.
+        modules: attribute; Child modules named by their attachment attributes.
+        target: attribute; Declared hardware target, or None to inherit.
+        topologies: attribute; Declared hierarchy, None to inherit, or an empty tuple.
+        metadata: attribute; Target and compiler-option metadata.
+        methods: attribute; Plain Python orchestration methods.
+    """
 
-    def resolve_target(self) -> Target: ...                # effective Target; fails when no owner declares one
-    def effective_topologies(self) -> tuple[Topology, ...]: ...   # effective hierarchy, inherited included
-    def resolve_topology(self, name: str) -> Topology: ...  # one effective level by exact name
+    name: str
+    functions: tuple[hir.Function | tir.PrimFunction, ...]
+    entry: str | None = None
+    modules: tuple["Module", ...] = field(default_factory=tuple)
+    target: Target | None = None
+    topologies: tuple[Topology, ...] | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+    methods: Mapping[str, object] = field(default_factory=dict)
+
+    def weights(self) -> Mapping[str, TensorType]: ...
+    def resolve_target(self) -> Target: ...
+    def effective_topologies(self) -> tuple[Topology, ...]: ...
+    def resolve_topology(self, name: str) -> Topology: ...
+    def owns(self, function: object, *, derived: bool = False) -> bool: ...
+    def load(self, resource) -> "LoadedModule": ...
+    def forward(self, *args): ...
+    def prepare(
+        self, raw, out_dir: str, *, device: str = "cpu"
+    ) -> None: ...
 ```
 
 - constraints:
@@ -61,6 +78,10 @@ class Module:
     declares the `Target` and the ordered `Topology` hierarchy.
   - a `Module` owns its child subtree. Placing a child that already belongs to
     another owner MUST NOT change what the first owner's subtree resolves.
+  - `owns(function)` MUST use identity and accept the Module's direct functions
+    and their specialization variants. With `derived=True`, it MUST also follow
+    a derived function's recorded specialization origin; equal copies and
+    same-name functions from another Module MUST remain unowned.
 
 - `parse_module` (see [parser §1](./parser.md#1-dsl-syntax)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
@@ -76,20 +97,21 @@ class Module:
 *declares*, not what it resolves to; resolution is lexical over the owner
 chain and is not copied onto each Module or Function.
 
-- `topologies = None` declares nothing and inherits the owner's hierarchy;
+- constraints:
+  - `topologies = None` declares nothing and inherits the owner's hierarchy;
   `topologies = ()` declares an explicitly topology-free domain; an explicit
   tuple replaces the inherited hierarchy whole rather than extending it. A
   declared tuple MUST NOT repeat a level name.
-- `resolve_topology(name)` returns the single effective level with that exact
+  - `resolve_topology(name)` returns the single effective level with that exact
   name and MUST fail, naming the levels that are available, when there is
   none.
-- `metadata` carries target / compiler-option configuration, never
+  - `metadata` carries target / compiler-option configuration, never
   semantic topology / mesh information.
-- Each entry of `modules` is named by the attribute it is attached under —
+  - Each entry of `modules` is named by the attribute it is attached under —
   torch / HuggingFace checkpoint-naming semantics: assigning a child to
   `self.self_attn` in a class body names that child `self_attn` in the tree,
   independent of the child's own `name`.
-- `mod.cloned()` returns an independent copy: its functions, their bodies, its
+  - `mod.cloned()` returns an independent copy: its functions, their bodies, its
   children, and every `Call` targeting one of them are copies, with internal
   `Call.target`s redirected to the copy. The immutable context around the node —
   its owner, `target` and `topologies` — MUST stay shared, since those are not
@@ -99,20 +121,20 @@ chain and is not copied onto each Module or Function.
   holding one Function would report one measurement under two names. This is
   what lets one definition become N distinct instances (N decoder layers, each
   renamed by index) and one prototype serve any number of independent builds.
-- `methods` collects plain Python functions (orchestration methods, e.g.
+  - `methods` collects plain Python functions (orchestration methods, e.g.
   `forward` / `init_caches`; full collection rule in
   [parser §2.7](./parser.md#27-module-authoring-surface)). A function name,
   a child module name, and a method name MUST be disjoint at one `Module`'s
   own level — all three resolve through the same attribute surface ([§1.1](#11-function-access)
   below), so a name used by more than one would be ambiguous.
-- `weights` is a derived property, not a stored field: each access unions
+  - `weights` is a derived property, not a stored field: each access unions
   every function's `ConstTensor` params (`Var.is_const`), in (function
   order, param order); the same name in two functions MUST carry an
   identical `TensorType`, or the access raises. There is no `states` field
   or persistent-state concept in the IR — a tensor that must survive across
   steps (e.g. a KV cache) is an ordinary `Tensor` param the caller passes in
   and receives back explicitly ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)).
-- Constructing a `Module` **seals** its functions: each base function and
+  - Constructing a `Module` **seals** its functions: each base function and
   its specialization variants are finalized. Variants may be added to a
   base only during authoring, before the base enters a `Module`; once
   sealed, adding a variant is an error
@@ -168,22 +190,21 @@ A `Module` mirrors the model it describes: a caller reaches a kernel, a child
 component, or an orchestration step through the same attribute surface.
 
 Each `name` maps to at most one entry among `Module.functions`,
-`Module.modules`, and `Module.methods` — and a function name, a child module
-name, and a method name MUST be mutually disjoint at one `Module`'s own level
-(checked at construction), since all three resolve through the attribute
-surface below. Within `functions` alone, shape-specialization variants of a
-function live inside that entry's `Function.variants`
-([hir.md §1.1](./hir.md#11-function)), never as separate same-name
-entries — so name resolution is always single-valued.
+`Module.modules`, and `Module.methods`. Within `functions`,
+shape-specialization variants live inside that entry's `Function.variants`
+([hir.md §1.1](./hir.md#11-function)), never as separate same-name entries.
 
-- `mod.lookup(name)` returns the function named `name`; it raises unless
+- constraints:
+  - A function name, child-module name, and method name MUST be mutually
+  disjoint at one Module's own level.
+  - `mod.lookup(name)` returns the function named `name`; it raises unless
   exactly one function matches. This is the canonical name-resolution
   contract (e.g. for a `SymbolRef` callee) and always returns the `Function`
   / `PrimFunction` node itself.
-- `mod.function_named(name)` returns the entries named `name`. In a verified
+  - `mod.function_named(name)` returns the entries named `name`. In a verified
   module this is length 0 or 1 (variants are not separate entries).
-- `mod.entry_function()` returns the function named by `entry`.
-- Python attribute access `mod.<name>` resolves, in order, a function, a
+  - `mod.entry_function()` returns the function named by `entry`.
+  - Python attribute access `mod.<name>` resolves, in order, a function, a
   child module, or a method named `<name>`, and MUST raise `AttributeError`
   when none match or when more than one same-kind entry shares the name. A
   **function** name resolves to a callable that runs it — not to the
@@ -206,30 +227,44 @@ domain it belongs to: a `Function` carries neither the Target its numbers are
 measured against nor the topology hierarchy they divide over, so a bare function
 is not a thing a cost can be stated about.
 
-`select(module, path)` resolves a dotted `path` relative to `module` and returns a
-`Module`. Each segment MUST name a child module, except that the last MAY instead
-name one of the reached module's own functions — which returns that module
-re-entried at it, carrying the Target and topology hierarchy it resolved through
-its owners. An empty `path` is `module` itself. An empty *segment* MUST be
-refused: dropping it would make two different paths name one node.
-
-`function_selectors(module)` returns every HIR function in `module`'s tree paired
-with the path that names it, in source order, parents before children. The paths
-are the ones `select` resolves, so a name is qualified by the children it was
-reached through — two child modules may each define a `moe`, and an unqualified
-name would make them one entry. A `PrimFunction` is not one of these: it is an
-implementation of a function rather than a function of the model.
+- constraints:
+  - `select(module, path)` MUST resolve a dotted `path` relative to `module`
+    and return a `Module`. Each segment MUST name a child module, except that
+    the last MAY instead name one of the reached module's own functions and
+    return that module re-entried at it. An empty path is the input module; an
+    empty segment MUST be refused.
+  - `function_selectors(module)` MUST return every HIR function in the module
+    tree paired with its resolving path, in source order and parents before
+    children. It MUST NOT return `PrimFunction` entries.
 
 ## 2. `Expr`
 
 ```python
 class IRMetadata:
+    """Describe one immutable expression annotation."""
+
     def format_comment(self) -> str | None: ...
 
 class BindingMetadata(IRMetadata):
+    """Describe an authored SSA binding name.
+
+    Attributes:
+        name: attribute; Authored binding name.
+    """
+
     name: str
 
 class SourceSpanMetadata(IRMetadata):
+    """Describe an authored source range.
+
+    Attributes:
+        file: attribute; Source file.
+        line: attribute; Starting line.
+        column: attribute; Starting column.
+        end_line: attribute; Optional ending line.
+        end_column: attribute; Optional ending column.
+    """
+
     file: str
     line: int
     column: int
@@ -248,6 +283,13 @@ class SourceSpanMetadata(IRMetadata):
 
 ```python
 class Expr:
+    """Provide the immutable base for every typed expression.
+
+    Attributes:
+        type: attribute; Expression type.
+        metadata: attribute; Typed expression annotations.
+    """
+
     type: Type
     metadata: tuple[IRMetadata, ...] = ()
 ```
@@ -303,9 +345,15 @@ and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
 
 ```python
 class Call(Expr):
-    target: Op              # the Op being called
-    args: tuple[Expr, ...]  # the input Exprs
-    # type: computed by typeinfer(target, args); one of TensorType / TupleType / UnitType
+    """Represent an Op invocation.
+
+    Attributes:
+        target: attribute; Op being called.
+        args: attribute; Input expressions in parameter order.
+    """
+
+    target: Op
+    args: tuple[Expr, ...]
 ```
 
 - constraints:
@@ -321,15 +369,35 @@ class Call(Expr):
 
 ```python
 class Var(Expr):
-    name: str     # a named value (HIR params, TIR bindings)
-    type: IRType  # declaration-side type
+    """Represent a named value.
+
+    Attributes:
+        name: attribute; Value name.
+        type: attribute; Declaration-side type.
+        is_const: attribute; Whether this is an external constant parameter.
+    """
+
+    name: str
+    type: Type
     is_const: bool = False
 
 class Constant(Expr):
-    value: object  # a literal; a scalar is a rank-0 TensorType
+    """Represent a literal value.
+
+    Attributes:
+        value: attribute; Literal payload.
+    """
+
+    value: object
 
 class Tuple(Expr):
-    elements: tuple[Expr, ...]  # value-level multi-output aggregate; type is TupleType
+    """Represent a value-level aggregate.
+
+    Attributes:
+        elements: attribute; Aggregate elements in field order.
+    """
+
+    elements: tuple[Expr, ...]
 ```
 
 - constraints:
@@ -337,10 +405,6 @@ class Tuple(Expr):
   - `Var.is_const` MUST be preserved for HIR function parameters and MUST mark
     an external constant tensor parameter without embedding a tensor payload or
     changing its `TensorType`.
-
-`Tuple` is the value-level aggregate node; it pairs with `TupleType`
-([types §4](./types.md#4-dim--symbolic-shape-dimensions)) but is not the same — `Tuple` is an `Expr`
-in the IR graph, `TupleType` is the type carried by `Expr.type`.
 
 ### 2.3 `Op`
 
@@ -351,10 +415,25 @@ in the IR graph, `TupleType` is the type carried by `Expr.type`.
 registered with `@register_op`.
 
 ```python
-class Op:                                     # @register_op registers a class
-    @classmethod
-    def params(cls) -> list[ParamDef]: ...    # reflectively scans class-level ParamDef attributes and returns them ordered
-    def __init__(self, **attrs): ...          # instantiates with attribute values (a no-attribute Op is a singleton)
+class ParameterInfo:
+    """Describe the public reflection view of one Op parameter.
+
+    Attributes:
+        name: attribute; Declared parameter name.
+        kind: attribute; Whether the parameter is an input or attribute.
+        type: attribute; Declared Python annotation.
+    """
+
+    name: str
+    kind: Literal["input", "attribute"]
+    type: object
+
+
+class Op:
+    """Describe an operation signature and its attribute values."""
+
+    def params(cls) -> list[ParameterInfo]: ...
+    def __init__(self, **attrs): ...
 ```
 
 - constraints:
@@ -366,11 +445,21 @@ class Op:                                     # @register_op registers a class
 
 ```python
 class ParamDef:
-    kind: Literal["input", "attribute"]  # "input" (flows into Call.args) or "attribute" (carried on the Op instance)
-    annotation: type | None              # the Python type of the parameter
-    pattern: Pattern | None              # input-kind only — the Pattern matched against arg.type
-    default: object                      # attribute-kind only — omitted-call default
-    optional: bool                       # attribute-kind only — nullability
+    """Declare one Op input or attribute.
+
+    Attributes:
+        kind: attribute; Whether the parameter is an input or attribute.
+        annotation: attribute; Python value-family annotation.
+        pattern: attribute; Optional input-type predicate.
+        optional: attribute; Whether None is accepted.
+        default: attribute; Call-site default or the required-value sentinel.
+    """
+
+    kind: Literal["input", "attribute"]
+    annotation: type = field(default=object)
+    pattern: Pattern | None = None
+    optional: bool = False
+    default: Any = MISSING
 ```
 
 - constraints:
@@ -379,6 +468,7 @@ class ParamDef:
 Example:
 
 ```python
+# example
 @register_op
 class Binary(Op):
     lhs  = ParamDef(kind="input", pattern=Tensor)
@@ -420,16 +510,8 @@ def builder() -> Op:
   - alias schemas have no IR class (`OpSchema.op_class is None`) and prepend to the
     schema bucket so they win first-match resolution.
 
-```python
-@register_alias(dialect="tf", category="math", name="add",
-                params=[Binary.lhs, Binary.rhs])
-def _add() -> Op:
-    return Binary(kind=BinaryKind.ADD)
-```
-
 Properties:
 
-- `OpSchema.op_class is None` — alias schemas have no IR class.
 - `params` reuses the **static `ParamDef` references** of the target
   Op. The alias never re-declares ParamDef structures.
 - `builder` takes attribute kwargs only; input args still flow into
@@ -441,9 +523,13 @@ Properties:
   ``op_class``-keyed legacy lookup transparently sees the real class
   registered for the same name (or `None` when there is none).
 
-HIR `math` uses aliases for kinded sugar names (`add` / `sub` /
-... / `cmp_eq` / ... / `neg` / ...); the IR core has just `Binary`
-/ `Unary` (see [hir math ops](./hir.md#irhirmath)).
+```python
+# example
+@register_alias(dialect="tf", category="math", name="add",
+                params=[Binary.lhs, Binary.rhs])
+def _add() -> Op:
+    return Binary(kind=BinaryKind.ADD)
+```
 
 #### Input position and form
 
@@ -466,7 +552,9 @@ and specialization dispatch.
 
 ```python
 class Pattern:
-    def match(self, subject) -> bool: ...    # base predicate returning bool; subclasses override it
+    """Carry a reusable dispatch predicate."""
+
+    def match(self, subject) -> bool: ...
 ```
 
 - constraints:
@@ -491,29 +579,92 @@ Two consumer surfaces:
 
 ```python
 class DimVarRangePat(Pattern):
-    dim_var: str  # name of the DimVar the range applies to
-    lo: int       # the half-open interval [lo, hi) lower bound
-    hi: int       # the half-open interval [lo, hi) upper bound
+    """Match one sub-range of a named dimension.
+
+    Attributes:
+        dim_var: attribute; Name of the dimension.
+        lo: attribute; Inclusive lower bound.
+        hi: attribute; Exclusive upper bound.
+    """
+
+    dim_var: str = ""
+    lo: int = 0
+    hi: int = 0
 ```
 
 - constraints:
-  - the per-variant sub-range for a named `DimVar`; `match(v)` is `lo <= v < hi`
-    and ignores `dim_var`.
+  - This is the per-variant sub-range for a named `DimVar`; `match(v)` is
+    `lo <= v < hi` and ignores `dim_var`.
+  - `dim_var` MUST be a non-empty `str` — the name of the `DimVar` the
+    range applies to. The lowering resolves it to a runtime
+    `ShapeOf(param, axis)` by walking the enclosing function signature.
+  - `lo` and `hi` MUST be plain `int`s (`bool` is rejected).
+  - The interval is half-open `[lo, hi)` (`lo` inclusive, `hi`
+    exclusive); construction MUST satisfy `lo < hi`. A single-point
+    range is `[k, k+1)`.
+  - `match(value)` returns `True` for an `int` value `v` iff
+    `lo <= v < hi`. The `dim_var` field does not participate in
+    `match`.
+  - The pattern references a `DimVar` by name only. The envelope of
+    the named dim lives on the `DimVar(name, lo, hi)` itself (see
+    [types.md §4](./types.md#4-dim--symbolic-shape-dimensions)); the
+    `DimVarRangePat` carries the per-variant sub-range. Envelope
+    containment (`pattern ⊆ DimVar envelope`) is checked in
+    signature context — by the `@tilefoundry.func` validator and the
+    HIR→TIR lowering — not by `DimVarRangePat.__post_init__`.
 
-- `dim_var` MUST be a non-empty `str` — the name of the `DimVar` the
-  range applies to. The lowering resolves it to a runtime
-  `ShapeOf(param, axis)` by walking the enclosing function signature.
-- `lo` and `hi` MUST be plain `int`s (`bool` is rejected).
-- The interval is half-open `[lo, hi)` (`lo` inclusive, `hi`
-  exclusive); construction MUST satisfy `lo < hi`. A single-point
-  range is `[k, k+1)`.
-- `match(value)` returns `True` for an `int` value `v` iff
-  `lo <= v < hi`. The `dim_var` field does not participate in
-  `match`.
-- The pattern references a `DimVar` by name only. The envelope of
-  the named dim lives on the `DimVar(name, lo, hi)` itself (see
-  [types.md §4](./types.md#4-dim--symbolic-shape-dimensions)); the
-  `DimVarRangePat` carries the per-variant sub-range. Envelope
-  containment (`pattern ⊆ DimVar envelope`) is checked in
-  signature context — by the `@tilefoundry.func` validator and the
-  HIR→TIR lowering — not by `DimVarRangePat.__post_init__`.
+## 4. Shared operation kinds
+
+```python
+class BinaryKind(enum.Enum):
+    """Enumerate pointwise binary operation kinds shared by HIR and TIR."""
+
+    ADD = "add"
+    SUB = "sub"
+    MUL = "mul"
+    DIV = "div"
+    FLOOR_DIV = "floor_div"
+    MOD = "mod"
+    MIN = "min"
+    MAX = "max"
+    EQ = "eq"
+    NE = "ne"
+    LT = "lt"
+    LE = "le"
+    GT = "gt"
+    GE = "ge"
+    AND = "and"
+    OR = "or"
+
+
+class UnaryKind(enum.Enum):
+    """Enumerate pointwise unary operation kinds shared by HIR and TIR."""
+
+    NEG = "neg"
+    ABS = "abs"
+    RSQRT = "rsqrt"
+    CAST = "cast"
+    NOT = "not"
+    RELU = "relu"
+    SQUARE = "square"
+    EXP = "exp"
+    LOG = "log"
+    CEIL = "ceil"
+    ROUND = "round"
+    EXP2 = "exp2"
+    LOG2 = "log2"
+
+
+class ReduceKind(enum.Enum):
+    """Enumerate reduction operation kinds shared by HIR and TIR."""
+
+    MEAN = "mean"
+    SUM = "sum"
+    ABS_MAX = "abs_max"
+    MAX = "max"
+```
+
+- constraints:
+  - These enums MUST be the single shared kind vocabulary carried by HIR and
+    TIR generic operations; lowering MUST preserve a kind without remapping it.
+  - The member names and string values above are the complete built-in sets.

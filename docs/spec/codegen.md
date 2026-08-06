@@ -47,12 +47,18 @@ metadata the link step needs.
 ### 2.1 Emitter registry
 
 ```python
-def get_emitter(target: str) -> Emitter: ...    # resolve the emitter registered for a target
-# Emitter: Callable[[tuple[PrimFunction, ...]], LinkableModule]
+def get_emitter(target: str | Target) -> Callable: ...
+def emit_cuda_module(cuda_fns: tuple[PrimFunction, ...]) -> LinkableModule: ...
+def emit_host_module(entry: PrimFunction, module) -> LinkableModule: ...
 ```
 
 - constraints:
-  - each target registers one emitter, resolved by target name.
+  - Each target registers one callable emitter, resolved by target object or
+    target name.
+  - Emitters do not share one callable shape. The CUDA emitter consumes the
+    grouped CUDA functions; the CPU emitter consumes the host entry plus the
+    module whose device functions it launches. Callers MUST invoke the resolved
+    emitter according to its target-owned contract.
 
 An emitter MUST consume only TIR and MUST return a `LinkableModule` for its
 target. The emitter file layout mirrors the IR file layout
@@ -62,7 +68,7 @@ by [code-organization](./code-organization.md).
 ### 2.2 Per-Op handler registry
 
 ```python
-def handler(call: Call, ctx: CodegenContext) -> None: ...   # Call (wrapped Op inside Evaluate) + CodegenContext
+def handler(call: Call, ctx: CodegenContext) -> None: ...
 ```
 
 - constraints:
@@ -80,15 +86,32 @@ prohibited.
 
 ```python
 class CodegenContext:
-    def emit(self, line: str) -> None: ...               # append a target source line
-    def expr(self, node: Expr) -> str: ...               # render an Expr as a target expression string
-    def dtype_to_cpp(self, dtype_name: str) -> str: ...  # backend dtype mapping
-    def name_for(self, var) -> str: ...                  # allocate / return the target-side identifier for an SSA var
+    """Mutable CUDA source builder passed to registered handlers."""
+
+    def reset_barrier_ids(self) -> None: ...
+    def alloc_barrier_id(self) -> int: ...
+    def dtype_to_cpp(self, dtype_name: str) -> str: ...
+    def register_kernel_param(self, var) -> None: ...
+    def is_kernel_param(self, var) -> bool: ...
+    def emit(self, line: str) -> None: ...
+    def blank(self) -> None: ...
+    def indent(self) -> None: ...
+    def dedent(self) -> None: ...
+    def name_for(self, var) -> str: ...
+    def source(self) -> str: ...
+    def capture(self, fn) -> str: ...
+    def emit_node(self, node) -> None: ...
 ```
 
 - constraints:
-  - the per-walk state object passed to handlers; the single source of truth for
-    target-side type strings, so handlers do not read the IR for them directly.
+  - This is the concrete CUDA context; it has a zero-argument constructor and
+    keeps its output, indentation, symbol table, and counters private.
+  - `emit_node` dispatches `Evaluate(op, args)` by the wrapped Op class; all
+    other nodes dispatch by their own class.
+  - `source` returns accumulated source text, and `capture` temporarily isolates
+    only the output buffer while preserving indentation and symbol bindings.
+  - The context is the single source of truth for target-side type strings, so
+    handlers do not read the IR for them directly.
 
 A handler MUST NOT reach into the IR for type strings on its own; the context is
 the single source of truth. Other helpers MAY be added per target.
@@ -109,7 +132,7 @@ codegen-static participant geometry) as compile-time template parameters. The
 runtime template dispatches on those layouts at compile time; codegen does not
 select a tier, compute a per-tier parameter, or carry the selection on the TIR
 op. This is the codegen side of the runtime-owned dispatch principle, whose
-contract lives in [runtime.md §3](runtime.md#3-runtime-ops). The target-side
+contract lives in [runtime.md §3](./runtime.md#3-runtime-ops). The target-side
 emission that produces these calls is owned by [target](./target.md).
 
 ## 4. Codegen products
@@ -121,13 +144,19 @@ One lowered function's pre-link source.
 
 ```python
 class LinkableFunction:
-    name: str      # the function / kernel symbol
-    source: str    # that function's emitted text
+    """One lowered function's pre-link source.
+
+    Attributes:
+        name: attribute; function or kernel symbol.
+        source: attribute; emitted function text.
+    """
+
+    name: str
+    source: str
 ```
 
 - constraints:
-  - MUST be the function / kernel symbol.
-  - MUST be that function's emitted text.
+  - No additional constraints.
 
 ### 4.2 `LinkableModule`
 
@@ -135,17 +164,24 @@ One target's pre-link translation unit.
 
 ```python
 class LinkableModule:
-    target: str                              # the function target name (cuda / cpu)
-    language: str                            # the source language (cu / cpp)
-    source: str                              # the assembled translation-unit text
-    functions: tuple[LinkableFunction, ...]  # the module's constituent LinkableFunctions
+    """One target's pre-link translation unit.
+
+    Attributes:
+        target: attribute; function target name.
+        language: attribute; source language.
+        source: attribute; assembled translation-unit text.
+        functions: attribute; constituent linkable functions in emission order.
+    """
+
+    target: str
+    language: str
+    source: str
+    functions: tuple[LinkableFunction, ...] = field(default_factory=tuple)
 ```
 
 - constraints:
-  - MUST be the function target name (`cuda` / `cpu`).
   - MUST be the source language: `cu` for a CUDA translation unit, `cpp` for a
     host translation unit.
-  - MUST be the assembled translation-unit text the link step compiles.
   - MUST list the module's constituent `LinkableFunction`s, in emission order.
 
 A `LinkableModule` is a build artifact, not a runtime object and not a
@@ -158,16 +194,22 @@ needs.
 
 ```python
 class LinkedModule:
-    library_path: Path                  # the produced shared library
-    source: str                         # the assembled host + device source
-    entry: EntryABI                     # the host-visible ABI of the module entry
+    """Linked library plus host-visible ABI metadata.
+
+    Attributes:
+        library_path: attribute; produced shared-library path.
+        source: attribute; assembled host and device source.
+        entry: attribute; host-visible ABI of the module entry.
+    """
+
+    library_path: Path
+    source: str
+    entry: EntryABI
 ```
 
 - constraints:
-  - MUST point at the produced shared library.
   - MUST carry the assembled host + device source — the diagnostic source the
     runtime exposes as `RuntimeModule.source` ([runtime](./runtime.md)).
-  - MUST be the host-visible ABI of the module entry.
 
 The `entry` `EntryABI` is a host-visible ABI metadata type owned by
 [runtime](./runtime.md); codegen references it on `LinkedModule` and MUST NOT

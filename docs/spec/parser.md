@@ -179,6 +179,7 @@ dtype          ::= '"f32"' | '"f16"' | '"bf16"' | …  ; see types §3
 layout         ::= layout-sugar                      ; see §1.5
                 | 'ShardLayout(' … ')'              ; verbose, see shard §7
 storage        ::= '"host"' | '"gmem"' | '"smem"' | '"rmem"' | '"tmem"'
+                | 'host' | 'gmem' | 'smem' | 'rmem' | 'tmem'
 ```
 
 `Tensor[...]` and `ConstTensor[...]` resolve to the same ordinary `TensorType`;
@@ -203,6 +204,8 @@ Tensor[(), "bf16"]                                    # scalar
     descriptor before constructing `TensorType`.
   - An unknown dtype string MUST be rejected; it MUST NOT fall back to another
     descriptor.
+  - Bare storage names MUST resolve to the five constants exported by
+    `tilefoundry.dsl.storage`; they are equivalent to the quoted spellings.
 
 ### 1.5 Layout sugar
 
@@ -460,16 +463,29 @@ The two namespaces are real Python modules; resolution is module
 
 ```python
 # tilefoundry/ir/core/op_registry.py
-def _register_schema(schema: OpSchema) -> None: ...
+def _register_schema(schema: OpSchema, *, prepend: bool = False) -> None: ...
 def get_schemas(dialect: str, name: str) -> list[OpSchema]: ...
 def iter_schema_names(dialect: str) -> Iterable[str]: ...
 
 # tilefoundry/ir/core/op_schema.py — a frozen dataclass
 class OpSchema:
-    dialect: str            # "tf" or "T"
+    """Describe one registered callable schema.
+
+    Attributes:
+        name: attribute; Canonical callable name.
+        dialect: attribute; Surface dialect, `tf` or `T`.
+        category: attribute; Organizational group.
+        signature: attribute; Parameters in declaration order.
+        builder: attribute; Callable that constructs the IR operation.
+        op_class: attribute; Registered Op class, or None for an alias schema.
+    """
+
     name: str
-    op_cls: type[Op]
+    dialect: str
+    category: str
     signature: tuple[ParamDef, ...]
+    builder: Callable[..., Any]
+    op_class: type | None = None
 
 # tilefoundry/dsl/tf/__init__.py        (TIR symmetric in tilefoundry/dsl/T)
 def __getattr__(name: str) -> type[Op] | Callable: ...
@@ -485,7 +501,7 @@ classDiagram
         iter_schema_names(dialect)
         _register_schema(schema)
     }
-    class OpSchema { dialect; name; op_cls; signature }
+    class OpSchema { name; dialect; category; signature; builder; op_class }
     class tilefoundry_dsl_tf { __getattr__(name); __dir__() }
     class tilefoundry_dsl_T  { __getattr__(name); __dir__() }
     class Op { <<abstract>> }
@@ -503,8 +519,13 @@ for any name not found on the module's own namespace. Both
 namespaces implement it identically:
 
 ```python
-def __getattr__(name: str) -> type[Op] | Callable: ...   # resolve a dialect name to its Op class / alias builder
-def __dir__() -> list[str]: ...                          # list the dialect's registered schema names
+def __getattr__(name: str) -> type[Op] | Callable:
+    """Resolve a dialect name to its Op class or alias builder."""
+    ...
+
+def __dir__() -> list[str]:
+    """Return the dialect's registered schema names."""
+    ...
 ```
 
 `__getattr__` looks up `op_registry.get_schemas(_DIALECT, name)` and raises
@@ -580,7 +601,7 @@ completions for `tf.<name>(...)`.
   on the `tilefoundry.ir.<dialect>.<category>` directory layout. DSL
   source addresses Ops only through `(dialect, name)`.
 - **Single-schema identity**. For a single-schema name `n`,
-  `getattr(tilefoundry.dsl.tf, n) is get_schemas("tf", n)[0].op_cls`.
+  `getattr(tilefoundry.dsl.tf, n) is get_schemas("tf", n)[0].op_class`.
   No wrapper class is interposed.
 
 ### 2.6 Platform sub-namespaces
@@ -721,14 +742,14 @@ function-level entry points are independent calls; there is no
 
 ```python
 # tilefoundry/parser/hir_parser.py
-def parse_func        (fn, *, topologies=()) -> hir.Function: ...
+def parse_func(fn, *, topologies=(), specializations=(), extra_closure=None) -> hir.Function: ...
 def parse_func_source (src: str) -> core_ir.Module | hir.Function: ...
-def parse_module_source(src: str) -> core_ir.Module: ...
+def parse_module_source(src: str) -> core_ir.Module | hir.Function: ...
 def parse_script      (src: str) -> core_ir.Module | hir.Function: ...
 class _HirBodyVisitor(BaseExprVisitor): ...
 
 # tilefoundry/parser/tir_parser.py
-def parse_prim_func   (fn) -> tir.PrimFunction: ...
+def parse_prim_func(fn, *, target=None, extra_closure=None) -> tir.PrimFunction: ...
 class _TirBodyVisitor(BaseExprVisitor): ...
 
 # tilefoundry/parser/base.py
@@ -738,7 +759,7 @@ class BaseExprVisitor: ...
 # tilefoundry/parser/symtab.py
 class LexicalEnv:
     def push_frame(self) -> None: ...
-    def pop_frame (self) -> None: ...
+    def pop_frame (self) -> dict[str, Any]: ...
     def define    (self, name, value) -> None: ...
     def lookup    (self, name) -> object: ...
     def innermost_mesh(self) -> Mesh | None: ...
@@ -893,6 +914,26 @@ schema's `ParamDef.annotation`:
 - `annotation=ShardLayout` → `parse_shard_layout_sugar`
 - `annotation=Layout`      → `parse_layout_sugar`
 
+```python
+def parse_mesh_layout_sugar(
+    node: ast.AST, *, closure: dict[str, Any] | None = None
+) -> Layout:
+    """Parse mesh-layout tuple sugar.
+
+    Args:
+        node: Static tuple syntax.
+        closure: Optional static-name bindings.
+
+    Returns:
+        The parsed mesh layout.
+    """
+    ...
+```
+
+- constraints:
+  - `parse_mesh_layout_sugar` MUST resolve closure-bound integer extents and
+    MUST derive C-order strides when the tuple omits them.
+
 Sugar dispatch is annotation-driven, not name-driven: an attribute
 called `shape` will not be parsed as layout sugar unless its
 ParamDef declares a layout annotation. Ops without a registered
@@ -925,6 +966,42 @@ across dialects. An HIR-only Op (e.g. `rope`) raises *unknown TIR
 callable* in a TIR body, and a TIR-only Op (e.g. `copy`) raises
 *unknown HIR callable* in an HIR body. The trailing-underscore
 selector is gated to the TIR token only.
+
+### 4.7 Restricted static evaluation
+
+```python
+def eval_static(
+    node: ast.AST,
+    *,
+    closure: dict[str, Any],
+    lookup: Callable[[str], Any] | None = None,
+    allowed_nodes: tuple[type, ...] = ALL_NODES,
+    div: DivMode = "true",
+    attr_resolver: Callable[[Any, str], Any] | None = None,
+    on_closure_name: Callable[[Any, str], None] | None = None,
+) -> Any:
+    """Evaluate the parser's restricted static-AST subset.
+
+    Args:
+        node: AST node to evaluate.
+        closure: Python closure bindings.
+        lookup: Optional parser-lexical name resolver.
+        allowed_nodes: Admitted AST node classes.
+        div: Division policy.
+        attr_resolver: Optional attribute resolver.
+        on_closure_name: Optional closure-use callback.
+
+    Returns:
+        The statically evaluated value.
+    """
+    ...
+```
+
+- constraints:
+  - Lexical `lookup` MUST run before closure fallback.
+  - A node outside `allowed_nodes`, an unresolved name, or an unsupported
+    operator MUST raise `VerifyError`.
+  - `div="floor"` MUST affect `/`; `//` is always floor division.
 
 ## 5. HIR parser
 

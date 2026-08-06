@@ -54,10 +54,6 @@ it, falling back to `generic_visit(node)` when no such override exists.
   caught by `visit_Call`; per-Op dispatch is the analysis registry's
   responsibility ([visitor-registry](./visitor-registry.md)).
 
-`visit_<ClassName>` is preferred over `singledispatch` because
-overrides are greppable, the inheritance chain is explicit, and it
-does not depend on Python-version-specific dispatch behaviour.
-
 ## 3. `ExprVisitor[T]`
 
 Read-only Expr-tree traversal. `T` is user-chosen (`None` for
@@ -81,12 +77,16 @@ table that grows whenever a new Expr subclass appears:
 |---|---|
 | `Var` | `()` |
 | `Constant` | `()` |
-| `Tuple` | `fields` |
+| `SymbolRef` | `()` |
+| `Tuple` | `elements` |
 | `Call` | `args` |
+| `GridRegionExpr` | `init_args`, `body`, `yield_values` (binding-site Vars are excluded) |
+| `hir.Function` | `body` (parameter binding-site Vars are excluded) |
 
 Example — collect every `Var`:
 
 ```python
+# example
 class VarCollector(ExprVisitor[None]):
     def __init__(self) -> None:
         self.vars: set[Var] = set()
@@ -156,8 +156,10 @@ come back via `StmtExprMutator`):
 | `If` | `(then_body, else_body)` |
 | `MeshScope` | `(body,)` |
 | `LetStmt` | `(body,)` |
+| `DispatchCall` | `case_calls`, then `fallback` |
 | `Return` | `()` |
 | `Evaluate` | `()` (leaf in the Stmt tree; its Expr fields are `args`, plus `callable` when `callable` is a `SymbolRef`) |
+| `Abort` | `()` |
 
 `StmtVisitor` / `StmtMutator` do **not** descend into Expr fields
 embedded in Stmts — `For.start` / `For.stop` / `For.step` /
@@ -195,7 +197,6 @@ when needed:
 | `Evaluate` | `args` (and `callable` when it is a `SymbolRef`) |
 | `MeshScope` / `Sequential` | (none) |
 
-The rewrite scope is **embedded value Exprs**, not binding `Var`s.
 `α-renaming` and similar `Var`-rewriting passes use `StmtMutator`
 directly to rebuild Stmts; they do not reuse `StmtExprMutator`.
 
@@ -220,11 +221,28 @@ position, instead of `Evaluate(op, args)`, is malformed IR
 
 ## 8. Implementation location
 
-- File: `src/tilefoundry/ir/visitor.py`.
 - Public exports: `ExprVisitor`, `ExprMutator`, `StmtVisitor`,
-  `StmtMutator`, `StmtExprMutator`.
+  `StmtMutator`, `StmtExprMutator`, `walk_prim_function`,
+  `rewrite_prim_function`.
 - The four child-enumeration / rebuild tables
   (`_expr_children`, `_rebuild_expr`, `_stmt_children`,
   `_rewrite_stmt_exprs`) are module-private. Adding a new Expr or
   Stmt subclass requires extending the relevant tables in this
   single file; downstream IR node files are not affected.
+
+## 9. PrimFunction helpers
+
+```python
+def walk_prim_function(visitor: StmtVisitor, pf: PrimFunction) -> None: ...
+def rewrite_prim_function(
+    mutator: StmtMutator,
+    pf: PrimFunction,
+) -> PrimFunction: ...
+```
+
+- constraints:
+  - `walk_prim_function` visits `pf.body`; it does not visit the
+    `PrimFunction` wrapper itself.
+  - `rewrite_prim_function` rewrites `pf.body` and returns the original
+    `PrimFunction` when the body is identity-unchanged. Otherwise it returns a
+    copy with the rewritten `Sequential` body.

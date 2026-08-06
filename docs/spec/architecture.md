@@ -38,6 +38,7 @@ graph TD
     subgraph aux["auxiliary"]
         inspection["<b>inspection</b>"]
         evaluator["<b>evaluator</b>"]
+        cli["<b>cli</b>"]
         codeorg["<b>code-organization</b>"]
     end
 
@@ -66,6 +67,9 @@ graph TD
     inspection -. side-channel reader .-> hir
     inspection -. side-channel reader .-> tir
     evaluator -. reference oracle .-> hir
+    cli -. user entry surface .-> parser
+    cli -. reports .-> analysis
+    cli -. reports .-> schedule
 ```
 
 A TileFoundry compilation flows left to right along the **pipeline**:
@@ -98,7 +102,7 @@ The type system is what each `Expr` carries. It is split into a
 **core** layer ([types](./types.md)) and a **shard / layout** sublayer
 ([shard](./shard.md)).
 
-- core types: `IRType` (abstract base) / `TensorType` / `TupleType` /
+- core types: `Type` (union alias) / `TensorType` / `TupleType` /
   `UnitType` / `DType` / `dim.*`.
 - shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` /
   `Topology` / `Mesh` family / `ShardAttr` / `ShardLayout`.
@@ -216,7 +220,7 @@ This table is the authoritative spec-to-box map. Each row lists the
 |---|---|
 | **[architecture](./architecture.md)** (this doc) | The map: pipeline + support-network picture, IR-region overview, spec-ownership table |
 | **[core-ir](./core-ir.md)** | core_ir shared node algebra: `Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`. No types, no `Stmt` |
-| **[types](./types.md)** | Core type system: `IRType` abstract base / `TensorType` / `TupleType` / `UnitType` / `DType` / `dim.*` + TensorType invariants |
+| **[types](./types.md)** | Core type system: `Type` union / `TensorType` / `TupleType` / `UnitType` / `DType` / `dim.*` + TensorType invariants |
 | **[shard](./shard.md)** | Shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` / `Mesh` family / `ShardAttr` / `ShardLayout` + shard-binding invariants |
 | **[hir](./hir.md)** | HIR dataflow IR: `Function` (`Expr` subclass), op subdirectories (math / tensor / nn / shape / sharding), `GridRegionExpr`, hir-side Mesh-scope rule |
 | **[tir](./tir.md)** | TIR stmt IR: `Stmt` base (tir-only), `PrimFunction`, `Sequential(Stmt)`, control-flow Stmts, effect / tile Ops in `Evaluate(op, args)` form, user `@intrinsic` Stmt generation |
@@ -232,6 +236,7 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, Facts projection, and admitted program topology levels |
 | **[codegen](./codegen.md)** | Emit / link pipeline and products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), emitter registry, dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
 | **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |
+| **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, schedule, and inspect |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |
 
 **Cross-spec sync.** Downstream specs link back to the relevant § of

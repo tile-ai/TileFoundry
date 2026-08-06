@@ -2,8 +2,9 @@
 
 The derived-visitor pattern: every `analysis` / `verify` / `codegen`
 walker is the same template — **base visitor + custom Context +
-per-class registry**. This spec defines the template and its four
-instances (`typeinfer` / `verify` / `codegen_<target>` / `cost`).
+per-class registry**. This spec defines the template and its five
+instances (`typeinfer` / `verify` / `codegen_<target>` / `cost` /
+`hir_lowering`).
 
 The settled split:
 
@@ -78,16 +79,10 @@ are pure traversal scaffolds (see
 `VerifyVisitor` explicitly, not granted to every `StmtVisitor`
 subclass automatically.
 
-```python
-# StmtVisitor itself does not consult any registry:
-class StmtVisitor(Generic[T]):
-    def generic_visit(self, stmt): ...   # pure recursion, no registry lookup
-
-# VerifyVisitor is the derived class that holds a registry reference:
-class VerifyVisitor(StmtVisitor[None]):
-    def __init__(self, ctx: VerifyContext, registry=verify_stmt_registry): ...   # explicit binding point
-    def generic_visit(self, stmt: Stmt) -> None: ...   # look up type(stmt) in the registry, then recurse
-```
+The canonical `StmtVisitor` interface and its pure-recursion contract are
+owned by [visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtmutator).
+`VerifyVisitor`, defined in [§5](#5-instance-2--verify), is the derived class
+that adds an explicit registry binding point.
 
 `@register_verify_stmt(Copy)` writes a handler into
 `verify_stmt_registry`; `VerifyVisitor.generic_visit` reads from the
@@ -127,10 +122,11 @@ instances split as follows:
 
 | Instance | Op-branch handler | Stmt-branch handler | Notes |
 |---|---|---|---|
-| **typeinfer** | `(Call, TypeInferContext) -> TensorType \| TupleType` | — | Value-producing only |
+| **typeinfer** | `(Call, TypeInferContext) -> Type` | — | Call result typing, including `UnitType` for effect Ops |
 | **verify** | — | `(Stmt, VerifyContext) -> None` | Effect-side constraints; for `Evaluate(op, args)`, dispatch keys on the Op class — see [§5](#5-instance-2--verify) |
 | **codegen_\<target\>** | `(Call, CodegenContext) -> str` | `(Stmt, CodegenContext) -> None` | Both sides are emitted |
 | **cost** | `(Call, CostContext) -> Cost` | `(Stmt, CostContext) -> Cost` (optional) | Recursive-local logical work |
+| **hir_lowering** | `(lowerer, Op, Call) -> Var` | — | HIR-to-TIR lowering; see [§11](#11-instance-5--hir_lowering) |
 
 Generic control-flow / binding Stmts (`For` / `If` / `While` /
 `LetStmt` / `Sequential` / `MeshScope` / `Return`) are handled by
@@ -169,10 +165,23 @@ Context:
 ```python
 @dataclass
 class TypeInferContext:
-    module: Module                              # the Module being type-checked
-    cache: dict[Expr, TensorType | TupleType]   # memoized Expr → TensorType | TupleType
-    def type_of(self, expr: Expr) -> TensorType | TupleType: ...   # lazy-compute + cache a node's type; supports recursive child queries
-    def error(self, node, msg: str): ...        # raise a constraint failure — see §7
+    """Walk-local type cache, mesh scope, and elaboration cache.
+
+    Attributes:
+        module: attribute; module being checked, or ``None`` when no module is
+            required.
+        cache: attribute; memoized ``id(expr)`` to inferred ``Type``.
+        mesh_scope: attribute; enclosing mesh scope tuple.
+        elaboration_cache: attribute; memoized specialization instances.
+    """
+
+    module: Any = None
+    cache: dict[int, Type] = field(default_factory=dict)
+    mesh_scope: tuple = ()
+    elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
+
+    def type_of(self, expr: Expr) -> Type: ...
+    def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
 
 - constraints:
@@ -190,11 +199,10 @@ def register_typeinfer(op_cls: type[Op]): ...     # decorator: register a typein
 ```
 
 - constraints:
-  - handler signature is `(call: Call, ctx: TypeInferContext) -> TensorType | TupleType`.
-
-Handler signature: `(call: Call, ctx: TypeInferContext) -> TensorType | TupleType`.
+  - handler signature is `(call: Call, ctx: TypeInferContext) -> Type`.
 
 ```python
+# example
 # a typeinfer handler pins the (call, ctx) -> type shape:
 @register_typeinfer(Binary)
 def _(call: Call, ctx: TypeInferContext) -> TensorType: ...
@@ -203,13 +211,14 @@ def _(call: Call, ctx: TypeInferContext) -> TensorType: ...
 Visitor:
 
 ```python
-class TypeInferVisitor(ExprVisitor[TensorType | TupleType]):
+class TypeInferVisitor(ExprVisitor[Type]):
     def __init__(self, ctx: TypeInferContext): ...   # ctx carries the cache and helpers
     def visit_Var(self, var: Var): ...               # return the Var's type
     def visit_Constant(self, c: Constant): ...       # the node's own declared type
     def visit_Call(self, call: Call): ...            # typeinfer_registry.lookup(type(call.target))
     def visit_Tuple(self, tup: Tuple): ...            # structural: TupleType over each element's type
     def visit_GridRegionExpr(self, grid): ...         # carry/body — hir §1.2
+    def visit_ShapeOf(self, shape_of: ShapeOf) -> Type: ...
 ```
 
 - constraints:
@@ -222,6 +231,7 @@ class TypeInferVisitor(ExprVisitor[TensorType | TupleType]):
     unregistered `Op` call routes through `ctx.error`.
   - `visit_Tuple` derives a structural `TupleType` from `ctx.type_of` of each
     element — never the `Tuple` node's own stamped `.type`.
+  - `visit_ShapeOf` returns the node's declared rank-0 i32 type.
   - `hir.Function` is itself a valid `Call.target` ([§4](#4-instance-1--typeinfer) above): its registered
     typeinfer handler elaborates the callee under the call's actual argument
     types ([hir §1.1](./hir.md#11-function)) rather than reading the target's
@@ -346,7 +356,14 @@ Context (extends `TypeInferContext` to share the type-of cache):
 ```python
 @dataclass
 class VerifyContext(TypeInferContext):   # inherits module / cache / type_of
-    mesh_stack: list                     # active mesh-scope stack maintained during the walk
+    """Type inference context extended with the active mesh stack.
+
+    Attributes:
+        mesh_stack: attribute; active mesh-scope stack maintained during the
+            verification walk.
+    """
+
+    mesh_stack: list = field(default_factory=list)
 ```
 
 - constraints:
@@ -363,9 +380,6 @@ def register_verify_stmt(cls: type): ...        # decorator: register a verify h
   - handler signature is `(node, ctx: VerifyContext) -> None`; failure routes
     through `ctx.error(node, msg)`, which raises `VerifyError`.
 
-Handler signature: `(node, ctx: VerifyContext) -> None`. Failure
-routes through `ctx.error(node, msg)` which raises `VerifyError`.
-
 **`Evaluate(op, args)` dispatch.** TIR effect-form Ops
 (`Copy` / `Fill` / `Mma` / `ReLU` / `RMSNorm` / `Reduce`) appear in
 Stmt position as `Evaluate(callable=op, args)`. The verify path keys
@@ -381,6 +395,7 @@ for the matching visitor entry-form contract and
 [tir §1.4](./tir.md#14-evaluate) for the wrapper definition.
 
 ```python
+# example
 # a verify handler keys on the Op class and returns None:
 @register_verify_stmt(Copy)
 def _(call: Call, ctx: VerifyContext) -> None: ...
@@ -412,20 +427,9 @@ fallback; their semantic constraints (e.g. `For.step != 0`,
 
 ## 6. Instance 3 — `codegen_<target>`
 
-Context (skeleton; per-target fields live in [target](./target.md)):
-
-```python
-@dataclass
-class CodegenContext:
-    module: Module              # the Module being emitted
-    output: list[str]           # accumulated code fragments
-    symbol_table: dict          # Var → emitted identifier
-    indent: int = 0             # current indent level
-    # target-specific fields owned by target.md
-```
-
-- constraints:
-  - skeleton only; per-target fields and helpers are owned by [target](./target.md).
+The concrete `CodegenContext` interface is owned by
+[codegen §2.3](./codegen.md#23-codegencontext). This section owns only the
+registry-dispatch contract that consumes that context.
 
 Registry per target:
 
@@ -438,11 +442,6 @@ def register_codegen_cuda(cls: type[Op] | type[Stmt]): ...   # decorator: regist
   - each target has its own registry; keys may be `type[Op]` (TIR-owned Expr Op
     handlers) or `type[Stmt]`.
 
-Each target has its own registry. Keys may be `type[Op]` (TIR-owned
-Expr Op handlers — `tir.memory.AllocTensor` /
-`tir.memory.{PtrOf,MemorySpan,TensorView}` / `tir.scalar.*`) or
-`type[Stmt]` (Stmt handlers).
-
 Handler signatures:
 
 - Op-branch: `(call: Call, ctx: CodegenContext) -> str` — returns a
@@ -452,6 +451,7 @@ Handler signatures:
   one or more lines into `ctx.output`.
 
 ```python
+# example
 # Op-branch handler returns a code fragment; Stmt-branch handler emits lines:
 @register_codegen_cuda(TirScalarReLU)
 def _(call: Call, ctx: CodegenContext) -> str: ...
@@ -493,26 +493,48 @@ candidate Types through `CostContext`; it does not select hardware resources.
 ```python
 @dataclass
 class TrafficBytes:
+    """Per-operand traffic.
+
+    Attributes:
+        read: attribute; bytes read from the operand.
+        write: attribute; bytes written to the operand.
+        total_bytes: attribute; derived read-only traffic in both directions.
+    """
+
     read: int = 0
     write: int = 0
 
-    @property
     def total_bytes(self) -> int: ...
 
 @dataclass
 class Cost:
+    """Leaf-local work for one selected candidate.
+
+    Attributes:
+        flops: attribute; logical work grouped by compute dtype.
+        traffic: attribute; per-operand traffic in argument order, with the
+            result last.
+        bytes: attribute; derived read-only traffic over every operand.
+    """
+
     flops: Mapping[DType, int]
     traffic: tuple[TrafficBytes, ...]
 
-    @property
     def bytes(self) -> int: ...
 
 class CostContext(TypeInferContext):
-    selected_types: Mapping[int, IRType] = {}
-    selected_output_type: IRType | None = None
+    """Selected candidate types used for recursive-local costing.
 
-    def local_type_of(self, expr: Expr) -> IRType: ...
-    def local_output_type(self, call: Call) -> IRType: ...
+    Attributes:
+        selected_types: attribute; selected ``id(expr)`` to ``Type`` mapping.
+        selected_output_type: attribute; selected output type, when supplied.
+    """
+
+    selected_types: Mapping[int, Type] = field(default_factory=dict)
+    selected_output_type: Type | None = None
+
+    def local_type_of(self, expr: Expr) -> Type: ...
+    def local_output_type(self, call: Call) -> Type: ...
 
 cost_evaluator_registry: AnalysisRegistry[type[Op]]
 def register_cost_evaluator(op_cls: type[Op]): ...
@@ -529,6 +551,8 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     from a target package would make one backend's presence decide whether any
     consumer can cost a program at all.
   - `flops` MUST group leaf-local logical work by compute `DType`.
+  - `TrafficBytes.total_bytes` and `Cost.bytes` MUST be read-only derived
+    properties and MUST NOT be accepted as constructor fields.
   - `traffic` MUST carry exactly one `TrafficBytes` per operand of the call, in
     argument order with the result last, so an Op that only touches part of an
     input says so where it knows it. `bytes` is derived: every operand's traffic
@@ -558,16 +582,9 @@ def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...   # node: the offe
   - provided by `TypeInferContext` and every Context that inherits it; raises
     `VerifyError` with a stable format.
 
-Handlers MUST surface constraint failures via `ctx.error(node, msg)`;
-hand-rolled `raise` is not the convention. This keeps the error
-format stable.
-
 ### 8.2 Other helpers
 
-`_constant_type` / `_broadcast` / `_merge_layout` /
-`_merge_storage` are implementation-side helpers. They live next to
-the Op files that use them (`ir/types/`, op modules) and are not
-constrained by this spec.
+Local helper implementation is not part of this contract.
 
 ## 9. Registration timing — import-time side effects
 
@@ -589,6 +606,7 @@ the four-step recipe.
 ### Step 1 — define a Context
 
 ```python
+# example
 @dataclass
 class AliasContext(TypeInferContext):
     alias_sets: dict[Var, set[Var]] = field(default_factory=dict)
@@ -597,6 +615,7 @@ class AliasContext(TypeInferContext):
 ### Step 2 — declare a registry + decorator
 
 ```python
+# example
 alias_registry: AnalysisRegistry[type[Op]]   # the new analysis's registry
 def register_alias(op_cls: type[Op]): ...     # decorator: register a handler for one Op class
 ```
@@ -608,6 +627,7 @@ needed.
 ### Step 3 — derive a Visitor that holds the registry explicitly
 
 ```python
+# example
 class AliasVisitor(ExprVisitor[None]):
     def __init__(self, ctx: AliasContext, registry: AnalysisRegistry = alias_registry): ...   # explicit binding
     def visit_Call(self, call: Call) -> None: ...   # look up type(call.target), invoke, then recurse
@@ -616,13 +636,14 @@ class AliasVisitor(ExprVisitor[None]):
 ### Step 4 — register handlers in the Op files
 
 ```python
+# example
 # an alias handler keys on the Op class and returns None:
 @register_alias(Reshape)
 def _(call: Call, ctx: AliasContext) -> None: ...
 ```
 
-These four steps are what every existing instance
-(typeinfer / verify / codegen) is doing. A new analysis is **peer**
+These four steps are what the extensible instances in this spec are doing.
+A new analysis is **peer**
 to them — no existing visitor / registry / dispatch code changes.
 
 The contract: callers own their `AnalysisRegistry`, their `Visitor`
@@ -630,3 +651,23 @@ subclass (built on
 [visitor-mutator](./visitor-mutator.md)), and their `Context`
 dataclass. Composition is explicit; there is no hidden
 framework-side magic that auto-binds them.
+
+## 11. Instance 5 — `hir_lowering`
+
+`hir_lowering_registry` dispatches each HIR `Call` to the handler that lowers
+that op to TIR. The pass-owned lowerer is the first handler argument.
+
+```python
+hir_lowering_registry: AnalysisRegistry[type[Op]]
+def register_hir_lowering(op_cls: type[Op]): ...
+```
+
+- constraints:
+  - Handler signature is
+    `(lowerer: _Lowerer, target: Op, expr: Call) -> Var`.
+  - `HirToTirPass` performs the lookup on `type(expr.target)` and invokes the
+    handler as `handler(lowerer, expr.target, expr)`; a missing handler is a
+    lowering error naming the op class.
+  - The registry and decorator are public from `tilefoundry.visitor_registry`.
+    Concrete handlers remain beside the pass or target-owned op that defines
+    the lowering; see [passes §7.1](./passes.md#71-hirtotirpass).

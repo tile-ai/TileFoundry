@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TB
-    IRType["<b>IRType</b><br/>(abstract base)"]
+    Type["<b>Type</b><br/>(union alias)"]
     TensorType["<b>TensorType</b>"]
     TupleType["<b>TupleType</b>"]
     UnitType["<b>UnitType</b>"]
@@ -12,45 +12,52 @@ flowchart TB
     dim["<b>dim ops</b>"]
     Layout["<b>Layout family</b><br/>(see shard)"]
 
-    IRType --> TensorType
-    IRType --> TupleType
-    IRType --> UnitType
-    IRType --> CallableType
+    TensorType -. member of .-> Type
+    TupleType -. member of .-> Type
+    UnitType -. member of .-> Type
+    CallableType -. member of .-> Type
 
     DType -. dtype .-> TensorType
     dim -. shape elements .-> TensorType
     Layout -. layout .-> TensorType
 
     TensorType -. element of .-> TupleType
-    IRType -. return type and parameter types .-> CallableType
+    Type -. return type and parameter types .-> CallableType
 ```
 
-## 1. `IRType`
+## 1. `Type`
 
 ```python
-class IRType:      # abstract base; concrete IR types derive from it
-    ...
+Type = TensorType | TupleType | UnitType | CallableType
 ```
-
-- constraints:
-  - every `core_ir.Expr.type` is one of its derivations (`TensorType` /
-    `TupleType` / `UnitType` / `CallableType`).
-
-`IRType` is the abstract base. Every `core_ir.Expr.type` is one of
-its derivations: `TensorType` / `TupleType` / `UnitType` /
-`CallableType`.
 
 ---
 
 ## 2. `TensorType`
 
 ```python
-# ShapeDim = int | DimVar | Expr — a static int, a bounded `DimVar` Op, or a dim-arithmetic `Expr` (see §4)
-class TensorType(IRType):
-    shape: tuple[ShapeDim, ...]                      # logical shape; invariant under sharding / storage / layout
-    dtype: DType                                     # element dtype
-    layout: LayoutBase | None                        # member of the Layout family, or no assigned layout (see shard)
-    storage: StorageKind | None                      # abstract result residency, or umat / None
+class TensorType:
+    """Describe a tensor's logical type.
+
+    Attributes:
+        shape: attribute; Logical shape, invariant under sharding, storage, and layout.
+        dtype: attribute; Element dtype.
+        layout: attribute; Layout-family member, or no assigned layout.
+        storage: attribute; Abstract result residency, unmaterialized residency, or None.
+    """
+
+    shape: tuple[ShapeDim, ...]
+    dtype: DType
+    layout: LayoutBase | None
+    storage: StorageKind | None
+
+    def scalar(
+        dtype: DType,
+        layout: LayoutBase | None = None,
+        storage: StorageKind | None = StorageKind.RMEM,
+    ) -> "TensorType": ...
+
+    def meta_scalar(dtype: DType = DType.i64) -> "TensorType": ...
 ```
 
 - constraints:
@@ -90,7 +97,16 @@ dispatch is described in
 ### 2.1 Recursive local projection
 
 ```python
-def local_type_of(type: IRType) -> IRType: ...
+def local_type_of(type: Type) -> Type:
+    """Project every tensor leaf to its per-shard local type.
+
+    Args:
+        type: Type to project.
+
+    Returns:
+        The recursively projected type.
+    """
+    ...
 ```
 
 - constraints:
@@ -105,9 +121,27 @@ def local_type_of(type: IRType) -> IRType: ...
 ### 2.2 Logical size
 
 ```python
-def numel(type: IRType) -> int: ...
+def numel(type: Type) -> int:
+    """Return the logical element count over all tensor leaves.
 
-def tensor_bytes(type: IRType) -> int: ...
+    Args:
+        type: Type to measure.
+
+    Returns:
+        The logical element count.
+    """
+    ...
+
+def tensor_bytes(type: Type) -> int:
+    """Return the logical byte size over all tensor leaves.
+
+    Args:
+        type: Type to measure.
+
+    Returns:
+        The logical byte size.
+    """
+    ...
 ```
 
 - constraints:
@@ -168,8 +202,8 @@ class DType:
     """Describe an element type.
 
     Attributes:
-        name: Canonical DSL spelling.
-        bit_width: Logical number of bits per element.
+        name: attribute; Canonical DSL spelling.
+        bit_width: attribute; Logical number of bits per element.
     """
 
     name: str
@@ -180,8 +214,8 @@ class FloatDType(DType):
     """Describe a floating-point element type.
 
     Attributes:
-        exponent_bits: Number of exponent bits.
-        mantissa_bits: Number of explicit mantissa bits.
+        exponent_bits: attribute; Number of exponent bits.
+        mantissa_bits: attribute; Number of explicit mantissa bits.
     """
 
     exponent_bits: int
@@ -192,7 +226,7 @@ class IntegerDType(DType):
     """Describe an integer element type.
 
     Attributes:
-        signed: Whether the integer representation is signed.
+        signed: attribute; Whether the integer representation is signed.
     """
 
     signed: bool
@@ -242,8 +276,7 @@ The canonical descriptors are:
 
 ## 4. `dim.*` — symbolic shape dimensions
 
-`shape` elements are values of the `ShapeDim` family (see [§2](#2-tensortype)'s
-field declaration: `ShapeDim = int | DimVar | Expr`):
+`shape` elements are values of the `ShapeDim` family:
 
 - a plain Python `int` for fully static dims;
 - a `DimVar(name, lo, hi)` value type (`core_ir.dim.DimVar`) for
@@ -252,56 +285,218 @@ field declaration: `ShapeDim = int | DimVar | Expr`):
   dim expressions, returning a rank-0 integer `Expr` of dtype
   `i64` and `storage=None`. This rank-0 meta-scalar type
   (`shape=()`, `layout=EMPTY_LAYOUT`, `storage=None`) has exactly one
-  constructor, `TensorType.meta_scalar(dtype)`; construction sites MUST NOT
-  restate the field tuple, so structural type equality holds across layers.
+  constructor, `TensorType.meta_scalar(dtype)`.
 
-The family covers:
+```python
+ShapeDim = int | DimVar | Expr
 
-- `DimConst(value: int)` — integer literal.
-- `DimVar(name: str, lo: int, hi: int)` — a bounded named shape
-  symbol (`"M"` / `"N"` / `"K"` / ...). The **half-open** envelope
-  `[lo, hi)` lives on the dim itself: `lo` is inclusive and `hi` is
-  exclusive, so `hi` is one past the maximum runtime value the dim
-  may take (the dim ranges over `lo .. hi-1`). `DimVar` MUST validate
-  `name` non-empty and `lo < hi`; a single-point envelope is
-  `[k, k+1)` (a fixed dim known symbolically). Identity is canonical per
-  `(name, lo, hi)`: every construction of `DimVar("N", a, b)`
-  returns the same object (via a per-`(name, lo, hi)` cache), so
-  identical entries compare equal across Ops. A second
-  `DimVar("N", a', b')` with `(a', b') != (a, b)` simply produces
-  a distinct canonical object; within a single function signature
-  same-name `DimVar`s MUST agree on bounds, and HIR
-  `verify_function` raises a `VerifyError` otherwise.
-- Arithmetic: `DimAdd` / `DimSub` / `DimMul` / `DimFloorDiv` /
-  `DimMod` / `DimMin` / `DimMax`, each taking two rank-0 integer
-  `Expr` inputs.
 
-These rank-0 shape-element tensors MUST use `storage=None` and carry no
-runtime memory.
+class DimConst(Op):
+    """Produce a constant symbolic dimension.
 
-**Construction-time folding.** Producers of arithmetic dim Calls
-(typeinfer rules, parser slice / range sugar, etc.) MUST route
-construction through `simplify_dim(op_cls, args)`. When every
-entry of `args` is an `int`-valued `Constant`, `simplify_dim`
-returns a folded `Constant` directly; otherwise it returns the
-canonical `Call(target=op_cls(), args=args)` unchanged. This
-keeps the IR free of all-`Constant` arithmetic chains and lets
-downstream consumers (printer, viewer, codegen) read the literal
-value without inspecting nested arithmetic. Two cases preserve
-the original `Call` even when all args are `Constant`:
-`DimFloorDiv` / `DimMod` with a zero divisor (so verify can flag
-the error) and Constants whose payload is not `int` (e.g.
-`bool`). No algebraic identity folding (`x + 0` → `x`, `x * 1`
-→ `x`) is performed at construction time; future passes own that
-optimisation.
+    Attributes:
+        value: attribute; Integer dimension value.
+    """
+
+    value: int
+
+
+class DimVar(Op):
+    """Produce a bounded named symbolic dimension.
+
+    Attributes:
+        name: attribute; Non-empty symbolic name.
+        lo: attribute; Inclusive lower bound.
+        hi: attribute; Exclusive upper bound.
+    """
+
+    name: str
+    lo: int
+    hi: int
+
+
+class DimAdd(Op):
+    """Produce the sum of two dimensions.
+
+    Attributes:
+        a: input; Left operand.
+        b: input; Right operand.
+    """
+
+    a: Expr
+    b: Expr
+
+
+class DimSub(Op):
+    """Produce the difference of two dimensions.
+
+    Attributes:
+        a: input; Left operand.
+        b: input; Right operand.
+    """
+
+    a: Expr
+    b: Expr
+
+
+class DimMul(Op):
+    """Produce the product of two dimensions.
+
+    Attributes:
+        a: input; Left operand.
+        b: input; Right operand.
+    """
+
+    a: Expr
+    b: Expr
+
+
+class DimFloorDiv(Op):
+    """Produce the floor quotient of two dimensions.
+
+    Attributes:
+        a: input; Dividend.
+        b: input; Divisor.
+    """
+
+    a: Expr
+    b: Expr
+
+
+class DimMod(Op):
+    """Produce the remainder of two dimensions.
+
+    Attributes:
+        a: input; Dividend.
+        b: input; Divisor.
+    """
+
+    a: Expr
+    b: Expr
+
+
+class DimMin(Op):
+    """Produce the minimum of two dimensions.
+
+    Attributes:
+        a: input; Left operand.
+        b: input; Right operand.
+    """
+
+    a: Expr
+    b: Expr
+
+
+class DimMax(Op):
+    """Produce the maximum of two dimensions.
+
+    Attributes:
+        a: input; Left operand.
+        b: input; Right operand.
+    """
+
+    a: Expr
+    b: Expr
+
+
+def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
+    """Build or constant-fold a dimension operation.
+
+    Args:
+        op_cls: Dimension operation class to construct.
+        args: Operation operands.
+
+    Returns:
+        A folded constant or the canonical call.
+    """
+    ...
+
+
+def is_dim_expr(value) -> bool:
+    """Return whether a value is a valid dimension expression.
+
+    Args:
+        value: Candidate value.
+
+    Returns:
+        Whether the value belongs to the dimension-expression family.
+    """
+    ...
+
+
+def dim_min(a, b) -> Expr:
+    """Build a symbolic minimum.
+
+    Args:
+        a: Left dimension.
+        b: Right dimension.
+
+    Returns:
+        The folded constant or symbolic minimum.
+    """
+    ...
+
+
+def dim_max(a, b) -> Expr:
+    """Build a symbolic maximum.
+
+    Args:
+        a: Left dimension.
+        b: Right dimension.
+
+    Returns:
+        The folded constant or symbolic maximum.
+    """
+    ...
+
+
+def ceildiv(a, b) -> Expr:
+    """Build symbolic ceiling division.
+
+    Args:
+        a: Dividend dimension.
+        b: Divisor dimension.
+
+    Returns:
+        The folded constant or symbolic ceiling quotient.
+    """
+    ...
+```
+
+- constraints:
+  - Rank-0 shape-element tensors MUST use `storage=None` and carry no runtime
+    memory.
+  - Construction sites MUST use `TensorType.meta_scalar(dtype)` instead of
+    restating its field tuple, so structural type equality holds across layers.
+  - `DimVar` MUST use a non-empty `name` and plain integer `lo` and `hi` bounds
+    satisfying `lo < hi`. Its envelope is half-open, `[lo, hi)`; `[k, k+1)` is
+    the fixed symbolic dimension `k`.
+  - `DimVar` identity MUST be canonical per `(name, lo, hi)`. Same-name
+    dimensions in one function signature MUST agree on bounds.
+  - Producers of arithmetic dimension calls MUST route construction through
+    `simplify_dim`.
+  - `simplify_dim` MUST fold two integer-valued constant operands, except
+    division or modulo by zero; otherwise it MUST retain the canonical call.
+    It MUST NOT perform algebraic identity folding.
+  - `is_dim_expr` MUST accept non-boolean integers, `DimVar`, integer-valued
+    `Constant`, and recursively valid calls to the seven dimension arithmetic
+    operations, and MUST reject other values.
+  - `ceildiv(a, b)` MUST compose the existing add, subtract, and floor-divide
+    operations; it does not introduce a distinct Op.
 
 ---
 
 ## 5. `TupleType`
 
 ```python
-class TupleType(IRType):
-    fields: tuple[IRType, ...]    # the tuple's field types; result type of a multi-output Op (nested TupleType is uncommon)
+class TupleType:
+    """Describe a tuple of result types.
+
+    Attributes:
+        fields: attribute; Field types in result order.
+    """
+
+    fields: tuple[TensorType | "TupleType", ...]
 ```
 
 - constraints:
@@ -320,29 +515,29 @@ class TupleType(IRType):
 ## 6. `UnitType`
 
 ```python
-class UnitType(IRType):    # no payload; result type of an effect-form Op
-    ...
+class UnitType:
+    """Describe the empty result type of an effect-form Op."""
 ```
 
 - constraints:
   - the result type of an effect-form Op; produces no readable value and
     appears in Stmt position as `Evaluate(op, args)`.
 
-`UnitType` is the result type of an effect-form Op (such as
-`tir.cuda.nn.Mma`, `tir.memory.Copy`), which produces no value its
-consumers can read; in Stmt position such an Op appears as
-`Evaluate(op, args)` ([tir §1.4](./tir.md#14-evaluate)). The
-effect-form vs value-form classification is owned by
-[core-ir §2.3](./core-ir.md#23-op).
-
 ---
 
 ## 7. `CallableType`
 
 ```python
-class CallableType(IRType):
-    return_type: IRType                # the callable's result type
-    parameters: tuple[IRType, ...]     # parameter types (names are not part of the type)
+class CallableType:
+    """Describe the type of a callable expression.
+
+    Attributes:
+        return_type: attribute; Callable result type.
+        parameters: attribute; Parameter types in declaration order.
+    """
+
+    return_type: Type
+    parameters: tuple[Type, ...]
 ```
 
 - constraints:
@@ -358,3 +553,90 @@ class CallableType(IRType):
     storage / layout are reached through `type` rather than restated. The
     two live in different layers and are disambiguated by import path; do
     not conflate them.
+
+---
+
+## 8. Tensor type convenience constructors
+
+```python
+def make_tensor_type(
+    shape: tuple,
+    dtype: DType = DType.f32,
+    storage: str | StorageKind | None = "gmem",
+    layout: object = None,
+) -> TensorType:
+    """Build a plain tensor type.
+
+    Args:
+        shape: Logical tensor shape.
+        dtype: Element dtype.
+        storage: Abstract tensor residency.
+        layout: Optional unsharded layout.
+
+    Returns:
+        The tensor type.
+    """
+    ...
+
+
+def make_shard_tensor_type(
+    shape: tuple,
+    dtype: DType = DType.f32,
+    storage: str | StorageKind | None = "gmem",
+    mesh: Mesh | None = None,
+    attrs: tuple = (),
+) -> TensorType:
+    """Build a canonical sharded tensor type.
+
+    Args:
+        shape: Logical tensor shape.
+        dtype: Element dtype.
+        storage: Abstract tensor residency.
+        mesh: Optional sharding mesh.
+        attrs: Shard attributes in mesh-axis order.
+
+    Returns:
+        The plain or canonically sharded tensor type.
+    """
+    ...
+```
+
+- constraints:
+  - `make_tensor_type` MUST preserve `shape` as a tuple and pass the remaining
+    fields to `TensorType`.
+  - `make_shard_tensor_type` MUST return a plain tensor type when `mesh` is
+    `None` or `attrs` is empty; otherwise it MUST build the layout through
+    `canonical_shard_layout`.
+
+## 9. Callable type projection
+
+```python
+def callable_type_for(params, return_type: Type) -> CallableType:
+    """Project parameters and a return type into a callable type.
+
+    Args:
+        params: Parameter values whose types are projected.
+        return_type: Callable result type.
+
+    Returns:
+        The callable type.
+    """
+    ...
+
+
+def callable_type_for_prim_function(fn) -> CallableType:
+    """Project a TIR primitive function into a callable type.
+
+    Args:
+        fn: Primitive function to project.
+
+    Returns:
+        The callable type with a unit result.
+    """
+    ...
+```
+
+- constraints:
+  - `callable_type_for` MUST preserve parameter order and project only each
+    parameter's `.type`; parameter names are not part of `CallableType`.
+  - `callable_type_for_prim_function` MUST use `UnitType` as the return type.
