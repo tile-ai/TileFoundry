@@ -19,57 +19,38 @@ defaults:
     shell: bash
 
 jobs:
-  lint:
+  ci:
     runs-on: [self-hosted, tilefoundry]
     container: tilefoundry-ci-runner:local
     steps:
       - uses: actions/checkout@v4
-      - name: pre-commit run --all-files
-        run: python -m pre_commit run --all-files
-
-  test:
-    needs: lint
-    runs-on: [self-hosted, tilefoundry]
-    container: tilefoundry-ci-runner:local
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install the checkout
+      - name: Prepare the project environment
         run: |
-          test_venv="$RUNNER_TEMP/test-venv"
-          python -m venv --system-site-packages "$test_venv"
-          "$test_venv/bin/python" -m pip install \
+          python -m venv --system-site-packages .venv
+          .venv/bin/python -m pip install \
             --no-deps --no-build-isolation --editable .
-          echo "$test_venv/bin" >> "$GITHUB_PATH"
+      - name: Run pre-commit
+        run: .venv/bin/python -m pre_commit run --all-files
       - name: Link CUTLASS headers
         run: |
           mkdir -p third_party/cutlass
           ln -sfnT /opt/cutlass/include third_party/cutlass/include
-      - name: pytest tests/ -n 4
-        run: python -m pytest tests/ -n 4
-
-  install-smoke:
-    needs: test
-    runs-on: [self-hosted, tilefoundry]
-    container: tilefoundry-ci-runner:local
-    steps:
-      - uses: actions/checkout@v4
+      - name: Run tests
+        run: .venv/bin/python -m pytest tests/ -n 4
       - name: Build the wheel
         run: |
           mkdir -p "$RUNNER_TEMP/wheel"
-          pip wheel . --no-deps --no-build-isolation \
+          .venv/bin/python -m pip wheel . --no-deps --no-build-isolation \
             --wheel-dir "$RUNNER_TEMP/wheel"
       - name: Install the wheel into a clean environment
         run: |
-          smoke_venv="$RUNNER_TEMP/smoke-venv"
-          python -m venv --system-site-packages "$smoke_venv"
-          "$smoke_venv/bin/python" -m pip install --no-deps \
+          python -m venv --system-site-packages .wheel-venv
+          .wheel-venv/bin/python -m pip install --no-deps \
             "$RUNNER_TEMP"/wheel/tilefoundry-*.whl
-          echo "$smoke_venv/bin" >> "$GITHUB_PATH"
-          echo "TF_SMOKE_VENV=$smoke_venv" >> "$GITHUB_ENV"
       - name: Verify the installed surface
-        run: python -m pytest tests/installed -o python_files='smoke_*.py' -q -n 8
+        run: .wheel-venv/bin/python -m pytest tests/installed -o python_files='smoke_*.py' -q -n 8
       - name: Decode the published checkpoint with the shipped source
         run: |
-          python tests/installed/qwen3_1_7b_l3.py \
-            --venv "$TF_SMOKE_VENV" \
+          .wheel-venv/bin/python tests/installed/qwen3_1_7b_l3.py \
+            --venv .wheel-venv \
             --work "$RUNNER_TEMP/l3"

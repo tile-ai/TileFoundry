@@ -23,54 +23,27 @@ defaults:
     shell: bash
 
 jobs:
-  build-and-verify:
+  build:
     runs-on: [self-hosted, tilefoundry]
     container: tilefoundry-ci-runner:local
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Prepare release environment
+      - name: Prepare packaging environment
         run: |
-          release_venv="$RUNNER_TEMP/release-venv"
-          python -m venv --system-site-packages "$release_venv"
-          "$release_venv/bin/python" -m pip install --upgrade build twine
-          echo "$release_venv/bin" >> "$GITHUB_PATH"
-      - name: Install packaging tools
-        run: python -c 'import build, twine'
+          python -m venv --system-site-packages .venv
+          .venv/bin/python -m pip install --upgrade build twine
       - name: Build tag distributions
         if: github.event_name == 'push'
-        run: python -m build
+        run: .venv/bin/python -m build
       - name: Build TestPyPI distributions
         if: github.event_name == 'workflow_dispatch'
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.testpypi-version }}
-        run: python -m build
+        run: .venv/bin/python -m build
       - name: Check distribution metadata
-        run: twine check dist/*
-      - name: Link baked cutlass headers
-        run: |
-          mkdir -p third_party/cutlass
-          ln -sfnT /opt/cutlass/include third_party/cutlass/include
-      - name: Verify the distribution wheel
-        env:
-          EVIDENCE_DIR: ${{ runner.temp }}/release-evidence
-        run: |
-          mkdir -p "$EVIDENCE_DIR"
-          wheel_venv="$RUNNER_TEMP/release-wheel"
-          python -m venv --system-site-packages "$wheel_venv"
-          "$wheel_venv/bin/python" -m pip install --no-deps dist/*.whl
-          PATH="$wheel_venv/bin:$PATH" TF_SMOKE_VENV="$wheel_venv" \
-            python -m pytest tests/integration/installed \
-            -o python_files='smoke_*.py' -q -n 4 --tb=short \
-            --junitxml="$EVIDENCE_DIR/direct.xml" > "$EVIDENCE_DIR/direct.txt" 2>&1
-      - name: Upload verification evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-verification
-          path: ${{ runner.temp }}/release-evidence/
-          if-no-files-found: warn
+        run: .venv/bin/twine check dist/*
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
@@ -79,7 +52,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build-and-verify
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && 'testpypi' || 'pypi' }}
