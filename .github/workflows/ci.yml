@@ -55,5 +55,5 @@ jobs:
       - name: Decode the published checkpoint with the shipped source
         run: |
           .wheel-venv/bin/python tests/installed/qwen3_1_7b_l3.py \
-            --venv .wheel-venv \
+            --venv "$PWD/.wheel-venv" \
             --work "$RUNNER_TEMP/l3"
