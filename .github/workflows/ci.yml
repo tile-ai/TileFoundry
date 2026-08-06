@@ -14,37 +14,37 @@ concurrency:
 permissions:
   contents: read
 
-# Jobs run directly inside the self-hosted runner container, which carries the
-# toolchain (torch, CUDA, cutlass headers at /opt/cutlass/include, ruff,
-# clang-format, pre-commit). The runner container is launched pinned to one GPU
-# (--gpus device=1), so no per-job GPU selection is needed. `tilefoundry`
-# is the runner label — set it in the runner's RUNNER_LABELS at launch.
-#
-# That GPU must be in the default compute mode. Under `Exclusive_Process` only one
-# process may hold a context, and `-n 4` below is four of them: three workers fail
-# to initialise CUDA with `cudaErrorDevicesUnavailable`, which reads like a broken
-# toolchain rather than a busy card.
+# The runner image provides Python, CUDA, the selected GPU, and the large
+# read-only assets. This workflow only checks out the repository and runs the
+# project commands.
+
 jobs:
   lint:
     runs-on: [self-hosted, tilefoundry]
     steps:
       - uses: actions/checkout@v4
       - name: pre-commit run --all-files
-        run: pre-commit run --all-files
+        run: python -m pre_commit run --all-files
 
   test:
     needs: lint
     runs-on: [self-hosted, tilefoundry]
     steps:
       - uses: actions/checkout@v4
-      - name: Link baked cutlass headers
-        run: mkdir -p third_party/cutlass && ln -sf /opt/cutlass/include third_party/cutlass/include
-      - name: Install tilefoundry (editable, deps already in the image)
-        run: pip install -e '.[test]'
+      - name: Link CUTLASS headers
+        shell: bash
+        run: |
+          mkdir -p third_party/cutlass
+          if [[ -e third_party/cutlass/include && ! -L third_party/cutlass/include ]]; then
+            echo 'third_party/cutlass/include is not an empty link target' >&2
+            exit 1
+          fi
+          rm -f third_party/cutlass/include
+          ln -s /opt/cutlass/include third_party/cutlass/include
       # Each worker can instantiate an independent f32 HF reference model. Four
       # fit on the one pinned GPU; eight OOMed in PR #38 run 30478400012.
       - name: pytest tests/ -n 4
-        run: pytest tests/ -n 4
+        run: python -m pytest tests/ -n 4
 
   # Two runners against one installed environment: the shipped files must resolve
   # under it, then the model source it ships must decode a real checkpoint. After
@@ -52,14 +52,7 @@ jobs:
   install-smoke:
     needs: test
     runs-on: [self-hosted, tilefoundry]
-    # Part of the runner's contract, like the baked cutlass headers. Not a
-    # repository variable: `vars` is empty for a `pull_request` from a fork.
-    env:
-      TILEFOUNDRY_QWEN3_1_7B_CKPT: /checkpoints/Qwen3-1.7B
     steps:
-      # For the two runner files only. `tilefoundry` is not importable from a
-      # checkout — the package lives under `src/` — so the IR under test is the
-      # installed one.
       - uses: actions/checkout@v4
       # Built here and read off disk. Handing it between jobs as an artifact needs
       # the runner to reach GitHub's artifact API, which failed with ECONNRESET and
@@ -67,18 +60,17 @@ jobs:
       # to do with the wheel.
       - name: Build the wheel
         run: >-
-          pip wheel . --no-deps
+          pip wheel . --no-deps --no-build-isolation
           --wheel-dir ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}
       # Built once here; the shards reuse it through TF_SMOKE_VENV.
       - name: Install the wheel into a clean environment
         run: |
-          python -m venv --system-site-packages ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/pip install --no-deps \
+          smoke_venv=${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          python -m venv --system-site-packages "$smoke_venv"
+          "$smoke_venv/bin/pip" install --no-deps \
             ${{ runner.temp }}/wheel-${{ github.run_id }}-${{ github.run_attempt }}/tilefoundry-*.whl
-      # The image carries pytest without xdist; the editable install that brings it in
-      # is the `test` job's, not this one's.
-      - name: Install pytest-xdist
-        run: pip install 'pytest-xdist>=3'
+      # pytest and pytest-xdist come from the read-only runner environment. The
+      # smoke venv only receives the project wheel and remains disposable.
       # Default collection misses smoke_*.py, so the pattern is named here. These tests
       # spend their time in `tilefoundry` subprocesses, so the workers share the
       # container's cores.
@@ -86,7 +78,8 @@ jobs:
         env:
           TF_SMOKE_VENV: ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: >-
-          pytest tests/installed -o python_files='smoke_*.py' -q -n 8
+          ${{ runner.temp }}/smoke-${{ github.run_id }}-${{ github.run_attempt }}/bin/python
+          -m pytest tests/installed -o python_files='smoke_*.py' -q -n 8
       # Run by the environment above. `--work` holds the emitted source and the
       # canonical store `prepare` writes.
       - name: Decode the published checkpoint with the shipped source

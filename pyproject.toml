@@ -36,7 +36,7 @@ tilefoundry = "tilefoundry.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist>=3"]
-dev = ["pre-commit>=3"]
+dev = ["pre-commit>=3", "ruff>=0.14", "setuptools>=68", "setuptools-scm>=8"]
 
 [tool.setuptools_scm]
 
@@ -73,6 +73,7 @@ where = ["src"]
 markers = [
     "no_dump: opt out of the autouse DumpScope for tests that emit excessive dump output",
 ]
+pythonpath = ["src"]
 
 [tool.ruff]
 # Snapshot examples are evidence; reformatting them to satisfy lint would change that evidence.

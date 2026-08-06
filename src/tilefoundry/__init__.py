@@ -6,11 +6,16 @@ Re-exports the stable public API from `tilefoundry.ir.*` for convenience.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _distribution_version
 
 # ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
 
-__version__ = _distribution_version("tilefoundry")
+try:
+    __version__ = _distribution_version("tilefoundry")
+except PackageNotFoundError:
+    # A source checkout can be imported before it is installed.
+    __version__ = "0+unknown"
 
 # Core IR
 from tilefoundry.ir.core import (
