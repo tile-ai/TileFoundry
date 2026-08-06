@@ -112,9 +112,12 @@ short bullet list — keep it that way.
 ### Tests
 
 - Write meaningful positive tests that exercise the intended path.
-- Each milestone starts from a Golden Reference: an external source, measured
-  behaviour, existing workflow, or public contract that defines its result.
-  Tests prove its listed functional points.
+- Each milestone defines its own Target State Design before implementation.
+  Show every part the milestone settles in its delivered form as code or compact
+  pseudocode. Implementation and review match that design; tests exercise its
+  externally observable behavior.
+- A Target State Design covers every step its milestone lists. A step with no
+  delivered shape is a reviewer's finding before implementation begins.
 - Start with the smallest existing workflow that reaches the changed behaviour;
   extend it before creating another test file or harness.
 - One workflow may evidence several acceptance criteria. An acceptance criterion

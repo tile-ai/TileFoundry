@@ -19,8 +19,8 @@ nobody rereads.
 
 The finalizer never touches handwritten content outside the marker
 ranges. A ``policy_*`` HTML comment appearing outside any allowed
-range is a hard validation failure. Every milestone must name its
-Golden Reference; a milestone that changes a public contract declares
+range is a hard validation failure. Every milestone must define its
+Target State Design; a milestone that changes a public contract declares
 so by listing the owning ``docs/spec/*.md`` path in its Related Files.
 """
 from __future__ import annotations
@@ -288,7 +288,7 @@ class PlanModel:
         sections: dict[str, tuple[int, int]] = {}
         for required in (
             "Depends",
-            "Golden Reference",
+            "Target State Design",
             "Related Files",
             "Plan",
             "Acceptance Criteria",
@@ -302,7 +302,7 @@ class PlanModel:
             # line in the body.
             body = [
                 ln
-                for ln in lines[span[0] + 1 : span[1]]
+                for ln in self.lines[span[0] + 1 : span[1]]
                 if ln.strip() and ln.strip() not in (
                     MILESTONE_AC_START,
                     MILESTONE_AC_END,
@@ -326,8 +326,6 @@ class PlanModel:
                     "List the paths this milestone touches."
                 )
             effective_paths.append(_strip_path_bullet(item))
-
-        self._validate_golden_reference(name, sections["Golden Reference"])
 
         ac_section = sections["Acceptance Criteria"]
 
@@ -359,19 +357,6 @@ class PlanModel:
             "policy_ac_end_idx": ac_end,
             "policy_states": _policy_check_states(lines, ac_start, ac_end),
         }
-
-    def _validate_golden_reference(
-        self, milestone_name: str, section: tuple[int, int]
-    ) -> None:
-        items = _list_bullets(self.scan, section[0] + 1, section[1])
-        label = f"{self.path}: milestone {milestone_name!r} `#### Golden Reference`"
-        required = ("Source:", "Functional points:")
-        missing = [prefix for prefix in required if not any(item.startswith(prefix) for item in items)]
-        if missing:
-            raise FinalizeError(
-                f"{label} must contain {', '.join(repr(prefix) for prefix in missing)} "
-                "bullet(s)."
-            )
 
 # ---------------------------------------------------------------------------
 # Render
