@@ -21,8 +21,6 @@ from tilefoundry.ir.visitor import ExprVisitor, StmtVisitor
 from .contexts import Cost, CostContext, TypeInferContext, VerifyContext, _constant_type
 from .registries import (
     AnalysisRegistry,
-    codegen_cpu_registry,
-    codegen_cuda_registry,
     cost_evaluator_registry,
     typeinfer_registry,
     verify_stmt_registry,
@@ -151,17 +149,20 @@ class CodegenVisitor:
     def __init__(
         self,
         ctx,  # CodegenContext; concrete per-target type lives with the target
-        target: str,
+        registry: AnalysisRegistry,
+        *,
+        backend: str,
     ) -> None:
         self.ctx = ctx
-        self.target = target
-        self.registry = _codegen_registry_for(target)
+        self.backend = backend
+        self.registry = registry
 
     def emit_stmt(self, stmt: Stmt) -> None:
         fn = self.registry.lookup(type(stmt))
         if fn is None:
             raise RuntimeError(
-                f"no @register_codegen_{self.target} for Stmt {type(stmt).__name__}"
+                f"no @register_codegen_{self.backend} for Stmt "
+                f"{type(stmt).__name__}"
             )
         fn(stmt, self.ctx)
 
@@ -170,7 +171,7 @@ class CodegenVisitor:
             fn = self.registry.lookup(type(expr.target))
             if fn is None:
                 raise RuntimeError(
-                    f"no @register_codegen_{self.target} for Op "
+                    f"no @register_codegen_{self.backend} for Op "
                     f"{type(expr.target).__name__}"
                 )
             return fn(expr, self.ctx)
@@ -205,14 +206,6 @@ class CostEvaluator(ExprVisitor[Cost]):
                 call, f"no cost evaluator registered for {type(call.target).__name__}"
             )
         return fn(call, self.ctx)
-
-
-def _codegen_registry_for(target: str) -> AnalysisRegistry:
-    if target == "cuda":
-        return codegen_cuda_registry
-    if target == "cpu":
-        return codegen_cpu_registry
-    raise ValueError(f"unknown codegen target: {target!r}")
 
 
 __all__ = [

@@ -25,6 +25,7 @@ from tilefoundry.ir.hir.specialize import (
     variant_for,
 )
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.target import CudaTarget
 
 ENTRY = GqaOnline.entry_function()
 STEADY = {"ctx_len": SMALL_CONTEXT_T}
@@ -221,7 +222,7 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     torch.testing.assert_close(got.float(), expected.float(), atol=0, rtol=0)
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _LoopOnly:
     """A context length that appears nowhere in the signature.
 

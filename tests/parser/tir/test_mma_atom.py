@@ -25,6 +25,7 @@ from tilefoundry.ir.tir.stmts import LetStmt, MeshScope
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CudaTarget
 
 # Module-level pre-instantiated alias (equivalent to building it inline).
 _ATOM = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
@@ -61,7 +62,7 @@ def test_a_valid_scope_takes_the_atom_contract_as_is() -> None:
     assert (atom.A, atom.B, atom.C) == (_ATOM.A, _ATOM.B, _ATOM.C)
     assert atom.required_scope is _ATOM.required_scope
 
-    kernel = prim_func(target="cuda")(
+    kernel = prim_func(target=CudaTarget("nvidia.h200_sxm"))(
         _alloc_frag_kernel(
             Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4)),
             names=("warp", "lane"),
@@ -75,7 +76,7 @@ def test_infunc_op_and_atom_emit_no_letstmt() -> None:
     static bindings: neither lowers to a LetStmt, so a body with only these
     assignments is empty."""
 
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
         op = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
         atom = T.cuda.mma.atom(op=op)  # noqa: F841
@@ -108,7 +109,7 @@ def test_a_scope_that_cannot_host_the_fragment_is_rejected(topology, layout) -> 
     not a warp scope however it is shaped; 64 lanes do not match a 32-lane atom;
     and a thread(64) topology carrying a 32-element layout is malformed."""
     with pytest.raises(VerifyError, match="required thread scope"):
-        prim_func(target="cuda")(_alloc_frag_kernel(topology, layout))
+        prim_func(target=CudaTarget("nvidia.h200_sxm"))(_alloc_frag_kernel(topology, layout))
 
 
 def test_atom_A_outside_mesh_scope_is_rejected() -> None:
@@ -122,4 +123,4 @@ def test_atom_A_outside_mesh_scope_is_rejected() -> None:
         )
 
     with pytest.raises(VerifyError, match="must be used inside a `with Mesh"):
-        prim_func(target="cuda")(kernel)
+        prim_func(target=CudaTarget("nvidia.h200_sxm"))(kernel)

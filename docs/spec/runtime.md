@@ -313,7 +313,7 @@ def jit(
     fn_or_mod: Function | Module,
     /,
     *,
-    target: str = "cuda",
+    target: Target | None = None,
     options: CompilerOptions | None = None,
     **kwargs,
 ) -> RuntimeModule:
@@ -321,7 +321,7 @@ def jit(
 
     Args:
         fn_or_mod: a hir.Function or Module (normalized to a Module).
-        target: the back-end target.
+        target: an explicit constructed Target, or the omitted-target policy.
         options: optional CompilerOptions.
         kwargs: rejected compatibility catch-all for unexpected keywords.
 
@@ -334,13 +334,17 @@ def jit(
   - accepts only TileFoundry IR (`Function` / `Module`); raw Python functions
     raise `TypeError`; the full input contract is stated below.
 
-`tilefoundry.jit(fn_or_mod, *, target="cuda", options=None)` is the JIT
+`tilefoundry.jit(fn_or_mod, *, target=None, options=None)` is the JIT
 entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
 `Module`, compiles with cache, and returns a callable `RuntimeModule`.
 
 **Input contract**:
 - Only TileFoundry IR objects (`Function` / `Module`) accepted.
 - Raw Python functions raise `TypeError` — use `@func` first.
+- A stated `target` MUST be a constructed, registered Target instance. Strings
+  MUST be refused and MUST NOT select a backend or construct a Target.
+- A Module-owned Target takes precedence and is retained as the exact instance;
+  a conflicting explicit Target or `CompilerOptions.target` MUST fail.
 - Topology is declared by the `Module`; a single-function
   `@func(topologies=...)` declares it through the implicit `Module` that
   decorator yields ([parser §1.1](./parser.md#11-decorators)).

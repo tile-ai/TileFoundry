@@ -313,7 +313,8 @@ requested analysis and renders the results together
   - A rendering MUST report what the caller *requested*. A requested analysis
     pulls its dependencies in, so records reach the IR that nobody asked to see;
     those records MUST stay on the IR and MUST NOT be reported. Which records an
-    analysis owns MUST be read from its registration ([§3.1](#31-analysis-registration)) rather than from a
+    analysis owns MUST be read from its Target-selected descriptor
+    ([§3.1](#31-target-selected-analyzers)) rather than from a
     second table.
   - Every rendering of one run MUST make that selection through one shared
     decision. A summary and an annotated program are two views of the same run,
@@ -718,7 +719,7 @@ def analyze(
     root, obtained from `Module.resolve_target()`.
   - A dependency cycle MUST fail and MUST name the path that closes it. A
     missing root and a missing dependency MUST be distinguishable: one is the
-    caller's selector, the other a broken registration.
+    caller's selector, the other a broken Target capability.
   - Type inference and validation MUST each run once per call, before any
     analysis. No analysis MAY run once either has rejected the IR, because an
     analysis reads inferred types and assumes a verified function.
@@ -733,11 +734,11 @@ def analyze(
     renderings of it and of the Metadata on the IR, and MUST NOT be fields of
     it.
 
-### 3.1 Analysis registration
+### 3.1 Target-selected Analyzers
 
 ```python
-class AnalysisAlgorithm:
-    """Describe one registered analysis.
+class Analyzer:
+    """Describe one Target-selected analysis.
 
     Attributes:
         selector: attribute; Public analysis selector.
@@ -749,33 +750,25 @@ class AnalysisAlgorithm:
     selector: str
     run: AnalysisCallable
     requires: tuple[str, ...] = ()
-    produces: tuple[type[IRMetadata], ...] = field(default=())
+    produces: tuple[type[IRMetadata], ...] = ()
 
 
-def register_analysis(
-    target_type: type,
-    selector: str,
-    *,
-    requires: tuple[str, ...] = (),
-    produces: tuple[type[IRMetadata], ...] = (),
-) -> "Callable[[AnalysisCallable], AnalysisCallable]": ...
+class Target:
+    def get_analyzer(self, selector: str) -> Analyzer: ...
 ```
 
 - constraints:
-  - An analysis MUST be registered under the exact
-    `(Target concrete type, selector)` pair, in the shared algorithm registry
-    contract ([code-organization](./code-organization.md)). A base-class
-    registration MUST NOT serve a subclass, and there MUST be no default-Target
-    fallback: two targets sharing a base can need different implementations.
-  - A target-independent analysis MUST still be registered once per supported
-    target, so the support matrix is read from the registrations rather than
-    inferred from an inheritance chain.
-  - A duplicate registration for one exact pair MUST fail rather than replace,
-    so dispatch cannot depend on import order.
+  - Analyze MUST obtain every root and dependency from the same exact Target
+    instance through `get_analyzer`.
+  - A Target subclass MUST inherit its base Analyzers through normal Python
+    inheritance. It MAY override one selector and delegate the rest to
+    `super()` or refuse inherited behavior that is invalid for its hardware.
+  - There MUST be no public analysis registration step or exact-concrete-Target
+    algorithm table. A custom provider registers only its Target class.
   - A declaration MUST be rejected when it requires itself, repeats a
     dependency, produces the same Metadata type twice, or names a `produces`
     entry that is not an `IRMetadata` subclass.
-  - An analysis MAY change only the Metadata types its registration declares.
+  - An analysis MAY change only the Metadata types its Analyzer declares.
     Ownership MUST be enforced against what reached the IR rather than against
     what the analysis reports, and MUST cover addition, replacement, and
     removal alike: deleting another analysis's record changes the IR as much as

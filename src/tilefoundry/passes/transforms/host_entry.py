@@ -2,7 +2,7 @@
 kernel.
 
 When a module has no host-callable (CPU-target) entry and exactly one CUDA
-device ``PrimFunction``, build a ``PrimFunction(target="cpu")`` whose signature
+device ``PrimFunction``, build a ``PrimFunction(target=CpuTarget())`` whose signature
 mirrors the device function's parameters and whose body is a single ``Launch``
 of that device function. Grid / block are taken from the existing static
 launch-config derivation and frozen as ``i64`` constants (dynamic grid is a
@@ -23,7 +23,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import CpuTarget, CudaTarget
 
 _DEFAULT_ENTRY_NAME = "main"
 
@@ -49,12 +49,12 @@ def insert_default_host_entry(module: Module) -> Module:
       whose body is a single ``Launch`` of that kernel.
     """
     entry_fn = module.entry_function()
-    if entry_fn.target.name == "cpu":
+    if isinstance(entry_fn.target, CpuTarget):
         return module
     # The entry is not CPU-target. A CPU function that is not the entry leaves
     # the module without a host-callable entry; v1 does not guess which one to
     # promote.
-    if any(fn.target.name == "cpu" for fn in module.functions):
+    if any(isinstance(fn.target, CpuTarget) for fn in module.functions):
         raise ValueError(
             "insert_default_host_entry: module has a CPU function that is not "
             "the entry; refusing to guess the host entry"
@@ -70,7 +70,7 @@ def insert_default_host_entry(module: Module) -> Module:
     device_fns = [
         fn
         for fn in module.functions
-        if isinstance(fn, PrimFunction) and fn.target.name == "cuda"
+        if isinstance(fn, PrimFunction) and isinstance(fn.target, CudaTarget)
     ]
     if len(device_fns) != 1:
         raise ValueError(

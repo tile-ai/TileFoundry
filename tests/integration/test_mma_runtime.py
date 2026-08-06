@@ -20,6 +20,7 @@ from tilefoundry.ir.types.shard import (
     Split,
     Topology,
 )
+from tilefoundry.target import CudaTarget
 
 # ── Fragment layouts (cf. tests/ir_types/shard/test_mma_fragment_layouts.py) ──
 
@@ -70,7 +71,7 @@ class MatmulModule:
 
 
 def test_mma_sm80_16x8x16_bf16_matches_torch_matmul() -> None:
-    rm = tilefoundry.compile(MatmulModule, target="cuda")
+    rm = tilefoundry.compile(MatmulModule, target=CudaTarget("nvidia.h200_sxm"))
     a = torch.randn(16, 16, dtype=torch.bfloat16, device="cuda")
     b = torch.randn(16, 8, dtype=torch.bfloat16, device="cuda")
     out = torch.empty(16, 8, dtype=torch.float32, device="cuda")

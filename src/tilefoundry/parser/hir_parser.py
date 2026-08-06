@@ -32,7 +32,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
 from tilefoundry.ir.visitor import ExprMutator
-from tilefoundry.target import Target, resolve_target
+from tilefoundry.target import Target, require_target
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (
@@ -312,10 +312,10 @@ def _extract_target_from_decorator(
                 continue
             value = _eval_decorator_static(keyword.value, closure)
             try:
-                target = resolve_target(value)
+                target = require_target(value)
             except (TypeError, ValueError) as exc:
                 raise VerifyError(
-                    f"func target must resolve to a Target, got {value!r}"
+                    f"func target must be a Target instance, got {value!r}"
                 ) from exc
             return target
     return None
@@ -1329,10 +1329,10 @@ def _module_declared_context(cls_node: ast.ClassDef, closure: dict[str, Any]):
         if kw.arg == "target":
             value = _eval_decorator_static(kw.value, closure)
             try:
-                target = resolve_target(value)
+                target = require_target(value)
             except (TypeError, ValueError) as exc:
                 raise VerifyError(
-                    f"module target must resolve to a Target, got {value!r}"
+                    f"module target must be a Target instance, got {value!r}"
                 ) from exc
     for stmt in cls_node.body:
         # The hierarchy is declared by a class-body assignment, not a decorator

@@ -16,13 +16,13 @@ from dataclasses import dataclass
 
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.preflight import infer_authored_types, validate_authored
-from tilefoundry.analysis.registry import ANALYSES, AnalysisAlgorithm
+from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
-from tilefoundry.registry import UnknownAlgorithmError
+from tilefoundry.target import Target
 
 
 @dataclass(frozen=True)
@@ -49,11 +49,11 @@ class AnalysisResult:
     metadata_types: tuple[type[IRMetadata], ...]
 
 
-def _algorithm(target: object, selector: str, *, root: str) -> AnalysisAlgorithm:
-    """The algorithm bound to *selector* under *target*'s exact type."""
+def _algorithm(target: Target, selector: str, *, root: str) -> Analyzer:
+    """The service selected by the resolved Target for *selector*."""
     try:
-        return ANALYSES.resolve(target, selector)
-    except UnknownAlgorithmError as error:
+        return target.get_analyzer(selector)
+    except ValueError as error:
         if selector == root:
             raise AnalysisError(str(error)) from None
         raise AnalysisError(
@@ -61,14 +61,14 @@ def _algorithm(target: object, selector: str, *, root: str) -> AnalysisAlgorithm
         ) from None
 
 
-def _closure(target: object, root: str) -> tuple[AnalysisAlgorithm, ...]:
+def _closure(target: Target, root: str) -> tuple[Analyzer, ...]:
     """*root* and everything it transitively needs, dependencies first.
 
     The walk is depth-first over declared names, which both orders the closure
     and detects a cycle: meeting a selector that is still being visited means
     it depends on itself through some path.
     """
-    ordered: list[AnalysisAlgorithm] = []
+    ordered: list[Analyzer] = []
     done: set[str] = set()
     visiting: list[str] = []
 
@@ -221,7 +221,7 @@ def _metadata_delta(
 
 
 def _require_owned_writes(
-    algorithm: AnalysisAlgorithm,
+    algorithm: Analyzer,
     before: dict[tuple[int, type], int],
     after: dict[tuple[int, type], int],
 ) -> set[tuple[int, type]]:

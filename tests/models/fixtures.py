@@ -26,7 +26,7 @@ from tilefoundry.target.base import Target
 
 def _parallel_units(target: Target, level: str) -> int:
     """How many positions of *level* the hardware documents state."""
-    facts = target.as_facts(ParallelCapacityFacts)
+    facts = target.get_facts(ParallelCapacityFacts)
     if facts.topology != level:
         raise ValueError(
             f"{type(target).__name__} states parallel capacity for "

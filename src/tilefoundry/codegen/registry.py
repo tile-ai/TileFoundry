@@ -1,77 +1,60 @@
-"""Per-target codegen emitter registry + target grouping.
+"""Code-generation services selected by concrete Target values."""
 
-Maps a function ``target`` (by its ``name``) to the emitter that lowers that
-target's functions, mirroring nncase's ``Target.GetModuleCompiler(kind)`` shape:
-group a module's functions by target, let each target emit its own
-``LinkableModule``, then link those modules into one host-callable artifact.
-
-This module is infrastructure only — registering / looking up emitters and
-grouping functions. It does not change the default compile path.
-"""
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from tilefoundry.ir.core.module import Module, ModuleFunction
+from tilefoundry.ir.core.module import Module
 from tilefoundry.target import Target
 
-_EMITTERS: dict[str, Callable] = {}
+
+@dataclass(frozen=True)
+class CodeGenerator:
+    """One immutable Target-owned code-generation service."""
+
+    emit: Callable[
+        [Module, tuple["PrimFunction", ...], Target], "LinkableModule"
+    ]
 
 
-def register_emitter(name: str, emitter: Callable) -> None:
-    """Register the emitter that lowers functions whose target is *name*."""
-    _EMITTERS[name] = emitter
+def group_functions_by_target(
+    module: Module,
+) -> dict[Target, tuple["PrimFunction", ...]]:
+    """Group functions by their equal Target value, preserving source order."""
+    from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
 
-
-def _ensure_defaults() -> None:
-    if "cuda" not in _EMITTERS:
-        # Split-pipeline per-target linkable-module emitters.
-        from tilefoundry.codegen.cpu.module import (  # noqa: PLC0415
-            emit_host_module,
-        )
-        from tilefoundry.codegen.cuda.module import (  # noqa: PLC0415
-            emit_cuda_module,
-        )
-
-        _EMITTERS["cuda"] = emit_cuda_module
-        _EMITTERS["cpu"] = emit_host_module
-
-
-def get_emitter(target: "str | Target") -> Callable:
-    """Return the emitter registered for *target* (a ``Target`` or its name)."""
-    name = target.name if isinstance(target, Target) else target
-    _ensure_defaults()
-    try:
-        return _EMITTERS[name]
-    except KeyError:
-        raise ValueError(
-            f"no codegen emitter registered for target {name!r}; "
-            f"have {sorted(_EMITTERS)}"
-        ) from None
-
-
-def group_functions_by_target(module: Module) -> dict[str, tuple[ModuleFunction, ...]]:
-    """Group functions by target name after checking CUDA identity."""
-    groups: dict[str, list[ModuleFunction]] = {}
-    for fn in module.functions:
-        if fn.target is None:
+    groups: dict[Target, list[PrimFunction]] = {}
+    for function in module.functions:
+        if not isinstance(function, PrimFunction):
+            raise TypeError(
+                f"tilefoundry: codegen expects PrimFunction values, got "
+                f"{type(function).__name__} {function.name!r}"
+            )
+        if function.target is None:
             raise ValueError(
-                f"tilefoundry: function {fn.name!r} has no resolved Target "
+                f"tilefoundry: function {function.name!r} has no resolved Target "
                 "at codegen grouping"
             )
-        groups.setdefault(fn.target.name, []).append(fn)
-    cuda_group = groups.get("cuda", ())
-    if cuda_group:
-        first = cuda_group[0].target
-        for fn in cuda_group[1:]:
-            if fn.target != first:
-                raise ValueError(
-                    f"tilefoundry: module {module.name!r} mixes CUDA functions "
-                    f"with differing Target facts: {first!r} "
-                    f"(function {cuda_group[0].name!r}) vs {fn.target!r} "
-                    f"(function {fn.name!r})"
-                )
-    return {name: tuple(fns) for name, fns in groups.items()}
+        groups.setdefault(function.target, []).append(function)
+
+    from tilefoundry.target import CudaTarget  # noqa: PLC0415
+
+    device_groups = [
+        (target, functions)
+        for target, functions in groups.items()
+        if isinstance(target, CudaTarget)
+    ]
+    if len(device_groups) > 1:
+        first_target, first_functions = device_groups[0]
+        second_target, second_functions = device_groups[1]
+        raise ValueError(
+            f"tilefoundry: module {module.name!r} mixes unequal device Targets: "
+            f"{first_target!r} (function {first_functions[0].name!r}) vs "
+            f"{second_target!r} (function {second_functions[0].name!r}); "
+            "multiple device translation units are not supported"
+        )
+    return {target: tuple(functions) for target, functions in groups.items()}
 
 
-__all__ = ["get_emitter", "group_functions_by_target", "register_emitter"]
+__all__ = ["CodeGenerator", "group_functions_by_target"]

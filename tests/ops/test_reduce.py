@@ -33,6 +33,7 @@ from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
+from tilefoundry.target import CudaTarget
 
 _RMEM = StorageKind.RMEM
 _BF = DType.bf16
@@ -184,7 +185,7 @@ class _CrossWarpSumModule:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_cross_warp_sum_matches_torch() -> None:
-    rm = tilefoundry.compile(_CrossWarpSumModule, target="cuda")
+    rm = tilefoundry.compile(_CrossWarpSumModule, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
     out = rm(x)
@@ -197,8 +198,10 @@ def test_cross_warp_sum_emits_reduce() -> None:
     # reduce_cross_warp call, no warps_per_group argument) — the runtime derives
     # the level + wpg. The workspace capacity is still sized by the lowering:
     # per (warp, lane, cell) = 4 warps × 32 lanes × 1 cell = 128 slots.
-    lowered = tilefoundry.lower(_CrossWarpSumModule, target="cuda")
-    src = emit_cuda_module(group_functions_by_target(lowered)["cuda"]).source
+    lowered = tilefoundry.lower(_CrossWarpSumModule, target=CudaTarget("nvidia.h200_sxm"))
+    groups = group_functions_by_target(lowered)
+    target, functions = next(iter(groups.items()))
+    src = emit_cuda_module(lowered, functions, target).source
     assert re.search(r"\breduce<[^(]*>\([^;]*\);", src), src
     assert re.search(r"__shared__ __align__\(16\) float ws\w*\[128\];", src), src
 

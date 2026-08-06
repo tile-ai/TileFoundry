@@ -17,6 +17,7 @@ from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry.contexts import CostContext, VerifyContext
+from tilefoundry.visitor_registry.registries import codegen_cuda_registry
 from tilefoundry.visitor_registry.visitors import (
     CodegenVisitor,
     CostEvaluator,
@@ -62,6 +63,8 @@ def test_visitors_fail_closed_when_unregistered() -> None:
 
     call = Call(type=_t(), target=_UnknownOp(), args=())
     with pytest.raises(RuntimeError, match="no @register_codegen_cuda for Op _UnknownOp"):
-        CodegenVisitor(_Ctx(), target="cuda").emit_expr(call)
+        CodegenVisitor(
+            _Ctx(), codegen_cuda_registry, backend="cuda"
+        ).emit_expr(call)
     with pytest.raises(VerifyError, match="no cost evaluator registered for _UnknownOp"):
         CostEvaluator(CostContext()).visit_Call(call)

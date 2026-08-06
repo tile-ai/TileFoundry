@@ -18,10 +18,11 @@ from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType
 from tilefoundry.schedule.facts import AtomFact
+from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.target.cuda.atoms import candidate_atoms
 
 
-@func(target="cuda")
+@func(target=CudaTarget("nvidia.h200_sxm"))
 def bf16_gemm(
     x: Tensor[(64, 128), "bf16"],
     w: Tensor[(128, 64), "bf16"],
@@ -30,7 +31,7 @@ def bf16_gemm(
     return h
 
 
-@func(target="cuda")
+@func(target=CudaTarget("nvidia.h200_sxm"))
 def f32_gemm(
     x: Tensor[(64, 128), "f32"],
     w: Tensor[(128, 64), "f32"],
@@ -39,7 +40,7 @@ def f32_gemm(
     return h
 
 
-@func(target="cuda")
+@func(target=CudaTarget("nvidia.h200_sxm"))
 def odd_shape_bf16_gemm(
     x: Tensor[(15, 128), "bf16"],
     w: Tensor[(128, 64), "bf16"],
@@ -122,4 +123,4 @@ def test_non_cuda_target_raises():
     """V1 supports ``CudaTarget`` only -- no per-atom device facts
     (sm_count / hbm_bandwidth / peak_for) exist for a CPU target."""
     with pytest.raises(NotImplementedError):
-        candidate_atoms(bf16_gemm.entry_function().body, target="cpu")
+        candidate_atoms(bf16_gemm.entry_function().body, target=CpuTarget())

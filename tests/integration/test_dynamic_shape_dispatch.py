@@ -23,6 +23,7 @@ import tilefoundry
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, DimVarRangePat, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — binds bare ``mul`` / ``add``
+from tilefoundry.target import CudaTarget
 
 _S = DimVar("S", 1, 8)   # half-open [1, 8) = 1..7
 
@@ -44,7 +45,7 @@ class Dispatch:
 
 def _build_runtime_module():
     """Compile the dispatch prototype to a fully-loaded RuntimeModule."""
-    return tilefoundry.compile(Dispatch, target="cuda")
+    return tilefoundry.compile(Dispatch, target=CudaTarget("nvidia.h200_sxm"))
 
 
 def test_entry_dispatch_both_variants_in_one_session() -> None:

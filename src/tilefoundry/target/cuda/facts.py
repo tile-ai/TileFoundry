@@ -28,7 +28,6 @@ from tilefoundry.schedule.pipeline.facts import (
     PipelineInstructionFacts,
 )
 from tilefoundry.schedule.plan import TargetSpecRef
-from tilefoundry.target.facts import register_target_facts
 
 from .atoms import candidate_atoms
 from .target import CudaTarget
@@ -203,13 +202,6 @@ def partition_facts(target: CudaTarget, query: PartitionFactsQuery) -> Partition
             sorted(device.dense_flops_per_second.items(), key=lambda item: item[0].name)
         ),
     )
-
-
-register_target_facts(CudaTarget, MemoryHierarchyFacts, memory_hierarchy)
-register_target_facts(CudaTarget, ThroughputFacts, throughput)
-register_target_facts(CudaTarget, ParallelCapacityFacts, parallel_capacity)
-register_target_facts(CudaTarget, PipelineFacts, pipeline_facts)
-register_target_facts(CudaTarget, PartitionFacts, partition_facts)
 
 
 __all__ = [

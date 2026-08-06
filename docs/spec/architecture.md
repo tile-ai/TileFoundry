@@ -234,7 +234,7 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
 | **[schedule](./schedule.md)** | The public scheduling operation: invocation contract, exact algorithm registration, shared options, result boundary, the extensible Plan base, the typed plan each algorithm family exports, the schedule-tree construction and scaffold emission stages an algorithm composes its solve from, and the facts it projects (`AtomFact`, plus each family's own closed facts) |
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, Facts projection, and admitted program topology levels |
-| **[codegen](./codegen.md)** | Emit / link pipeline and products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), emitter registry, dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
+| **[codegen](./codegen.md)** | Target-selected CodeGenerator services, emit / link products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
 | **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |
 | **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, schedule, and inspect |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |

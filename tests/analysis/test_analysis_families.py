@@ -33,12 +33,11 @@ from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import DType, numel
 from tilefoundry.target import AmxTarget, CudaTarget
-from tilefoundry.target.facts import TARGET_FACTS
 from tilefoundry.visitor_registry import cost_evaluator_registry
 from tilefoundry.visitor_registry.contexts import Cost
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _CudaAdd:
     topologies = (Topology("cta", 4),)
 
@@ -47,7 +46,7 @@ class _CudaAdd:
         return tf.add(source, source)
 
 
-@module(entry="main", target="amx")
+@module(entry="main", target=AmxTarget())
 class _AmxAdd:
     topologies = (Topology("core", 4),)
 
@@ -56,7 +55,7 @@ class _AmxAdd:
         return tf.add(source, source)
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _MixedPrecision:
     topologies = (Topology("cta", 1),)
 
@@ -67,7 +66,7 @@ class _MixedPrecision:
         return tf.add(half, half)
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _WeightedAdd:
     topologies = (Topology("cta", 1),)
 
@@ -80,7 +79,7 @@ class _WeightedAdd:
         return tf.add(scaled, scaled)
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _Rotated:
     topologies = (Topology("cta", 1),)
 
@@ -96,7 +95,7 @@ class _Rotated:
         return rotated
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _Allocated:
     topologies = (Topology("cta", 1),)
 
@@ -105,7 +104,7 @@ class _Allocated:
         return tf.add(source, tf.zeros(shape=(64,), dtype="f32"))
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _BatchedOnTheRight:
     topologies = (Topology("cta", 1),)
 
@@ -117,7 +116,7 @@ class _BatchedOnTheRight:
         return tf.matmul(token, blocks)
 
 
-@module(entry="main", target="cuda")
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
 class _Gathered:
     topologies = (Topology("cta", 1),)
 
@@ -129,12 +128,12 @@ class _Gathered:
         return tf.gather(table, rows, axis=0)
 
 
-@func(target="cuda", topologies=(Topology("cta", 168),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 168),))
 def _wide_grid(source: Tensor[(1024,), "f32"]):
     return tf.add(source, source)
 
 
-@func(target="cuda", topologies=(Topology("thread", 1),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 1),))
 def _reshard_boundary(source: Tensor[(1,), "f32"]):
     with Mesh(topology="thread", layout=(1,), names=("lane",)) as thread:
         local = tf.reshard(source, (1 @ thread.lane,), "rmem")
@@ -142,28 +141,28 @@ def _reshard_boundary(source: Tensor[(1,), "f32"]):
         return tf.add(moved, moved)
 
 
-@func(target="cuda", topologies=(Topology("cta", 2), Topology("thread", 4)))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2), Topology("thread", 4)))
 def _thread_sharded(source: Tensor[(8,), "f32"]):
     with Mesh(topology="thread", layout=(4,), names=("lane",)) as thread:
         local = tf.reshard(source, (8 @ thread.lane,), "rmem")
         return tf.add(local, local)
 
 
-@func(target="cuda", topologies=(Topology("thread", 4),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 4),))
 def _oversized_shared(source: Tensor[(131072,), "f32"]):
     with Mesh(topology="thread", layout=(4,), names=("lane",)) as thread:
         local = tf.reshard(source, (131072 @ thread.lane,), "smem")
         return tf.add(local, local)
 
 
-@func(target="cuda", topologies=(Topology("thread", 4),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 4),))
 def _modest_shared(source: Tensor[(1024,), "f32"]):
     with Mesh(topology="thread", layout=(4,), names=("lane",)) as thread:
         local = tf.reshard(source, (1024 @ thread.lane,), "smem")
         return tf.add(local, local)
 
 
-@func(target="cuda", topologies=(Topology("cta", 1),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 def _oversized_working_set(source: Tensor[(16_000_000,), "f32"]):
     return tf.add(source, source)
 
@@ -396,7 +395,7 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     bound = get_metadata(call, RooflineMetadata)
     assert cost is not None and bound is not None
 
-    facts = TARGET_FACTS.project(CudaTarget("nvidia.h200_sxm"), ThroughputFacts)
+    facts = CudaTarget("nvidia.h200_sxm").get_facts(ThroughputFacts)
     rate = facts.peak_for(DType.f32)
     assert rate is not None
     expected = -(-cost.flops[0][1] * 1_000_000_000 // rate)
@@ -459,7 +458,7 @@ def test_the_gpu_memory_graph_is_not_a_tree() -> None:
     than carrying a stub edge, which is the case that would otherwise be modelled
     by a special one.
     """
-    facts = TARGET_FACTS.project(CudaTarget("nvidia.h200_sxm"), MemoryHierarchyFacts)
+    facts = CudaTarget("nvidia.h200_sxm").get_facts(MemoryHierarchyFacts)
 
     assert facts.cached_level("l1") == "l2"
     assert facts.cached_level("l2") == "gmem"
@@ -470,7 +469,7 @@ def test_the_gpu_memory_graph_is_not_a_tree() -> None:
     assert {level.name for level in facts.explicit_levels} >= {"gmem", "smem", "rmem"}
     assert {level.name for level in facts.implicit_levels} == {"l1", "l2"}
 
-    flat = TARGET_FACTS.project(AmxTarget(), MemoryHierarchyFacts)
+    flat = AmxTarget().get_facts(MemoryHierarchyFacts)
     assert flat.cached_level("l1d") == "l2"
     assert flat.backing_level("l1d") == "gmem"
     assert flat.capacity_sharers("l1d") == ()

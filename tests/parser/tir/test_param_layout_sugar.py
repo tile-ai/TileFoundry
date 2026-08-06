@@ -15,6 +15,7 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CudaTarget
 
 _M_CTA = Mesh(Topology("cta", 128), Layout((128,), (1,)), names=("cta",))
 
@@ -24,7 +25,7 @@ def test_prim_func_param_layout_sugar_canonicalises() -> None:
     ``(128, 64)`` with the mesh axis bound as a Split on the new layout axis
     — the same result the HIR parser produces for an identical annotation."""
 
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(1, 8192), "f32", (1, 8192 @ _M_CTA), "smem"]):  # noqa: F821
         return
 

@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry import cli
-from tilefoundry.cli.source import one_extent_per_dim
+from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim
+from tilefoundry.target import registered_targets
 
 
 def test_parse_dims_reads_one_extent_per_dimension() -> None:
@@ -51,3 +52,29 @@ def test_schedule_rejects_several_extents_per_dimension(capsys) -> None:
     refused = capsys.readouterr().err
     assert "ctx_len takes one EXTENT at a time" in refused
     assert "asking several EXTENTs together is for check" in refused
+
+
+def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) -> None:
+    (tmp_path / "provider.py").write_text(
+        "from tilefoundry.target import CpuTarget, register_target\n"
+        "@register_target\n"
+        "class ReloadTarget(CpuTarget):\n"
+        "    name = 'tests.cli.reload_target'\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "model.py"
+    source.write_text(
+        "from tilefoundry import module\n"
+        "from provider import ReloadTarget\n"
+        "@module(target=ReloadTarget())\n"
+        "class Model:\n"
+        "    def forward(self):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+
+    first = load_authored_ir(f"{source}:Model")
+    second = load_authored_ir(f"{source}:Model")
+
+    assert type(first.target) is not type(second.target)
+    assert registered_targets()["tests.cli.reload_target"] is type(first.target)

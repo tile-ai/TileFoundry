@@ -15,14 +15,12 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target.amx.target import AmxTarget
-from tilefoundry.target.cuda.target import CudaTarget
+from tilefoundry.target import Target
 from tilefoundry.visitor_registry import cost_evaluator_registry
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
 
 from .errors import AnalysisError
 from .metadata import ComputeCostMetadata, TrafficBytes
-from .registry import register_analysis
 from .walk import (
     attach,
     bytes_by_storage,
@@ -192,7 +190,7 @@ def _scaled(
 def analyze_compute_cost(
     module: Module,
     function: Function,
-    target: object,
+    target: Target,
     options: object | None = None,
 ) -> None:
     """Attach one work record per Call reachable from *function*.
@@ -218,15 +216,6 @@ def analyze_compute_cost(
             flops=tuple(sorted(flops.items())),
             traffic=tuple(sorted(traffic.items())),
         )
-
-
-# The measurement is target-independent, but the support matrix is not inferred:
-# each target that admits it says so, so a new backend does not silently acquire
-# an analysis nobody checked it against.
-for _target_type in (CudaTarget, AmxTarget):
-    register_analysis(
-        _target_type, SELECTOR, produces=(ComputeCostMetadata,)
-    )(analyze_compute_cost)
 
 
 __all__ = ["SELECTOR", "analyze_compute_cost"]

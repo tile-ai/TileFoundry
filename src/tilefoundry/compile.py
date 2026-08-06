@@ -7,13 +7,14 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from tilefoundry.inspection import as_script as _as_script
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import BufferizePass, HirToTirPass
+from tilefoundry.target import Target, default_target, require_target
 
 # ── Compiler Options ─────────────────────────────────────────────────────────
 
@@ -24,11 +25,14 @@ class CompilerOptions:
     Serialisation is deterministic: ``target`` + extra fields as
     sorted key-value pairs join by null separator.
     """
-    target: str = "cuda"
+    target: Target
+
+    def __post_init__(self) -> None:
+        require_target(self.target)
 
     def canonical_text(self) -> str:
         """Deterministic text serialisation for cache-key computation."""
-        parts = [f"target={self.target}"]
+        parts = [f"target={self.target!r}"]
         return "\0".join(parts)
 
 # ── Module Normalisation ─────────────────────────────────────────────────────
@@ -68,7 +72,7 @@ def lower(
     mod: Module,
     /,
     *,
-    target: str = "cuda",
+    target: Target | None = None,
 ) -> Module:
     """Run the default pass pipeline on *mod* and return a lowered ``Module`` (TIR).
 
@@ -81,30 +85,32 @@ def lower(
             f"tilefoundry.lower: expected Module, got {type(mod).__name__}. "
             f"Construct Module(name=..., functions=(fn,), entry=fn.name) explicitly."
         )
-    if target != "cuda":
-        raise ValueError(f"tilefoundry.lower: target {target!r} not supported yet")
-
     # Validate the module's declared program topology levels against its
     # target before lowering — a module may declare an unsupported level (e.g.
     # ``gpu``) without ever emitting a MeshScope, so the codegen-side check is
     # not enough.
-    from tilefoundry.target import default_target  # noqa: PLC0415
     try:
         module_target = mod.resolve_target()
     except ValueError:
-        module_target = default_target()
+        module_target = default_target() if target is None else require_target(target)
+        mod = replace(mod, target=module_target)
+    else:
+        if target is not None and require_target(target) != module_target:
+            raise ValueError(
+                f"tilefoundry.lower: explicit target {target!r} conflicts with "
+                f"the Module Target {module_target!r}"
+            )
     for topology in mod.effective_topologies():
         module_target.validate_program_topology(topology)
 
     pm = _build_default_pipeline()
     result = pm.run(mod)
     merged = dict(result.metadata)
-    merged["target"] = target
     return Module(
         name=result.name,
         functions=result.functions,
         entry=result.entry,
-        target=result.target,
+        target=module_target,
         topologies=result.topologies,
         metadata=merged,
     )
@@ -113,7 +119,7 @@ def build(
     mod: Module,
     /,
     *,
-    target: str | None = None,
+    target: Target | None = None,
 ) -> "RuntimeModule":
     """Codegen + compile + load *mod* and return a fully-loaded ``RuntimeModule``.
 
@@ -125,20 +131,17 @@ def build(
         raise TypeError(
             f"tilefoundry.build: expected Module, got {type(mod).__name__}."
         )
-    mod_target: object = mod.metadata.get("target") if hasattr(mod, "metadata") else None
-    if target is None:
-        if mod_target is None:
-            raise ValueError(
-                "tilefoundry.build: target not specified and mod.metadata has no 'target'"
-            )
-        target = str(mod_target)
-    elif mod_target is not None and target != str(mod_target):
+    try:
+        module_target = mod.resolve_target()
+    except ValueError as error:
+        raise ValueError(
+            "tilefoundry.build: module has no Target; declare one on the Module"
+        ) from error
+    if target is not None and require_target(target) != module_target:
         raise ValueError(
             f"tilefoundry.build: explicit target {target!r} conflicts with "
-            f"mod.metadata['target'] = {mod_target!r}"
+            f"the Module Target {module_target!r}"
         )
-    if target != "cuda":
-        raise ValueError(f"tilefoundry.build: target {target!r} not supported yet")
 
     # Keyed by pid so concurrent processes (e.g. pytest-xdist workers) building
     # same-named entries never share a cmake/nvcc build directory.
@@ -165,7 +168,6 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     )
     from tilefoundry.codegen.linker import link_modules  # noqa: PLC0415
     from tilefoundry.codegen.registry import (  # noqa: PLC0415
-        get_emitter,
         group_functions_by_target,
     )
     from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
@@ -176,20 +178,31 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
 
     linked = insert_default_host_entry(mod)
     groups = group_functions_by_target(linked)
-    cuda_group = groups.get("cuda", ())
-    if not cuda_group:
+    from tilefoundry.target import CpuTarget, CudaTarget  # noqa: PLC0415
+
+    device_groups = [
+        (target, functions)
+        for target, functions in groups.items()
+        if isinstance(target, CudaTarget)
+    ]
+    if len(device_groups) != 1:
         raise ValueError(
             f"tilefoundry.build: module {linked.name!r} has no CUDA device functions"
         )
+    device_target, cuda_group = device_groups[0]
     cpu_entry = linked.entry_function()
-    if cpu_entry.target.name != "cpu":
+    if not isinstance(cpu_entry.target, CpuTarget):
         raise ValueError(
             f"tilefoundry.build: entry {cpu_entry.name!r} is not a CPU host entry "
             f"after normalization"
         )
 
-    device_module = get_emitter("cuda")(cuda_group)
-    host_module = get_emitter("cpu")(cpu_entry, linked)
+    device_module = device_target.get_code_generator().emit(
+        linked, cuda_group, device_target
+    )
+    host_module = cpu_entry.target.get_code_generator().emit(
+        linked, (cpu_entry,), cpu_entry.target
+    )
 
     # Host-visible ABI: filter the hidden shape scalars the host derives from
     # tensor shapes; keep the CPU entry's parameter order and output count.
@@ -202,7 +215,7 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
         output_count=_output_count_from_fn(cpu_entry),
     )
 
-    cuda_arch = cuda_group[0].target.arch.removeprefix("sm_")
+    cuda_arch = device_target.arch.removeprefix("sm_")
     linked_module = link_modules(
         (device_module, host_module),
         workdir=workdir,
@@ -216,7 +229,7 @@ def compile(
     mod: Module,
     /,
     *,
-    target: str = "cuda",
+    target: Target | None = None,
 ) -> "RuntimeModule":
     """``build(lower(mod, target=target))`` — full compile shortcut.
 
@@ -247,7 +260,7 @@ def jit(
     fn_or_mod,
     /,
     *,
-    target: str = "cuda",
+    target: Target | None = None,
     options: CompilerOptions | None = None,
     **kwargs,
 ) -> "RuntimeModule":
@@ -262,7 +275,7 @@ def jit(
 
     Args:
         fn_or_mod: A ``hir.Function`` or ``Module``.
-        target: Compilation target (currently only ``"cuda"``).
+        target: A constructed compilation Target.
         options: Compiler options (defaults to ``CompilerOptions(target=target)``).
 
     Returns:
@@ -270,7 +283,7 @@ def jit(
 
     Raises:
         TypeError: raw Python functions and unsupported types.
-        ValueError: unrecognised targets.
+        ValueError: an explicit Target conflicts with the Module Target.
     """
     # Reject all unexpected kwargs
     if kwargs:
@@ -291,14 +304,24 @@ def jit(
     mod = normalize_to_module(fn_or_mod)
 
     # Options
+    if target is None:
+        try:
+            target = mod.resolve_target()
+        except ValueError:
+            target = default_target()
+    else:
+        target = require_target(target)
     if options is None:
         options = CompilerOptions(target=target)
-    if target != "cuda":
-        raise ValueError(f"tilefoundry.jit: target {target!r} not supported yet")
+    elif options.target != target:
+        raise ValueError(
+            f"tilefoundry.jit: options target {options.target!r} conflicts with "
+            f"the resolved Target {target!r}"
+        )
 
     # Cache key: sha256 over canonical module text + target + options
     canonical_text = _canonical_module_text(mod)
-    payload = canonical_text + "\0" + target + "\0" + options.canonical_text()
+    payload = canonical_text + "\0" + repr(target) + "\0" + options.canonical_text()
     key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     if key not in _jit_cache:
@@ -320,19 +343,28 @@ jit.cache_info = _jit_cache_info    # type: ignore[attr-defined]
 
 def _jit_cache_key_payload(
     fn_or_mod: HirFunction | Module,
-    target: str = "cuda",
+    target: Target | None = None,
     options: CompilerOptions | None = None,
 ) -> tuple[str, str, str]:
-    """For testing only: return ``(module_text, target, options_text)``.
+    """For testing only: return ``(module_text, target_repr, options_text)``.
 
     The actual cache key is ``sha256(text + "\0" + target + "\0" + opts)``.
     """
     mod = normalize_to_module(fn_or_mod)
+    if target is None:
+        try:
+            target = mod.resolve_target()
+        except ValueError:
+            target = default_target()
+    else:
+        target = require_target(target)
     if options is None:
         options = CompilerOptions(target=target)
+    elif options.target != target:
+        raise ValueError("CompilerOptions Target conflicts with cache-key Target")
     return (
         _canonical_module_text(mod),
-        target,
+        repr(target),
         options.canonical_text(),
     )
 

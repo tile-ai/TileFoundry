@@ -13,7 +13,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.schedule.facts import AtomFact
-from tilefoundry.target import Target, resolve_target
+from tilefoundry.target import Target, require_target
 from tilefoundry.target.amx.spec import installed_architecture
 from tilefoundry.target.amx.target import AmxTarget
 
@@ -170,10 +170,9 @@ def _static_positive(*dims: object) -> bool:
     return all(isinstance(d, int) and not isinstance(d, bool) and d > 0 for d in dims)
 
 
-def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFact]:
+def candidate_atoms(op: Call, target: Target | None = None) -> list[AtomFact]:
     """List every AMX atom that could execute ``op`` (an HIR ``MatMul``
-    ``Call``) on ``target`` (a default :class:`AmxTarget` when omitted; a
-    backend name string is resolved via ``resolve_target``).
+    ``Call``) on ``target`` (a default :class:`AmxTarget` when omitted).
 
     Hard filter only -- no ranking: an atom is a candidate iff
 
@@ -189,7 +188,7 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
     candidates" outcome, not an error). Raises ``NotImplementedError`` for an
     unsupported op kind or target.
     """
-    target = AmxTarget() if target is None else resolve_target(target)
+    target = AmxTarget() if target is None else require_target(target)
     if not isinstance(op, Call) or not isinstance(op.target, MatMul):
         got = type(op).__name__
         if isinstance(op, Call):

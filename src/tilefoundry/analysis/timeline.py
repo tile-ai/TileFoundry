@@ -25,14 +25,11 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import Type
 from tilefoundry.ir.types.shard import ShardLayout, Topology
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.target.amx.target import AmxTarget
-from tilefoundry.target.cuda.target import CudaTarget
-from tilefoundry.target.facts import TARGET_FACTS
+from tilefoundry.target import Target
 
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts
 from .metadata import RooflineMetadata, TimelineMetadata
-from .registry import register_analysis
 from .walk import (
     attach,
     describe,
@@ -284,11 +281,11 @@ def _durations(fn: Function) -> dict[int, int]:
 def analyze_timeline(
     module: Module,
     function: Function,
-    target: object,
+    target: Target,
     options: object | None = None,
 ) -> None:
     """Place every reachable Function's calls on the nominal timeline."""
-    facts = TARGET_FACTS.project(target, ParallelCapacityFacts)
+    facts = target.get_facts(ParallelCapacityFacts)
     capacity = facts.parallel_units
     if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
         raise AnalysisError(
@@ -316,15 +313,6 @@ def analyze_timeline(
                 end_ns=makespan,
             ),
         )
-
-
-for _target_type in (CudaTarget, AmxTarget):
-    register_analysis(
-        _target_type,
-        SELECTOR,
-        requires=("roofline",),
-        produces=(TimelineMetadata,),
-    )(analyze_timeline)
 
 
 __all__ = ["SELECTOR", "analyze_timeline"]

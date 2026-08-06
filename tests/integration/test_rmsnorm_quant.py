@@ -12,6 +12,7 @@ import torch
 import tilefoundry
 from tilefoundry import module
 from tilefoundry.dsl import *  # Tensor, tf, T, func, Mesh, Topology, ReduceKind, B, ...
+from tilefoundry.target import CudaTarget
 
 
 @module(entry="rmsnorm")
@@ -95,7 +96,7 @@ def test_a_compiled_rmsnorm_matches_torch(normaliser, batch) -> None:
     reduce, so this accepts a wider bf16-realistic tolerance than the f32 mma path
     uses.
     """
-    rm = tilefoundry.compile(normaliser, target="cuda")
+    rm = tilefoundry.compile(normaliser, target=CudaTarget("nvidia.h200_sxm"))
 
     torch.manual_seed(42)
     a = torch.randn(batch, 1536, dtype=torch.bfloat16, device="cuda") * 0.1
@@ -158,7 +159,7 @@ def test_rmsnorm_quant_seq_2_e2e_gpu_precision() -> None:
     so the kernel output matches the reference bitwise.
     """
 
-    rm = tilefoundry.compile(RmsnormQuantSeq2Module, target="cuda")
+    rm = tilefoundry.compile(RmsnormQuantSeq2Module, target=CudaTarget("nvidia.h200_sxm"))
 
     torch.manual_seed(42)
     a = torch.randn(2, 1536, dtype=torch.bfloat16, device="cuda") * 0.1

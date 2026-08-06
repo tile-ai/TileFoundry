@@ -12,6 +12,8 @@ steps below that boundary stay private to the algorithm that owns them.
 
 from __future__ import annotations
 
+from functools import cache
+
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import origin_of
@@ -32,7 +34,7 @@ from tilefoundry.schedule.pipeline import (
     export_pipeline_plan,
     solve_pipeline_problem,
 )
-from tilefoundry.schedule.registry import register_schedule
+from tilefoundry.schedule.registry import Scheduler
 
 from .target import CudaTarget
 
@@ -84,7 +86,7 @@ def schedule_thread(
     _entry_function(PIPELINE_TOPOLOGY, module, function)
     _options(PIPELINE_TOPOLOGY, options)
     program = build_pipeline_program(module, function)
-    facts = target.as_facts(PipelineFacts, program.facts_query(PIPELINE_TOPOLOGY))
+    facts = target.get_facts(PipelineFacts, program.facts_query(PIPELINE_TOPOLOGY))
     problem = build_pipeline_problem(program, facts, topology)
     solution = solve_pipeline_problem(problem)
     return export_pipeline_plan(program, solution, target)
@@ -101,14 +103,10 @@ def schedule_cta(
     _entry_function(PARTITION_TOPOLOGY, module, function)
     resolved = _options(PARTITION_TOPOLOGY, options)
     program = build_partition_program(module, function)
-    facts = target.as_facts(PartitionFacts, program.facts_query(PARTITION_TOPOLOGY))
+    facts = target.get_facts(PartitionFacts, program.facts_query(PARTITION_TOPOLOGY))
     problem = build_partition_problem(program, facts, topology)
     solution = solve_partition_problem(problem, resolved)
     return export_partition_plan(problem, solution)
-
-
-register_schedule(CudaTarget, PIPELINE_TOPOLOGY)(schedule_thread)
-register_schedule(CudaTarget, PARTITION_TOPOLOGY)(schedule_cta)
 
 
 __all__ = [
@@ -117,3 +115,12 @@ __all__ = [
     "schedule_cta",
     "schedule_thread",
 ]
+
+
+@cache
+def cuda_schedulers() -> dict[str, Scheduler]:
+    """Return the scheduler services inherited by CUDA Target subclasses."""
+    return {
+        PIPELINE_TOPOLOGY: Scheduler(PIPELINE_TOPOLOGY, schedule_thread),
+        PARTITION_TOPOLOGY: Scheduler(PARTITION_TOPOLOGY, schedule_cta),
+    }

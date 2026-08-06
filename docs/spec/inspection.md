@@ -134,6 +134,12 @@ Target prints as the `@module(target=...)` argument and a declared hierarchy
 as the class body's leading `topologies` assignment
 ([parser §2.7](./parser.md#27-module-authoring-surface)).
 
+The printer MUST import the concrete Target class from its provider module and
+embed `repr(target)` as the constructor expression. That representation MUST
+rebuild an equal value of the same concrete class when the emitted source is
+executed. A Target subclass with a different constructor customizes ordinary
+`__repr__`; there is no printer-specific Target hook or construction registry.
+
 ### 2.3 DSL text forms
 
 DSL text forms for tensor / layout / shard annotations are owned by

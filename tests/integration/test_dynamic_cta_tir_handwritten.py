@@ -21,6 +21,7 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CpuTarget, CudaTarget
 
 _TILE = 12
 _NT = DimVar("Ntile", 1, 64)
@@ -28,7 +29,7 @@ _NT = DimVar("Ntile", 1, 64)
 
 @module(entry="dyn_square_host")
 class DynSquare:
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dyn_square(a: Tensor[(_NT, _TILE), "f32"]):
         # Launch-provided CTA extent (None) → grid from the host launch; each CTA
         # owns one (1, TILE) row of the DimVar-shaped global tensor.
@@ -57,7 +58,7 @@ class DynSquare:
             T.binary(reg, reg, reg, kind=BinaryKind.MUL)
             T.copy(reg, a_view)
 
-    @prim_func(target="cpu")
+    @prim_func(target=CpuTarget())
     def dyn_square_host(a: Tensor[(_NT, _TILE), "f32"]):
         launch(dyn_square, a, grid=(_NT, 1, 1), block=(1, 1, 1))  # noqa: F821
 
@@ -65,7 +66,7 @@ class DynSquare:
 def test_handwritten_tir_dynamic_cta_matches_torch_at_several_shapes() -> None:
     """One compiled artifact squares the tensor at three ``Ntile`` shapes via
     the host-computed grid; all match torch with no recompile."""
-    rm = tilefoundry.compile(DynSquare, target="cuda")
+    rm = tilefoundry.compile(DynSquare, target=CudaTarget("nvidia.h200_sxm"))
     for nt in (4, 8, 17):
         torch.manual_seed(nt)
         x = torch.randn(nt, _TILE, dtype=torch.float32, device="cuda")

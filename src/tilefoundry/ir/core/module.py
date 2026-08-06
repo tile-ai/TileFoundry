@@ -14,7 +14,7 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.types.tensor_type import TensorType
-from tilefoundry.target import Target
+from tilefoundry.target import Target, require_target
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 ModuleFunction = Union[HirFunction, PrimFunction]
@@ -98,6 +98,8 @@ class Module:
         """Seal each function against further authoring mutation, reject a
         name shared by two of functions / modules / methods, validate the
         declared execution context, and link each child to this owner."""
+        if self.target is not None:
+            require_target(self.target)
         for fn in self.functions:
             seal = getattr(fn, "seal", None)
             if callable(seal):
@@ -162,7 +164,7 @@ class Module:
             node = getattr(node, "_parent", None)
         raise ValueError(
             f"Module {self._owner_path()!r}: no target is declared by this "
-            "module or any of its owners; declare target=\"cuda\" on the root "
+            "module or any of its owners; declare a Target instance on the root "
             "module. The rule: tilefoundry spec core-ir target-inheritance"
         )
 

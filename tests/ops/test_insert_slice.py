@@ -32,6 +32,7 @@ from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.parser.hir_parser import parse_script
+from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -257,7 +258,7 @@ def test_decode_step_matches_torch() -> None:
     dynamic offset and the KV cache update match a torch reference."""
     import tilefoundry  # noqa: PLC0415
 
-    rm = tilefoundry.compile(_DecodeStep, target="cuda")
+    rm = tilefoundry.compile(_DecodeStep, target=CudaTarget("nvidia.h200_sxm"))
     x = torch.randn(_DEC_D, device="cuda")
     v = torch.randn(1, device="cuda")
     kcache = torch.zeros(1, _CACHE_CAP, _KV_HEADS, _HEAD_DIM, device="cuda")
@@ -374,7 +375,7 @@ def test_insert_slice_rankn_gpu_oracle() -> None:
     middle-axis coordinate."""
     import tilefoundry  # noqa: PLC0415
 
-    rm = tilefoundry.compile(_NdWindow, target="cuda")
+    rm = tilefoundry.compile(_NdWindow, target=CudaTarget("nvidia.h200_sxm"))
     base = torch.randn(_NW_A, _NW_B, _NW_C, device="cuda")
     v = torch.randn(_NW_A, _NW_UB, _NW_UC, device="cuda")
     out = torch.empty(_NW_A, _NW_B, _NW_C, device="cuda")

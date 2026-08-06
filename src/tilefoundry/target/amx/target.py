@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target.base import Architecture, Device, Target
 from tilefoundry.target.hardware.registry import check_compatible, select
+from tilefoundry.target.registration import register_target
 
 
+@register_target
 @dataclass(frozen=True, init=False)
 class AmxTarget(Target):
     """AMX target composed from one architecture and one device."""
 
-    name: str = field(default="amx", init=False)
+    name: ClassVar[str] = "amx"
     architecture: Architecture = field(init=False)
     device: Device = field(init=False)
     # Identity and digest record where a value came from, not what it says, so
@@ -44,13 +47,82 @@ class AmxTarget(Target):
         )
         if architecture.id is not None and device.id is not None:
             check_compatible(architecture, device)
-        object.__setattr__(self, "name", "amx")
         object.__setattr__(self, "architecture", architecture.value)
         object.__setattr__(self, "device", device.value)
         object.__setattr__(self, "architecture_id", architecture.id)
         object.__setattr__(self, "device_id", device.id)
         object.__setattr__(self, "architecture_digest", architecture.digest)
         object.__setattr__(self, "device_digest", device.digest)
+
+    def get_analyzer(self, selector: str) -> "Analyzer":
+        """Select an AMX analysis service."""
+        from tilefoundry.analysis.registry import (  # noqa: PLC0415
+            builtin_analyzers,
+        )
+
+        try:
+            return builtin_analyzers()[selector]
+        except KeyError:
+            return super().get_analyzer(selector)
+
+    def get_facts(self, facts_type: type, query: object | None = None):
+        """Project AMX hardware through the facts this Target owns."""
+        from tilefoundry.analysis.facts import (  # noqa: PLC0415
+            MemoryHierarchyFacts,
+            ParallelCapacityFacts,
+            ThroughputFacts,
+        )
+        from tilefoundry.schedule.pipeline import PipelineFacts  # noqa: PLC0415
+        from tilefoundry.target.amx.facts import (  # noqa: PLC0415
+            memory_hierarchy,
+            parallel_capacity,
+            pipeline_facts,
+            throughput,
+        )
+        from tilefoundry.target.facts import facts_result  # noqa: PLC0415
+
+        projections = {
+            MemoryHierarchyFacts: memory_hierarchy,
+            ThroughputFacts: throughput,
+            ParallelCapacityFacts: parallel_capacity,
+            PipelineFacts: pipeline_facts,
+        }
+        try:
+            projection = projections[facts_type]
+        except KeyError:
+            return super().get_facts(facts_type, query)
+        return facts_result(self, facts_type, projection(self, query))
+
+    def get_scheduler(self, topology: str) -> "Scheduler":
+        """Select the AMX core scheduler."""
+        from tilefoundry.target.amx.schedule import amx_schedulers  # noqa: PLC0415
+
+        try:
+            return amx_schedulers()[topology]
+        except KeyError:
+            return super().get_scheduler(topology)
+
+    def __repr__(self) -> str:
+        """Return a constructor expression for this concrete AMX Target."""
+        constructor = type(self).__name__
+        if self.architecture_id is not None and self.device_id is not None:
+            from .spec import APPLE_AMX_ID, APPLE_M2_PRO_ID  # noqa: PLC0415
+
+            if (
+                self.architecture_id == APPLE_AMX_ID
+                and self.device_id == APPLE_M2_PRO_ID
+            ):
+                return f"{constructor}()"
+        architecture = (
+            self.architecture_id
+            if self.architecture_id is not None
+            else self.architecture
+        )
+        device = self.device_id if self.device_id is not None else self.device
+        return (
+            f"{constructor}(architecture={architecture!r}, "
+            f"device={device!r})"
+        )
 
     @property
     def arch(self) -> str:

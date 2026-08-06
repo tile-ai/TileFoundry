@@ -13,6 +13,7 @@ from tilefoundry.dsl import DimVar, T, Tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CpuTarget, CudaTarget
 
 _TILE = 12
 _NT = DimVar("Ntile", 1, 64)
@@ -23,7 +24,7 @@ def _shape_scalars(pf) -> list[str]:
 
 
 def test_device_dynamic_dim_injects_shape_scalar() -> None:
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(_NT, _TILE), "f32"]):
         with Mesh(Topology("cta", None), Layout(shape=(None,), strides=(1,))) as cta:
             a_view = T.tensor_view(
@@ -59,7 +60,7 @@ def test_host_entry_not_polluted() -> None:
     """A ``cpu`` host entry carrying the same DimVar param gets no hidden scalar
     — it reads the shape from its tensor argument at launch time."""
 
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(_NT, _TILE), "f32"]):
         with Mesh(Topology("cta", None), Layout(shape=(None,), strides=(1,))) as cta:
             a_view = T.tensor_view(
@@ -84,7 +85,7 @@ def test_host_entry_not_polluted() -> None:
             )
             T.copy(a_view, reg)
 
-    @prim_func(target="cpu")
+    @prim_func(target=CpuTarget())
     def host(a: Tensor[(_NT, _TILE), "f32"]):
         launch(dev, a, grid=(_NT, 1, 1), block=(1, 1, 1))  # noqa: F821
 
@@ -95,7 +96,7 @@ def test_host_entry_not_polluted() -> None:
 def test_static_device_kernel_has_no_shape_scalar() -> None:
     """A device kernel with only static dims gets no hidden scalars."""
 
-    @prim_func(target="cuda")
+    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(16, 8), "f32"]):
         with Mesh(Topology("thread", 8), Layout(shape=(8,), strides=(1,))) as t:
             a_view = T.tensor_view(

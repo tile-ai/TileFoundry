@@ -81,18 +81,9 @@ from tilefoundry.module import module
 # Top-level pipeline entry.
 from tilefoundry.compile import build, compile, jit, lower, normalize_to_module, CompilerOptions
 from tilefoundry.inspection.viewer import Viewer as _Viewer
-from tilefoundry.target import register_facts_projections as _register_facts_projections
-from tilefoundry.target import register_schedule_algorithms as _register_schedule_algorithms
 
 # All imports done — now invoke the deferred dim typeinfer registration.
 _register_dim_typeinfer()
-
-# Deferred for the same reason: a Target's Facts projections name the analysis
-# aggregates they build, and the analysis layer rests on the IR that was still
-# loading the Target while this module ran.
-_register_facts_projections()
-_register_schedule_algorithms()
-
 
 def view(root, *, port: int = 0, open_browser: bool = True) -> int:
     """Start the interactive HIR viewer for *root* (Function or Module).

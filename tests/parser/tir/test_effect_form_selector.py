@@ -15,10 +15,11 @@ from tilefoundry import prim_func
 from tilefoundry.dsl import Tensor
 from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
+from tilefoundry.target import CpuTarget
 
 
 def test_trailing_underscore_selects_effect_form_on_prim_func() -> None:
-    @prim_func(target="cpu")
+    @prim_func(target=CpuTarget())
     def dev(a: Tensor[(128,), "f32"], b: Tensor[(128,), "f32"]):
         copy_(a, b)  # noqa: F821 — resolved via dispatch.resolve_callable, not closure
 

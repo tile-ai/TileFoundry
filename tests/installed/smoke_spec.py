@@ -78,7 +78,7 @@ def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
     ("topic", "section", "expected"),
     (
         ("target", "topology-levels", "Only `cta` MAY have a launch-provided"),
-        ("core-ir", "target-inheritance", 'with `target="cuda"`'),
+        ("core-ir", "target-inheritance", 'with `target=CudaTarget("nvidia.h200_sxm")`'),
         ("core-ir", "default-step", "MUST have no default step"),
         ("cli", "check", "A FAIL with `--inputs random`"),
     ),

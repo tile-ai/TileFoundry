@@ -181,17 +181,17 @@ class CompilerOptions:
     """Carry deterministic compiler configuration.
 
     Attributes:
-        target: attribute; Compilation target name.
+        target: attribute; Constructed compilation Target.
     """
 
-    target: str = "cuda"
+    target: Target
 
     def canonical_text(self) -> str: ...
 
 
-def lower(mod: Module, /, *, target: str = "cuda") -> Module: ...
-def build(mod: Module, /, *, target: str | None = None) -> RuntimeModule: ...
-def compile(mod: Module, /, *, target: str = "cuda") -> RuntimeModule: ...
+def lower(mod: Module, /, *, target: Target | None = None) -> Module: ...
+def build(mod: Module, /, *, target: Target | None = None) -> RuntimeModule: ...
+def compile(mod: Module, /, *, target: Target | None = None) -> RuntimeModule: ...
 ```
 
 `lower` runs the default pipeline (`HirToTirPass → BufferizePass →
@@ -199,9 +199,11 @@ def compile(mod: Module, /, *, target: str = "cuda") -> RuntimeModule: ...
 `ShardLayout.mesh` in the HIR body — the verbs do not accept
 `cta_mesh` / `thread_mesh` kwargs.
 
-`build` reads `target` from `mod.metadata["target"]` when the
-keyword is omitted; an explicit `target` that disagrees with
-`mod.metadata` is an error (no silent override). Internally it
+`lower` uses the Module-owned Target when present. At an undeclared root it
+attaches either the explicit Target instance or `default_target()` before any
+pass runs. An explicit Target that disagrees with a declared Module Target is
+an error. `build` requires the lowered Module to own its Target and applies the
+same explicit-conflict rule. Internally it
 runs codegen → toolchain link → loader and returns a
 `RuntimeModule` ([runtime](./runtime.md)).
 

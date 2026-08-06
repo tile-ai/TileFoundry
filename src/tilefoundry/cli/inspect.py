@@ -7,7 +7,7 @@ import sys
 from tilefoundry.cli.source import load_authored_ir, selected_target
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.target import _STRING_TARGETS, CudaTarget
+from tilefoundry.target import CudaTarget, registered_targets
 from tilefoundry.target.hardware import HARDWARE_SPECS, format_capabilities, hardware_documents
 
 
@@ -39,7 +39,8 @@ def _installed_capabilities() -> str:
         )
     lines += [
         "",
-        f"Targets a module may declare: {', '.join(sorted(_STRING_TARGETS))}",
+        "Registered Target classes: "
+        f"{', '.join(sorted(registered_targets()))}",
         "",
         "Name a SOURCE for the facts of the target that selection declares:",
         "  tilefoundry inspect capabilities model.py:Model",

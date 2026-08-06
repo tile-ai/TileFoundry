@@ -15,7 +15,7 @@ from tilefoundry.ir.types.shard import ShardLayout
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_local_shape
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule.facts import AtomFact
-from tilefoundry.target import Target, default_target, resolve_target
+from tilefoundry.target import Target, default_target, require_target
 from tilefoundry.target.cuda.target import CudaTarget
 
 # The MMA atom catalogue this bridge searches. V1 has exactly the one op
@@ -103,11 +103,9 @@ def _static_positive(*dims: object) -> bool:
     return all(isinstance(d, int) and not isinstance(d, bool) and d > 0 for d in dims)
 
 
-def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFact]:
+def candidate_atoms(op: Call, target: Target | None = None) -> list[AtomFact]:
     """List every MMA atom that could execute ``op`` (an HIR ``MatMul``
-    ``Call``) on ``target`` (``default_target()`` when omitted; a backend
-    name string is resolved via ``resolve_target``, matching ``@func``'s
-    own ``target=`` surface).
+    ``Call``) on ``target`` (``default_target()`` when omitted).
 
     Hard filter only -- no ranking, no CP-SAT: an atom is a candidate iff
 
@@ -126,7 +124,7 @@ def candidate_atoms(op: Call, target: Target | str | None = None) -> list[AtomFa
     for an unsupported op kind or target -- V1 supports ``MatMul`` on
     ``CudaTarget`` only.
     """
-    target = default_target() if target is None else resolve_target(target)
+    target = default_target() if target is None else require_target(target)
     if not isinstance(op, Call) or not isinstance(op.target, MatMul):
         got = type(op).__name__
         if isinstance(op, Call):

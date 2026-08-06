@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import ClassVar, TypeVar
+
+from tilefoundry.target.registration import register_target
+
+FactsT = TypeVar("FactsT")
 
 
 class Architecture:
@@ -29,26 +34,53 @@ class Target:
     interchangeable everywhere.
     """
 
-    name: str
+    name: ClassVar[str]
 
-    def as_facts(self, facts_type: type, query: object = None) -> object:
-        """Project this target's specification into *facts_type*.
+    def get_analyzer(self, selector: str) -> "Analyzer":
+        """Return the analysis service selected by this concrete Target."""
+        raise ValueError(
+            f"{type(self).__name__} ({getattr(type(self), 'name', '<unregistered>')}): "
+            f"no analyzer for {selector!r}"
+        )
 
-        This converts what the target already knows; it does not analyze IR,
-        build a constraint model, solve, or export a plan. *query* is optional
-        and owned by the requesting algorithm: a hardware-only projection omits
-        it, while a program-dependent one passes its own private value.
-        """
-        from tilefoundry.target.facts import TARGET_FACTS  # noqa: PLC0415
+    def get_scheduler(self, topology: str) -> "Scheduler":
+        """Return the scheduler selected by this concrete Target."""
+        raise ValueError(
+            f"{type(self).__name__} ({getattr(type(self), 'name', '<unregistered>')}): "
+            f"no scheduler for {topology!r}"
+        )
 
-        return TARGET_FACTS.project(self, facts_type, query)
+    def get_code_generator(self) -> "CodeGenerator":
+        """Return the code-generation service selected by this Target."""
+        raise ValueError(
+            f"{type(self).__name__} ({getattr(type(self), 'name', '<unregistered>')}): "
+            "no code generator"
+        )
+
+    def get_facts(
+        self, facts_type: type[FactsT], query: object | None = None
+    ) -> FactsT:
+        """Return one immutable hardware-facts aggregate for this Target."""
+        raise ValueError(
+            f"{type(self).__name__} ({getattr(type(self), 'name', '<unregistered>')}): "
+            "no Facts projection for "
+            f"{getattr(facts_type, '__name__', facts_type)!r}"
+        )
 
 
+@register_target
 @dataclass(frozen=True)
 class CpuTarget(Target):
     """Identify the CPU host backend."""
 
-    name: str = field(default="cpu", init=False)
+    name: ClassVar[str] = "cpu"
+
+    def get_code_generator(self) -> "CodeGenerator":
+        from tilefoundry.codegen.cpu.module import (  # noqa: PLC0415
+            CPU_CODE_GENERATOR,
+        )
+
+        return CPU_CODE_GENERATOR
 
 
 __all__ = ["Architecture", "CpuTarget", "Device", "Target"]

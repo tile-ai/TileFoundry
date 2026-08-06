@@ -13,50 +13,123 @@ from dataclasses import replace
 
 import pytest
 
+from tests.fixtures.demo_ir import build_demo
+from tilefoundry import lower
 from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.registry import UnknownAlgorithmError
-from tilefoundry.schedule.registry import SCHEDULES
 from tilefoundry.target import (
     AmxTarget,
     CpuTarget,
     CudaTarget,
     Target,
+    register_target,
+    registered_targets,
+    require_target,
 )
 from tilefoundry.target.cuda.spec import installed_architecture as _installed_sm90
 
 
-def test_a_scheduler_is_reached_by_target_type_not_by_target_value() -> None:
-    """Which levels a target can be scheduled at is a property of its type.
+@register_target
+class ExternalCudaTarget(CudaTarget):
+    name = "tests.target.external_cuda"
 
-    A target carrying different hardware facts is still the same kind of machine,
-    so it resolves the same scheduler; a target with no registration resolves
-    none, and says which levels it does serve rather than only that it failed.
-    Nothing about scheduling is stored on the target value, which is why two
-    equal targets stay equal and interchangeable -- codegen groups functions by
-    comparing targets, so a registration reachable by value would split one
-    machine into two.
-    """
-    assert SCHEDULES.selectors_for(CudaTarget) == ("cta", "thread")
-    assert SCHEDULES.selectors_for(AmxTarget) == ("core",)
-    assert SCHEDULES.selectors_for(CpuTarget) == ()
 
+def _provider_target(module_name: str, provider_name: str, registered_name: str):
+    return type(
+        provider_name,
+        (Target,),
+        {
+            "__module__": module_name,
+            "__qualname__": provider_name,
+            "name": registered_name,
+        },
+    )
+
+
+def test_registration_is_one_class_boundary_and_reload_is_idempotent() -> None:
+    registered_name = "tests.target.reload"
+    first = _provider_target("tests.providers.reload", "ReloadTarget", registered_name)
+    second = _provider_target("tests.providers.reload", "ReloadTarget", registered_name)
+
+    assert register_target(first) is first
+    assert register_target(second) is second
+    assert registered_targets()[registered_name] is first
+    assert require_target(second()) is not None
+    assert {"cpu", "cuda", "amx"} <= registered_targets().keys()
+    with pytest.raises(TypeError):
+        registered_targets()["tests.target.mutation"] = Target
+
+
+def test_registration_rejects_ambiguous_or_invalid_provider_classes() -> None:
+    inherited = type(
+        "InheritedTarget",
+        (CudaTarget,),
+        {"__module__": "tests.providers.inherited"},
+    )
+    empty = _provider_target("tests.providers.empty", "EmptyTarget", "")
+
+    with pytest.raises(ValueError, match="declare a class-level"):
+        register_target(inherited)
+    with pytest.raises(ValueError, match="non-empty"):
+        register_target(empty)
+    with pytest.raises(TypeError, match="Target subclass"):
+        register_target(object)
+    with pytest.raises(TypeError, match="Target subclass"):
+        register_target("tests.target.argument")
+
+    owner = _provider_target(
+        "tests.providers.owner", "OwnedTarget", "tests.target.conflict"
+    )
+    claimant = _provider_target(
+        "tests.providers.claimant", "ClaimantTarget", "tests.target.conflict"
+    )
+    register_target(owner)
+    with pytest.raises(ValueError, match="already owned.*cannot register"):
+        register_target(claimant)
+
+
+def test_authored_target_boundaries_reject_strings_and_keep_exact_instances() -> None:
+    target = CudaTarget("nvidia.h200_sxm")
+    module = Module("exact", (), target=target)
+
+    assert module.target is target
+    assert module.resolve_target() is target
+    with pytest.raises(TypeError, match="Target instance, not a string"):
+        Module("invalid", (), target="cuda")
+    with pytest.raises(TypeError, match="Target instance, not a string"):
+        PrimFunction("invalid", (), Sequential(()), target="cuda")
+
+
+def test_lowering_and_codegen_keep_the_external_target_instance() -> None:
+    function, _, _ = build_demo()
+    target = ExternalCudaTarget("nvidia.h200_sxm")
+    module = Module("external", (function,), function.name, target=target)
+
+    lowered = lower(module)
+
+    assert lowered.target is target
+    assert all(fn.target is target for fn in lowered.functions)
+    assert target.get_code_generator() is CudaTarget(
+        "nvidia.h200_sxm"
+    ).get_code_generator()
+
+
+def test_a_scheduler_is_reached_by_target_inheritance() -> None:
+    """CUDA subclasses inherit their base class's Target-owned schedulers."""
     custom = CudaTarget(
         "nvidia.h200_sxm",
         architecture=replace(_installed_sm90(), name="sm_90_custom"),
     )
-    assert SCHEDULES.resolve(custom, "cta") is SCHEDULES.resolve(CudaTarget("nvidia.h200_sxm"), "cta")
-    assert SCHEDULES.resolve(CudaTarget("nvidia.h200_sxm"), "cta") is not SCHEDULES.resolve(
-        CudaTarget("nvidia.h200_sxm"), "thread"
-    )
+    assert custom.get_scheduler("cta").solve is CudaTarget("nvidia.h200_sxm").get_scheduler("cta").solve
+    assert CudaTarget("nvidia.h200_sxm").get_scheduler("cta").solve is not CudaTarget("nvidia.h200_sxm").get_scheduler("thread").solve
 
-    with pytest.raises(UnknownAlgorithmError, match="no 'cta' registered for Target"):
-        SCHEDULES.resolve(Target("test"), "cta")
-    with pytest.raises(UnknownAlgorithmError, match=r"available: \['core'\]"):
-        SCHEDULES.resolve(AmxTarget(), "amx")
+    with pytest.raises(ValueError, match="Target .*no scheduler for 'cta'"):
+        Target().get_scheduler("cta")
+    with pytest.raises(ValueError, match="AmxTarget .*no scheduler for 'amx'"):
+        AmxTarget().get_scheduler("amx")
 
     assert CudaTarget("nvidia.h200_sxm") == CudaTarget("nvidia.h200_sxm")
     assert hash(CudaTarget("nvidia.h200_sxm")) == hash(CudaTarget("nvidia.h200_sxm"))
@@ -93,7 +166,7 @@ def test_group_functions_by_target_fact_matching() -> None:
             architecture=replace(_installed_sm90(), name="sm_90_alt"),
         ),
     )
-    with pytest.raises(ValueError, match="differing Target facts"):
+    with pytest.raises(ValueError, match="mixes unequal device Targets"):
         group_functions_by_target(
             Module(name="mixed", functions=(first, second), entry="first")
         )
@@ -102,5 +175,5 @@ def test_group_functions_by_target_fact_matching() -> None:
     groups = group_functions_by_target(
         Module(name="mixed", functions=(first, host), entry="host")
     )
-    assert tuple(fn.name for fn in groups["cuda"]) == ("first",)
-    assert tuple(fn.name for fn in groups["cpu"]) == ("host",)
+    assert tuple(fn.name for fn in groups[first.target]) == ("first",)
+    assert tuple(fn.name for fn in groups[host.target]) == ("host",)

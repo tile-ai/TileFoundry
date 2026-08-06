@@ -26,7 +26,9 @@ from tilefoundry.codegen.cuda.tir.prim_function import (
     _parse_shape_param_name,
 )
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
+from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
@@ -45,6 +47,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import Target
 
 # Memory-space → required DLPack device type for a host ABI tensor argument.
 _STORAGE_DEVICE_TYPE = {
@@ -157,13 +160,18 @@ def _shim_decl(fn: PrimFunction) -> str:
     return f'extern "C" void {shim_symbol(fn.name)}({", ".join(tokens)});'
 
 
-def emit_host_module(entry: PrimFunction, module) -> LinkableModule:
+def emit_host_module(
+    module: Module, functions: tuple[PrimFunction, ...], target: Target
+) -> LinkableModule:
     """Emit the host ``.cpp`` linkable module for a CPU *entry*.
 
     *module* is the enclosing ``Module``; the dispatch path resolves each
     case's ``SymbolRef`` callee through ``module.lookup`` to read the variant's
     parameters.
     """
+    if len(functions) != 1:
+        raise ValueError("emit_host_module: expected exactly one CPU host entry")
+    entry = functions[0]
     body = entry.body
     if (
         isinstance(body, Sequential)
@@ -193,6 +201,9 @@ def emit_host_module(entry: PrimFunction, module) -> LinkableModule:
         source=source,
         functions=(LinkableFunction(name=entry.name, source=source),),
     )
+
+
+CPU_CODE_GENERATOR = CodeGenerator(emit_host_module)
 
 
 def _lower_launch(entry: PrimFunction, evaluate, module):

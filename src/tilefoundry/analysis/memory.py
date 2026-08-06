@@ -27,9 +27,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.target.amx.target import AmxTarget
-from tilefoundry.target.cuda.target import CudaTarget
-from tilefoundry.target.facts import TARGET_FACTS
+from tilefoundry.target import Target
 
 from .errors import AnalysisError
 from .facts import ImplicitMemoryLevelFacts, MemoryHierarchyFacts
@@ -40,7 +38,6 @@ from .metadata import (
     TrafficBytes,
     ValueLifetime,
 )
-from .registry import register_analysis
 from .walk import (
     attach,
     bytes_by_storage,
@@ -310,11 +307,11 @@ def _advisories(
 def analyze_memory(
     module: Module,
     function: Function,
-    target: object,
+    target: Target,
     options: object | None = None,
 ) -> None:
     """Attach one memory record to every Function reachable from *function*."""
-    facts = TARGET_FACTS.project(target, MemoryHierarchyFacts)
+    facts = target.get_facts(MemoryHierarchyFacts)
     for fn in reachable_functions(function):
         residencies, length = _residencies(fn)
         peaks = _peaks(residencies, length)
@@ -341,15 +338,6 @@ def analyze_memory(
                 advisories=_advisories(facts, peaks),
             ),
         )
-
-
-for _target_type in (CudaTarget, AmxTarget):
-    register_analysis(
-        _target_type,
-        SELECTOR,
-        requires=("compute-cost",),
-        produces=(MemoryMetadata,),
-    )(analyze_memory)
 
 
 __all__ = ["SELECTOR", "analyze_memory"]
