@@ -29,6 +29,7 @@ from tilefoundry.dsl import (
 )
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
@@ -36,6 +37,7 @@ from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.shard.shard_layout import Split
@@ -45,6 +47,8 @@ from tilefoundry.passes.transforms.hir_to_tir import (
     _collect_hir_callee_names,
     _derive_meshes_from_body,
 )
+from tilefoundry.target import default_target
+from tilefoundry.target.cuda.target import CudaTarget
 
 
 def test_umat_param_rejected_at_lowering() -> None:
@@ -189,3 +193,96 @@ def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
     )
 
     assert _collect_hir_callee_names(in_yield) == {"callee_fn"}
+
+
+def test_lowered_functions_carry_the_modules_declared_target() -> None:
+    """The Module owns the execution context, so its Target must reach every
+    PrimFunction the pass builds — the static body, each mangled dispatch
+    variant, and the dispatch entry alike.
+
+    A dropped target is silent rather than fatal: ``PrimFunction`` defaults to
+    ``default_target()``, so codegen compiles for the fallback arch and the
+    driver PTX-JITs the result to whatever card is present. The kernel still
+    computes the right answer, so no runtime witness can catch this — only the
+    identity of the propagated value can. ``default_target()`` builds a fresh
+    equal value per call, so ``is`` separates "propagated" from "defaulted"
+    where ``==`` would not.
+    """
+    declared = CudaTarget("nvidia.h200_sxm")
+    ty = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem")
+    x = Var(type=ty, name="x")
+    fn = HirFunction.build(name="static_fn", params=(x,), body=x, return_type=ty)
+
+    out = HirToTirPass().run(
+        Module(name="m", functions=(fn,), entry="static_fn", target=declared)
+    )
+    assert out.functions[0].target is declared
+
+    # Dispatch path: the mangled variants and the entry that selects between
+    # them are separate construction sites and must agree on one arch.
+    dim = DimVar(name="S", lo=1, hi=7)
+    dyn_ty = TensorType(shape=(dim,), dtype=DType.f32, layout=None, storage="gmem")
+
+    def _variant(lo: int, hi: int) -> HirFunction:
+        v = Var(type=dyn_ty, name="x")
+        return HirFunction.build(
+            name="main", params=(v,), body=v, return_type=dyn_ty,
+            specializations=(DimVarRangePat("S", lo, hi),),
+        )
+
+    proto_param = Var(type=dyn_ty, name="x")
+    proto = HirFunction.build(
+        name="main", params=(proto_param,), body=None, return_type=dyn_ty
+    )
+    for v in (_variant(1, 3), _variant(4, 7)):
+        proto.add_variant(v)
+
+    out = HirToTirPass().run(
+        Module(name="m", functions=(proto,), entry="main", target=declared)
+    )
+    assert sorted(f.name for f in out.functions) == [
+        "main", "main$S$1_3", "main$S$4_7",
+    ]
+    for pf in out.functions:
+        assert pf.target is declared, f"{pf.name} lost the declared target"
+
+
+def test_a_child_module_lowers_against_the_target_it_inherits() -> None:
+    """Only the root Module may declare a target; a child inherits it through
+    the owner chain. The pass therefore resolves the target rather than reading
+    the field, so lowering a child selected out of a tree does not fall back to
+    the default arch."""
+    declared = CudaTarget("nvidia.h200_sxm")
+    ty = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem")
+    x = Var(type=ty, name="x")
+    fn = HirFunction.build(name="inner_fn", params=(x,), body=x, return_type=ty)
+
+    root = Module(
+        name="root",
+        functions=(),
+        entry=None,
+        modules=(Module(name="child", functions=(fn,), entry="inner_fn"),),
+        target=declared,
+    )
+    child = root.modules[0]
+    assert child.target is None, "the child must not declare a target of its own"
+
+    out = HirToTirPass().run(child)
+    assert out.functions[0].target is declared
+
+
+def test_a_module_declaring_no_target_keeps_the_primfunction_default() -> None:
+    """A Module with no target anywhere in its owner chain must still lower.
+    Resolution fails there by contract, so the pass leaves the target unset and
+    ``PrimFunction``'s own default applies — the pre-existing behaviour for the
+    many tests and tools that build a Module without naming hardware."""
+    ty = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem")
+    x = Var(type=ty, name="x")
+    fn = HirFunction.build(name="static_fn", params=(x,), body=x, return_type=ty)
+
+    module = Module(name="m", functions=(fn,), entry="static_fn")
+    with pytest.raises(ValueError, match="no target is declared"):
+        module.resolve_target()
+
+    pf = HirToTirPass().run(module).functions[0]
+    assert pf.target == default_target()
