@@ -38,37 +38,48 @@ def _render_layout(shape, strides) -> str:
     )
 
 
+def render_topology(topo) -> str:
+    """``tilefoundry::Topology<scope, size>``.
+
+    A launch-provided (dynamic) extent has no compile-time size; the mesh value
+    carries the real extent, so the type parameter is an inert 0 placeholder.
+    """
+    size = topo.size if isinstance(topo.size, int) else 0
+    return f"tilefoundry::Topology<{topology_scope_str(topo.name)}, {size}>"
+
+
+def extra_topology_args(mesh) -> str:
+    """Trailing template args for a mesh spanning several topologies.
+
+    ``Mesh<TTopo, TMeshLayout, TMoreTopos...>`` keeps the primary topology
+    first so an ordinary single-topology mesh renders exactly as before, and
+    the remaining levels follow the layout. Empty when there is only one.
+    """
+    extra = tuple(mesh.topologies or ())[1:]
+    return "".join(f", {render_topology(t)}" for t in extra)
+
+
 def _render_mesh_type(mesh, ctx=None) -> str:
     """tilefoundry::Mesh<...> — uses scope alias if registered in ctx."""
+    ml = mesh.layout
+    shape_args = ", ".join(f"cute::Int<{s}>" for s in ml.shape)
+    stride_args = ", ".join(f"cute::Int<{s}>" for s in ml.strides)
+    inline = (
+        f"tilefoundry::Mesh<"
+        f"{render_topology(mesh.topology)}, "
+        f"cute::Layout<cute::Shape<{shape_args}>, cute::Stride<{stride_args}>>"
+        f"{extra_topology_args(mesh)}>"
+    )
     if ctx and hasattr(ctx, '_mesh_aliases'):
         # try exact id match
         entry = ctx._mesh_aliases.get(id(mesh))
         if entry:
             return entry[0]  # alias name
         # try structural fallback: compare inline type string
-        topo = mesh.topology
-        scope = topology_scope_str(topo.name)
-        ml = mesh.layout
-        shape_args = ", ".join(f"cute::Int<{s}>" for s in ml.shape)
-        stride_args = ", ".join(f"cute::Int<{s}>" for s in ml.strides)
-        inline = (
-            f"tilefoundry::Mesh<"
-            f"tilefoundry::Topology<{scope}, {topo.size}>, "
-            f"cute::Layout<cute::Shape<{shape_args}>, cute::Stride<{stride_args}>>>"
-        )
         for alias_name, type_str in ctx._mesh_aliases.values():
             if type_str == inline:
                 return alias_name
-    topo = mesh.topology
-    scope = topology_scope_str(topo.name)
-    ml = mesh.layout
-    shape_args = ", ".join(f"cute::Int<{s}>" for s in ml.shape)
-    stride_args = ", ".join(f"cute::Int<{s}>" for s in ml.strides)
-    return (
-        f"tilefoundry::Mesh<"
-        f"tilefoundry::Topology<{scope}, {topo.size}>, "
-        f"cute::Layout<cute::Shape<{shape_args}>, cute::Stride<{stride_args}>>>"
-    )
+    return inline
 
 
 def _render_attr(a) -> str:
@@ -181,18 +192,14 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
     ml_shape = ", ".join(_mesh_dim(d) for d in ml.shape)
     ml_stride = ", ".join(_static_dim(s, "mesh layout stride") for s in ml.strides)
 
-    scope = topology_scope_str(topo.name)
-    # A launch-provided CTA extent has no compile-time size; the value carries
-    # the real extent, so the Topology type parameter is an inert placeholder.
-    topo_size = topo.size if isinstance(topo.size, int) else 0
     attrs = ", ".join(_render_attr(a) for a in sl.attrs)
     preamble = [
         f"auto {sl_var} = cute::make_layout("
         f"cute::make_shape({sl_shape}), cute::make_stride({sl_stride}));",
         f"auto {ml_var} = cute::make_layout("
         f"cute::make_shape({ml_shape}), cute::make_stride({ml_stride}));",
-        f"tilefoundry::Mesh<tilefoundry::Topology<{scope}, {topo_size}>, "
-        f"decltype({ml_var})> {mesh_var}{{{ml_var}}};",
+        f"tilefoundry::Mesh<{render_topology(topo)}, "
+        f"decltype({ml_var}){extra_topology_args(sl.mesh)}> {mesh_var}{{{ml_var}}};",
     ]
     value_expr = (
         f"tilefoundry::ShardLayout<decltype({sl_var}), cute::tuple<{attrs}>, "
