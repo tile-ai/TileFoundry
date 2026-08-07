@@ -13,7 +13,13 @@ from tilefoundry.target.base import (
     registered_targets,
 )
 from tilefoundry.target.cpu import CpuTarget
-from tilefoundry.target.cuda import H200SXM, SM90, CudaTarget
+from tilefoundry.target.cuda import (
+    H200SXM,
+    SM90,
+    CudaArchitecture,
+    CudaDevice,
+    CudaTarget,
+)
 from tilefoundry.target.cuda.spec import H200_SXM_ID
 from tilefoundry.target.facts import TopologyLimitFacts
 from tilefoundry.target.services import Analyzer, Scheduler
@@ -49,6 +55,8 @@ __all__ = [
     "AppleM2Pro",
     "Architecture",
     "CpuTarget",
+    "CudaArchitecture",
+    "CudaDevice",
     "CudaTarget",
     "Device",
     "H200SXM",

@@ -67,9 +67,16 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
                 capacity_bytes=architecture.registers_per_sm_32bit * 4,
                 scope="sm",
             ),
-            # Tensor memory arrives with a later architecture; SM90 has none, and
-            # a level with no capacity is how that is said.
-            ExplicitMemoryLevelFacts(name="tmem", capacity_bytes=None, scope="cta"),
+            # Tensor memory is the store the tensor cores accumulate in where the
+            # architecture has one. It is allocated in columns spanning every
+            # lane, and one CTA can hold all of them, so the whole store is the
+            # capacity a CTA is bounded by. An architecture without one states no
+            # capacity, and the level then says it has none.
+            ExplicitMemoryLevelFacts(
+                name="tmem",
+                capacity_bytes=architecture.tensor_memory_per_cta_bytes,
+                scope="cta",
+            ),
         ),
         implicit_levels=(
             ImplicitMemoryLevelFacts(name="l1", capacity_bytes=None, scope="sm"),

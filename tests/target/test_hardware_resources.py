@@ -63,6 +63,12 @@ def _document(old: str, new: str) -> str:
     return _MINIMAL_DEVICE.replace(old, new)
 
 
+def _hardware_text(resource: str) -> str:
+    """The installed hardware document *resource* as authored."""
+    hardware = Path(cuda_spec.__file__).parent.parent / "hardware"
+    return (hardware / resource).read_text(encoding="utf-8")
+
+
 def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     """AC-1-1 and AC-1-3. Each side is a complete document in its own right, and
     a target is the pair composed through a declared compatibility rather than one
@@ -123,11 +129,7 @@ def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(
     before = registry.installed_ids()
 
     custom = tmp_path / "custom_sm90.toml"
-    text = (
-        Path(cuda_spec.__file__).parent.parent
-        / "hardware"
-        / "nvidia_sm90.toml"
-    ).read_text(encoding="utf-8")
+    text = _hardware_text("nvidia_sm90.toml")
     custom.write_text(text.replace('id = "nvidia.sm90"', 'id = "vendor.sm90_custom"'))
 
     resolved = registry.load_path(custom)
@@ -179,10 +181,7 @@ def test_a_malformed_document_names_exactly_what_is_wrong(
 def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
     """AC-1-2. An unknown key under ``facts`` is a spelling mistake, not an
     unused fact, so a document carrying one does not load."""
-    text = (
-        Path(cuda_spec.__file__).parent.parent / "hardware" / "nvidia_sm90.toml"
-    ).read_text(encoding="utf-8")
-    stray = text + (
+    stray = _hardware_text("nvidia_sm90.toml") + (
         '\n[facts.compute.max_threads_per_cluster]\n'
         'value = 8\nunit = "count"\norigin = "vendor"\n'
         'source = "test"\nconditions = "test"\n'
@@ -255,3 +254,12 @@ def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
         assert not any("topology" in path for path in document.facts)
         for fact in document.facts.values():
             assert (fact.value is None) == (not fact.available)
+
+    # A rate the product's tensor cores have no mode for is recorded as absent
+    # rather than left out, so asking for it fails instead of reading as a number
+    # nobody published.
+    assert HARDWARE_SPECS.document(_H200).fact("throughput.f4e2m1").status == (
+        "unavailable"
+    )
+    with pytest.raises(ValueError, match="no dense compute-throughput entry"):
+        CudaTarget(_H200).device.peak_for(DType.f4e2m1)

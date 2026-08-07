@@ -101,78 +101,35 @@ class Device:
 ## 2. `SM90`
 
 ```python
-class SM90:
+class SM90(CudaArchitecture):
     """SM90 compilation identity and structural capabilities."""
-
-    name: str
-    supported_compute_dtypes: tuple[DType, ...]
-    instruction_capabilities: tuple[str, ...]
-    max_threads_per_cta: int
-    max_threads_per_warp: int
-    max_warps_per_cta: int
-    max_resident_ctas_per_sm: int
-    shared_memory_per_sm_bytes: int
-    shared_memory_per_cta_bytes: int
-    unified_l1_shared_per_sm_bytes: int
-    registers_per_sm_32bit: int
-
-    def supports_compute_dtype(self, dtype: DType) -> bool: ...
-
-    def topology_limit(self, name: str) -> int: ...
 ```
 
 - constraints:
-  - `name` MUST be the architecture identity used by CUDA compilation.
-  - SM90 MUST own supported compute DTypes, instruction capabilities, and the
-    thread/CTA structural limits.
-  - SM90 MUST own the per-SM resource limits: resident CTAs, shared-memory
-    capacity per SM and per CTA, and register-file capacity per SM. These are
-    properties of the microarchitecture, so every product built on it shares
-    them, and a device MUST NOT restate them.
-  - `unified_l1_shared_per_sm_bytes` MUST be the size of the one physical block
-    the shared-memory carveout and the L1 data cache are both taken from, and
-    MUST be at least `shared_memory_per_sm_bytes`. The architecture MUST NOT
-    state an L1 capacity: how much L1 remains depends on how much shared memory
-    a program asked for, which is not a property of the hardware.
+  - `name` MUST be `sm_90`, the architecture identity CUDA compilation uses.
+  - SM90 MUST carry the CUDA architecture facts and add no field of its own
+    ([§12](#12-cudaarchitecture)).
   - Storage and scale DTypes `f4e2m1` and `f8e8m0` MUST NOT be reported as
     compute DTypes by SM90.
+  - SM90 MUST state no tensor-memory capacity: its MMA accumulates in the
+    register file, so there is no separate store to size.
   - Device-frequency-dependent FLOP/s values MUST NOT be stored on SM90.
-  - No field MAY carry a default: every value comes from the installed
-    document ([§1](#1-target)0), so the class declares shape and never content.
 
 ## 3. `H200SXM`
 
 ```python
-class H200SXM:
-    """One H200 SXM device with fixed hard resource limits."""
-
-    name: str
-    sm_count: int
-    hbm_capacity_bytes: int
-    hbm_bandwidth_bytes_per_second: int
-    l2_capacity_bytes: int | None
-    _dense_flops: tuple[tuple[DType, int], ...]
-
-    def peak_for(self, dtype: DType) -> int: ...
+class H200SXM(CudaDevice):
+    """One H200 SXM device."""
 ```
 
 - constraints:
-  - H200SXM MUST describe one device and MUST NOT carry a GPU count.
-  - H200SXM MUST describe how many SMs the product has and how its memory
-    system and compute units perform. Per-SM structural limits belong to the
-    architecture ([§2](#2-sm90)).
+  - H200SXM MUST carry the CUDA device facts and add no field of its own
+    ([§13](#13-cudadevice)).
   - `peak_for` MUST expose a dense integer FLOP/s entry for each of `f32`,
     `f16`, `bf16`, and `fp8e4m3`, each value taken from the installed document.
-  - `f4e2m1` and `f8e8m0` MUST have no compute-throughput entry.
-  - Unknown compute DTypes MUST raise an actionable error.
-  - `l2_capacity_bytes` MUST be `None` when the installed document records no
-    value for it. A recorded absence and a number are both statements about the
-    product; a substituted figure would not be.
-  - No field MAY carry a default, and no resource value MAY be written as a
-    Python literal: the installed document is the single source ([§1](#1-target)0).
-    Selecting a different installed document by ID is not an override; supplying
-    a partial or edited number without a document behind it is, and is not
-    admitted.
+  - `f4e2m1` MUST be recorded unavailable rather than omitted: the Hopper tensor
+    cores have no FP4 mode, so the product has no such rate, which is a fact
+    about it and not a number nobody published.
 
 ## 4. `CudaTarget`
 
@@ -241,6 +198,11 @@ class CudaTarget(Target):
     `architecture.shared_memory_per_cta_bytes`, and MUST be reported as belonging
     to the `cta` scope even when the level being scheduled is `thread`
     ([schedule §5](./schedule.md#5-scheduling-facts)).
+  - The tensor-memory level MUST be projected as
+    `architecture.tensor_memory_per_cta_bytes` and MUST report no capacity where
+    the architecture states none. A level naming a capacity on hardware that has
+    no such store would offer a plan somewhere to hold accumulators that does not
+    exist.
   - The partition projection MUST state the device's SM count as the parallel
     units, its HBM bandwidth and capacity, and its dense peak rate per DType
     ([schedule §5.2](./schedule.md#52-partitionfacts)). Every one of those MUST be
@@ -584,3 +546,93 @@ class Target:
     state. It only converts what the specification already records.
   - There MUST be no public Facts registration step or global Target Facts
     table. A custom Target provider registers only its Target class.
+
+## 12. `CudaArchitecture`
+
+```python
+class CudaArchitecture(Architecture):
+    """What one CUDA architecture states about itself."""
+
+    name: str
+    supported_compute_dtypes: tuple[DType, ...]
+    instruction_capabilities: tuple[str, ...]
+    max_threads_per_cta: int
+    max_threads_per_warp: int
+    max_warps_per_cta: int
+    max_resident_ctas_per_sm: int
+    shared_memory_per_sm_bytes: int
+    shared_memory_per_cta_bytes: int
+    unified_l1_shared_per_sm_bytes: int
+    registers_per_sm_32bit: int
+    tensor_memory_per_cta_bytes: int | None
+
+    def supports_compute_dtype(self, dtype: DType) -> bool: ...
+
+    def topology_limit(self, name: str) -> int: ...
+```
+
+- constraints:
+  - `name` MUST be the architecture identity CUDA compilation uses, and a
+    concrete architecture value MUST be immutable.
+  - A CUDA architecture MUST own supported compute DTypes, instruction
+    capabilities, and the thread/CTA structural limits.
+  - It MUST own the per-SM resource limits: resident CTAs, shared-memory
+    capacity per SM and per CTA, and register-file capacity per SM. These are
+    properties of the microarchitecture, so every product built on it shares
+    them, and a device MUST NOT restate them.
+  - `unified_l1_shared_per_sm_bytes` MUST be the size of the one physical block
+    the shared-memory carveout and the L1 data cache are both taken from, and
+    MUST be at least `shared_memory_per_sm_bytes`. The architecture MUST NOT
+    state an L1 capacity: how much L1 remains depends on how much shared memory
+    a program asked for, which is not a property of the hardware.
+  - `tensor_memory_per_cta_bytes` MUST be the whole tensor-memory store on an
+    architecture whose MMA accumulates in one, because that store is allocated
+    in columns spanning every lane and one CTA may hold all of them. It MUST be
+    `None` where the architecture has no such store, which is the same statement
+    the document makes by recording that leaf unavailable.
+  - The leaf behind every field MUST be declared by each architecture document,
+    so a value the architecture does not have is recorded as absent rather than
+    left out ([§10.2](#102-registry-and-resolution)).
+  - No field MAY carry a default: every value comes from the installed document
+    ([§10](#10-installed-hardware-resources)), so the class declares shape and
+    never content.
+
+## 13. `CudaDevice`
+
+```python
+class CudaDevice(Device):
+    """One CUDA device: how many SMs, and the memory and compute rates."""
+
+    name: str
+    sm_count: int
+    hbm_capacity_bytes: int
+    hbm_bandwidth_bytes_per_second: int
+    l2_capacity_bytes: int | None
+    _dense_flops: tuple[tuple[DType, int], ...]
+
+    def peak_for(self, dtype: DType) -> int: ...
+```
+
+- constraints:
+  - A CUDA device value MUST be immutable, MUST describe one device, and MUST
+    NOT carry a GPU count.
+  - It MUST describe how many SMs the product has and how its memory system and
+    compute units perform. Per-SM structural limits belong to the architecture
+    ([§12](#12-cudaarchitecture)).
+  - `peak_for` MUST answer from the installed document for every compute DType
+    the product's tensor cores have a mode for, and MUST raise an actionable
+    error for any other DType. A product with no such mode records that leaf
+    unavailable, so asking for its rate fails instead of reading as a rate
+    nobody published.
+  - `_dense_flops` MUST hold a dense integer FLOP/s entry per DType. A published
+    sparse peak MUST be halved and the division stated as the document's
+    evidence, so no plan is priced against a rate structured sparsity is
+    required to reach.
+  - `l2_capacity_bytes` MUST be `None` when the installed document records no
+    value for it. A recorded absence and a number are both statements about the
+    product; a substituted figure would not be.
+  - No field MAY carry a default, and no resource value MAY be written as a
+    Python literal: the installed document is the single source
+    ([§10](#10-installed-hardware-resources)). Selecting a different installed
+    document by ID is not an override; supplying a partial or edited number
+    without a document behind it is, and is not admitted.

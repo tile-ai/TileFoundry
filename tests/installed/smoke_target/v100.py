@@ -38,6 +38,7 @@ class Volta70(Architecture):
     shared_memory_per_cta_bytes: int = 96 * 1024
     unified_l1_shared_per_sm_bytes: int = 128 * 1024
     registers_per_sm_32bit: int = 64 * 1024
+    tensor_memory_per_cta_bytes: int | None = None
 
     def topology_limit(self, name: str) -> int:
         if name == "thread":

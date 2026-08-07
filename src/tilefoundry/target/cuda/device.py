@@ -1,8 +1,9 @@
-"""H200 SXM device resources.
+"""CUDA device resources.
 
-Every value is built from the installed ``nvidia.h200_sxm`` document; this
-module holds the shape of the device value, never a copy of its numbers. The
-per-SM structural limits belong to the architecture, not here.
+Every value is built from an installed device document; this module holds the
+shape of a CUDA device value and the products this package ships, never a copy
+of their numbers. The per-SM structural limits belong to the architecture, not
+here.
 """
 
 from __future__ import annotations
@@ -14,8 +15,8 @@ from tilefoundry.target.base import Device
 
 
 @dataclass(frozen=True)
-class H200SXM(Device):
-    """One H200 SXM device: how many SMs, and the memory and compute rates."""
+class CudaDevice(Device):
+    """One CUDA device: how many SMs, and the memory and compute rates."""
 
     name: str
     sm_count: int
@@ -27,7 +28,10 @@ class H200SXM(Device):
     _dense_flops: tuple[tuple[DType, int], ...]
 
     def _python_import_module(self) -> str:
-        if type(self) is H200SXM:
+        # Every device this module defines is re-exported by the package, so a
+        # rendered constructor imports it from there. A provider's own subclass
+        # lives elsewhere and keeps its own module.
+        if type(self).__module__ == __name__:
             return "tilefoundry.target.cuda"
         return super()._python_import_module()
 
@@ -47,4 +51,9 @@ class H200SXM(Device):
             ) from None
 
 
-__all__ = ["H200SXM"]
+@dataclass(frozen=True)
+class H200SXM(CudaDevice):
+    """One H200 SXM device."""
+
+
+__all__ = ["CudaDevice", "H200SXM"]

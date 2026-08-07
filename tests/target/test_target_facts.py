@@ -29,6 +29,10 @@ def test_builtin_targets_own_their_facts_projections() -> None:
 
     assert throughput.memory_bandwidth_bytes_per_second == 4_800_000_000_000
     assert memory.explicit("gmem").capacity_bytes == cuda.device.hbm_capacity_bytes
+    # A tensor-memory level with no capacity is how an architecture that
+    # accumulates in registers says it has no such store.
+    assert cuda.architecture.tensor_memory_per_cta_bytes is None
+    assert memory.explicit("tmem").capacity_bytes is None
     assert AmxTarget().get_facts(ThroughputFacts).bandwidth_level == "gmem"
 
 

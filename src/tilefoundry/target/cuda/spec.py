@@ -20,6 +20,11 @@ H200_SXM_ID = "nvidia.h200_sxm"
 
 _PACKAGE = "tilefoundry.target.hardware"
 
+# The compute DTypes a CUDA device document states a dense peak rate for. A
+# product whose tensor cores have no mode for one of them records it
+# unavailable, so the absence is a statement rather than a missing key.
+_THROUGHPUT_DTYPE_NAMES = ("f32", "f16", "bf16", "fp8e4m3", "f4e2m1")
+
 
 def _dtypes(names: tuple[str, ...], document: HardwareDocument) -> tuple[DType, ...]:
     """Resolve recorded dtype names against the IR dtype table."""
@@ -66,6 +71,9 @@ def build_sm90(document: HardwareDocument) -> SM90:
             "memory.unified_l1_shared.per_sm", unit="byte"
         ),
         registers_per_sm_32bit=reader.integer("memory.register.per_sm", unit="register"),
+        tensor_memory_per_cta_bytes=reader.optional_integer(
+            "memory.tensor.per_cta", unit="byte"
+        ),
     )
     reader.declared_unavailable("memory.shared.bandwidth")
     reader.declared_unavailable("memory.register.bandwidth")
@@ -99,10 +107,11 @@ def build_sm90(document: HardwareDocument) -> SM90:
 def build_h200_sxm(document: HardwareDocument) -> H200SXM:
     """Build the immutable H200 SXM value from its installed document."""
     reader = SchemaReader(document)
-    dense_flops = tuple(
-        (getattr(DType, name), reader.integer(f"throughput.{name}", unit="flop/s"))
-        for name in ("f32", "f16", "bf16", "fp8e4m3")
-    )
+    dense_flops: list[tuple[DType, int]] = []
+    for dtype_name in _THROUGHPUT_DTYPE_NAMES:
+        peak = reader.optional_integer(f"throughput.{dtype_name}", unit="flop/s")
+        if peak is not None:
+            dense_flops.append((getattr(DType, dtype_name), peak))
     device = H200SXM(
         name=reader.text("identity.name"),
         sm_count=reader.integer("compute.sm_count", unit="count"),
@@ -111,7 +120,7 @@ def build_h200_sxm(document: HardwareDocument) -> H200SXM:
             "memory.hbm.bandwidth", unit="byte/s"
         ),
         l2_capacity_bytes=reader.optional_integer("memory.l2.capacity", unit="byte"),
-        _dense_flops=dense_flops,
+        _dense_flops=tuple(dense_flops),
     )
     reader.declared_unavailable("memory.l2.bandwidth")
     reader.close()

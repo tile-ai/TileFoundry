@@ -87,3 +87,7 @@ conditions = "SM90 maximum 32-bit register-file capacity per SM"
 [facts.memory.register.bandwidth]
 status = "unavailable"
 conditions = "NVIDIA publishes no static register-file bandwidth to use for a roofline."
+
+[facts.memory.tensor.per_cta]
+status = "unavailable"
+conditions = "SM90 has no tensor-memory store: wgmma accumulates in the register file, so there is no separate capacity to state."

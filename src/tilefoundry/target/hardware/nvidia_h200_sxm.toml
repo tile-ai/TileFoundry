@@ -72,3 +72,7 @@ unit = "flop/s"
 origin = "derived"
 source = "https://www.nvidia.com/en-us/data-center/h200/"
 conditions = "dense peak; the published 3958 TFLOP/s sparse FP8 peak divided by two"
+
+[facts.throughput.f4e2m1]
+status = "unavailable"
+conditions = "The Hopper tensor cores have no FP4 mode, so this product has no FP4 peak rather than an unpublished one."
