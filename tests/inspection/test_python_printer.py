@@ -1,9 +1,9 @@
 """Inspection printer: what the emitted source carries besides the program.
 
 The program itself round-trips on every corpus model. What has no such witness is
-the material around it — an opt-in type annotation, the ``# loc`` comment that
-names a binding, and the target header, whose value must rebuild the *same*
-Target when the emitted source is executed.
+the material around it — an opt-in type annotation, the binding label the emitted
+left-hand side carries, and the target header, whose value must rebuild the
+*same* Target when the emitted source is executed.
 """
 
 from dataclasses import replace
@@ -28,14 +28,17 @@ def test_inspection_types_are_opt_in_same_line_comments():
     annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
 
     assert canonical != annotated
-    assert "type=Tensor[" in annotated
+    assert "# Tensor[" in annotated
+    # Same line as the statement it types, never a line of its own: a comment the
+    # reader has to look up is a comment about a different program.
     assert all(
-        not line.lstrip().startswith("# type=")
+        line.split("# Tensor[")[0].strip()
         for line in annotated.splitlines()
+        if "# Tensor[" in line
     )
 
 
-def test_binding_metadata_preserves_the_canonical_loc_comment():
+def test_binding_metadata_names_the_emitted_binding():
     tensor_type = TensorType.scalar(DType.f32)
     source = Var(name="source", type=tensor_type)
     result = Call(
@@ -53,8 +56,9 @@ def test_binding_metadata_preserves_the_canonical_loc_comment():
 
     canonical = as_script(function)
 
+    # The label is the emitted name, and the emitted name is the whole record of
+    # it: re-parsing reads it back off the left-hand side.
     assert "result = add(source, source)" in canonical
-    assert '# loc="result"' in canonical
 
     unbound = Call(
         target=Binary(kind=BinaryKind.ADD),
@@ -67,7 +71,8 @@ def test_binding_metadata_preserves_the_canonical_loc_comment():
         body=unbound,
         return_type=tensor_type,
     )
-    assert "# loc=" not in as_script(unbound_function)
+    # Nothing to name it after, so the printer numbers it.
+    assert "v0 = add(source, source)" in as_script(unbound_function)
 
 
 class TestPythonPrinterTargetRoundTrip:

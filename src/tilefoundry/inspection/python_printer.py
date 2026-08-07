@@ -101,21 +101,22 @@ def _compact_type(ty: object) -> str:
     return repr(ty)
 
 
-def _comments(
-    expr: Expr,
-    options: PythonPrintOptions,
-    *,
-    include_binding: bool = False,
-    emitted_name: str | None = None,
-) -> str:
+def _comments(expr: Expr, options: PythonPrintOptions) -> str:
+    """The same-line annotations for one printed statement.
+
+    The binding label is not among them. It is the name on the left of the very
+    line these comments sit on -- printing it again as ``loc="x"`` said ``x``
+    twice, and said the *emitted* name at that, so the one thing a second copy
+    could have carried (that two printed values share one authored label) was
+    what it dropped. Re-parsing recovers the label from the left-hand side.
+
+    The type carries no key either. The fragment is a type, which is what a type
+    annotation looks like, so ``type=`` in front of it was a word saying what the
+    reader can already see.
+    """
     comments: list[str] = []
-    authored_name = binding_name(expr)
-    if include_binding and authored_name is not None:
-        label = emitted_name or authored_name
-        if label:
-            comments.append(f'loc="{label}"')
     if options.show_types:
-        comments.append(f"type={_compact_type(expr.type)}")
+        comments.append(_compact_type(expr.type))
     for metadata_type in options.comment_metadata_types:
         metadata = get_metadata(expr, metadata_type)
         if metadata is None:
@@ -892,7 +893,7 @@ def _emit_def(
         name = _names[id(expr)]
         lines.append(
             f"{level}{name} = {_format_call(expr, level)}"
-            f"{_comments(expr, options, emitted_name=name)}"
+            f"{_comments(expr, options)}"
         )
         printed.add(id(expr))
 
@@ -984,7 +985,7 @@ def _emit_def(
             name = _names[id(expr)]
             lines.append(
                 f"{indent}{name} = {_format_call(expr, indent)}"
-                f"{_comments(expr, options, include_binding=True, emitted_name=name)}"
+                f"{_comments(expr, options)}"
             )
             line = _constraint_line(expr, indent, name)
             if line is not None:

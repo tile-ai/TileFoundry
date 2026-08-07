@@ -70,8 +70,10 @@ def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
 def test_shadowed_call_loc_roundtrips() -> None:
     """When a call's source loc collides with an op name (``vals, idx = topk``
     gives the ``topk`` call loc ``"topk"``), the printer renames the binding to
-    ``topk_out`` to avoid shadowing the op; the emitted ``# loc`` comment must
-    reflect the emitted binding, so the source re-parses and re-prints identically."""
+    ``topk_out`` to avoid shadowing the op. The renamed binding is carried by the
+    left-hand side and nothing else, so re-printing the re-parsed source is what
+    proves the label survived: had it come back as ``topk``, the fixed point would
+    not hold."""
     fn = parse_script(
         _HEADER
         + "\n@func\n"
@@ -81,7 +83,6 @@ def test_shadowed_call_loc_roundtrips() -> None:
     )
     script = as_script(fn)
     assert 'topk_out = topk(' in script, script
-    assert 'loc="topk_out"' in script and 'loc="topk"' not in script, script
     assert as_script(parse_script(script)) == script
 
 

@@ -401,34 +401,19 @@ def render_text(data: dict[str, object]) -> str:
     if "timeline" in records:
         lines.append(f"theoretical-makespan={records['timeline']['end_ns']}ns")
     for call in data["calls"]:
-        parts = [f"value={call['value']}"]
-        if "compute-cost" in call:
-            cost = call["compute-cost"]
-            parts.append(
-                "flops="
-                + (
-                    ",".join(
-                        f"{name}:{value}"
-                        for name, value in sorted(cost["flops"].items())
-                    )
-                    or "0"
-                )
-            )
-        if "roofline" in call:
-            parts.append(f"bound={call['roofline']['theoretical_ns']}ns")
-        if "timeline" in call:
-            timeline = call["timeline"]
-            parts.append(
-                f"placement={timeline['start_ns']}-{timeline['end_ns']}ns "
-                f"units={timeline['grid_units']} waves={timeline['waves']}"
-            )
-        lines.append(" ".join(parts))
+        # Only what the annotated program does not already say on the value's own
+        # line. Its flops, its bound and its placement are all there, against the
+        # name that produced them; repeating them here made the report a second
+        # copy of the program, and the copy was the one whose labels are ambiguous.
+        # The per-operand split is not there -- the annotation carries the sum --
+        # so this is where it lives, and text and `--json` still agree.
         operands = call.get("compute-cost", {}).get("operands")
-        if operands is not None:
-            lines.append(
-                "  operands "
-                + ", ".join(_operand_text(operand) for operand in operands)
-            )
+        if operands is None:
+            continue
+        lines.append(
+            f"value={call['value']} operands "
+            + ", ".join(_operand_text(operand) for operand in operands)
+        )
     return "\n".join(f"# {line}" for line in lines)
 
 

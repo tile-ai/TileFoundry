@@ -75,7 +75,7 @@ def test_analyze_json_and_text_report_the_same_conclusions(tf, cwide) -> None:
     assert f"by={payload['function_records']['roofline']['bound_by']}" in text
 
     assert text.startswith("# analysis target=cuda module=Model function=main")
-    assert "type=Tensor[" in text
+    assert "# Tensor[" in text
     assert "compute-cost flops=f32:" in text
     assert "roofline bound=" in text
     assert "timeline units=168 waves=2" in text
