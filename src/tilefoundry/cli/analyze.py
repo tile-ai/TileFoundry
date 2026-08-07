@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import textwrap
 from typing import Mapping
 
 from tilefoundry.analysis.api import analyze
@@ -16,8 +17,47 @@ from tilefoundry.inspection.analysis_report import (
 )
 from tilefoundry.ir.hir.specialize import dim_vars_reached
 
+#: What each root analysis reports. One table, so the flag that asks for an
+#: analysis and the help that explains it cannot name different evidence.
+EVIDENCE: dict[str, str] = {
+    "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
+    "memory": "where that traffic lands, and the footprint it holds live against the capacity",
+    "roofline": "which of compute or memory limits each value, and the limit in time",
+    "timeline": "when each value runs under those limits, and over how many units",
+}
+
 # The root analyses `analyze` can be asked for, in the order they are reported.
-ANALYSES = ("compute-cost", "memory", "roofline", "timeline")
+ANALYSES: tuple[str, ...] = tuple(EVIDENCE)
+
+
+def guidance() -> str:
+    """What the command reports, and what it leaves to whoever read it.
+
+    What each analysis reports is not restated here: the flags above already say
+    it, off the same table, and a second copy is one more thing that can drift.
+    """
+    return textwrap.dedent(
+        """\
+        evidence, not a decision. This reports what a program would cost. It
+        searches nothing, rewrites nothing, and picks no optimization: what to do
+        about a number is yours.
+
+        Complete inferred types are printed whatever the flags are; each flag above
+        adds one root analysis, and with no flag every one of them runs.
+
+        It reads the authored program, so it answers before any implementation of it
+        exists -- and its numbers are the floor an implementation is read against,
+        not a measurement of one. That is the whole use: without an independent
+        bound, the fastest thing you have measured becomes the ceiling you believe
+        in, and "already at roofline" is a claim about your own best attempt.
+        Reading authored HIR is what it takes as input; making something fast is
+        what it is for.
+
+        The selection must be a Module that reaches a declared target, so name it
+        from the root down. That Module's resolved Target is the hardware every
+        number is measured against, which is why there is no --target.
+        """
+    )
 
 
 def run_authored_analysis(
@@ -68,4 +108,4 @@ def run_authored_analysis(
     return 0
 
 
-__all__ = ["ANALYSES", "run_authored_analysis"]
+__all__ = ["ANALYSES", "EVIDENCE", "guidance", "run_authored_analysis"]

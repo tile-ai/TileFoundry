@@ -7,11 +7,14 @@ import sys
 from typing import Sequence
 
 from tilefoundry.analysis import AnalysisError, ExtractError
-from tilefoundry.cli.analyze import ANALYSES, run_authored_analysis
+from tilefoundry.cli.analyze import ANALYSES, EVIDENCE, run_authored_analysis
+from tilefoundry.cli.analyze import guidance as analyze_guidance
 from tilefoundry.cli.check import add_arguments as add_check_arguments
-from tilefoundry.cli.check import guidance, run_check
+from tilefoundry.cli.check import guidance as check_guidance
+from tilefoundry.cli.check import run_check
 from tilefoundry.cli.inspect import run_capabilities
 from tilefoundry.cli.models import run_models
+from tilefoundry.cli.schedule import guidance as schedule_guidance
 from tilefoundry.cli.schedule import run_schedule
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
@@ -29,8 +32,12 @@ _COMMANDS = {
     "spec": "read one specification: its sections, or one of them",
     "tutorial": "learn the two-step workflow: its pages, or one of them",
     "check": "compare an implementation against its reference, output by output",
-    "analyze": "type-check and analyze authored HIR",
-    "schedule": "schedule authored HIR at one declared topology level",
+    # Named by the evidence they report, not by what they read. Both read authored
+    # HIR, which is step one's output, so a description that led with the input read
+    # as "step one's command" -- and a reader who has finished step one never opened
+    # them again.
+    "analyze": "report what a program costs: flops, traffic, bounds, timing",
+    "schedule": "propose a plan for one topology level: placement and timing",
     "inspect": "inspect installed target facts",
 }
 
@@ -164,17 +171,20 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser(
         "check",
         help=_COMMANDS["check"],
-        epilog=guidance(),
+        epilog=check_guidance(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add_check_arguments(check)
 
-    analyze = commands.add_parser("analyze", help=_COMMANDS["analyze"])
+    analyze = commands.add_parser(
+        "analyze",
+        help=_COMMANDS["analyze"],
+        epilog=analyze_guidance(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     _add_source_argument(analyze)
     for analysis in _ANALYSES:
-        analyze.add_argument(
-            f"--{analysis}", action="store_true", help=f"run the {analysis} analysis"
-        )
+        analyze.add_argument(f"--{analysis}", action="store_true", help=EVIDENCE[analysis])
     analyze.add_argument(
         "--dim",
         action="append",
@@ -185,7 +195,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print the report as JSON instead of text"
     )
 
-    schedule = commands.add_parser("schedule", help=_COMMANDS["schedule"])
+    schedule = commands.add_parser(
+        "schedule",
+        help=_COMMANDS["schedule"],
+        epilog=schedule_guidance(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     _add_source_argument(schedule)
     schedule.add_argument(
         "--topology",
