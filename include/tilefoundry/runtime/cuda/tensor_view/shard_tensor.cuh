@@ -44,8 +44,6 @@ template <int TRank, int MRank> struct shard_axis_projection_t {
 template <class T, class GL, class SL>
 CUTE_HOST_DEVICE auto shard_axis_projection(ShardTensor<T, GL, SL> const &st) {
     using mesh_t = typename SL::mesh;
-    using topo_t = typename mesh_t::topology;
-    constexpr auto scope = topo_t::scope;
     using attrs_t = typename SL::attrs;
     using sl_layout_t = typename SL::layout;
     using m_layout_t = typename mesh_t::layout;
@@ -53,7 +51,10 @@ CUTE_HOST_DEVICE auto shard_axis_projection(ShardTensor<T, GL, SL> const &st) {
     auto const &sl_layout = st.shard_layout.layout_value;
     auto const &m_layout = st.shard_layout.mesh_value.layout_value;
 
-    auto pid = program_id<scope>();
+    // Mixed-radix over the whole topology pack: with a mesh spanning cta and
+    // thread, program_id<cta>() alone maps every thread of a CTA onto one
+    // mesh coordinate.
+    auto pid = mesh_t::linear_id();
     auto crd = m_layout.get_hier_coord(pid);
     using sl_shape_t =
         cute::remove_cvref_t<decltype(cute::shape(sl_layout_t{}))>;

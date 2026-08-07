@@ -6,7 +6,10 @@ from __future__ import annotations
 from tilefoundry.codegen.cuda.context import (
     CodegenContext,
     register_codegen_cuda,
-    topology_scope_str,
+)
+from tilefoundry.codegen.cuda.tir.memory.tensor_view import (
+    extra_topology_args,
+    render_topology,
 )
 from tilefoundry.ir.tir.stmts import MeshScope
 from tilefoundry.target import validate_cuda_topology_levels
@@ -23,13 +26,16 @@ def _validate_topology(mesh) -> None:
 
 
 def _mesh_type(mesh) -> str:
-    topo = mesh.topology
+    # Shares the topology renderers with the tensor_view emitter: the alias
+    # registered here is matched against that emitter's inline type by string
+    # equality, so the two must not drift.
     shape_types = ", ".join(f"cute::Int<{s}>" for s in mesh.layout.shape)
     stride_types = ", ".join(f"cute::Int<{s}>" for s in mesh.layout.strides)
     return (
         f"tilefoundry::Mesh<"
-        f"tilefoundry::Topology<{topology_scope_str(topo.name)}, {topo.size}>, "
-        f"cute::Layout<cute::Shape<{shape_types}>, cute::Stride<{stride_types}>>>"
+        f"{render_topology(mesh.topology)}, "
+        f"cute::Layout<cute::Shape<{shape_types}>, cute::Stride<{stride_types}>>"
+        f"{extra_topology_args(mesh)}>"
     )
 
 
