@@ -32,10 +32,8 @@ _COMMANDS = {
     "spec": "read one specification: its sections, or one of them",
     "tutorial": "learn the two-step workflow: its pages, or one of them",
     "check": "compare an implementation against its reference, output by output",
-    # Named by the evidence they report, not by what they read. Both read authored
-    # HIR, which is step one's output, so a description that led with the input read
-    # as "step one's command" -- and a reader who has finished step one never opened
-    # them again.
+    # Named by their evidence, not shared authored HIR input, so a reader who finished
+    # HIR does not mistake Analyze or Schedule for a command belonging to that step.
     "analyze": "report what a program costs: flops, traffic, bounds, timing",
     "schedule": "propose a plan for one topology level: placement and timing",
     "inspect": "inspect installed target facts",

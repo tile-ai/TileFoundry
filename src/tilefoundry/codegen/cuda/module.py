@@ -70,7 +70,7 @@ def emit_cuda_module(
     PrimFunctions of a module)."""
     from tilefoundry.codegen.cuda.emit import _topology_shape_specializations  # noqa: PLC0415
 
-    ctx = CodegenContext()
+    ctx = CodegenContext(target)
     kernel_texts = []
     all_fields = []
     for fn in cuda_fns:

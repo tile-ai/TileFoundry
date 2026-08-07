@@ -2,20 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-
 from tilefoundry.ir.core.module import Module
-from tilefoundry.target import Target
-
-
-@dataclass(frozen=True)
-class CodeGenerator:
-    """One immutable Target-owned code-generation service."""
-
-    emit: Callable[
-        [Module, tuple["PrimFunction", ...], Target], "LinkableModule"
-    ]
+from tilefoundry.target.base import Target, _target_summary
+from tilefoundry.target.services import CodeGenerator
 
 
 def group_functions_by_target(
@@ -50,8 +39,8 @@ def group_functions_by_target(
         second_target, second_functions = device_groups[1]
         raise ValueError(
             f"tilefoundry: module {module.name!r} mixes unequal device Targets: "
-            f"{first_target!r} (function {first_functions[0].name!r}) vs "
-            f"{second_target!r} (function {second_functions[0].name!r}); "
+            f"{_target_summary(first_target)} (function {first_functions[0].name!r}) "
+            f"vs {_target_summary(second_target)} (function {second_functions[0].name!r}); "
             "multiple device translation units are not supported"
         )
     return {target: tuple(functions) for target, functions in groups.items()}

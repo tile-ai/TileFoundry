@@ -16,7 +16,7 @@ from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.module import TOPOLOGIES_ATTR, UNDECLARED
 from tilefoundry.parser import parse_func, parse_prim_func
-from tilefoundry.target import require_target
+from tilefoundry.target.base import target_instance
 
 
 def _validate_one_pattern(pattern: Any) -> Pattern:
@@ -106,7 +106,9 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     single-function ``Module`` carrying that context. A ``pass`` body declares
     a dispatch prototype; implementations are registered via
     :meth:`Function.specialize`."""
-    resolved_target = require_target(target) if target is not None else None
+    if target is not None:
+        target_instance(target)
+    resolved_target = target
     declares_context = resolved_target is not None or topologies is not UNDECLARED
     declared_topologies = None if topologies is UNDECLARED else tuple(topologies)
 
@@ -201,7 +203,9 @@ def prim_func(fn=None, *, target=None):
     The decorated name binds to the resulting IR node. ``target`` (a Target
     object) selects the compilation target; omitted, it uses the
     normal compile-entry default."""
-    resolved_target = require_target(target) if target is not None else None
+    if target is not None:
+        target_instance(target)
+    resolved_target = target
 
     def _wrap(fn_inner):
         extra_closure = _definition_namespace()

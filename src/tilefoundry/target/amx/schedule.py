@@ -2,20 +2,10 @@
 
 from __future__ import annotations
 
-from functools import cache
-
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.schedule import ScheduleError, ScheduleOptions
-from tilefoundry.schedule.pipeline import (
-    PipelineFacts,
-    PipelineSchedulePlan,
-    build_pipeline_problem,
-    build_pipeline_program,
-    export_pipeline_plan,
-    solve_pipeline_problem,
-)
-from tilefoundry.schedule.registry import Scheduler
+from tilefoundry.target.services import Scheduler
 
 from .target import AmxTarget
 
@@ -28,8 +18,16 @@ def schedule_core(
     target: AmxTarget,
     topology: object,
     options: object | None = None,
-) -> PipelineSchedulePlan:
+) -> object:
     """Build, close, solve, and export the AMX core pipeline schedule."""
+    from tilefoundry.schedule.pipeline import (  # noqa: PLC0415
+        PipelineFacts,
+        build_pipeline_problem,
+        build_pipeline_program,
+        export_pipeline_plan,
+        solve_pipeline_problem,
+    )
+
     if function is not module.entry_function():
         raise ScheduleError(
             f"{TOPOLOGY} schedule requires the module entry function, got "
@@ -47,10 +45,11 @@ def schedule_core(
     return export_pipeline_plan(program, solution, target)
 
 
-@cache
-def amx_schedulers() -> dict[str, Scheduler]:
-    """Return the scheduler service inherited by AMX Target subclasses."""
-    return {TOPOLOGY: Scheduler(TOPOLOGY, schedule_core)}
+def amx_scheduler(topology: str) -> Scheduler | None:
+    """Construct the AMX scheduler requested for one topology level."""
+    if topology == TOPOLOGY:
+        return Scheduler(TOPOLOGY, schedule_core)
+    return None
 
 
-__all__ = ["TOPOLOGY", "amx_schedulers", "schedule_core"]
+__all__ = ["TOPOLOGY", "amx_scheduler", "schedule_core"]

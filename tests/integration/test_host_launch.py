@@ -1,16 +1,7 @@
-"""End-to-end host-launch checks for the split host/device pipeline.
+"""End-to-end checks for the explicit host/device boundary.
 
-Exercises non-MMA kernels through the explicit host/device boundary:
-- a multi-CTA elementwise kernel (each CTA owns a distinct output row) run via
-  both the implicit auto-inserted CPU entry and an explicit
-  ``@prim_func(target=CpuTarget())`` + ``launch``;
-- a within-CTA per-row reduce;
-- a device-placement negative (a CPU tensor handed to a CUDA launch errors at
-  the host wrapper);
-- a dynamic (launch-provided) CTA extent: a kernel tiled ``(Ntile, TILE)`` with
-  the dynamic outer ``Ntile`` axis split across CTAs, launched explicitly so one
-  compiled artifact runs two different ``Ntile`` shapes without recompiling, plus
-  the negative that such a kernel cannot use the implicit auto-inserted entry.
+Covers static and dynamic CTA launches, implicit and explicit CPU entries,
+multi-CTA execution, and device-placement and shape negatives.
 """
 from __future__ import annotations
 
@@ -28,6 +19,10 @@ from tilefoundry.target import CpuTarget, CudaTarget
 
 _ROWS = 128
 _COLS = 12
+
+
+class ExternalH200Target(CudaTarget):
+    name = "tests.integration.external_h200"
 
 
 # Multi-CTA elementwise: the cta mesh splits the rows, so CTA i owns row i.
@@ -72,6 +67,25 @@ def test_implicit_entry_elementwise_multi_cta() -> None:
     out = torch.empty_like(x)
     rm(x, out)
     torch.cuda.synchronize()
+    assert torch.allclose(out, x * x, rtol=0, atol=0)
+
+
+def test_external_cuda_target_builds_links_loads_and_executes() -> None:
+    target = ExternalH200Target("nvidia.h200_sxm")
+    external_module = Module(
+        name="external_h200_double_rows",
+        functions=(double_rows.entry_function(),),
+        entry=double_rows.entry_function().name,
+        target=target,
+        topologies=double_rows.effective_topologies(),
+    )
+
+    rm = tilefoundry.compile(external_module)
+    x = _randn_rows()
+    out = torch.empty_like(x)
+    rm(x, out)
+    torch.cuda.synchronize()
+
     assert torch.allclose(out, x * x, rtol=0, atol=0)
 
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 from tests.models.corpus import TargetFixture
 from tilefoundry.analysis.facts import ParallelCapacityFacts
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CudaTarget, TopologyLimitFacts
 from tilefoundry.target.amx.target import AmxTarget
 from tilefoundry.target.base import Target
 
@@ -44,7 +44,7 @@ def h200_sxm(*, threads_per_cta: int = 512) -> TargetFixture:
     by what the architecture admits.
     """
     target = CudaTarget("nvidia.h200_sxm")
-    limit = target.topology_limit("thread")
+    limit = target.get_facts(TopologyLimitFacts, "thread").max_static_extent
     if limit is not None and not 1 <= threads_per_cta <= limit:
         raise ValueError(
             f"h200_sxm: {threads_per_cta} threads per CTA is outside the "
@@ -67,7 +67,7 @@ def apple_m2_pro() -> TargetFixture:
     and the single AMX unit a core issues to.
     """
     target = AmxTarget()
-    amx_limit = target.topology_limit("amx")
+    amx_limit = target.get_facts(TopologyLimitFacts, "amx").max_static_extent
     return TargetFixture(
         id="apple_m2_pro",
         target=target,

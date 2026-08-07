@@ -12,10 +12,10 @@ from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.ir.core.module import Module
-from tilefoundry.target import Target, register_target
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.target import CudaTarget, Target
 
 
-@register_target
 @dataclass(frozen=True)
 class _AnalysisTarget(Target):
     name: ClassVar[str] = "test.analysis"
@@ -65,6 +65,23 @@ def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -
     with pytest.raises(AnalysisError, match="'root' depends on 'lost'"):
         analyze(module, function, analysis="root")
 
+    target = _AnalysisTarget(
+        (
+            Analyzer(
+                "needs-facts",
+                lambda _module, _function, target, _options: target.get_facts(
+                    type("MissingFacts", (), {})
+                ),
+            ),
+        )
+    )
+    module, function = _module(target)
+    with pytest.raises(
+        AnalysisError,
+        match=r"needs-facts: _AnalysisTarget \(test.analysis\): no Facts projection",
+    ):
+        analyze(module, function, analysis="needs-facts")
+
 
 def test_analyze_detects_cycles_declared_by_target_services() -> None:
     target = _AnalysisTarget(
@@ -77,3 +94,27 @@ def test_analyze_detects_cycles_declared_by_target_services() -> None:
 
     with pytest.raises(AnalysisError, match="a -> b -> a"):
         analyze(module, function, analysis="a")
+
+
+def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() -> None:
+    @dataclass(frozen=True)
+    class _BrokenTarget(Target):
+        name: ClassVar[str] = "test.broken-analysis"
+
+        def get_analyzer(self, selector: str) -> Analyzer:
+            raise ValueError("provider analysis failure")
+
+    module, function = _module(_BrokenTarget())
+    with pytest.raises(ValueError, match="provider analysis failure"):
+        analyze(module, function, analysis="broken")
+
+    function, _, _ = build_demo()
+    over_limit = Module(
+        "over-limit",
+        (function,),
+        function.name,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1), Topology("thread", 1025)),
+    )
+    with pytest.raises(ValueError, match="1 <= extent <= 1024"):
+        analyze(over_limit, function, analysis="roofline")

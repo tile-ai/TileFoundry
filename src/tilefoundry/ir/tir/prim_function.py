@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.target import Target, default_target, require_target
+from tilefoundry.target.base import Target, target_instance
+
+
+def _default_target():
+    """Construct the compiler-owned default after the IR import graph is ready."""
+    from tilefoundry.target import default_target  # noqa: PLC0415
+
+    return default_target()
 
 
 @dataclass(frozen=True)
@@ -22,10 +29,10 @@ class PrimFunction(Stmt):
     params: tuple[Var, ...]
     body: Sequential
     output_count: int = 1
-    target: Target = field(default_factory=default_target)
+    target: Target = field(default_factory=_default_target)
 
     def __post_init__(self) -> None:
-        require_target(self.target)
+        target_instance(self.target)
 
 
 __all__ = ["PrimFunction"]

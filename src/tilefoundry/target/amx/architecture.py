@@ -27,6 +27,11 @@ class AppleAmx(Architecture):
     staging_bytes: int
     accumulator_bytes: int
 
+    def _python_import_module(self) -> str:
+        if type(self) is AppleAmx:
+            return "tilefoundry.target.amx"
+        return super()._python_import_module()
+
     def supports_compute_dtype(self, dtype: DType) -> bool:
         """Return whether AMX has a compute instruction for ``dtype``."""
         return dtype in self.supported_compute_dtypes

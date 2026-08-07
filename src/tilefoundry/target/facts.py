@@ -1,4 +1,4 @@
-"""Validation shared by Target-owned Facts projections."""
+"""Target-owned Facts shared across consumer families and their validation."""
 
 from __future__ import annotations
 
@@ -6,6 +6,18 @@ import dataclasses
 from typing import TypeVar
 
 FactsT = TypeVar("FactsT")
+
+
+@dataclasses.dataclass(frozen=True)
+class TopologyLimitFacts:
+    """The static extent ceiling one topology level admits.
+
+    ``None`` means that the level has no static ceiling and may defer its extent
+    to launch.
+    """
+
+    topology: str
+    max_static_extent: int | None
 
 
 class TargetFactsError(Exception):
@@ -34,4 +46,4 @@ def facts_result(
     return value
 
 
-__all__ = ["FactsT", "TargetFactsError", "facts_result"]
+__all__ = ["FactsT", "TargetFactsError", "TopologyLimitFacts", "facts_result"]

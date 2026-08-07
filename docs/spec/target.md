@@ -46,12 +46,15 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     provider claiming the same name MUST fail rather than replace the owner.
   - `registered_targets()` MUST expose one read-only `name -> class` view. The
     view MAY be used for inspection but MUST NOT construct a Target.
-  - Authored Target parameters MUST accept a constructed, registered Target
-    instance or their documented omitted state. A string MUST fail and MUST NOT
-    be resolved through registration.
+  - Authored Target parameters MUST accept a constructed Target instance or
+    their documented omitted state. A string MUST fail and MUST NOT be resolved
+    through registration.
   - Target values MUST remain immutable hardware values. Their service getters
     select immutable descriptors and Facts; normal Python inheritance carries
     those selections to a subclass unless it overrides or refuses them.
+  - A provider MAY import `Analyzer` and `Scheduler` from `tilefoundry.target`
+    to construct getter results. That package MUST NOT expose `CodeGenerator`
+    or `LinkableModule` as provider API.
   - A missing getter capability MUST fail and name the concrete Target class,
     its registration name, and the requested selector, topology, or Facts type.
   - Target values MUST NOT own code emission, linking, loading, or the public
@@ -195,8 +198,6 @@ class CudaTarget(Target):
         arch: str | None = None,
     ) -> None: ...
 
-    def topology_limit(self, name: str) -> int | None: ...
-
     def validate_program_topology(self, topology: Topology) -> None: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
     def get_scheduler(self, topology: str) -> Scheduler: ...
@@ -261,9 +262,10 @@ thread mesh layouts.
   - A declared program topology name MUST be one of its target's
     `topology_levels`. A name outside that set MUST be refused naming the levels
     the target declares.
-  - `topology_limit("cta")` MUST be `None`: the CUDA grid is a launch shape
-    rather than an SM allocation, so its static extent is unbounded here.
-    `topology_limit("thread")` MUST equal `architecture.max_threads_per_cta`.
+  - `get_facts(TopologyLimitFacts, "cta").max_static_extent` MUST be `None`:
+    the CUDA grid is a launch shape rather than an SM allocation, so its static
+    extent is unbounded here. The `"thread"` Facts projection MUST equal
+    `architecture.max_threads_per_cta`.
   - Only `cta` MAY have a launch-provided (`None`) extent; every other level
     MUST have a static extent.
   - A launch-provided level MUST NOT be scheduled, because scheduling requires

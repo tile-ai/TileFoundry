@@ -32,7 +32,8 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
 from tilefoundry.ir.visitor import ExprMutator
-from tilefoundry.target import Target, require_target
+from tilefoundry.target import Target
+from tilefoundry.target.base import target_instance
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (
@@ -312,11 +313,9 @@ def _extract_target_from_decorator(
                 continue
             value = _eval_decorator_static(keyword.value, closure)
             try:
-                target = require_target(value)
-            except (TypeError, ValueError) as exc:
-                raise VerifyError(
-                    f"func target must be a Target instance, got {value!r}"
-                ) from exc
+                target = target_instance(value, subject="func target")
+            except TypeError as error:
+                raise VerifyError(str(error)) from None
             return target
     return None
 
@@ -1329,11 +1328,9 @@ def _module_declared_context(cls_node: ast.ClassDef, closure: dict[str, Any]):
         if kw.arg == "target":
             value = _eval_decorator_static(kw.value, closure)
             try:
-                target = require_target(value)
-            except (TypeError, ValueError) as exc:
-                raise VerifyError(
-                    f"module target must be a Target instance, got {value!r}"
-                ) from exc
+                target = target_instance(value, subject="module target")
+            except TypeError as error:
+                raise VerifyError(str(error)) from None
     for stmt in cls_node.body:
         # The hierarchy is declared by a class-body assignment, not a decorator
         # argument, so a function parsed below it can name one of its levels.

@@ -14,7 +14,8 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.passes.pass_manager import PassManager
 from tilefoundry.passes.transforms import BufferizePass, HirToTirPass
-from tilefoundry.target import Target, default_target, require_target
+from tilefoundry.target import Target, default_target
+from tilefoundry.target.base import _target_summary, target_instance
 
 # ── Compiler Options ─────────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ class CompilerOptions:
     target: Target
 
     def __post_init__(self) -> None:
-        require_target(self.target)
+        target_instance(self.target)
 
     def canonical_text(self) -> str:
         """Deterministic text serialisation for cache-key computation."""
@@ -85,6 +86,9 @@ def lower(
             f"tilefoundry.lower: expected Module, got {type(mod).__name__}. "
             f"Construct Module(name=..., functions=(fn,), entry=fn.name) explicitly."
         )
+    if target is not None:
+        target = target_instance(target)
+
     # Validate the module's declared program topology levels against its
     # target before lowering — a module may declare an unsupported level (e.g.
     # ``gpu``) without ever emitting a MeshScope, so the codegen-side check is
@@ -92,13 +96,13 @@ def lower(
     try:
         module_target = mod.resolve_target()
     except ValueError:
-        module_target = default_target() if target is None else require_target(target)
+        module_target = default_target() if target is None else target
         mod = replace(mod, target=module_target)
     else:
-        if target is not None and require_target(target) != module_target:
+        if target is not None and target != module_target:
             raise ValueError(
-                f"tilefoundry.lower: explicit target {target!r} conflicts with "
-                f"the Module Target {module_target!r}"
+                f"tilefoundry.lower: explicit target {_target_summary(target)} "
+                f"conflicts with the Module Target {_target_summary(module_target)}"
             )
     for topology in mod.effective_topologies():
         module_target.validate_program_topology(topology)
@@ -131,16 +135,18 @@ def build(
         raise TypeError(
             f"tilefoundry.build: expected Module, got {type(mod).__name__}."
         )
+    if target is not None:
+        target = target_instance(target)
     try:
         module_target = mod.resolve_target()
     except ValueError as error:
         raise ValueError(
             "tilefoundry.build: module has no Target; declare one on the Module"
         ) from error
-    if target is not None and require_target(target) != module_target:
+    if target is not None and target != module_target:
         raise ValueError(
-            f"tilefoundry.build: explicit target {target!r} conflicts with "
-            f"the Module Target {module_target!r}"
+            f"tilefoundry.build: explicit target {_target_summary(target)} "
+            f"conflicts with the Module Target {_target_summary(module_target)}"
         )
 
     # Keyed by pid so concurrent processes (e.g. pytest-xdist workers) building
@@ -264,26 +270,12 @@ def jit(
     options: CompilerOptions | None = None,
     **kwargs,
 ) -> "RuntimeModule":
-    """JIT-compile a ``hir.Function`` or ``Module`` and return a ``RuntimeModule``.
+    """JIT-compile a ``hir.Function`` or ``Module`` to a ``RuntimeModule``.
 
-    ``Module`` is the compile unit.  ``Function`` input is normalised into a
-    single-function ``Module``, which declares no execution context: a Function
-    that needs one is authored inside the ``Module`` that declares it.
-
-    Cache key is ``sha256(canonical_module_text + target_text +
-    canonical_options_text)`` — no Python object identity participates.
-
-    Args:
-        fn_or_mod: A ``hir.Function`` or ``Module``.
-        target: A constructed compilation Target.
-        options: Compiler options (defaults to ``CompilerOptions(target=target)``).
-
-    Returns:
-        A callable ``RuntimeModule``.
-
-    Raises:
-        TypeError: raw Python functions and unsupported types.
-        ValueError: an explicit Target conflicts with the Module Target.
+    A ``Module`` is the compilation unit; a Function becomes a context-free
+    single-function Module, so execution context belongs to its owner Module.
+    The cache key is canonical module text, Target text, and options text -- no
+    Python object identity participates.
     """
     # Reject all unexpected kwargs
     if kwargs:
@@ -310,13 +302,13 @@ def jit(
         except ValueError:
             target = default_target()
     else:
-        target = require_target(target)
+        target = target_instance(target)
     if options is None:
         options = CompilerOptions(target=target)
     elif options.target != target:
         raise ValueError(
-            f"tilefoundry.jit: options target {options.target!r} conflicts with "
-            f"the resolved Target {target!r}"
+            f"tilefoundry.jit: options target {_target_summary(options.target)} "
+            f"conflicts with the resolved Target {_target_summary(target)}"
         )
 
     # Cache key: sha256 over canonical module text + target + options
@@ -357,7 +349,7 @@ def _jit_cache_key_payload(
         except ValueError:
             target = default_target()
     else:
-        target = require_target(target)
+        target = target_instance(target)
     if options is None:
         options = CompilerOptions(target=target)
     elif options.target != target:

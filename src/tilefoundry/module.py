@@ -45,9 +45,11 @@ def module(cls=None, *, entry: str | None = None, target=None):
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
     from tilefoundry.ir.types.shard.mesh import Topology  # noqa: PLC0415
-    from tilefoundry.target import require_target  # noqa: PLC0415
+    from tilefoundry.target.base import target_instance  # noqa: PLC0415
 
-    resolved_target = require_target(target) if target is not None else None
+    if target is not None:
+        target_instance(target)
+    resolved_target = target
 
     def _declared_topologies(cls_inner):
         """The class body's own ``topologies`` assignment, if it makes one.

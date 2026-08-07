@@ -35,6 +35,11 @@ class SM90(Architecture):
     unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
 
+    def _python_import_module(self) -> str:
+        if type(self) is SM90:
+            return "tilefoundry.target.cuda"
+        return super()._python_import_module()
+
     def supports_compute_dtype(self, dtype: DType) -> bool:
         """Return whether SM90 has a compute instruction for ``dtype``."""
         return dtype in self.supported_compute_dtypes

@@ -64,7 +64,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import _expr_children
-from tilefoundry.target import CudaTarget, Target
+from tilefoundry.utils.python_source import PythonExpr
 
 # ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -1012,62 +1012,6 @@ def _pattern_ctor(pat: Pattern) -> str:
     return repr(pat)
 
 
-def _target_str(target: Target) -> str:
-    """Render one explicit Target through Python's normal ``repr`` hook."""
-    expression = repr(target)
-    try:
-        compiled = compile(expression, "<Target repr>", "eval")
-        namespace = {type(target).__name__: type(target)}
-        for value in (
-            getattr(target, "architecture", None),
-            getattr(target, "device", None),
-        ):
-            if value is not None:
-                namespace[type(value).__name__] = type(value)
-        if "DType." in expression:
-            namespace["DType"] = DType
-        rebuilt = eval(compiled, {"__builtins__": {}}, namespace)  # noqa: S307
-    except Exception as error:
-        raise TypeError(
-            f"{type(target).__name__}.__repr__ must return a Python "
-            f"constructor expression that rebuilds the Target, got "
-            f"{expression!r}: {error}"
-        ) from error
-    if type(rebuilt) is not type(target) or rebuilt != target:
-        raise TypeError(
-            f"{type(target).__name__}.__repr__ rebuilt {rebuilt!r}, not the "
-            "same concrete Target value"
-        )
-    return expression
-
-
-def _class_import(value_type: type) -> str:
-    """Return the import that binds one top-level provider value class."""
-    if value_type.__qualname__ != value_type.__name__:
-        raise TypeError(
-            f"cannot print {value_type.__module__}.{value_type.__qualname__}: "
-            "canonical Target classes and value classes must be top-level"
-        )
-    if value_type.__name__ in {"CpuTarget", "CudaTarget", "AmxTarget"}:
-        return f"from tilefoundry.target import {value_type.__name__}"
-    return f"from {value_type.__module__} import {value_type.__name__}"
-
-
-def _target_imports(target: Target | None) -> tuple[str, ...]:
-    """Imports needed to evaluate the concrete Target's constructor repr."""
-    if target is None:
-        return ()
-    expression = _target_str(target)
-    imports = [_class_import(type(target))]
-    if isinstance(target, CudaTarget):
-        for value in (target.architecture, target.device):
-            if f"{type(value).__name__}(" in expression:
-                imports.append(_class_import(type(value)))
-        if "DType." in expression:
-            imports.append("from tilefoundry.ir.types import DType")
-    return tuple(dict.fromkeys(imports))
-
-
 def _collect_all_meshes(fn: HirFunction) -> dict[int, Mesh]:
     """Meshes referenced by *fn* and every specialization variant — the
     printer's mesh-name map must stay stable across the base prototype and
@@ -1085,7 +1029,7 @@ def _emit_header(
     indent: str,
     *,
     for_module: bool = False,
-    target: "Target | None" = None,
+    target: object | None = None,
     dim_vars: "dict[str, object] | None" = None,
 ) -> list[str]:
     """Import header + mesh-prelude shared by ``hir_function_to_python`` and
@@ -1098,7 +1042,8 @@ def _emit_header(
         lines.append("from tilefoundry.module import module")
     lines.append("from tilefoundry import func")
     if target is not None:
-        lines.extend(_target_imports(target))
+        rendered: PythonExpr = target.to_python()
+        lines.extend(rendered.imports)
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
     lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
@@ -1234,7 +1179,8 @@ def _module_decorator_line(mod: Module, entry_name: str | None) -> str:
     ``entry``, so a re-parse rebuilds the same declaration/inheritance split."""
     kwargs = [] if entry_name is None else [f'entry="{entry_name}"']
     if mod.target is not None:
-        kwargs.append(f"target={_target_str(mod.target)}")
+        rendered: PythonExpr = mod.target.to_python()
+        kwargs.append(f"target={rendered.text}")
     return f"@module({', '.join(kwargs)})" if kwargs else "@module"
 
 

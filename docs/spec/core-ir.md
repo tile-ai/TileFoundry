@@ -154,7 +154,7 @@ through its owner chain.
   - A Module with no declaration anywhere in its owner chain MUST be refused
     when its target is resolved. Its root Module MUST declare one, for example
     with `target=CudaTarget("nvidia.h200_sxm")`.
-  - A Target declaration MUST be a constructed, registered Target instance.
+  - A Target declaration MUST be a constructed Target instance.
     A string MUST be refused rather than resolved or constructed.
   - `resolve_target()` MUST return the exact instance the root declared; it MUST
     NOT reconstruct or replace an equal value.

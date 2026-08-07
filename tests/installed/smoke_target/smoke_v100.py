@@ -63,3 +63,25 @@ def test_external_v100_target_analyses_a_copied_installed_model(
     assert {call["grid_units"] for call in call_timelines} == {132}
     assert {call["waves"] for call in call_timelines} == {2}
     assert timeline["waves"] == sum(call["waves"] for call in call_timelines)
+
+    scheduled = tf(
+        "schedule",
+        f"{model}:Qwen3_1_7B.layer0.mlp",
+        "--topology",
+        "thread",
+        "--solver-timeout=60",
+        "--solver-workers=4",
+        "--first-plan",
+    )
+    assert scheduled.returncode == 0, scheduled.stderr
+
+    service_calls = (model.parent / "v100_service_calls.txt").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert {
+        "analyzer:compute-cost",
+        "analyzer:memory",
+        "analyzer:roofline",
+        "analyzer:timeline",
+        "scheduler:thread",
+    } <= set(service_calls)

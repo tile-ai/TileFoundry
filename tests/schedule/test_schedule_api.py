@@ -15,8 +15,8 @@ from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule.api import ScheduleResult, schedule
 from tilefoundry.schedule.errors import ScheduleError
 from tilefoundry.schedule.plan import PlanVerificationError, SchedulePlan
-from tilefoundry.schedule.registry import Scheduler
-from tilefoundry.target import Target, register_target
+from tilefoundry.target import CudaTarget, Target, TopologyLimitFacts, register_target
+from tilefoundry.target.services import Scheduler
 
 
 @dataclass(frozen=True)
@@ -43,9 +43,18 @@ def _solve(module, function, target, topology, options):
     return _Plan(topology.size)
 
 
-@register_target
 @dataclass(frozen=True)
-class _SchedulingTarget(Target):
+class _TopologyTarget(Target):
+    topology_levels: ClassVar[tuple[str, ...]] = ("tile",)
+
+    def get_facts(self, facts_type: type, query: object | None = None):
+        if facts_type is TopologyLimitFacts and query == "tile":
+            return TopologyLimitFacts("tile", 4)
+        return super().get_facts(facts_type, query)
+
+
+@dataclass(frozen=True)
+class _SchedulingTarget(_TopologyTarget):
     name: ClassVar[str] = "test.scheduler"
 
     def get_scheduler(self, topology: str) -> Scheduler:
@@ -54,9 +63,8 @@ class _SchedulingTarget(Target):
         return super().get_scheduler(topology)
 
 
-@register_target
 @dataclass(frozen=True)
-class _UnsupportedTarget(Target):
+class _UnsupportedTarget(_TopologyTarget):
     name: ClassVar[str] = "test.unsupported-scheduler"
 
 
@@ -74,6 +82,26 @@ class Widget:
 @module(entry="scale", target=_UnsupportedTarget())
 class Unsupported:
     topologies = (Topology("tile", 4),)
+    scale = scale
+
+
+@dataclass(frozen=True)
+class _BrokenSchedulerTarget(_TopologyTarget):
+    name: ClassVar[str] = "test.broken-scheduler"
+
+    def get_scheduler(self, topology: str) -> Scheduler:
+        raise ValueError("provider scheduler failure")
+
+
+@module(entry="scale", target=_BrokenSchedulerTarget())
+class BrokenScheduler:
+    topologies = (Topology("tile", 4),)
+    scale = scale
+
+
+@module(entry="scale", target=CudaTarget("nvidia.h200_sxm"))
+class OverLimitCuda:
+    topologies = (Topology("cta", 1), Topology("thread", 1025))
     scale = scale
 
 
@@ -109,3 +137,10 @@ def test_schedule_preserves_plan_verification() -> None:
 
     with pytest.raises(PlanVerificationError, match="invalid plan"):
         schedule(Invalid, scale, topology="tile")
+
+
+def test_schedule_keeps_provider_failures_and_rejects_over_limit_topology() -> None:
+    with pytest.raises(ValueError, match="provider scheduler failure"):
+        schedule(BrokenScheduler, scale, topology="tile")
+    with pytest.raises(ValueError, match="1 <= extent <= 1024"):
+        schedule(OverLimitCuda, scale, topology="thread")

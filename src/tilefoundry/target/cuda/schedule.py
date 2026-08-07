@@ -12,29 +12,11 @@ steps below that boundary stay private to the algorithm that owns them.
 
 from __future__ import annotations
 
-from functools import cache
-
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.schedule import ScheduleError, ScheduleOptions
-from tilefoundry.schedule.partition import (
-    PartitionFacts,
-    PartitionSchedulePlan,
-    build_partition_problem,
-    build_partition_program,
-    export_partition_plan,
-    solve_partition_problem,
-)
-from tilefoundry.schedule.pipeline import (
-    PipelineFacts,
-    PipelineSchedulePlan,
-    build_pipeline_problem,
-    build_pipeline_program,
-    export_pipeline_plan,
-    solve_pipeline_problem,
-)
-from tilefoundry.schedule.registry import Scheduler
+from tilefoundry.target.services import Scheduler
 
 from .target import CudaTarget
 
@@ -81,8 +63,16 @@ def schedule_thread(
     target: CudaTarget,
     topology: object,
     options: object | None = None,
-) -> PipelineSchedulePlan:
+) -> object:
     """Build, close, solve, and export the intra-CTA pipeline schedule."""
+    from tilefoundry.schedule.pipeline import (  # noqa: PLC0415
+        PipelineFacts,
+        build_pipeline_problem,
+        build_pipeline_program,
+        export_pipeline_plan,
+        solve_pipeline_problem,
+    )
+
     _entry_function(PIPELINE_TOPOLOGY, module, function)
     _options(PIPELINE_TOPOLOGY, options)
     program = build_pipeline_program(module, function)
@@ -98,8 +88,16 @@ def schedule_cta(
     target: CudaTarget,
     topology: object,
     options: object | None = None,
-) -> PartitionSchedulePlan:
+) -> object:
     """Build, close, solve, and export the device-wide partition schedule."""
+    from tilefoundry.schedule.partition import (  # noqa: PLC0415
+        PartitionFacts,
+        build_partition_problem,
+        build_partition_program,
+        export_partition_plan,
+        solve_partition_problem,
+    )
+
     _entry_function(PARTITION_TOPOLOGY, module, function)
     resolved = _options(PARTITION_TOPOLOGY, options)
     program = build_partition_program(module, function)
@@ -113,14 +111,15 @@ __all__ = [
     "PARTITION_TOPOLOGY",
     "PIPELINE_TOPOLOGY",
     "schedule_cta",
+    "cuda_scheduler",
     "schedule_thread",
 ]
 
 
-@cache
-def cuda_schedulers() -> dict[str, Scheduler]:
-    """Return the scheduler services inherited by CUDA Target subclasses."""
-    return {
-        PIPELINE_TOPOLOGY: Scheduler(PIPELINE_TOPOLOGY, schedule_thread),
-        PARTITION_TOPOLOGY: Scheduler(PARTITION_TOPOLOGY, schedule_cta),
-    }
+def cuda_scheduler(topology: str) -> Scheduler | None:
+    """Construct the CUDA scheduler requested for one topology level."""
+    if topology == PIPELINE_TOPOLOGY:
+        return Scheduler(PIPELINE_TOPOLOGY, schedule_thread)
+    if topology == PARTITION_TOPOLOGY:
+        return Scheduler(PARTITION_TOPOLOGY, schedule_cta)
+    return None

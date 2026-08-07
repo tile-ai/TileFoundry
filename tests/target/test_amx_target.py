@@ -21,7 +21,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.schedule.pipeline.facts import PipelineFacts, PipelineFactsQuery
-from tilefoundry.target import AmxTarget
+from tilefoundry.target import AmxTarget, TopologyLimitFacts, UnsupportedCapabilityError
 from tilefoundry.target.amx.atoms import (
     AMX_REGISTERS,
     CORE_CACHE,
@@ -92,27 +92,23 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     it that issues one atom. The core limit is the measured performance-core
     count; the unit limit comes from the architecture.
 
-    Asking about a level the target does not have raises, and the message lists
-    the levels it does -- for the limit lookup and for the declared-topology
-    validation alike, since a program naming a foreign level is the same mistake
-    either way. A declared extent is validated against its level's own limit, and
-    an AMX core count is always static: there is no launch shape to defer it to,
-    so a symbolic extent is refused rather than accepted and counted later.
+    Each limit is projected as a Target Fact. A declared extent is validated
+    against its level's own limit, and an AMX core count is always static: there
+    is no launch shape to defer it to, so a symbolic extent is refused rather
+    than accepted and counted later.
     """
     target = AmxTarget()
     assert target.topology_levels == ("core", "amx")
-    assert target.topology_limit("core") == 8
-    assert target.topology_limit("amx") == 1
+    assert target.get_facts(TopologyLimitFacts, "core").max_static_extent == 8
+    assert target.get_facts(TopologyLimitFacts, "amx").max_static_extent == 1
     assert AmxTarget().topology_levels == target.topology_levels
 
-    with pytest.raises(ValueError) as limit_error:
-        target.topology_limit("cta")
     with pytest.raises(ValueError) as topology_error:
         target.validate_program_topology(Topology("cta", 4))
-    for error in (limit_error, topology_error):
-        message = str(error.value)
-        assert "unsupported topology level 'cta'" in message
-        assert "('core', 'amx')" in message
+    assert "unsupported topology level 'cta'" in str(topology_error.value)
+    assert "('core', 'amx')" in str(topology_error.value)
+    with pytest.raises(UnsupportedCapabilityError, match="no Facts projection"):
+        target.get_facts(TopologyLimitFacts, "cta")
 
     target.validate_program_topology(Topology("core", 8))
     with pytest.raises(ValueError, match="must satisfy 1 <= extent <= 8"):

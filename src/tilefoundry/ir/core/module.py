@@ -14,7 +14,7 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.types.tensor_type import TensorType
-from tilefoundry.target import Target, require_target
+from tilefoundry.target.base import Target, target_instance
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 ModuleFunction = Union[HirFunction, PrimFunction]
@@ -99,7 +99,7 @@ class Module:
         name shared by two of functions / modules / methods, validate the
         declared execution context, and link each child to this owner."""
         if self.target is not None:
-            require_target(self.target)
+            target_instance(self.target)
         for fn in self.functions:
             seal = getattr(fn, "seal", None)
             if callable(seal):

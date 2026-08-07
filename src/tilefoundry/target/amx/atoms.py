@@ -13,9 +13,10 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.schedule.facts import AtomFact
-from tilefoundry.target import Target, require_target
+from tilefoundry.target import Target
 from tilefoundry.target.amx.spec import installed_architecture
 from tilefoundry.target.amx.target import AmxTarget
+from tilefoundry.target.base import target_instance
 
 
 @dataclass(frozen=True)
@@ -171,24 +172,15 @@ def _static_positive(*dims: object) -> bool:
 
 
 def candidate_atoms(op: Call, target: Target | None = None) -> list[AtomFact]:
-    """List every AMX atom that could execute ``op`` (an HIR ``MatMul``
-    ``Call``) on ``target`` (a default :class:`AmxTarget` when omitted).
+    """List AMX atoms eligible for an HIR ``MatMul`` Call.
 
-    Hard filter only -- no ranking: an atom is a candidate iff
-
-    1. ``op``'s M/N/K are all static and evenly divisible by the atom's
-       ``shape_mnk``;
-    2. ``op``'s lhs/rhs dtypes match the atom's ``dtype_a``/``dtype_b``;
-    3. the operands' layouts are compatible (``_operands_layout_ok``); and
-    4. ``op``'s own three operands fit the atom's storage level -- which is
-       what separates a register-resident unit from one streaming through
-       cache, and so what an untiled whole-tensor statement fails.
-
-    Returns ``[]`` when no registered atom clears the filter (a legitimate "no
-    candidates" outcome, not an error). Raises ``NotImplementedError`` for an
-    unsupported op kind or target.
+    This is a hard filter: static M/N/K divisibility, input dtypes, layouts, and
+    three operands fitting the atom storage level. The storage test separates a
+    register-resident unit from cache streaming. ``[]`` is valid; unsupported
+    operation kinds and Targets raise.
     """
-    target = AmxTarget() if target is None else require_target(target)
+    target = AmxTarget() if target is None else target
+    target = target_instance(target)
     if not isinstance(op, Call) or not isinstance(op.target, MatMul):
         got = type(op).__name__
         if isinstance(op, Call):

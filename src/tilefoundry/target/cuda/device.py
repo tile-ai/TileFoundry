@@ -26,6 +26,11 @@ class H200SXM(Device):
     l2_capacity_bytes: int | None
     _dense_flops: tuple[tuple[DType, int], ...]
 
+    def _python_import_module(self) -> str:
+        if type(self) is H200SXM:
+            return "tilefoundry.target.cuda"
+        return super()._python_import_module()
+
     @property
     def dense_flops_per_second(self) -> dict[DType, int]:
         """Return the dense compute-throughput map."""

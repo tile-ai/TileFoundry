@@ -37,6 +37,7 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.dump import DumpFlags, DumpScope, FileDumper, NullDumper
+from tilefoundry.target.base import _TARGET_CLASSES, _TARGET_PROVIDERS
 
 _RESULTS_ROOT = Path(__file__).resolve().parents[1] / "test_results"
 _SANITIZE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -120,4 +121,17 @@ def _tilefoundry_dump_scope(request: pytest.FixtureRequest):
     dumper = FileDumper(test_root)
     with DumpScope(dumper=dumper, flags=DumpFlags.ALL) as scope:
         yield scope
+
+
+@pytest.fixture(autouse=True)
+def _restore_target_registry():
+    classes = dict(_TARGET_CLASSES)
+    providers = dict(_TARGET_PROVIDERS)
+    try:
+        yield
+    finally:
+        _TARGET_CLASSES.clear()
+        _TARGET_CLASSES.update(classes)
+        _TARGET_PROVIDERS.clear()
+        _TARGET_PROVIDERS.update(providers)
 

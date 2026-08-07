@@ -3,7 +3,8 @@
 A family declares the narrow aggregate it needs; the target package registers
 the conversion that builds it. What a family cannot see it cannot depend on, so
 these types are the record of how much hardware each measurement actually rests
-on -- and none of them names a backend.
+on -- and none of them names a backend. A fact used by more than one consumer
+family belongs in ``tilefoundry.target.facts`` instead.
 """
 
 from __future__ import annotations

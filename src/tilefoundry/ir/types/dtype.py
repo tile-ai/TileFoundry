@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tilefoundry.utils.python_source import PythonExpr
+
 
 @dataclass(frozen=True)
 class DType:
@@ -31,6 +33,14 @@ class DType:
                 f"DType: unknown value {name!r}; valid: {sorted(members)}"
             )
         return member
+
+    def to_python(self) -> PythonExpr:
+        if DType._members().get(self.name) is not self:
+            raise TypeError(f"cannot render non-canonical DType {self!r}")
+        return PythonExpr(
+            ("from tilefoundry.ir.types import DType",),
+            f"DType.{self.name}",
+        )
 
 
 @dataclass(frozen=True)

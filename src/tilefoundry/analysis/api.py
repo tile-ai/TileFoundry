@@ -22,7 +22,7 @@ from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
-from tilefoundry.target import Target
+from tilefoundry.target import Target, UnsupportedCapabilityError
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ def _algorithm(target: Target, selector: str, *, root: str) -> Analyzer:
     """The service selected by the resolved Target for *selector*."""
     try:
         return target.get_analyzer(selector)
-    except ValueError as error:
+    except UnsupportedCapabilityError as error:
         if selector == root:
             raise AnalysisError(str(error)) from None
         raise AnalysisError(
@@ -141,6 +141,8 @@ def analyze(
             raise AnalysisError(f"analyze: {error}") from None
 
     target = module.resolve_target()
+    for level in module.effective_topologies():
+        target.validate_program_topology(level)
     closure = _closure(target, analysis)
 
     # Both preflights run once for the whole call, before any algorithm: an
@@ -153,7 +155,10 @@ def analyze(
     written_records: set[tuple[int, type]] = set()
     for algorithm in closure:
         before = _metadata_snapshot(functions)
-        algorithm.run(module, function, target, options)
+        try:
+            algorithm.run(module, function, target, options)
+        except UnsupportedCapabilityError as error:
+            raise AnalysisError(f"{algorithm.selector}: {error}") from None
         after = _metadata_snapshot(functions)
         records = _require_owned_writes(algorithm, before, after)
         written_records |= records

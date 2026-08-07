@@ -2,111 +2,53 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from functools import cache
-
-from tilefoundry.ir.core import IRMetadata
-
-# An algorithm runs over the selected Module and Function against one target.
-AnalysisCallable = Callable[
-    ["Module", "Function", "Target", object | None], None
-]
+from tilefoundry.target.services import AnalysisCallable, Analyzer
 
 
-@dataclass(frozen=True)
-class Analyzer:
-    """One analysis service: its identity, dependencies, and owned Metadata."""
+def builtin_analyzer(selector: str) -> Analyzer | None:
+    """Construct the one standard analysis service named by *selector*."""
+    if selector == "compute-cost":
+        from tilefoundry.analysis.compute_cost import analyze_compute_cost  # noqa: PLC0415
+        from tilefoundry.analysis.metadata import ComputeCostMetadata  # noqa: PLC0415
 
-    selector: str
-    run: AnalysisCallable
-    requires: tuple[str, ...] = ()
-    produces: tuple[type[IRMetadata], ...] = field(default=())
+        return Analyzer(
+            "compute-cost", analyze_compute_cost, produces=(ComputeCostMetadata,)
+        )
+    if selector == "memory":
+        from tilefoundry.analysis.memory import analyze_memory  # noqa: PLC0415
+        from tilefoundry.analysis.metadata import MemoryMetadata  # noqa: PLC0415
 
-    def __post_init__(self) -> None:
-        if not self.selector:
-            raise ValueError("an analysis needs a non-empty selector")
-        if len(set(self.requires)) != len(self.requires):
-            raise ValueError(
-                f"{self.selector}: duplicate entries in requires {list(self.requires)}"
-            )
-        if self.selector in self.requires:
-            raise ValueError(f"{self.selector}: an analysis cannot require itself")
-        for produced in self.produces:
-            if not isinstance(produced, type) or not issubclass(produced, IRMetadata):
-                raise ValueError(
-                    f"{self.selector}: produces must name IRMetadata subclasses, "
-                    f"got {produced!r}"
-                )
-        if len(set(self.produces)) != len(self.produces):
-            raise ValueError(
-                f"{self.selector}: the same Metadata type is produced twice"
-            )
-
-
-@cache
-def builtin_analyzers() -> dict[str, Analyzer]:
-    """Return the immutable services inherited by built-in Target classes."""
-    from tilefoundry.analysis.compute_cost import (  # noqa: PLC0415
-        SELECTOR as COMPUTE_COST,
-    )
-    from tilefoundry.analysis.compute_cost import (  # noqa: PLC0415
-        analyze_compute_cost,
-    )
-    from tilefoundry.analysis.memory import (  # noqa: PLC0415
-        SELECTOR as MEMORY,
-    )
-    from tilefoundry.analysis.memory import (  # noqa: PLC0415
-        analyze_memory,
-    )
-    from tilefoundry.analysis.metadata import (  # noqa: PLC0415
-        ComputeCostMetadata,
-        MemoryMetadata,
-        RooflineMetadata,
-        TimelineMetadata,
-    )
-    from tilefoundry.analysis.roofline import (  # noqa: PLC0415
-        SELECTOR as ROOFLINE,
-    )
-    from tilefoundry.analysis.roofline import (  # noqa: PLC0415
-        analyze_roofline,
-    )
-    from tilefoundry.analysis.timeline import (  # noqa: PLC0415
-        SELECTOR as TIMELINE,
-    )
-    from tilefoundry.analysis.timeline import (  # noqa: PLC0415
-        analyze_timeline,
-    )
-
-    return {
-        COMPUTE_COST: Analyzer(
-            COMPUTE_COST,
-            analyze_compute_cost,
-            produces=(ComputeCostMetadata,),
-        ),
-        MEMORY: Analyzer(
-            MEMORY,
+        return Analyzer(
+            "memory",
             analyze_memory,
-            requires=(COMPUTE_COST,),
+            requires=("compute-cost",),
             produces=(MemoryMetadata,),
-        ),
-        ROOFLINE: Analyzer(
-            ROOFLINE,
+        )
+    if selector == "roofline":
+        from tilefoundry.analysis.metadata import RooflineMetadata  # noqa: PLC0415
+        from tilefoundry.analysis.roofline import analyze_roofline  # noqa: PLC0415
+
+        return Analyzer(
+            "roofline",
             analyze_roofline,
-            requires=(MEMORY, COMPUTE_COST),
+            requires=("memory", "compute-cost"),
             produces=(RooflineMetadata,),
-        ),
-        TIMELINE: Analyzer(
-            TIMELINE,
+        )
+    if selector == "timeline":
+        from tilefoundry.analysis.metadata import TimelineMetadata  # noqa: PLC0415
+        from tilefoundry.analysis.timeline import analyze_timeline  # noqa: PLC0415
+
+        return Analyzer(
+            "timeline",
             analyze_timeline,
-            requires=(ROOFLINE,),
+            requires=("roofline",),
             produces=(TimelineMetadata,),
-        ),
-    }
+        )
+    return None
 
 
 __all__ = [
     "AnalysisCallable",
     "Analyzer",
-    "builtin_analyzers",
+    "builtin_analyzer",
 ]

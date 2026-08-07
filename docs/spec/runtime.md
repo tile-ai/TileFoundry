@@ -341,7 +341,7 @@ entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
 **Input contract**:
 - Only TileFoundry IR objects (`Function` / `Module`) accepted.
 - Raw Python functions raise `TypeError` — use `@func` first.
-- A stated `target` MUST be a constructed, registered Target instance. Strings
+- A stated `target` MUST be a constructed Target instance. Strings
   MUST be refused and MUST NOT select a backend or construct a Target.
 - A Module-owned Target takes precedence and is retained as the exact instance;
   a conflicting explicit Target or `CompilerOptions.target` MUST fail.

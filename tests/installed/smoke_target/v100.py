@@ -3,9 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from tilefoundry import DType
-from tilefoundry.target import Architecture, CudaTarget, Device, register_target
+from tilefoundry.target import (
+    Analyzer,
+    Architecture,
+    CudaTarget,
+    Device,
+    Scheduler,
+    register_target,
+)
+
+_SERVICE_CALLS = Path(__file__).with_name("v100_service_calls.txt")
+
+
+def _record_service(kind: str, selector: str) -> None:
+    with _SERVICE_CALLS.open("a", encoding="utf-8") as calls:
+        calls.write(f"{kind}:{selector}\n")
 
 
 @dataclass(frozen=True)
@@ -59,8 +74,24 @@ class V100Target(CudaTarget):
 
     name = "nvidia.v100_sxm2_32gb"
 
-    def __init__(self) -> None:
-        super().__init__(V100_SXM2_32GB, VOLTA_70)
+    def __init__(
+        self,
+        architecture: Architecture = VOLTA_70,
+        device: Device = V100_SXM2_32GB,
+    ) -> None:
+        super().__init__(device, architecture)
 
-    def __repr__(self) -> str:
-        return "V100Target()"
+    def get_analyzer(self, selector: str) -> Analyzer:
+        inherited = super().get_analyzer(selector)
+        _record_service("analyzer", selector)
+        return Analyzer(
+            inherited.selector,
+            inherited.run,
+            inherited.requires,
+            inherited.produces,
+        )
+
+    def get_scheduler(self, topology: str) -> Scheduler:
+        inherited = super().get_scheduler(topology)
+        _record_service("scheduler", topology)
+        return Scheduler(inherited.topology, inherited.solve)

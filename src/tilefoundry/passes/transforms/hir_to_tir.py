@@ -1781,10 +1781,8 @@ class HirToTirPass(ModulePass):
         try:
             target = module.resolve_target()
         except ValueError:
-            # Direct pass use is an existing compiler-owned omitted-target
-            # boundary. Materialize the same explicit built-in value used by
-            # ``tilefoundry.lower`` so every emitted PrimFunction and the
-            # returned Module share one exact Target instance.
+            # Direct pass use is a compiler-owned omitted-target boundary; materialize the
+            # same built-in as ``tilefoundry.lower`` so functions and Module share it.
             target = default_target()
             module = replace(module, target=target)
         dispatch_view: dict[str, tuple[HirFunction, ...]] = {}

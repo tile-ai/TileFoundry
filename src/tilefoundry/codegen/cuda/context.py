@@ -47,7 +47,8 @@ def lookup(node_type: type):
 
 
 class CodegenContext:
-    def __init__(self) -> None:
+    def __init__(self, target: object | None = None) -> None:
+        self.target = target
         self._lines: list[str] = []
         self._indent = 0
         self._var_names: dict[int, str] = {}

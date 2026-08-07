@@ -20,11 +20,6 @@ from tilefoundry.analysis.facts import (
 )
 from tilefoundry.ir.types import DType
 from tilefoundry.schedule.facts import AtomFact
-from tilefoundry.schedule.pipeline.facts import (
-    PipelineFacts,
-    PipelineFactsQuery,
-    PipelineInstructionFacts,
-)
 
 from .atoms import candidate_atoms
 from .target import AmxTarget
@@ -126,12 +121,18 @@ def parallel_capacity(
     )
 
 
-def pipeline_facts(target: AmxTarget, query: PipelineFactsQuery) -> PipelineFacts:
+def pipeline_facts(target: AmxTarget, query: object) -> object:
     """Project the finite AMX instruction catalogue before solving.
 
     An AMX core both runs the work and owns the L1d the tile lives in, so here
     the level asked about and the level the capacity belongs to are the same one.
     """
+    from tilefoundry.schedule.pipeline.facts import (  # noqa: PLC0415
+        PipelineFacts,
+        PipelineFactsQuery,
+        PipelineInstructionFacts,
+    )
+
     if not isinstance(query, PipelineFactsQuery):
         raise TypeError("AMX pipeline facts need a PipelineFactsQuery")
     if query.topology != _PIPELINE_TOPOLOGY:

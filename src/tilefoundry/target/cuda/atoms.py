@@ -15,7 +15,8 @@ from tilefoundry.ir.types.shard import ShardLayout
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_local_shape
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule.facts import AtomFact
-from tilefoundry.target import Target, default_target, require_target
+from tilefoundry.target import Target, default_target
+from tilefoundry.target.base import target_instance
 from tilefoundry.target.cuda.target import CudaTarget
 
 # The MMA atom catalogue this bridge searches. V1 has exactly the one op
@@ -104,27 +105,15 @@ def _static_positive(*dims: object) -> bool:
 
 
 def candidate_atoms(op: Call, target: Target | None = None) -> list[AtomFact]:
-    """List every MMA atom that could execute ``op`` (an HIR ``MatMul``
-    ``Call``) on ``target`` (``default_target()`` when omitted).
+    """List CUDA MMA atoms eligible for an HIR ``MatMul`` Call.
 
-    Hard filter only -- no ranking, no CP-SAT: an atom is a candidate iff
-
-    1. ``op``'s M/N/K are all static and evenly divisible by the atom's
-       ``shape_mnk``;
-    2. ``op``'s lhs/rhs dtypes match the atom's ``dtype_a``/``dtype_b``
-       (the atom's own ``dtype_c`` is its *internal* accumulator dtype --
-       e.g. f32 for the one bf16-input SM80 atom -- and is not required to
-       equal ``op``'s own output dtype; a down-cast to a narrower output is
-       an epilogue concern outside this bridge); and
-    3. the operands' layouts are compatible (``_operands_layout_ok`` --
-       pack/repack is an agent-hole concern, not a candidate here).
-
-    Returns ``[]`` when no registered atom clears the filter (a legitimate
-    "no candidates" outcome, not an error). Raises ``NotImplementedError``
-    for an unsupported op kind or target -- V1 supports ``MatMul`` on
-    ``CudaTarget`` only.
+    This is a hard filter, not ranking: static M/N/K must divide ``shape_mnk``;
+    input dtypes and operand layouts must agree. ``dtype_c`` is the atom's
+    internal accumulator, so narrowing output is an epilogue concern. ``[]`` is
+    a valid outcome; unsupported operation kinds and Targets raise.
     """
-    target = default_target() if target is None else require_target(target)
+    target = default_target() if target is None else target
+    target = target_instance(target)
     if not isinstance(op, Call) or not isinstance(op.target, MatMul):
         got = type(op).__name__
         if isinstance(op, Call):

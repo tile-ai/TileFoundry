@@ -1,16 +1,7 @@
-"""Module transform: synthesize a default host (CPU) entry for a lone device
-kernel.
+"""Synthesize a CPU entry that launches a lone CUDA ``PrimFunction``.
 
-When a module has no host-callable (CPU-target) entry and exactly one CUDA
-device ``PrimFunction``, build a ``PrimFunction(target=CpuTarget())`` whose signature
-mirrors the device function's parameters and whose body is a single ``Launch``
-of that device function. Grid / block are taken from the existing static
-launch-config derivation and frozen as ``i64`` constants (dynamic grid is a
-later concern).
-
-The transform returns a new ``Module`` (the device function object is reused,
-but ``functions`` / ``entry`` are rebuilt). It is not wired into the production
-compile path.
+It copies device parameters and the existing static launch configuration;
+dynamic grids remain unsupported.
 """
 from __future__ import annotations
 

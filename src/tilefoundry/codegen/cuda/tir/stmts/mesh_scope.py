@@ -12,12 +12,12 @@ from tilefoundry.ir.tir.stmts import MeshScope
 from tilefoundry.target import validate_cuda_topology_levels
 
 
-def _validate_topology(mesh) -> None:
+def _validate_topology(mesh, target) -> None:
     """Each program topology level a mesh binds must be one this target
     supports; finer levels (e.g. warp) belong in the mesh layout, not as a
     program topology level. Defense-in-depth alongside the declared-topology
     check at lowering entry."""
-    validate_cuda_topology_levels(t.name for t in mesh.topologies)
+    validate_cuda_topology_levels(target, (t.name for t in mesh.topologies))
 
 
 
@@ -43,7 +43,9 @@ def _is_dynamic_mesh(mesh) -> bool:
 
 @register_codegen_cuda(MeshScope)
 def _emit(node: MeshScope, ctx: CodegenContext) -> None:
-    _validate_topology(node.mesh)
+    if ctx.target is None:
+        raise RuntimeError("CUDA MeshScope emission requires its Target")
+    _validate_topology(node.mesh, ctx.target)
     name = ctx.name_for(node.binding)
     ctx.emit(f"// mesh scope: {node.mesh.topology.name}")
     # A dynamic mesh has no compile-time type: its extent comes from the launch

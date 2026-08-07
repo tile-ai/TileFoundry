@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import ClassVar
 
 import pytest
 
 from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
-from tilefoundry.target import AmxTarget, CudaTarget, Target
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.target import (
+    AmxTarget,
+    CudaTarget,
+    Target,
+    TopologyLimitFacts,
+    UnsupportedCapabilityError,
+)
 from tilefoundry.target.facts import TargetFactsError, facts_result
 
 
@@ -28,8 +37,50 @@ def test_a_target_without_a_requested_projection_fails_closed() -> None:
     class _UnknownFacts:
         units: int
 
-    with pytest.raises(ValueError, match=r"CudaTarget \(cuda\): no Facts projection"):
+    with pytest.raises(
+        UnsupportedCapabilityError, match=r"CudaTarget \(cuda\): no Facts projection"
+    ):
         CudaTarget("nvidia.h200_sxm").get_facts(_UnknownFacts)
+
+
+def test_topology_limits_are_target_facts_and_base_validation_is_inherited() -> None:
+    cuda = CudaTarget("nvidia.h200_sxm")
+    amx = AmxTarget()
+
+    assert cuda.get_facts(TopologyLimitFacts, "cta").max_static_extent is None
+    assert cuda.get_facts(TopologyLimitFacts, "thread").max_static_extent == 1024
+    assert amx.get_facts(TopologyLimitFacts, "core").max_static_extent == 8
+    assert amx.get_facts(TopologyLimitFacts, "amx").max_static_extent == 1
+
+    @dataclass(frozen=True)
+    class _DirectTarget(Target):
+        name: ClassVar[str] = "test.direct-topology"
+        topology_levels: ClassVar[tuple[str, ...]] = ("unit",)
+
+        def get_facts(self, facts_type: type, query: object | None = None):
+            if facts_type is TopologyLimitFacts and query == "unit":
+                return TopologyLimitFacts("unit", 4)
+            return super().get_facts(facts_type, query)
+
+    _DirectTarget().validate_program_topology(Topology("unit", 4))
+    with pytest.raises(ValueError, match="1 <= extent <= 4"):
+        _DirectTarget().validate_program_topology(Topology("unit", 5))
+
+
+def test_cuda_throughput_projection_leaves_scheduler_families_unloaded() -> None:
+    source = """
+import sys
+from tilefoundry.analysis.facts import ThroughputFacts
+from tilefoundry.target import CudaTarget
+
+CudaTarget(\"nvidia.h200_sxm\").get_facts(ThroughputFacts)
+assert \"tilefoundry.schedule.partition\" not in sys.modules
+assert \"tilefoundry.schedule.pipeline\" not in sys.modules
+"""
+    completed = subprocess.run(
+        (sys.executable, "-c", source), text=True, capture_output=True, check=False
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_projection_results_are_still_immutable_aggregates_of_the_requested_type() -> None:
