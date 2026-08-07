@@ -9,7 +9,12 @@ from typing import ClassVar
 
 import pytest
 
-from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
+from tilefoundry.analysis.facts import (
+    MemoryHierarchyFacts,
+    ParallelCapacityFacts,
+    ThroughputFacts,
+)
+from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import (
     AmxTarget,
@@ -29,11 +34,33 @@ def test_builtin_targets_own_their_facts_projections() -> None:
 
     assert throughput.memory_bandwidth_bytes_per_second == 4_800_000_000_000
     assert memory.explicit("gmem").capacity_bytes == cuda.device.hbm_capacity_bytes
-    # A tensor-memory level with no capacity is how an architecture that
-    # accumulates in registers says it has no such store.
-    assert cuda.architecture.tensor_memory_per_cta_bytes is None
-    assert memory.explicit("tmem").capacity_bytes is None
     assert AmxTarget().get_facts(ThroughputFacts).bandwidth_level == "gmem"
+
+
+def test_two_cuda_products_project_the_hardware_each_one_is() -> None:
+    """AC-1-3 and AC-1-4. One projection serves both products, so what separates
+    them is what their documents record rather than a branch per architecture.
+
+    Tensor memory is the case that matters: a level with no capacity says the
+    architecture has no such store, and a capacity says a CTA's accumulators live
+    in one. A projection that reported the same for both would price a Blackwell
+    kernel against Hopper's registers.
+    """
+    hopper = CudaTarget("nvidia.h200_sxm")
+    blackwell = CudaTarget("nvidia.b200_sxm")
+
+    assert hopper.get_facts(MemoryHierarchyFacts).explicit("tmem").capacity_bytes is None
+    tmem = blackwell.get_facts(MemoryHierarchyFacts).explicit("tmem")
+    assert (tmem.capacity_bytes, tmem.scope) == (262_144, "cta")
+
+    throughput = blackwell.get_facts(ThroughputFacts)
+    peaks = dict(throughput.peak_flops_per_second)
+    assert throughput.memory_bandwidth_bytes_per_second == 7_672_320_000_000
+    assert peaks[DType.f4e2m1] == 9_000_000_000_000_000
+    assert DType.f4e2m1 not in dict(
+        hopper.get_facts(ThroughputFacts).peak_flops_per_second
+    )
+    assert blackwell.get_facts(ParallelCapacityFacts).parallel_units == 148
 
 
 def test_a_target_without_a_requested_projection_fails_closed() -> None:

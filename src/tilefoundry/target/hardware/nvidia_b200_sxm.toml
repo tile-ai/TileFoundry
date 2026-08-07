@@ -1,0 +1,81 @@
+[spec]
+schema = "tilefoundry.cuda.device/v1"
+kind = "device"
+id = "nvidia.b200_sxm"
+
+[compatibility]
+architectures = ["nvidia.sm100"]
+
+[facts.identity.name]
+value = "b200_sxm"
+unit = "name"
+origin = "vendor"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+conditions = "product identity of the SXM package an HGX B200 baseboard carries eight of"
+
+[facts.compute.sm_count]
+value = 148
+unit = "count"
+origin = "measured"
+source = "CUDA runtime device query on an NVIDIA B200 SXM, driver 590.48.01, CUDA 13.1"
+conditions = "cudaDevAttrMultiProcessorCount; NVIDIA publishes no SM count for this product, and the two dies it is built from present as one device"
+
+[facts.memory.hbm.capacity]
+value = 191505498112
+unit = "byte"
+origin = "measured"
+source = "CUDA runtime device query on an NVIDIA B200 SXM, driver 590.48.01, CUDA 13.1"
+conditions = "cudaMemGetInfo total on an idle device, so the figure already excludes what the driver reserves; the DGX B200 system specification states 1,440 GB across eight GPUs, which this part exceeds"
+
+[facts.memory.hbm.bandwidth]
+value = 7672320000000
+unit = "byte/s"
+origin = "derived"
+source = "CUDA runtime device query on an NVIDIA B200 SXM, driver 590.48.01, CUDA 13.1"
+conditions = "peak: the queried 7680-bit HBM3e bus at its queried 3996 MHz clock, transferring on both edges"
+
+[facts.memory.l2.capacity]
+value = 132644864
+unit = "byte"
+origin = "measured"
+source = "CUDA runtime device query on an NVIDIA B200 SXM, driver 590.48.01, CUDA 13.1"
+conditions = "cudaDevAttrL2CacheSize; NVIDIA publishes no L2 capacity for this product"
+
+[facts.memory.l2.bandwidth]
+status = "unavailable"
+conditions = "NVIDIA publishes no static L2 bandwidth to use for a roofline."
+
+[facts.throughput.f32]
+value = 75000000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+conditions = "the published 600 TFLOP/s FP32 rate of an eight-GPU HGX B200 divided by eight; the FP32 figure carries no sparsity footnote"
+
+[facts.throughput.f16]
+value = 2250000000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+conditions = "dense peak: the published 36 PFLOP/s sparse FP16 rate of an eight-GPU HGX B200 divided by eight, then by two for sparsity"
+
+[facts.throughput.bf16]
+value = 2250000000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+conditions = "dense peak: the published 36 PFLOP/s sparse BF16 rate of an eight-GPU HGX B200 divided by eight, then by two for sparsity"
+
+[facts.throughput.fp8e4m3]
+value = 4500000000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+conditions = "dense peak: the published 72 PFLOP/s sparse FP8 rate of an eight-GPU HGX B200 divided by eight, then by two for sparsity"
+
+[facts.throughput.f4e2m1]
+value = 9000000000000000
+unit = "flop/s"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+conditions = "dense peak: the published 72 PFLOP/s dense FP4 rate of an eight-GPU HGX B200 divided by eight; the FP4 row prints the sparse and dense rates separately, so no sparsity division applies"

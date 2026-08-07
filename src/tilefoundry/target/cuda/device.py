@@ -56,4 +56,9 @@ class H200SXM(CudaDevice):
     """One H200 SXM device."""
 
 
-__all__ = ["CudaDevice", "H200SXM"]
+@dataclass(frozen=True)
+class B200SXM(CudaDevice):
+    """One B200 SXM device."""
+
+
+__all__ = ["B200SXM", "CudaDevice", "H200SXM"]

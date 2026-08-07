@@ -21,7 +21,7 @@ import pytest
 from tilefoundry.ir.types import DType
 from tilefoundry.target.amx import AmxTarget
 from tilefoundry.target.amx import spec as amx_spec
-from tilefoundry.target.cuda import CudaTarget
+from tilefoundry.target.cuda import B200SXM, SM100, CudaTarget
 from tilefoundry.target.cuda import spec as cuda_spec
 from tilefoundry.target.hardware import (
     HARDWARE_SPECS,
@@ -37,7 +37,9 @@ from tilefoundry.target.hardware import (
 )
 
 _SM90 = "nvidia.sm90"
+_SM100 = "nvidia.sm100"
 _H200 = "nvidia.h200_sxm"
+_B200 = "nvidia.b200_sxm"
 
 _MINIMAL_DEVICE = """
 [spec]
@@ -119,6 +121,53 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     )
 
 
+def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
+    """AC-1-1, AC-1-2 and AC-1-4. A CUDA product is a pair of documents and
+    nothing else, so naming one device is enough to compose a target for
+    hardware the compiler has never been pointed at before.
+
+    Both products go through one document format per kind: every CUDA
+    architecture document states the same fact paths and so does every device
+    document, which is what lets one schema validate them all and what makes a
+    product's capability a recorded value rather than a special case in code. The
+    value class a document builds is the identity it declares, so an identity
+    nothing models is its own diagnostic instead of a document that loads into
+    the wrong type.
+    """
+    architecture = HARDWARE_SPECS.document(_SM100)
+    device = HARDWARE_SPECS.document(_B200)
+    assert device.compatibility == (_SM100,)
+    assert architecture.schema == HARDWARE_SPECS.document(_SM90).schema
+    assert device.schema == HARDWARE_SPECS.document(_H200).schema
+
+    target = CudaTarget(_B200)
+    assert (target.architecture_id, target.device_id) == (_SM100, _B200)
+    assert target.architecture_digest == architecture.digest
+    assert target.device_digest == device.digest
+    assert isinstance(target.architecture, SM100)
+    assert isinstance(target.device, B200SXM)
+    assert target.arch == "sm_100"
+    assert target.device.sm_count == 148
+
+    unmodelled = _hardware_text("nvidia_sm100.toml").replace(
+        'value = "sm_100"', 'value = "sm_105"'
+    )
+    with pytest.raises(SchemaValidationError, match="no value class for identity"):
+        cuda_spec.build_cuda_architecture(
+            parse_document(unmodelled, origin_label="unmodelled")
+        )
+
+    # A rate a product's tensor cores can reach, and the recorded absence of one
+    # they cannot: the second is a statement about the hardware, so asking for it
+    # fails rather than reading as an unpublished number.
+    assert target.device.peak_for(DType.f4e2m1) == 9_000_000_000_000_000
+    assert HARDWARE_SPECS.document(_H200).fact("throughput.f4e2m1").status == (
+        "unavailable"
+    )
+    with pytest.raises(ValueError, match="no dense compute-throughput entry"):
+        CudaTarget(_H200).device.peak_for(DType.f4e2m1)
+
+
 def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(
     tmp_path: Path,
 ) -> None:
@@ -187,7 +236,7 @@ def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
         'source = "test"\nconditions = "test"\n'
     )
     with pytest.raises(SchemaValidationError, match="unknown facts for schema"):
-        cuda_spec.build_sm90(parse_document(stray, origin_label="stray"))
+        cuda_spec.build_cuda_architecture(parse_document(stray, origin_label="stray"))
 
 
 def test_registration_and_resolution_failures_are_each_distinguishable() -> None:
@@ -197,7 +246,7 @@ def test_registration_and_resolution_failures_are_each_distinguishable() -> None
     cuda_spec.install(registry)
 
     with pytest.raises(UnknownDocumentError, match="no installed hardware document"):
-        registry.resolve("nvidia.sm100")
+        registry.resolve("nvidia.sm70")
     with pytest.raises(DuplicateRegistrationError, match="already registered"):
         cuda_spec.install(registry)
     with pytest.raises(DuplicateRegistrationError, match="already installed"):
@@ -223,7 +272,9 @@ def test_no_installed_number_is_repeated_as_a_python_default() -> None:
     constructed without one."""
     for value_type in (
         cuda_spec.SM90_ID,
+        cuda_spec.SM100_ID,
         cuda_spec.H200_SXM_ID,
+        cuda_spec.B200_SXM_ID,
         amx_spec.APPLE_AMX_ID,
         amx_spec.APPLE_M2_PRO_ID,
     ):
@@ -248,18 +299,9 @@ def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
     assert unavailable.status == "unavailable"
     assert unavailable.conditions
 
-    for spec_id in (_SM90, _H200, "apple.amx", "apple.m2_pro"):
+    for spec_id in (_SM90, _SM100, _H200, _B200, "apple.amx", "apple.m2_pro"):
         document = HARDWARE_SPECS.document(spec_id)
         assert not any("policy" in path for path in document.facts)
         assert not any("topology" in path for path in document.facts)
         for fact in document.facts.values():
             assert (fact.value is None) == (not fact.available)
-
-    # A rate the product's tensor cores have no mode for is recorded as absent
-    # rather than left out, so asking for it fails instead of reading as a number
-    # nobody published.
-    assert HARDWARE_SPECS.document(_H200).fact("throughput.f4e2m1").status == (
-        "unavailable"
-    )
-    with pytest.raises(ValueError, match="no dense compute-throughput entry"):
-        CudaTarget(_H200).device.peak_for(DType.f4e2m1)

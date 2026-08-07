@@ -181,6 +181,12 @@ class CudaTarget(Target):
     supplied directly carries no document, so it has no ID or digest and is
     exempt from that check: it is a distinct hardware value rather than a
     revision of an installed one.
+  - `CudaTarget` MUST compose any installed architecture and device pair that
+    declares compatibility. A further CUDA product is its two documents and the
+    two value identities they build
+    ([§10.2](#102-registry-and-resolution)), never a Target subclass:
+    the services and Facts are selected by the value already, so a subclass would
+    have nothing of its own to state.
   - CUDA MUST select the pipeline Scheduler at `thread` and the partition
     Scheduler at `cta` through `get_scheduler`. A CUDA subclass MUST inherit
     those services through ordinary Python inheritance unless it overrides or
@@ -487,6 +493,11 @@ conditions = "No validated number."
     search path, no overlay, and no partial document.
   - A target package MUST register its typed schemas and installed documents as
     an import side effect, into the same shared registry.
+  - A schema MAY build more than one value class when every document it validates
+    states the same fact paths. The identity a document declares MUST select the
+    class, and an identity the schema builds no class for MUST raise naming the
+    identities it does build. That selection reads the document's own recorded
+    content, so it is not a dispatch on a Target name.
   - A typed schema MUST validate exact fact paths, value types, units, required
     fields, and cross-field invariants, and MUST reject any leaf the document
     carries that the schema does not model, so a misspelled key cannot become
@@ -636,3 +647,40 @@ class CudaDevice(Device):
     ([§10](#10-installed-hardware-resources)). Selecting a different installed
     document by ID is not an override; supplying a partial or edited number
     without a document behind it is, and is not admitted.
+
+## 14. `SM100`
+
+```python
+class SM100(CudaArchitecture):
+    """SM100 compilation identity and structural capabilities."""
+```
+
+- constraints:
+  - `name` MUST be `sm_100`, the architecture identity CUDA compilation uses.
+  - SM100 MUST carry the CUDA architecture facts and add no field of its own
+    ([§12](#12-cudaarchitecture)).
+  - SM100 MUST report `f4e2m1` as a compute DType, because its MMA takes 4-bit
+    operands directly. `f8e8m0` MUST NOT be reported as one: it scales those
+    operands rather than being multiplied.
+  - SM100 MUST state a tensor-memory capacity, and its instruction capabilities
+    MUST name the MMA family that accumulates there rather than the SM90 family,
+    which this architecture does not run.
+  - Device-frequency-dependent FLOP/s values MUST NOT be stored on SM100.
+
+## 15. `B200SXM`
+
+```python
+class B200SXM(CudaDevice):
+    """One B200 SXM device."""
+```
+
+- constraints:
+  - B200SXM MUST carry the CUDA device facts and add no field of its own
+    ([§13](#13-cudadevice)).
+  - `peak_for` MUST expose a dense integer FLOP/s entry for each of `f32`,
+    `f16`, `bf16`, `fp8e4m3`, and `f4e2m1`, each value taken from the installed
+    document.
+  - Resource facts the vendor does not publish for this product, its SM count
+    and its L2 capacity among them, MUST be recorded as measured on the
+    described host rather than estimated or borrowed from a related part
+    ([§10.1](#101-document-envelope)).

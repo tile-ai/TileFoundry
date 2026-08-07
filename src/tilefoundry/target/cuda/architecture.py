@@ -65,4 +65,13 @@ class SM90(CudaArchitecture):
     """SM90 compilation identity and structural capabilities."""
 
 
-__all__ = ["SM90", "CudaArchitecture"]
+@dataclass(frozen=True)
+class SM100(CudaArchitecture):
+    """SM100 compilation identity and structural capabilities.
+
+    Its MMA accumulates in a tensor-memory store of its own, so an SM100 value
+    states a tensor-memory capacity where SM90 states none.
+    """
+
+
+__all__ = ["SM90", "SM100", "CudaArchitecture"]

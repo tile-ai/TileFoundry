@@ -36,7 +36,7 @@ from tilefoundry.target import (
     registered_targets,
     validate_cuda_topology_levels,
 )
-from tilefoundry.target.cuda.spec import installed_architecture as _installed_sm90
+from tilefoundry.target.cuda.spec import installed_sm90 as _installed_sm90
 from tilefoundry.target.services import CodeGenerator, Scheduler
 
 
