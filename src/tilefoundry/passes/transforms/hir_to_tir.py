@@ -90,6 +90,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.passes.pass_base import ModulePass
+from tilefoundry.target import Target
 from tilefoundry.visitor_registry.registries import (
     hir_lowering_registry,
     register_hir_lowering,
@@ -1400,6 +1401,18 @@ def _lower_single_output(
         lo._items.append(_eval_call(Copy(), (src, out_var)))
 
 
+def _target_kwarg(target: Target | None) -> dict[str, Target]:
+    """``{"target": target}``, or empty when the Module declared none.
+
+    The target picks the backend and, for cuda, the SM arch codegen builds for,
+    so dropping it silently compiles for the fallback arch. Omitting the kwarg
+    leaves ``PrimFunction``'s own default in place; passing ``None`` would store
+    ``None`` and trip ``group_functions_by_target``. The rule:
+    tilefoundry spec core-ir target-inheritance.
+    """
+    return {} if target is None else {"target": target}
+
+
 def _lower_function(
     fn: HirFunction,
     *,
@@ -1411,6 +1424,7 @@ def _lower_function(
     override_name: str | None = None,
     dispatch_groups: "dict[str, tuple[HirFunction, ...]] | None" = None,
     mangled_registry: "dict[str, PrimFunction] | None" = None,
+    target: Target | None = None,
 ) -> PrimFunction:
     """Materialise the HIR `Function(params) -> tensor` as an
     explicit-output-param ``PrimFunction``. The function-end
@@ -1535,12 +1549,15 @@ def _lower_function(
         params=final_params,
         body=body,
         output_count=len(out_vars),
+        **_target_kwarg(target),
     )
 
 
 def _build_dispatch_entry(
     group: tuple[HirFunction, ...],
     mangled_pfs: list[PrimFunction],
+    *,
+    target: Target | None = None,
 ) -> PrimFunction:
     """Build the unmangled entry PrimFunction holding the DispatchCall.
 
@@ -1633,6 +1650,9 @@ def _build_dispatch_entry(
         params=(*entry_params, *out_vars, shape_param),
         body=body,
         output_count=len(out_vars),
+        # Same target as the variants this entry dispatches to, so the entry and
+        # its callees stay on one backend / arch.
+        **_target_kwarg(target),
     )
 
 
@@ -1778,6 +1798,15 @@ class HirToTirPass(ModulePass):
             if isinstance(fn, HirFunction) and fn.variants:
                 dispatch_view[fn.name] = fn.variants
 
+        # The Module — not the Function — owns the execution context, so the
+        # target is resolved once here through the owner chain and handed to
+        # every PrimFunction built below. A Module that declares no target
+        # anywhere leaves it unset, which keeps PrimFunction's own default.
+        try:
+            module_target = module.resolve_target()
+        except ValueError:
+            module_target = None
+
         mangled_registry: dict[str, PrimFunction] = {}
         mangled_by_group: dict[str, list[PrimFunction]] = {}
 
@@ -1811,6 +1840,7 @@ class HirToTirPass(ModulePass):
                     override_name=mangled_name,
                     dispatch_groups=dispatch_view,
                     mangled_registry=mangled_registry,
+                    target=module_target,
                 )
                 mangled_registry[mangled_name] = pf
                 lowered.append(pf)
@@ -1841,7 +1871,9 @@ class HirToTirPass(ModulePass):
                 new_fns.extend(mangled_for_group)
                 new_fns.append(
                     _build_dispatch_entry(
-                        dispatch_view[group_name], mangled_for_group
+                        dispatch_view[group_name],
+                        mangled_for_group,
+                        target=module_target,
                     )
                 )
                 continue
@@ -1860,6 +1892,7 @@ class HirToTirPass(ModulePass):
                     thread_var_name=self.thread_var_name,
                     dispatch_groups=dispatch_view,
                     mangled_registry=mangled_registry,
+                    target=module_target,
                 )
             )
 
