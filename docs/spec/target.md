@@ -272,6 +272,11 @@ class CudaArchitecture(Architecture):
   - A provider MAY subclass it to carry a fact of its own hardware that this
     shape does not model. The added fields are subject to the same rule: they
     state what a document records, not a number written in Python.
+  - Any value a CUDA Target projects Facts from MUST answer for every field
+    declared here, whether it subclasses this type or `Architecture` directly
+    ([§1.1](#11-architecture)). The projection reads them by name, so a value
+    missing one is a Facts request that fails rather than a level reported
+    without a capacity.
 
 #### 4.1.1 SM90
 
