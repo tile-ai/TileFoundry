@@ -348,6 +348,27 @@ def _parse_topology_item(node: ast.AST) -> "Topology | None":
                         return Topology(name=name.value, size=size_val)
     return None
 
+
+def _parse_topology_declaration(
+    value: ast.AST, *, subject: str
+) -> tuple["Topology", ...]:
+    if not isinstance(value, ast.Tuple):
+        raise VerifyError(
+            f"{subject}: topologies must be a tuple of Topology(...) declarations, "
+            f"got {ast.unparse(value)}"
+        )
+    items = []
+    for element in value.elts:
+        topology = _parse_topology_item(element)
+        if topology is None:
+            raise VerifyError(
+                f"{subject}: topologies entry {ast.unparse(element)} is not a "
+                "Topology(name, size) declaration the parser can resolve statically"
+            )
+        items.append(topology)
+    return tuple(items)
+
+
 _TOPOLOGY_STATIC_NODES = (ast.Constant, ast.BinOp, ast.UnaryOp)
 
 
@@ -1276,22 +1297,9 @@ def _module_declared_context(cls_node: ast.ClassDef, closure: dict[str, Any]):
             except TypeError as error:
                 raise VerifyError(str(error)) from None
         elif kw.arg == "topologies":
-            if not isinstance(kw.value, ast.Tuple):
-                raise VerifyError(
-                    f"@module class {cls_node.name!r}: topologies must be a tuple "
-                    f"of Topology(...) declarations, got {ast.unparse(kw.value)}"
-                )
-            items = []
-            for elt in kw.value.elts:
-                topo = _parse_topology_item(elt)
-                if topo is None:
-                    raise VerifyError(
-                        f"@module class {cls_node.name!r}: topologies entry "
-                        f"{ast.unparse(elt)} is not a Topology(name, size) "
-                        "declaration the parser can resolve statically"
-                    )
-                items.append(topo)
-            topologies = tuple(items)
+            topologies = _parse_topology_declaration(
+                kw.value, subject=f"@module class {cls_node.name!r}"
+            )
     return target, topologies
 
 
@@ -1340,24 +1348,10 @@ def _parse_module_class(
                 for kw in dec.keywords
                 if kw.arg == "topologies"
             )
-            if not isinstance(topology_value, ast.Tuple):
-                raise VerifyError(
-                    f"@module class {cls_node.name!r}: member {stmt.name!r} "
-                    "topologies must be a tuple of Topology(...) declarations, "
-                    f"got {ast.unparse(topology_value)}"
-                )
-            items = []
-            for elt in topology_value.elts:
-                topology = _parse_topology_item(elt)
-                if topology is None:
-                    raise VerifyError(
-                        f"@module class {cls_node.name!r}: member {stmt.name!r} "
-                        f"topologies entry {ast.unparse(elt)} is not a "
-                        "Topology(name, size) declaration the parser can "
-                        "resolve statically"
-                    )
-                items.append(topology)
-            member_topologies = tuple(items)
+            member_topologies = _parse_topology_declaration(
+                topology_value,
+                subject=f"@module class {cls_node.name!r}: member {stmt.name!r}",
+            )
         declares_target = _declares_decorator_kwarg(stmt, "target")
         member_target = (
             _extract_target_from_decorator(stmt, closure) if declares_target else None
