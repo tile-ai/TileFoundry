@@ -136,9 +136,9 @@ def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
         (topology.name, topology.size) for topology in static_online_attend.effective_topologies()
     ) == (("cta", 132),)
 
-    reparsed = import_dsl(as_script(static_online_attend))
+    imported = import_dsl(as_script(static_online_attend))
     reparsed_regions = tuple(
-        expr for expr in _walk_ir(reparsed.entry_function().body) if isinstance(expr, GridRegionExpr)
+        expr for expr in _walk_ir(imported.entry_function().body) if isinstance(expr, GridRegionExpr)
     )
     assert len(reparsed_regions) == 1
     assert reparsed_regions[0].extent == 4096

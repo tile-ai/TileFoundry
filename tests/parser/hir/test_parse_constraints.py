@@ -74,9 +74,9 @@ def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
     printed = as_script(fn)
     assert 'where(layout=(_, 16 @ cta), mesh=Mesh(' in printed
     assert 'storage="gmem"' in printed
-    reparsed = import_dsl(printed)
-    verify_function(reparsed)
-    again = constraint_metadata(reparsed.body).constraints
+    imported = import_dsl(printed)
+    verify_function(imported)
+    again = constraint_metadata(imported.body).constraints
     assert [type(c) for c in again] == [LayoutConstraint, MeshConstraint, StorageConstraint]
     assert again[0].bindings == layout.bindings
     assert again[0].layout.shape[1] == layout.layout.shape[1]

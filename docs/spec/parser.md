@@ -710,12 +710,8 @@ is.
 - The `topologies=(Topology(...), ...)` decorator argument declares the
   domain's complete ordered hierarchy. Omitting it inherits the owning class's
   hierarchy; `()` declares an explicitly topology-free domain. The value MUST
-  be a tuple of `Topology`;
-  a value that is not, or an entry the parser cannot resolve statically, MUST be
-  rejected rather than read as an empty hierarchy. A deferred extent
-  (`Topology("cta", None)`, [target §4](./target.md#4-cudatarget)) is a
-  declaration in its own right and MUST survive parsing, not be dropped as
-  unresolvable.
+  be a tuple of `Topology`; a value that is not MUST be rejected rather than
+  read as an empty hierarchy.
 - The printer emits this surface: shared meshes at module level (before the
   class) so the class body stays function-and-nested-Module-only, then
   `@module(entry="<entry>", topologies=(...))` — or a bare `@module` for a

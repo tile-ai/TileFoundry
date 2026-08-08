@@ -62,41 +62,41 @@ def _child(mod: Module, name: str) -> Module:
 
 
 def test_the_root_declaration_and_its_functions_survive_the_round_trip() -> None:
-    reparsed = import_dsl(as_script(_Tree))
+    imported = import_dsl(as_script(_Tree))
 
-    assert isinstance(reparsed, Module)
-    assert reparsed.name == "_Tree"
-    assert reparsed.entry == "forward"
-    assert reparsed.target == CudaTarget("nvidia.h200_sxm")
-    assert reparsed.topologies == (_CTA,)
+    assert isinstance(imported, Module)
+    assert imported.name == "_Tree"
+    assert imported.entry == "forward"
+    assert imported.target == CudaTarget("nvidia.h200_sxm")
+    assert imported.topologies == (_CTA,)
     # Every owned function, in the order the printer emits (callees first).
-    assert [fn.name for fn in reparsed.functions] == ["spare", "forward"]
-    assert reparsed.entry_function().name == "forward"
+    assert [fn.name for fn in imported.functions] == ["spare", "forward"]
+    assert imported.entry_function().name == "forward"
 
 
 def test_each_nested_module_survives_with_its_own_context() -> None:
     """A child's context is either declared or inherited, and the round trip must
     not turn the second into the first: a copied-down target would freeze a child
     that should follow whatever parent it is attached to."""
-    reparsed = import_dsl(as_script(_Tree))
+    imported = import_dsl(as_script(_Tree))
 
-    assert sorted(child.name for child in reparsed.modules) == [
+    assert sorted(child.name for child in imported.modules) == [
         "inherits", "nominates_nothing", "replaces", "topology_free",
     ]
-    assert _child(reparsed, "inherits").entry == "step"
-    assert _child(reparsed, "replaces").entry_function().name == "step"
+    assert _child(imported, "inherits").entry == "step"
+    assert _child(imported, "replaces").entry_function().name == "step"
 
-    inherits = _child(reparsed, "inherits")
+    inherits = _child(imported, "inherits")
     assert inherits.target is None
     assert inherits.topologies is None
     assert inherits.resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert inherits.effective_topologies() == (_CTA,)
 
-    replaces = _child(reparsed, "replaces")
+    replaces = _child(imported, "replaces")
     assert replaces.topologies == (_THREAD,)
     assert replaces.effective_topologies() == (_THREAD,)
 
-    topology_free = _child(reparsed, "topology_free")
+    topology_free = _child(imported, "topology_free")
     assert topology_free.topologies == ()
     assert topology_free.effective_topologies() == ()
 
@@ -139,11 +139,11 @@ class _Siblings:
 def test_a_sibling_call_survives_the_round_trip() -> None:
     """A body calling an earlier sibling is canonical output, so importing it
     must resolve the callee to that sibling rather than read it as an op name."""
-    reparsed = import_dsl(as_script(_Siblings))
+    imported = import_dsl(as_script(_Siblings))
 
-    assert [fn.name for fn in reparsed.functions] == ["callee", "caller"]
-    callee, caller = reparsed.functions
+    assert [fn.name for fn in imported.functions] == ["callee", "caller"]
+    callee, caller = imported.functions
     assert caller.body.target is callee
 
-    once = as_script(reparsed)
+    once = as_script(imported)
     assert as_script(import_dsl(once)) == once

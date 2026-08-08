@@ -103,9 +103,9 @@ def test_low_precision_dtype_names_roundtrip() -> None:
     printed = as_script(fn)
     for name in ("fp8e4m3", "f8e8m0", "f4e2m1"):
         assert name in printed, printed
-    reparsed = import_dsl(printed)
-    assert [p.type.dtype for p in reparsed.params] == expected
-    assert as_script(reparsed) == printed
+    imported = import_dsl(printed)
+    assert [p.type.dtype for p in imported.params] == expected
+    assert as_script(imported) == printed
 
 
 def test_tuple_return_with_mesh_element_roundtrips() -> None:
