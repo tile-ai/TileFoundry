@@ -1,8 +1,9 @@
 """CUDA compilation capabilities.
 
-Every value is built from an installed architecture document; this module holds
-the shape of a CUDA architecture value and the identities this package ships,
-never a copy of their numbers.
+One value type answers for every CUDA architecture. What separates sm_90 from
+sm_100 is what their installed documents record, not a class per architecture:
+the numbers live in the documents, so a type carrying none of them would only
+restate an identity the value already holds.
 """
 
 from __future__ import annotations
@@ -35,15 +36,15 @@ class CudaArchitecture(Architecture):
     # this figure rather than a constant of its own.
     unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
-    # None where the tensor cores accumulate in registers, so there is no
-    # separate store to state a capacity for.
+    # None where the MMA accumulates in registers, so there is no separate store
+    # to state a capacity for.
     tensor_memory_per_cta_bytes: int | None
 
     def _python_import_module(self) -> str:
-        # Every architecture this module defines is re-exported by the package, so
-        # a rendered constructor imports it from there. A provider's own subclass
-        # lives elsewhere and keeps its own module.
-        if type(self).__module__ == __name__:
+        # The package re-exports this type, so a rendered constructor imports it
+        # from there. A provider's own subclass lives elsewhere and keeps its own
+        # module.
+        if type(self) is CudaArchitecture:
             return "tilefoundry.target.cuda"
         return super()._python_import_module()
 
@@ -60,18 +61,4 @@ class CudaArchitecture(Architecture):
         )
 
 
-@dataclass(frozen=True)
-class SM90(CudaArchitecture):
-    """SM90 compilation identity and structural capabilities."""
-
-
-@dataclass(frozen=True)
-class SM100(CudaArchitecture):
-    """SM100 compilation identity and structural capabilities.
-
-    Its MMA accumulates in a tensor-memory store of its own, so an SM100 value
-    states a tensor-memory capacity where SM90 states none.
-    """
-
-
-__all__ = ["SM90", "SM100", "CudaArchitecture"]
+__all__ = ["CudaArchitecture"]

@@ -21,7 +21,7 @@ import pytest
 from tilefoundry.ir.types import DType
 from tilefoundry.target.amx import AmxTarget
 from tilefoundry.target.amx import spec as amx_spec
-from tilefoundry.target.cuda import B200SXM, SM100, CudaTarget
+from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.cuda import spec as cuda_spec
 from tilefoundry.target.hardware import (
     HARDWARE_SPECS,
@@ -126,13 +126,11 @@ def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
     nothing else, so naming one device is enough to compose a target for
     hardware the compiler has never been pointed at before.
 
-    Both products go through one document format per kind: every CUDA
-    architecture document states the same fact paths and so does every device
-    document, which is what lets one schema validate them all and what makes a
-    product's capability a recorded value rather than a special case in code. The
-    value class a document builds is the identity it declares, so an identity
-    nothing models is its own diagnostic instead of a document that loads into
-    the wrong type.
+    Both products go through one document format per kind and build one value
+    type per kind: every CUDA architecture document states the same fact paths
+    and so does every device document, which is what lets one schema validate
+    them all. What separates the two products is what their documents record, so
+    a Blackwell target needs no type of its own to be a distinct value.
     """
     architecture = HARDWARE_SPECS.document(_SM100)
     device = HARDWARE_SPECS.document(_B200)
@@ -141,21 +139,15 @@ def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
     assert device.schema == HARDWARE_SPECS.document(_H200).schema
 
     target = CudaTarget(_B200)
+    hopper = CudaTarget(_H200)
     assert (target.architecture_id, target.device_id) == (_SM100, _B200)
     assert target.architecture_digest == architecture.digest
     assert target.device_digest == device.digest
-    assert isinstance(target.architecture, SM100)
-    assert isinstance(target.device, B200SXM)
-    assert target.arch == "sm_100"
+    assert (target.arch, target.device.name) == ("sm_100", "b200_sxm")
     assert target.device.sm_count == 148
-
-    unmodelled = _hardware_text("nvidia_sm100.toml").replace(
-        'value = "sm_100"', 'value = "sm_105"'
-    )
-    with pytest.raises(SchemaValidationError, match="no value class for identity"):
-        cuda_spec.build_cuda_architecture(
-            parse_document(unmodelled, origin_label="unmodelled")
-        )
+    assert type(target.architecture) is type(hopper.architecture) is CudaArchitecture
+    assert type(target.device) is type(hopper.device) is CudaDevice
+    assert target != hopper
 
     # A rate a product's tensor cores can reach, and the recorded absence of one
     # they cannot: the second is a statement about the hardware, so asking for it
@@ -165,7 +157,7 @@ def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
         "unavailable"
     )
     with pytest.raises(ValueError, match="no dense compute-throughput entry"):
-        CudaTarget(_H200).device.peak_for(DType.f4e2m1)
+        hopper.device.peak_for(DType.f4e2m1)
 
 
 def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(

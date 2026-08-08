@@ -18,7 +18,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import Target, register_target
-from tilefoundry.target.cuda import SM90
+from tilefoundry.target.cuda import CudaArchitecture
 from tilefoundry.target.cuda import CudaTarget as BuiltinCudaTarget
 from tilefoundry.utils.python_source import PythonExpr
 
@@ -28,8 +28,8 @@ class CudaTarget(BuiltinCudaTarget):
 
 
 @dataclass(frozen=True)
-class ExtendedSM90(SM90):
-    twelfth_field: int
+class ExtendedCudaArchitecture(CudaArchitecture):
+    thirteenth_field: int
 
 
 def test_inspection_types_are_opt_in_same_line_comments():
@@ -105,12 +105,12 @@ def test_an_installed_target_reports_its_public_constructor():
 
 def test_direct_hardware_values_keep_added_fields_in_canonical_source():
     installed = BuiltinCudaTarget("nvidia.h200_sxm")
-    architecture = ExtendedSM90(
+    architecture = ExtendedCudaArchitecture(
         **{
             field.name: getattr(installed.architecture, field.name)
             for field in fields(installed.architecture)
         },
-        twelfth_field=12,
+        thirteenth_field=13,
     )
     target = BuiltinCudaTarget(
         architecture=architecture,
@@ -118,15 +118,15 @@ def test_direct_hardware_values_keep_added_fields_in_canonical_source():
     )
     rendered = target.to_python()
 
-    assert "twelfth_field=12" in rendered.text
+    assert "thirteenth_field=13" in rendered.text
     assert rendered.imports == (
-        "from tests.inspection.test_python_printer import ExtendedSM90",
+        "from tests.inspection.test_python_printer import ExtendedCudaArchitecture",
         "from tilefoundry.ir.types import DType",
-        "from tilefoundry.target.cuda import CudaTarget, H200SXM",
+        "from tilefoundry.target.cuda import CudaDevice, CudaTarget",
     )
     rebuilt = _rebuild(rendered)
     assert rebuilt == target
-    assert rebuilt.architecture.twelfth_field == 12
+    assert rebuilt.architecture.thirteenth_field == 13
 
 
 def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():

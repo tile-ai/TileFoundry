@@ -1,8 +1,8 @@
 """CUDA device resources.
 
-Every value is built from an installed device document; this module holds the
-shape of a CUDA device value and the products this package ships, never a copy
-of their numbers. The per-SM structural limits belong to the architecture, not
+One value type answers for every CUDA device. What separates an H200 SXM from a
+B200 SXM is what their installed documents record, so there is no class per
+product; the per-SM structural limits belong to the architecture rather than
 here.
 """
 
@@ -28,10 +28,10 @@ class CudaDevice(Device):
     _dense_flops: tuple[tuple[DType, int], ...]
 
     def _python_import_module(self) -> str:
-        # Every device this module defines is re-exported by the package, so a
-        # rendered constructor imports it from there. A provider's own subclass
-        # lives elsewhere and keeps its own module.
-        if type(self).__module__ == __name__:
+        # The package re-exports this type, so a rendered constructor imports it
+        # from there. A provider's own subclass lives elsewhere and keeps its own
+        # module.
+        if type(self) is CudaDevice:
             return "tilefoundry.target.cuda"
         return super()._python_import_module()
 
@@ -51,14 +51,4 @@ class CudaDevice(Device):
             ) from None
 
 
-@dataclass(frozen=True)
-class H200SXM(CudaDevice):
-    """One H200 SXM device."""
-
-
-@dataclass(frozen=True)
-class B200SXM(CudaDevice):
-    """One B200 SXM device."""
-
-
-__all__ = ["B200SXM", "CudaDevice", "H200SXM"]
+__all__ = ["CudaDevice"]

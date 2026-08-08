@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from tilefoundry.ir.types import DType
-from tilefoundry.target.cuda.architecture import SM90, SM100, CudaArchitecture
-from tilefoundry.target.cuda.device import B200SXM, H200SXM, CudaDevice
+from tilefoundry.target.cuda.architecture import CudaArchitecture
+from tilefoundry.target.cuda.device import CudaDevice
 from tilefoundry.target.hardware.envelope import (
     HardwareDocument,
     SchemaValidationError,
@@ -12,6 +12,10 @@ from tilefoundry.target.hardware.envelope import (
 from tilefoundry.target.hardware.registry import HARDWARE_SPECS, HardwareSpecRegistry
 from tilefoundry.target.hardware.schema import SchemaReader
 
+# One document format per kind: every CUDA architecture document states the same
+# fact paths and so does every device document, which is what lets one schema
+# validate them all, and what makes a product's capability a recorded value
+# rather than a case in code.
 ARCHITECTURE_SCHEMA = "tilefoundry.cuda.architecture/v1"
 DEVICE_SCHEMA = "tilefoundry.cuda.device/v1"
 
@@ -21,20 +25,6 @@ H200_SXM_ID = "nvidia.h200_sxm"
 B200_SXM_ID = "nvidia.b200_sxm"
 
 _PACKAGE = "tilefoundry.target.hardware"
-
-# One document format per kind: every CUDA architecture document states the same
-# fact paths and so does every device document, which is what lets one schema
-# validate them all. Which value class a document builds is the identity it
-# declares, because that identity is the document's own content rather than a
-# dispatch on a target name.
-_ARCHITECTURE_IDENTITIES: dict[str, type[CudaArchitecture]] = {
-    "sm_90": SM90,
-    "sm_100": SM100,
-}
-_DEVICE_IDENTITIES: dict[str, type[CudaDevice]] = {
-    "h200_sxm": H200SXM,
-    "b200_sxm": B200SXM,
-}
 
 # The compute DTypes a CUDA device document states a dense peak rate for. A
 # product whose tensor cores have no mode for one of them records it
@@ -55,24 +45,9 @@ def _dtypes(names: tuple[str, ...], document: HardwareDocument) -> tuple[DType, 
     return tuple(resolved)
 
 
-def _identity(
-    identities: dict[str, type], name: str, document: HardwareDocument
-) -> type:
-    """The value class the identity a document declares selects."""
-    try:
-        return identities[name]
-    except KeyError:
-        raise SchemaValidationError(
-            f"{document.id}: no value class for identity {name!r}; "
-            f"this schema builds {sorted(identities)}"
-        ) from None
-
-
 def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
     """Build the immutable CUDA architecture value from its installed document."""
     reader = SchemaReader(document)
-    name = reader.text("identity.name")
-    architecture_type = _identity(_ARCHITECTURE_IDENTITIES, name, document)
     max_threads_per_cta = reader.integer(
         "compute.max_threads_per_cta", unit="thread"
     )
@@ -80,8 +55,8 @@ def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
         "compute.max_threads_per_warp", unit="thread"
     )
     max_warps_per_cta = reader.integer("compute.max_warps_per_cta", unit="count")
-    architecture = architecture_type(
-        name=name,
+    architecture = CudaArchitecture(
+        name=reader.text("identity.name"),
         supported_compute_dtypes=_dtypes(
             reader.names("instruction.compute_dtypes"), document
         ),
@@ -138,15 +113,13 @@ def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
 def build_cuda_device(document: HardwareDocument) -> CudaDevice:
     """Build the immutable CUDA device value from its installed document."""
     reader = SchemaReader(document)
-    name = reader.text("identity.name")
-    device_type = _identity(_DEVICE_IDENTITIES, name, document)
     dense_flops: list[tuple[DType, int]] = []
     for dtype_name in _THROUGHPUT_DTYPE_NAMES:
         peak = reader.optional_integer(f"throughput.{dtype_name}", unit="flop/s")
         if peak is not None:
             dense_flops.append((getattr(DType, dtype_name), peak))
-    device = device_type(
-        name=name,
+    device = CudaDevice(
+        name=reader.text("identity.name"),
         sm_count=reader.integer("compute.sm_count", unit="count"),
         hbm_capacity_bytes=reader.integer("memory.hbm.capacity", unit="byte"),
         hbm_bandwidth_bytes_per_second=reader.integer(
@@ -171,12 +144,12 @@ def install(registry: HardwareSpecRegistry | None = None) -> None:
     into.install(B200_SXM_ID, _PACKAGE, "nvidia_b200_sxm.toml")
 
 
-def installed_sm90() -> SM90:
+def installed_sm90() -> CudaArchitecture:
     """The installed SM90 architecture value."""
     return HARDWARE_SPECS.resolve(SM90_ID).value
 
 
-def installed_h200_sxm() -> H200SXM:
+def installed_h200_sxm() -> CudaDevice:
     """The installed H200 SXM device value."""
     return HARDWARE_SPECS.resolve(H200_SXM_ID).value
 
