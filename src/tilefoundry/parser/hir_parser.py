@@ -1331,14 +1331,45 @@ def _parse_module_class(
         if not any(_is_func_decorator(d) for d in stmt.decorator_list):
             continue
         declares_topologies = _declares_decorator_kwarg(stmt, "topologies")
-        member_topologies = tuple(_extract_topologies_from_decorator(stmt))
+        member_topologies = None
+        if declares_topologies:
+            topology_value = next(
+                kw.value
+                for dec in stmt.decorator_list
+                if isinstance(dec, ast.Call) and _is_func_decorator(dec)
+                for kw in dec.keywords
+                if kw.arg == "topologies"
+            )
+            if not isinstance(topology_value, ast.Tuple):
+                raise VerifyError(
+                    f"@module class {cls_node.name!r}: member {stmt.name!r} "
+                    "topologies must be a tuple of Topology(...) declarations, "
+                    f"got {ast.unparse(topology_value)}"
+                )
+            items = []
+            for elt in topology_value.elts:
+                topology = _parse_topology_item(elt)
+                if topology is None:
+                    raise VerifyError(
+                        f"@module class {cls_node.name!r}: member {stmt.name!r} "
+                        f"topologies entry {ast.unparse(elt)} is not a "
+                        "Topology(name, size) declaration the parser can "
+                        "resolve statically"
+                    )
+                items.append(topology)
+            member_topologies = tuple(items)
+        declares_target = _declares_decorator_kwarg(stmt, "target")
+        member_target = (
+            _extract_target_from_decorator(stmt, closure) if declares_target else None
+        )
         parse_topologies = member_topologies if declares_topologies else effective
         parsed = _parse_func_node(stmt, closure, topologies=parse_topologies)
-        if declares_topologies:
+        if declares_topologies or declares_target:
             child = Module(
                 name=parsed.name,
                 functions=(parsed,),
                 entry=parsed.name,
+                target=member_target,
                 topologies=member_topologies,
             )
             children.append(child)

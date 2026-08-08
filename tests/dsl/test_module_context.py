@@ -222,14 +222,16 @@ class Layer:
 
 
 def test_member_context_builds_the_same_tree_at_runtime_and_from_source(tmp_path) -> None:
-    source_path = tmp_path / "member_context.py"
-    source_path.write_text(_MEMBER_CONTEXT_SOURCE)
-    spec = importlib.util.spec_from_file_location("member_context", source_path)
-    assert spec is not None and spec.loader is not None
-    loaded = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(loaded)
+    def import_source(source: str, name: str):
+        source_path = tmp_path / f"{name}.py"
+        source_path.write_text(source)
+        spec = importlib.util.spec_from_file_location(name, source_path)
+        assert spec is not None and spec.loader is not None
+        loaded = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loaded)
+        return loaded.Layer
 
-    imported = loaded.Layer
+    imported = import_source(_MEMBER_CONTEXT_SOURCE, "member_context")
     parsed = parse_script(_MEMBER_CONTEXT_SOURCE)
 
     assert as_script(parsed) == as_script(imported)
@@ -237,6 +239,46 @@ def test_member_context_builds_the_same_tree_at_runtime_and_from_source(tmp_path
     assert [child.name for child in parsed.modules] == ["softmax"]
     assert parsed.modules[0].topologies == (Topology("thread", 4),)
     assert parsed.modules[0].resolve_target() == CudaTarget("nvidia.h200_sxm")
+
+    with_constant = _MEMBER_CONTEXT_SOURCE.replace(
+        "from tilefoundry.target import CudaTarget\n",
+        "from tilefoundry.target import CudaTarget\n\n"
+        '_MEMBER_TOPOLOGIES = (Topology("thread", 4),)\n',
+    )
+    for name, declaration, expected in (
+        ("named_member_context", "_MEMBER_TOPOLOGIES", (Topology("thread", 4),)),
+        (
+            "mixed_member_context",
+            '(Topology("warp", 8), _MEMBER_TOPOLOGIES[0])',
+            (Topology("warp", 8), Topology("thread", 4)),
+        ),
+    ):
+        source = with_constant.replace(
+            '(Topology("thread", 4),))\n    def softmax',
+            f"{declaration})\n    def softmax",
+        )
+        assert import_source(source, name).modules[0].topologies == expected
+        with pytest.raises(VerifyError, match="resolve statically|must be a tuple"):
+            parse_script(source)
+
+    target_source = _MEMBER_CONTEXT_SOURCE.replace(
+        'topologies=(Topology("thread", 4),)',
+        'target=CudaTarget("nvidia.h200_sxm")',
+    ).replace(
+        'Mesh(("thread",), (4,), ("lane",))',
+        'Mesh(("cta",), (2,), ("block",))',
+    )
+    target_errors = []
+    for build in (
+        lambda: import_source(target_source, "target_member_context"),
+        lambda: parse_script(target_source),
+    ):
+        with pytest.raises(
+            ValueError, match="child module 'softmax' declares its own target"
+        ) as error:
+            build()
+        target_errors.append(str(error.value))
+    assert target_errors[0] == target_errors[1]
 
 
 _SOURCE_PRELUDE = """
