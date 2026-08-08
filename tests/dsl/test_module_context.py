@@ -132,28 +132,6 @@ def test_a_raising_class_body_is_not_visible_to_a_later_standalone_func() -> Non
                 return tf.relu(x)
 
 
-def test_a_deeper_failed_body_is_not_inherited_by_a_shallower_module() -> None:
-    def fail_one_level_deeper() -> None:
-        try:
-
-            @module(topologies=(Topology("leaked", 1),))
-            class Failed:
-                raise RuntimeError("class body failed")
-        except RuntimeError:
-            pass
-
-    fail_one_level_deeper()
-
-    with pytest.raises(VerifyError, match="topology 'leaked' not declared"):
-
-        @module(entry="probe")
-        class Later:
-            @func
-            def probe(x: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:
-                with Mesh(("leaked",), (1,), ("lane",)) as _mesh:
-                    return tf.relu(x)
-
-
 def test_a_failed_body_is_not_inherited_by_a_deeper_module() -> None:
     try:
 

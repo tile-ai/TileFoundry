@@ -713,7 +713,7 @@ is.
   declaration in its own right and MUST survive parsing, not be dropped as
   unresolvable.
 - The printer emits this surface: shared meshes at module level (before the
-  class) so the class body stays declaration-and-function-only, then
+  class) so the class body stays function-and-nested-Module-only, then
   `@module(entry="<entry>", topologies=(...))` — or a bare `@module` for a
   Module that declares no entry, target, or topology hierarchy — then the
   functions and nested Modules.

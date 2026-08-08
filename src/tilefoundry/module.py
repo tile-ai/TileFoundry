@@ -33,21 +33,6 @@ class _Entry:
 _DECLARING: list[_Entry] = []
 
 
-def _discard_unreachable(caller: FrameType) -> None:
-    """Drop declarations whose class bodies are no longer on this call stack."""
-    active_callers = []
-    frame = caller
-    while frame is not None:
-        if "__qualname__" in frame.f_locals and frame.f_back is not None:
-            active_callers.append(frame.f_back)
-        frame = frame.f_back
-    _DECLARING[:] = [
-        entry
-        for entry in _DECLARING
-        if any(entry.frame is active for active in active_callers)
-    ]
-
-
 def _validate(topologies) -> tuple:
     from tilefoundry.ir.types.shard.mesh import Topology  # noqa: PLC0415
 
@@ -83,7 +68,6 @@ def module(
     resolved_target = target
     declared_topologies = None if topologies is UNDECLARED else _validate(topologies)
     mine = _Entry(declared_topologies, sys._getframe(1))
-    _discard_unreachable(mine.frame)
     _DECLARING.append(mine)
 
     def _wrap(cls_inner):

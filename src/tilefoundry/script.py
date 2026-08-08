@@ -90,7 +90,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     """Decorator: parse an ``@func``-decorated function into HIR.
 
     Plain ``@func`` binds the decorated name to a ``hir.Function``, parsed
-    against whatever topology hierarchy its owning ``@module`` class body
+    against whatever topology hierarchy its owning ``@module`` decorator
     declares. Declaring execution context here instead — ``topologies`` (the
     topology namespace enabling ``with Mesh(("cta",), ...)``) or
     ``target`` (a Target object) — makes that function its own

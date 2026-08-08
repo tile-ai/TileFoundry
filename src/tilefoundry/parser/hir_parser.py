@@ -1213,10 +1213,10 @@ def parse_script(src: str):
 
     Auto-detects the source format:
 
-    - ``@module(entry=..., target=...) class M: ...`` → the ``Module``,
+    - ``@module(entry=..., target=..., topologies=...) class M: ...`` → the ``Module``,
       including every ``@func`` it owns and its nested ``@module`` classes,
       parsed with the mesh symbol table (sugar axis resolution). Its topology
-      hierarchy comes from the class body's ``topologies`` assignment.
+      hierarchy comes from the decorator's ``topologies`` argument.
     - ``@func def fn(...): ...`` → a standalone ``Function``, or the implicit
       single-function ``Module`` when the decorator declares execution context.
 
