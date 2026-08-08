@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.cuda.architecture/v1"
+schema = "tilefoundry.cuda.architecture/v2"
 kind = "architecture"
 id = "nvidia.sm90"
 

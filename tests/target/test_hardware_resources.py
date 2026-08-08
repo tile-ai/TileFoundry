@@ -122,9 +122,9 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
 
 
 def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
-    """AC-1-1, AC-1-2 and AC-1-4. A CUDA product is a pair of documents and
-    nothing else, so naming one device is enough to compose a target for
-    hardware the compiler has never been pointed at before.
+    """A CUDA product is a pair of documents and nothing else, so naming one
+    device is enough to compose a target for hardware the compiler has never been
+    pointed at before.
 
     Both products go through one document format per kind and build one value
     type per kind: every CUDA architecture document states the same fact paths
@@ -264,9 +264,7 @@ def test_no_installed_number_is_repeated_as_a_python_default() -> None:
     constructed without one."""
     for value_type in (
         cuda_spec.SM90_ID,
-        cuda_spec.SM100_ID,
         cuda_spec.H200_SXM_ID,
-        cuda_spec.B200_SXM_ID,
         amx_spec.APPLE_AMX_ID,
         amx_spec.APPLE_M2_PRO_ID,
     ):

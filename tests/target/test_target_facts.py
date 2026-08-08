@@ -38,8 +38,8 @@ def test_builtin_targets_own_their_facts_projections() -> None:
 
 
 def test_two_cuda_products_project_the_hardware_each_one_is() -> None:
-    """AC-1-3 and AC-1-4. One projection serves both products, so what separates
-    them is what their documents record rather than a branch per architecture.
+    """One projection serves both products, so what separates them is what their
+    documents record rather than a branch per architecture.
 
     Tensor memory is the case that matters: a level with no capacity says the
     architecture has no such store, and a capacity says a CTA's accumulators live

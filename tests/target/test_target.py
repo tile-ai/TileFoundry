@@ -36,7 +36,8 @@ from tilefoundry.target import (
     registered_targets,
     validate_cuda_topology_levels,
 )
-from tilefoundry.target.cuda.spec import installed_sm90
+from tilefoundry.target.cuda.spec import SM90_ID
+from tilefoundry.target.hardware import HARDWARE_SPECS
 from tilefoundry.target.services import CodeGenerator, Scheduler
 
 
@@ -326,7 +327,7 @@ def test_group_functions_by_target_fact_matching() -> None:
         body=body,
         target=CudaTarget(
             "nvidia.h200_sxm",
-            architecture=replace(installed_sm90(), name="sm_90_alt"),
+            architecture=replace(HARDWARE_SPECS.resolve(SM90_ID).value, name="sm_90_alt"),
         ),
     )
     with pytest.raises(ValueError, match="mixes unequal device Targets") as error:
@@ -390,7 +391,7 @@ def test_target_conflict_diagnostics_use_stable_summaries() -> None:
     declared_target = CudaTarget("nvidia.h200_sxm")
     explicit_target = CudaTarget(
         "nvidia.h200_sxm",
-        architecture=replace(installed_sm90(), name="sm_90_alt"),
+        architecture=replace(HARDWARE_SPECS.resolve(SM90_ID).value, name="sm_90_alt"),
     )
     module_value = Module(
         name="conflicting_targets",

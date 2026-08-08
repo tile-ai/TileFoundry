@@ -1,10 +1,7 @@
 [spec]
-schema = "tilefoundry.cuda.architecture/v1"
+schema = "tilefoundry.cuda.architecture/v2"
 kind = "architecture"
 id = "nvidia.sm100"
-
-[compatibility]
-devices = ["nvidia.b200_sxm"]
 
 [facts.identity.name]
 value = "sm_100"

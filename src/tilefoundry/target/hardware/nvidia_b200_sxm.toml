@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.cuda.device/v1"
+schema = "tilefoundry.cuda.device/v2"
 kind = "device"
 id = "nvidia.b200_sxm"
 
@@ -21,11 +21,11 @@ source = "CUDA runtime device query on an NVIDIA B200 SXM, driver 590.48.01, CUD
 conditions = "cudaDevAttrMultiProcessorCount; NVIDIA publishes no SM count for this product, and the two dies it is built from present as one device"
 
 [facts.memory.hbm.capacity]
-value = 191505498112
+value = 180000000000
 unit = "byte"
-origin = "measured"
-source = "CUDA runtime device query on an NVIDIA B200 SXM, driver 590.48.01, CUDA 13.1"
-conditions = "cudaMemGetInfo total on an idle device, so the figure already excludes what the driver reserves; the DGX B200 system specification states 1,440 GB across eight GPUs, which this part exceeds"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/dgx-b200/"
+conditions = "the published 1,440 GB across the eight GPUs of a DGX B200 divided by eight, decimal; a part provisioned with more HBM reports more through the CUDA runtime, so this is what every B200 SXM has rather than the most that some have"
 
 [facts.memory.hbm.bandwidth]
 value = 7672320000000
@@ -78,4 +78,4 @@ value = 9000000000000000
 unit = "flop/s"
 origin = "derived"
 source = "https://www.nvidia.com/en-us/data-center/hgx/"
-conditions = "dense peak: the published 72 PFLOP/s dense FP4 rate of an eight-GPU HGX B200 divided by eight; the FP4 row prints the sparse and dense rates separately, so no sparsity division applies"
+conditions = "dense peak: the FP4 row of an eight-GPU HGX B200 prints 144 PFLOP/s sparse and 72 PFLOP/s dense; this is the dense figure divided by eight, so no sparsity division applies"

@@ -16,8 +16,8 @@ from tilefoundry.target.hardware.schema import SchemaReader
 # fact paths and so does every device document, which is what lets one schema
 # validate them all, and what makes a product's capability a recorded value
 # rather than a case in code.
-ARCHITECTURE_SCHEMA = "tilefoundry.cuda.architecture/v1"
-DEVICE_SCHEMA = "tilefoundry.cuda.device/v1"
+ARCHITECTURE_SCHEMA = "tilefoundry.cuda.architecture/v2"
+DEVICE_SCHEMA = "tilefoundry.cuda.device/v2"
 
 SM90_ID = "nvidia.sm90"
 SM100_ID = "nvidia.sm100"
@@ -144,16 +144,6 @@ def install(registry: HardwareSpecRegistry | None = None) -> None:
     into.install(B200_SXM_ID, _PACKAGE, "nvidia_b200_sxm.toml")
 
 
-def installed_sm90() -> CudaArchitecture:
-    """The installed SM90 architecture value."""
-    return HARDWARE_SPECS.resolve(SM90_ID).value
-
-
-def installed_h200_sxm() -> CudaDevice:
-    """The installed H200 SXM device value."""
-    return HARDWARE_SPECS.resolve(H200_SXM_ID).value
-
-
 install()
 
 
@@ -162,11 +152,9 @@ __all__ = [
     "B200_SXM_ID",
     "DEVICE_SCHEMA",
     "H200_SXM_ID",
-    "SM90_ID",
     "SM100_ID",
+    "SM90_ID",
     "build_cuda_architecture",
     "build_cuda_device",
     "install",
-    "installed_h200_sxm",
-    "installed_sm90",
 ]

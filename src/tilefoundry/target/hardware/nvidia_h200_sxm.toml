@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.cuda.device/v1"
+schema = "tilefoundry.cuda.device/v2"
 kind = "device"
 id = "nvidia.h200_sxm"
 

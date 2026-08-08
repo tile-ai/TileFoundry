@@ -253,6 +253,9 @@ class CudaArchitecture(Architecture):
     capacity per SM and per CTA, and register-file capacity per SM. These are
     properties of the microarchitecture, so every product built on it shares
     them, and a device MUST NOT restate them.
+  - It MUST NOT carry a compute-throughput rate. A FLOP/s figure depends on the
+    clock of one product, so it is a device fact ([§4.2](#42-cudadevice)) even
+    though the instruction it rates is the architecture's.
   - `unified_l1_shared_per_sm_bytes` MUST be the size of the one physical block
     the shared-memory carveout and the L1 data cache are both taken from, and
     MUST be at least `shared_memory_per_sm_bytes`. The architecture MUST NOT
@@ -288,7 +291,6 @@ The installed `nvidia.sm90` architecture document.
     compute DTypes.
   - It MUST record no tensor-memory capacity: the SM90 MMA accumulates in the
     register file, so there is no separate store to size.
-  - Device-frequency-dependent FLOP/s values MUST NOT appear in it.
 
 #### 4.1.2 SM100
 
@@ -302,7 +304,6 @@ The installed `nvidia.sm100` architecture document.
   - It MUST record a tensor-memory capacity, and its instruction capabilities
     MUST name the MMA family that accumulates there rather than the SM90 family,
     which this architecture does not run.
-  - Device-frequency-dependent FLOP/s values MUST NOT appear in it.
 
 ### 4.2 `CudaDevice`
 
@@ -573,7 +574,7 @@ compatibility, never a single combined record.
 
 ```toml
 [spec]
-schema = "tilefoundry.cuda.device/v1"
+schema = "tilefoundry.cuda.device/v2"
 kind = "device"
 id = "nvidia.h200_sxm"
 
@@ -622,13 +623,16 @@ conditions = "No validated number."
 - constraints:
   - `HardwareSpecRegistry` MUST resolve documents by exact ID. There MUST be no
     search path, no overlay, and no partial document.
+  - A schema name carries a version. Requiring a leaf a previous version did not
+    MUST take a new version, because a document written against the old one no
+    longer loads and the failure is otherwise a missing fact rather than a
+    contract that moved.
   - A target package MUST register its typed schemas and installed documents as
     an import side effect, into the same shared registry.
-  - A schema MAY build more than one value class when every document it validates
-    states the same fact paths. The identity a document declares MUST select the
-    class, and an identity the schema builds no class for MUST raise naming the
-    identities it does build. That selection reads the document's own recorded
-    content, so it is not a dispatch on a Target name.
+  - A schema MAY validate the documents of several products when they state the
+    same fact paths, and MUST build one value type from all of them. A product is
+    what its document records, so a schema MUST NOT select a type by the identity
+    a document declares.
   - A typed schema MUST validate exact fact paths, value types, units, required
     fields, and cross-field invariants, and MUST reject any leaf the document
     carries that the schema does not model, so a misspelled key cannot become
