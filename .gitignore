@@ -229,6 +229,7 @@ __marimo__/
 docs/superpowers/
 docs/plans/.tmp/
 test_results/
+.torch_extensions/
 
 # Per-developer conda env hint (see docs/develop.md §1)
 .dev-env

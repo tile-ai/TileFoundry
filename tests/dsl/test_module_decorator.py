@@ -259,7 +259,7 @@ def test_prim_func_host_resolves_sibling_device_in_class_body():
     class _Launch:
         @prim_func(target=CudaTarget("nvidia.h200_sxm"))
         def dev(a: Tensor[(8,), "f32"]):  # noqa: ARG001
-            with Mesh(Topology("thread", 8), Layout(shape=(8,), strides=(1,))) as m:
+            with Mesh((Topology("thread", 8),), Layout(shape=(8,), strides=(1,))) as m:
                 T.sync(m)
 
         @prim_func(target=CpuTarget())

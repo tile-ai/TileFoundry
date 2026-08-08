@@ -20,9 +20,9 @@ from tilefoundry.analysis.poly import _local_type
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- rms_norm resolved dynamically
 from tilefoundry.ir.types import make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Mesh, Split, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, Split, Topology
 
-_MESH = Mesh(Topology("gpu", 2), (2,), names=("a",))
+_MESH = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), names=("a",))
 
 
 @func

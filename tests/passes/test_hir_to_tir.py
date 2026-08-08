@@ -151,7 +151,10 @@ def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
     inter-group dependency edge in dispatch-group ordering. Neither failure is
     visible in the pass's output shape; both are wrong programs.
     """
-    mesh = Mesh(topology=Topology("cta", 4), layout=(4,))
+    mesh = Mesh(
+        topologies=(Topology("cta", 4),),
+        layout=Layout(shape=(4,), strides=(1,)),
+    )
     sl = SL(layout=Layout(shape=(4,), strides=(1,)), attrs=(Split(0),), mesh=mesh)
     body_ty = TensorType(shape=(4,), dtype=DType.f32, layout=sl, storage=StorageKind.GMEM)
     iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")

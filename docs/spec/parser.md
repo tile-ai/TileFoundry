@@ -727,7 +727,7 @@ so the entry function does not yet exist when `@module(entry=...)` is called.
 
 `topologies` is a class-body assignment rather than a decorator argument for
 the mirror-image reason. A function body MAY name a level of its domain
-(`with Mesh(topology="cta", ...)`), and that name has to resolve while the
+(`with Mesh(("cta",), ...)`), and that name has to resolve while the
 body is parsed — which happens as the class body runs, before the decorator is
 applied. A class-body assignment is already bound at that point, so the
 declaration is readable exactly when it is needed; a decorator argument is

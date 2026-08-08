@@ -27,7 +27,7 @@ from tilefoundry.ir.types.shard import Partial, Split
 from tilefoundry.parser.hir_parser import parse_script
 
 _MESH_PRELUDE = 'from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n\n' \
-    'cta_mesh = Mesh(Topology("cta", 8), Layout((8,), (1,)))'
+    'cta_mesh = Mesh((Topology("cta", 8),), Layout((8,), (1,)))'
 
 
 def _source(body: str, preamble: str = _MESH_PRELUDE, ret: str = '(8, 16), "bf16"') -> str:

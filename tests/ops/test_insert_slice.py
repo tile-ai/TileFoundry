@@ -239,7 +239,7 @@ class _DecodeStep:
         spos: Tensor[(1,), "i32"],
         off: Tensor[(), "i32"],
     ):
-        with Mesh(Topology("thread", 1), (1,), ("t",)) as m:
+        with Mesh(("thread",), (1,), ("t",)) as m:
             xr = reshard(x, (_DEC_D @ m.t,), "rmem")
             vr = reshard(v, (1 @ m.t,), "rmem")
             acc = full_like(xr, 0.0)
@@ -307,7 +307,7 @@ def _op_of(value):
 # be bypassed by the output-sink lowering.
 @func(topologies=(Topology("cta", 2),))
 def _cross_cta_reshard_output(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_D), "f32"]:
-    with Mesh(topology="cta", layout=ShardMeshLayout(shape=(2,), strides=(1,))) as cta:
+    with Mesh(("cta",), layout=ShardMeshLayout(shape=(2,), strides=(1,))) as cta:
         g1 = reshard(a, layout=(2 @ cta, _DEC_D), storage=gmem)
         return reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
 
@@ -357,7 +357,7 @@ class _NdWindow:
         base: Tensor[(_NW_A, _NW_B, _NW_C), "f32"],
         v: Tensor[(_NW_A, _NW_UB, _NW_UC), "f32"],
     ):
-        with Mesh(Topology("thread", 1), (1,), ("t",)) as m:
+        with Mesh(("thread",), (1,), ("t",)) as m:
             br = reshard(base, (_NW_A, _NW_B, _NW_C @ m.t), "rmem")
             vr = reshard(v, (_NW_A, _NW_UB, _NW_UC @ m.t), "rmem")
             acc = full_like(br, 0.0)

@@ -43,6 +43,15 @@ _RESULTS_ROOT = Path(__file__).resolve().parents[1] / "test_results"
 _SANITIZE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+def pytest_configure(config) -> None:
+    extensions = Path(config.rootpath) / ".torch_extensions"
+    os.environ.setdefault("TORCH_EXTENSIONS_DIR", str(extensions))
+    if hasattr(config, "workerinput"):
+        return
+    for lock in extensions.glob("*/lock"):
+        lock.unlink(missing_ok=True)
+
+
 def _split_nodeid(nodeid: str) -> tuple[str, str | None]:
     """Return ``(file_stem, test_name_or_none)`` for a pytest nodeid.
 
@@ -134,4 +143,3 @@ def _restore_target_registry():
         _TARGET_CLASSES.update(classes)
         _TARGET_PROVIDERS.clear()
         _TARGET_PROVIDERS.update(providers)
-

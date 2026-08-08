@@ -125,7 +125,7 @@ class GqaOnline:
         # each CTA running the full online-softmax over the context (heads are
         # embarrassingly parallel — no cross-CTA combine). All mesh-scoped compute
         # stays inside the `with Mesh` block.
-        with Mesh(topology="cta", layout=Layout((NUM_CTA,), (1,))) as cta:
+        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:
             q_sh = reshard(q, layout=(1, S, _HQ @ cta, _D))  # reshard + cta layout sugar
             q_f = tf.cast(q_sh, dtype="f32")
             q_s = q_f * tf.full_like(q_f, value=_SCALE)
@@ -182,7 +182,7 @@ class GqaOnline:
         # block gets its OWN local softmax (m_p, l_p, o_p) over its block axis only —
         # no cross-block reduction here. `with Mesh(cta)` is the CTA-parallel
         # authoring context (NUM_SPLITS is the CTA axis); it emits no IR node.
-        with Mesh(topology="cta", layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
             k_f = tf.transpose(
                 tf.cast(tf.repeat_interleave(
                     tf.reshape(k_cache, new_shape=(1, NUM_SPLITS, CBLK, _HKV, _D)),
@@ -227,7 +227,7 @@ class GqaOnline:
         # `with Mesh(cta)` keeps this on the same CTA mesh as `_ctx_partials`: the
         # NUM_SPLITS axis IS the CTA axis, so this reduction is the cross-CTA combine,
         # mapped at lowering to a barrier / gather over the producers (not an IR node).
-        with Mesh(topology="cta", layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:  # noqa: F841
             m = tf.reduce(m_p, axes=(-2,), keepdim=True, kind="max")          # global max
             alpha = tf.exp(m_p - m)                                           # rescale per block
             l = tf.reduce(alpha * l_p, axes=(-2,), keepdim=True, kind="sum")  # [1,S,Hq,1,1]

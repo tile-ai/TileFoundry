@@ -94,8 +94,8 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
         ):
             raise VerifyError(
                 "T.mma: no enclosing mesh scope hosts the atom's required thread "
-                f"scope (topology {atom.required_scope.topology.name!r}, "
-                f"{atom.required_scope.topology.size} lanes)"
+                f"scope (topology {atom.required_scope.topologies[0].name!r}, "
+                f"{atom.required_scope.topologies[0].size} lanes)"
             )
 
 
@@ -105,7 +105,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 # axis 0 ('x', size 4) the fastest-varying lane coord. Wrong strides silently
 # break numerics, so this is pinned, not derived at use sites.
 _SM80_THREAD_MESH = Mesh(
-    topology=Topology("thread", 32),
+    topologies=(Topology("thread", 32),),
     layout=Layout(shape=(4, 8), strides=(1, 4)),
 )
 

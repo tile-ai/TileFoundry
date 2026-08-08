@@ -135,7 +135,7 @@ def _wide_grid(source: Tensor[(1024,), "f32"]):
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 1),))
 def _reshard_boundary(source: Tensor[(1,), "f32"]):
-    with Mesh(topology="thread", layout=(1,), names=("lane",)) as thread:
+    with Mesh(("thread",), layout=(1,), names=("lane",)) as thread:
         local = tf.reshard(source, (1 @ thread.lane,), "rmem")
         moved = tf.reshard(local, (1 @ thread.lane,), "rmem")
         return tf.add(moved, moved)
@@ -143,21 +143,38 @@ def _reshard_boundary(source: Tensor[(1,), "f32"]):
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2), Topology("thread", 4)))
 def _thread_sharded(source: Tensor[(8,), "f32"]):
-    with Mesh(topology="thread", layout=(4,), names=("lane",)) as thread:
+    with Mesh(("thread",), layout=(4,), names=("lane",)) as thread:
         local = tf.reshard(source, (8 @ thread.lane,), "rmem")
+        return tf.add(local, local)
+
+
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", None),))
+def _launch_provided_tiles(source: Tensor[(8, 128), "f32"]):
+    with Mesh(("cta",), layout=(8,), names=("tile",)) as cta:
+        local = tf.reshard(source, (8 @ cta.tile, 128), "rmem")
+        return tf.add(local, local)
+
+
+@func(
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 2), Topology("thread", 2)),
+)
+def _multi_topology_mesh(source: Tensor[(4,), "f32"]):
+    with Mesh(("cta", "thread"), layout=(4,), names=("position",)) as mesh:
+        local = tf.reshard(source, (4 @ mesh.position,), "rmem")
         return tf.add(local, local)
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 4),))
 def _oversized_shared(source: Tensor[(131072,), "f32"]):
-    with Mesh(topology="thread", layout=(4,), names=("lane",)) as thread:
+    with Mesh(("thread",), layout=(4,), names=("lane",)) as thread:
         local = tf.reshard(source, (131072 @ thread.lane,), "smem")
         return tf.add(local, local)
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 4),))
 def _modest_shared(source: Tensor[(1024,), "f32"]):
-    with Mesh(topology="thread", layout=(4,), names=("lane",)) as thread:
+    with Mesh(("thread",), layout=(4,), names=("lane",)) as thread:
         local = tf.reshard(source, (1024 @ thread.lane,), "smem")
         return tf.add(local, local)
 
@@ -229,6 +246,24 @@ def test_a_call_no_mesh_placed_runs_once_and_costs_the_same_on_either_machine() 
     assert record.execution_count == 1
     assert record.flops == (("f32", numel(call.type)),)
     assert _cost_of(cuda_entry) == _cost_of(amx_entry)
+
+
+def test_a_launch_provided_topology_uses_its_mesh_layout_for_analysis() -> None:
+    """A dynamic launch declares its positions in the mesh layout, not Topology."""
+    _, entry = _run(_launch_provided_tiles, "timeline")
+
+    record = get_metadata(_calls(entry)[-1], TimelineMetadata)
+    assert record is not None
+    assert record.grid_units == 8
+    assert record.waves == 1
+
+
+def test_analysis_refuses_a_position_count_for_a_multi_topology_mesh() -> None:
+    with pytest.raises(
+        AnalysisError,
+        match=r"per-topology position count requires one Mesh topology.*\('cta', 'thread'\)",
+    ):
+        _run(_multi_topology_mesh, "compute-cost")
 
 
 def test_a_matmul_takes_its_batch_from_what_it_produced() -> None:
@@ -415,15 +450,14 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     assert whole.theoretical_ns == max(whole.compute_ns, whole.memory_ns)
 
 
-def test_a_grid_wider_than_the_parallel_capacity_runs_in_waves() -> None:
-    """One launch cannot occupy more units than the target admits at once, and
-    the function-level record spans the whole plan."""
+def test_timeline_credits_an_unplaced_call_with_one_position() -> None:
+    """A declared launch hierarchy does not place a value by itself."""
     _, entry = _run(_wide_grid, "timeline")
 
     record = get_metadata(_calls(entry)[-1], TimelineMetadata)
     assert record is not None
-    assert record.grid_units == 168
-    assert record.waves == 2
+    assert record.grid_units == 1
+    assert record.waves == 1
 
     whole = get_metadata(entry, TimelineMetadata)
     assert whole is not None

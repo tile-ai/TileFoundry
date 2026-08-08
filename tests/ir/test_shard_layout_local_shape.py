@@ -33,7 +33,7 @@ DIVIDED = [
             layout=Layout(shape=(128,), strides=(1,)),
             attrs=(Split(0), Split(0)),
             mesh=Mesh(
-                Topology("thread", 4 * 32),
+                (Topology("thread", 4 * 32),),
                 Layout(shape=(4, 32), strides=(32, 1)),
                 names=("y", "t"),
             ),
@@ -46,7 +46,7 @@ DIVIDED = [
             layout=Layout(shape=(4,), strides=(1,)),
             attrs=(Broadcast(), Split(0)),
             mesh=Mesh(
-                Topology("thread", 2 * 4),
+                (Topology("thread", 2 * 4),),
                 Layout(shape=(2, 4), strides=(4, 1)),
                 names=("x", "t"),
             ),
@@ -59,7 +59,7 @@ DIVIDED = [
             layout=Layout(shape=(8,), strides=(1,)),
             attrs=(Partial(),),
             mesh=Mesh(
-                Topology("thread", 4),
+                (Topology("thread", 4),),
                 Layout(shape=(4,), strides=(1,)),
                 names=("t",),
             ),

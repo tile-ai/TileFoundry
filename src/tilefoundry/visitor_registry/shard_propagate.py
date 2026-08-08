@@ -227,7 +227,7 @@ def derive_output_shard_layout(
     for _, sl in sharded:
         if sl.mesh != mesh:
             raise ValueError("inputs reference different meshes")
-    mesh_rank = len(mesh.axes)
+    mesh_rank = len(mesh.layout.shape)
 
     *input_maps, output_map = relation.maps
     out_access = _result_access(output_map)

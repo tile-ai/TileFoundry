@@ -102,7 +102,7 @@ def test_verify_rejects_what_the_instruction_cannot_do(stated, refusal) -> None:
 class AsyncStage:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def async_stage_device(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):
-        with Mesh(Topology("thread", 128), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
+        with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
             a_view = T.tensor_view(
                 a,
                 layout=ShardLayout(

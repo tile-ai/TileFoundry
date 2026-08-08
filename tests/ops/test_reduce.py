@@ -151,10 +151,9 @@ def test_analyze_rejects_cross_cta_reduce():
     # A reduced Split on a cta-topology mesh axis spans CTAs — cross-CTA reduce
     # is not supported and MUST raise rather than fall back to intra_cta.
     mesh_cta = Mesh(
-        topology=[Topology("cta", 2), Topology("thread", 32)],
+        topologies=(Topology("cta", 2), Topology("thread", 32)),
         layout=Layout(shape=(2, 32), strides=(32, 1)),
         names=("c", "t"),
-        topologies=(Topology("cta", 2), Topology("thread", 32)),
     )
     src = make_shard_tensor_type(
         (2, 32), mesh=mesh_cta, attrs=(Split(0), Split(1)), dtype=_BF, storage=_RMEM,
@@ -175,7 +174,7 @@ class _CrossWarpSumModule:
 
     @func
     def cross_warp_sum(a: Tensor[(4, 32), 'f32']):
-        with Mesh(Topology("thread", 4 * 32), (4, 32), ('tk', 'hc')) as m:
+        with Mesh(("thread",), (4, 32), ('tk', 'hc')) as m:
             # Axis 0 (tk) spans the four warps; axis 1 (hc) is the lane axis and
             # carries distinct output cells. Reducing axis 0 crosses warps only.
             a_reg = tf.reshard(a, (4 @ m.tk, 32 @ m.hc), 'rmem')

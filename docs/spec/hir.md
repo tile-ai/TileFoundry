@@ -81,7 +81,7 @@ and call elaboration MUST allow that state. A Function boundary MUST preserve
 the `ShardLayout` mesh and per-axis reduction; it MUST NOT complete the value
 or reject it merely because it is `Partial`.
 
-A `with Mesh(topology="cta", ...) as cta:` inside the body names a level of
+A `with Mesh(("cta",), layout=...) as cta:` inside the body names a level of
 the execution domain the owning `Module` declares. The name MUST resolve to
 one of that Module's effective `Topology` levels, and the scope creates a
 parser-lexical mesh binding; `ShardLayout.mesh` MUST point at an active

@@ -25,7 +25,8 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
-from tilefoundry.ir.types.shard import ShardLayout, Topology
+from tilefoundry.ir.types.shard import Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.shard.layout_algebra import size
 from tilefoundry.ir.types.storage import StorageKind
 
 from .errors import AnalysisError
@@ -216,8 +217,22 @@ def bytes_by_storage(type_: Type) -> dict[str, int]:
     return result
 
 
+def _mesh_position_count(mesh: Mesh) -> tuple[str, int]:
+    """The one topology name and logical position count a mesh can state here."""
+    names = tuple(topology.name for topology in mesh.topologies)
+    if len(names) != 1:
+        raise AnalysisError(
+            "a per-topology position count requires one Mesh topology, got "
+            f"{names}"
+        )
+    count = size(mesh.layout)
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        raise AnalysisError("a mesh position count requires a positive static layout size")
+    return names[0], count
+
+
 def execution_domain(type_: Type) -> dict[str, int] | None:
-    """The topology extents *type_*'s meshes say its value is spread over.
+    """The logical positions *type_*'s meshes say its value is spread over.
 
     ``None`` means the type carries no mesh at all, which is different from an
     empty domain: nothing was declared, rather than one instance declared.
@@ -229,18 +244,13 @@ def execution_domain(type_: Type) -> dict[str, int] | None:
         if not isinstance(tensor.layout, ShardLayout):
             continue
         domain: dict[str, int] = {}
-        for topology in tensor.layout.mesh.topologies:
-            if not isinstance(topology.size, int) or topology.size <= 0:
-                raise AnalysisError(
-                    "an execution domain requires positive static topology extents"
-                )
-            previous = domain.get(topology.name)
-            if previous is not None and previous != topology.size:
-                raise AnalysisError(
-                    f"one Mesh declares conflicting {topology.name!r} extents "
-                    f"{previous} and {topology.size}"
-                )
-            domain[topology.name] = topology.size
+        name, count = _mesh_position_count(tensor.layout.mesh)
+        previous = domain.get(name)
+        if previous is not None and previous != count:
+            raise AnalysisError(
+                f"one Mesh declares conflicting {name!r} extents {previous} and {count}"
+            )
+        domain[name] = count
         domains.add(tuple(sorted(domain.items())))
     if len(domains) > 1:
         raise AnalysisError(
@@ -287,6 +297,8 @@ def execution_count(
     if domain is None:
         domain = dict(next(iter(inputs))) if inputs else {}
     for topology in topologies:
+        if topology.size is None:
+            continue
         if not isinstance(topology.size, int) or topology.size <= 0:
             raise AnalysisError(
                 f"function {fn.name!r}: an execution count requires positive "
@@ -301,24 +313,20 @@ def execution_count(
     if not domain:
         return 1
     for topology in topologies:
-        domain[topology.name] = topology.size
+        if isinstance(topology.size, int):
+            domain[topology.name] = topology.size
     return math.prod(domain.values())
 
 
 def topology_extent(type_: Type, name: str) -> int | None:
-    """The extent *type_*'s meshes declare for the topology called *name*."""
+    """The logical extent *type_*'s meshes state for topology *name*."""
     extents: set[int] = set()
     for tensor in tensor_types(type_):
         if not isinstance(tensor.layout, ShardLayout):
             continue
-        for topology in tensor.layout.mesh.topologies:
-            if topology.name != name:
-                continue
-            if not isinstance(topology.size, int) or topology.size <= 0:
-                raise AnalysisError(
-                    f"a {name!r} extent must be a positive static integer"
-                )
-            extents.add(topology.size)
+        mesh_name, count = _mesh_position_count(tensor.layout.mesh)
+        if mesh_name == name:
+            extents.add(count)
     if len(extents) > 1:
         raise AnalysisError(
             f"one value references conflicting {name!r} extents {sorted(extents)}"

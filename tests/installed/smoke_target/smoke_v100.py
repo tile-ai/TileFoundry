@@ -57,11 +57,11 @@ def test_external_v100_target_analyses_a_copied_installed_model(
     )
     assert gmem["peak_bytes"] < 32_000_000_000
     timeline = report["function_records"]["timeline"]
-    assert timeline["grid_units"] == 132
+    assert timeline["grid_units"] == 1
     call_timelines = [call["timeline"] for call in report["calls"]]
     assert call_timelines
-    assert {call["grid_units"] for call in call_timelines} == {132}
-    assert {call["waves"] for call in call_timelines} == {2}
+    assert {call["grid_units"] for call in call_timelines} == {1}
+    assert {call["waves"] for call in call_timelines} == {1}
     assert timeline["waves"] == sum(call["waves"] for call in call_timelines)
 
     scheduled = tf(

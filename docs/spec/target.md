@@ -270,6 +270,10 @@ thread mesh layouts.
     MUST have a static extent.
   - A launch-provided level MUST NOT be scheduled, because scheduling requires
     its static extent.
+  - A launch-provided level has no declared position count. When a Mesh names
+    that one level, analysis reads its logical position count from
+    `size(mesh.layout)`; a Mesh naming multiple levels is refused for this
+    name-keyed reading rather than assigned to one of them.
   - Static declared topology extents MUST be positive integers within their
     target resource limits. `Topology("cta", None)` MUST remain valid for the
     handwritten dynamic-launch compile path.

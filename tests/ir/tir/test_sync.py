@@ -33,7 +33,7 @@ from tilefoundry.target import CpuTarget, CudaTarget
 class SyncSquare:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def sync_square_device(a: Tensor[(4, 32), "f32"]):
-        with Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
+        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
             view = T.tensor_view(
                 a,
                 layout=ShardLayout(
@@ -91,7 +91,7 @@ def test_sync_barrier_forms_emit_expected_cuda() -> None:
 class GridSync:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def grid_sync_device(a: Tensor[(128,), "f32"]):
-        with Mesh(Topology("cta", 4), Layout(shape=(4,), strides=(1,))) as m:
+        with Mesh((Topology("cta", 4),), Layout(shape=(4,), strides=(1,))) as m:
             T.sync(m)
 
     @prim_func(target=CpuTarget())

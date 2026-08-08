@@ -117,16 +117,18 @@ def local_type_of(type: Type) -> Type:
     )
 
 
-def _layout_shape(layout: object) -> tuple:
+def _require_concrete(shape: tuple | list) -> None:
+    if any(not isinstance(dim, int) or isinstance(dim, bool) or dim < 0 for dim in shape):
+        raise ValueError(
+            "local_type_of: local tensor extent is not a concrete non-negative integer"
+        )
+
+
+def _nested_layout_shape(layout: object) -> tuple:
     if isinstance(layout, ShardLayout):
         return _local_layout_shape(layout)
     if isinstance(layout, (Layout, ComposedLayout)):
-        shape = tuple(layout.shape)
-        if any(not isinstance(dim, int) or isinstance(dim, bool) or dim < 0 for dim in shape):
-            raise ValueError(
-                "local_type_of: local tensor extent is not a concrete non-negative integer"
-            )
-        return shape
+        return tuple(layout.shape)
     raise ValueError(
         f"local_type_of: unresolved layout {layout!r}; local projection requires "
         "a resolved Layout"
@@ -134,7 +136,7 @@ def _layout_shape(layout: object) -> tuple:
 
 
 def _local_layout_shape(layout: ShardLayout) -> tuple[int, ...]:
-    shape = list(_layout_shape(layout.layout))
+    shape = list(_nested_layout_shape(layout.layout))
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
@@ -144,11 +146,25 @@ def _local_layout_shape(layout: ShardLayout) -> tuple[int, ...]:
         extent = layout.mesh.layout.shape[mesh_axis]
         if not isinstance(axis, int) or isinstance(axis, bool) or not 0 <= axis < len(shape):
             raise ValueError("local_type_of: Split axis is not a concrete layout axis")
-        if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
+        if extent is not None and (
+            not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0
+        ):
             raise ValueError("local_type_of: mesh extent is not a concrete positive integer")
-        if shape[axis] % extent:
+        if extent is None or extent == shape[axis]:
+            shape[axis] = 1
+        elif not isinstance(shape[axis], int) or isinstance(shape[axis], bool):
             raise ValueError(
-                f"local_type_of: extent {shape[axis]} is not divisible by mesh extent {extent}"
+                f"local_type_of: axis {axis} has dynamic extent {shape[axis]!r} "
+                f"and mesh extent {extent} states a fixed position count; a "
+                "dynamic axis is split by a mesh sized to it (launch-provided)"
             )
-        shape[axis] //= extent
+        elif shape[axis] % extent:
+            raise ValueError(
+                f"local_type_of: extent {shape[axis]} is not divisible by mesh "
+                f"extent {extent}; write the two loops out as (ceildiv(N, T), T) "
+                "and bind the tile count"
+            )
+        else:
+            shape[axis] //= extent
+    _require_concrete(shape)
     return tuple(shape)

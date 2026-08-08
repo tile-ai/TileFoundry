@@ -68,7 +68,7 @@ def parse_func(fn, *, topologies=(), specializations=(), extra_closure=None) -> 
     """@tilefoundry.func parser entry. Parse fn's source into hir.Function.
 
     ``topologies`` is the declared topology namespace this body may name in
-    ``Mesh(topology="...")``; it is a parse-time namespace, not state the
+    ``Mesh(("...",), ...)``; it is a parse-time namespace, not state the
     resulting Function keeps. ``extra_closure`` adds names to the resolution
     namespace below ``fn``'s own globals/freevars; it lets an ``@func`` defined
     in a ``@module`` class body resolve sibling ``@func`` methods (which are
@@ -1111,11 +1111,7 @@ class _HirBodyVisitor(BaseExprVisitor):
         if item.optional_vars is None or not isinstance(item.optional_vars, ast.Name):
             raise VerifyError("hir: `with Mesh(...) as name` requires a single Name binding")
 
-        # Resolve Mesh, supporting string topology-name resolution.
-        #   with Mesh(topology="cta", layout=...) as cta_mesh:
-        #       → "cta" resolved through topo_ns → Topology object
-        #   with Mesh(topology=cta, layout=...) as cta_mesh:
-        #       → cta resolved through env/closure → Topology object (legacy)
+        # Resolve Mesh's tuple of topology names through topo_ns.
         mesh = self._resolve_mesh_context(item.context_expr)
         if not isinstance(mesh, Mesh):
             raise VerifyError(
@@ -1148,15 +1144,7 @@ class _HirBodyVisitor(BaseExprVisitor):
         return self._visit_chain(stmts, idx + 1, require_return)
 
     def _resolve_mesh_context(self, node: ast.AST) -> Mesh:
-        """Resolve a ``Mesh(...)`` call node, supporting string topology-name lookup
-        and tuple layout sugar.
-
-        Handles:
-        - ``Mesh(topology="cta", layout=(128,))`` → sugar layout tuple
-        - ``Mesh("cta", (128,))`` → positional sugar
-        - ``Mesh(topology="cta", layout=Layout(...))`` → verbose form
-        - ``Mesh(topology=<Topology obj>, layout=...)`` → legacy closure/env path
-        """
+        """Resolve a ``Mesh(...)`` call with tuple topology-name sugar."""
         if not isinstance(node, ast.Call):
             return self._eval_static(node)
 
@@ -1178,76 +1166,36 @@ class _HirBodyVisitor(BaseExprVisitor):
                 )
             return obj
 
-        def _eval_topology_node(arg_node: ast.AST) -> object:
-            """Resolve a topology arg AST. Bare string constants look
-            up the function-level topo_ns; tuples of string constants
-            resolve to a tuple of Topology objects (multi-topology
-            mesh sugar — parser owns topology resolution, not Mesh
-            post_init)."""
-            if isinstance(arg_node, ast.Constant) and isinstance(arg_node.value, str):
-                return _resolve_string_topology(arg_node.value)
-            if isinstance(arg_node, ast.Tuple) and all(
-                isinstance(e, ast.Constant) and isinstance(e.value, str)
-                for e in arg_node.elts
-            ):
-                return tuple(
-                    _resolve_string_topology(e.value) for e in arg_node.elts
-                )
-            return self._eval_static(arg_node)
+        if any(keyword.arg in {"topology", "topologies"} for keyword in node.keywords):
+            raise VerifyError(
+                'hir: Mesh requires a tuple of declared topology names, '
+                'for example Mesh(("cta",), layout=(128,))'
+            )
+        if (
+            not node.args
+            or not isinstance(node.args[0], ast.Tuple)
+            or not node.args[0].elts
+            or not all(
+            isinstance(entry, ast.Constant) and isinstance(entry.value, str)
+            for entry in node.args[0].elts
+            )
+        ):
+            raise VerifyError(
+                'hir: Mesh requires a tuple of declared topology names, '
+                'for example Mesh(("cta",), layout=(128,))'
+            )
 
-        # Detect topology from keyword or positional
-        topo_arg = None
-        topo_resolved = False
-        for kw in node.keywords:
-            if kw.arg == "topology":
-                topo_arg = _eval_topology_node(kw.value)
-                topo_resolved = True
-                break
-
-        if topo_arg is None and not topo_resolved:
-            # Positional topology — first positional arg, may be string,
-            # tuple-of-strings, or Topology obj.
-            if node.args:
-                topo_arg = _eval_topology_node(node.args[0])
-                topo_resolved = True
-
-        if topo_resolved:
-            # Build remaining args/kwargs and inject the resolved topology.
-            mesh_fn = self._eval_static(node.func)
-            pos_args: list = [topo_arg]
-            for i, a in enumerate(node.args[1:], start=1):
-                pos_args.append(_eval_mesh_arg(a) if i == 1 else self._eval_static(a))
-            pos_kw = {
-                k.arg: _eval_mesh_arg(k.value, is_layout_slot=(k.arg == "layout"))
-                for k in node.keywords
-                if k.arg != "topology"
-            }
-            # If topology came from kwarg, drop positional[0] (which was
-            # not actually present in node.args).
-            if not node.args:
-                pos_kw["topology"] = topo_arg
-                pos_args = []
-            return mesh_fn(*pos_args, **pos_kw)
-
-        if topo_arg is None:
-            # No topology specified — fall through to the generic
-            # positional eval path below for legacy callers.
-            mesh_fn = self._eval_static(node.func)
-            pos_args = [_eval_mesh_arg(a) if i == 1 else self._eval_static(a)
-                        for i, a in enumerate(node.args)]
-            pos_kw = {
-                k.arg: _eval_mesh_arg(k.value, is_layout_slot=(k.arg == "layout"))
-                for k in node.keywords
-            }
-            return mesh_fn(*pos_args, **pos_kw)
-
-        # Defensive fallthrough — should not be hit given the
-        # exhaustive branches above. Evaluate everything statically
-        # and let Mesh(...) raise if shape mismatches.
         mesh_fn = self._eval_static(node.func)
-        pos_args = [_eval_mesh_arg(a) if i == 1 else self._eval_static(a)
-                    for i, a in enumerate(node.args)]
-        pos_kw = {k.arg: _eval_mesh_arg(k.value) for k in node.keywords}
+        topologies = tuple(_resolve_string_topology(entry.value) for entry in node.args[0].elts)
+        pos_args = [topologies]
+        for index, argument in enumerate(node.args[1:], start=1):
+            pos_args.append(_eval_mesh_arg(argument, is_layout_slot=(index == 1)))
+        pos_kw = {
+            keyword.arg: _eval_mesh_arg(
+                keyword.value, is_layout_slot=(keyword.arg == "layout")
+            )
+            for keyword in node.keywords
+        }
         return mesh_fn(*pos_args, **pos_kw)
 
 def _is_module_decorator(dec: ast.AST) -> bool:

@@ -30,7 +30,7 @@ def static_online_attend(
     k_cache: Tensor[(1, C, NUM_KV_HEADS, HEAD_DIM), "bf16"],
     v_cache: Tensor[(1, C, NUM_KV_HEADS, HEAD_DIM), "bf16"],
 ) -> Tensor[(1, S, NUM_Q_HEADS, HEAD_DIM), "bf16"]:
-    with Mesh(topology="cta", layout=Layout((132,), (1,))) as cta:  # noqa: F841
+    with Mesh(("cta",), layout=Layout((132,), (1,))) as cta:  # noqa: F841
         q_sh = reshard(q, layout=(1, S, NUM_Q_HEADS, HEAD_DIM))
         q_f = tf.cast(q_sh, dtype="f32")
         q_s = q_f * tf.full_like(q_f, value=SCALE)

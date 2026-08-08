@@ -1,8 +1,8 @@
-"""``@func(topologies=(...))`` + ``with Mesh(topology="...", ...)`` parser tests.
+"""``@func(topologies=(...))`` + ``with Mesh(("...",), ...)`` parser tests.
 
 A declaration list names the levels a body may open a Mesh on, and a body's
 string topology is resolved against it. The positive path is exercised by every
-``with Mesh(topology=...)`` scene in the shard-sugar tests and by the corpus
+``with Mesh((...,))`` scene in the shard-sugar tests and by the corpus
 print / re-import trip; what only a source-level test can pin is the failure of
 a declaration list that cannot answer a body's request.
 """
@@ -16,6 +16,7 @@ from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F403
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.parser.hir_parser import parse_script
 
 
 def test_topology_errors() -> None:
@@ -31,7 +32,27 @@ def test_topology_errors() -> None:
         @func(topologies=(Topology("cta", 128),))
         def _unk(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:
             with Mesh(
-                topology="nonexistent",
+                ("nonexistent",),
                 layout=Layout(shape=(128,), strides=(1,)),
             ) as m:  # noqa: F841
                 return a
+
+
+@pytest.mark.parametrize(
+    "mesh_source",
+    (
+        'Mesh("cta", layout=(128,))',
+        'Mesh(topology="cta", layout=(128,))',
+    ),
+)
+def test_mesh_requires_a_tuple_of_topology_names(mesh_source: str) -> None:
+    with pytest.raises(VerifyError, match="tuple of declared topology names"):
+        parse_script(
+            "from tilefoundry import func\n"
+            "from tilefoundry.dsl import Mesh, Tensor\n"
+            "from tilefoundry.ir.types.shard import Topology\n\n"
+            "@func(topologies=(Topology('cta', 128),))\n"
+            "def f(a: Tensor[(128,), 'f32']):\n"
+            f"    with {mesh_source} as cta:\n"
+            "        return a\n"
+        )

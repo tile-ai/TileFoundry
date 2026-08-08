@@ -17,7 +17,7 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CudaTarget
 
-_M_CTA = Mesh(Topology("cta", 128), Layout((128,), (1,)), names=("cta",))
+_M_CTA = Mesh((Topology("cta", 128),), Layout((128,), (1,)), names=("cta",))
 
 
 def test_prim_func_param_layout_sugar_canonicalises() -> None:

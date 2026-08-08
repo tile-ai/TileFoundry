@@ -35,7 +35,7 @@ def _alloc_frag_kernel(topology, mesh_layout, names=()):
     """A kernel that allocs a fragment via `atom.A` inside the given scope."""
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
         atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
-        with Mesh(topology, mesh_layout, names=names) as warp:  # noqa: F841
+        with Mesh((topology,), mesh_layout, names=names) as warp:  # noqa: F841
             frag = T.alloc_tensor(  # noqa: F841
                 TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A,
                            storage=StorageKind.RMEM)
