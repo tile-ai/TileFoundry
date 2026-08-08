@@ -23,17 +23,10 @@ from tilefoundry.parser.sugar import parse_shard_layout_sugar
 from tilefoundry.schedule.partition.problem import _placement_relation
 
 
-def _mesh(name: str, topology_size: int | None, layout_shape: tuple[int, ...]) -> Mesh:
-    return Mesh(
-        topologies=(Topology(name, topology_size),),
-        layout=Layout(shape=layout_shape, strides=(1,) * len(layout_shape)),
-    )
-
-
 def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
-    matching = _mesh("thread", 32, (32,))
-    mismatching = _mesh("thread", 64, (32,))
-    launch_provided = _mesh("cta", None, (8,))
+    matching = make_mesh((32,), topology="thread")
+    mismatching = make_mesh((32,), topology=Topology("thread", 64))
+    launch_provided = make_mesh((8,), topology=Topology("cta", None))
 
     assert product(matching.topologies) == 32
     assert product((2, None)) is None
@@ -64,10 +57,7 @@ def test_mesh_is_an_unmodified_record_without_axis_attributes() -> None:
 
 
 def test_mesh_slice_keeps_the_parent_topologies() -> None:
-    mesh = Mesh(
-        topologies=(Topology("thread", 128),),
-        layout=Layout(shape=(4, 32), strides=(32, 1)),
-    )
+    mesh = make_mesh((4, 32), topology="thread")
 
     sliced = mesh[0, :]
 
@@ -76,11 +66,7 @@ def test_mesh_slice_keeps_the_parent_topologies() -> None:
 
 
 def test_named_mesh_axis_sugar_carries_a_layout_index() -> None:
-    mesh = Mesh(
-        topologies=(Topology("cta", 8),),
-        layout=Layout(shape=(8,), strides=(1,)),
-        names=("cta",),
-    )
+    mesh = make_mesh((8,), names=("cta",), topology="cta")
     node = ast.parse("(8 @ cta.cta,)", mode="eval").body
 
     layout = parse_shard_layout_sugar(node, lambda name: mesh if name == "cta" else None)
@@ -94,8 +80,8 @@ def test_named_mesh_axis_sugar_carries_a_layout_index() -> None:
 
 
 def test_mesh_value_equality_is_usable_by_timeline_and_partition() -> None:
-    left = _mesh("thread", 8, (8,))
-    right = _mesh("thread", 8, (8,))
+    left = make_mesh((8,), topology="thread")
+    right = make_mesh((8,), topology="thread")
     layout = Layout(shape=(8,), strides=(1,))
     producer = TensorType(
         shape=(8,),
