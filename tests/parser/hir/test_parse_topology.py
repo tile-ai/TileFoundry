@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F403
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
-from tilefoundry.parser.hir_parser import parse_script
 
 
 def test_topology_errors() -> None:
@@ -47,7 +47,7 @@ def test_topology_errors() -> None:
 )
 def test_mesh_requires_a_tuple_of_topology_names(mesh_source: str) -> None:
     with pytest.raises(VerifyError, match="tuple of declared topology names"):
-        parse_script(
+        import_dsl(
             "from tilefoundry import func\n"
             "from tilefoundry.dsl import Mesh, Tensor\n"
             "from tilefoundry.ir.types.shard import Topology\n\n"

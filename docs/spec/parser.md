@@ -54,10 +54,8 @@ so it remains callable by its siblings and specializable through
 `.specialize`.
 A class-body `@func(topologies=(...))` instead binds a single-function child
 `Module`: it declares its own hierarchy and inherits the owning Module's Target.
-Importing the source and reading it with `parse_script` MUST build the same tree
-and parse that member's body against its own hierarchy. The printer MAY render
-the child as a nested `@module` class rather than reproduce the member-function
-form.
+The printer MAY render the child as a nested `@module` class rather than
+reproduce the member-function form.
 
 ```python
 # example
@@ -749,9 +747,6 @@ function-level entry points are independent calls; there is no
 ```python
 # tilefoundry/parser/hir_parser.py
 def parse_func(fn, *, topologies=(), specializations=(), extra_closure=None) -> hir.Function: ...
-def parse_func_source (src: str) -> core_ir.Module | hir.Function: ...
-def parse_module_source(src: str) -> core_ir.Module | hir.Function: ...
-def parse_script      (src: str) -> core_ir.Module | hir.Function: ...
 class _HirBodyVisitor(BaseExprVisitor): ...
 
 # tilefoundry/parser/tir_parser.py
@@ -788,7 +783,6 @@ dialect's `BaseExprVisitor` subclass.
 classDiagram
     class parse_func
     class parse_prim_func
-    class parse_module_source
     class BaseExprVisitor   { <<abstract>> }
     class _HirBodyVisitor
     class _TirBodyVisitor
@@ -796,7 +790,6 @@ classDiagram
     class dispatch          { resolve_op; resolve_stmt; resolve_schema; resolve_callable }
 
     parse_func ..> _HirBodyVisitor : drives
-    parse_module_source ..> parse_func : per @func (HIR only)
     parse_prim_func ..> _TirBodyVisitor : drives
     BaseExprVisitor <|-- _HirBodyVisitor
     BaseExprVisitor <|-- _TirBodyVisitor
@@ -808,24 +801,13 @@ classDiagram
 
 ### 3.3 Description
 
-`parse_func` / `parse_prim_func` consume a live Python function
-(`fn`); `topologies` supplies the parse-time namespace a body may name,
-and is not retained on the resulting `Function`. `parse_func_source` /
-`parse_module_source` / `parse_script` accept Python source text.
-Both paths return a `core_ir.Module` for module-level input, but they do not
-cover the same member kinds. The runtime `@tilefoundry.module` decorator builds
-the `core_ir.Module` from the class's already-parsed `@func` / `@prim_func`
-methods. The source-text `parse_module_source` / `parse_script` build it from
-the class body, including every `@func` it owns and each nested `@module`
-class. The source path is **HIR-only**: it MUST reject a `@prim_func`, whether
-as a class member or as the bare top-level function, and the error MUST name
-that boundary rather than report only the absence of an `@func`. Reading TIR
-back from source text is not part of the round trip, because the Python printer
-emits no mixed HIR/TIR module
-([inspection §2.2](./inspection.md#22-module-printer)). A source that declares
-only a bare `@func` returns that `hir.Function`, or the implicit
-single-function `core_ir.Module` when the decorator declares execution
-context — mirroring what executing the same source would bind.
+`parse_func` / `parse_prim_func` consume a live Python function (`fn`);
+`topologies` supplies the parse-time namespace a body may name and is not
+retained on the resulting `Function`. The `@tilefoundry.module` decorator
+builds a `core_ir.Module` from the class's already-parsed `@func` /
+`@prim_func` methods and nested Modules. A standalone `@func` returns an
+`hir.Function`, or the implicit single-function `core_ir.Module` when its
+decorator declares execution context.
 
 The closure dict supplies same-module callee lookup. Names defined
 in the user's Python module (other `@func` / `@prim_func`

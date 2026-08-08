@@ -14,8 +14,8 @@ import textwrap
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.parser.hir_parser import parse_script
 
 
 def _dedent(s: str) -> str:
@@ -36,7 +36,7 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     return totally_undefined_op(x)
 """
     with pytest.raises(VerifyError, match=r"unknown HIR callable|unknown Op name"):
-        parse_script(_dedent(src))
+        import_dsl(_dedent(src))
 
 
 # ── 3. Forbidden AST node ────────────────────────────────────────────────
@@ -54,7 +54,7 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     yield x
 """
     with pytest.raises(VerifyError):
-        parse_script(_dedent(src))
+        import_dsl(_dedent(src))
 
 
 def test_lambda_in_hir_body_raises() -> None:
@@ -70,4 +70,4 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     return g(x)
 """
     with pytest.raises(VerifyError, match="Lambda"):
-        parse_script(_dedent(src))
+        import_dsl(_dedent(src))

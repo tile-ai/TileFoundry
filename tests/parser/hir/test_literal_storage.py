@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare bindings used by @func bodies
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.types import DType
-from tilefoundry.parser.hir_parser import parse_script
 
 _EPS = 1e-6
 
@@ -36,7 +36,7 @@ def test_umat_is_not_an_accepted_surface_storage() -> None:
         "    return x\n"
     )
     with pytest.raises(ValueError, match="unknown storage"):
-        parse_script(src)
+        import_dsl(src)
 
 
 @func
@@ -65,4 +65,4 @@ def test_a_python_float_scalar_takes_the_dtype_of_the_operand_it_meets() -> None
         "    return mul(x, 2)\n"
     )
     with pytest.raises(VerifyError, match="dtype mismatch"):
-        parse_script(integer)
+        import_dsl(integer)

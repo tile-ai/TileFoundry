@@ -1,8 +1,8 @@
 """Python printer renders a dispatch prototype as ``pass`` base + ``.specialize``.
 
 Per [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract) a dispatch prototype's rendering is display-only and must not be used as
-a ``parse_script`` validation artifact, so these check emitted text plus syntax
-validity rather than a parse round-trip.
+a structural round-trip validation artifact, so these check emitted text plus
+syntax validity instead.
 """
 
 from __future__ import annotations

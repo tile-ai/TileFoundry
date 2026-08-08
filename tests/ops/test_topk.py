@@ -21,6 +21,7 @@ from dataclasses import replace
 import pytest
 import torch
 
+from tests._source import import_dsl
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -43,7 +44,6 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.dim import DimVar, dim_min
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -158,7 +158,7 @@ def test_topk_parser_preserves_largest_sorted():
         "    v = topk(x, k=6, axis=-1, largest=False, sorted=True)\n"
         "    return v\n"
     )
-    topk = parse_script(src).body.target
+    topk = import_dsl(src).body.target
     assert isinstance(topk, TopK)
     assert topk.k == 6 and topk.axis == -1
     assert topk.largest is False and topk.sorted is True

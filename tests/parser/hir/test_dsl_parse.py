@@ -18,13 +18,13 @@ from dataclasses import dataclass
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType
-from tilefoundry.parser.hir_parser import parse_script
 
 
 @func
@@ -63,7 +63,7 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     return relu((x, x))
 """
     with pytest.raises(VerifyError, match="Tuple"):
-        parse_script(bad)
+        import_dsl(bad)
 
 
 @dataclass(frozen=True)

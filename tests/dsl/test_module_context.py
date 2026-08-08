@@ -9,19 +9,17 @@ answers for its own effective context without any Function carrying it.
 """
 from __future__ import annotations
 
-import importlib.util
 from dataclasses import replace
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, tf  # noqa: F401 -- used by bodies
-from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CTA = Topology("cta", 132)
@@ -221,133 +219,10 @@ class Layer:
 """
 
 
-def test_member_context_builds_the_same_tree_at_runtime_and_from_source(tmp_path) -> None:
-    def import_source(source: str, name: str):
-        source_path = tmp_path / f"{name}.py"
-        source_path.write_text(source)
-        spec = importlib.util.spec_from_file_location(name, source_path)
-        assert spec is not None and spec.loader is not None
-        loaded = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(loaded)
-        return loaded.Layer
+def test_member_context_builds_its_own_runtime_domain() -> None:
+    imported = import_dsl(_MEMBER_CONTEXT_SOURCE, "Layer")
 
-    imported = import_source(_MEMBER_CONTEXT_SOURCE, "member_context")
-    parsed = parse_script(_MEMBER_CONTEXT_SOURCE)
-
-    assert as_script(parsed) == as_script(imported)
-    assert [function.name for function in parsed.functions] == ["attention"]
-    assert [child.name for child in parsed.modules] == ["softmax"]
-    assert parsed.modules[0].topologies == (Topology("thread", 4),)
-    assert parsed.modules[0].resolve_target() == CudaTarget("nvidia.h200_sxm")
-
-    with_constant = _MEMBER_CONTEXT_SOURCE.replace(
-        "from tilefoundry.target import CudaTarget\n",
-        "from tilefoundry.target import CudaTarget\n\n"
-        '_MEMBER_TOPOLOGIES = (Topology("thread", 4),)\n',
-    )
-    for name, declaration, expected in (
-        ("named_member_context", "_MEMBER_TOPOLOGIES", (Topology("thread", 4),)),
-        (
-            "mixed_member_context",
-            '(Topology("warp", 8), _MEMBER_TOPOLOGIES[0])',
-            (Topology("warp", 8), Topology("thread", 4)),
-        ),
-    ):
-        source = with_constant.replace(
-            '(Topology("thread", 4),))\n    def softmax',
-            f"{declaration})\n    def softmax",
-        )
-        assert import_source(source, name).modules[0].topologies == expected
-        with pytest.raises(VerifyError, match="resolve statically|must be a tuple"):
-            parse_script(source)
-
-    target_source = _MEMBER_CONTEXT_SOURCE.replace(
-        'topologies=(Topology("thread", 4),)',
-        'target=CudaTarget("nvidia.h200_sxm")',
-    ).replace(
-        'Mesh(("thread",), (4,), ("lane",))',
-        'Mesh(("cta",), (2,), ("block",))',
-    )
-    target_errors = []
-    for build in (
-        lambda: import_source(target_source, "target_member_context"),
-        lambda: parse_script(target_source),
-    ):
-        with pytest.raises(
-            ValueError, match="child module 'softmax' declares its own target"
-        ) as error:
-            build()
-        target_errors.append(str(error.value))
-    assert target_errors[0] == target_errors[1]
-
-
-_SOURCE_PRELUDE = """
-import tilefoundry
-from tilefoundry.ir.types.shard.mesh import Topology
-from tilefoundry.dsl import Tensor, tf
-
-@tilefoundry.module(entry="k", topologies={declaration})
-class M:
-
-    @tilefoundry.func
-    def k(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-"""
-
-
-@pytest.mark.parametrize(
-    "declaration", ["1", '[Topology("cta", 1)]', "(1, 2)", "(Topology,)"]
-)
-def test_source_rejects_a_malformed_topology_declaration(declaration: str) -> None:
-    """A declaration the parser cannot read is an error, not an empty domain:
-    silently yielding a topology-free Module would strip the hierarchy every body
-    below it names. Not a tuple, a tuple of non-Topologies, and the Topology class
-    in place of an instance are each unreadable."""
-    with pytest.raises(VerifyError, match="topologies"):
-        parse_script(_SOURCE_PRELUDE.format(declaration=declaration))
-
-
-def test_source_keeps_a_deferred_topology_extent() -> None:
-    """``Topology(name, None)`` is the dynamic-launch extent, so it must parse
-    as a declaration rather than be dropped as unreadable."""
-    parsed = parse_script(_SOURCE_PRELUDE.format(declaration='(Topology("cta", None),)'))
-
-    assert parsed.topologies == (Topology("cta", None),)
-
-
-_PRIM_FUNC_MEMBER = """
-import tilefoundry
-from tilefoundry.dsl import Tensor, tf
-
-@tilefoundry.module(entry="k")
-class M:
-    @tilefoundry.func
-    def k(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-
-    @tilefoundry.prim_func
-    def lowered(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return x
-"""
-
-_BARE_PRIM_FUNC = """
-import tilefoundry
-from tilefoundry.dsl import Tensor
-
-@tilefoundry.prim_func
-def lowered(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    return x
-"""
-
-
-@pytest.mark.parametrize(
-    "source", [_PRIM_FUNC_MEMBER, _BARE_PRIM_FUNC], ids=["member", "bare"]
-)
-def test_source_rejects_a_prim_func_at_the_hir_boundary(source: str) -> None:
-    """Parsing a Module from source text reads HIR only. A TIR member is rejected
-    rather than skipped, so the source never yields a Module that silently lost
-    one of the functions it declares; a top-level ``@prim_func`` is refused for
-    the same reason, and says so, rather than reporting only that no ``@func``
-    was found."""
-    with pytest.raises(VerifyError, match="prim_func"):
-        parse_script(source)
+    assert [function.name for function in imported.functions] == ["attention"]
+    assert [child.name for child in imported.modules] == ["softmax"]
+    assert imported.modules[0].topologies == (Topology("thread", 4),)
+    assert imported.modules[0].resolve_target() == CudaTarget("nvidia.h200_sxm")

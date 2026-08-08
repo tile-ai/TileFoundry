@@ -8,6 +8,7 @@ left-hand side carries, and the target header, whose value must rebuild the
 
 from dataclasses import dataclass, fields, replace
 
+from tests._source import import_dsl
 from tests.fixtures.demo_ir import build_demo
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.ir.core import BindingMetadata, Call, Var
@@ -16,7 +17,6 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import Target, register_target
 from tilefoundry.target.cuda import SM90
 from tilefoundry.target.cuda import CudaTarget as BuiltinCudaTarget
@@ -67,7 +67,7 @@ def test_binding_metadata_names_the_emitted_binding():
     canonical = as_script(function)
 
     # The label is the emitted name, and the emitted name is the whole record of
-    # it: re-parsing reads it back off the left-hand side.
+    # it: importing the emitted file reads it back off the left-hand side.
     assert "result = add(source, source)" in canonical
 
     unbound = Call(
@@ -138,7 +138,7 @@ def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
 
     assert "from tests.inspection.test_python_printer import CudaTarget" in canonical
     assert "from tilefoundry.target.cuda import CudaTarget" not in canonical
-    rebuilt = parse_script(canonical)
+    rebuilt = import_dsl(canonical)
     assert type(rebuilt.target) is CudaTarget
     assert rebuilt.target == target
 

@@ -12,6 +12,7 @@ import textwrap
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
@@ -19,7 +20,6 @@ from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TupleType
-from tilefoundry.parser.hir_parser import parse_script
 
 
 def _dedent(src: str) -> str:
@@ -114,10 +114,10 @@ def bad_targets(x: Tensor[(1, 1536), "bf16"]) -> Tensor[(1, 1536), "fp8e4m3"]:
 def test_tuple_unpack_errors() -> None:
     """Non-TupleType RHS / arity mismatch / nested tuple target all raise."""
     with pytest.raises(VerifyError, match="tuple unpack requires RHS of TupleType"):
-        parse_script(_dedent(_BAD_RHS))
+        import_dsl(_dedent(_BAD_RHS))
 
     with pytest.raises(VerifyError, match="tuple unpack arity mismatch"):
-        parse_script(_dedent(_BAD_TARGETS.format(targets="a, b, c")))
+        import_dsl(_dedent(_BAD_TARGETS.format(targets="a, b, c")))
 
     with pytest.raises(VerifyError, match="targets must all be plain names"):
-        parse_script(_dedent(_BAD_TARGETS.format(targets="(a, b), c")))
+        import_dsl(_dedent(_BAD_TARGETS.format(targets="(a, b), c")))

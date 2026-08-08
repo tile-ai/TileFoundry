@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests._source import import_dsl
 from tests.ops.typeinfer_utils import (
     infer_call,
 )
@@ -16,7 +17,6 @@ from tilefoundry.ir.types import DType, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
-from tilefoundry.parser.hir_parser import parse_script
 
 _M = make_mesh((4,))
 
@@ -51,7 +51,7 @@ def _double_cast_fn(n: int, io_dtype: str, mid_dtype: str):
         f'def rt(x: Tensor[({n},), "{io_dtype}"]) -> Tensor[({n},), "{io_dtype}"]:\n'
         f'    return tf.cast(tf.cast(x, "{mid_dtype}"), "{io_dtype}")\n'
     )
-    return parse_script(src)
+    return import_dsl(src)
 
 
 #: The low-precision dtypes the evaluator does support, each against torch's own.
@@ -91,6 +91,6 @@ def test_cast_f4e2m1_has_no_evaluator_support():
         'def rt(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f4e2m1"]:\n'
         '    return tf.cast(x, "f4e2m1")\n'
     )
-    fn = parse_script(src)
+    fn = import_dsl(src)
     with pytest.raises(EvalError, match=r"unsupported dtype.*f4e2m1"):
         evaluate(fn, torch.randn(4), device="cpu")

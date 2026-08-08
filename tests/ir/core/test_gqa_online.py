@@ -18,6 +18,7 @@ import math
 import pytest
 import torch
 
+from tests._source import import_dsl
 from tests.fixtures.gqa_online import (
     GQA_GROUP,
     HEAD_DIM,
@@ -31,7 +32,6 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import CudaTarget
 
 Hq, Hkv, D, G = NUM_Q_HEADS, NUM_KV_HEADS, HEAD_DIM, GQA_GROUP
@@ -136,7 +136,7 @@ def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
         (topology.name, topology.size) for topology in static_online_attend.effective_topologies()
     ) == (("cta", 132),)
 
-    reparsed = parse_script(as_script(static_online_attend))
+    reparsed = import_dsl(as_script(static_online_attend))
     reparsed_regions = tuple(
         expr for expr in _walk_ir(reparsed.entry_function().body) if isinstance(expr, GridRegionExpr)
     )

@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests._source import import_dsl
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -31,7 +32,6 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -96,7 +96,7 @@ def _eval_rankn(dst: torch.Tensor, upd: torch.Tensor, lit_offsets, runtime_axis=
         f'def ins(dst: Tensor[({d}), "f32"], upd: Tensor[({u}), "f32"]{extra}) -> Tensor[({d}), "f32"]:\n'
         f"    return tf.insert_slice(dst, upd, ({', '.join(elems)}))\n"
     )
-    return evaluate(parse_script(src), *inputs, device="cpu")
+    return evaluate(import_dsl(src), *inputs, device="cpu")
 
 
 def _ref_scatter(dst, upd, offsets):

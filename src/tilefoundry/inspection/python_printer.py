@@ -107,7 +107,8 @@ def _comments(expr: Expr, options: PythonPrintOptions) -> str:
     line these comments sit on -- printing it again as ``loc="x"`` said ``x``
     twice, and said the *emitted* name at that, so the one thing a second copy
     could have carried (that two printed values share one authored label) was
-    what it dropped. Re-parsing recovers the label from the left-hand side.
+    what it dropped. Importing the emitted file recovers the label from the
+    left-hand side.
 
     The type carries no key either. The fragment is a type, which is what a type
     annotation looks like, so ``type=`` in front of it was a word saying what the
@@ -457,8 +458,8 @@ def _op_name(target) -> str:
 
     1. Kinded ``Binary`` / ``Unary`` instances render as
        their surface alias (``add`` / ``cmp_eq`` / ``neg`` / ...) —
-       not as ``binary(..., kind=BinaryKind.ADD)`` which would fail to
-       re-parse without ``BinaryKind`` in scope.
+       not as ``binary(..., kind=BinaryKind.ADD)`` which would fail on import
+       without ``BinaryKind`` in scope.
     2. ``target._op_schema.name`` — set by ``@register_op``; this is
        the canonical DSL name and works for ops with non-trivial class
        names (e.g. ``Mma_SM80_16x8x16`` → ``mma_sm80_16x8x16``).
@@ -487,8 +488,8 @@ def _kinded_alias_name(target) -> str | None:
 
     Per-name HIR math classes are gone; the IR instance is
     ``Binary(kind=...)`` / ``Unary(kind=...)``. Round-trip printing
-    must emit the alias surface name so the regenerated DSL source
-    re-parses against the same alias schema.
+    must emit the alias surface name so importing the regenerated DSL source
+    uses the same alias schema.
     """
     if isinstance(target, Binary):
         kind = getattr(target, "kind", None)
@@ -798,12 +799,12 @@ def _emit_def(
 
     def _arg_ref(a) -> str:
         # A tuple-valued input (e.g. insert_slice's per-axis offsets) renders
-        # inline as a literal so the parser's narrow route lifts it back to a
-        # core Tuple on re-parse.
+        # inline as a literal so importing the file lifts it back to a core
+        # Tuple through the authoring parser.
         return _tuple_literal(a.elements) if isinstance(a, Tuple) else _expr_ref(a)
 
-    # Function signature. A ``TupleType`` return has no surface annotation; it
-    # is re-inferred from the literal tuple ``return`` body on re-parse.
+    # Function signature. A ``TupleType`` return has no surface annotation; the
+    # authoring parser re-infers it from the literal tuple ``return`` body.
     return_ty = fn.return_type
     arrow = ""
     if isinstance(return_ty, TensorType):
@@ -892,7 +893,7 @@ def _emit_def(
                 attr_strs.append(f"{param.name}={value}")
         # Positional operands and attributes are one argument list. An op with
         # attributes and no operands -- zeros(shape=..., dtype=...) -- would
-        # otherwise be printed with a leading comma and not parse back.
+        # otherwise be printed with a leading comma and fail on import.
         arguments = [_arg_ref(arg) for arg in expr.args] + attr_strs
         return f"{_op_name(target)}({', '.join(arguments)})"
 
@@ -985,8 +986,8 @@ def _emit_def(
         if isinstance(expr, Tuple):
             # A tuple is rendered inline at its use site: as a literal argument
             # (op input) or by the ``return`` statement (function body). The
-            # parser lifts an inline offset tuple back to a core Tuple, whereas a
-            # hoisted ``name = (...)`` binding would not re-parse.
+            # authoring parser lifts an inline offset tuple back to a core Tuple,
+            # whereas a hoisted ``name = (...)`` binding would not rebuild it.
             continue
         if isinstance(expr, Call):
             name = _names[id(expr)]

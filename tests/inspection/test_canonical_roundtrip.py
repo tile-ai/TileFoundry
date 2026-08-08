@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from tests._source import import_dsl
 from tests.fixtures.demo_canonical import build_demo_canonical
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import TensorType
-from tilefoundry.parser.hir_parser import parse_script
 
 
 def _structural_equal(a, b) -> bool:
@@ -71,6 +71,6 @@ def test_canonical_roundtrip_preserves_topologies_and_compiles() -> None:
     compile(src, "<test>", "exec")
     assert "topologies=" in src
 
-    mod2 = parse_script(src)
+    mod2 = import_dsl(src)
     assert mod2.topologies == mod1.topologies
     assert _structural_equal(mod1.entry_function(), mod2.entry_function())
