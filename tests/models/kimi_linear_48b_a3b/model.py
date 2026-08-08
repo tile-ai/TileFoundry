@@ -625,7 +625,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             shared = shared_expert(tokens, sh_gate, sh_up, sh_down)
             return tf.reshape(routed + shared, new_shape=(1, S, config.hidden_size))
 
-    @module(target=CudaTarget("nvidia.h200_sxm"))
+    @module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
     class KimiLinear48BA3B:
         """The three kernels this model is, as one tree.
 
@@ -635,7 +635,6 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
         reached through.
         """
 
-        topologies = (Topology("cta", 132), Topology("thread", 512))
 
         kda = KimiKda
         mla = KimiMla

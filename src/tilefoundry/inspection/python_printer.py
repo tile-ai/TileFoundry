@@ -1182,42 +1182,26 @@ def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
 
 
 def _module_decorator_line(mod: Module, entry_name: str | None) -> str:
-    """The ``@module(...)`` line declaring this Module's entry and Target. An
-    inherited Target prints nothing, and a Module with no default step prints no
-    ``entry``, so a re-parse rebuilds the same declaration/inheritance split."""
+    """Render the context this Module declares as an ``@module(...)`` line."""
     kwargs = [] if entry_name is None else [f'entry="{entry_name}"']
     if mod.target is not None:
         rendered: PythonExpr = mod.target.to_python()
         kwargs.append(f"target={rendered.text}")
+    if mod.topologies is not None:
+        topo_strs = [f'Topology("{t.name}", {t.size})' for t in mod.topologies]
+        rendered_topologies = f'({", ".join(topo_strs)},)' if topo_strs else "()"
+        kwargs.append(f"topologies={rendered_topologies}")
     return f"@module({', '.join(kwargs)})" if kwargs else "@module"
-
-
-def _topologies_declaration(mod: Module) -> str | None:
-    """The class-body ``topologies`` assignment, or ``None`` when this Module
-    inherits its hierarchy. It leads the body so a function parsed below it can
-    name one of those levels."""
-    if mod.topologies is None:
-        return None
-    if not mod.topologies:
-        return "topologies = ()"
-    topo_strs = [f'Topology("{t.name}", {t.size})' for t in mod.topologies]
-    return f'topologies = ({", ".join(topo_strs)},)'
 
 
 def _emit_module_class(
     mod: Module, module_name: str, mesh_map: dict[int, str], indent: str,
     options: PythonPrintOptions,
 ) -> list[str]:
-    """One ``@module`` class block: its topology declaration, its functions,
-    then its nested Modules."""
+    """One ``@module`` class block: its functions, then its nested Modules."""
     functions = _module_hir_functions(mod)
     entry = mod.entry_function() if functions and mod.entry is not None else None
     lines = [_module_decorator_line(mod, mod.entry), f"class {module_name}:"]
-    declaration = _topologies_declaration(mod)
-    if declaration is not None:
-        lines.append(f"{indent}{declaration}")
-        lines.append("")
-
     ordered = tuple(fn for fn in functions if fn is not entry)
     if entry is not None:
         ordered += (entry,)

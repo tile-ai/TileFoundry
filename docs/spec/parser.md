@@ -636,13 +636,13 @@ surface so editors complete `T.cuda.mma.<NAME>` and `.atom(...)`.
 
 ### 2.7 `@module` authoring surface
 
-`@module(entry="<name>", target=...)` collects a class body into a `Module`
+`@module(entry="<name>", target=..., topologies=(Topology(...), ...))` collects
+a class body into a `Module`
 ([core-ir §1](./core-ir.md#1-module)). The decorated name binds to the
 resulting `Module`. `target` MUST be a constructed Target instance;
 a string MUST be refused and MUST NOT be resolved or constructed. The value
-declares the hardware the domain runs on; the
-ordered `Topology` hierarchy is declared by a `topologies` assignment in the
-class body instead (see below).
+declares the hardware the domain runs on. `topologies` declares the ordered
+`Topology` hierarchy (see below).
 
 A file of `@module` classes is an ordinary importable Python module: every name
 its class bodies read — the shape configuration above all — MUST resolve within
@@ -663,8 +663,7 @@ against the locals of every scope enclosing it, innermost first, so a parameter
 of that function is as visible to a nested class body as a module-level import
 is.
 
-- Every non-dunder class member MUST be one of four kinds: the `topologies`
-  declaration; an `@func` /
+- Every non-dunder class member MUST be one of three kinds: an `@func` /
   `@prim_func` result (an `hir.Function` / `tir.PrimFunction`); a child
   `Module` — or a tuple/list of them, how a factory attaches N identical
   instances under one attribute (each already named by the factory, e.g.
@@ -704,10 +703,10 @@ is.
 - A member MAY call a sibling **defined above it** (the call resolves to the
   sibling function / launches a sibling device kernel); a forward reference to a
   sibling defined below stays unresolved and MUST fail.
-- A `topologies = (Topology(...), ...)` assignment declares the domain's
-  complete ordered hierarchy and MUST precede the functions that name one of
-  its levels. Omitting it inherits the owning class's hierarchy; `()` declares
-  an explicitly topology-free domain. The value MUST be a tuple of `Topology`;
+- The `topologies=(Topology(...), ...)` decorator argument declares the
+  domain's complete ordered hierarchy. Omitting it inherits the owning class's
+  hierarchy; `()` declares an explicitly topology-free domain. The value MUST
+  be a tuple of `Topology`;
   a value that is not, or an entry the parser cannot resolve statically, MUST be
   rejected rather than read as an empty hierarchy. A deferred extent
   (`Topology("cta", None)`, [target §4](./target.md#4-cudatarget)) is a
@@ -715,9 +714,9 @@ is.
   unresolvable.
 - The printer emits this surface: shared meshes at module level (before the
   class) so the class body stays declaration-and-function-only, then
-  `@module(entry="<entry>")` — or a bare `@module` for a Module that declares
-  neither an entry nor a target — then the `topologies` declaration when the
-  Module makes one, then the functions and nested Modules.
+  `@module(entry="<entry>", topologies=(...))` — or a bare `@module` for a
+  Module that declares no entry, target, or topology hierarchy — then the
+  functions and nested Modules.
 
 #### Design rationale
 
@@ -725,14 +724,13 @@ is.
 because a class decorator's arguments are evaluated before the class body runs,
 so the entry function does not yet exist when `@module(entry=...)` is called.
 
-`topologies` is a class-body assignment rather than a decorator argument for
-the mirror-image reason. A function body MAY name a level of its domain
-(`with Mesh(("cta",), ...)`), and that name has to resolve while the
-body is parsed — which happens as the class body runs, before the decorator is
-applied. A class-body assignment is already bound at that point, so the
-declaration is readable exactly when it is needed; a decorator argument is
-not. `target` stays a decorator argument because nothing consumes it until
-after the `Module` exists.
+The `topologies` decorator argument is evaluated before the class body runs.
+The resulting declaration is retained while that body is evaluated, so a
+function body MAY name a level of its domain (`with Mesh(("cta",), ...)`) when
+`@func` parses it. Nested `@module` bodies resolve the declaration belonging to
+their own class body first; omission walks outward to the owning class, while
+an explicit `()` stops inheritance. `target` needs no such early lookup because
+nothing consumes it until after the `Module` exists.
 
 ## 3. Parser architecture
 

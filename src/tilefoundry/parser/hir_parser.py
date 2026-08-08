@@ -1264,11 +1264,7 @@ def _module_entry_name(cls_node: ast.ClassDef) -> str | None:
 
 
 def _module_declared_context(cls_node: ast.ClassDef, closure: dict[str, Any]):
-    """The ``(target, topologies)`` this class declares: ``target`` from the
-    ``@module`` decorator, ``topologies`` from the class body's ``topologies``
-    assignment. ``topologies`` stays ``None`` when the class body has no such
-    assignment, so inheritance and an explicit empty declaration remain
-    distinguishable."""
+    """The ``(target, topologies)`` declared by this class's decorator."""
     call = _module_decorator_call(cls_node)
     target = None
     topologies: tuple[Topology, ...] | None = None
@@ -1279,30 +1275,23 @@ def _module_declared_context(cls_node: ast.ClassDef, closure: dict[str, Any]):
                 target = target_instance(value, subject="module target")
             except TypeError as error:
                 raise VerifyError(str(error)) from None
-    for stmt in cls_node.body:
-        # The hierarchy is declared by a class-body assignment, not a decorator
-        # argument, so a function parsed below it can name one of its levels.
-        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
-            continue
-        name = stmt.targets[0]
-        if not isinstance(name, ast.Name) or name.id != "topologies":
-            continue
-        if not isinstance(stmt.value, (ast.Tuple, ast.List)):
-            raise VerifyError(
-                f"@module class {cls_node.name!r}: topologies must be a tuple "
-                f"of Topology(...) declarations, got {ast.unparse(stmt.value)}"
-            )
-        items = []
-        for elt in stmt.value.elts:
-            topo = _parse_topology_item(elt)
-            if topo is None:
+        elif kw.arg == "topologies":
+            if not isinstance(kw.value, ast.Tuple):
                 raise VerifyError(
-                    f"@module class {cls_node.name!r}: topologies entry "
-                    f"{ast.unparse(elt)} is not a Topology(name, size) "
-                    "declaration the parser can resolve statically"
+                    f"@module class {cls_node.name!r}: topologies must be a tuple "
+                    f"of Topology(...) declarations, got {ast.unparse(kw.value)}"
                 )
-            items.append(topo)
-        topologies = tuple(items)
+            items = []
+            for elt in kw.value.elts:
+                topo = _parse_topology_item(elt)
+                if topo is None:
+                    raise VerifyError(
+                        f"@module class {cls_node.name!r}: topologies entry "
+                        f"{ast.unparse(elt)} is not a Topology(name, size) "
+                        "declaration the parser can resolve statically"
+                    )
+                items.append(topo)
+            topologies = tuple(items)
     return target, topologies
 
 

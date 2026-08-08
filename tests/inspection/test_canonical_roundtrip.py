@@ -69,19 +69,8 @@ def test_canonical_roundtrip_preserves_topologies_and_compiles() -> None:
     mod1 = build_demo_canonical()
     src = as_script(mod1)
     compile(src, "<test>", "exec")
-    assert "@module(entry=" in src and "topologies = (" in src
-    assert 'Topology("cta", 128)' in src
+    assert "topologies=" in src
 
     mod2 = parse_script(src)
     assert mod2.topologies == mod1.topologies
     assert _structural_equal(mod1.entry_function(), mod2.entry_function())
-
-
-def test_canonical_module_form_roundtrip() -> None:
-    """``@module`` form preserves topologies in the class-body @func decorator."""
-
-    mod1 = build_demo_canonical()
-    src = as_script(mod1, module="M")
-    assert "@module" in src and "class M:" in src and "topologies = (" in src
-    mod2 = parse_script(src)
-    assert len(mod2.topologies) == 2

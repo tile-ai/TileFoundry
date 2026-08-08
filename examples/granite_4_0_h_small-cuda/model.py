@@ -588,13 +588,12 @@ def attention_mask(step, device, dtype=None):
     return row.reshape(1, 1, _CAP)
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"))
+@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 256)))
 class Granite4_0_H_Small:
     """The layer stack in `config.layer_types` order, and the step around it --
     embedding, the walk, the closing norm, the head. Each layer is an
     independent copy, so an analysis of one annotates only it."""
 
-    topologies = (Topology("cta", 132), Topology("thread", 256))
 
     # The published layer-type cycle determines each layer Module.
     layers = tuple(

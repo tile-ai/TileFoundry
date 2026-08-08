@@ -222,7 +222,7 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     torch.testing.assert_close(got.float(), expected.float(), atol=0, rtol=0)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _LoopOnly:
     """A context length that appears nowhere in the signature.
 
@@ -230,7 +230,6 @@ class _LoopOnly:
     it is, which is what makes this the case a signature-driven rebuild misses.
     """
 
-    topologies = (Topology("cta", 1),)
 
     @func
     def main(x: Tensor[(8,), "f32"]):

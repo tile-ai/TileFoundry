@@ -220,13 +220,12 @@ _KV_HEADS = 1
 _HEAD_DIM = 4
 
 
-@module(entry="decode_step")
+@module(entry="decode_step", topologies=(Topology("thread", 1),))
 class _DecodeStep:
     """A single decode step exercising the in-place loop-carry lowerings: a
     two-carry grid region (output accumulator + running total → a tuple, so
     ``tuple_get_item``), ``full_like`` inits, an in-place ``insert_slice`` write
     at a dynamic scalar offset, and a rank-4 ``cache_update`` KV write."""
-    topologies = (Topology("thread", 1),)
 
 
     @func
@@ -344,12 +343,11 @@ _NW_UB, _NW_UC = 2, 3  # window extent on axis 1 / axis 2 (partial: 3 of 6)
 _NW_STEPS = 2
 
 
-@module(entry="nd_window")
+@module(entry="nd_window", topologies=(Topology("thread", 1),))
 class _NdWindow:
     """A loop-carried rank-3 in-place ``insert_slice`` writing a non-trivial,
     non-contiguous window (full axis 0, window 2 on axis 1, partial 3-of-6 on
     axis 2) at the induction variable as the middle-axis tile coordinate."""
-    topologies = (Topology("thread", 1),)
 
 
     @func

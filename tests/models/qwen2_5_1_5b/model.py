@@ -278,11 +278,10 @@ class Qwen2_5_1_5B_DecoderLayer:
         return h1 + mlp_out, k_new, v_new
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"))
+@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen2_5_1_5B:
     """The ordered layer stack plus the norm that closes it."""
 
-    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
         Qwen2_5_1_5B_DecoderLayer.renamed(f"layer{index}")

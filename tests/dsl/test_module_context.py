@@ -14,7 +14,7 @@ from dataclasses import replace
 import pytest
 
 from tilefoundry import func, module
-from tilefoundry.dsl import Tensor, tf  # noqa: F401 -- tf used by bodies
+from tilefoundry.dsl import Mesh, Tensor, tf  # noqa: F401 -- used by bodies
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -27,9 +27,8 @@ _WARP = Topology("warp", 4)
 _THREAD = Topology("thread", 32)
 
 
-@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA, _WARP))
 class _Root:
-    topologies = (_CTA, _WARP)
 
     @func
     def forward(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -41,17 +40,15 @@ class _Root:
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.relu(x)
 
-    @module(entry="step")
+    @module(entry="step", topologies=())
     class topology_free:
-        topologies = ()
 
         @func
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.relu(x)
 
-    @module(entry="step")
+    @module(entry="step", topologies=(_THREAD,))
     class replaces:
-        topologies = (_THREAD,)
 
         @func
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -109,6 +106,77 @@ def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
         _Root.replaces.resolve_topology("cta")
 
 
+@pytest.mark.parametrize("invalid", [[_CTA], (_CTA, object())])
+def test_module_rejects_a_non_topology_tuple(invalid) -> None:
+    with pytest.raises(TypeError, match="topologies must be a tuple of Topology"):
+
+        @module(topologies=invalid)
+        class Invalid:
+            pass
+
+
+def test_a_raising_class_body_is_not_visible_to_a_later_standalone_func() -> None:
+    try:
+
+        @module(topologies=(Topology("leaked", 1),))
+        class Failed:
+            raise RuntimeError("class body failed")
+    except RuntimeError:
+        pass
+
+    with pytest.raises(VerifyError, match="topology 'leaked' not declared"):
+
+        @func
+        def probe(x: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:
+            with Mesh(("leaked",), (1,), ("lane",)) as _mesh:
+                return tf.relu(x)
+
+
+def test_a_deeper_failed_body_is_not_inherited_by_a_shallower_module() -> None:
+    def fail_one_level_deeper() -> None:
+        try:
+
+            @module(topologies=(Topology("leaked", 1),))
+            class Failed:
+                raise RuntimeError("class body failed")
+        except RuntimeError:
+            pass
+
+    fail_one_level_deeper()
+
+    with pytest.raises(VerifyError, match="topology 'leaked' not declared"):
+
+        @module(entry="probe")
+        class Later:
+            @func
+            def probe(x: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:
+                with Mesh(("leaked",), (1,), ("lane",)) as _mesh:
+                    return tf.relu(x)
+
+
+def test_a_failed_body_is_not_inherited_by_a_deeper_module() -> None:
+    try:
+
+        @module(topologies=(Topology("leaked", 1),))
+        class Failed:
+            raise RuntimeError("class body failed")
+    except RuntimeError:
+        pass
+
+    def define_one_level_deeper():
+        @module(entry="probe")
+        class Later:
+            @func
+            def probe(x: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:
+                with Mesh(("leaked",), (1,), ("lane",)) as _mesh:
+                    return tf.relu(x)
+
+        return Later
+
+    with pytest.raises(VerifyError, match="topology 'leaked' not declared"):
+        define_one_level_deeper()
+
+
 def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
     """An unresolved level lists the levels in scope, and a repeated level is
     rejected at construction -- a duplicate name would make lexical resolution
@@ -154,9 +222,8 @@ import tilefoundry
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.dsl import Tensor, tf
 
-@tilefoundry.module(entry="k")
+@tilefoundry.module(entry="k", topologies={declaration})
 class M:
-    topologies = {declaration}
 
     @tilefoundry.func
     def k(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -164,7 +231,9 @@ class M:
 """
 
 
-@pytest.mark.parametrize("declaration", ["1", "(1, 2)", "(Topology,)"])
+@pytest.mark.parametrize(
+    "declaration", ["1", '[Topology("cta", 1)]', "(1, 2)", "(Topology,)"]
+)
 def test_source_rejects_a_malformed_topology_declaration(declaration: str) -> None:
     """A declaration the parser cannot read is an error, not an empty domain:
     silently yielding a topology-free Module would strip the hierarchy every body

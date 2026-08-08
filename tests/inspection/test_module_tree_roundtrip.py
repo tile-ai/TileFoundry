@@ -19,9 +19,8 @@ _CTA = Topology("cta", 132)
 _THREAD = Topology("thread", 32)
 
 
-@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
 class _Tree:
-    topologies = (_CTA,)
 
     @func
     def forward(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -37,13 +36,18 @@ class _Tree:
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.relu(x)
 
-    @module(entry="step")
+    @module(entry="step", topologies=(_THREAD,))
     class replaces:
-        topologies = (_THREAD,)
 
         @func
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.square(x)
+
+    @module(topologies=())
+    class topology_free:
+        @func
+        def helper(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+            return tf.relu(x)
 
     @module
     class nominates_nothing:
@@ -76,7 +80,7 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     reparsed = parse_script(as_script(_Tree))
 
     assert sorted(child.name for child in reparsed.modules) == [
-        "inherits", "nominates_nothing", "replaces",
+        "inherits", "nominates_nothing", "replaces", "topology_free",
     ]
     assert _child(reparsed, "inherits").entry == "step"
     assert _child(reparsed, "replaces").entry_function().name == "step"
@@ -90,6 +94,10 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     replaces = _child(reparsed, "replaces")
     assert replaces.topologies == (_THREAD,)
     assert replaces.effective_topologies() == (_THREAD,)
+
+    topology_free = _child(reparsed, "topology_free")
+    assert topology_free.topologies == ()
+    assert topology_free.effective_topologies() == ()
 
 
 def test_a_child_nominating_no_step_prints_as_a_bare_decorator() -> None:

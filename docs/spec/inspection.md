@@ -131,7 +131,7 @@ ownership. It MUST emit only what a Module *declares*, never what the Module
 resolves to — an inherited Target or topology hierarchy prints nothing, so
 the declaration-versus-inheritance split survives the round trip. A declared
 Target prints as the `@module(target=...)` argument and a declared hierarchy
-as the class body's leading `topologies` assignment
+as the `@module(topologies=...)` argument
 ([parser §2.7](./parser.md#27-module-authoring-surface)).
 
 The printer MUST import the concrete Target class from its provider module and
