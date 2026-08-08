@@ -8,6 +8,7 @@ from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.types.shard import product
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.layout_algebra import apply as _apply
 from tilefoundry.ir.types.shard.layout_algebra import size as _size
@@ -147,7 +148,7 @@ def participation(mesh: Mesh) -> Participation:
 
     Raises ``VerifyError`` for a malformed mesh (dynamic extent) or an
     unsupported slice (non-contiguous / overlapping)."""
-    domain = mesh.topology_domain()
+    domain = product(mesh.topologies)
     if domain is None:
         raise VerifyError(
             "T.sync: a mesh with a dynamic topology extent cannot be classified; "

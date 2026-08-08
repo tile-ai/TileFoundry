@@ -46,7 +46,7 @@ def _render_mesh_type(mesh, ctx=None) -> str:
         if entry:
             return entry[0]  # alias name
         # try structural fallback: compare inline type string
-        topo = mesh.topology
+        topo = mesh.topologies[0]
         scope = topology_scope_str(topo.name)
         ml = mesh.layout
         shape_args = ", ".join(f"cute::Int<{s}>" for s in ml.shape)
@@ -59,7 +59,7 @@ def _render_mesh_type(mesh, ctx=None) -> str:
         for alias_name, type_str in ctx._mesh_aliases.values():
             if type_str == inline:
                 return alias_name
-    topo = mesh.topology
+    topo = mesh.topologies[0]
     scope = topology_scope_str(topo.name)
     ml = mesh.layout
     shape_args = ", ".join(f"cute::Int<{s}>" for s in ml.shape)
@@ -117,7 +117,7 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
     the dynamic path; an unmapped dynamic dim also raises rather than falling
     back to an envelope bound.
     """
-    sll, ml, topo = sl.layout, sl.mesh.layout, sl.mesh.topology
+    sll, ml, topo = sl.layout, sl.mesh.layout, sl.mesh.topologies[0]
 
     def _static_dim(value, what):
         if not isinstance(value, int):

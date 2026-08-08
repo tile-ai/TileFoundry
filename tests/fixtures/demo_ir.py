@@ -3,7 +3,7 @@
 ⚠️ **Legacy fixture** — Uses closure-captured ``shared_layout`` /
 ``reg_layout`` / ``cta_mesh`` / ``thread_mesh`` at module level. This
 pattern is NOT canonical. Prefer ``tests/fixtures/demo_canonical.py``
-which uses ``@func(topologies=...)`` + ``with Mesh(topology="cta", ...)``.
+which uses ``@func(topologies=...)`` + ``with Mesh(("cta",), ...)``.
 
 Also provides the legacy ``build_demo()`` API returning ``(Function, cta_mesh,
 thread_mesh)`` for backwards compatibility with existing tests.
@@ -28,8 +28,8 @@ from tilefoundry.ir.types.shard import (
 cta_topo = Topology("cta", 128)
 thread_topo = Topology("thread", 8 * 32)
 
-cta_mesh = Mesh(topology=cta_topo, layout=Layout(shape=(128,), strides=(1,)))
-thread_mesh = Mesh(topology=thread_topo, layout=Layout(shape=(8, 32), strides=(32, 1)))
+cta_mesh = Mesh(topologies=(cta_topo,), layout=Layout(shape=(128,), strides=(1,)))
+thread_mesh = Mesh(topologies=(thread_topo,), layout=Layout(shape=(8, 32), strides=(32, 1)))
 
 LOGICAL_SHAPE = (1, 1536)
 

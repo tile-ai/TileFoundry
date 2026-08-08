@@ -1,6 +1,7 @@
 """Match an enclosing mesh scope against an op's required thread scope."""
 from __future__ import annotations
 
+from .int_tuple import product
 from .layout import Layout
 from .layout_algebra import is_inverse_projectable, size
 from .mesh import Mesh
@@ -10,23 +11,26 @@ def _as_layout(mesh: Mesh) -> Layout:
     return Layout(shape=tuple(mesh.layout.shape), strides=tuple(mesh.layout.strides))
 
 
+def states_consistent_positions(mesh: Mesh) -> bool:
+    declared = product(mesh.topologies)
+    return declared is None or declared == size(mesh.layout)
+
+
 def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     """True iff ``current`` provides the thread participation ``required`` needs."""
     # Same program topology level — a `cta` scope is never a `thread`/warp scope.
-    if current.topology.name != required.topology.name:
+    if current.topologies[0].name != required.topologies[0].name:
         return False
 
-    cur_domain = current.topology_domain()
-    req_domain = required.topology_domain()
+    cur_domain = product(current.topologies)
+    req_domain = product(required.topologies)
     if cur_domain is None or req_domain is None:
         return False
 
     cur_layout = _as_layout(current)
     req_layout = _as_layout(required)
 
-    # Self-consistent mesh: topology domain == layout extent (Mesh does not
-    # enforce this, so a `thread(64)` carrying a 32-element layout is rejected).
-    if cur_domain != size(cur_layout) or req_domain != size(req_layout):
+    if not states_consistent_positions(current) or not states_consistent_positions(required):
         return False
 
     # Must be an admissible execution scope (injective, compact-ordered).
@@ -39,4 +43,4 @@ def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     return cur_layout.shape == req_layout.shape and cur_layout.strides == req_layout.strides
 
 
-__all__ = ["mesh_scope_matches_required_scope"]
+__all__ = ["mesh_scope_matches_required_scope", "states_consistent_positions"]

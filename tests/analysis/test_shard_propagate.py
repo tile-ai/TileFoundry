@@ -23,8 +23,8 @@ from tilefoundry.visitor_registry.shard_propagate import (
     partial_reductions_by_axis,
 )
 
-_GPU = Mesh(Topology("gpu", 8), (8,), names=("g",))
-_GPU2 = Mesh(Topology("gpu", 4), (2, 2), names=("a", "b"))
+_GPU = Mesh((Topology("gpu", 8),), Layout((8,), (1,)), names=("g",))
+_GPU2 = Mesh((Topology("gpu", 4),), Layout((2, 2), (2, 1)), names=("a", "b"))
 
 
 def _matmul_relation() -> AccessRelationResult:

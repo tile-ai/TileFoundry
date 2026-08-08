@@ -90,7 +90,7 @@ class Module:
 - Same-module `@prim_func` calls resolve through the module's symbol
   table, not Python closures.
 - `topologies` is the execution domain's complete ordered hierarchy.
-  `with Mesh(topology="cta", ...)` inside a function body names one of the
+  `with Mesh(("cta",), layout=...)` inside a function body names one of the
   effective levels and creates a lexical mesh binding.
 
 **Effective context.** `target` and `topologies` record what a Module

@@ -157,7 +157,7 @@ def candidate_atoms(op: Call, target: Target | None = None) -> list[AtomFact]:
                     "c_reg_bytes": c_bytes,
                     "reg_bytes": a_bytes + b_bytes + c_bytes,
                 },
-                resource={"lane": atom.required_scope.topology.size},
+                resource={"lane": atom.required_scope.topologies[0].size},
                 is_async=_is_async_op(mma_op),
                 atom=atom,
             )

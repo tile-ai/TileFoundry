@@ -21,7 +21,7 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, MeshAxis
+from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Partial,
@@ -196,25 +196,21 @@ def _resolve_mesh(name: str, mesh_by_name: dict[str, Mesh]) -> Mesh:
     return mesh
 
 
-def _resolve_mesh_axis(mesh: Mesh, axis_name: str) -> MeshAxis:
+def _resolve_mesh_axis(mesh: Mesh, axis_name: str) -> int:
     """Resolve a mesh axis by name (preferred) or x/y/z position fallback.
 
     - If *mesh* has ``names``, resolve by matching name.
     - If *axis_name* is ``"x"``, ``"y"``, or ``"z"``, resolve by position.
     - Otherwise, raises ``ValueError``.
     """
-    # First try named axis
-    axis = mesh.axis_named(axis_name)
-    if axis is not None:
-        return axis
-    # Fallback: x/y/z positional
-    if axis_name == "x":
-        return mesh.x
-    if axis_name == "y":
-        return mesh.y
-    if axis_name == "z":
-        return mesh.z
-    available = list(mesh.names) if mesh.names else ["x", "y", "z"][: len(mesh.axes)]
+    for index, name in enumerate(mesh.names):
+        if name == axis_name:
+            return index
+    if axis_name in ("x", "y", "z"):
+        index = ("x", "y", "z").index(axis_name)
+        if index < len(mesh.layout.shape):
+            return index
+    available = list(mesh.names) if mesh.names else ["x", "y", "z"][: len(mesh.layout.shape)]
     raise VerifyError(
         f"mesh has no axis named {axis_name!r}; available: {available}"
     )
@@ -400,7 +396,7 @@ def parse_shard_layout_sugar(
                 "context; use verbose ShardLayout(...) to disambiguate"
             )
 
-    mesh_rank = len(resolved_mesh.axes)
+    mesh_rank = len(resolved_mesh.layout.shape)
     attrs_list: list[ShardAttr] = [Broadcast() for _ in range(mesh_rank)]
 
     for dim, _mesh, m_axis, kind, _reduction in parsed:
@@ -510,7 +506,7 @@ def _parse_value_state(
             raise VerifyError(f"undefined mesh {mesh_name!r}")
         axis = _resolve_mesh_axis(mesh, axis_name)
         reduction = _eval_ast(elt.right.args[0])
-        out.append((mesh, axis.index, reduction))
+        out.append((mesh, axis, reduction))
     return out
 
 
@@ -585,7 +581,7 @@ def _parse_layout_item(
                 raise VerifyError(f"undefined mesh {mesh_name!r}")
             axis = _resolve_mesh_axis(mesh, axis_name)
             if not canonicalize:
-                return [(dim, mesh, axis.index, "split", None)]
+                return [(dim, mesh, axis, "split", None)]
             return _canonicalize_single_axis(dim, mesh, axis)
 
         # Case 3-bis (``int @ mesh`` shorthand for single-axis mesh):
@@ -596,15 +592,15 @@ def _parse_layout_item(
             mesh = mesh_resolver(rhs.id)
             if mesh is None:
                 raise VerifyError(f"undefined mesh {rhs.id!r}")
-            axes = mesh.axes
-            if len(axes) != 1:
+            mesh_rank = len(mesh.layout.shape)
+            if mesh_rank != 1:
                 raise VerifyError(
                     f"``int @ {rhs.id}`` shorthand requires a single-axis mesh "
-                    f"(found {len(axes)} axes); write ``{rhs.id}.<axis>`` explicitly"
+                    f"(found {mesh_rank} axes); write ``{rhs.id}.<axis>`` explicitly"
                 )
             if not canonicalize:
                 return [(dim, mesh, 0, "split", None)]
-            return _canonicalize_single_axis(dim, mesh, axes[0])
+            return _canonicalize_single_axis(dim, mesh, 0)
 
     # Case 4: bare dynamic / closure-resolved axis (a DimVar like ``S`` or a
     # closure Name bound to an int / DimVar). A bare axis is Broadcast — it
@@ -624,7 +620,7 @@ def _parse_layout_item(
 def _canonicalize_single_axis(
     dim: int,
     mesh: Mesh,
-    axis: MeshAxis,
+    axis: int,
 ) -> list[_LayoutItem]:
     """Canonicalize ``N @ m.a`` into the factorised pair when ``N > mesh_extent(a)``.
 
@@ -634,17 +630,17 @@ def _canonicalize_single_axis(
     layout dim has ``local_shape == 1``. ``N % mesh_extent(a) == 0`` is
     required; otherwise ``ValueError``.
     """
-    extent = axis.size
+    extent = mesh.layout.shape[axis]
     if dim % extent != 0:
         raise VerifyError(
             f"dim {dim} not divisible by mesh extent {extent} on axis "
-            f"{axis.index}; cannot canonicalize ``{dim} @ m.<axis>``"
+            f"{axis}; cannot canonicalize ``{dim} @ m.<axis>``"
         )
     if dim == extent:
-        return [(dim, mesh, axis.index, "split", None)]
+        return [(dim, mesh, axis, "split", None)]
     residual = dim // extent
     return [
-        (extent, mesh, axis.index, "split", None),
+        (extent, mesh, axis, "split", None),
         (residual, None, None, "broadcast", None),
     ]
 
@@ -668,7 +664,7 @@ def _expand_multi_axis_sugar(
 
     for i, ax_node in enumerate(axis_nodes):
         mesh, axis = _resolve_axis_node(ax_node, mesh_resolver)
-        extent = axis.size
+        extent = mesh.layout.shape[axis]
         if remaining % extent != 0:
             raise VerifyError(
                 f"dim {dim} not divisible by mesh extent {extent} "
@@ -676,7 +672,7 @@ def _expand_multi_axis_sugar(
             )
         per_axis = extent
         remaining //= extent
-        items.append((per_axis, mesh, axis.index, "split", None))
+        items.append((per_axis, mesh, axis, "split", None))
 
     if remaining > 0:
         items.append((remaining, None, None, "broadcast", None))
@@ -687,8 +683,8 @@ def _expand_multi_axis_sugar(
 def _resolve_axis_node(
     node: ast.AST,
     mesh_resolver: MeshResolver,
-) -> tuple[Mesh, MeshAxis]:
-    """Resolve a mesh-axis reference node to (Mesh, MeshAxis).
+) -> tuple[Mesh, int]:
+    """Resolve a mesh-axis reference node to a mesh and layout-axis index.
 
     Accepts ``mesh.axis`` attribute references and single-axis
     ``mesh`` name shorthand.
@@ -704,14 +700,14 @@ def _resolve_axis_node(
         mesh = mesh_resolver(node.id)
         if mesh is None:
             raise VerifyError(f"undefined mesh {node.id!r}")
-        axes = mesh.axes
-        if len(axes) != 1:
+        mesh_rank = len(mesh.layout.shape)
+        if mesh_rank != 1:
             raise VerifyError(
                 f"``int @ (..., {node.id}, ...)`` shorthand requires a "
-                f"single-axis mesh (found {len(axes)} axes); "
+                f"single-axis mesh (found {mesh_rank} axes); "
                 f"write ``{node.id}.<axis>`` explicitly"
             )
-        return (mesh, axes[0])
+        return (mesh, 0)
     raise VerifyError(f"expected mesh.axis, got {ast.dump(node)}")
 
 

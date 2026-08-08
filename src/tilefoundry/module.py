@@ -38,7 +38,7 @@ def module(cls=None, *, entry: str | None = None, target=None):
     The ordered parallel-resource hierarchy is declared by a ``topologies``
     assignment at the top of the class body rather than by a decorator
     argument, because a function body may name one of those levels (``with
-    Mesh("warp", ...)``) and Python binds class-body names before it applies
+    Mesh(("warp",), ...)``) and Python binds class-body names before it applies
     this decorator. Omitting the assignment inherits the owning Module's
     hierarchy; an explicit ``()`` declares a topology-free Module."""
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle

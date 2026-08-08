@@ -154,13 +154,13 @@ class PartitionProblem:
 
 
 def _mesh(count: int, topology: str) -> Mesh:
-    return Mesh(Topology(topology, count), Layout(shape=(count,), strides=(1,)))
+    return Mesh((Topology(topology, count),), Layout(shape=(count,), strides=(1,)))
 
 
 def _type_mesh(type: TensorType, fallback: Mesh) -> Mesh:
     if isinstance(type.layout, ShardLayout):
         mesh = type.layout.mesh
-        if len(mesh.axes) != 1:
+        if len(mesh.layout.shape) != 1:
             raise PartitionProblemError(
                 "partition requires rank-one candidate meshes"
             )
@@ -183,7 +183,7 @@ def _layout_matches(actual: object, constraint: LayoutConstraint) -> bool:
         if not is_layout_wildcard(want) and got != want:
             return False
     for topology, attr in constraint.bindings:
-        if actual.mesh.topology.name != topology:
+        if actual.mesh.topologies[0].name != topology:
             return False
         try:
             index = actual.mesh.names.index(topology)
@@ -379,7 +379,7 @@ class _Closer:
             raise PartitionProblemError(
                 "multi-output candidate leaves require one shared Mesh"
             )
-        if len(mesh.axes) != 1:
+        if len(mesh.layout.shape) != 1:
             raise PartitionProblemError("candidate Mesh must be rank one")
         count = mesh.layout.shape[0]
         if not isinstance(count, int) or not 1 <= count <= self.extent:

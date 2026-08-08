@@ -23,7 +23,7 @@ def _validate_topology(mesh, target) -> None:
 
 
 def _mesh_type(mesh) -> str:
-    topo = mesh.topology
+    topo = mesh.topologies[0]
     shape_types = ", ".join(f"cute::Int<{s}>" for s in mesh.layout.shape)
     stride_types = ", ".join(f"cute::Int<{s}>" for s in mesh.layout.strides)
     return (
@@ -36,7 +36,7 @@ def _mesh_type(mesh) -> str:
 def _is_dynamic_mesh(mesh) -> bool:
     """A launch-provided (dynamic) CTA mesh: its topology size or a layout axis
     extent is ``None`` and only known at launch time."""
-    if mesh.topology.size is None:
+    if mesh.topologies[0].size is None:
         return True
     return any(s is None for s in mesh.layout.shape)
 
@@ -47,7 +47,7 @@ def _emit(node: MeshScope, ctx: CodegenContext) -> None:
         raise RuntimeError("CUDA MeshScope emission requires its Target")
     _validate_topology(node.mesh, ctx.target)
     name = ctx.name_for(node.binding)
-    ctx.emit(f"// mesh scope: {node.mesh.topology.name}")
+    ctx.emit(f"// mesh scope: {node.mesh.topologies[0].name}")
     # A dynamic mesh has no compile-time type: its extent comes from the launch
     # grid, so no constexpr ``using`` alias is emitted. Shard layouts on a
     # dynamic mesh are built as runtime values at their use sites (reshard /

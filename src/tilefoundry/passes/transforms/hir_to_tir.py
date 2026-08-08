@@ -561,10 +561,7 @@ class _Lowerer:
             # only an actual OWNERSHIP CHANGE is a transition — an identical
             # re-view keeps the local path and never fences.
             and src_expr.type.layout != dst_sl
-            and all(
-                getattr(t, "name", None) == "cta"
-                for t in (dst_sl.mesh.topologies or (dst_sl.mesh.topology,))
-            )
+            and all(t.name == "cta" for t in dst_sl.mesh.topologies)
         ):
             root = self._param_alias_root(src_expr)
             if root is not None:
@@ -1665,11 +1662,7 @@ class _MeshDeriver(ExprVisitor[None]):
         sl = getattr(ty, "layout", None)
         if isinstance(sl, ShardLayout):
             m = sl.mesh
-            # ``mesh.topology`` may be a ``Topology`` dataclass or a
-            # plain string depending on how the Mesh was authored
-            # (sugar paths pass topology names as strings).
-            primary = m.topology
-            primary_name = primary.name if hasattr(primary, "name") else str(primary)
+            primary_name = m.topologies[0].name
             if primary_name == "cta":
                 if self.cta_mesh is None:
                     self.cta_mesh = m

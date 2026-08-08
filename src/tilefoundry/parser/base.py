@@ -64,7 +64,6 @@ logger = logging.getLogger(__name__)
 _IR_OBJECT_TYPES = {
     "Topology": None,
     "Mesh": None,
-    "MeshAxis": None,
     "ShardLayout": None,
     "Layout": None,
 }
@@ -73,9 +72,7 @@ _IR_OBJECT_TYPES = {
 def _warn_if_ir_object(val: Any, name: str) -> None:
     """Warn when a preconstructed IR object is resolved from closure.
 
-    Canonical DSL source should use AST constructor syntax
-    (e.g. ``Topology("cta", 128)``) or topology-name string resolution
-    (e.g. ``with Mesh(topology="cta", ...)``) instead of capturing
+    Canonical DSL source should use AST constructor syntax instead of capturing
     prebuilt Python objects in the closure.
     """
     type_name = type(val).__name__
@@ -473,10 +470,7 @@ class BaseExprVisitor:
         value = self._static_number(node)
         if value is not None:
             return self._constant_expr(value)
-        # `cta.x` / `cta.y` resolves through the lexical env to a
-        # compile-time MeshAxis (Python object). It is NOT an Expr — callers
-        # embedding it (e.g. ShardLayout construction) handle that. If it
-        # really reaches this Expr dispatcher, raise.
+        # Mesh-axis references are parsed by layout sugar, not as Expr values.
         raise VerifyError(f"attribute access {ast.unparse(node)!r} not valid as Expr")
 
     # Subscript: only TupleType, integer-constant index — emits TupleGetItem -------

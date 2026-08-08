@@ -18,9 +18,10 @@ import pytest
 
 from tests.fixtures.gqa_online import MAX_CTX, GqaOnline
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
-from tilefoundry.analysis import analyze
+from tilefoundry.analysis import TimelineMetadata, analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.inspection.analysis_report import render_text, report
+from tilefoundry.ir.core import get_metadata
 from tilefoundry.ir.hir.specialize import residual_dims, variant_for
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
@@ -124,6 +125,27 @@ def test_without_a_size_the_call_is_what_it_was() -> None:
     result = analyze(module, function, analysis="compute-cost")
 
     assert result.function is function
+
+
+@pytest.mark.parametrize(
+    ("ctx_len", "makespan_ns"),
+    ((1, 21_098), (1024, 29_009)),
+)
+def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length(
+    ctx_len: int, makespan_ns: int
+) -> None:
+    module = QWEN3_1_7B.build()
+    function = module.lookup("decoder_layer")
+
+    result = analyze(
+        module, function, analysis="timeline", dims={"ctx_len": ctx_len}
+    )
+
+    record = get_metadata(result.function, TimelineMetadata)
+    assert record is not None
+    assert record.grid_units == 1
+    assert record.waves == 7
+    assert record.end_ns == makespan_ns
 
 
 def test_a_size_no_variant_covers_is_refused() -> None:

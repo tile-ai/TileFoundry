@@ -30,7 +30,7 @@ class ExternalH200Target(CudaTarget):
 # assertion catches.
 @func(topologies=(Topology("cta", _ROWS),))
 def double_rows(a: Tensor[(_ROWS, _COLS), "f32"]) -> Tensor[(_ROWS, _COLS), "f32"]:
-    with Mesh(topology="cta", layout=Layout(shape=(_ROWS,), strides=(1,))) as cta:
+    with Mesh(("cta",), layout=Layout(shape=(_ROWS,), strides=(1,))) as cta:
         reg = reshard(a, layout=(128 @ cta, 12), storage=rmem)  # noqa: F405
         out = tf.mul(reg, reg)
         return reshard(out, layout=(128 @ cta, 12), storage=gmem)  # noqa: F405
@@ -45,7 +45,7 @@ def host_double(a: Tensor[(_ROWS, _COLS), "f32"], out: Tensor[(_ROWS, _COLS), "f
 # Within-CTA per-row reduce: a single CTA reduces the row across its threads.
 @func(topologies=(Topology("thread", 6 * 32),))
 def row_mean(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1), "f32"]:
-    with Mesh(Topology("thread", 6 * 32), (6, 32), ("w", "t")) as m:
+    with Mesh(("thread",), (6, 32), ("w", "t")) as m:
         a_reg = tf.reshard(a, (1, 1536 @ (m.w, m.t)), rmem)
         a_mean = tf.reduce(a_reg, (-1,), True, ReduceKind.MEAN)
         return tf.reshard(a_mean, (1, 1), gmem)
@@ -151,7 +151,7 @@ _NT = DimVar("Ntile", 1, 64)
 
 @func(topologies=(Topology("cta", None),))
 def dyn_double(a: Tensor[(_NT, _TILE), "f32"]) -> Tensor[(_NT, _TILE), "f32"]:
-    with Mesh(topology="cta", layout=Layout(shape=(None,), strides=(1,))) as cta:
+    with Mesh(("cta",), layout=Layout(shape=(None,), strides=(1,))) as cta:
         reg = reshard(  # noqa: F405
             a,
             layout=ShardLayout(

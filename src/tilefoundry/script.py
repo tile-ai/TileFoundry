@@ -100,7 +100,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     Plain ``@func`` binds the decorated name to a ``hir.Function``, parsed
     against whatever topology hierarchy its owning ``@module`` class body
     declares. Declaring execution context here instead — ``topologies`` (the
-    topology namespace enabling ``with Mesh(topology="cta", ...)``) or
+    topology namespace enabling ``with Mesh(("cta",), ...)``) or
     ``target`` (a Target object) — makes that function its own
     execution domain, so the decorated name binds to the implicit
     single-function ``Module`` carrying that context. A ``pass`` body declares

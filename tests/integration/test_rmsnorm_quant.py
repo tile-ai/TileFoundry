@@ -21,7 +21,7 @@ class RmsnormModule:
 
     @func
     def rmsnorm(a: Tensor[(1, 1536), 'bf16']):
-        with Mesh(Topology("thread", 6 * 32), (6, 32), ('w', 't')) as m:
+        with Mesh(("thread",), (6, 32), ('w', 't')) as m:
             a_reg = tf.reshard(a, (1, 1536 @ (m.w, m.t)), 'rmem')
             a_f32 = tf.cast(a_reg, 'f32')
             a_sq = tf.square(a_f32)
@@ -40,7 +40,7 @@ class RmsnormSeq2Module:
 
     @func
     def rmsnorm_seq_2(a: Tensor[(2, 1536), 'bf16']):
-        with Mesh(Topology("thread", 2 * 4 * 32), (2, 4, 32), ('x', 'y', 't')) as m:
+        with Mesh(("thread",), (2, 4, 32), ('x', 'y', 't')) as m:
             a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'rmem')
             a_f32 = tf.cast(a_reg, 'f32')
             a_sq = tf.square(a_f32)
@@ -57,7 +57,7 @@ class RmsnormQuantSeq2Module:
 
     @func
     def rmsnorm_quant_seq_2(a: Tensor[(2, 1536), 'bf16']):
-        with Mesh(Topology("thread", 2 * 4 * 32), (2, 4, 32), ('x', 'y', 't')) as m:
+        with Mesh(("thread",), (2, 4, 32), ('x', 'y', 't')) as m:
             a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'rmem')
             a_f32 = tf.cast(a_reg, 'f32')
             a_sq = tf.square(a_f32)

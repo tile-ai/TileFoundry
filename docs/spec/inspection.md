@@ -186,7 +186,7 @@ must use an explicit pretty-printer API rather than relying on no-argument
 
 The printer collects unique `Mesh` objects from all `ShardLayout`
 references in the function (params, return type, body `Reshard` ops)
-and assigns variable names based on `mesh.topology.name`.  Mesh
+and assigns variable names from the first declared topology's name. Mesh
 definitions are emitted in the module prelude / standalone header.
 
 ### 2.6 Specialization printing

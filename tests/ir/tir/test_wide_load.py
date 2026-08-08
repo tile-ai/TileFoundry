@@ -27,7 +27,7 @@ from tilefoundry.target import CpuTarget, CudaTarget
 class WideLoad:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def wide_device(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):
-        with Mesh(Topology("thread", 128), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
+        with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
             a_view = T.tensor_view(
                 a, layout=ShardLayout(layout=Layout(shape=(128, 4), strides=(4, 1)), attrs=(Split(0),), mesh=m)
             )
@@ -56,7 +56,7 @@ class WideLoad:
 class NarrowLoad:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def narrow_device(a: Tensor[(128, 2), "f32"], b: Tensor[(128, 2), "f32"]):
-        with Mesh(Topology("thread", 128), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
+        with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
             a_view = T.tensor_view(
                 a, layout=ShardLayout(layout=Layout(shape=(128, 2), strides=(2, 1)), attrs=(Split(0),), mesh=m)
             )
@@ -93,4 +93,3 @@ def test_wide_load_roundtrip_matches(cls, cols):
     rm(a, b)
     torch.cuda.synchronize()
     assert torch.allclose(b, a, rtol=0, atol=0)
-

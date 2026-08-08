@@ -27,7 +27,7 @@ from tilefoundry.target import CudaTarget
 
 _THREAD = Topology("thread", 32)
 _THREAD_MESH = Mesh(
-    topology=_THREAD,
+    topologies=(_THREAD,),
     layout=Layout(shape=(4, 8), strides=(1, 4)),
     names=("x", "y"),
 )

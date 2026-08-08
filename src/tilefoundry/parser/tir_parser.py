@@ -501,8 +501,8 @@ class _TirBodyVisitor(BaseExprVisitor):
                 raise VerifyError(
                     f"mma fragment `atom.{attr}`: enclosing mesh scope does not "
                     f"match the atom's required thread scope "
-                    f"(topology {req.topology.name!r}, {req.topology.size} lanes); "
-                    f"a {req.topology.name}({req.topology.size}) scope with the "
+                    f"(topology {req.topologies[0].name!r}, {req.topologies[0].size} lanes); "
+                    f"a {req.topologies[0].name}({req.topologies[0].size}) scope with the "
                     f"exact lane layout shape {tuple(req.layout.shape)} strides "
                     f"{tuple(req.layout.strides)} is required (e.g. the fragment "
                     f"`Split` axes need the 2-axis (4,8) warp, not a flat (32,))"

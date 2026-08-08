@@ -36,7 +36,7 @@ def test_positional_and_keyword_attrs_are_the_same_program() -> None:
         "sl = ShardLayout(\n"
         "    layout=Layout((1, 1536), (1536, 1)),\n"
         "    attrs=(),\n"
-        '    mesh=Mesh(Topology("cta", 128), Layout((128,), (1,))),\n'
+        '    mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
         ")\n"
         "\n"
         "@func\n"
@@ -118,7 +118,7 @@ def test_tuple_return_with_mesh_element_roundtrips() -> None:
         + "sl = ShardLayout(\n"
         "    layout=Layout((1, 1536), (1536, 1)),\n"
         "    attrs=(),\n"
-        '    mesh=Mesh(Topology("cta", 128), Layout((128,), (1,))),\n'
+        '    mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,))),\n'
         ")\n"
         "\n@func\n"
         'def f(a: Tensor[(1, 1536), "f32"], c: Tensor[(1, 1536), "f32"]):\n'
@@ -139,8 +139,8 @@ def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor\n"
         + _SHARD_IMPORT
-        + "thread = Mesh(Topology('thread', 2), Layout((2,), (1,)))\n"
-        "cta = Mesh(Topology('cta', 4), Layout((4,), (1,)))\n"
+        + "thread = Mesh((Topology('thread', 2),), Layout((2,), (1,)))\n"
+        "cta = Mesh((Topology('cta', 4),), Layout((4,), (1,)))\n"
         "prior = ShardLayout(\n"
         "    layout=Layout((8,), (1,)), attrs=(S(0),), mesh=thread,\n"
         ")\n"

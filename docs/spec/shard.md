@@ -11,7 +11,6 @@ flowchart TB
 
     Topology["<b>Topology</b>"]
     Mesh["<b>Mesh</b>"]
-    MeshAxis["<b>MeshAxis</b>"]
 
     ShardAttr["<b>ShardAttr</b>"]
     Split["<b>Split</b>"]
@@ -28,7 +27,6 @@ flowchart TB
     Topology --> Mesh
     Layout -. layout .-> Mesh
     ComposedLayout -. layout .-> Mesh
-    Mesh --> MeshAxis
 
     ShardAttr --> Split
     ShardAttr --> Broadcast
@@ -218,34 +216,19 @@ class Topology:
     size: ShapeDim | None
 
 class Mesh:
-    """Describe a parallel device domain.
+    """Record a parallel device domain and its logical positions.
 
     Attributes:
-        topology: attribute; Primary topology level.
+        topologies: attribute; Ordered topology sequence.
         layout: attribute; Mesh layout or constant sliced layout.
         names: attribute; Human-readable layout-axis names.
-        topologies: attribute; Full normalized topology sequence.
     """
 
-    topology: Topology
+    topologies: tuple[Topology, ...]
     layout: Layout | ComposedLayout
     names: tuple[str, ...] = ()
-    topologies: tuple[Topology, ...] = ()
 
-    def topology_domain(self) -> int | None: ...
-
-class MeshAxis:
-    """Describe one named or indexed mesh axis.
-
-    Attributes:
-        mesh: attribute; Owning mesh.
-        index: attribute; Layout-axis index.
-        size: attribute; Static or symbolic layout-axis extent.
-    """
-
-    mesh: Mesh
-    index: int
-    size: ShapeDim
+    def __getitem__(self, key) -> Mesh: ...
 ```
 
 - constraints:
@@ -254,31 +237,40 @@ class MeshAxis:
 
 Field meanings:
 
-- `topology` — the primary (first) device-domain description (`name` +
-  `size`)
+- `topologies` — the ordered device-domain descriptions (`name` + `size`)
 - `layout` — the mesh's own shape / strides (a `Layout`); a constant slice
   (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
   ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
-- `MeshAxis` — single-axis object retrieved via `mesh.x` / `mesh.y` /
-  `mesh.axes[i]`, used by parser static evaluation
 
 `Mesh` describes the parallel device domain; it is not a tensor layout
 object.
 
-`Mesh` MAY carry more than one `Topology` (e.g. `warp(4) × thread(32)`); the
-full sequence is `topologies`, and `topology` is always its first entry.
+`Mesh` MAY carry more than one `Topology` (e.g. `warp(4) x thread(32)`); the
+full sequence is always `topologies`.
 
 - constraints:
-  - `topologies` MUST normalize to a non-empty `tuple[Topology, ...]`; a
-    single `Topology` normalizes to a one-element `topologies` and a raw
-    string MUST be rejected (a caller resolving a surface topology name,
-    e.g. the parser's topology namespace or `make_mesh`, MUST convert it to
-    a `Topology` first) — a consumer MAY read `mesh.topologies` /
-    `mesh.topology` directly, with no fallback or duck-typing.
-  - `Mesh.topology_domain() -> int | None` is the product of every
-    `topologies[i].size`; it is `None` when any entry is a launch-provided
-    (dynamic) extent.
+  - `Mesh` is a frozen record. It performs no construction-time normalization
+    or position-consistency check. Its `topologies` field is a
+    `tuple[Topology, ...]`; helpers such as `make_mesh` construct that tuple
+    for handwritten Python.
+  - The author surface is `with Mesh(("cta",), layout=(128,)) as cta:`. The
+    parser resolves the non-empty tuple of declared topology names to the
+    `Topology` tuple before it constructs the record. A bare string and the
+    `topology=` keyword are not Mesh author forms.
+  - `states_consistent_positions(mesh)` is true when the product of static
+    topology sizes equals `size(mesh.layout)`, or when a topology size is
+    launch-provided. Mesh-scope verification asserts this predicate; Mesh
+    construction and slicing do not, so a derived slice remains a record of
+    its parent scope.
+  - A reader that asks for a position count by topology name reads
+    `size(mesh.layout)`. It accepts a Mesh with one topology only; a
+    multi-topology Mesh is rejected rather than projecting its layout onto a
+    guessed level.
+  - `Mesh` exposes neither a primary `topology` nor `topology_domain()`, and
+    it has no attribute-style axis API. In layout sugar, `m.axis` is parser
+    syntax resolved to the pair `(mesh, layout_axis_index)`, not a Mesh
+    attribute.
 
 ---
 
@@ -446,13 +438,13 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
 - `Split(k)` indexes into `G`; it MUST NOT refer to `T.shape` axes or
   mesh axes.
 - For every mesh axis `a` with `sl.attrs[a] = Split(k)`,
-  `G[k] == sl.mesh.shape[a]` MUST hold. Equivalently, `local_shape(sl)[k] == 1`
+  `G[k] == sl.mesh.layout.shape[a]` MUST hold. Equivalently, `local_shape(sl)[k] == 1`
   on every `Split`-bound layout dim. Surface sugar `N @ m.a` with
   `N > mesh_extent(a)` is canonicalized at parse time into a
   factorised form (`(mesh_extent(a) @ m.a, N // mesh_extent(a))`); the
   factorised residual axis enters the IR as a non-`Split` layout dim. See
   [parser §1.5](./parser.md#15-layout-sugar).
-- `local_shape(sl)[k] = G[k] / sl.mesh.shape[a] = 1` iff some mesh axis
+- `local_shape(sl)[k] = G[k] / sl.mesh.layout.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
 - `local_shape(sl)[k] = G[k]` otherwise.
 - The canonical regroup rule ([§8](#8-layout-propagation)) defines how `T.shape` aligns with
@@ -533,7 +525,7 @@ default):
 # example
 layout = Layout(shape=(2, 4, 3, 32, 4), strides=(0, 0, 4, 0, 1))
 attrs  = (Split(0), Split(1), Broadcast, Split(3), Broadcast)
-mesh   = Mesh(layout=Layout(shape=(2, 4, 32), ...))
+mesh   = Mesh((Topology("thread", 256),), Layout(shape=(2, 4, 32), ...))
 ```
 
 `shard_layout_local_shape(sl)` yields `(1, 1, 3, 1, 4)`. Each `Split`

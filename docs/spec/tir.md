@@ -962,7 +962,7 @@ verify-only and MUST NOT fuse the loads or the store.
 ```python
 # example
 atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
-with Mesh(Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4))) as warp:
+with Mesh((Topology("thread", 32),), Layout(shape=(4, 8), strides=(1, 4))) as warp:
     a_frag = T.alloc_tensor(TensorType(..., layout=atom.A, storage=rmem))
     acc    = T.alloc_tensor(TensorType(..., layout=atom.C, storage=rmem))
     T.copy(T.tensor_view(a, layout=atom.A), a_frag)   # load

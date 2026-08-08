@@ -33,11 +33,11 @@ from tilefoundry.target import CudaTarget
 
 def _thread_mesh() -> Mesh:
     """A 128-thread block viewed as (4 warps, 32 lanes)."""
-    return Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t"))
+    return Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t"))
 
 
 def _cta_mesh() -> Mesh:
-    return Mesh(topology=Topology("cta", 128), layout=Layout(shape=(128,), strides=(1,)))
+    return Mesh(topologies=(Topology("cta", 128),), layout=Layout(shape=(128,), strides=(1,)))
 
 
 def _binding(name: str = "m") -> Var:
@@ -69,7 +69,7 @@ def test_parse_sync_builds_evaluate_wrapped_op() -> None:
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001 — body-only smoke
-        with Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
+        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
             T.sync(m)
 
     mesh_scope = kernel.body.body[0]
@@ -86,7 +86,7 @@ def test_parse_sync_slice_records_offset_and_extent() -> None:
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001
-        with Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
+        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
             T.sync(m)
             T.sync(m[0, :])
             T.sync(m[1:3, :])
@@ -101,7 +101,7 @@ def test_parse_sync_accepts_only_mesh() -> None:
     """A non-mesh ``T.sync`` argument fails to resolve to a mesh."""
 
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001
-        with Mesh(Topology("thread", 128), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:  # noqa: F841
+        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:  # noqa: F841
             T.sync(a)
 
     with pytest.raises(VerifyError):
@@ -157,10 +157,9 @@ def test_verify_rejects_forged_subbox_exceeding_parent() -> None:
     bounds each sub-extent by the parent shape, not by field equality."""
     e = _thread_mesh()  # (4, 32)
     forged = Mesh(
-        topology=e.topology,
+        topologies=e.topologies,
         layout=ComposedLayout(inner=None, offset=0, outer=Layout((1, 64), (32, 1))),
         names=e.names,
-        topologies=e.topologies,
     )
     with pytest.raises(VerifyError, match="enclosing"):
         verify_prim_function(_scoped(e, forged))
@@ -170,14 +169,13 @@ def test_verify_rejects_forged_topology_mismatch() -> None:
     """A forged sync mesh that shares the primary topology but differs in the
     full topology tuple is rejected (the proof compares the full tuple)."""
     e = Mesh(
-        topology=[Topology("warp", 4), Topology("thread", 32)],
+        topologies=(Topology("warp", 4), Topology("thread", 32)),
         layout=Layout(shape=(4, 32), strides=(32, 1)),
     )
     forged = Mesh(
-        topology=Topology("warp", 4),
+        topologies=(Topology("warp", 4),),
         layout=ComposedLayout(inner=None, offset=0, outer=Layout((2, 32), (32, 1))),
         names=e.names,
-        topologies=(Topology("warp", 4),),
     )
     with pytest.raises(VerifyError, match="enclosing"):
         verify_prim_function(_scoped(e, forged))
@@ -187,7 +185,7 @@ def test_verify_rejects_cross_warp_unaligned_slice() -> None:
     """A contiguous but cross-warp-unaligned range (lanes 16..47) is rejected."""
     # 64-thread block as (2 warps, 32 lanes); slice 16 lanes of warp 0 + 16 of
     # warp 1 → contiguous [16, 48) but not warp-aligned.
-    m = Mesh(Topology("thread", 64), Layout(shape=(64,), strides=(1,)))
+    m = Mesh((Topology("thread", 64),), Layout(shape=(64,), strides=(1,)))
     with pytest.raises(VerifyError, match="warp-aligned"):
         verify_prim_function(_scoped(m, m[16:48]))
 

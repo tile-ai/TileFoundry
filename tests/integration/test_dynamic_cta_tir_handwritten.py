@@ -1,7 +1,7 @@
 """GPU e2e for a hand-written TIR dynamic-extent CTA kernel.
 
 A hand-authored ``@prim_func`` whose CTA count is launch-provided: the device
-mesh is ``Mesh(Topology("cta", None), Layout(shape=(None,), strides=(1,)))``
+mesh is ``Mesh((Topology("cta", None),), Layout(shape=(None,), strides=(1,)))``
 and the global tensor's leading dim is a ``DimVar``. Each CTA squares its own
 ``(1, TILE)`` row in place. One compiled artifact runs at several ``Ntile``
 shapes with no recompile (the grid comes from the runtime tensor shape).
@@ -33,7 +33,7 @@ class DynSquare:
     def dyn_square(a: Tensor[(_NT, _TILE), "f32"]):
         # Launch-provided CTA extent (None) → grid from the host launch; each CTA
         # owns one (1, TILE) row of the DimVar-shaped global tensor.
-        with Mesh(Topology("cta", None), Layout(shape=(None,), strides=(1,))) as cta:
+        with Mesh((Topology("cta", None),), Layout(shape=(None,), strides=(1,))) as cta:
             a_view = T.tensor_view(
                 a,
                 layout=ShardLayout(

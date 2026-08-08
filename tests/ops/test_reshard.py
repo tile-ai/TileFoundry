@@ -40,10 +40,10 @@ def _shard_layout(shape) -> ShardLayout:
 _SL_PRESERVES_SHAPE = _shard_layout((1, 8, 192))
 
 # Direction-of-materialization meshes / sugar (strides=None) inputs.
-_MESH_H2L = Mesh(topology=Topology("thread", 4), layout=Layout(shape=(4,), strides=(1,)), names=("t",))
+_MESH_H2L = Mesh(topologies=(Topology("thread", 4),), layout=Layout(shape=(4,), strides=(1,)), names=("t",))
 _SL_H2L = ShardLayout(layout=Layout(shape=(2, 4, 128), strides=None), attrs=(Split(1),), mesh=_MESH_H2L)
 
-_MESH_L2H = Mesh(topology=Topology("thread", 4), layout=Layout(shape=(4,), strides=(1,)), names=("w",))
+_MESH_L2H = Mesh(topologies=(Topology("thread", 4),), layout=Layout(shape=(4,), strides=(1,)), names=("w",))
 _REG_L2H_LAYOUT = ShardLayout(layout=Layout(shape=(4, 64), strides=(0, 1)), attrs=(Split(0),), mesh=_MESH_L2H)
 _SL_L2H = ShardLayout(layout=Layout(shape=(4, 64), strides=None), attrs=(Split(0),), mesh=_MESH_L2H)
 
@@ -56,7 +56,7 @@ def _materialized(shape, strides, attrs, mesh):
 # materialization form; the per-instance (high->low) form rejects it because a
 # per-shard register/shared buffer cannot be sized by a non-split dynamic axis.
 _S_DYN = DimVar("seq_len", 1, 4)
-_MESH_DYN = Mesh(topology=Topology("cta", 8), layout=Layout(shape=(8,), strides=(1,)))
+_MESH_DYN = Mesh(topologies=(Topology("cta", 8),), layout=Layout(shape=(8,), strides=(1,)))
 _SL_DYN_BARE = ShardLayout(
     layout=Layout(shape=(1, _S_DYN, 32, 128), strides=None),
     attrs=(Split(axis=2),),

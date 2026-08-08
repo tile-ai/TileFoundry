@@ -187,7 +187,7 @@ def _classify_shard_attrs(
     ``layout_axis_to_tensor_axis``).
     """
     layout = sl.layout
-    if not isinstance(layout, Layout) or len(sl.attrs) != len(sl.mesh.axes):
+    if not isinstance(layout, Layout) or len(sl.attrs) != len(sl.mesh.layout.shape):
         return None
     layout_rank = len(layout.shape)
     names = sl.mesh.names if hasattr(sl.mesh, "names") and sl.mesh.names else ()
@@ -373,10 +373,17 @@ def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
     raise TypeError(f"unsupported layout type: {type(layout).__name__}")
 
 
+def _topologies_str(mesh: Mesh) -> str:
+    topologies = ", ".join(
+        f'Topology("{topology.name}", {topology.size})'
+        for topology in mesh.topologies
+    )
+    return f"({topologies}{',' if len(mesh.topologies) == 1 else ''})"
+
+
 def _mesh_str(mesh: Mesh, indent: str = "") -> str:
     """Mesh(...) constructor string, includes ``names=`` when non-empty."""
-    topo = mesh.topology
-    base = f'Mesh(Topology("{topo.name}", {topo.size}), {_layout_str(mesh.layout, indent)}'
+    base = f"Mesh({_topologies_str(mesh)}, {_layout_str(mesh.layout, indent)}"
     if mesh.names:
         base += f", names={repr(tuple(mesh.names))}"
     return base + ")"
@@ -661,12 +668,13 @@ def _collect_meshes(fn: HirFunction, *, include_node_types: bool = False) -> dic
 def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
     """Assign stable variable names to each Mesh.
 
-    Uses ``mesh.topology.name`` when available; falls back to ``mesh_N``.
+    Uses the first declared topology name when available; falls back to
+    ``mesh_N``.
     """
     name_map: dict[int, str] = {}
     used: set[str] = set()
     for mid, mesh in meshes.items():
-        base = mesh.topology.name if mesh.topology and mesh.topology.name else "mesh"
+        base = mesh.topologies[0].name if mesh.topologies else "mesh"
         name = base
         n = 2
         while name in used:
@@ -1069,11 +1077,11 @@ def _emit_header(
     if any(m.names for m in meshes.values()):
         for mid, mesh in meshes.items():
             name = mesh_map[mid]
-            topo = mesh.topology
+            topologies = _topologies_str(mesh)
             names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
             lines.append(
                 f"{name} = Mesh("
-                f'Topology("{topo.name}", {topo.size}), '
+                f"{topologies}, "
                 f"{_layout_str(mesh.layout)}, "
                 f"names={names_repr}"
                 f")"

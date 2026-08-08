@@ -112,7 +112,7 @@ def _layout_json(type: Type) -> object:
         return None
     layout = type.layout
     return {
-        "topology": layout.mesh.topology.name,
+        "topology": layout.mesh.topologies[0].name,
         "mesh_shape": [str(dim) for dim in layout.mesh.layout.shape],
         "attrs": [attr.__class__.__name__ for attr in layout.attrs],
         "shape": [str(dim) for dim in layout.layout.shape],
@@ -142,7 +142,7 @@ def _describe_type(type: Type) -> str:
     if isinstance(type.layout, ShardLayout):
         attrs = ",".join(attr.__class__.__name__ for attr in type.layout.attrs)
         mesh = "x".join(str(dim) for dim in type.layout.mesh.layout.shape)
-        text += f" {type.layout.mesh.topology.name}[{mesh}]:{attrs}"
+        text += f" {type.layout.mesh.topologies[0].name}[{mesh}]:{attrs}"
     return text
 
 

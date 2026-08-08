@@ -1,7 +1,7 @@
 """Canonical topology-aware demo fixture.
 
 Uses ``@func(topologies=...)`` with nested
-``with Mesh(topology="cta"/"thread", ...)`` scopes and inline
+``with Mesh(("cta",)/("thread",), ...)`` scopes and inline
 ``ShardLayout(...)`` constructor kwarg values.
 
 The old ``build_demo()`` (closure-captured ``shared_layout`` /
@@ -30,7 +30,7 @@ def demo_canonical(
     a: Tensor[(1, 1536), "f32"],
 ) -> Tensor[(1, 1536), "f32"]:
     with Mesh(
-        topology="cta", layout=Layout(shape=(128,), strides=(1,))
+        ("cta",), layout=Layout(shape=(128,), strides=(1,))
     ) as cta_mesh:
         b = reshard(
             a,
@@ -42,7 +42,7 @@ def demo_canonical(
             storage="smem",
         )
         with Mesh(
-            topology="thread",
+            ("thread",),
             layout=Layout(shape=(8, 32), strides=(32, 1)),
         ) as thread_mesh:
             c = reshard(

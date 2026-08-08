@@ -51,7 +51,7 @@ class Mine:
 
     @func
     def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
+        with Mesh(("cta",), (168,), ("block",)) as cta:
             local = tf.reshard(x, (168 @ cta.block,), "rmem")
             return tf.reshard(tf.square(local), (168 @ cta.block,), "gmem")
 '''
@@ -238,14 +238,14 @@ class Model:
 
     @func
     def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
+        with Mesh(("cta",), (168,), ("block",)) as cta:
             x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
             squared = tf.square(x_local)
             return tf.reshard(squared, (168 @ cta.block,), "gmem")
 
     @func
     def zeroed(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
+        with Mesh(("cta",), (168,), ("block",)) as cta:
             x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
             nothing = tf.sub(x_local, x_local)
             return tf.reshard(nothing, (168 @ cta.block,), "gmem")
@@ -281,7 +281,7 @@ class Weighted:
     def scaled(
         x: Tensor[(168,), "f32"], w: ConstTensor[(168,), "f32"]
     ) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
+        with Mesh(("cta",), (168,), ("block",)) as cta:
             x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
             w_local = tf.reshard(w, (168 @ cta.block,), "rmem")
             weighted = tf.mul(x_local, w_local)
@@ -313,7 +313,7 @@ class Fused:
 
     @func
     def fused(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
+        with Mesh(("cta",), (168,), ("block",)) as cta:
             x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
             squared = tf.square(x_local)
             shifted = tf.sub(squared, x_local)
@@ -406,7 +406,7 @@ class Model:
 
     @func
     def main(x: Tensor[(168,), "f32"]):
-        with Mesh(Topology("cta", 168), (168,), ("block",)) as cta:
+        with Mesh(("cta",), (168,), ("block",)) as cta:
             x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
             squared = tf.square(x_local)
             return tf.reshard(squared, (168 @ cta.block,), "gmem")

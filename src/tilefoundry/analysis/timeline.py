@@ -23,7 +23,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import Type
-from tilefoundry.ir.types.shard import ShardLayout, Topology
+from tilefoundry.ir.types.shard import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 
@@ -92,12 +92,12 @@ def _fusable(producer: Type, consumer: Type) -> bool:
     return bool(producer_meshes) and producer_meshes == consumer_meshes
 
 
-def _extent(call: Call, topologies: tuple[Topology, ...], name: str) -> int:
+def _extent(call: Call, name: str) -> int:
     """How many parallel units *call* occupies.
 
-    The output decides when it says anything, then a single agreeing input, then
-    the function's own declaration. A call that none of them describe occupies
-    one unit: that is the smallest launch, not a guess at a larger one.
+    The output decides when it says anything, then a single agreeing input. A
+    call that neither describes occupies one unit: that is the smallest launch,
+    not a guess at a larger one.
     """
     output = topology_extent(call.type, name)
     if output is not None:
@@ -107,18 +107,12 @@ def _extent(call: Call, topologies: tuple[Topology, ...], name: str) -> int:
     }
     if len(inputs) == 1:
         return next(iter(inputs))
-    declared = {
-        topology.size
-        for topology in topologies
-        if topology.name == name and isinstance(topology.size, int)
-    }
-    return next(iter(declared)) if len(declared) == 1 else 1
+    return 1
 
 
 def _units(
     fn: Function,
     durations: dict[int, int],
-    topologies: tuple[Topology, ...],
     topology: str,
 ) -> dict[int, _Unit]:
     """Group *fn*'s calls into execution units by fusable local placement.
@@ -144,8 +138,8 @@ def _units(
             if producer is None or isinstance(producer.target, Reshard):
                 continue
             if _fusable(producer.type, consumer.type) and _extent(
-                producer, topologies, topology
-            ) == _extent(consumer, topologies, topology):
+                producer, topology
+            ) == _extent(consumer, topology):
                 left, right = find(id(producer)), find(id(consumer))
                 if left != right:
                     parent[right] = left
@@ -162,7 +156,7 @@ def _units(
         unit_of[id(call)] = unit_id
         unit = units[unit_id]
         unit.calls.append(call)
-        unit.extent = max(unit.extent, _extent(call, topologies, topology))
+        unit.extent = max(unit.extent, _extent(call, topology))
         unit.duration_ns += durations[id(call)]
     for consumer in calls:
         consumer_unit = unit_of[id(consumer)]
@@ -292,13 +286,12 @@ def analyze_timeline(
             "the timeline requires a positive parallel-unit capacity, got "
             f"{capacity!r}"
         )
-    topologies = module.effective_topologies()
     for fn in reachable_functions(function):
         durations = _durations(fn)
         if not durations:
             attach(fn, TimelineMetadata(grid_units=0, waves=0, start_ns=0, end_ns=0))
             continue
-        units = _units(fn, durations, topologies, facts.topology)
+        units = _units(fn, durations, facts.topology)
         makespan, total_waves, records = _solve(units, capacity)
         for expr in postorder(fn.body):
             record = records.get(id(expr))

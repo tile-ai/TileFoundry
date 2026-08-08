@@ -37,15 +37,15 @@ from tilefoundry.parser.sugar import parse_shard_layout_sugar
 # ── the meshes the annotation scenes are written against ─────────────────────
 
 _M_GPU = Mesh(
-    Topology("gpu", 8192),
+    (Topology("gpu", 8192),),
     Layout((32, 2, 8, 32), (2048, 1024, 32, 1)),
     names=("cluster", "cta", "warp", "lane"),
 )
-_M_MULTI = Mesh(Topology("thread", 6 * 32), Layout((6, 32), (32, 1)), names=("w", "t"))
-_M_STRIDED = Mesh(Topology("thread", 4 * 32), Layout((4, 32), (32, 1)), names=("y", "t"))
-_M_CTA = Mesh(Topology("cta", 128), Layout((128,), (1,)), names=("cta",))
+_M_MULTI = Mesh((Topology("thread", 6 * 32),), Layout((6, 32), (32, 1)), names=("w", "t"))
+_M_STRIDED = Mesh((Topology("thread", 4 * 32),), Layout((4, 32), (32, 1)), names=("y", "t"))
+_M_CTA = Mesh((Topology("cta", 128),), Layout((128,), (1,)), names=("cta",))
 _M_STATE = Mesh(
-    Topology("thread", 4 * 2 * 16), Layout((4, 2, 16), (32, 16, 1)), names=("l", "g", "t")
+    (Topology("thread", 4 * 2 * 16),), Layout((4, 2, 16), (32, 16, 1)), names=("l", "g", "t")
 )
 
 
@@ -239,7 +239,7 @@ def build_dynamic_bare_and_closure_split_func():
     def _f(
         q: Tensor[(1, _S_DYN, _HQ, _D), "bf16"],
     ) -> Tensor[(1, _S_DYN, _HQ, _D), "bf16"]:
-        with Mesh(topology="cta", layout=Layout((8,), (1,))) as cta:
+        with Mesh(("cta",), layout=Layout((8,), (1,))) as cta:
             return reshard(q, layout=(1, _S_DYN, _HQ @ cta, _D))  # noqa: F821
     return _f
 
@@ -260,7 +260,7 @@ def test_reshard_sugar_rejects_dynamic_split_axis() -> None:
     participates in canonicalisation and must resolve to a static int — a dynamic
     ``DimVar`` split extent is rejected. Driven through
     ``parse_shard_layout_sugar`` directly, the layer that canonicalises."""
-    cta = Mesh(Topology("cta", 8), Layout((8,), (1,)), names=("cta",))
+    cta = Mesh((Topology("cta", 8),), Layout((8,), (1,)), names=("cta",))
     node = ast.parse("(1, S @ cta, 32, 128)", mode="eval").body
     with pytest.raises(ValueError, match="static int"):
         parse_shard_layout_sugar(
@@ -274,7 +274,7 @@ def build_mesh_dims_reshard_func(warps, lanes):
     dynamic ``DimVar`` in that static-extent position must be rejected."""
     @func(topologies=(Topology("thread", 128),))
     def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
-        with Mesh(topology="thread", layout=(warps, lanes), names=("w", "t")) as m:
+        with Mesh(("thread",), layout=(warps, lanes), names=("w", "t")) as m:
             xr = reshard(x, (1, 128 @ (m.w, m.t)), "rmem")  # noqa: F821
             return reshard(xr, (1, 128), "gmem")  # noqa: F821
     return _f
@@ -285,7 +285,7 @@ def build_literal_reshard_func():
     ``128 @ (m.w, m.t)`` split extent; the closure builder above prints to it."""
     @func(topologies=(Topology("thread", 128),))
     def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
-        with Mesh(topology="thread", layout=(4, 32), names=("w", "t")) as m:
+        with Mesh(("thread",), layout=(4, 32), names=("w", "t")) as m:
             xr = reshard(x, (1, 128 @ (m.w, m.t)), "rmem")  # noqa: F821
             return reshard(xr, (1, 128), "gmem")  # noqa: F821
     return _f
@@ -305,7 +305,7 @@ def build_bool_split_extent_single_axis_func():
     rejected with a static-int diagnostic."""
     @func(topologies=(Topology("thread", 128),))
     def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
-        with Mesh(topology="thread", layout=(4, 32), names=("w", "t")) as m:
+        with Mesh(("thread",), layout=(4, 32), names=("w", "t")) as m:
             xr = reshard(x, (1, True @ m.w), "rmem")  # noqa: F821
             return reshard(xr, (1, 128), "gmem")  # noqa: F821
     return _f
