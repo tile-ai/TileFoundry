@@ -47,9 +47,10 @@ print(hir_function_to_dot(fn))
 ## 2. Python DSL Printer
 
 Canonical Python DSL printer that outputs executable `@func` /
-`@module` source.  The output is round-trippable: `as_script(fn)` can
-be parsed back via `parse_script()` to produce a structurally equivalent
-IR.
+`@module` source. The output is round-trippable: write `as_script(fn)` to a
+Python file and import it, and the real authoring decorators MUST produce a
+structurally equivalent IR. Printing that rebuilt value MUST reproduce the
+same canonical text.
 
 ### 2.1 Function printer
 
@@ -126,12 +127,12 @@ def module_to_python(fn: hir.Function, module_name: str = "M") -> str:
     rejected.
 
 The printer MUST emit a Module's whole tree: each nested Module prints as a
-`@module` class inside its owner's body, so a re-parse rebuilds the same
+`@module` class inside its owner's body, so importing the file rebuilds the same
 ownership. It MUST emit only what a Module *declares*, never what the Module
 resolves to — an inherited Target or topology hierarchy prints nothing, so
 the declaration-versus-inheritance split survives the round trip. A declared
 Target prints as the `@module(target=...)` argument and a declared hierarchy
-as the class body's leading `topologies` assignment
+as the `@module(topologies=...)` argument
 ([parser §2.7](./parser.md#27-module-authoring-surface)).
 
 The printer MUST import the concrete Target class from its provider module and
@@ -219,7 +220,7 @@ validation artifact.
 A rendering is one of two surfaces:
 
 **Canonical** — the rendering of a function with no `DimVar` parameter. It
-MUST round-trip: printing, parsing, and the test-side structural comparison
+MUST round-trip: printing, importing, and the test-side structural comparison
 MUST agree over
 
 - Params: shape, dtype, storage, layout.attrs, layout.shape, layout.strides, mesh identity (topology name/size, layout shape, names)
@@ -233,8 +234,8 @@ MUST agree over
 **Display-only** — the rendering of a function with a `DimVar` parameter, and
 therefore of any dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)). A
 display-only rendering is human-readable and MUST NOT be used as a
-`parse_script` validation artifact: it is held to importing, not to
-the same structural comparison.
+structural round-trip validation artifact: it is held to importing, not to the
+same structural comparison.
 
 A `DimVar` shape entry prints as its bare name, and a shape-valued op attribute
 holding one MUST print it the same way rather than as its repr. The rendering

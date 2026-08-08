@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.parser.hir_parser import parse_script
 
 _SEQ = DimVar("seq_len", 1, 100)
 
@@ -143,15 +143,15 @@ def test_nested_for_builds_nested_grid_region():
 def test_tile_rejects_non_dim_expr():
     # A bare tensor (not int / DimVar / dim-op Expr) is not a legal extent.
     with pytest.raises(VerifyError, match="dim expression"):
-        parse_script(_src("for i in tile(x):", "    y = relu(x)"))
+        import_dsl(_src("for i in tile(x):", "    y = relu(x)"))
 
 
 def test_return_inside_tile_body_rejected():
     with pytest.raises(VerifyError, match="must not contain `return`"):
-        parse_script(_src("for i in tile(8):", "    return x", "return x"))
+        import_dsl(_src("for i in tile(8):", "    return x", "return x"))
 
 
 def test_augassign_in_body_rejected():
     # v1 supports only `=`; an augmented assignment would hide a carry.
     with pytest.raises(VerifyError, match="augmented assignment"):
-        parse_script(_src("o = relu(x)", "for i in tile(8):", "    o += x", "return o"))
+        import_dsl(_src("o = relu(x)", "for i in tile(8):", "    o += x", "return o"))

@@ -15,9 +15,8 @@ from tilefoundry.dsl import *  # Tensor, tf, T, func, Mesh, Topology, ReduceKind
 from tilefoundry.target import CudaTarget
 
 
-@module(entry="rmsnorm")
+@module(entry="rmsnorm", topologies=(Topology("thread", 6 * 32),))
 class RmsnormModule:
-    topologies = (Topology("thread", 6 * 32),)
 
     @func
     def rmsnorm(a: Tensor[(1, 1536), 'bf16']):
@@ -34,9 +33,8 @@ class RmsnormModule:
             return tf.reshard(a_norm, (1, 1536 @ (m.w, m.t)), 'gmem')
 
 
-@module(entry="rmsnorm_seq_2")
+@module(entry="rmsnorm_seq_2", topologies=(Topology("thread", 2 * 4 * 32),))
 class RmsnormSeq2Module:
-    topologies = (Topology("thread", 2 * 4 * 32),)
 
     @func
     def rmsnorm_seq_2(a: Tensor[(2, 1536), 'bf16']):
@@ -51,9 +49,8 @@ class RmsnormSeq2Module:
             return tf.reshard(a_norm, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'gmem')
 
 
-@module(entry="rmsnorm_quant_seq_2")
+@module(entry="rmsnorm_quant_seq_2", topologies=(Topology("thread", 2 * 4 * 32),))
 class RmsnormQuantSeq2Module:
-    topologies = (Topology("thread", 2 * 4 * 32),)
 
     @func
     def rmsnorm_quant_seq_2(a: Tensor[(2, 1536), 'bf16']):

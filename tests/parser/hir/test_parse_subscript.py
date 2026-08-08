@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare bindings used by @func bodies
@@ -21,7 +22,6 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types.dim import DimAdd, DimMul
-from tilefoundry.parser.hir_parser import parse_script
 
 _PRELUDE = """from tilefoundry import func
 from tilefoundry.dsl.tf import *
@@ -92,7 +92,7 @@ def test_tile_with_too_many_args_rejected():
         "    y = relu(x)",
     )
     with pytest.raises(VerifyError, match="tile.. takes 1 or 2 arguments"):
-        parse_script(bad)
+        import_dsl(bad)
 
 
 @func
@@ -133,7 +133,7 @@ def test_a_compile_time_list_is_indexed_where_it_is_written():
         "    taps = [x[:, :, j:j + 1] for j in range(4)]\n"
         "    return add(taps[0], taps[-1])\n"
     )
-    first, last = parse_script(taps).body.args
+    first, last = import_dsl(taps).body.args
     assert isinstance(first.target, Slice) and isinstance(last.target, Slice)
     assert first.target.begin[2].value == 0
     assert last.target.begin[2].value == 3
@@ -143,7 +143,7 @@ def test_a_compile_time_list_is_indexed_where_it_is_written():
         "    ends = [x[:, :, 0:1], x[:, :, 7:8]]\n"
         "    return add(ends[0], ends[1])\n"
     )
-    low, high = parse_script(literal).body.args
+    low, high = import_dsl(literal).body.args
     assert isinstance(low.target, Slice) and isinstance(high.target, Slice)
     assert low.target.begin[2].value == 0
     assert high.target.begin[2].value == 7
@@ -161,7 +161,7 @@ def test_unsupported_subscripts_are_rejected():
         "return o",
     )
     with pytest.raises(VerifyError, match="rank 1 != tensor rank 2"):
-        parse_script(rank_mismatch)
+        import_dsl(rank_mismatch)
 
     runtime_tuple_index = _src(
         'x: Tensor[(1, 1536), "bf16"], i: Tensor[(), "i64"])'
@@ -170,4 +170,4 @@ def test_unsupported_subscripts_are_rejected():
         "return out[i]",
     )
     with pytest.raises(VerifyError, match="integer constant index"):
-        parse_script(runtime_tuple_index)
+        import_dsl(runtime_tuple_index)

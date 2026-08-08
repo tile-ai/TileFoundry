@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import inspect
+import sys
+from dataclasses import dataclass
+from types import FrameType
 
 
 class _Undeclared:
@@ -12,8 +15,7 @@ class _Undeclared:
     while omitting it declares nothing and inherits from the owning Module. A
     plain ``None`` default cannot express both, because ``None`` is already the
     IR's encoding of "inherit". This applies to both declaration surfaces: the
-    ``topologies`` assignment in a ``@module`` class body and the
-    ``topologies=`` argument of a standalone ``@func``."""
+    ``topologies=`` arguments of ``@module`` and standalone ``@func``."""
 
     def __repr__(self) -> str:
         return "UNDECLARED"
@@ -22,10 +24,30 @@ class _Undeclared:
 UNDECLARED = _Undeclared()
 
 
-TOPOLOGIES_ATTR = "topologies"
+@dataclass(eq=False)
+class _Entry:
+    topologies: tuple | None
+    frame: FrameType
 
 
-def module(cls=None, *, entry: str | None = None, target=None):
+_DECLARING: list[_Entry] = []
+
+
+def _validate(topologies) -> tuple:
+    from tilefoundry.ir.types.shard.mesh import Topology  # noqa: PLC0415
+
+    if not isinstance(topologies, tuple) or not all(
+        isinstance(topology, Topology) for topology in topologies
+    ):
+        raise TypeError(
+            f"@module: topologies must be a tuple of Topology, got {topologies!r}"
+        )
+    return topologies
+
+
+def module(
+    cls=None, *, entry: str | None = None, target=None, topologies=UNDECLARED
+):
     """Collect a class body into a ``Module``: DSL functions, child ``Module``s
     (or a tuple/list of them), and plain orchestration methods. See the module
     authoring surface in docs/spec/parser.md.
@@ -33,44 +55,26 @@ def module(cls=None, *, entry: str | None = None, target=None):
     ``entry`` optionally names which collected function is the default step.
 
     ``target`` declares the hardware this execution domain runs on; only the
-    outermost Module declares it and nested Modules inherit it.
-
-    The ordered parallel-resource hierarchy is declared by a ``topologies``
-    assignment at the top of the class body rather than by a decorator
-    argument, because a function body may name one of those levels (``with
-    Mesh(("warp",), ...)``) and Python binds class-body names before it applies
-    this decorator. Omitting the assignment inherits the owning Module's
-    hierarchy; an explicit ``()`` declares a topology-free Module."""
+    outermost Module declares it and nested Modules inherit it. ``topologies``
+    declares the ordered parallel-resource hierarchy; omitting it inherits the
+    owning Module's hierarchy and ``()`` declares a topology-free Module."""
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
-    from tilefoundry.ir.types.shard.mesh import Topology  # noqa: PLC0415
     from tilefoundry.target.base import target_instance  # noqa: PLC0415
 
     if target is not None:
         target_instance(target)
     resolved_target = target
-
-    def _declared_topologies(cls_inner):
-        """The class body's own ``topologies`` assignment, if it makes one.
-
-        Only this class's namespace counts: an attribute reached through a
-        base class is not a declaration by this execution domain.
-        """
-        declared = vars(cls_inner).get(TOPOLOGIES_ATTR, UNDECLARED)
-        if declared is UNDECLARED:
-            return None
-        if not isinstance(declared, (tuple, list)) or not all(
-            isinstance(t, Topology) for t in declared
-        ):
-            raise TypeError(
-                f"@module {cls_inner.__name__!r}: {TOPOLOGIES_ATTR} must be a "
-                f"tuple of Topology, got {declared!r}"
-            )
-        return tuple(declared)
+    declared_topologies = None if topologies is UNDECLARED else _validate(topologies)
+    mine = _Entry(declared_topologies, sys._getframe(1))
+    _DECLARING.append(mine)
 
     def _wrap(cls_inner):
-        declared_topologies = _declared_topologies(cls_inner)
+        for index, declaring in enumerate(_DECLARING):
+            if declaring is mine:
+                del _DECLARING[index:]
+                break
         functions = []
         child_modules = []
         methods = {}
@@ -85,8 +89,6 @@ def module(cls=None, *, entry: str | None = None, target=None):
                     f"<module>(...) delegates to."
                 )
             if name.startswith("__") and name.endswith("__"):
-                continue
-            if name == TOPOLOGIES_ATTR:
                 continue
             if isinstance(value, Module):
                 # torch / HF semantics: a child is named by its attribute, not

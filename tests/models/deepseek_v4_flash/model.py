@@ -519,13 +519,12 @@ def _submodules(config: DSV4Config):
     n_act = config.n_act  # below only -- see the module docstring.
 
 
-    @module(entry="deepseek_v4_flash_moe_hash")
+    @module(entry="deepseek_v4_flash_moe_hash", topologies=(Topology("cta", 132), Topology("thread", 512)))
     class DeepseekV4MoE:
         """Hash-router MoE (entry ``deepseek_v4_flash_moe_hash``), plus a plain
         ``forward``. Takes an already-normalized hidden state: the checkpoint's
         ``ffn_norm.weight`` is layer-level, so this component has no pre-MoE norm
         of its own (contrast ``DeepseekV4NoauxTcMoE`` below)."""
-        topologies = (Topology("cta", 132), Topology("thread", 512))
 
 
         @func
@@ -864,12 +863,11 @@ def _submodules(config: DSV4Config):
             return self.deepseek_v4_flash_moe_hash(hidden, token_ids)
 
 
-    @module(entry="deepseek_v4_flash_moe")
+    @module(entry="deepseek_v4_flash_moe", topologies=(Topology("cta", 132), Topology("thread", 512)))
     class DeepseekV4NoauxTcMoE:
         """The learned/``noaux_tc``-router MoE component (entry
         ``deepseek_v4_flash_moe``): keeps its own ``pre_moe_rms_norm`` (contrast
         ``DeepseekV4MoE`` above)."""
-        topologies = (Topology("cta", 132), Topology("thread", 512))
 
 
         @func
@@ -1260,9 +1258,8 @@ def build_deepseek_v4_flash(config: DSV4Config):
     #: positions counting its own, so the context it is handed is one shorter.
     KEPT = config.window - 1
 
-    @module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"))
+    @module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
     class DeepseekV4Flash:
-        topologies = (Topology("cta", 132), Topology("thread", 512))
 
         @func
         def embed(

@@ -1,4 +1,4 @@
-"""Round-trip tests: print → parse → print is a fixed point.
+"""Round-trip tests: print, import, and print again to reach a fixed point.
 
 Every corpus model is printed, written to a file and imported back by the CLI
 witness, so the constructs a model uses need no separate case here. What is kept
@@ -6,13 +6,13 @@ is one construct per class of printer decision the corpus does not reach: a
 call-site literal tuple, a binding whose source name shadows an op, the
 low-precision dtype names, a mesh introduced inside a tuple return, and a nested
 ``ComposedLayout``. Each asserts the property in question directly and then that
-re-printing the re-parsed source reproduces it character for character — a
+re-printing the imported source reproduces it character for character — a
 dangling reference or a dropped declaration does not survive that.
 """
 
+from tests._source import import_dsl
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.types import DType
-from tilefoundry.parser.hir_parser import parse_script
 
 _HEADER = (
     "from __future__ import annotations\n"
@@ -43,7 +43,7 @@ def test_positional_and_keyword_attrs_are_the_same_program() -> None:
         'def f(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:\n'
     )
     printed = [
-        as_script(parse_script(_HEADER + _SHARD_IMPORT + body + call))
+        as_script(import_dsl(_HEADER + _SHARD_IMPORT + body + call))
         for call in ("    b = reshard(a, sl)\n    return b\n",
                      "    b = reshard(a, layout=sl)\n    return b\n")
     ]
@@ -54,9 +54,9 @@ def test_positional_and_keyword_attrs_are_the_same_program() -> None:
 def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
     """A rank-3 ``insert_slice`` whose offset is a literal tuple argument prints
     the tuple inline as a literal ``(e0, e1, e2)`` at the call site (the parser
-    lifts an inline offset tuple back to a hir Tuple), so the source re-parses
-    without a dangling reference and re-prints identically."""
-    fn = parse_script(
+    lifts an inline offset tuple back to a hir Tuple), so importing the source
+    leaves no dangling reference and re-printing is identical."""
+    fn = import_dsl(
         _HEADER
         + "\n@func\n"
         'def ins(dst: Tensor[(2, 5, 3), "f32"], upd: Tensor[(2, 1, 3), "f32"]):\n'
@@ -64,17 +64,17 @@ def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
         "    return res\n"
     )
     script = as_script(fn)
-    assert as_script(parse_script(script)) == script
+    assert as_script(import_dsl(script)) == script
 
 
 def test_shadowed_call_loc_roundtrips() -> None:
     """When a call's source loc collides with an op name (``vals, idx = topk``
     gives the ``topk`` call loc ``"topk"``), the printer renames the binding to
     ``topk_out`` to avoid shadowing the op. The renamed binding is carried by the
-    left-hand side and nothing else, so re-printing the re-parsed source is what
+    left-hand side and nothing else, so re-printing the imported source is what
     proves the label survived: had it come back as ``topk``, the fixed point would
     not hold."""
-    fn = parse_script(
+    fn = import_dsl(
         _HEADER
         + "\n@func\n"
         'def sh(x: Tensor[(4, 8), "f32"]):\n'
@@ -83,15 +83,15 @@ def test_shadowed_call_loc_roundtrips() -> None:
     )
     script = as_script(fn)
     assert 'topk_out = topk(' in script, script
-    assert as_script(parse_script(script)) == script
+    assert as_script(import_dsl(script)) == script
 
 
 def test_low_precision_dtype_names_roundtrip() -> None:
     """A ``@func`` whose parameters are typed with the three low-precision dtype
-    names (fp8e4m3, f8e8m0, f4e2m1) prints those names and re-parses to the same
+    names (fp8e4m3, f8e8m0, f4e2m1) prints those names and imports with the same
     dtypes."""
     expected = [DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1]
-    fn = parse_script(
+    fn = import_dsl(
         _HEADER
         + "\n@func\n"
         'def lp(a: Tensor[(4,), "fp8e4m3"], b: Tensor[(4,), "f8e8m0"], '
@@ -103,16 +103,16 @@ def test_low_precision_dtype_names_roundtrip() -> None:
     printed = as_script(fn)
     for name in ("fp8e4m3", "f8e8m0", "f4e2m1"):
         assert name in printed, printed
-    reparsed = parse_script(printed)
-    assert [p.type.dtype for p in reparsed.params] == expected
-    assert as_script(reparsed) == printed
+    imported = import_dsl(printed)
+    assert [p.type.dtype for p in imported.params] == expected
+    assert as_script(imported) == printed
 
 
 def test_tuple_return_with_mesh_element_roundtrips() -> None:
     """A tuple-return element that introduces a mesh (a ``reshard``) must be
     discovered by the printer's mesh collection via ``Tuple.elements``; the
     rendered call references the declared mesh and round-trips."""
-    fn = parse_script(
+    fn = import_dsl(
         _HEADER
         + _SHARD_IMPORT
         + "sl = ShardLayout(\n"
@@ -128,13 +128,13 @@ def test_tuple_return_with_mesh_element_roundtrips() -> None:
     printed = as_script(fn)
     assert "return (" in printed, printed
     assert "mesh=Mesh(" in printed, printed
-    assert as_script(parse_script(printed)) == printed
+    assert as_script(import_dsl(printed)) == printed
 
 
 def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
     """A ``ComposedLayout`` whose outer is a prior ``ShardLayout`` stage must print
     as that nesting: flattening it would lose which mesh level owns which axis."""
-    fn = parse_script(
+    fn = import_dsl(
         "from __future__ import annotations\n"
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor\n"
@@ -157,14 +157,14 @@ def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
 
     assert "layout=ComposedLayout(" in printed
     assert "outer=ShardLayout(" in printed
-    assert as_script(parse_script(printed)) == printed
+    assert as_script(import_dsl(printed)) == printed
 
 
 def test_a_loop_used_as_a_value_prints_the_name_its_carry_has() -> None:
     """A ``for`` statement binds no name of its own. A loop with one carried
     value, consumed by a later statement, has to render as that carry — a
-    dangling reference does not survive being parsed back."""
-    fn = parse_script(
+    dangling reference does not survive importing the emitted file."""
+    fn = import_dsl(
         _HEADER
         + "\n@func\n"
         'def acc(x: Tensor[(4, 8), "f32"]):\n'
@@ -177,4 +177,4 @@ def test_a_loop_used_as_a_value_prints_the_name_its_carry_has() -> None:
     printed = as_script(fn)
 
     assert "mul(total, x)" in printed, printed
-    assert as_script(parse_script(printed)) == printed
+    assert as_script(import_dsl(printed)) == printed

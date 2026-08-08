@@ -92,13 +92,12 @@ _G = GQA_GROUP
 _SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 
-@module(entry="gqa_online_attend")
+@module(entry="gqa_online_attend", topologies=(Topology("cta", NUM_CTA),))
 class GqaOnline:
     """The two decode strategies and the shared context-split kernels, in one
     execution domain: an HIR Function may only call a Function its own Module
     owns, and every body here names the same ``cta`` level."""
 
-    topologies = (Topology("cta", NUM_CTA),)
 
     @func
     def gqa_online_attend(

@@ -168,9 +168,8 @@ def test_analyze_rejects_cross_cta_reduce():
 # ``reduce_cross_warp`` path via the uniform ``reduce`` entry. Full GPU
 # compile + run + numeric compare, plus the codegen-emit shape.
 
-@module(entry="cross_warp_sum")
+@module(entry="cross_warp_sum", topologies=(Topology("thread", 4 * 32),))
 class _CrossWarpSumModule:
-    topologies = (Topology("thread", 4 * 32),)
 
     @func
     def cross_warp_sum(a: Tensor[(4, 32), 'f32']):
@@ -205,11 +204,10 @@ def test_cross_warp_sum_emits_reduce() -> None:
     assert re.search(r"__shared__ __align__\(16\) float ws\w*\[128\];", src), src
 
 
-@module(entry="max_over_nothing")
+@module(entry="max_over_nothing", topologies=())
 class _EmptyAxisModule:
     """Reductions over an axis of no elements: per kind, and per keepdim."""
 
-    topologies = ()
 
     @func
     def max_over_nothing(x: Tensor[(1, 0, 8), "f32"]) -> Tensor[(1, 1, 8), "f32"]:

@@ -344,12 +344,11 @@ class MiniCPM3_4B_DecoderLayer:
         return h1 + mlp_out * residual_scale, k_new, v_new
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"))
+@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class MiniCPM3_4B:
     """The ordered layer stack, the norm that closes it, and the two scaled ends
     that bracket it."""
 
-    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
         MiniCPM3_4B_DecoderLayer.renamed(f"layer{index}")

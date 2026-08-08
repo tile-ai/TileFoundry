@@ -45,9 +45,8 @@ from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
 from tilefoundry.target import CpuTarget
 
 
-@module(entry="main", target=CpuTarget())
+@module(entry="main", target=CpuTarget(), topologies=(Topology("cta", 168),))
 class Mine:
-    topologies = (Topology("cta", 168),)
 
     @func
     def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
@@ -77,9 +76,8 @@ from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
 
-@module(entry="root", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="root", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 128)))
 class CMine:
-    topologies = (Topology("cta", 1), Topology("thread", 128))
 
     @func
     def root(
@@ -232,9 +230,8 @@ from tilefoundry.runtime import RuntimeModule, runtime_func, runtime_module
 from tilefoundry.target import CpuTarget
 
 
-@module(entry="main", target=CpuTarget())
+@module(entry="main", target=CpuTarget(), topologies=(Topology("cta", 168),))
 class Model:
-    topologies = (Topology("cta", 168),)
 
     @func
     def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
@@ -273,9 +270,8 @@ class Drifted:
         return x - x
 
 
-@module(entry="scaled")
+@module(entry="scaled", topologies=(Topology("cta", 168),))
 class Weighted:
-    topologies = (Topology("cta", 168),)
 
     @func
     def scaled(
@@ -307,9 +303,8 @@ class WeightedRootTwin:
         return x * w
 
 
-@module(entry="fused", target=CpuTarget())
+@module(entry="fused", target=CpuTarget(), topologies=(Topology("cta", 168),))
 class Fused:
-    topologies = (Topology("cta", 168),)
 
     @func
     def fused(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
@@ -327,9 +322,8 @@ class FusedTwin:
         return x * x - x
 
 
-@module(entry="add_pair", target=CpuTarget())
+@module(entry="add_pair", target=CpuTarget(), topologies=(Topology("cta", 168),))
 class Orchestrated:
-    topologies = (Topology("cta", 168),)
 
     @func
     def add_pair(
@@ -400,9 +394,8 @@ from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
 from tilefoundry.target import CudaTarget
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 168),))
 class Model:
-    topologies = (Topology("cta", 168),)
 
     @func
     def main(x: Tensor[(168,), "f32"]):

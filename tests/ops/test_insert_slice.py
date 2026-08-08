@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests._source import import_dsl
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -31,7 +32,6 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
-from tilefoundry.parser.hir_parser import parse_script
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -96,7 +96,7 @@ def _eval_rankn(dst: torch.Tensor, upd: torch.Tensor, lit_offsets, runtime_axis=
         f'def ins(dst: Tensor[({d}), "f32"], upd: Tensor[({u}), "f32"]{extra}) -> Tensor[({d}), "f32"]:\n'
         f"    return tf.insert_slice(dst, upd, ({', '.join(elems)}))\n"
     )
-    return evaluate(parse_script(src), *inputs, device="cpu")
+    return evaluate(import_dsl(src), *inputs, device="cpu")
 
 
 def _ref_scatter(dst, upd, offsets):
@@ -220,13 +220,12 @@ _KV_HEADS = 1
 _HEAD_DIM = 4
 
 
-@module(entry="decode_step")
+@module(entry="decode_step", topologies=(Topology("thread", 1),))
 class _DecodeStep:
     """A single decode step exercising the in-place loop-carry lowerings: a
     two-carry grid region (output accumulator + running total → a tuple, so
     ``tuple_get_item``), ``full_like`` inits, an in-place ``insert_slice`` write
     at a dynamic scalar offset, and a rank-4 ``cache_update`` KV write."""
-    topologies = (Topology("thread", 1),)
 
 
     @func
@@ -344,12 +343,11 @@ _NW_UB, _NW_UC = 2, 3  # window extent on axis 1 / axis 2 (partial: 3 of 6)
 _NW_STEPS = 2
 
 
-@module(entry="nd_window")
+@module(entry="nd_window", topologies=(Topology("thread", 1),))
 class _NdWindow:
     """A loop-carried rank-3 in-place ``insert_slice`` writing a non-trivial,
     non-contiguous window (full axis 0, window 2 on axis 1, partial 3-of-6 on
     axis 2) at the induction variable as the middle-axis tile coordinate."""
-    topologies = (Topology("thread", 1),)
 
 
     @func

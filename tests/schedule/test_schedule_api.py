@@ -73,15 +73,13 @@ def scale(x: Tensor[(64, 64), "f32"]) -> Tensor[(64, 64), "f32"]:
     return relu(x)  # noqa: F405
 
 
-@module(entry="scale", target=_SchedulingTarget())
+@module(entry="scale", target=_SchedulingTarget(), topologies=(Topology("tile", 4),))
 class Widget:
-    topologies = (Topology("tile", 4),)
     scale = scale
 
 
-@module(entry="scale", target=_UnsupportedTarget())
+@module(entry="scale", target=_UnsupportedTarget(), topologies=(Topology("tile", 4),))
 class Unsupported:
-    topologies = (Topology("tile", 4),)
     scale = scale
 
 
@@ -93,15 +91,13 @@ class _BrokenSchedulerTarget(_TopologyTarget):
         raise ValueError("provider scheduler failure")
 
 
-@module(entry="scale", target=_BrokenSchedulerTarget())
+@module(entry="scale", target=_BrokenSchedulerTarget(), topologies=(Topology("tile", 4),))
 class BrokenScheduler:
-    topologies = (Topology("tile", 4),)
     scale = scale
 
 
-@module(entry="scale", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="scale", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 1025)))
 class OverLimitCuda:
-    topologies = (Topology("cta", 1), Topology("thread", 1025))
     scale = scale
 
 
@@ -130,9 +126,8 @@ def test_schedule_preserves_plan_verification() -> None:
         def get_scheduler(self, topology: str) -> Scheduler:
             return Scheduler(topology, lambda *_args: _Plan(4, valid=False))
 
-    @module(entry="scale", target=_InvalidTarget())
+    @module(entry="scale", target=_InvalidTarget(), topologies=(Topology("tile", 4),))
     class Invalid:
-        topologies = (Topology("tile", 4),)
         scale = scale
 
     with pytest.raises(PlanVerificationError, match="invalid plan"):

@@ -14,7 +14,7 @@ from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.module import TOPOLOGIES_ATTR, UNDECLARED
+from tilefoundry.module import _DECLARING, UNDECLARED
 from tilefoundry.parser import parse_func, parse_prim_func
 from tilefoundry.target.base import target_instance
 
@@ -68,26 +68,18 @@ def _definition_namespace() -> dict[str, Any]:
 
 
 def _enclosing_topologies() -> tuple | None:
-    """The ``topologies`` an enclosing ``@module`` class body declares.
-
-    A function body may name a level of its own execution domain (``with
-    Mesh("warp", ...)``), and that name has to resolve while the body is
-    parsed. The owning ``@module`` decorator has not run yet at that point, but
-    the class body it decorates has already bound its ``topologies``
-    assignment, so the declaration is readable from that frame. Walking
-    outwards past a class body that declares nothing gives nested Modules the
-    same inheritance the IR applies.
-    """
+    """Find the declaration belonging to the enclosing ``@module`` class body."""
     frame = sys._getframe(1)
     here = __file__
     while frame is not None and frame.f_code.co_filename == here:
         frame = frame.f_back
     while frame is not None:
-        # A class body is the only scope that binds ``__qualname__`` locally.
         if "__qualname__" in frame.f_locals:
-            declared = frame.f_locals.get(TOPOLOGIES_ATTR)
-            if declared is not None:
-                return tuple(declared)
+            for entry in reversed(_DECLARING):
+                if entry.frame is frame.f_back:
+                    if entry.topologies is not None:
+                        return entry.topologies
+                    break
         elif frame.f_code.co_name == "<module>":
             break
         frame = frame.f_back
@@ -98,7 +90,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     """Decorator: parse an ``@func``-decorated function into HIR.
 
     Plain ``@func`` binds the decorated name to a ``hir.Function``, parsed
-    against whatever topology hierarchy its owning ``@module`` class body
+    against whatever topology hierarchy its owning ``@module`` decorator
     declares. Declaring execution context here instead — ``topologies`` (the
     topology namespace enabling ``with Mesh(("cta",), ...)``) or
     ``target`` (a Target object) — makes that function its own

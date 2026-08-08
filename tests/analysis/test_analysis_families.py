@@ -37,27 +37,24 @@ from tilefoundry.visitor_registry import cost_evaluator_registry
 from tilefoundry.visitor_registry.contexts import Cost
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
 class _CudaAdd:
-    topologies = (Topology("cta", 4),)
 
     @func
     def main(source: Tensor[(256,), "f32"]):
         return tf.add(source, source)
 
 
-@module(entry="main", target=AmxTarget())
+@module(entry="main", target=AmxTarget(), topologies=(Topology("core", 4),))
 class _AmxAdd:
-    topologies = (Topology("core", 4),)
 
     @func
     def main(source: Tensor[(256,), "f32"]):
         return tf.add(source, source)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _MixedPrecision:
-    topologies = (Topology("cta", 1),)
 
     @func
     def main(source: Tensor[(64,), "f32"]):
@@ -66,9 +63,8 @@ class _MixedPrecision:
         return tf.add(half, half)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _WeightedAdd:
-    topologies = (Topology("cta", 1),)
 
     @func
     def main(
@@ -79,9 +75,8 @@ class _WeightedAdd:
         return tf.add(scaled, scaled)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _Rotated:
-    topologies = (Topology("cta", 1),)
 
     @func
     def main(
@@ -95,18 +90,16 @@ class _Rotated:
         return rotated
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _Allocated:
-    topologies = (Topology("cta", 1),)
 
     @func
     def main(source: Tensor[(64,), "f32"]):
         return tf.add(source, tf.zeros(shape=(64,), dtype="f32"))
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _BatchedOnTheRight:
-    topologies = (Topology("cta", 1),)
 
     @func
     def main(
@@ -116,9 +109,8 @@ class _BatchedOnTheRight:
         return tf.matmul(token, blocks)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _Gathered:
-    topologies = (Topology("cta", 1),)
 
     @func
     def main(

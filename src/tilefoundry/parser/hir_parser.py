@@ -15,7 +15,6 @@ from tilefoundry.ir.constraints import (
 )
 from tilefoundry.ir.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.ir.core import BindingMetadata, Expr, Var, VerifyError, get_metadata
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -32,8 +31,6 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
 from tilefoundry.ir.visitor import ExprMutator
-from tilefoundry.target import Target
-from tilefoundry.target.base import target_instance
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (
@@ -44,7 +41,6 @@ from .base import (
     extract_ast,
 )
 from .range_slice import RangeSlice
-from .static_eval import eval_static
 from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar
 from .symtab import LexicalEnv
 
@@ -82,92 +78,9 @@ def parse_func(fn, *, topologies=(), specializations=(), extra_closure=None) -> 
         source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
     )
 
-def _find_func_def(stmts: list[ast.stmt]) -> ast.FunctionDef | None:
-    """Return the first ``@func``-decorated ``FunctionDef`` in *stmts*, else
-    ``None``. Shared by ``parse_func_source`` (a flat module body) and
-    ``_parse_module_source_tree`` (module body + the ``@module`` class body,
-    pre-flattened by the caller)."""
-    for stmt in stmts:
-        if isinstance(stmt, ast.FunctionDef):
-            for dec in stmt.decorator_list:
-                if _is_func_decorator(dec):
-                    return stmt
-    return None
-
-
-# Source statements folded into the ``exec``-built prelude namespace: the
-# union of what ``parse_func_source`` and ``_parse_module_source_tree``
-# each accepted independently (Assign / AnnAssign / Expr), so a module-level
-# constant round-trips identically through either source entry point.
-_SOURCE_PRELUDE_STMTS = (ast.Assign, ast.AnnAssign, ast.Expr)
-
 #: A body-local binding is compile-time or it is not; ``None`` and ``0`` are both
 #: legitimate compile-time values, so the miss needs its own marker.
 _NOT_STATIC = object()
-
-
-def _build_source_closure(stmts: list[ast.stmt]) -> dict[str, Any]:
-    """Build a source-level prelude namespace from *stmts* (module body, or
-    module body + ``@module`` class body): every ``import`` / assignment /
-    bare-expression statement is rendered back to source and ``exec``'d;
-    ``FunctionDef`` / ``ClassDef`` are skipped (they are handled separately
-    by :func:`_find_func_def` / the module-class walk)."""
-    closure: dict[str, Any] = {}
-    prelude_lines: list[str] = []
-    for stmt in stmts:
-        if isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
-            continue
-        if isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                name = alias.asname or alias.name
-                prelude_lines.append(f"import {alias.name} as {name}")
-        elif isinstance(stmt, ast.ImportFrom):
-            names = ", ".join(a.name + (f" as {a.asname}" if a.asname else "")
-                              for a in stmt.names)
-            prelude_lines.append(f"from {stmt.module or ''} import {names}")
-        elif isinstance(stmt, _SOURCE_PRELUDE_STMTS):
-            prelude_lines.append(ast.unparse(stmt))
-    exec("\n".join(prelude_lines), closure)
-    return closure
-
-
-def parse_func_source(src: str):
-    """Parse an ``@func``-decorated function from a Python source string.
-
-    Mirrors the authoring decorator: a plain ``@func`` yields a ``Function``,
-    while an ``@func`` declaring execution context yields the implicit
-    single-function ``Module`` carrying that context. Used for round-trip —
-    ``parse_func_source(printer_output)`` reconstructs what the source
-    declares. Imports are executed to build a source-level prelude namespace;
-    the canonical path relies on parser-recognised AST constructors (Topology,
-    Layout, etc.) and string-name topology resolution rather than arbitrary
-    Python object capture.
-    """
-    tree = ast.parse(src)
-    func_node = _find_func_def(tree.body)
-    if func_node is None:
-        _reject_prim_func_source(tree.body)
-        raise ValueError("no @func-decorated function found in source")
-    closure = _build_source_closure(tree.body)
-
-    parsed_topologies = _extract_topologies_from_decorator(func_node)
-    declares_topologies = _declares_decorator_kwarg(func_node, "topologies")
-    parsed_target = _extract_target_from_decorator(func_node, closure)
-    fn = _parse_func_node(
-        func_node,
-        closure,
-        topologies=parsed_topologies,
-        source_filename="<string>",
-    )
-    if parsed_target is None and not declares_topologies:
-        return fn
-    return Module(
-        name=fn.name,
-        functions=(fn,),
-        entry=fn.name,
-        target=parsed_target,
-        topologies=tuple(parsed_topologies) if declares_topologies else None,
-    )
 
 def _parse_func_node(
     node: ast.FunctionDef,
@@ -241,135 +154,6 @@ def _finalize_schedule_metadata(
     new_params = tuple(finalizer.visit(param) for param in params)
     new_body = None if body is None else finalizer.visit(body)
     return new_params, new_body
-
-def _extract_topologies_from_decorator(node: ast.FunctionDef) -> list["Topology"]:
-    """Parse ``@func(topologies=(...))`` from the function's decorator AST.
-
-    Returns a list of Topology objects extracted from the decorator's
-    ``topologies`` keyword argument. Supports:
-
-    - ``Topology("cta", 128)`` — inline constructor (canonical)
-    - ``cta`` — variable reference resolved through closure (legacy)
-    """
-    result: list["Topology"] = []
-
-    for dec in node.decorator_list:
-        if isinstance(dec, ast.Call):
-            if not _is_func_decorator(dec):
-                continue
-            for kw in dec.keywords:
-                if kw.arg != "topologies":
-                    continue
-                # Parse topology values from the tuple/list literal
-                values = kw.value
-                if isinstance(values, (ast.Tuple, ast.List)):
-                    for elt in values.elts:
-                        topo = _parse_topology_item(elt)
-                        if topo is not None:
-                            result.append(topo)
-                elif isinstance(values, ast.Name):
-                    # Single variable reference from closure (legacy)
-                    pass  # handled by the decorator's runtime kwarg passing
-    return result
-
-
-_DECORATOR_STATIC_NODES = (
-    ast.Constant, ast.Name, ast.Attribute, ast.Tuple, ast.List, ast.Call,
-)
-
-
-def _eval_decorator_static(node: ast.AST, closure: dict[str, Any]):
-    """Evaluate the static expression subset used by decorator kwargs.
-
-    Thin policy wrapper over :func:`eval_static`: no lexical env exists yet
-    at decorator-parse time (only the function's closure), and only the
-    literal / name / attribute / call node shapes a decorator argument may
-    take are allowed.
-    """
-    return eval_static(node, closure=closure, allowed_nodes=_DECORATOR_STATIC_NODES)
-
-
-def _declares_decorator_kwarg(node: ast.FunctionDef, name: str) -> bool:
-    """Whether the ``@func`` decorator spells *name* out, however it is
-    valued. An explicit ``topologies=()`` declares a topology-free domain and
-    must stay distinguishable from omitting the argument."""
-    for dec in node.decorator_list:
-        if not isinstance(dec, ast.Call) or not _is_func_decorator(dec):
-            continue
-        if any(kw.arg == name for kw in dec.keywords):
-            return True
-    return False
-
-
-def _extract_target_from_decorator(
-    node: ast.FunctionDef, closure: dict[str, Any]
-) -> Target | None:
-    """Parse an explicit target value from an @func decorator."""
-    for dec in node.decorator_list:
-        if not isinstance(dec, ast.Call) or not _is_func_decorator(dec):
-            continue
-        for keyword in dec.keywords:
-            if keyword.arg != "target":
-                continue
-            value = _eval_decorator_static(keyword.value, closure)
-            try:
-                target = target_instance(value, subject="func target")
-            except TypeError as error:
-                raise VerifyError(str(error)) from None
-            return target
-    return None
-
-def _parse_topology_item(node: ast.AST) -> "Topology | None":
-    """Parse a single topology declaration from an AST node.
-
-    Returns a Topology object, or None if the node can't be parsed statically
-    (e.g. a variable reference — handled at Python runtime by the decorator).
-
-    Supports finite compile-time expressions for *size*:
-    - ``Topology("cta", 128)``          (int literal)
-    - ``Topology("thread", 8 * 32)``   (safe arithmetic)
-    - ``Topology("cta", None)``        (deferred extent, dynamic launch)
-
-    A literal ``None`` size is a declaration in its own right, not a parse
-    failure: it is the dynamic-launch extent target.md keeps valid. It must
-    stay distinct from the unparseable case so the declaration survives a
-    print / parse round trip.
-    """
-    if isinstance(node, ast.Call):
-        if isinstance(node.func, ast.Name) and node.func.id == "Topology":
-            if len(node.args) >= 2:
-                name = node.args[0]
-                size = node.args[1]
-                if isinstance(name, ast.Constant) and isinstance(name.value, str):
-                    if isinstance(size, ast.Constant) and size.value is None:
-                        return Topology(name=name.value, size=None)
-                    size_val = _eval_topology_expr(size)
-                    if size_val is not None:
-                        return Topology(name=name.value, size=size_val)
-    return None
-
-_TOPOLOGY_STATIC_NODES = (ast.Constant, ast.BinOp, ast.UnaryOp)
-
-
-def _eval_topology_expr(node: ast.AST) -> int | None:
-    """Safely evaluate a compile-time expression for topology size.
-
-    Thin policy wrapper over :func:`eval_static`, restricted to integer
-    literals, binary arithmetic, and unary minus, with ``div="floor"`` —
-    topology sizes are always integral, unlike the true-division default
-    used for general attribute kwargs (:meth:`BaseExprVisitor._eval_static`).
-    Returns ``None`` (rather than raising) for anything that cannot be
-    statically resolved, e.g. a variable reference (handled by the runtime
-    decorator kwarg path instead) or division by zero.
-    """
-    try:
-        value = eval_static(
-            node, closure={}, allowed_nodes=_TOPOLOGY_STATIC_NODES, div="floor"
-        )
-    except (VerifyError, ZeroDivisionError):
-        return None
-    return value if isinstance(value, int) else None
-
 
 def _constraint_value(node: ast.AST):
     """Read a stage-neutral layout extent or topology reference."""
@@ -457,47 +241,6 @@ def _parse_layout_constraint(
     if len({topology for topology, _ in bindings}) != len(bindings):
         raise VerifyError("layout constraint cannot bind one topology more than once")
     return LayoutConstraint(layout=Layout(shape=tuple(shape)), bindings=tuple(bindings))
-
-def _reject_prim_func_source(stmts: list[ast.stmt]) -> None:
-    """Fail naming the HIR-only boundary when *stmts* declare a ``@prim_func``.
-
-    Reading TIR back from source text is not part of the round trip, so a
-    ``@prim_func`` input says why it is refused rather than reporting the bare
-    absence of an ``@func``.
-    """
-    for stmt in stmts:
-        if not isinstance(stmt, ast.FunctionDef):
-            continue
-        if any(_is_prim_func_decorator(d) for d in stmt.decorator_list):
-            raise VerifyError(
-                f"{stmt.name!r} is a @prim_func; parsing from source text "
-                "reads HIR only"
-            )
-
-
-def _is_prim_func_decorator(dec: ast.AST) -> bool:
-    """Check if an AST decorator node is ``@prim_func`` or ``@prim_func(...)``."""
-    if isinstance(dec, ast.Name) and dec.id == "prim_func":
-        return True
-    if isinstance(dec, ast.Attribute) and dec.attr == "prim_func":
-        return True
-    if isinstance(dec, ast.Call):
-        return _is_prim_func_decorator(dec.func)
-    return False
-
-
-def _is_func_decorator(dec: ast.AST) -> bool:
-    """Check if an AST decorator node is ``@func`` or ``@func(...)``."""
-    # @func (bare)
-    if isinstance(dec, ast.Name) and dec.id == "func":
-        return True
-    # module.func
-    if isinstance(dec, ast.Attribute) and dec.attr == "func":
-        return True
-    # @func(topologies=(...)) — Call wrapping Name/Attribute
-    if isinstance(dec, ast.Call):
-        return _is_func_decorator(dec.func)
-    return False
 
 def _is_pass_body(stmts: list[ast.stmt]) -> bool:
     """A dispatch-prototype body is exactly ``pass``. A ``pass`` mixed with any
@@ -1198,189 +941,4 @@ class _HirBodyVisitor(BaseExprVisitor):
         }
         return mesh_fn(*pos_args, **pos_kw)
 
-def _is_module_decorator(dec: ast.AST) -> bool:
-    """True for ``@module``, ``@tf.module``, or ``@module(entry=...)`` — the
-    bare name/attribute form or the entry-carrying call form."""
-    if isinstance(dec, ast.Call):
-        dec = dec.func
-    return (isinstance(dec, ast.Name) and dec.id == "module") or (
-        isinstance(dec, ast.Attribute) and dec.attr == "module"
-    )
-
-
-def parse_script(src: str):
-    """Parse Python DSL source into the HIR value the source declares.
-
-    Auto-detects the source format:
-
-    - ``@module(entry=..., target=...) class M: ...`` → the ``Module``,
-      including every ``@func`` it owns and its nested ``@module`` classes,
-      parsed with the mesh symbol table (sugar axis resolution). Its topology
-      hierarchy comes from the class body's ``topologies`` assignment.
-    - ``@func def fn(...): ...`` → a standalone ``Function``, or the implicit
-      single-function ``Module`` when the decorator declares execution context.
-
-    Args:
-        src: Python DSL source string.
-
-    Returns:
-        The parsed ``Module`` or ``hir.Function``.
-    """
-    tree = ast.parse(src)
-    # Check for @module class
-    has_module = False
-    for stmt in tree.body:
-        if isinstance(stmt, ast.ClassDef):
-            if any(_is_module_decorator(dec) for dec in stmt.decorator_list):
-                has_module = True
-        if has_module:
-            break
-    if has_module:
-        return _parse_module_source_tree(tree)
-    return parse_func_source(src)
-
-# backward-compat aliases
-def parse_module_source(src: str):
-    """Backward-compat alias for parse_script with @module source."""
-    return parse_script(src)
-
-
-def _module_decorator_call(cls_node: ast.ClassDef) -> ast.Call | None:
-    """The ``@module(...)`` call node decorating *cls_node*, if it has one."""
-    for dec in cls_node.decorator_list:
-        if isinstance(dec, ast.Call) and _is_module_decorator(dec):
-            return dec
-    return None
-
-
-def _module_entry_name(cls_node: ast.ClassDef) -> str | None:
-    """The ``entry=`` name this class's ``@module`` decorator declares, or ``None``
-    where it declares none."""
-    call = _module_decorator_call(cls_node)
-    for kw in (call.keywords if call is not None else ()):
-        if kw.arg == "entry" and isinstance(kw.value, ast.Constant):
-            return kw.value.value
-    return None
-
-
-def _module_declared_context(cls_node: ast.ClassDef, closure: dict[str, Any]):
-    """The ``(target, topologies)`` this class declares: ``target`` from the
-    ``@module`` decorator, ``topologies`` from the class body's ``topologies``
-    assignment. ``topologies`` stays ``None`` when the class body has no such
-    assignment, so inheritance and an explicit empty declaration remain
-    distinguishable."""
-    call = _module_decorator_call(cls_node)
-    target = None
-    topologies: tuple[Topology, ...] | None = None
-    for kw in (call.keywords if call is not None else ()):
-        if kw.arg == "target":
-            value = _eval_decorator_static(kw.value, closure)
-            try:
-                target = target_instance(value, subject="module target")
-            except TypeError as error:
-                raise VerifyError(str(error)) from None
-    for stmt in cls_node.body:
-        # The hierarchy is declared by a class-body assignment, not a decorator
-        # argument, so a function parsed below it can name one of its levels.
-        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
-            continue
-        name = stmt.targets[0]
-        if not isinstance(name, ast.Name) or name.id != "topologies":
-            continue
-        if not isinstance(stmt.value, (ast.Tuple, ast.List)):
-            raise VerifyError(
-                f"@module class {cls_node.name!r}: topologies must be a tuple "
-                f"of Topology(...) declarations, got {ast.unparse(stmt.value)}"
-            )
-        items = []
-        for elt in stmt.value.elts:
-            topo = _parse_topology_item(elt)
-            if topo is None:
-                raise VerifyError(
-                    f"@module class {cls_node.name!r}: topologies entry "
-                    f"{ast.unparse(elt)} is not a Topology(name, size) "
-                    "declaration the parser can resolve statically"
-                )
-            items.append(topo)
-        topologies = tuple(items)
-    return target, topologies
-
-
-def _parse_module_class(
-    cls_node: ast.ClassDef, prelude: list[ast.stmt],
-    inherited_topologies: tuple[Topology, ...] = (),
-) -> "Module":
-    """Parse one ``@module`` class into a ``Module``, recursing into the
-    nested ``@module`` classes in its body.
-
-    *prelude* is the enclosing statement context (source-level imports and
-    constants, plus any owning class bodies) whose names this class's
-    functions may reference.
-    """
-    statements = list(prelude) + list(cls_node.body)
-    closure = _build_source_closure(statements)
-    target, topologies = _module_declared_context(cls_node, closure)
-
-    child_classes = [
-        stmt for stmt in cls_node.body
-        if isinstance(stmt, ast.ClassDef)
-        and any(_is_module_decorator(d) for d in stmt.decorator_list)
-    ]
-    effective = topologies if topologies is not None else inherited_topologies
-    children = tuple(
-        _parse_module_class(child, statements, effective)
-        for child in child_classes
-    )
-
-    functions = []
-    for stmt in cls_node.body:
-        if not isinstance(stmt, ast.FunctionDef):
-            continue
-        if any(_is_prim_func_decorator(d) for d in stmt.decorator_list):
-            # Source parsing is HIR-only: the printer emits no mixed HIR/TIR
-            # module, so a TIR member here has no round trip to belong to.
-            raise VerifyError(
-                f"@module class {cls_node.name!r}: member {stmt.name!r} is a "
-                "@prim_func; parsing a Module from source text reads HIR only"
-            )
-        if not any(_is_func_decorator(d) for d in stmt.decorator_list):
-            continue
-        # A body may name any topology level of its effective execution
-        # domain, inherited included.
-        parsed = _parse_func_node(stmt, closure, topologies=effective)
-        # Publish each function under its own name before parsing the next, so
-        # a later sibling calling an earlier one resolves the callee to its
-        # Function and lowers to a direct Call. This mirrors what the runtime
-        # decorator sees in the class body's definition frame.
-        closure[parsed.name] = parsed
-        functions.append(parsed)
-    if not functions and not children:
-        raise ValueError(
-            f"@module class {cls_node.name!r}: no @func-decorated method found"
-        )
-    return Module(
-        name=cls_node.name,
-        functions=tuple(functions),
-        entry=_module_entry_name(cls_node),
-        modules=children,
-        target=target,
-        topologies=topologies,
-    )
-
-
-def _parse_module_source_tree(tree: ast.Module) -> "Module":
-    """Parse a ``@module``-wrapped AST into its ``Module``."""
-    module_cls = None
-    for stmt in tree.body:
-        if isinstance(stmt, ast.ClassDef):
-            if any(_is_module_decorator(dec) for dec in stmt.decorator_list):
-                module_cls = stmt
-        if module_cls:
-            break
-
-    if module_cls is None:
-        raise ValueError("no @module-decorated class found in source")
-    return _parse_module_class(module_cls, list(tree.body))
-
-
-__all__ = ["parse_func", "parse_func_source", "parse_module_source", "parse_script"]
+__all__ = ["parse_func"]

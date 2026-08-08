@@ -305,12 +305,11 @@ class Gemma2_2B_DecoderLayer:
         return h1 + mlp_out_n, k_new, v_new
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"))
+@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Gemma2_2B:
     """The ordered layer stack, the norm that closes it, and the scaled embedding
     and soft-capped head that bracket it."""
 
-    topologies = (Topology("cta", 132), Topology("thread", 512))
 
     layers = tuple(
         Gemma2_2B_DecoderLayer.renamed(f"layer{index}")
