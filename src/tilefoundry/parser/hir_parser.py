@@ -1310,19 +1310,15 @@ def _parse_module_class(
     closure = _build_source_closure(statements)
     target, topologies = _module_declared_context(cls_node, closure)
 
-    child_classes = [
-        stmt for stmt in cls_node.body
-        if isinstance(stmt, ast.ClassDef)
-        and any(_is_module_decorator(d) for d in stmt.decorator_list)
-    ]
     effective = topologies if topologies is not None else inherited_topologies
-    children = tuple(
-        _parse_module_class(child, statements, effective)
-        for child in child_classes
-    )
-
+    children = []
     functions = []
     for stmt in cls_node.body:
+        if isinstance(stmt, ast.ClassDef) and any(
+            _is_module_decorator(d) for d in stmt.decorator_list
+        ):
+            children.append(_parse_module_class(stmt, statements, effective))
+            continue
         if not isinstance(stmt, ast.FunctionDef):
             continue
         if any(_is_prim_func_decorator(d) for d in stmt.decorator_list):
@@ -1334,9 +1330,20 @@ def _parse_module_class(
             )
         if not any(_is_func_decorator(d) for d in stmt.decorator_list):
             continue
-        # A body may name any topology level of its effective execution
-        # domain, inherited included.
-        parsed = _parse_func_node(stmt, closure, topologies=effective)
+        declares_topologies = _declares_decorator_kwarg(stmt, "topologies")
+        member_topologies = tuple(_extract_topologies_from_decorator(stmt))
+        parse_topologies = member_topologies if declares_topologies else effective
+        parsed = _parse_func_node(stmt, closure, topologies=parse_topologies)
+        if declares_topologies:
+            child = Module(
+                name=parsed.name,
+                functions=(parsed,),
+                entry=parsed.name,
+                topologies=member_topologies,
+            )
+            children.append(child)
+            closure[parsed.name] = child
+            continue
         # Publish each function under its own name before parsing the next, so
         # a later sibling calling an earlier one resolves the callee to its
         # Function and lowers to a direct Call. This mirrors what the runtime
@@ -1351,7 +1358,7 @@ def _parse_module_class(
         name=cls_node.name,
         functions=tuple(functions),
         entry=_module_entry_name(cls_node),
-        modules=children,
+        modules=tuple(children),
         target=target,
         topologies=topologies,
     )

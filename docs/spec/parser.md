@@ -52,6 +52,12 @@ single-function `Module` carrying the declaration rather than to the
 this: the class declares the domain, and the member stays a `hir.Function`
 so it remains callable by its siblings and specializable through
 `.specialize`.
+A class-body `@func(topologies=(...))` instead binds a single-function child
+`Module`: it declares its own hierarchy and inherits the owning Module's Target.
+Importing the source and reading it with `parse_script` MUST build the same tree
+and parse that member's body against its own hierarchy. The printer MAY render
+the child as a nested `@module` class rather than reproduce the member-function
+form.
 
 ```python
 # example

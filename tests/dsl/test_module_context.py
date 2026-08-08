@@ -9,12 +9,14 @@ answers for its own effective context without any Function carrying it.
 """
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import replace
 
 import pytest
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, tf  # noqa: F401 -- used by bodies
+from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -193,6 +195,48 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
     assert empty.topologies == ()
     assert isinstance(plain, Function)
     assert not hasattr(plain, "target") and not hasattr(plain, "topologies")
+
+
+_MEMBER_CONTEXT_SOURCE = """
+import tilefoundry
+from tilefoundry.dsl import Mesh, Tensor, tf
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.target import CudaTarget
+
+@tilefoundry.module(
+    entry="attention",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 2),),
+)
+class Layer:
+    @tilefoundry.func
+    def attention(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+        with Mesh(("cta",), (2,), ("block",)) as _cta:
+            return tf.relu(x)
+
+    @tilefoundry.func(topologies=(Topology("thread", 4),))
+    def softmax(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+        with Mesh(("thread",), (4,), ("lane",)) as _thread:
+            return tf.square(x)
+"""
+
+
+def test_member_context_builds_the_same_tree_at_runtime_and_from_source(tmp_path) -> None:
+    source_path = tmp_path / "member_context.py"
+    source_path.write_text(_MEMBER_CONTEXT_SOURCE)
+    spec = importlib.util.spec_from_file_location("member_context", source_path)
+    assert spec is not None and spec.loader is not None
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+
+    imported = loaded.Layer
+    parsed = parse_script(_MEMBER_CONTEXT_SOURCE)
+
+    assert as_script(parsed) == as_script(imported)
+    assert [function.name for function in parsed.functions] == ["attention"]
+    assert [child.name for child in parsed.modules] == ["softmax"]
+    assert parsed.modules[0].topologies == (Topology("thread", 4),)
+    assert parsed.modules[0].resolve_target() == CudaTarget("nvidia.h200_sxm")
 
 
 _SOURCE_PRELUDE = """
