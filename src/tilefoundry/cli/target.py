@@ -26,6 +26,8 @@ from tilefoundry.target.hardware.envelope import (
 )
 from tilefoundry.utils.python_source import PythonExpr
 
+_KNOWN_MODULE_TARGETS: dict[str, tuple[type[Target], ...]] = {}
+
 
 @dataclass(frozen=True)
 class _DocumentEntry:
@@ -211,25 +213,19 @@ def _load_module(entry: _ModuleEntry) -> ModuleType:
         return module
 
 
-def _module_targets(module: ModuleType, before: dict[str, type[Target]]) -> tuple[type[Target], ...]:
-    for value in vars(module).values():
-        if (
-            isinstance(value, type)
-            and issubclass(value, Target)
-            and value is not Target
-            and (
-                value.__module__ == module.__name__
-                or value.__module__.startswith(f"{module.__name__}.")
-            )
-        ):
-            register_target(value)
+def _module_targets(
+    module: ModuleType, *, replay_cached: bool
+) -> tuple[type[Target], ...]:
     targets = tuple(
         target_type
-        for name, target_type in registered_targets().items()
-        if before.get(name) is not target_type
-        or target_type.__module__ == module.__name__
+        for target_type in registered_targets().values()
+        if target_type.__module__ == module.__name__
         or target_type.__module__.startswith(f"{module.__name__}.")
     )
+    if not targets and replay_cached:
+        targets = _KNOWN_MODULE_TARGETS.get(module.__name__, ())
+        for target_type in targets:
+            register_target(target_type)
     if not targets:
         raise ValueError(f"target module {module.__name__!r} registered no Target classes")
     return targets
@@ -337,9 +333,10 @@ def load_registrations(path: Path) -> LoadedRegistrations:
         before = dict(registered_targets())
         try:
             module = _load_module(entry)
-            target_types = _module_targets(module, before)
+            target_types = _module_targets(module, replay_cached=entry.name is not None)
             existing = _identity_owners(frozenset(target_types))
             identities = _check_module_identities(target_types, existing)
+            _KNOWN_MODULE_TARGETS[module.__name__] = target_types
             loaded_modules.append(_LoadedModule(entry, target_types, identities))
         except Exception as error:
             _rollback_targets(before)
@@ -513,13 +510,14 @@ def run_add_module(source: str, registrations: LoadedRegistrations) -> int:
     before = dict(registered_targets())
     try:
         module = _load_module(entry)
-        target_types = _module_targets(module, before)
+        target_types = _module_targets(module, replay_cached=entry.name is not None)
         existing = _identity_owners(frozenset(target_types))
         _check_module_identities(target_types, existing)
         _write_registry(
             registrations.path,
             _RegistryState(registrations.state.documents, (*registrations.state.modules, entry)),
         )
+        _KNOWN_MODULE_TARGETS[module.__name__] = target_types
     except Exception:
         _rollback_targets(before)
         raise

@@ -252,6 +252,43 @@ def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) ->
     assert registered_targets()["tests.cli.reload_target"] is type(first.target)
 
 
+def test_named_provider_registers_only_decorated_targets_and_replays_them(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    provider_name = "decorated_target_provider"
+    (tmp_path / f"{provider_name}.py").write_text(
+        "from dataclasses import dataclass\n"
+        "from tilefoundry.target import Target, register_target\n"
+        "@dataclass(frozen=True)\n"
+        "class _VendorBase(Target):\n"
+        "    topology_levels = ('core',)\n"
+        "@register_target\n"
+        "@dataclass(frozen=True)\n"
+        "class VendorOne(_VendorBase):\n"
+        "    name = 'tests.cli.vendor_one'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = tmp_path / "registry.toml"
+    prefix = ["--registry", str(registry), "target"]
+
+    assert cli.main([*prefix, "add", provider_name]) == 0
+    assert "VendorOne()" in capsys.readouterr().out
+    assert "tests.cli.vendor_one" in registered_targets()
+    assert all(
+        target_type.__name__ != "_VendorBase"
+        for target_type in registered_targets().values()
+    )
+
+    assert cli.main([*prefix, "remove", provider_name]) == 0
+    assert "tests.cli.vendor_one" not in registered_targets()
+    capsys.readouterr()
+
+    assert cli.main([*prefix, "add", provider_name]) == 0
+    assert "VendorOne()" in capsys.readouterr().out
+    assert "tests.cli.vendor_one" in registered_targets()
+
+
 def test_persisted_targets_drive_every_command_without_touching_the_default_registry(
     tmp_path,
 ) -> None:
