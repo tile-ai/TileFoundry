@@ -69,7 +69,7 @@ def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -
         (
             Analyzer(
                 "needs-facts",
-                lambda _module, _function, target, _options: target.get_facts(
+                lambda _module, _function, target, _level, _options: target.get_facts(
                     type("MissingFacts", (), {})
                 ),
             ),

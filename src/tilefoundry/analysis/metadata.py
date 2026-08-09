@@ -33,25 +33,24 @@ class ComputeCostMetadata(IRMetadata):
     that mixes precisions does not have one flop count -- and which of those
     counts dominates is a question about hardware, asked later.
 
+    ``flops`` is the operation's global arithmetic from the types as written.
+    ``flops_per_unit`` is the arithmetic one unit of the analysed topology level
+    performs after shard projection.
+
     ``operands`` breaks ``traffic`` down the other way: per operand rather than
     per level, positional against ``(*call.args, call)``. It is present only for
     a direct call on a primitive op; a call into another Function carries that
     callee's aggregate traffic, which no breakdown of this call's operands
     describes.
 
-    Nothing here reads a Target. The same authored call carries the same record
-    on every backend.
+    Traffic is global and counted once. A launch-provided topology may make the
+    per-unit column target-dependent because the target supplies its extent.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
+    flops_per_unit: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
-    execution_count: int = 1
     operands: tuple[TrafficBytes, ...] = ()
-
-    @property
-    def total_flops(self) -> int:
-        """Logical flops across every dtype."""
-        return sum(value for _name, value in self.flops)
 
     def traffic_at(self, level: str) -> TrafficBytes:
         """Traffic at *level*, zero when the call does not touch it."""
@@ -61,6 +60,10 @@ class ComputeCostMetadata(IRMetadata):
 
     def format_comment(self) -> str:
         flop_text = ",".join(f"{name}:{value}" for name, value in self.flops) or "0"
+        local_text = (
+            ",".join(f"{name}:{value}" for name, value in self.flops_per_unit)
+            or "0"
+        )
         traffic_text = (
             ",".join(
                 f"{level}:r{value.read}/w{value.write}"
@@ -68,10 +71,7 @@ class ComputeCostMetadata(IRMetadata):
             )
             or "0"
         )
-        return (
-            f"compute-cost flops={flop_text} bytes={traffic_text} "
-            f"executions={self.execution_count}"
-        )
+        return f"compute-cost flops={flop_text} per-unit={local_text} bytes={traffic_text}"
 
 
 @dataclass(frozen=True)
@@ -164,12 +164,12 @@ class RooflineMetadata(IRMetadata):
 
     compute_ns: int = 0
     memory_ns: int = 0
-    theoretical_ns: int = 0
+    ideal_ns: int = 0
     bound_by: str = "none"
 
     def format_comment(self) -> str:
         return (
-            f"roofline bound={self.theoretical_ns}ns by={self.bound_by} "
+            f"roofline bound={self.ideal_ns}ns by={self.bound_by} "
             f"compute={self.compute_ns}ns memory={self.memory_ns}ns"
         )
 

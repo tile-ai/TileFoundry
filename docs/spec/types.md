@@ -97,11 +97,15 @@ dispatch is described in
 ### 2.1 Recursive local projection
 
 ```python
-def local_type_of(type: Type) -> Type:
-    """Project every tensor leaf to its per-shard local type.
+def local_type_of(
+    type: Type, *, level: str, topologies: tuple[Topology, ...]
+) -> Type:
+    """Project every tensor leaf to what one unit of a topology level holds.
 
     Args:
         type: Type to project.
+        level: Topology level whose unit is being projected.
+        topologies: Ordered declared topology levels with resolved extents.
 
     Returns:
         The recursively projected type.
@@ -112,7 +116,13 @@ def local_type_of(type: Type) -> Type:
 - constraints:
   - `local_type_of` MUST recursively project every tensor leaf and rebuild
     `TupleType` structure.
-  - A resolved nested `ShardLayout` MUST be applied exactly once per layer.
+  - A `Split` at `level` or a coarser topology level MUST divide; a finer
+    `Split`, `Broadcast`, and `Partial` MUST NOT divide.
+  - Each resolved nested `ShardLayout` MUST be applied exactly once per layer.
+    A mesh axis's stated extent MUST take precedence; only an axis whose extent
+    is launch-provided MAY use the corresponding resolved topology extent, and
+    that division MUST round up. A stated static extent that does not divide the
+    split dimension MUST still raise.
   - The result MUST remain an ordinary IR Type and MUST NOT introduce a
     schedule-specific tensor type.
   - Unresolved layouts and local extents that are not concrete non-negative

@@ -10,8 +10,6 @@ type, and a type's byte size are properties of the authored IR alone.
 
 from __future__ import annotations
 
-import math
-
 from tilefoundry.ir.core import (
     Call,
     Expr,
@@ -25,7 +23,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
-from tilefoundry.ir.types.shard import Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.shard import Mesh, ShardLayout
 from tilefoundry.ir.types.shard.layout_algebra import size
 from tilefoundry.ir.types.storage import StorageKind
 
@@ -259,65 +257,6 @@ def execution_domain(type_: Type) -> dict[str, int] | None:
     return dict(next(iter(domains))) if domains else None
 
 
-def execution_count(
-    call: Call, fn: Function, topologies: tuple[Topology, ...]
-) -> int:
-    """How many times *call* runs, as the product of its topology extents.
-
-    The output's own domain wins when it has one, because the output is what
-    the call produced; only when it carries no mesh do the inputs decide. The
-    function's declared topologies are then folded in, and a value that
-    contradicts the declaration is an error rather than an override.
-
-    A call no mesh placed anywhere runs once. That is not a special case, it is
-    what its operand types mean: a sharded type states the extent one point holds,
-    so multiplying it by the hierarchy recovers the whole, while an unsharded type
-    already states the whole. Folding the hierarchy into the second reads it as the
-    first, and the cost of one authored norm over two thousand elements comes back
-    multiplied by every thread on the machine -- work no program does, in units the
-    traffic beside it is not counted in, which then decides a memory-bound decode
-    step is compute-bound.
-
-    Replication is why the hierarchy is folded in at all: a value sharded across
-    threads and silent about blocks is held by every block, so those extents belong
-    in the count. A value on no mesh is not replicated across the hierarchy, it is
-    simply not laid across it.
-    """
-    domain = execution_domain(call.type)
-    inputs = {
-        tuple(sorted(value.items()))
-        for arg in call.args
-        if (value := execution_domain(arg.type)) is not None
-    }
-    if domain is None and len(inputs) > 1:
-        raise AnalysisError(
-            f"{describe(call)}: inputs reference conflicting execution domains "
-            f"{sorted(inputs)}"
-        )
-    if domain is None:
-        domain = dict(next(iter(inputs))) if inputs else {}
-    for topology in topologies:
-        if topology.size is None:
-            continue
-        if not isinstance(topology.size, int) or topology.size <= 0:
-            raise AnalysisError(
-                f"function {fn.name!r}: an execution count requires positive "
-                "static topology extents"
-            )
-        previous = domain.get(topology.name)
-        if previous is not None and previous != topology.size:
-            raise AnalysisError(
-                f"{describe(call)}: value Mesh declares {topology.name}={previous}, "
-                f"but function {fn.name!r} declares {topology.name}={topology.size}"
-            )
-    if not domain:
-        return 1
-    for topology in topologies:
-        if isinstance(topology.size, int):
-            domain[topology.name] = topology.size
-    return math.prod(domain.values())
-
-
 def topology_extent(type_: Type, name: str) -> int | None:
     """The logical extent *type_*'s meshes state for topology *name*."""
     extents: set[int] = set()
@@ -368,7 +307,6 @@ __all__ = [
     "detach",
     "enclosing_trips",
     "entry_function",
-    "execution_count",
     "execution_domain",
     "postorder",
     "reachable_functions",

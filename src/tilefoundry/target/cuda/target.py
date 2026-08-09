@@ -163,5 +163,11 @@ class CudaTarget(_BuiltinAnalysisTarget):
 
     topology_levels: ClassVar[tuple[str, ...]] = ("cta", "thread")
 
+    def topology_limit(self, name: str) -> int:
+        """Return the physical parallel limit for one CUDA topology level."""
+        if name == "cta":
+            return self.device.sm_count
+        return self.architecture.topology_limit(name)
+
 
 __all__ = ["CudaTarget"]

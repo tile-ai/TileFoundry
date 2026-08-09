@@ -82,6 +82,8 @@ def test_topology_limits_are_target_facts_and_base_validation_is_inherited() -> 
     assert cuda.get_facts(TopologyLimitFacts, "thread").max_static_extent == 1024
     assert amx.get_facts(TopologyLimitFacts, "core").max_static_extent == 8
     assert amx.get_facts(TopologyLimitFacts, "amx").max_static_extent == 1
+    assert cuda.topology_limit("cta") == cuda.device.sm_count == 132
+    assert cuda.topology_limit("thread") == cuda.architecture.max_threads_per_cta
 
     @dataclass(frozen=True)
     class _DirectTarget(Target):

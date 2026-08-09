@@ -78,8 +78,8 @@ def _operands(record: ComputeCostMetadata, expr: object) -> list[dict[str, objec
 def _compute_cost(record: ComputeCostMetadata, expr: object) -> dict[str, object]:
     projected: dict[str, object] = {
         "flops": dict(record.flops),
+        "flops_per_unit": dict(record.flops_per_unit),
         "traffic": _traffic(record.traffic),
-        "execution_count": record.execution_count,
     }
     operands = _operands(record, expr)
     if operands:
@@ -91,7 +91,7 @@ def _roofline(record: RooflineMetadata, expr: object) -> dict[str, object]:
     return {
         "compute_ns": record.compute_ns,
         "memory_ns": record.memory_ns,
-        "theoretical_ns": record.theoretical_ns,
+        "ideal_ns": record.ideal_ns,
         "bound_by": record.bound_by,
     }
 
@@ -241,6 +241,7 @@ def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
         "target": getattr(target, "name", type(target).__name__),
         "module": first.module.name,
         "function": function.name,
+        "topology": first.level,
         "requested": [item.analysis for item in results],
         "executed": executed,
         "function_records": _merged_function_records(results, selected),
@@ -366,7 +367,7 @@ def render_text(data: dict[str, object]) -> str:
     """
     lines = [
         f"analysis target={data['target']} module={data['module']} "
-        f"function={data['function']}",
+        f"function={data['function']} topology={data['topology'] or 'none'}",
         f"analyses={','.join(data['requested'])} executed={','.join(data['executed'])}",
     ]
     totals = data.get("totals")
@@ -390,7 +391,7 @@ def render_text(data: dict[str, object]) -> str:
     if "roofline" in records:
         bound = records["roofline"]
         lines.append(
-            f"theoretical-bound={bound['theoretical_ns']}ns by={bound['bound_by']}"
+            f"ideal-bound={bound['ideal_ns']}ns by={bound['bound_by']}"
         )
     if "timeline" in records:
         lines.append(f"theoretical-makespan={records['timeline']['end_ns']}ns")

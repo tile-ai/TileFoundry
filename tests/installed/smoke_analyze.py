@@ -24,7 +24,7 @@ def test_every_analysis_the_command_offers_runs(tf, cmine) -> None:
         "--compute-cost", "--memory", "--roofline", "--timeline",
     )
     assert done.returncode == 0, done.stderr
-    for conclusion in ("flops ", "traffic ", "peak-footprint ", "theoretical-bound="):
+    for conclusion in ("flops ", "traffic ", "peak-footprint ", "ideal-bound="):
         assert conclusion in done.stdout, conclusion
 
 
@@ -46,7 +46,7 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
     assert done.returncode == 0, done.stderr
 
     assert "# analyses=roofline executed=compute-cost,memory,roofline" in done.stdout
-    assert "# theoretical-bound=" in done.stdout
+    assert "# ideal-bound=" in done.stdout
     assert "# peak-footprint" not in done.stdout
     assert "# theoretical-makespan" not in done.stdout
     assert "roofline bound=" in done.stdout

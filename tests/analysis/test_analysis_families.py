@@ -120,6 +120,51 @@ class _Gathered:
         return tf.gather(table, rows, axis=0)
 
 
+@module(entry="plain", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
+class _MatmulLayouts:
+
+    @func
+    def plain(
+        lhs: Tensor[(1056, 2048), "bf16"],
+        rhs: ConstTensor[(2048, 6600), "bf16"],
+    ):
+        return tf.matmul(lhs, rhs)
+
+    @func
+    def split(
+        lhs: Tensor[(1056, 2048), "bf16"],
+        rhs: ConstTensor[(2048, 6600), "bf16"],
+    ):
+        with Mesh(("cta",), layout=(132,), names=("tile",)) as cta:
+            local_lhs = tf.reshard(lhs, (1056 @ cta.tile, 2048), "gmem")
+            local_rhs = tf.reshard(rhs, (2048, 6600), "gmem")
+            return tf.matmul(local_lhs, local_rhs)
+
+    @func
+    def broadcast(
+        lhs: Tensor[(1056, 2048), "bf16"],
+        rhs: ConstTensor[(2048, 6600), "bf16"],
+    ):
+        with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
+            local_lhs = tf.reshard(lhs, (1056, 2048), "gmem")
+            local_rhs = tf.reshard(rhs, (2048, 6600), "gmem")
+            return tf.matmul(local_lhs, local_rhs)
+
+
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
+class _NestedSplitAdd:
+
+    @func
+    def block(source: Tensor[(256,), "f32"]):
+        with Mesh(("cta",), layout=(4,), names=("tile",)) as cta:
+            local = tf.reshard(source, (256 @ cta.tile,), "gmem")
+            return tf.add(local, local)
+
+    @func
+    def main(source: Tensor[(256,), "f32"]):
+        return block(source)
+
+
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 168),))
 def _wide_grid(source: Tensor[(1024,), "f32"]):
     return tf.add(source, source)
@@ -199,33 +244,27 @@ def _cost_of(function) -> ComputeCostMetadata:
     return record
 
 
-def test_compute_cost_scales_leaf_work_by_the_whole_execution_mesh() -> None:
-    """One authored call runs once per point of the topology hierarchy."""
-    _, entry = _run(_thread_sharded, "compute-cost")
+def test_compute_cost_stops_at_the_selected_topology_level() -> None:
+    entry = _entry(_thread_sharded)
+    cta_result = analyze(_thread_sharded, entry, analysis="compute-cost")
 
     record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
     assert record is not None
-    assert record.execution_count == 8
-    assert record.flops == (("f32", 16),)
+    assert cta_result.level == "cta"
+    assert record.flops == (("f32", 8),)
+    assert record.flops_per_unit == (("f32", 8),)
+    traffic = record.traffic
+
+    thread_result = analyze(_thread_sharded, entry, analysis="compute-cost", level="thread")
+    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    assert record is not None
+    assert thread_result.level == "thread"
+    assert record.flops == (("f32", 8),)
+    assert record.flops_per_unit == (("f32", 2),)
+    assert record.traffic == traffic
 
 
-def test_a_call_no_mesh_placed_runs_once_and_costs_the_same_on_either_machine() -> None:
-    """An unsharded type states the whole tensor, so nothing multiplies it.
-
-    The two readings of a tensor type are what makes this a real question. A
-    sharded type states the extent one point holds, so recovering the whole means
-    multiplying by the hierarchy -- which is what the test above measures. An
-    unsharded type already states the whole, and folding the hierarchy into it reads
-    the second as the first: an authored norm over `hidden` elements comes back
-    multiplied by every thread the target declares, in units the traffic beside it
-    is not counted in.
-
-    Which is also why the same program is asked of two unrelated machines here:
-    the work count is a property of the program. It used to be four times too
-    large on either target -- the same four times, so an equality between the two
-    still held while the number said the work of an unsharded add depended on how
-    many blocks the target declares.
-    """
+def test_an_unsharded_call_reports_the_same_global_and_per_unit_work() -> None:
     cuda_entry = _CudaAdd.entry_function()
     amx_entry = _AmxAdd.entry_function()
 
@@ -235,25 +274,67 @@ def test_a_call_no_mesh_placed_runs_once_and_costs_the_same_on_either_machine() 
     call = _calls(cuda_entry)[-1]
     record = get_metadata(call, ComputeCostMetadata)
     assert record is not None
-    assert record.execution_count == 1
     assert record.flops == (("f32", numel(call.type)),)
+    assert record.flops_per_unit == record.flops
     assert _cost_of(cuda_entry) == _cost_of(amx_entry)
+
+
+def test_matmul_layout_changes_only_the_per_unit_work() -> None:
+    records = []
+    functions = {function.name: function for function in _MatmulLayouts.functions}
+    for function in (functions["plain"], functions["split"], functions["broadcast"]):
+        analyze(_MatmulLayouts, function, analysis="roofline")
+        call = _calls(function)[-1]
+        cost = get_metadata(call, ComputeCostMetadata)
+        bound = get_metadata(call, RooflineMetadata)
+        assert cost is not None and bound is not None
+        records.append((cost, bound))
+
+    (plain_cost, plain_bound), (split_cost, split_bound), (
+        broadcast_cost,
+        broadcast_bound,
+    ) = records
+    assert [record.flops for record, _bound in records] == [
+        (("bf16", 28_547_481_600),),
+    ] * 3
+    assert [record.flops_per_unit for record, _bound in records] == [
+        (("bf16", 28_547_481_600),),
+        (("bf16", 216_268_800),),
+        (("bf16", 28_547_481_600),),
+    ]
+    assert split_cost.traffic == plain_cost.traffic == broadcast_cost.traffic
+    assert split_bound == plain_bound == broadcast_bound
+    assert plain_bound.ideal_ns == 28_851
+
+
+def test_function_call_carries_the_callee_per_unit_work() -> None:
+    entry = _NestedSplitAdd.entry_function()
+    analyze(_NestedSplitAdd, entry, analysis="compute-cost")
+
+    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    assert record is not None
+    assert record.flops == (("f32", 256),)
+    assert record.flops_per_unit == (("f32", 64),)
 
 
 def test_a_launch_provided_topology_uses_its_mesh_layout_for_analysis() -> None:
     """A dynamic launch declares its positions in the mesh layout, not Topology."""
     _, entry = _run(_launch_provided_tiles, "timeline")
 
-    record = get_metadata(_calls(entry)[-1], TimelineMetadata)
-    assert record is not None
-    assert record.grid_units == 8
-    assert record.waves == 1
+    call = _calls(entry)[-1]
+    cost = get_metadata(call, ComputeCostMetadata)
+    placement = get_metadata(call, TimelineMetadata)
+    assert cost is not None and placement is not None
+    assert cost.flops == (("f32", 8 * 128),)
+    assert cost.flops_per_unit == (("f32", 128),)
+    assert placement.grid_units == 8
+    assert placement.waves == 1
 
 
 def test_analysis_refuses_a_position_count_for_a_multi_topology_mesh() -> None:
     with pytest.raises(
         AnalysisError,
-        match=r"per-topology position count requires one Mesh topology.*\('cta', 'thread'\)",
+        match="one mesh axis names multiple topology levels",
     ):
         _run(_multi_topology_mesh, "compute-cost")
 
@@ -439,7 +520,7 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     ]
     assert len(per_call) > 1
     assert whole.compute_ns < sum(item.compute_ns for item in per_call)
-    assert whole.theoretical_ns == max(whole.compute_ns, whole.memory_ns)
+    assert whole.ideal_ns == max(whole.compute_ns, whole.memory_ns)
 
 
 def test_timeline_credits_an_unplaced_call_with_one_position() -> None:

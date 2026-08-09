@@ -340,14 +340,14 @@ class ComputeCostMetadata(IRMetadata):
 
     Attributes:
         flops: attribute; Flop count per compute DType name, sorted by name.
+        flops_per_unit: attribute; Flop count performed by one unit of the analysed topology level.
         traffic: attribute; TrafficBytes per storage level name.
-        execution_count: attribute; How many times the call runs.
         operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
+    flops_per_unit: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
-    execution_count: int = 1
     operands: tuple[TrafficBytes, ...] = ()
 
 class LevelFootprint:
@@ -405,13 +405,13 @@ class RooflineMetadata(IRMetadata):
     Attributes:
         compute_ns: attribute; Time the flops imply at the target's rates.
         memory_ns: attribute; Time the traffic implies at the target's bandwidth.
-        theoretical_ns: attribute; The bound the two imply.
+        ideal_ns: attribute; The ideal bound the two imply.
         bound_by: attribute; Which resource set the bound.
     """
 
     compute_ns: int = 0
     memory_ns: int = 0
-    theoretical_ns: int = 0
+    ideal_ns: int = 0
     bound_by: str = "none"
 
 class TimelineMetadata(IRMetadata):
@@ -441,16 +441,15 @@ class TimelineMetadata(IRMetadata):
   - A `Function`-attached record MUST NOT be read as data the Function
     inherently carries. It states what one analysis found when a call reached
     that function, and there MUST be no cross-call cache behind it.
-  - `ComputeCostMetadata` MUST be derivable from the authored program alone. Its
-    flops MUST come from the op's registered cost evaluator
-    ([visitor-registry](./visitor-registry.md)) scaled by the execution count,
-    and its bytes from the logical types the operands and result carry. It MUST
-    NOT read any Target fact, so one authored call carries the same record on
-    every backend. An op with no registered cost evaluator MUST raise
-    `AnalysisError`.
-  - The execution count MUST be the product of the execution-topology extents the
-    call's value meshes carry and the owning Module declares. Conflicting extents
-    for one topology name MUST raise rather than be reconciled.
+  - `ComputeCostMetadata.flops` and its bytes MUST be derivable from the authored
+    program alone. Flops MUST come from the op's registered cost evaluator
+    ([visitor-registry](./visitor-registry.md)) over the types as written, and
+    bytes from the logical types the operands and result carry. `flops_per_unit`
+    MUST come from the same evaluator over types projected to the analysed level.
+    Only that field MAY read the target, and only to resolve a launch-provided
+    mesh extent through `topology_limit`; that per-unit projection MUST round up
+    to the largest share one unit performs in a wave. An op with no registered
+    cost evaluator MUST raise `AnalysisError`.
   - `ValueLifetime.binding` MUST identify one value within its function. An
     authored name does not: the parser attaches an assignment's name to every
     nested expression of its right-hand side, so several values answer to one name
@@ -504,7 +503,7 @@ Each owns one record type and declares what it needs.
 
 | Selector | Requires | Owns | Rests on |
 |---|---|---|---|
-| `compute-cost` | — | `ComputeCostMetadata` | the authored program only |
+| `compute-cost` | — | `ComputeCostMetadata` | the authored program; `topology_limit` for a launch-provided per-unit extent |
 | `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` |
 | `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` |
 | `timeline` | `roofline` | `TimelineMetadata` | `ParallelCapacityFacts` |
@@ -516,8 +515,10 @@ Each owns one record type and declares what it needs.
     analyzer, and MUST NOT resolve an undeclared Target to a default.
   - A family MUST read a dependency's record rather than recompute what it
     states. A number with two derivations has two answers.
-  - Logical work and lifetime MUST remain target-independent. Physical capacity,
-    hierarchy relationships, and throughput comparisons are target-aware.
+  - Global logical work and lifetime MUST remain target-independent.
+    `flops_per_unit` MAY depend on a target's parallel width when a mesh extent is
+    launch-provided. Physical capacity, hierarchy relationships, and throughput
+    comparisons are target-aware.
 
 ### 2.3 Memory hierarchy facts
 
@@ -654,6 +655,7 @@ class AnalysisResult:
         module: attribute; Source Module.
         function: attribute; Function that received records.
         analysis: attribute; Requested root analysis.
+        level: attribute; Topology level whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
         metadata_types: attribute; Metadata classes actually written.
     """
@@ -661,6 +663,7 @@ class AnalysisResult:
     module: "Module"
     function: "Function"
     analysis: str
+    level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
 
@@ -670,6 +673,7 @@ def analyze(
     function: "Function",
     *,
     analysis: str,
+    level: str | None = None,
     options: object | None = None,
     dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult: ...
@@ -678,6 +682,10 @@ def analyze(
 - constraints:
   - One call MUST select exactly one root analysis. A caller wanting several
     roots MUST call the operation once per root.
+  - `level` MUST name one effective Module topology. When omitted, it MUST
+    default to the coarsest effective topology; when the Module declares none,
+    it MUST remain `None` and no per-unit projection divides. `AnalysisResult.level`
+    MUST record the resolved answer.
   - The Function MUST be one the Module owns: one it declares, or a
     specialization variant of one it declares
     ([core-ir §1](./core-ir.md#1-module)). A Function derived by specialising one

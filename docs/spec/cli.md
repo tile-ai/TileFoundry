@@ -271,6 +271,11 @@ no ordinary `--target` option.
     against nor the topology hierarchy they divide over.
   - `--json` MUST print the report as JSON instead of text. Both formats MUST
     carry the same conclusions ([analysis §2](./analysis.md#2-authored-hir-metrics)).
+  - `--topology LEVEL` MUST be optional, passed through as the public analysis
+    operation's `level`, and name the unit for per-unit figures. Its help MUST
+    state the default and, for every family, which figure changes with the level
+    and when to pass it, together with the global-traffic and observed-peak
+    assumptions.
   - `--dim NAME=EXTENT` MUST bind one dimension the selection leaves open, and
     MUST be repeatable to bind several. One dimension MUST receive one extent;
     a comma-separated list of extents for one dimension MUST be rejected because

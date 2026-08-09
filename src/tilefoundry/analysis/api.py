@@ -45,6 +45,7 @@ class AnalysisResult:
     module: Module
     function: Function
     analysis: str
+    level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
 
@@ -95,15 +96,15 @@ def analyze(
     function: Function,
     *,
     analysis: str,
+    level: str | None = None,
     options: object | None = None,
     dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult:
     """Run *analysis* and everything it depends on over *function*.
 
     The Module is the execution domain: it carries the Target the cost model
-    measures against and the topology hierarchy execution counts divide over,
-    so a Function is analysed as part of the Module that owns it rather than on
-    its own.
+    measures against and the topology hierarchy. *level* names the unit for
+    per-unit quantities and defaults to the coarsest declared level.
 
     *dims* states an extent for each dimension the function declares as a
     range. An analysis counts elements and compares them against a machine, and
@@ -141,8 +142,16 @@ def analyze(
             raise AnalysisError(f"analyze: {error}") from None
 
     target = module.resolve_target()
-    for level in module.effective_topologies():
-        target.validate_program_topology(level)
+    topologies = module.effective_topologies()
+    for topology in topologies:
+        target.validate_program_topology(topology)
+    if level is None and topologies:
+        level = topologies[0].name
+    if level is not None:
+        try:
+            module.resolve_topology(level)
+        except ValueError as error:
+            raise AnalysisError(f"analyze: {error}") from None
     closure = _closure(target, analysis)
 
     # Both preflights run once for the whole call, before any algorithm: an
@@ -156,7 +165,7 @@ def analyze(
     for algorithm in closure:
         before = _metadata_snapshot(functions)
         try:
-            algorithm.run(module, function, target, options)
+            algorithm.run(module, function, target, level, options)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
         after = _metadata_snapshot(functions)
@@ -176,6 +185,7 @@ def analyze(
         module=module,
         function=function,
         analysis=analysis,
+        level=level,
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
     )

@@ -535,10 +535,14 @@ class CostContext(TypeInferContext):
     Attributes:
         selected_types: attribute; selected ``id(expr)`` to ``Type`` mapping.
         selected_output_type: attribute; selected output type, when supplied.
+        level: attribute; topology window to project through, or None for types as written.
+        topologies: attribute; ordered topology levels with resolved extents.
     """
 
     selected_types: Mapping[int, Type] = field(default_factory=dict)
     selected_output_type: Type | None = None
+    level: str | None = None
+    topologies: tuple[Topology, ...] = ()
 
     def local_type_of(self, expr: Expr) -> Type: ...
     def local_output_type(self, call: Call) -> Type: ...
@@ -573,9 +577,10 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     each level instead. What the evaluator reported stands as the operand's own
     amount; a per-level total is therefore not always the sum of the amounts
     reported here.
-  - `CostContext.local_type_of` MUST apply every resolved nested `ShardLayout`
-    exactly once and MUST reject unresolved or non-concrete local extents at the
-    point where the evaluator requires them.
+  - With no level, `CostContext.local_type_of` MUST return the selected Type as
+    written. With a level, it MUST apply `local_type_of` using the context's
+    topology hierarchy and MUST reject unresolved or non-concrete local extents
+    at the point where the evaluator requires them.
 
 ## 8. Shared helpers
 

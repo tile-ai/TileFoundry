@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from tilefoundry.ir.core import IRMetadata
 
 AnalysisCallable = Callable[
-    ["Module", "Function", "Target", object | None], None
+    ["Module", "Function", "Target", str | None, object | None], None
 ]
 
 

@@ -342,4 +342,4 @@ def test_a_decode_step_is_bound_by_memory(tf, shipped_source) -> None:
         f"moves {data['totals']['traffic']['gmem']['read']} B to do "
         f"{data['totals']['flops']['f32']} flops"
     )
-    assert bound["theoretical_ns"] > 0
+    assert bound["ideal_ns"] > 0

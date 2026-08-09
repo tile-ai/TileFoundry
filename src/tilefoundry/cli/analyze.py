@@ -56,6 +56,25 @@ def guidance() -> str:
         The selection must be a Module that reaches a declared target, so name it
         from the root down. That Module's resolved Target is the hardware every
         number is measured against, which is why there is no --target.
+
+        family         what --topology changes                 pass it when
+        ------------   --------------------------------------  ---------------------
+        compute-cost   flops_per_unit. flops and traffic are   the program shards
+                       the device's and do not move
+        memory         the footprint each capacity is          the program shards, or
+                       compared against                        places values in smem
+        roofline       nothing. The bound is the machine's     never
+                       and is unchanged by program splits
+        timeline       which level's parallel capacity the     the program shards
+                       plan is issued against
+
+        Two assumptions the reported numbers rest on:
+          traffic is the device's and counted once, so units reading one operand
+            in common are assumed to read it from memory once. Whether they can is
+            a residency question, reported as an advisory.
+          a reported peak footprint holds under the order this walk took. Which
+            order the program really takes is settled by scheduling, so the peak
+            is an observation, not a bound.
         """
     )
 
@@ -64,6 +83,7 @@ def run_authored_analysis(
     source: str,
     analyses: tuple[str, ...],
     *,
+    topology: str | None = None,
     as_json: bool = False,
     dims: Mapping[str, int] | None = None,
 ) -> int:
@@ -89,7 +109,8 @@ def run_authored_analysis(
         )
         raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
     results = [
-        analyze(module, function, analysis=name, dims=dims) for name in analyses
+        analyze(module, function, analysis=name, level=topology, dims=dims)
+        for name in analyses
     ]
     data = report(results)
     if as_json:

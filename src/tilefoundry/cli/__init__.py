@@ -184,6 +184,14 @@ def build_parser() -> argparse.ArgumentParser:
     for analysis in _ANALYSES:
         analyze.add_argument(f"--{analysis}", action="store_true", help=EVIDENCE[analysis])
     analyze.add_argument(
+        "--topology",
+        metavar="LEVEL",
+        help=(
+            "topology level whose unit the per-unit figures describe; defaults "
+            "to the module's coarsest declared level"
+        ),
+    )
+    analyze.add_argument(
         "--dim",
         action="append",
         metavar="NAME=EXTENT",
@@ -312,7 +320,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         analyses = _ANALYSES
     try:
         return run_authored_analysis(
-            args.source, analyses, as_json=args.json, dims=one_extent_per_dim(parse_dims(args.dim))
+            args.source,
+            analyses,
+            topology=args.topology,
+            as_json=args.json,
+            dims=one_extent_per_dim(parse_dims(args.dim)),
         )
     except (AnalysisError, VerifyError, OSError, TypeError, ValueError) as error:
         print(f"tilefoundry: error: {error}", file=sys.stderr)

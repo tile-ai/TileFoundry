@@ -268,7 +268,7 @@ def _durations(fn: Function) -> dict[int, int]:
                 f"{describe(expr)}: the timeline needs the roofline bound this "
                 "call was never given"
             )
-        result[id(expr)] = bound.theoretical_ns
+        result[id(expr)] = bound.ideal_ns
     return result
 
 
@@ -276,6 +276,7 @@ def analyze_timeline(
     module: Module,
     function: Function,
     target: Target,
+    level: str | None = None,
     options: object | None = None,
 ) -> None:
     """Place every reachable Function's calls on the nominal timeline."""

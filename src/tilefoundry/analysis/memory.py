@@ -308,6 +308,7 @@ def analyze_memory(
     module: Module,
     function: Function,
     target: Target,
+    level: str | None = None,
     options: object | None = None,
 ) -> None:
     """Attach one memory record to every Function reachable from *function*."""

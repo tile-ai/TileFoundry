@@ -50,7 +50,7 @@ def test_external_v100_target_analyses_a_copied_installed_model(
     assert report["target"] == "nvidia.v100_sxm2_32gb"
     assert report["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
     assert report["totals"]["flops"]["f16"] > 0
-    assert report["function_records"]["roofline"]["theoretical_ns"] > 0
+    assert report["function_records"]["roofline"]["ideal_ns"] > 0
     gmem = next(
         item for item in report["function_records"]["memory"]["footprint"]
         if item["level"] == "gmem"

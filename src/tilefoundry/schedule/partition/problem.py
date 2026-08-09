@@ -535,6 +535,8 @@ class _Closer:
                         for arg, type in zip(candidate_call.args, selected_types)
                     },
                     selected_output_type=output_type,
+                    level=self.topology.name,
+                    topologies=self.program.module.effective_topologies(),
                 )
                 cost = CostEvaluator(cost_ctx).visit_Call(candidate_call)
                 mesh, count = self._active_mesh_for_outputs(output_types)
@@ -613,6 +615,8 @@ class _Closer:
                         module=self.program.module,
                         selected_types={id(source_var): source},
                         selected_output_type=target,
+                        level=self.topology.name,
+                        topologies=self.program.module.effective_topologies(),
                     )
                     try:
                         cost = CostEvaluator(cost_ctx).visit_Call(call)

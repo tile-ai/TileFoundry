@@ -79,6 +79,19 @@ def test_analyze_reads_a_launch_provided_topology_from_its_mesh_layout(
     assert timeline["waves"] == 2
 
 
+def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["analyze", "--help"])
+
+    assert stopped.value.code == 0
+    help_text = capsys.readouterr().out
+    for family in ("compute-cost", "memory", "roofline", "timeline"):
+        assert family in help_text
+    assert "flops_per_unit" in help_text
+    assert "traffic is the device's and counted once" in help_text
+    assert "is an observation, not a bound" in help_text
+
+
 def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) -> None:
     (tmp_path / "provider.py").write_text(
         "from tilefoundry.target import CpuTarget, register_target\n"

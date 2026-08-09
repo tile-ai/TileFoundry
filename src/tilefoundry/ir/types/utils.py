@@ -6,7 +6,15 @@ from typing import Optional
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
-from .shard import ComposedLayout, Layout, Mesh, ShardLayout, Split, canonical_shard_layout
+from .shard import (
+    ComposedLayout,
+    Layout,
+    Mesh,
+    ShardLayout,
+    Split,
+    Topology,
+    canonical_shard_layout,
+)
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -86,17 +94,30 @@ def make_shard_tensor_type(
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 
-def local_type_of(type: Type) -> Type:
-    """Project every ``TensorType`` leaf of ``type`` to its per-shard local
-    shape, rebuilding ``TupleType`` structure; any other ``Type`` passes
-    through unchanged.
+def local_type_of(
+    type: Type, *, level: str, topologies: tuple[Topology, ...]
+) -> Type:
+    """Project every tensor leaf to what one unit of *level* holds.
 
-    Applies every already-resolved nested ``ShardLayout`` exactly once. A
-    ``TensorType`` whose layout is neither ``None`` nor a resolved layout is
-    rejected — the caller must resolve it before requesting a local projection.
+    A ``Split`` at *level* or a coarser declared level divides. Finer splits do
+    not change what the containing unit holds, while ``Broadcast`` and
+    ``Partial`` never divide. ``topologies`` supplies the ordered hierarchy and
+    concrete extents; callers resolve launch-provided extents before projecting.
     """
+    levels = {topology.name: index for index, topology in enumerate(topologies)}
+    if level not in levels:
+        available = ", ".join(levels) or "none"
+        raise ValueError(
+            f"local_type_of: topology level {level!r} is not declared; "
+            f"available levels are {available}"
+        )
+    if len(levels) != len(topologies):
+        raise ValueError("local_type_of: topology level names must be unique")
     if isinstance(type, TupleType):
-        return TupleType(fields=tuple(local_type_of(field) for field in type.fields))
+        return TupleType(fields=tuple(
+            local_type_of(field, level=level, topologies=topologies)
+            for field in type.fields
+        ))
     if not isinstance(type, TensorType):
         return type
     layout = type.layout
@@ -106,7 +127,9 @@ def local_type_of(type: Type) -> Type:
         return type
     if isinstance(layout, ShardLayout):
         return TensorType(
-            shape=_local_layout_shape(layout),
+            shape=_local_layout_shape(
+                layout, selected_level=levels[level], topologies=topologies
+            ),
             dtype=type.dtype,
             layout=layout,
             storage=type.storage,
@@ -124,9 +147,13 @@ def _require_concrete(shape: tuple | list) -> None:
         )
 
 
-def _nested_layout_shape(layout: object) -> tuple:
+def _nested_layout_shape(
+    layout: object, *, selected_level: int, topologies: tuple[Topology, ...]
+) -> tuple:
     if isinstance(layout, ShardLayout):
-        return _local_layout_shape(layout)
+        return _local_layout_shape(
+            layout, selected_level=selected_level, topologies=topologies
+        )
     if isinstance(layout, (Layout, ComposedLayout)):
         return tuple(layout.shape)
     raise ValueError(
@@ -135,22 +162,52 @@ def _nested_layout_shape(layout: object) -> tuple:
     )
 
 
-def _local_layout_shape(layout: ShardLayout) -> tuple[int, ...]:
-    shape = list(_nested_layout_shape(layout.layout))
+def _local_layout_shape(
+    layout: ShardLayout, *, selected_level: int, topologies: tuple[Topology, ...]
+) -> tuple[int, ...]:
+    shape = list(_nested_layout_shape(
+        layout.layout, selected_level=selected_level, topologies=topologies
+    ))
+    declared = {
+        topology.name: (index, topology.size)
+        for index, topology in enumerate(topologies)
+    }
+    if len(layout.mesh.topologies) > 1:
+        raise ValueError(
+            "local_type_of: one mesh axis names multiple topology levels; "
+            "a level boundary cannot assign its position count"
+        )
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
-        if mesh_axis >= len(layout.mesh.layout.shape):
+        if mesh_axis >= len(layout.mesh.topologies):
             raise ValueError("local_type_of: shard attribute exceeds mesh rank")
+        topology = layout.mesh.topologies[mesh_axis]
+        resolved = declared.get(topology.name)
+        if resolved is None:
+            raise ValueError(
+                f"local_type_of: shard uses undeclared topology level {topology.name!r}"
+            )
+        topology_level, resolved_extent = resolved
+        if topology_level > selected_level:
+            continue
+        if mesh_axis >= len(layout.mesh.layout.shape):
+            raise ValueError("local_type_of: shard attribute exceeds mesh layout rank")
+        mesh_extent = layout.mesh.layout.shape[mesh_axis]
+        extent = resolved_extent if mesh_extent is None else mesh_extent
         axis = attr.axis
-        extent = layout.mesh.layout.shape[mesh_axis]
         if not isinstance(axis, int) or isinstance(axis, bool) or not 0 <= axis < len(shape):
             raise ValueError("local_type_of: Split axis is not a concrete layout axis")
-        if extent is not None and (
-            not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0
-        ):
+        if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
             raise ValueError("local_type_of: mesh extent is not a concrete positive integer")
-        if extent is None or extent == shape[axis]:
+        if mesh_extent is None:
+            if not isinstance(shape[axis], int) or isinstance(shape[axis], bool):
+                raise ValueError(
+                    f"local_type_of: axis {axis} has dynamic extent {shape[axis]!r}; "
+                    "bind it before projecting a launch-provided mesh extent"
+                )
+            shape[axis] = (shape[axis] + extent - 1) // extent
+        elif extent == shape[axis]:
             shape[axis] = 1
         elif not isinstance(shape[axis], int) or isinstance(shape[axis], bool):
             raise ValueError(

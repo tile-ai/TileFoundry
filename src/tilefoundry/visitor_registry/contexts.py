@@ -23,6 +23,7 @@ from tilefoundry.ir.core.metadata import (
     get_metadata,
 )
 from tilefoundry.ir.core.stmt import Stmt
+from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.tensor_type import DType, TensorType, Type
 from tilefoundry.ir.types.utils import local_type_of
 
@@ -110,16 +111,17 @@ class VerifyContext(TypeInferContext):
 
 @dataclass
 class CostContext(TypeInferContext):
-    """Recursive-local Cost Evaluator context.
+    """Cost Evaluator context for one topology window.
 
-    A Cost Evaluator needs no active-topology selector: ``local_type_of``
-    projects every already-resolved nested ``ShardLayout`` exactly once, so
-    the same registered handler returns per-GPU work for a GPU-local Type
-    and per-CTA work for the corresponding nested GPU-plus-CTA Type.
+    ``level=None`` exposes the types as written. A named level projects them to
+    what one unit of that level holds, letting the same registered evaluator
+    answer both global and per-unit questions.
     """
 
     selected_types: Mapping[int, Type] = field(default_factory=dict)
     selected_output_type: Type | None = None
+    level: str | None = None
+    topologies: tuple[Topology, ...] = ()
 
     def type_of(self, expr: Expr) -> Type:
         selected = self.selected_types.get(id(expr))
@@ -128,16 +130,20 @@ class CostContext(TypeInferContext):
         return super().type_of(expr)
 
     def local_type_of(self, expr: Expr) -> Type:
-        """Return ``expr``'s recursive-local Type (thin wrapper over the
-        shared ``ir.types.utils.local_type_of`` projection)."""
-        return local_type_of(self.type_of(expr))
+        """Return ``expr``'s Type in this context's topology window."""
+        type_ = self.type_of(expr)
+        if self.level is None:
+            return type_
+        return local_type_of(type_, level=self.level, topologies=self.topologies)
 
     def local_output_type(self, call: Call) -> Type:
         """Return the selected candidate output in recursive-local form."""
         output = self.selected_output_type
         if output is None:
             output = self.type_of(call)
-        return local_type_of(output)
+        if self.level is None:
+            return output
+        return local_type_of(output, level=self.level, topologies=self.topologies)
 
 
 @dataclass(frozen=True)

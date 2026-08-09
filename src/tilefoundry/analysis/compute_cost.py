@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.core import Call
+from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import Target
-from tilefoundry.visitor_registry import cost_evaluator_registry
-from tilefoundry.visitor_registry.contexts import Cost, CostContext
+from tilefoundry.visitor_registry.contexts import CostContext
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .metadata import ComputeCostMetadata, TrafficBytes
@@ -26,7 +26,6 @@ from .walk import (
     bytes_by_storage,
     describe,
     enclosing_trips,
-    execution_count,
     postorder,
     reachable_functions,
 )
@@ -39,18 +38,8 @@ class _Totals:
     """One function's work, summed over the calls in its body."""
 
     flops: tuple[tuple[str, int], ...]
+    flops_per_unit: tuple[tuple[str, int], ...]
     traffic: tuple[tuple[str, TrafficBytes], ...]
-
-
-def _local_cost(call: Call, module: Module) -> Cost:
-    """The per-instance logical cost of *call*, from its cost evaluator."""
-    evaluate = cost_evaluator_registry.lookup(type(call.target))
-    if evaluate is None:
-        raise AnalysisError(
-            f"{describe(call)}: no cost evaluator registered for "
-            f"{type(call.target).__name__}"
-        )
-    return evaluate(call, CostContext(module=module))
 
 
 def _call_movement(
@@ -98,59 +87,20 @@ def _call_movement(
 
 def _accumulate(
     flops: dict[str, int],
+    flops_per_unit: dict[str, int],
     traffic: dict[str, TrafficBytes],
     record: ComputeCostMetadata,
 ) -> None:
     for name, value in record.flops:
         flops[name] = flops.get(name, 0) + value
+    for name, value in record.flops_per_unit:
+        flops_per_unit[name] = flops_per_unit.get(name, 0) + value
     for level, value in record.traffic:
         current = traffic.get(level, TrafficBytes())
         traffic[level] = TrafficBytes(
             current.read + value.read,
             current.write + value.write,
         )
-
-
-def _call_record(
-    call: Call,
-    fn: Function,
-    module: Module,
-    topologies: tuple[Topology, ...],
-    totals: dict[int, _Totals],
-    trips: int = 1,
-) -> ComputeCostMetadata:
-    """The work record for one call site.
-
-    A call into another Function costs what that Function costs. Its callee was
-    measured first, so the totals are already there; their absence means the
-    call graph is recursive or unresolved, which no amount of measuring fixes.
-
-    *trips* is how many times the loops around this call run it. Unlike the mesh
-    count it scales the traffic too, and for the opposite reason: a loop body's
-    operand types are the tile one trip touches, so the whole tensor is the tile
-    times the trips. A mesh's operand types are already the whole.
-    """
-    if isinstance(call.target, Function):
-        child = totals.get(id(call.target))
-        if child is None:
-            raise AnalysisError(
-                f"{describe(call)}: recursive or unresolved Function call graph"
-            )
-        return _scaled(child.flops, child.traffic, trips)
-    count = execution_count(call, fn, topologies)
-    cost = _local_cost(call, module)
-    traffic, operands = _call_movement(call, cost)
-    return ComputeCostMetadata(
-        flops=tuple(
-            sorted(
-                (dtype.name, value * count * trips)
-                for dtype, value in cost.flops.items()
-            )
-        ),
-        traffic=_scale_traffic(traffic, trips),
-        execution_count=count * trips,
-        operands=_scale_moved(operands, trips),
-    )
 
 
 def _scale_traffic(
@@ -176,14 +126,35 @@ def _scale_moved(
 
 def _scaled(
     flops: tuple[tuple[str, int], ...],
+    flops_per_unit: tuple[tuple[str, int], ...],
     traffic: tuple[tuple[str, TrafficBytes], ...],
     trips: int,
 ) -> ComputeCostMetadata:
     """A callee's totals, charged once per trip of the loops around the call."""
     return ComputeCostMetadata(
         flops=tuple((name, value * trips) for name, value in flops),
+        flops_per_unit=tuple(
+            (name, value * trips) for name, value in flops_per_unit
+        ),
         traffic=_scale_traffic(traffic, trips),
-        execution_count=trips,
+    )
+
+
+def _scaled_flops(flops: dict, trips: int) -> tuple[tuple[str, int], ...]:
+    return tuple(
+        sorted((dtype.name, value * trips) for dtype, value in flops.items())
+    )
+
+
+def _resolved_topologies(
+    topologies: tuple[Topology, ...], target: Target
+) -> tuple[Topology, ...]:
+    """Fill launch-provided extents from the target's physical limits."""
+    return tuple(
+        topology
+        if topology.size is not None
+        else Topology(topology.name, target.topology_limit(topology.name))
+        for topology in topologies
     )
 
 
@@ -191,6 +162,7 @@ def analyze_compute_cost(
     module: Module,
     function: Function,
     target: Target,
+    level: str | None = None,
     options: object | None = None,
 ) -> None:
     """Attach one work record per Call reachable from *function*.
@@ -198,22 +170,48 @@ def analyze_compute_cost(
     Callees are measured before their callers so a call site can report the
     callee's totals rather than re-walking its body.
     """
-    topologies = module.effective_topologies()
+    topologies = _resolved_topologies(module.effective_topologies(), target)
+    whole = CostEvaluator(CostContext(module=module))
+    local = CostEvaluator(
+        CostContext(module=module, level=level, topologies=topologies)
+    )
     totals: dict[int, _Totals] = {}
     for fn in reversed(reachable_functions(function)):
         flops: dict[str, int] = {}
+        flops_per_unit: dict[str, int] = {}
         traffic: dict[str, TrafficBytes] = {}
         trips = enclosing_trips(fn.body)
         for expr in postorder(fn.body):
             if not isinstance(expr, Call):
                 continue
-            record = _call_record(
-                expr, fn, module, topologies, totals, trips.get(id(expr), 1)
-            )
+            count = trips.get(id(expr), 1)
+            if isinstance(expr.target, Function):
+                child = totals.get(id(expr.target))
+                if child is None:
+                    raise AnalysisError(
+                        f"{describe(expr)}: recursive or unresolved Function call graph"
+                    )
+                record = _scaled(
+                    child.flops, child.flops_per_unit, child.traffic, count
+                )
+            else:
+                try:
+                    whole_cost = whole.visit(expr)
+                    local_cost = local.visit(expr)
+                except (ValueError, VerifyError) as error:
+                    raise AnalysisError(str(error)) from None
+                traffic_by_level, operands = _call_movement(expr, whole_cost)
+                record = ComputeCostMetadata(
+                    flops=_scaled_flops(whole_cost.flops, count),
+                    flops_per_unit=_scaled_flops(local_cost.flops, count),
+                    traffic=_scale_traffic(traffic_by_level, count),
+                    operands=_scale_moved(operands, count),
+                )
             attach(expr, record)
-            _accumulate(flops, traffic, record)
+            _accumulate(flops, flops_per_unit, traffic, record)
         totals[id(fn)] = _Totals(
             flops=tuple(sorted(flops.items())),
+            flops_per_unit=tuple(sorted(flops_per_unit.items())),
             traffic=tuple(sorted(traffic.items())),
         )
 

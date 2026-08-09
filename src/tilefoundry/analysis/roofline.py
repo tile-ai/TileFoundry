@@ -69,10 +69,10 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
     does something reports at least one nanosecond. Reporting zero would read as
     free.
     """
-    theoretical = max(compute_ns, memory_ns)
-    if not theoretical:
-        theoretical = 1 if has_work else 0
-    if not theoretical:
+    ideal = max(compute_ns, memory_ns)
+    if not ideal:
+        ideal = 1 if has_work else 0
+    if not ideal:
         bound_by = "none"
     elif compute_ns and compute_ns == memory_ns:
         # Calling an exact tie one side's win would hide that relieving that
@@ -89,7 +89,7 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
     return RooflineMetadata(
         compute_ns=compute_ns,
         memory_ns=memory_ns,
-        theoretical_ns=theoretical,
+        ideal_ns=ideal,
         bound_by=bound_by,
     )
 
@@ -98,6 +98,7 @@ def analyze_roofline(
     module: Module,
     function: Function,
     target: Target,
+    level: str | None = None,
     options: object | None = None,
 ) -> None:
     """Attach a bound to every Call, and one to every Function, reachable here."""

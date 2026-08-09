@@ -92,7 +92,7 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
     assert set(data["function_records"]) == {"memory", "roofline", "timeline"}
     assert data["totals"]["flops"], "the work totals summed to nothing"
     text = render_text(data)
-    for expected in ("peak-footprint", "theoretical-bound", "theoretical-makespan"):
+    for expected in ("peak-footprint", "ideal-bound", "theoretical-makespan"):
         assert expected in text, f"{expected} is missing from the rendered report"
 
 
