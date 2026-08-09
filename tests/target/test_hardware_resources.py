@@ -32,6 +32,7 @@ from tilefoundry.target.hardware import (
     SchemaValidationError,
     UnknownDocumentError,
     UnknownSchemaError,
+    hardware_documents,
     parse_document,
 )
 
@@ -183,6 +184,11 @@ def test_an_explicitly_loaded_document_stays_out_of_the_available_namespace(
     assert re.fullmatch(r"[0-9a-f]{64}", target.architecture_digest)
     assert re.fullmatch(r"[0-9a-f]{64}", target.device_digest)
     assert target.architecture.max_threads_per_cta == 1024
+    architecture_document, device_document = hardware_documents(target)
+    assert architecture_document.id == target.architecture_id
+    assert device_document.id == target.device_id
+    assert architecture_document.digest == target.architecture_digest
+    assert device_document.digest == target.device_digest
     assert tuple(CudaTarget.hardware.documents()) == before
     with pytest.raises(UnknownDocumentError):
         CudaTarget.hardware.resolve("vendor.sm90_custom")
@@ -249,8 +255,17 @@ def test_a_memory_owner_must_use_the_target_vocabulary() -> None:
 
 def test_resolution_failures_are_each_distinguishable() -> None:
     """Unknown IDs, schemas, duplicate IDs, and incompatible pairs differ."""
-    with pytest.raises(UnknownDocumentError, match="no hardware document"):
-        CudaTarget.hardware.resolve("nvidia.sm70")
+    with pytest.raises(
+        UnknownDocumentError, match="no hardware document 'nvidia.sm70'"
+    ):
+        CudaTarget("nvidia.sm70")
+
+    with pytest.raises(UnknownDocumentError) as cross_backend:
+        CudaTarget("apple.m2_pro")
+    assert str(cross_backend.value) == (
+        "CudaTarget.device 'apple.m2_pro' is a hardware document owned by "
+        "AmxTarget, not CudaTarget"
+    )
 
     document = CudaTarget.hardware.documents()[_SM90]
     with pytest.raises(DuplicateRegistrationError, match="already registered"):

@@ -19,16 +19,12 @@ from tilefoundry.target.hardware.envelope import (
     parse_document,
 )
 from tilefoundry.target.hardware.schema import SchemaReader
-
-_BASE_EXPORTS = {"HardwareSpec", "check_compatible", "select"}
-_SPEC_EXPORTS = {"format_capabilities", "hardware_documents"}
+from tilefoundry.target.hardware.spec import format_capabilities, hardware_documents
 
 
 def __getattr__(name: str):
-    if name in _BASE_EXPORTS:
-        return getattr(import_module("tilefoundry.target.base"), name)
-    if name in _SPEC_EXPORTS:
-        return getattr(import_module("tilefoundry.target.hardware.spec"), name)
+    if name == "HardwareSpec":
+        return import_module("tilefoundry.target.base").HardwareSpec
     raise AttributeError(name)
 
 
@@ -46,9 +42,7 @@ __all__ = [
     "SchemaValidationError",
     "UnknownDocumentError",
     "UnknownSchemaError",
-    "check_compatible",
     "format_capabilities",
     "hardware_documents",
     "parse_document",
-    "select",
 ]

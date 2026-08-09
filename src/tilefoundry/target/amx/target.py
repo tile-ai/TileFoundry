@@ -22,6 +22,7 @@ from tilefoundry.target.base import (
     select,
 )
 from tilefoundry.target.facts import TopologyLimitFacts, facts_result
+from tilefoundry.target.hardware.envelope import HardwareDocument
 from tilefoundry.target.services import Scheduler
 from tilefoundry.utils.python_source import PythonExpr
 
@@ -49,6 +50,12 @@ class AmxTarget(_BuiltinAnalysisTarget):
     device_id: str | None = field(default=None, init=False, compare=False)
     architecture_digest: str | None = field(default=None, init=False, compare=False)
     device_digest: str | None = field(default=None, init=False, compare=False)
+    _architecture_document: HardwareDocument | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
+    _device_document: HardwareDocument | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
 
     def __init__(
         self,
@@ -77,6 +84,8 @@ class AmxTarget(_BuiltinAnalysisTarget):
         object.__setattr__(self, "device_id", device.id)
         object.__setattr__(self, "architecture_digest", architecture.digest)
         object.__setattr__(self, "device_digest", device.digest)
+        object.__setattr__(self, "_architecture_document", architecture.document)
+        object.__setattr__(self, "_device_document", device.document)
 
     def get_facts(self, facts_type: type, query: object | None = None):
         """Project AMX hardware through the facts this Target owns."""
