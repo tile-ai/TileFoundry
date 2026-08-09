@@ -97,7 +97,7 @@ def test_an_installed_target_reports_its_public_constructor():
     rendered = installed.to_python()
 
     assert rendered == PythonExpr(
-        imports=("from tilefoundry.target.cuda import CudaTarget",),
+        imports=("from tilefoundry.target import CudaTarget",),
         text='CudaTarget("nvidia.h200_sxm")',
     )
     assert _rebuild(rendered) == installed

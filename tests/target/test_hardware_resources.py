@@ -267,6 +267,13 @@ def test_resolution_failures_are_each_distinguishable() -> None:
         "AmxTarget, not CudaTarget"
     )
 
+    with pytest.raises(UnknownDocumentError) as wrong_kind:
+        CudaTarget(_SM90)
+    assert str(wrong_kind.value) == (
+        "CudaTarget.device got hardware document 'nvidia.sm90', which builds "
+        "CudaArchitecture; expected Device"
+    )
+
     document = CudaTarget.hardware.documents()[_SM90]
     with pytest.raises(DuplicateRegistrationError, match="already registered"):
         CudaTarget.hardware.adopt(document)

@@ -125,16 +125,6 @@ def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, plan
     assert json.loads(done.stdout)
 
 
-@pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
-def test_the_command_reads_the_machine_off_the_shipped_source(
-    tf, shipped_source, case, planned
-) -> None:
-    """Nothing tells the command which target to use; the source has to say."""
-    done = contract.capabilities(tf, shipped_source(MODEL), case, planned.selector)
-
-    assert done.stdout.strip()
-
-
 # ── against Hugging Face ─────────────────────────────────────────────────────
 @pytest.mark.parametrize("ctx_len", [0, 24])
 def test_the_decode_step_and_the_cache_entry_it_hands_back(

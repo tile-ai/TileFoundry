@@ -65,7 +65,7 @@ def test_analyze_json_and_text_report_the_same_conclusions(tf, cwide) -> None:
     text = as_text.stdout
     assert as_text.stderr == ""
 
-    assert payload["target"] == "cuda"
+    assert payload["target"] == "nvidia.h200_sxm"
     assert payload["function"] == "main"
     assert payload["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
     for level, value in payload["totals"]["traffic"].items():
@@ -74,7 +74,9 @@ def test_analyze_json_and_text_report_the_same_conclusions(tf, cwide) -> None:
         assert f"{item['level']}={item['peak_bytes']}" in text
     assert f"by={payload['function_records']['roofline']['bound_by']}" in text
 
-    assert text.startswith("# analysis target=cuda module=Model function=main")
+    assert text.startswith(
+        "# analysis target=nvidia.h200_sxm module=Model function=main"
+    )
     assert "# Tensor[" in text
     assert "compute-cost flops=f32:" in text
     assert "roofline bound=" in text

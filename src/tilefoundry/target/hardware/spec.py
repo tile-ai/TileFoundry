@@ -30,8 +30,6 @@ def hardware_documents(target: object) -> tuple[HardwareDocument, HardwareDocume
 
 def format_capabilities(
     documents: tuple[HardwareDocument, HardwareDocument],
-    *,
-    grid_cta_count: int | None = None,
 ) -> str:
     """Format the stable, intentionally compact capabilities report."""
     architecture, device = documents
@@ -40,7 +38,6 @@ def format_capabilities(
         f"  digest: {architecture.digest}",
         f"device: {device.id}",
         f"  digest: {device.digest}",
-        f"grid_cta_count: {grid_cta_count if grid_cta_count is not None else 'unspecified'}",
         "facts:",
     ]
     for document in (architecture, device):

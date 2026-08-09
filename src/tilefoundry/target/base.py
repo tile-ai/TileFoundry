@@ -161,6 +161,16 @@ class Target:
     name: ClassVar[str]
     topology_levels: ClassVar[tuple[str, ...]] = ()
 
+    @property
+    def identity(self) -> str:
+        """The stable identity of this concrete Target value."""
+        return self.name
+
+    @classmethod
+    def available(cls) -> tuple[Target, ...]:
+        """Return the values this Target class can currently construct."""
+        return (cls(),)
+
     def _python_import_module(self) -> str:
         return type(self).__module__
 
@@ -334,10 +344,35 @@ def select(
         )
     if not isinstance(resolved.value, base_type):
         raise UnknownDocumentError(
-            f"{role} {resolved.id!r} builds a {type(resolved.value).__name__}, "
-            f"not a {base_type.__name__}"
+            f"{role} got hardware document {resolved.id!r}, which builds "
+            f"{type(resolved.value).__name__}; expected {base_type.__name__}"
         )
     return resolved
+
+
+def _architecture_of(
+    device: Any,
+    *,
+    role: str,
+    hardware: HardwareSpec,
+) -> str:
+    """Return the sole architecture declared by one device document."""
+    target_name = role.partition(".")[0]
+    if isinstance(device, Device):
+        raise ValueError(
+            f"{target_name}: a Device supplied directly carries "
+            "no document to read a compatible architecture from; name the "
+            "architecture as well"
+        )
+    architectures = select(
+        device, Device, role=role, hardware=hardware
+    ).document.compatibility
+    if len(architectures) != 1:
+        raise IncompatiblePairError(
+            f"device {device!r} declares {list(architectures)} as compatible "
+            "architectures; name the one to build against"
+        )
+    return architectures[0]
 
 
 def check_compatible(

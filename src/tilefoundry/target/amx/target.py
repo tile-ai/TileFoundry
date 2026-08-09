@@ -16,6 +16,7 @@ from tilefoundry.target.base import (
     Architecture,
     Device,
     HardwareSpec,
+    _architecture_of,
     _BuiltinAnalysisTarget,
     check_compatible,
     register_target,
@@ -57,21 +58,44 @@ class AmxTarget(_BuiltinAnalysisTarget):
         default=None, init=False, compare=False, repr=False
     )
 
+    @property
+    def identity(self) -> str:
+        return self.device_id or self.name
+
+    @classmethod
+    def available(cls) -> tuple[AmxTarget, ...]:
+        documents = cls.hardware.documents()
+        return tuple(
+            cls(document.id)
+            for document in sorted(documents.values(), key=lambda item: item.id)
+            if document.kind == "device"
+            and len(document.compatibility) == 1
+            and document.compatibility[0] in documents
+            and documents[document.compatibility[0]].kind == "architecture"
+        )
+
     def __init__(
         self,
-        architecture: Architecture | str | Path | None = None,
         device: Device | str | Path | None = None,
+        architecture: Architecture | str | Path | None = None,
     ) -> None:
-        from .spec import APPLE_AMX_ID, APPLE_M2_PRO_ID  # noqa: PLC0415
+        from .spec import APPLE_M2_PRO_ID  # noqa: PLC0415
 
+        device = APPLE_M2_PRO_ID if device is None else device
+        if architecture is None:
+            architecture = _architecture_of(
+                device,
+                role="AmxTarget.device",
+                hardware=self.hardware,
+            )
         architecture = select(
-            APPLE_AMX_ID if architecture is None else architecture,
+            architecture,
             Architecture,
             role="AmxTarget.architecture",
             hardware=self.hardware,
         )
         device = select(
-            APPLE_M2_PRO_ID if device is None else device,
+            device,
             Device,
             role="AmxTarget.device",
             hardware=self.hardware,
@@ -151,8 +175,8 @@ class AmxTarget(_BuiltinAnalysisTarget):
     def to_python(self) -> PythonExpr:
         if type(self) is AmxTarget and self.architecture_id and self.device_id:
             return PythonExpr(
-                ("from tilefoundry.target.amx import AmxTarget",),
-                "AmxTarget()",
+                ("from tilefoundry.target import AmxTarget",),
+                f'AmxTarget("{self.device_id}")',
             )
         return super().to_python()
 

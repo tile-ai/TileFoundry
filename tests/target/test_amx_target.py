@@ -101,6 +101,8 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     assert target.get_facts(TopologyLimitFacts, "core").max_static_extent == 8
     assert target.get_facts(TopologyLimitFacts, "amx").max_static_extent == 1
     assert AmxTarget().topology_levels == target.topology_levels
+    assert AmxTarget("apple.m2_pro") == target
+    assert target.to_python().text == 'AmxTarget("apple.m2_pro")'
 
     with pytest.raises(ValueError) as topology_error:
         target.validate_program_topology(Topology("cta", 4))

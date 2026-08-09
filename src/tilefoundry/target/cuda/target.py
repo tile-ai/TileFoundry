@@ -10,6 +10,7 @@ from tilefoundry.target.base import (
     Architecture,
     Device,
     HardwareSpec,
+    _architecture_of,
     _BuiltinAnalysisTarget,
     check_compatible,
     register_target,
@@ -22,27 +23,9 @@ from tilefoundry.target.cuda.spec import (
     build_cuda_device,
 )
 from tilefoundry.target.facts import TopologyLimitFacts, facts_result
-from tilefoundry.target.hardware.envelope import HardwareDocument, IncompatiblePairError
+from tilefoundry.target.hardware.envelope import HardwareDocument
 from tilefoundry.target.services import CodeGenerator, Scheduler
 from tilefoundry.utils.python_source import PythonExpr
-
-
-def _architecture_of(device: Device | str | Path, hardware: HardwareSpec) -> str:
-    """The architecture *device*'s own document declares, when it declares one."""
-    if isinstance(device, Device):
-        raise ValueError(
-            "CudaTarget: a Device supplied directly carries no document to read a "
-            "compatible architecture from; name the architecture as well"
-        )
-    architectures = select(
-        device, Device, role="CudaTarget.device", hardware=hardware
-    ).document.compatibility
-    if len(architectures) != 1:
-        raise IncompatiblePairError(
-            f"device {device!r} declares {list(architectures)} as compatible "
-            f"architectures; name the one to build against"
-        )
-    return architectures[0]
 
 
 @register_target
@@ -75,6 +58,22 @@ class CudaTarget(_BuiltinAnalysisTarget):
         default=None, init=False, compare=False, repr=False
     )
 
+    @property
+    def identity(self) -> str:
+        return self.device_id or self.name
+
+    @classmethod
+    def available(cls) -> tuple[CudaTarget, ...]:
+        documents = cls.hardware.documents()
+        return tuple(
+            cls(document.id)
+            for document in sorted(documents.values(), key=lambda item: item.id)
+            if document.kind == "device"
+            and len(document.compatibility) == 1
+            and document.compatibility[0] in documents
+            and documents[document.compatibility[0]].kind == "architecture"
+        )
+
     def __init__(
         self,
         device: Device | str | Path,
@@ -83,7 +82,11 @@ class CudaTarget(_BuiltinAnalysisTarget):
         arch: str | None = None,
     ) -> None:
         if architecture is None:
-            architecture = _architecture_of(device, self.hardware)
+            architecture = _architecture_of(
+                device,
+                role="CudaTarget.device",
+                hardware=self.hardware,
+            )
         architecture = select(
             architecture,
             Architecture,
@@ -182,7 +185,7 @@ class CudaTarget(_BuiltinAnalysisTarget):
     def to_python(self) -> PythonExpr:
         if type(self) is CudaTarget and self.device_id and self.architecture_id:
             return PythonExpr(
-                ("from tilefoundry.target.cuda import CudaTarget",),
+                ("from tilefoundry.target import CudaTarget",),
                 f'CudaTarget("{self.device_id}")',
             )
         return super().to_python()

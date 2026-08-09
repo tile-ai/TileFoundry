@@ -17,6 +17,13 @@ class Target:
     """Identify a compilation backend."""
 
     name: ClassVar[str]
+    topology_levels: ClassVar[tuple[str, ...]]
+
+    @property
+    def identity(self) -> str: ...
+
+    @classmethod
+    def available(cls) -> tuple[Target, ...]: ...
 
     def get_analyzer(self, selector: str) -> Analyzer: ...
     def get_scheduler(self, topology: str) -> Scheduler: ...
@@ -46,6 +53,12 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     provider claiming the same name MUST fail rather than replace the owner.
   - `registered_targets()` MUST expose one read-only `name -> class` view. The
     view MAY be used for inspection but MUST NOT construct a Target.
+  - `identity` MUST name one concrete Target value. It MUST be the device
+    document ID for a document-backed Target and the registered class `name`
+    for a Target with no device document.
+  - `available()` MUST return every value of that registered class which can be
+    constructed in the current environment. A class with no hardware documents
+    MUST return its one parameterless value by default.
   - Authored Target parameters MUST accept a constructed Target instance or
     their documented omitted state. A string MUST fail and MUST NOT be resolved
     through registration.
@@ -116,8 +129,8 @@ class CudaTarget(Target):
 
     def __init__(
         self,
-        device: Device | str,
-        architecture: Architecture | str | None = None,
+        device: Device | str | Path,
+        architecture: Architecture | str | Path | None = None,
         *,
         arch: str | None = None,
     ) -> None: ...
@@ -156,6 +169,9 @@ class CudaTarget(Target):
     and no architecture or device type of its own. The services and Facts are
     selected by the value already, and the numbers are in the documents, so
     either addition would carry nothing.
+  - `CudaTarget.available()` MUST contain one value per device document whose
+    sole compatible architecture document is available. Its `identity` MUST be
+    that device document's ID.
   - CUDA MUST select the pipeline Scheduler at `thread` and the partition
     Scheduler at `cta` through `get_scheduler`. A CUDA subclass MUST inherit
     those services through ordinary Python inheritance unless it overrides or
@@ -535,8 +551,8 @@ class AmxTarget(Target):
 
     def __init__(
         self,
-        architecture: Architecture | str | None = None,
-        device: Device | str | None = None,
+        device: Device | str | Path | None = None,
+        architecture: Architecture | str | Path | None = None,
     ) -> None: ...
 
     def topology_limit(self, name: str) -> int: ...
@@ -548,11 +564,16 @@ class AmxTarget(Target):
 ```
 
 - constraints:
-  - `architecture` and `device` MUST accept an installed document ID or a
-    concrete value, on the same terms as [§4](#4-cudatarget).
+  - `device` and `architecture` MUST accept an installed document ID, a
+    document path, or a concrete value, on the same terms as
+    [§4](#4-cudatarget). An omitted architecture MUST be read from the device
+    document's sole compatibility declaration.
   - `AmxTarget()` MUST select the installed `apple.amx` and `apple.m2_pro`
     documents, and `arch` MUST equal
     `architecture.name`.
+  - `AmxTarget.available()` MUST contain one value per device document whose
+    sole compatible architecture document is available. Its `identity` MUST be
+    that device document's ID.
   - `topology_levels` MUST be `("core", "amx")`: the performance core one tile
     stream runs on, and the AMX unit inside that core which issues one atom.
   - `topology_limit("core")` MUST equal `device.performance_core_count` and

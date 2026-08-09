@@ -92,6 +92,78 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     assert "is an observation, not a bound" in help_text
 
 
+def test_target_list_expressions_execute_and_show_accepts_their_identities(
+    capsys,
+) -> None:
+    assert cli.main(["target", "list"]) == 0
+    listed = capsys.readouterr()
+    namespace: dict[str, object] = {}
+    import_line = next(line for line in listed.out.splitlines() if line.startswith("from "))
+    exec(import_line, namespace)
+
+    rows = [line.strip() for line in listed.out.splitlines() if "  identity: " in line]
+    identities = []
+    for row in rows:
+        expression, identity = row.rsplit("  identity: ", 1)
+        target = eval(expression.rstrip(), namespace)
+        assert target.identity == identity
+        identities.append(identity)
+
+        assert cli.main(["target", "show", identity]) == 0
+        shown = capsys.readouterr()
+        assert shown.err == ""
+        if identity == "cpu":
+            assert shown.out == "identity: cpu\nCpuTarget()\nfacts: unavailable\n"
+        else:
+            assert f"device: {identity}\n" in shown.out
+            assert shown.out.count("  digest: ") == 2
+
+    assert identities == [
+        "apple.m2_pro",
+        "cpu",
+        "nvidia.b200_sxm",
+        "nvidia.h200_sxm",
+    ]
+
+
+def test_target_show_rejects_unknown_identity_and_inspect_is_gone(capsys) -> None:
+    assert cli.main(["target", "show", "vendor.missing"]) == 1
+    unknown = capsys.readouterr()
+    assert unknown.out == ""
+    for identity in ("apple.m2_pro", "cpu", "nvidia.b200_sxm", "nvidia.h200_sxm"):
+        assert identity in unknown.err
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["inspect"])
+    invalid = capsys.readouterr()
+    assert invalid.out == ""
+    assert "invalid choice: 'inspect'" in invalid.err
+
+
+def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
+    reports = {}
+    for device in ("nvidia.h200_sxm", "nvidia.b200_sxm"):
+        source = tmp_path / f"{device.rsplit('.', 1)[1]}.py"
+        source.write_text(
+            "from tilefoundry import func\n"
+            "from tilefoundry.dsl import Tensor, Topology, tf\n"
+            "from tilefoundry.target import CudaTarget\n"
+            f"@func(target=CudaTarget('{device}'), "
+            "topologies=(Topology('cta', 1),))\n"
+            "def model(source: Tensor[(8,), 'f32']):\n"
+            "    return tf.add(source, source)\n",
+            encoding="utf-8",
+        )
+        assert cli.main(["analyze", f"{source}:model", "--compute-cost", "--json"]) == 0
+        report = json.loads(capsys.readouterr().out)
+        reports[device] = report["target"]
+
+    assert reports == {
+        "nvidia.h200_sxm": "nvidia.h200_sxm",
+        "nvidia.b200_sxm": "nvidia.b200_sxm",
+    }
+
+
 def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) -> None:
     (tmp_path / "provider.py").write_text(
         "from tilefoundry.target import CpuTarget, register_target\n"

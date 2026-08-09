@@ -238,7 +238,7 @@ def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
                 executed.append(selector)
     target = first.module.resolve_target()
     data = {
-        "target": getattr(target, "name", type(target).__name__),
+        "target": target.identity,
         "module": first.module.name,
         "function": function.name,
         "topology": first.level,

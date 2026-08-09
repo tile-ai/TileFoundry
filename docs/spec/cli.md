@@ -303,6 +303,8 @@ no ordinary `--target` option.
   - Output MUST report the analyses that were requested. A dependency that ran
     because a requested root needed it MUST appear in the executed list and MUST
     NOT have its own measurements reported.
+  - The report's `target` field MUST be the concrete Target value's `identity`,
+    so two products served by one Target class remain distinguishable.
   - On success, text output begins with the `#`-headed report followed by
     annotated HIR. On inference, verification, or analysis failure, stdout MUST
     be empty and stderr MUST report the source location, binding where
@@ -379,19 +381,26 @@ The same Module scheduled at a level it also declares answers with that level's
 own algorithm and that algorithm's own Plan, which reads differently because it
 decided different things.
 
-## Inspect Capabilities
+## Target
 
-`inspect capabilities` with no `SOURCE` lists the installed architecture and
-device documents, including each document's compatibility declarations, and the
-target names a Module may declare. It also states how to ask for one selection.
+`target list` prints every Target value constructible in the current
+environment. Each row contains its exact `identity` and a Python expression
+that reconstructs an equal value; the required imports follow the rows.
 
-With a `SOURCE`, it resolves the target from the selected Module and prints the
-installed compact hardware capability record. It does not emit compiler
-operation coverage. The record names both the architecture and the device
-document behind the target, each with its content digest, then every recorded
-fact by its path. A fact identifies its unit, the conditions it holds under,
-its source, and its origin — vendor-published, measured on the described host,
-cited from a reference, derived, or a reading no source states. A fact with no
-usable value is reported as unavailable rather than given a placeholder number.
-A target composed from a directly supplied value has no installed document to
-report, and the command says so instead of naming the resource it resembles.
+`target show IDENTITY` addresses those same rows by exact identity. For a
+document-backed Target it prints the architecture and device documents retained
+by the value, each with its digest, then every recorded fact by path. A fact
+identifies its unit, conditions, source, and origin. A fact with no usable value
+is reported as unavailable rather than given a placeholder number.
+
+For a Target without retained documents, `target show` prints only its identity,
+its reconstructing expression, and `facts: unavailable`. It does not query or
+attempt to enumerate `get_facts`: a Target exposes facts on demand but has no
+interface that claims to list every Facts projection it supports.
+
+- constraints:
+  - Every expression printed by `target list` MUST be executable with the
+    accompanying imports and MUST reconstruct the Target named by that row.
+  - `target show` MUST accept every identity printed by `target list`. An
+    unknown identity MUST fail naming the identities currently available.
+  - `inspect` MUST NOT remain as a second Target inspection command.

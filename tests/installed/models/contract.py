@@ -343,10 +343,3 @@ def disagreed(tf, work: Path, source: Path, case: ModelCase, selector: str, **as
     assert done.returncode == 1, done.stdout + done.stderr
     assert "FAIL" in done.stdout, done.stdout
     return done
-
-
-def capabilities(tf, source: Path, case: ModelCase, selector: str):
-    """``inspect capabilities``, which nothing tells the target: the source states it."""
-    done = tf("inspect", "capabilities", static(source, case, selector))
-    assert done.returncode == 0, done.stderr
-    return done

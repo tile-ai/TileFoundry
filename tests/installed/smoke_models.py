@@ -72,7 +72,7 @@ def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, in
     static = f"{copied / 'model.py'}:Qwen3_1_7B.layer0.mlp"
     analysed = tf("analyze", static, "--compute-cost")
     assert analysed.returncode == 0, analysed.stderr
-    assert "target=cuda" in analysed.stdout
+    assert "target=nvidia.h200_sxm" in analysed.stdout
     assert "flops" in analysed.stdout and "traffic gmem=" in analysed.stdout
 
     targetless = f"{copied / 'model.py'}:Qwen3_1_7B_DecoderLayer"
