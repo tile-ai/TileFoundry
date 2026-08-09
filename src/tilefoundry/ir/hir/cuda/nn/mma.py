@@ -22,6 +22,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -56,10 +57,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     op = call.target
     a_ty = ctx.type_of(call.args[0])
     b_ty = ctx.type_of(call.args[1])
+    out_shape = (16, 8)
     return TensorType(
-        shape=(16, 8),
+        shape=out_shape,
         dtype=op.dtype_acc,
-        layout=a_ty.layout,
+        layout=(
+            None
+            if a_ty.layout is None and b_ty.layout is None
+            else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+        ),
         storage=resolve_anchor_storage(ctx, call, a_ty.storage, b_ty.storage),
     )
 
@@ -85,10 +91,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     op = call.target
     a_ty = ctx.type_of(call.args[0])
     b_ty = ctx.type_of(call.args[1])
+    out_shape = (64, 128)
     return TensorType(
-        shape=(64, 128),
+        shape=out_shape,
         dtype=op.dtype_acc,
-        layout=a_ty.layout,
+        layout=(
+            None
+            if a_ty.layout is None and b_ty.layout is None
+            else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+        ),
         storage=resolve_anchor_storage(ctx, call, a_ty.storage, b_ty.storage),
     )
 

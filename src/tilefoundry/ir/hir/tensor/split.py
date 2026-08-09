@@ -6,6 +6,16 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard import (
+    Broadcast,
+    Layout,
+    Partial,
+    ShardLayout,
+    canonical_shard_layout,
+    try_c_order_strides,
+)
+from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
+from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -32,7 +42,27 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         part_len = orig
     part_shape = list(x_ty.shape)
     part_shape[axis] = part_len
+    part_shape = tuple(part_shape)
+    if isinstance(x_ty.layout, ShardLayout):
+        layout_to_tensor = layout_axis_to_tensor_axis(
+            x_ty.layout.layout.shape, x_ty.shape
+        )
+        attrs = tuple(
+            SplitAttr(layout_to_tensor[attr.axis])
+            if isinstance(attr, SplitAttr)
+            else Partial(attr.reduction)
+            if isinstance(attr, Partial)
+            else Broadcast()
+            for attr in x_ty.layout.attrs
+        )
+        part_layout = canonical_shard_layout(part_shape, x_ty.layout.mesh, attrs)
+    elif x_ty.layout is None:
+        part_layout = None
+    else:
+        part_layout = Layout(
+            shape=part_shape, strides=try_c_order_strides(part_shape)
+        )
     part_ty = TensorType(
-        shape=tuple(part_shape), dtype=x_ty.dtype, layout=x_ty.layout, storage=x_ty.storage
+        shape=part_shape, dtype=x_ty.dtype, layout=part_layout, storage=x_ty.storage
     )
     return TupleType(fields=tuple(part_ty for _ in range(n)))

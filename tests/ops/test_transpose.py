@@ -14,8 +14,8 @@ from tests.ops.typeinfer_utils import (
     raw_shard_tensor_type,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType, make_shard_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard import Layout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -40,6 +40,16 @@ _T10 = Transpose(perm=(1, 0))
 # output shape and which mesh axis stays genuinely `Split` (and its local
 # extent), not the internal layout position / stride a valid `Transpose`
 # permutation produces.
+
+
+def test_plain_input_permutes_its_layout_when_one_is_stated():
+    source = make_tensor_type(
+        (16, 8), DType.bf16, layout=Layout(shape=(16, 8), strides=(8, 1))
+    )
+    ty = infer_call(_T10, source)
+
+    assert ty.layout == Layout(shape=(8, 16), strides=(1, 8))
+    assert infer_call(_T10, make_tensor_type((16, 8), DType.bf16)).layout is None
 
 
 def test_factorized_split_reorders_subaxes():

@@ -14,11 +14,22 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import (
+    Layout,
+    ShardLayout,
+    canonical_shard_layout,
+    try_c_order_strides,
+)
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelationResult,
     AccessRelations,
+    build_relation,
     register_access_relation,
+    register_type_relation,
 )
+from tilefoundry.visitor_registry.relation_build import build_domain
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
 @register_op
@@ -39,11 +50,49 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     # The winning index is not recoverable from a partial (per-shard) reduction.
     reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
+    new_layout = (
+        None
+        if x_ty.layout is None
+        else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+    )
+    if isinstance(x_ty.layout, ShardLayout):
+        relation = build_relation(call, (x_ty,), ctx)
+        derived = derive_output_shard_layout(
+            (x_ty,),
+            relation,
+            out_shape,
+            complete_reduction_dims=frozenset({axis}),
+            fresh_strides=True,
+        )
+        new_layout = (
+            derived
+            if derived is not None
+            else canonical_shard_layout(
+                out_shape, x_ty.layout.mesh, x_ty.layout.attrs
+            )
+        )
     return TensorType(
         shape=out_shape,
         dtype=DType.i64,
-        layout=x_ty.layout,
+        layout=new_layout,
         storage=x_ty.storage,
+    )
+
+
+@register_type_relation(ArgMax)
+def _argmax_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
+    (x,) = input_types
+    rank = len(x.shape)
+    axis = call.target.axis % rank
+    dims = [f"d{i}" for i in range(rank)]
+    source = f"[{', '.join(dims)}]"
+    output = [dim for i, dim in enumerate(dims) if i != axis]
+    return AccessRelationResult(
+        domain=build_domain(x.shape),
+        maps=(
+            isl.map(f"{{ {source} -> [{', '.join(dims)}] }}"),
+            isl.map(f"{{ {source} -> [{', '.join(output)}] }}"),
+        ),
     )
 
 @register_access_relation(ArgMax)

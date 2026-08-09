@@ -22,7 +22,7 @@ from tests.ops.typeinfer_utils import (
 )
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.types import make_shard_tensor_type
+from tilefoundry.ir.types import make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -50,6 +50,24 @@ def _partial_reductions(ty) -> dict:
     """Mesh axes carrying a `Partial` in *ty*'s output layout, keyed by mesh
     axis and valued by reduction op."""
     return {i: a.reduction for i, a in enumerate(ty.layout.attrs) if isinstance(a, Partial)}
+
+
+def test_plain_c_order_layout_is_derived_when_reshape_is_a_view():
+    source = make_tensor_type(
+        (16, 8), layout=Layout(shape=(16, 8), strides=(8, 1))
+    )
+    ty = infer_call(_reshape((8, 16)), source)
+
+    assert ty.layout == Layout(shape=(8, 16), strides=(16, 1))
+    assert infer_call(_reshape((8, 16)), make_tensor_type((16, 8))).layout is None
+
+
+def test_noncontiguous_plain_layout_is_not_claimed_as_a_reshape_view():
+    source = make_tensor_type(
+        (8, 16), layout=Layout(shape=(8, 16), strides=(1, 8))
+    )
+
+    assert infer_call(_reshape((128,)), source).layout is None
 
 
 def test_straddling_split_fails_closed():

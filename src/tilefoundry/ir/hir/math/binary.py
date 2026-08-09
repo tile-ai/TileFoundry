@@ -22,6 +22,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import canonical_shard_layout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -84,25 +85,44 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
-def _merge_layout(a: object, b: object) -> object:
+def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
     """Merge two non-sharded operand layouts. Equal layouts or one ``None``
     pass through. Two fully-replicated (all-``Broadcast``) ``ShardLayout``s are
     mesh-agnostic (the data is replicated everywhere) so the first is kept.
     Any other genuine mismatch raises — there is no silent lhs pick; a real
     shard mismatch is propagated through the shard engine, not merged here."""
     if a == b:
-        return a
-    if a is None:
-        return b
-    if b is None:
-        return a
-    if (
-        isinstance(a, ShardLayout)
-        and isinstance(b, ShardLayout)
-        and all(isinstance(x, Broadcast) for x in a.attrs)
-        and all(isinstance(x, Broadcast) for x in b.attrs)
+        if a is None:
+            return None
+        layout = a
+    elif a is None:
+        layout = b
+    elif b is None:
+        layout = a
+    elif not isinstance(a, ShardLayout) and not isinstance(b, ShardLayout):
+        return None
+    else:
+        layout = None
+    if layout is not None:
+        if isinstance(layout, ShardLayout):
+            if all(isinstance(attr, Broadcast) for attr in layout.attrs):
+                return canonical_shard_layout(out_shape, layout.mesh, layout.attrs)
+            return layout
+        if tuple(layout.shape) == out_shape:
+            return layout
+        return None
+    replicated = [
+        layout
+        for layout in (a, b)
+        if isinstance(layout, ShardLayout)
+        and all(isinstance(attr, Broadcast) for attr in layout.attrs)
+    ]
+    if replicated and all(
+        not isinstance(layout, ShardLayout) or layout in replicated
+        for layout in (a, b)
     ):
-        return a
+        first = replicated[0]
+        return canonical_shard_layout(out_shape, first.mesh, first.attrs)
     raise ValueError(f"incompatible operand layouts {a!r} vs {b!r}")
 
 
@@ -166,7 +186,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         shard = None
         if isinstance(la, ShardLayout) or isinstance(lb, ShardLayout):
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)
-        layout = shard if shard is not None else _merge_layout(la, lb)
+        layout = shard if shard is not None else _merge_layout(la, lb, out_shape)
     except ValueError as e:
         ctx.error(call, f"Binary {op.kind.name}: {e}")
     return TensorType(

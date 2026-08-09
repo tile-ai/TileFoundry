@@ -75,9 +75,10 @@ class TensorType:
     unmaterialized value MUST be resolved to a concrete residency (or otherwise
     materialized) before codegen consumes it. `None` is unchanged — a tensor with
     no memory space (a shape-element scalar), distinct from `umat`.
-  - For plain `Layout` / `ComposedLayout`, `len(shape)` MUST equal
-    `layout.domain_rank`; consumers use this common contract rather than
-    inspecting a `ComposedLayout` component.
+  - For plain `Layout` / `ComposedLayout`, `layout.shape` MUST have the same rank
+    and logical extents as `shape`; the layout describes the value whose type
+    carries it. Consumers use this common contract rather than inspecting a
+    `ComposedLayout` component.
   - For `ShardLayout`, `TensorType.shape` remains the logical shape;
     `ShardLayout.layout.shape` is the sharding-internal / per-shard
     layout shape and need not match `shape` axis-by-axis. `Reshard`

@@ -12,6 +12,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shard import ComposedLayout, try_c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
@@ -199,6 +200,33 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                     "Reshape cannot express the sharded layout: new shape does "
                     "not align with the input layout factorization",
                 )
+    else:
+        source = x_ty.layout
+        if isinstance(source, Layout):
+            source_strides = source.strides
+            expected_strides = try_c_order_strides(source.shape)
+            if source_strides is None or source_strides == expected_strides:
+                new_layout = Layout(
+                    shape=new_shape,
+                    strides=try_c_order_strides(new_shape),
+                )
+        elif (
+            isinstance(source, ComposedLayout)
+            and isinstance(source.outer, Layout)
+            and (
+                source.outer.strides is None
+                or source.outer.strides
+                == try_c_order_strides(source.outer.shape)
+            )
+        ):
+            new_layout = ComposedLayout(
+                inner=source.inner,
+                offset=source.offset,
+                outer=Layout(
+                    shape=new_shape,
+                    strides=try_c_order_strides(new_shape),
+                ),
+            )
     return TensorType(
         shape=new_shape,
         dtype=x_ty.dtype,

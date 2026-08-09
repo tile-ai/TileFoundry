@@ -10,6 +10,11 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import i64_const
+from tilefoundry.ir.types.shard import (
+    ComposedLayout,
+    Layout,
+    ShardLayout,
+)
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
@@ -89,12 +94,51 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         e_e = e if isinstance(e, Expr) else _i64(int(e))
         s_e = s if isinstance(s, Expr) else _i64(int(s))
         shape.append(_slice_dim(b_e, e_e, s_e))
-    # A sliced sharded axis changes its per-shard extent, which cannot in
-    # general be re-expressed; drop to an unsharded output rather than carry the
-    # input layout onto the smaller shape. Re-expressing a slice of a sharded
-    # axis is left to a follow-up.
+    layout_shape = tuple(
+        int(dim.value) if isinstance(dim, Constant) else dim for dim in shape
+    )
+    source = x_ty.layout
+    inherited_offset = 0
+    if isinstance(source, ShardLayout):
+        source = None
+    elif (
+        isinstance(source, ComposedLayout)
+        and source.inner is None
+        and isinstance(source.outer, Layout)
+    ):
+        inherited_offset = source.offset
+        source = source.outer
+
+    new_layout = None
+    if isinstance(source, Layout) and source.strides is not None:
+        starts = []
+        steps = []
+        for begin, end, stride in zip(op.begin, op.end, op.strides):
+            if not (
+                isinstance(begin, Constant)
+                and isinstance(begin.value, int)
+                and isinstance(end, Constant)
+                and isinstance(end.value, int)
+                and isinstance(stride, Constant)
+                and isinstance(stride.value, int)
+            ):
+                break
+            starts.append(int(begin.value))
+            steps.append(int(stride.value))
+        else:
+            new_layout = ComposedLayout(
+                inner=None,
+                offset=inherited_offset
+                + sum(start * stride for start, stride in zip(starts, source.strides)),
+                outer=Layout(
+                    shape=layout_shape,
+                    strides=tuple(
+                        stride * step for stride, step in zip(source.strides, steps)
+                    ),
+                ),
+            )
     return TensorType(
-        shape=tuple(shape), dtype=x_ty.dtype, layout=None, storage=x_ty.storage
+        shape=tuple(shape), dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
     )
 
 

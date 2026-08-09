@@ -14,6 +14,11 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shard import (
+    Layout,
+    canonical_shard_layout,
+    try_c_order_strides,
+)
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -84,7 +89,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             new_shape.pop(a)
     out_shape = tuple(new_shape)
 
-    new_layout = x_ty.layout
+    new_layout = (
+        None
+        if x_ty.layout is None
+        else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+    )
     if isinstance(x_ty.layout, ShardLayout):
         relation = build_relation(call, (x_ty,), ctx)
         derived = derive_output_shard_layout(
@@ -94,8 +103,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             complete_reduction_dims=frozenset(reduced),
             fresh_strides=True,
         )
-        if derived is not None:
-            new_layout = derived
+        new_layout = (
+            derived
+            if derived is not None
+            else canonical_shard_layout(
+                out_shape, x_ty.layout.mesh, x_ty.layout.attrs
+            )
+        )
 
     return TensorType(
         shape=out_shape,

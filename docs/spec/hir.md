@@ -390,6 +390,10 @@ registered `@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
   `Reshard` op entry below.
 - Any HIR Op MUST be value-form ([core-ir §2.3](./core-ir.md#23-op));
   emitting an effect-form Call into HIR is a verify error.
+- Each result layout MUST describe that result. A view derives its layout from
+  its source when one is stated; an op producing a distinct value derives a
+  layout over its own result shape. An op MUST NOT copy an input layout across
+  a shape change.
 
 Generic, analysis-wide typing behavior is owned by
 [semantic-analysis](./semantic-analysis.md): relation-driven type validity
@@ -440,6 +444,11 @@ class Binary(Op):
     surface, before it is an operand at all ([parser §1.9](./parser.md#19-compile-time-values)); a Python
     integer is not.
   - The elementwise `min` / `max` kinds are also surfaced as `minimum` / `maximum`.
+  - Equal plain layouts, or one plain layout paired with `layout=None`, pass
+    through only when that layout describes the broadcast result. Otherwise two
+    non-sharded operands produce `layout=None`; broadcasting differently shaped
+    views does not make either operand's layout describe the result. This
+    fallback MUST NOT accept an incompatible `ShardLayout` pair.
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
     output only when `kind` provably commutes with `reduction`
     (`op(reduction(x)) == reduction(op(x))`); typeinfer rejects otherwise,
@@ -539,6 +548,19 @@ class Softplus(Op):
 Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 / `Stack` / `ShapeOf` / `Rank`) follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
+
+`Transpose`, statically bounded `Slice`, and `Reshape` derive a view layout from
+their input when it states one. An input with `layout=None` produces a view with
+`layout=None`; a runtime-bounded `Slice` also keeps `layout=None` because
+`ComposedLayout.offset` is static. Neither case says that the view materialized.
+
+- `Transpose` MUST permute the layout shape and strides by the same permutation
+  as the tensor shape. A `ShardLayout` MUST remap its split positions through
+  the registered relation.
+- `Slice` with static bounds MUST produce a `ComposedLayout`: its offset is the
+  source offset plus the starts multiplied by the source strides, and its outer
+  layout carries the sliced shape and the retained strides (multiplied by any
+  slice step). A runtime-bounded `Slice` MUST remain accepted with `layout=None`.
 
 ##### ArgMax
 
@@ -690,7 +712,9 @@ class Reshape(Op):
 ```
 - constraints:
   - The result shape is `new_shape`; `size(new_shape)` MUST equal `size(x.shape)`.
-  - A plain (non-`ShardLayout`) input reshapes to a plain output.
+  - A plain C-order input reshapes to a C-order `Layout` over `new_shape`. An
+    input with no assigned layout, or a non-contiguous plain input whose regroup
+    cannot be expressed, has a `None` result layout.
   - A fully-`Broadcast` `ShardLayout` input (every attr `Broadcast`, no genuine
     sharding) reshapes to a plain (unsharded) output.
   - A genuine `ShardLayout` input (at least one non-`Broadcast` attr) carries

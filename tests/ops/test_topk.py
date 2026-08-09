@@ -42,7 +42,7 @@ from tilefoundry.ir.types import (
     make_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimVar, dim_min
-from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard import Layout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -126,6 +126,17 @@ def test_topk_output_layout_shrinks_selected_axis_preserving_split():
         assert math.prod(t.layout.layout.shape) == math.prod(t.shape), (
             f"size(layout)={t.layout.layout.shape} != size(shape)={t.shape}"
         )
+
+
+def test_plain_topk_layout_describes_the_selected_result():
+    source = make_tensor_type(
+        (4, 256), _F32, layout=Layout(shape=(4, 256), strides=(256, 1))
+    )
+
+    values, indices = infer_call(TopK(k=6, axis=-1), source).fields
+
+    assert values.layout == Layout(shape=(4, 6), strides=(6, 1))
+    assert indices.layout == values.layout
 
 
 def test_topk_all_broadcast_layout_with_dynamic_dim():

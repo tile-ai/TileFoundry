@@ -27,10 +27,10 @@ from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.tensor.reduce import Reduce
-from tilefoundry.ir.types import DType, make_shard_tensor_type
+from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import Partial, Split
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
 from tilefoundry.target import CudaTarget
@@ -44,6 +44,35 @@ _M = make_mesh((6, 32), ("w", "t"))
 _PARTIAL_MESH = make_mesh((4,))
 _PSUM = make_shard_tensor_type((8, 16), mesh=_PARTIAL_MESH, attrs=(Partial("sum"),), dtype=DType.f32)
 _PMAX = make_shard_tensor_type((8, 16), mesh=_PARTIAL_MESH, attrs=(Partial("max"),), dtype=DType.f32)
+
+
+def test_plain_reduce_layout_describes_the_reduced_result():
+    source = make_tensor_type(
+        (1, 16, 1024, 128),
+        _BF,
+        layout=Layout(shape=(1, 16, 1024, 128), strides=(2097152, 131072, 128, 1)),
+    )
+
+    result = infer_call(
+        Reduce(axes=(-1,), keepdim=False, kind=ReduceKind.SUM), source
+    )
+
+    assert result.shape == (1, 16, 1024)
+    assert result.layout == Layout(
+        shape=(1, 16, 1024), strides=(16384, 1024, 1)
+    )
+
+    replicated = make_shard_tensor_type(
+        (1, 16, 1024, 128),
+        _BF,
+        mesh=make_mesh((4,)),
+        attrs=(Broadcast(),),
+    )
+    replicated_result = infer_call(
+        Reduce(axes=(-1,), keepdim=False, kind=ReduceKind.SUM), replicated
+    )
+    assert replicated_result.layout.layout.shape == (1, 16, 1024)
+    assert replicated_result.layout.attrs == (Broadcast(),)
 
 
 @pytest.mark.parametrize(

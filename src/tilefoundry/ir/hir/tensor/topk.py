@@ -190,7 +190,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     # A sharded input keeps its non-selected splits; the selected axis shrinks
     # to k. Derive the output layout instead of passing it through, so the
     # shard invariant size(layout) == size(shape) holds.
-    new_layout = x_ty.layout
+    new_layout = (
+        None
+        if x_ty.layout is None
+        else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+    )
     if isinstance(x_ty.layout, ShardLayout):
         relation = build_relation(call, (x_ty,), ctx)
         derived = derive_output_shard_layout(

@@ -14,10 +14,12 @@ from tests.ops.typeinfer_utils import (
     infer_call,
     run_typeinfer_case,
 )
+from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 
 _ADD = Binary(kind=BinaryKind.ADD)
@@ -45,17 +47,6 @@ CASES = [
     # An axis of no elements. The iteration domain is then empty, so the extents
     # come from the shapes the domain was built from rather than back out of it.
     TypeInferCase("empty_axis", _ADD, (make_tensor_type((1, 0, 8), _F), make_tensor_type((8,), _F)), make_tensor_type((1, 0, 8), _F)),
-    # lhs splits axis 0, rhs splits axis 1 on the same mesh axis → conflict,
-    # not a silent lhs pick.
-    TypeInferCase(
-        "incompatible_split",
-        _ADD,
-        (
-            make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)),
-            make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(1),)),
-        ),
-        ExpectedError(match="incompatible"),
-    ),
     # An unmaterialized literal operand abstains, but two *different* concrete
     # residencies have no anchor → error, not a pick.
     TypeInferCase(
@@ -70,6 +61,26 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_binary_typeinfer(case):
     run_typeinfer_case(case)
+
+
+def test_broadcast_layout_fallback_does_not_weaken_shard_mismatch():
+    narrow = (1, 1, 16, 1, 128)
+    wide = (1, 1, 16, 4, 128)
+    lhs = make_tensor_type(narrow, _F, layout=Layout(narrow))
+    rhs = make_tensor_type(wide, _F, layout=Layout(wide))
+    assert infer_call(_MUL, lhs, rhs).layout is None
+    assert infer_call(_MUL, lhs, make_tensor_type(wide, _F)).layout is None
+
+    replicated = make_shard_tensor_type(
+        narrow, mesh=_M, attrs=(Broadcast(),)
+    )
+    replicated_out = infer_call(_MUL, replicated, rhs)
+    assert replicated_out.layout.layout.shape == wide
+
+    split_0 = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),))
+    split_1 = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(1),))
+    with pytest.raises(VerifyError, match="incompatible"):
+        infer_call(_ADD, split_0, split_1)
 
 
 PARTIAL_CASES = [

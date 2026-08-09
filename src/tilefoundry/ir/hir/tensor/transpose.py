@@ -10,6 +10,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.shard import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -66,6 +67,33 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
         if derived is not None:
             new_layout = derived
+    else:
+        source = x_ty.layout
+        if isinstance(source, Layout):
+            new_layout = Layout(
+                shape=tuple(source.shape[p] for p in perm),
+                strides=(
+                    None
+                    if source.strides is None
+                    else tuple(source.strides[p] for p in perm)
+                ),
+            )
+        elif (
+            isinstance(source, ComposedLayout)
+            and isinstance(source.outer, Layout)
+        ):
+            new_layout = ComposedLayout(
+                inner=source.inner,
+                offset=source.offset,
+                outer=Layout(
+                    shape=tuple(source.outer.shape[p] for p in perm),
+                    strides=(
+                        None
+                        if source.outer.strides is None
+                        else tuple(source.outer.strides[p] for p in perm)
+                    ),
+                ),
+            )
     return TensorType(
         shape=new_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
     )
