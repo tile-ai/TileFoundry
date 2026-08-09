@@ -1,4 +1,4 @@
-"""CPU compilation target."""
+"""CPU compilation target implementation."""
 
 from __future__ import annotations
 

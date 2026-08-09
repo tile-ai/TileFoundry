@@ -1,4 +1,4 @@
-"""Typed AMX hardware schemas and the documents this package installs."""
+"""Typed AMX hardware schema builders."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from tilefoundry.target.hardware.envelope import (
     HardwareDocument,
     SchemaValidationError,
 )
-from tilefoundry.target.hardware.registry import HARDWARE_SPECS, HardwareSpecRegistry
 from tilefoundry.target.hardware.schema import SchemaReader
 
 ARCHITECTURE_SCHEMA = "tilefoundry.amx.architecture/v2"
@@ -18,8 +17,6 @@ DEVICE_SCHEMA = "tilefoundry.amx.device/v2"
 
 APPLE_AMX_ID = "apple.amx"
 APPLE_M2_PRO_ID = "apple.m2_pro"
-
-_PACKAGE = "tilefoundry.target.hardware"
 
 
 def _memory_owner(reader: SchemaReader, path: str) -> str:
@@ -124,28 +121,6 @@ def build_apple_m2_pro(document: HardwareDocument) -> AppleM2Pro:
     return device
 
 
-def install(registry: HardwareSpecRegistry | None = None) -> None:
-    """Register the AMX schemas and documents into *registry*."""
-    into = HARDWARE_SPECS if registry is None else registry
-    into.register_schema(ARCHITECTURE_SCHEMA, build_apple_amx)
-    into.register_schema(DEVICE_SCHEMA, build_apple_m2_pro)
-    into.install(APPLE_AMX_ID, _PACKAGE, "apple_amx.toml")
-    into.install(APPLE_M2_PRO_ID, _PACKAGE, "apple_m2_pro.toml")
-
-
-def installed_architecture() -> AppleAmx:
-    """The installed Apple AMX architecture value."""
-    return HARDWARE_SPECS.resolve(APPLE_AMX_ID).value
-
-
-def installed_device() -> AppleM2Pro:
-    """The installed Apple M2 Pro device value."""
-    return HARDWARE_SPECS.resolve(APPLE_M2_PRO_ID).value
-
-
-install()
-
-
 __all__ = [
     "APPLE_AMX_ID",
     "APPLE_M2_PRO_ID",
@@ -153,7 +128,4 @@ __all__ = [
     "DEVICE_SCHEMA",
     "build_apple_amx",
     "build_apple_m2_pro",
-    "install",
-    "installed_architecture",
-    "installed_device",
 ]

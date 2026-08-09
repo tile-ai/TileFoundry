@@ -1,4 +1,4 @@
-"""Typed CUDA hardware schemas and the documents this package installs."""
+"""Typed CUDA hardware schema builders."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from tilefoundry.target.hardware.envelope import (
     HardwareDocument,
     SchemaValidationError,
 )
-from tilefoundry.target.hardware.registry import HARDWARE_SPECS, HardwareSpecRegistry
 from tilefoundry.target.hardware.schema import SchemaReader
 
 # One document format per kind: every CUDA architecture document states the same
@@ -24,8 +23,6 @@ SM90_ID = "nvidia.sm90"
 SM100_ID = "nvidia.sm100"
 H200_SXM_ID = "nvidia.h200_sxm"
 B200_SXM_ID = "nvidia.b200_sxm"
-
-_PACKAGE = "tilefoundry.target.hardware"
 
 # The compute DTypes a CUDA device document states a dense peak rate for. A
 # product whose tensor cores have no mode for one of them records it
@@ -150,20 +147,6 @@ def build_cuda_device(document: HardwareDocument) -> CudaDevice:
     return device
 
 
-def install(registry: HardwareSpecRegistry | None = None) -> None:
-    """Register the CUDA schemas and documents into *registry*."""
-    into = HARDWARE_SPECS if registry is None else registry
-    into.register_schema(ARCHITECTURE_SCHEMA, build_cuda_architecture)
-    into.register_schema(DEVICE_SCHEMA, build_cuda_device)
-    into.install(SM90_ID, _PACKAGE, "nvidia_sm90.toml")
-    into.install(SM100_ID, _PACKAGE, "nvidia_sm100.toml")
-    into.install(H200_SXM_ID, _PACKAGE, "nvidia_h200_sxm.toml")
-    into.install(B200_SXM_ID, _PACKAGE, "nvidia_b200_sxm.toml")
-
-
-install()
-
-
 __all__ = [
     "ARCHITECTURE_SCHEMA",
     "B200_SXM_ID",
@@ -173,5 +156,4 @@ __all__ = [
     "SM90_ID",
     "build_cuda_architecture",
     "build_cuda_device",
-    "install",
 ]

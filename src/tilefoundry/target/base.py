@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.resources import files
+from pathlib import Path
 from types import MappingProxyType
-from typing import ClassVar, Mapping, TypeVar
+from typing import Any, ClassVar, Mapping, TypeVar
 
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target.facts import TopologyLimitFacts
+from tilefoundry.target.hardware.envelope import (
+    DuplicateRegistrationError,
+    HardwareDocument,
+    IncompatiblePairError,
+    ResolvedResource,
+    UnknownDocumentError,
+    UnknownSchemaError,
+    parse_document,
+)
 from tilefoundry.target.services import Analyzer, CodeGenerator, Scheduler
 from tilefoundry.utils.python_source import PythonExpr, dataclass_to_python
 
 FactsT = TypeVar("FactsT")
+SchemaBuilder = Callable[[HardwareDocument], Any]
 
 
 def _target_summary(target: object) -> str:
@@ -49,6 +62,90 @@ class Device:
 
     def to_python(self) -> PythonExpr:
         return dataclass_to_python(self, self._python_import_module())
+
+
+class HardwareSpec:
+    """One Target class's document formats and available products."""
+
+    def __init__(self, package: str, schemas: Mapping[str, SchemaBuilder]) -> None:
+        self._package = package
+        self._schemas = dict(schemas)
+        self._documents: dict[str, HardwareDocument] = {}
+        self._cache: dict[str, ResolvedResource] = {}
+        self._scanned = False
+
+    def _build(self, document: HardwareDocument) -> ResolvedResource:
+        try:
+            builder = self._schemas[document.schema]
+        except KeyError:
+            raise UnknownSchemaError(
+                f"{document.id}: unsupported schema {document.schema!r}; "
+                f"supported: {sorted(self._schemas)}"
+            ) from None
+        return ResolvedResource(
+            value=builder(document),
+            id=document.id,
+            digest=document.digest,
+            document=document,
+        )
+
+    def _scan(self) -> None:
+        if self._scanned:
+            return
+        for resource in files(self._package).iterdir():
+            if not resource.name.endswith(".toml"):
+                continue
+            document = parse_document(
+                resource.read_text(encoding="utf-8"),
+                origin_label=f"{self._package}/{resource.name}",
+            )
+            self._add(document)
+        self._scanned = True
+
+    def read(self, path: Path) -> ResolvedResource:
+        """Build a complete document without adding it to this Target's products."""
+        location = Path(path)
+        document = parse_document(
+            location.read_text(encoding="utf-8"), origin_label=str(location)
+        )
+        return self._build(document)
+
+    def _add(self, document: HardwareDocument) -> None:
+        if document.schema not in self._schemas:
+            raise UnknownSchemaError(
+                f"{document.id}: unsupported schema {document.schema!r}; "
+                f"supported: {sorted(self._schemas)}"
+            )
+        if document.id in self._documents:
+            raise DuplicateRegistrationError(
+                f"hardware document {document.id!r} is already registered"
+            )
+        self._documents[document.id] = document
+
+    def adopt(self, document: HardwareDocument) -> None:
+        """Add one document whose schema is owned by this Target."""
+        self._scan()
+        self._add(document)
+
+    def resolve(self, spec_id: str) -> ResolvedResource:
+        """Build one available product by exact document ID."""
+        self._scan()
+        try:
+            document = self._documents[spec_id]
+        except KeyError:
+            raise UnknownDocumentError(
+                f"no hardware document {spec_id!r}; available: {sorted(self._documents)}"
+            ) from None
+        resolved = self._cache.get(spec_id)
+        if resolved is None:
+            resolved = self._build(document)
+            self._cache[spec_id] = resolved
+        return resolved
+
+    def documents(self) -> Mapping[str, HardwareDocument]:
+        """Return this Target's available documents by ID."""
+        self._scan()
+        return MappingProxyType(self._documents)
 
 
 @dataclass(frozen=True)
@@ -204,12 +301,88 @@ def registered_targets() -> Mapping[str, type[Target]]:
     return MappingProxyType(_TARGET_CLASSES)
 
 
+def select(
+    value: Any,
+    base_type: type,
+    *,
+    role: str,
+    hardware: HardwareSpec,
+) -> ResolvedResource:
+    """Resolve an ID or path through one Target's spec, or retain a direct value."""
+    if isinstance(value, str):
+        try:
+            resolved = hardware.resolve(value)
+        except UnknownDocumentError:
+            for target_type in registered_targets().values():
+                other = getattr(target_type, "hardware", None)
+                if other is hardware or not isinstance(other, HardwareSpec):
+                    continue
+                if value in other.documents():
+                    raise UnknownDocumentError(
+                        f"{role} {value!r} is a hardware document owned by "
+                        f"{target_type.__name__}, not {role.partition('.')[0]}"
+                    ) from None
+            raise
+    elif isinstance(value, Path):
+        resolved = hardware.read(value)
+    elif isinstance(value, base_type):
+        return ResolvedResource(value=value)
+    else:
+        raise TypeError(
+            f"{role} must be an installed ID string, a document path, or a "
+            f"{base_type.__name__}; got {type(value).__name__}"
+        )
+    if not isinstance(resolved.value, base_type):
+        raise UnknownDocumentError(
+            f"{role} {resolved.id!r} builds a {type(resolved.value).__name__}, "
+            f"not a {base_type.__name__}"
+        )
+    return resolved
+
+
+def check_compatible(
+    architecture: ResolvedResource, device: ResolvedResource
+) -> None:
+    """Require that an architecture and device declare each other usable."""
+    if architecture.document is None or device.document is None:
+        raise IncompatiblePairError("compatibility requires two hardware documents")
+    if architecture.document.kind != "architecture":
+        raise IncompatiblePairError(
+            f"{architecture.id}: expected an architecture document, "
+            f"got kind {architecture.document.kind!r}"
+        )
+    if device.document.kind != "device":
+        raise IncompatiblePairError(
+            f"{device.id}: expected a device document, got kind {device.document.kind!r}"
+        )
+    device_allows = device.document.compatibility
+    architecture_allows = architecture.document.compatibility
+    if device_allows and architecture.id not in device_allows:
+        raise IncompatiblePairError(
+            f"device {device.id!r} declares compatibility with "
+            f"{list(device_allows)}, not {architecture.id!r}"
+        )
+    if architecture_allows and device.id not in architecture_allows:
+        raise IncompatiblePairError(
+            f"architecture {architecture.id!r} declares compatibility with "
+            f"{list(architecture_allows)}, not {device.id!r}"
+        )
+    if not device_allows and not architecture_allows:
+        raise IncompatiblePairError(
+            f"neither {architecture.id!r} nor {device.id!r} declares the pair "
+            "compatible; one side must name the other"
+        )
+
+
 __all__ = [
     "Architecture",
     "Device",
+    "HardwareSpec",
     "Target",
     "UnsupportedCapabilityError",
+    "check_compatible",
     "register_target",
     "registered_targets",
+    "select",
     "target_instance",
 ]

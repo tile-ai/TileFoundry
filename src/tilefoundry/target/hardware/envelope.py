@@ -110,6 +110,16 @@ class HardwareDocument:
             ) from None
 
 
+@dataclass(frozen=True)
+class ResolvedResource:
+    """One immutable hardware value and the document it came from."""
+
+    value: Any
+    id: str | None = None
+    digest: str | None = None
+    document: HardwareDocument | None = None
+
+
 def _leaf_from(path: str, table: dict[str, Any]) -> Fact:
     """One evidence leaf, validated against the generic leaf format."""
     has_value = "value" in table
@@ -268,6 +278,7 @@ __all__ = [
     "HardwareDocument",
     "HardwareSpecError",
     "IncompatiblePairError",
+    "ResolvedResource",
     "SchemaValidationError",
     "UnknownDocumentError",
     "UnknownSchemaError",

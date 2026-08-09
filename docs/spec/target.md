@@ -589,6 +589,11 @@ database, and the only place a hardware number is written. Each is a complete
 document in its own right; a target is the pair composed through a declared
 compatibility, never a single combined record.
 
+Each document belongs to the Target class that understands its versioned
+schema. The class declares one `HardwareSpec` containing its immutable schema
+builders and the package holding its built-in documents. There is no
+cross-backend hardware registry.
+
 ### 10.1 Document envelope
 
 ```toml
@@ -647,14 +652,20 @@ conditions = "No validated number."
 ### 10.2 Registry and resolution
 
 - constraints:
-  - `HardwareSpecRegistry` MUST resolve documents by exact ID. There MUST be no
-    search path, no overlay, and no partial document.
+  - A Target class that consumes hardware documents MUST declare one
+    `HardwareSpec`. Its package MUST contain that Target's built-in documents,
+    and its schema mapping MUST state every document format the Target accepts.
+  - A `HardwareSpec` MUST resolve its documents by exact ID. There MUST be no
+    cross-backend document table, search path, overlay, or partial document.
+    Built-in package documents MAY be scanned lazily, but resolution MUST NOT
+    depend on a previously constructed Target instance.
   - A schema name carries a version. Requiring a leaf a previous version did not
     MUST take a new version, because a document written against the old one no
     longer loads and the failure is otherwise a missing fact rather than a
     contract that moved.
-  - A target package MUST register its typed schemas and installed documents as
-    an import side effect, into the same shared registry.
+  - A Target's schema mapping is fixed by its class. A complete document MAY be
+    adopted as another product only when its schema is in that mapping; adding
+    another schema is adding a backend, not adding a hardware product.
   - A schema MAY validate the documents of several products when they state the
     same fact paths, and MUST build one value type from all of them. A product is
     what its document records, so a schema MUST NOT select a type by the identity
@@ -674,11 +685,12 @@ conditions = "No validated number."
     composed value, so a compiled artifact can name the exact resources it was
     built against. Editing any recorded value or its evidence MUST change the
     digest.
-  - A custom document MUST be loadable through an explicit path API, MUST be
-    complete, and MUST NOT enter the installed-ID namespace, so it can neither
-    shadow nor replace an installed resource.
-  - Unknown IDs, unknown schemas, unmodelled or malformed facts, malformed
-    envelopes, duplicate registrations, and incompatible pairs MUST each raise
+  - A Target constructor MUST accept a custom document through a filesystem
+    path. The document MUST be complete, retain its declared ID and digest, and
+    MUST NOT enter that Target's available-ID namespace, so it can neither
+    shadow nor replace an available resource.
+  - Unknown IDs, unsupported schemas, unmodelled or malformed facts, malformed
+    envelopes, duplicate document IDs, and incompatible pairs MUST each raise
     their own actionable diagnostic rather than one shared parse failure.
   - Reporting the resources behind a target MUST name both documents and their
     digests. A target composed from a directly supplied value has no document to

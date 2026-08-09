@@ -14,7 +14,7 @@ from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.target import Target
-from tilefoundry.target.amx.spec import installed_architecture
+from tilefoundry.target.amx.spec import APPLE_AMX_ID
 from tilefoundry.target.amx.target import AmxTarget
 from tilefoundry.target.base import target_instance
 
@@ -35,7 +35,7 @@ class StorageLevel:
 
 # The X/Y/Z register files are AMX ISA geometry, not a per-part figure, so the
 # level they form is read once off the installed architecture.
-_ISA = installed_architecture()
+_ISA = AmxTarget.hardware.resolve(APPLE_AMX_ID).value
 
 # An AMX operand is addressed as a register: A in X, B in Y, C in the Z
 # accumulator file, and one instance never reaches outside them.

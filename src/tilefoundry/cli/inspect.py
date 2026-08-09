@@ -8,7 +8,7 @@ from tilefoundry.cli.source import load_authored_ir, selected_target
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.target import CudaTarget, registered_targets
-from tilefoundry.target.hardware import HARDWARE_SPECS, format_capabilities, hardware_documents
+from tilefoundry.target.hardware import format_capabilities, hardware_documents
 
 
 def _grid_cta_count(ir: Module | Function) -> int | None:
@@ -25,7 +25,12 @@ def _grid_cta_count(ir: Module | Function) -> int | None:
 def _installed_capabilities() -> str:
     """Describe the hardware documents and target names available to a module."""
     documents = sorted(
-        (HARDWARE_SPECS.document(spec_id) for spec_id in HARDWARE_SPECS.installed_ids()),
+        (
+            document
+            for target_type in registered_targets().values()
+            if (hardware := getattr(target_type, "hardware", None)) is not None
+            for document in hardware.documents().values()
+        ),
         key=lambda document: (document.kind, document.id),
     )
     lines = ["Installed hardware documents:"]

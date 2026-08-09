@@ -6,7 +6,6 @@ from tilefoundry.target.hardware.envelope import (
     HardwareDocument,
     UnknownDocumentError,
 )
-from tilefoundry.target.hardware.registry import HARDWARE_SPECS
 
 
 def hardware_documents(target: object) -> tuple[HardwareDocument, HardwareDocument]:
@@ -27,8 +26,8 @@ def hardware_documents(target: object) -> tuple[HardwareDocument, HardwareDocume
             "composed from directly supplied values"
         )
     return (
-        HARDWARE_SPECS.document(architecture_id),
-        HARDWARE_SPECS.document(device_id),
+        type(target).hardware.documents()[architecture_id],
+        type(target).hardware.documents()[device_id],
     )
 
 

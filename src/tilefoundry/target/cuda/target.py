@@ -3,29 +3,42 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
 from tilefoundry.target.base import (
     Architecture,
     Device,
+    HardwareSpec,
     _BuiltinAnalysisTarget,
+    check_compatible,
     register_target,
+    select,
+)
+from tilefoundry.target.cuda.spec import (
+    ARCHITECTURE_SCHEMA,
+    DEVICE_SCHEMA,
+    build_cuda_architecture,
+    build_cuda_device,
 )
 from tilefoundry.target.facts import TopologyLimitFacts, facts_result
 from tilefoundry.target.hardware.envelope import IncompatiblePairError
-from tilefoundry.target.hardware.registry import check_compatible, select
 from tilefoundry.target.services import CodeGenerator, Scheduler
 from tilefoundry.utils.python_source import PythonExpr
 
 
-def _architecture_of(device: Device | str) -> str:
+def _architecture_of(device: Device | str | Path, hardware: HardwareSpec) -> str:
     """The architecture *device*'s own document declares, when it declares one."""
     if isinstance(device, Device):
         raise ValueError(
             "CudaTarget: a Device supplied directly carries no document to read a "
             "compatible architecture from; name the architecture as well"
         )
-    architectures = select(device, Device, role="CudaTarget.device").document.compatibility
+    document = select(
+        device, Device, role="CudaTarget.device", hardware=hardware
+    ).document
+    assert document is not None
+    architectures = document.compatibility
     if len(architectures) != 1:
         raise IncompatiblePairError(
             f"device {device!r} declares {list(architectures)} as compatible "
@@ -40,6 +53,13 @@ class CudaTarget(_BuiltinAnalysisTarget):
     """CUDA target composed from one device and the architecture it runs."""
 
     name: ClassVar[str] = "cuda"
+    hardware: ClassVar[HardwareSpec] = HardwareSpec(
+        package="tilefoundry.target.cuda.hardware",
+        schemas={
+            ARCHITECTURE_SCHEMA: build_cuda_architecture,
+            DEVICE_SCHEMA: build_cuda_device,
+        },
+    )
     architecture: Architecture = field(init=False)
     device: Device = field(init=False)
     # Identity and digest record where a value came from, not what it says, so
@@ -53,17 +73,22 @@ class CudaTarget(_BuiltinAnalysisTarget):
 
     def __init__(
         self,
-        device: Device | str,
-        architecture: Architecture | str | None = None,
+        device: Device | str | Path,
+        architecture: Architecture | str | Path | None = None,
         *,
         arch: str | None = None,
     ) -> None:
         if architecture is None:
-            architecture = _architecture_of(device)
+            architecture = _architecture_of(device, self.hardware)
         architecture = select(
-            architecture, Architecture, role="CudaTarget.architecture"
+            architecture,
+            Architecture,
+            role="CudaTarget.architecture",
+            hardware=self.hardware,
         )
-        device = select(device, Device, role="CudaTarget.device")
+        device = select(
+            device, Device, role="CudaTarget.device", hardware=self.hardware
+        )
         architecture_id, device_id = architecture.id, device.id
         if arch is not None and arch != architecture.value.name:
             raise ValueError(

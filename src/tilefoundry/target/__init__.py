@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from tilefoundry.target.amx import AmxTarget, AppleAmx, AppleM2Pro
-from tilefoundry.target.amx import spec as _amx_spec  # noqa: F401
 from tilefoundry.target.base import (
     Architecture,
     Device,

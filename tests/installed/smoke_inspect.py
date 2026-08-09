@@ -52,12 +52,11 @@ def test_inspect_capabilities_rejects_an_uninstalled_cuda_target(
             "from dataclasses import replace\n"
             "from tilefoundry.target import CudaTarget\n"
             "from tilefoundry.target.cuda.spec import SM90_ID\n"
-            "from tilefoundry.target.hardware import HARDWARE_SPECS",
         )
         .replace(
             'target=CudaTarget("nvidia.h200_sxm")',
             'target=CudaTarget("nvidia.h200_sxm", '
-            'architecture=replace(HARDWARE_SPECS.resolve(SM90_ID).value, '
+            'architecture=replace(CudaTarget.hardware.resolve(SM90_ID).value, '
             'name="sm_90_custom"))',
         ),
         encoding="utf-8",

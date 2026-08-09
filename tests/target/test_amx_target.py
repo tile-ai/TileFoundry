@@ -30,7 +30,6 @@ from tilefoundry.target.amx.atoms import (
     NEON_FMLA_4x4x1_F32,
     candidate_atoms,
 )
-from tilefoundry.target.hardware import HARDWARE_SPECS
 
 
 @func(target=AmxTarget())
@@ -252,8 +251,8 @@ def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got()
     assert device.performance_core_count == 8
     assert device.sm_count == 2
 
-    architecture_document = HARDWARE_SPECS.document("apple.amx")
-    device_document = HARDWARE_SPECS.document("apple.m2_pro")
+    architecture_document = AmxTarget.hardware.documents()["apple.amx"]
+    device_document = AmxTarget.hardware.documents()["apple.m2_pro"]
     assert device_document.fact("memory.unified.bandwidth").origin == "vendor"
     assert device_document.fact("compute.amx_unit_count").origin == "estimated"
     assert device_document.fact("throughput.amx.f32").origin == "measured"

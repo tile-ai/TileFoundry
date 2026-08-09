@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
+from tilefoundry.target.amx.spec import (
+    ARCHITECTURE_SCHEMA,
+    DEVICE_SCHEMA,
+    build_apple_amx,
+    build_apple_m2_pro,
+)
 from tilefoundry.target.base import (
     Architecture,
     Device,
+    HardwareSpec,
     _BuiltinAnalysisTarget,
+    check_compatible,
     register_target,
+    select,
 )
 from tilefoundry.target.facts import TopologyLimitFacts, facts_result
-from tilefoundry.target.hardware.registry import check_compatible, select
 from tilefoundry.target.services import Scheduler
 from tilefoundry.utils.python_source import PythonExpr
 
@@ -23,6 +32,13 @@ class AmxTarget(_BuiltinAnalysisTarget):
     """AMX target composed from one architecture and one device."""
 
     name: ClassVar[str] = "amx"
+    hardware: ClassVar[HardwareSpec] = HardwareSpec(
+        package="tilefoundry.target.amx.hardware",
+        schemas={
+            ARCHITECTURE_SCHEMA: build_apple_amx,
+            DEVICE_SCHEMA: build_apple_m2_pro,
+        },
+    )
     architecture: Architecture = field(init=False)
     device: Device = field(init=False)
     # Identity and digest record where a value came from, not what it says, so
@@ -36,8 +52,8 @@ class AmxTarget(_BuiltinAnalysisTarget):
 
     def __init__(
         self,
-        architecture: Architecture | str | None = None,
-        device: Device | str | None = None,
+        architecture: Architecture | str | Path | None = None,
+        device: Device | str | Path | None = None,
     ) -> None:
         from .spec import APPLE_AMX_ID, APPLE_M2_PRO_ID  # noqa: PLC0415
 
@@ -45,11 +61,13 @@ class AmxTarget(_BuiltinAnalysisTarget):
             APPLE_AMX_ID if architecture is None else architecture,
             Architecture,
             role="AmxTarget.architecture",
+            hardware=self.hardware,
         )
         device = select(
             APPLE_M2_PRO_ID if device is None else device,
             Device,
             role="AmxTarget.device",
+            hardware=self.hardware,
         )
         if architecture.id is not None and device.id is not None:
             check_compatible(architecture, device)

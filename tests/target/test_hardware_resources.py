@@ -24,11 +24,10 @@ from tilefoundry.target.amx import spec as amx_spec
 from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.cuda import spec as cuda_spec
 from tilefoundry.target.hardware import (
-    HARDWARE_SPECS,
     DocumentFormatError,
     DuplicateRegistrationError,
     EvidenceFormatError,
-    HardwareSpecRegistry,
+    HardwareSpec,
     IncompatiblePairError,
     SchemaValidationError,
     UnknownDocumentError,
@@ -67,7 +66,7 @@ def _document(old: str, new: str) -> str:
 
 def _hardware_text(resource: str) -> str:
     """The installed hardware document *resource* as authored."""
-    hardware = Path(cuda_spec.__file__).parent.parent / "hardware"
+    hardware = Path(cuda_spec.__file__).parent / "hardware"
     return (hardware / resource).read_text(encoding="utf-8")
 
 
@@ -84,8 +83,8 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     targets, and letting the resolved ID into equality would report identical
     hardware as "differing Target facts".
     """
-    architecture = HARDWARE_SPECS.document(_SM90)
-    device = HARDWARE_SPECS.document(_H200)
+    architecture = CudaTarget.hardware.documents()[_SM90]
+    device = CudaTarget.hardware.documents()[_H200]
     assert (architecture.kind, device.kind) == ("architecture", "device")
     assert device.compatibility == (_SM90,)
     assert not any(path.startswith("throughput.") for path in architecture.facts)
@@ -132,11 +131,11 @@ def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
     them all. What separates the two products is what their documents record, so
     a Blackwell target needs no type of its own to be a distinct value.
     """
-    architecture = HARDWARE_SPECS.document(_SM100)
-    device = HARDWARE_SPECS.document(_B200)
+    architecture = CudaTarget.hardware.documents()[_SM100]
+    device = CudaTarget.hardware.documents()[_B200]
     assert device.compatibility == (_SM100,)
-    assert architecture.schema == HARDWARE_SPECS.document(_SM90).schema
-    assert device.schema == HARDWARE_SPECS.document(_H200).schema
+    assert architecture.schema == CudaTarget.hardware.documents()[_SM90].schema
+    assert device.schema == CudaTarget.hardware.documents()[_H200].schema
 
     target = CudaTarget(_B200)
     hopper = CudaTarget(_H200)
@@ -153,32 +152,40 @@ def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
     # they cannot: the second is a statement about the hardware, so asking for it
     # fails rather than reading as an unpublished number.
     assert target.device.peak_for(DType.f4e2m1) == 9_000_000_000_000_000
-    assert HARDWARE_SPECS.document(_H200).fact("throughput.f4e2m1").status == (
+    assert CudaTarget.hardware.documents()[_H200].fact("throughput.f4e2m1").status == (
         "unavailable"
     )
     with pytest.raises(ValueError, match="no dense compute-throughput entry"):
         hopper.device.peak_for(DType.f4e2m1)
 
 
-def test_an_explicitly_loaded_document_stays_out_of_the_installed_namespace(
+def test_an_explicitly_loaded_document_stays_out_of_the_available_namespace(
     tmp_path: Path,
 ) -> None:
-    """AC-1-3. A custom document is loaded by path and must be complete; it
-    cannot shadow or join the installed IDs."""
-    registry = HardwareSpecRegistry()
-    cuda_spec.install(registry)
-    before = registry.installed_ids()
+    """A complete custom pair keeps provenance without joining available IDs."""
+    before = tuple(CudaTarget.hardware.documents())
+    architecture_path = tmp_path / "custom_sm90.toml"
+    architecture_path.write_text(
+        _hardware_text("nvidia_sm90.toml").replace(
+            'id = "nvidia.sm90"', 'id = "vendor.sm90_custom"'
+        )
+    )
+    device_path = tmp_path / "custom_h200.toml"
+    device_path.write_text(
+        _hardware_text("nvidia_h200_sxm.toml")
+        .replace('id = "nvidia.h200_sxm"', 'id = "vendor.h200_custom"')
+        .replace('architectures = ["nvidia.sm90"]', 'architectures = ["vendor.sm90_custom"]')
+    )
 
-    custom = tmp_path / "custom_sm90.toml"
-    text = _hardware_text("nvidia_sm90.toml")
-    custom.write_text(text.replace('id = "nvidia.sm90"', 'id = "vendor.sm90_custom"'))
-
-    resolved = registry.load_path(custom)
-    assert resolved.id == "vendor.sm90_custom"
-    assert resolved.value.max_threads_per_cta == 1024
-    assert registry.installed_ids() == before
+    target = CudaTarget(device_path, architecture_path)
+    assert target.architecture_id == "vendor.sm90_custom"
+    assert target.device_id == "vendor.h200_custom"
+    assert re.fullmatch(r"[0-9a-f]{64}", target.architecture_digest)
+    assert re.fullmatch(r"[0-9a-f]{64}", target.device_digest)
+    assert target.architecture.max_threads_per_cta == 1024
+    assert tuple(CudaTarget.hardware.documents()) == before
     with pytest.raises(UnknownDocumentError):
-        registry.resolve("vendor.sm90_custom")
+        CudaTarget.hardware.resolve("vendor.sm90_custom")
 
 
 @pytest.mark.parametrize(
@@ -240,31 +247,21 @@ def test_a_memory_owner_must_use_the_target_vocabulary() -> None:
         cuda_spec.build_cuda_device(parse_document(document, origin_label="bad-owner"))
 
 
-def test_registration_and_resolution_failures_are_each_distinguishable() -> None:
-    """AC-1-2. Unknown IDs, unknown schemas, duplicate registrations, and
-    incompatible pairs are separate diagnostics."""
-    registry = HardwareSpecRegistry()
-    cuda_spec.install(registry)
+def test_resolution_failures_are_each_distinguishable() -> None:
+    """Unknown IDs, schemas, duplicate IDs, and incompatible pairs differ."""
+    with pytest.raises(UnknownDocumentError, match="no hardware document"):
+        CudaTarget.hardware.resolve("nvidia.sm70")
 
-    with pytest.raises(UnknownDocumentError, match="no installed hardware document"):
-        registry.resolve("nvidia.sm70")
+    document = CudaTarget.hardware.documents()[_SM90]
     with pytest.raises(DuplicateRegistrationError, match="already registered"):
-        cuda_spec.install(registry)
-    with pytest.raises(DuplicateRegistrationError, match="already installed"):
-        registry.install(_SM90, "tilefoundry.target.hardware", "nvidia_sm90.toml")
+        CudaTarget.hardware.adopt(document)
 
-    unschemed = HardwareSpecRegistry()
-    unschemed.install("test.device", "tilefoundry.target.hardware", "nvidia_sm90.toml")
-    with pytest.raises(UnknownDocumentError, match="declares id="):
-        unschemed.resolve("test.device")
-
-    bare = HardwareSpecRegistry()
-    bare.install(_SM90, "tilefoundry.target.hardware", "nvidia_sm90.toml")
-    with pytest.raises(UnknownSchemaError, match="no registered schema"):
-        bare.resolve(_SM90)
+    unsupported = HardwareSpec("tilefoundry.target.cuda.hardware", {})
+    with pytest.raises(UnknownSchemaError, match="unsupported schema"):
+        unsupported.resolve(_SM90)
 
     with pytest.raises(IncompatiblePairError, match="declares compatibility with"):
-        AmxTarget(architecture="apple.amx", device=_H200)
+        CudaTarget(_H200, architecture=_SM100)
 
 
 def test_no_installed_number_is_repeated_as_a_python_default() -> None:
@@ -277,20 +274,21 @@ def test_no_installed_number_is_repeated_as_a_python_default() -> None:
         amx_spec.APPLE_AMX_ID,
         amx_spec.APPLE_M2_PRO_ID,
     ):
-        built = HARDWARE_SPECS.resolve(value_type).value
+        hardware = AmxTarget.hardware if value_type.startswith("apple.") else CudaTarget.hardware
+        built = hardware.resolve(value_type).value
         with pytest.raises(TypeError, match="required positional argument"):
             type(built)()
 
     # The one figure that had no installed record is now recorded, so the
     # public peak stays available without a Python literal behind it.
     assert CudaTarget("nvidia.h200_sxm").device.peak_for(DType.f32) == 67_000_000_000_000
-    assert HARDWARE_SPECS.document(_H200).fact("throughput.f32").origin == "vendor"
+    assert CudaTarget.hardware.documents()[_H200].fact("throughput.f32").origin == "vendor"
 
 
 def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
     """AC-1-5. An unavailable fact is recorded as such rather than carrying a
     placeholder string, and hardware documents hold no compiler policy."""
-    architecture = HARDWARE_SPECS.document(_SM90)
+    architecture = CudaTarget.hardware.documents()[_SM90]
     unavailable = architecture.fact("memory.shared.bandwidth")
 
     assert not unavailable.available
@@ -315,7 +313,8 @@ def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
         "apple.m2_pro": {"memory.unified.owner": "target"},
     }
     for spec_id, expected_owners in owners.items():
-        document = HARDWARE_SPECS.document(spec_id)
+        hardware = AmxTarget.hardware if spec_id.startswith("apple.") else CudaTarget.hardware
+        document = hardware.documents()[spec_id]
         assert not any("policy" in path for path in document.facts)
         assert not any("topology" in path for path in document.facts)
         assert {
