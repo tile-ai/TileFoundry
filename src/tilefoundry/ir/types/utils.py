@@ -192,7 +192,7 @@ def _local_layout_shape(
         and mesh_axis < len(mesh_shape)
         and mesh_shape[mesh_axis] is None
     )
-    if len(launch_split_axes) > 1:
+    if topology_level <= selected_level and len(launch_split_axes) > 1:
         raise ValueError(
             f"local_type_of: mesh {layout.mesh!r} has launch-provided extents "
             f"on Split axes {launch_split_axes}; topology level {topology.name!r} "
