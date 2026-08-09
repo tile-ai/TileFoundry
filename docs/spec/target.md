@@ -42,6 +42,23 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
 ```
 
 - constraints:
+  - A custom Target MUST use one of two modes. A document-backed product adds
+    complete Architecture and Device documents to an existing Target class; it
+    MUST NOT add a product-specific Target subclass. A new backend implements
+    the Target interface directly and answers its hardware through `get_facts`;
+    it need not expose Architecture, Device, or hardware documents.
+  - Inheriting bare Architecture or Device values and injecting them into an
+    existing document-backed Target is not a supported custom Target mode. It
+    bypasses both document schema validation and the `facts_result` projection
+    boundary.
+  - `Target.get_analyzer` MUST select the standard compute-cost, memory,
+    roofline, and timeline analyzers for every Target. Those algorithms consume
+    only requested Facts, so a backend reuses them by answering `get_facts`, not
+    by inheriting a backend-specific analysis base class. A missing Facts
+    projection MUST fail when the selected analyzer requests it.
+  - `facts_result`, `TargetFactsError`, `TopologyLimitFacts`,
+    `MemoryHierarchyFacts`, `ThroughputFacts`, and `ParallelCapacityFacts` MUST
+    be importable from `tilefoundry.target` for provider implementations.
   - `name` MUST be a non-empty class variable declared directly by every
     concrete registered Target class. It is the stable class registration
     identity, not a backend-family selector and not an instance value field.

@@ -15,7 +15,8 @@ from dataclasses import dataclass, replace
 import pytest
 
 from tests.fixtures.demo_ir import build_demo
-from tilefoundry import CompilerOptions, build, func, jit, lower, module
+from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
+from tilefoundry import CompilerOptions, DType, build, func, jit, lower, module
 from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul
@@ -29,9 +30,14 @@ from tilefoundry.target import (
     AmxTarget,
     CpuTarget,
     CudaTarget,
+    MemoryHierarchyFacts,
+    ParallelCapacityFacts,
     Target,
+    TargetFactsError,
+    ThroughputFacts,
     TopologyLimitFacts,
     UnsupportedCapabilityError,
+    facts_result,
     register_target,
     registered_targets,
     validate_cuda_topology_levels,
@@ -136,6 +142,41 @@ def test_target_registration_and_service_annotations_resolve() -> None:
         Target.get_code_generator,
     ):
         assert typing.get_type_hints(getter)
+
+
+def test_document_free_target_projects_facts_and_inherits_standard_analysis() -> None:
+    target = VendorNpuTarget()
+
+    assert target.get_analyzer("roofline").selector == "roofline"
+    assert target.get_facts(TopologyLimitFacts, "core") == TopologyLimitFacts(
+        "core", 256
+    )
+    memory = target.get_facts(MemoryHierarchyFacts)
+    assert memory.explicit("gmem").capacity_bytes == 64_000_000_000
+    assert target.get_facts(ThroughputFacts).peak_for(DType.f32) == 2_000_000_000_000_000
+    assert target.get_facts(ParallelCapacityFacts) == ParallelCapacityFacts("core", 16)
+    target.validate_program_topology(Topology("core", 256))
+    with pytest.raises(ValueError, match="1 <= extent <= 256"):
+        target.validate_program_topology(Topology("core", 257))
+
+
+def test_document_free_target_enforces_projection_and_capability_boundaries() -> None:
+    class BrokenFactsTarget(Target):
+        name = "tests.target.broken_facts"
+
+        def get_facts(self, facts_type: type, query: object | None = None):
+            return facts_result(self, facts_type, object())
+
+    target = VendorNpuTarget()
+
+    with pytest.raises(
+        TargetFactsError,
+        match="BrokenFactsTarget: Facts projection for ThroughputFacts returned object",
+    ):
+        BrokenFactsTarget().get_facts(ThroughputFacts)
+    with pytest.raises(UnsupportedCapabilityError) as error:
+        target.get_code_generator()
+    assert str(error.value) == "VendorNpuTarget (vendor.npu): no code generator"
 
 
 def test_cuda_mesh_topology_validation_uses_the_emission_target() -> None:

@@ -179,6 +179,11 @@ class Target:
 
     def get_analyzer(self, selector: str) -> Analyzer:
         """Return the analysis service selected by this concrete Target."""
+        from tilefoundry.analysis.registry import builtin_analyzer  # noqa: PLC0415
+
+        analyzer = builtin_analyzer(selector)
+        if analyzer is not None:
+            return analyzer
         raise UnsupportedCapabilityError(
             f"{_target_summary(self)}: no analyzer for {selector!r}"
         )
@@ -237,18 +242,6 @@ class Target:
                 f"{target_summary}: topology {topology.name!r} extent {topology.size} "
                 f"must satisfy 1 <= extent <= {limit}"
             )
-
-
-class _BuiltinAnalysisTarget(Target):
-    """Target base for backends that serve the standard analysis families."""
-
-    def get_analyzer(self, selector: str) -> Analyzer:
-        from tilefoundry.analysis.registry import builtin_analyzer  # noqa: PLC0415
-
-        analyzer = builtin_analyzer(selector)
-        if analyzer is not None:
-            return analyzer
-        return super().get_analyzer(selector)
 
 
 def target_instance(value: object, *, subject: str = "target") -> Target:

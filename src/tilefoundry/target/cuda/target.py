@@ -10,9 +10,9 @@ from tilefoundry.target.base import (
     Architecture,
     Device,
     HardwareSpec,
+    Target,
     _architecture_of,
     _available_device_ids,
-    _BuiltinAnalysisTarget,
     check_compatible,
     register_target,
     select,
@@ -31,7 +31,7 @@ from tilefoundry.utils.python_source import PythonExpr
 
 @register_target
 @dataclass(frozen=True, init=False)
-class CudaTarget(_BuiltinAnalysisTarget):
+class CudaTarget(Target):
     """CUDA target composed from one device and the architecture it runs."""
 
     name: ClassVar[str] = "cuda"

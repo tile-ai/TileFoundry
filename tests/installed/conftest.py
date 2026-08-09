@@ -67,7 +67,6 @@ class MineTwin:
         return x * x
 '''
 
-# CpuTarget registers no analysis and no scheduling algorithm.
 _CMINE_MODEL = '''\
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor

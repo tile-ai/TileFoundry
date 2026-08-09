@@ -14,8 +14,26 @@ from tilefoundry.target.base import (
 from tilefoundry.target.cpu import CpuTarget
 from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.cuda.spec import H200_SXM_ID
-from tilefoundry.target.facts import TopologyLimitFacts
+from tilefoundry.target.facts import (
+    TargetFactsError,
+    TopologyLimitFacts,
+    facts_result,
+)
 from tilefoundry.target.services import Analyzer, Scheduler
+
+_ANALYSIS_FACTS = {
+    "MemoryHierarchyFacts",
+    "ParallelCapacityFacts",
+    "ThroughputFacts",
+}
+
+
+def __getattr__(name: str):
+    if name in _ANALYSIS_FACTS:
+        from tilefoundry.analysis import facts  # noqa: PLC0415
+
+        return getattr(facts, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _cuda_fallback() -> CudaTarget:
@@ -52,11 +70,16 @@ __all__ = [
     "CudaDevice",
     "CudaTarget",
     "Device",
+    "MemoryHierarchyFacts",
+    "ParallelCapacityFacts",
     "Scheduler",
     "Target",
+    "TargetFactsError",
     "TopologyLimitFacts",
+    "ThroughputFacts",
     "UnsupportedCapabilityError",
     "default_target",
+    "facts_result",
     "register_target",
     "registered_targets",
     "validate_cuda_topology_levels",
