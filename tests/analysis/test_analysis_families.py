@@ -433,8 +433,8 @@ def test_an_evaluator_that_misses_an_operand_is_refused(monkeypatch) -> None:
 
 
 def test_memory_holds_a_weight_resident_past_its_last_reader() -> None:
-    """AC-1-2: a constant weight is never reclaimable within the function, while
-    an ordinary value is live only between its definition and its last use."""
+    """A constant weight is never reclaimable within the function, while an
+    ordinary value is live only between its definition and its last use."""
     entry = _WeightedAdd.entry_function()
     analyze(_WeightedAdd, entry, analysis="memory")
 
@@ -478,7 +478,7 @@ def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
 
 
 def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None:
-    """AC-1-3: an over-full cache costs speed, so the analysis still succeeds.
+    """An over-full cache costs speed, so the analysis still succeeds.
 
     And it is only reported where the comparison means something. A per-SM
     capacity set against a whole-device footprint exceeds it for almost any
@@ -496,8 +496,8 @@ def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None
 
 
 def test_a_shared_block_reports_what_the_program_leaves_the_cache() -> None:
-    """AC-1-5: the sharing edge is what makes L1's usable size depend on the
-    program, and that division is reportable without any working set."""
+    """The sharing edge makes L1's usable size depend on the program, and that
+    division is reportable without any working set."""
     _, entry = _run(_modest_shared, "memory")
 
     record = get_metadata(entry, MemoryMetadata)
@@ -513,8 +513,7 @@ def test_a_shared_block_reports_what_the_program_leaves_the_cache() -> None:
 
 
 def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> None:
-    """AC-1-4: the bound follows whatever compute-cost recorded, at the rate the
-    target states.
+    """The bound follows whatever compute-cost recorded, at the target's rate.
 
     Aggregating the work first is what keeps the bound a lower bound. Each call's
     own bound rounds up to whole nanoseconds; adding those up would charge the
@@ -584,7 +583,7 @@ def test_a_reshard_ends_the_execution_unit_on_both_sides() -> None:
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:
-    """AC-1-5: L1 caches L2, L2 caches GMEM, and L1 shares a block with SMEM.
+    """L1 caches L2, L2 caches GMEM, and L1 shares a block with SMEM.
 
     The shared edge is what makes the graph non-hierarchical: smem is an
     addressable level and l1 a cache, yet neither contains the other. A machine
