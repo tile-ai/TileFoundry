@@ -334,7 +334,7 @@ def test_a_launch_provided_topology_uses_its_mesh_layout_for_analysis() -> None:
 def test_analysis_refuses_a_position_count_for_a_multi_topology_mesh() -> None:
     with pytest.raises(
         AnalysisError,
-        match="one mesh axis names multiple topology levels",
+        match="one mesh names multiple topology levels",
     ):
         _run(_multi_topology_mesh, "compute-cost")
 

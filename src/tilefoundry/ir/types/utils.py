@@ -174,21 +174,19 @@ def _local_layout_shape(
     }
     if len(layout.mesh.topologies) > 1:
         raise ValueError(
-            "local_type_of: one mesh axis names multiple topology levels; "
+            "local_type_of: one mesh names multiple topology levels; "
             "a level boundary cannot assign its position count"
         )
+    (topology,) = layout.mesh.topologies
+    resolved = declared.get(topology.name)
+    if resolved is None:
+        raise ValueError(
+            f"local_type_of: shard uses undeclared topology level {topology.name!r}"
+        )
+    topology_level, resolved_extent = resolved
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
-        if mesh_axis >= len(layout.mesh.topologies):
-            raise ValueError("local_type_of: shard attribute exceeds mesh rank")
-        topology = layout.mesh.topologies[mesh_axis]
-        resolved = declared.get(topology.name)
-        if resolved is None:
-            raise ValueError(
-                f"local_type_of: shard uses undeclared topology level {topology.name!r}"
-            )
-        topology_level, resolved_extent = resolved
         if topology_level > selected_level:
             continue
         if mesh_axis >= len(layout.mesh.layout.shape):

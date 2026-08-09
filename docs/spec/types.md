@@ -123,6 +123,11 @@ def local_type_of(
     is launch-provided MAY use the corresponding resolved topology extent, and
     that division MUST round up. A stated static extent that does not divide the
     split dimension MUST still raise.
+  - Every axis of a Mesh carrying one topology MUST be read at that topology
+    level. A Mesh carrying multiple topologies remains a valid Mesh, but local
+    projection MUST reject it when asking for a position count by topology name
+    rather than assign one of its layout axes to a guessed level
+    ([shard §5](./shard.md#5-mesh)).
   - The result MUST remain an ordinary IR Type and MUST NOT introduce a
     schedule-specific tensor type.
   - Unresolved layouts and local extents that are not concrete non-negative

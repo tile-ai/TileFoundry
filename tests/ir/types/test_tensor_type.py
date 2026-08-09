@@ -120,6 +120,25 @@ def test_local_type_preserves_canonical_split_projection(
     ).shape == expected
 
 
+def test_local_type_projects_every_axis_of_a_single_topology_mesh() -> None:
+    mesh = Mesh(
+        topologies=(Topology("cta", 32),),
+        layout=Layout(shape=(4, 8), strides=(8, 1)),
+    )
+    layout = ShardLayout(
+        layout=Layout(shape=(16, 64), strides=(64, 1)),
+        attrs=(Split(0), Split(1)),
+        mesh=mesh,
+    )
+    tensor = TensorType(shape=(16, 64), dtype=DType.f32, layout=layout, storage="gmem")
+
+    local = local_type_of(
+        tensor, level="cta", topologies=(Topology("cta", 32),)
+    )
+
+    assert local.shape == (4, 8)
+
+
 @pytest.mark.parametrize(("shape", "extent"), [(1024, 132), (64, 128)])
 def test_canonical_shard_layout_keeps_rejecting_non_divisible_splits(
     shape: int, extent: int

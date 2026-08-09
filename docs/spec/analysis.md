@@ -745,6 +745,10 @@ def analyze(
 ### 3.1 Target-selected Analyzers
 
 ```python
+AnalysisCallable = Callable[
+    [Module, Function, Target, str | None, object | None], None
+]
+
 class Analyzer:
     """Describe one Target-selected analysis.
 
@@ -766,6 +770,9 @@ class Target:
 ```
 
 - constraints:
+  - `AnalysisCallable` MUST receive the Module, Function, exact Target, resolved
+    topology level, and caller options in that order. The level MAY be `None`
+    only when the Module declares no topology; options MAY be `None`.
   - Analyze MUST obtain every root and dependency from the same exact Target
     instance through `get_analyzer`.
   - A Target subclass MUST inherit its base Analyzers through normal Python
