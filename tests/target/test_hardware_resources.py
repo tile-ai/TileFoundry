@@ -22,6 +22,7 @@ from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
 from tilefoundry.ir.types import DType
 from tilefoundry.target.amx import AmxTarget
 from tilefoundry.target.amx import spec as amx_spec
+from tilefoundry.target.base import Architecture, Device
 from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.cuda import spec as cuda_spec
 from tilefoundry.target.hardware import (
@@ -328,7 +329,7 @@ def test_resolution_failures_are_each_distinguishable() -> None:
         CudaTarget(_SM90)
     assert str(wrong_kind.value) == (
         "CudaTarget.device got hardware document 'nvidia.sm90', which builds "
-        "CudaArchitecture; expected Device"
+        "CudaArchitecture; expected CudaDevice"
     )
 
     document = CudaTarget.hardware.documents()[_SM90]
@@ -341,6 +342,51 @@ def test_resolution_failures_are_each_distinguishable() -> None:
 
     with pytest.raises(IncompatiblePairError, match="declares compatibility with"):
         CudaTarget(_H200, architecture=_SM100)
+
+
+class _BareArchitecture(Architecture):
+    pass
+
+
+class _BareDevice(Device):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("construct", "message"),
+    [
+        pytest.param(
+            lambda: CudaTarget(_H200, architecture=_BareArchitecture()),
+            "CudaTarget.architecture must be an installed ID string, a document "
+            "path, or a CudaArchitecture; got _BareArchitecture",
+            id="cuda-architecture",
+        ),
+        pytest.param(
+            lambda: CudaTarget(_BareDevice()),
+            "CudaTarget.device must be an installed ID string, a document path, "
+            "or a CudaDevice; got _BareDevice",
+            id="cuda-device",
+        ),
+        pytest.param(
+            lambda: AmxTarget(architecture=_BareArchitecture()),
+            "AmxTarget.architecture must be an installed ID string, a document "
+            "path, or an AppleAmx; got _BareArchitecture",
+            id="amx-architecture",
+        ),
+        pytest.param(
+            lambda: AmxTarget(_BareDevice()),
+            "AmxTarget.device must be an installed ID string, a document path, "
+            "or an AppleM2Pro; got _BareDevice",
+            id="amx-device",
+        ),
+    ],
+)
+def test_document_backends_reject_bare_projection_value_markers(
+    construct, message: str
+) -> None:
+    with pytest.raises(TypeError) as rejected:
+        construct()
+    assert str(rejected.value) == message
 
 
 def test_no_installed_number_is_repeated_as_a_python_default() -> None:

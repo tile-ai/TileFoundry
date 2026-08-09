@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+from tilefoundry.target.amx.architecture import AppleAmx
+from tilefoundry.target.amx.device import AppleM2Pro
 from tilefoundry.target.amx.spec import (
     ARCHITECTURE_SCHEMA,
     DEVICE_SCHEMA,
@@ -78,18 +80,19 @@ class AmxTarget(Target):
         if architecture is None:
             architecture = _architecture_of(
                 device,
+                device_type=AppleM2Pro,
                 role="AmxTarget.device",
                 hardware=self.hardware,
             )
         architecture = select(
             architecture,
-            Architecture,
+            AppleAmx,
             role="AmxTarget.architecture",
             hardware=self.hardware,
         )
         device = select(
             device,
-            Device,
+            AppleM2Pro,
             role="AmxTarget.device",
             hardware=self.hardware,
         )

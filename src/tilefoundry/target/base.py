@@ -354,9 +354,10 @@ def select(
     elif isinstance(value, base_type):
         return ResolvedResource(value=value)
     else:
+        article = "an" if base_type.__name__[0].lower() in "aeiou" else "a"
         raise TypeError(
-            f"{role} must be an installed ID string, a document path, or a "
-            f"{base_type.__name__}; got {type(value).__name__}"
+            f"{role} must be an installed ID string, a document path, or "
+            f"{article} {base_type.__name__}; got {type(value).__name__}"
         )
     if not isinstance(resolved.value, base_type):
         raise UnknownDocumentError(
@@ -382,19 +383,20 @@ def _available_device_ids(hardware: HardwareSpec) -> tuple[str, ...]:
 def _architecture_of(
     device: Any,
     *,
+    device_type: type[Device],
     role: str,
     hardware: HardwareSpec,
 ) -> str:
     """Return the sole architecture declared by one device document."""
     target_name = role.partition(".")[0]
-    if isinstance(device, Device):
+    if isinstance(device, device_type):
         raise ValueError(
-            f"{target_name}: a Device supplied directly carries "
+            f"{target_name}: a {device_type.__name__} supplied directly carries "
             "no document to read a compatible architecture from; name the "
             "architecture as well"
         )
     architectures = select(
-        device, Device, role=role, hardware=hardware
+        device, device_type, role=role, hardware=hardware
     ).document.compatibility
     if len(architectures) != 1:
         raise IncompatiblePairError(

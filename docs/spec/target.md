@@ -101,7 +101,14 @@ class Architecture:
 ```
 
 - constraints:
-  - Concrete architecture values MUST be immutable.
+  - `Architecture` is a Target-level marker for the architecture-side value
+    passed into a Facts projection and for its Python reconstruction support;
+    it is not a provider extension point.
+  - A document-backed Target MUST accept direct values only through its
+    backend-specific concrete Architecture type. A further product adds a
+    document of that backend's schema; a further backend implements `Target`
+    and `get_facts` directly.
+  - Concrete backend architecture values MUST be immutable.
   - `name` MUST be the stable architecture identity used by compilation.
   - `max_threads_per_cta` MUST describe the architecture's static CTA thread
     limit when the architecture has a CTA thread level.
@@ -117,7 +124,14 @@ class Device:
 ```
 
 - constraints:
-  - Concrete device values MUST be immutable and describe one device.
+  - `Device` is a Target-level marker for the device-side value passed into a
+    Facts projection and for its Python reconstruction support; it is not a
+    provider extension point.
+  - A document-backed Target MUST accept direct values only through its
+    backend-specific concrete Device type. A further product adds a document
+    of that backend's schema; a further backend implements `Target` and
+    `get_facts` directly.
+  - Concrete backend device values MUST be immutable and describe one device.
   - `name` MUST be the stable product identity.
   - Device-specific capacity, bandwidth, and compute-throughput facts belong
     to concrete subclasses.
@@ -316,14 +330,6 @@ class CudaArchitecture(Architecture):
   - No field MAY carry a default: every value comes from the installed document
     ([§10](#10-installed-hardware-resources)), so the type declares shape and
     never content.
-  - A provider MAY subclass it to carry a fact of its own hardware that this
-    shape does not model. The added fields are subject to the same rule: they
-    state what a document records, not a number written in Python.
-  - Any value a CUDA Target projects Facts from MUST answer for every field
-    declared here, whether it subclasses this type or `Architecture` directly
-    ([§1.1](#11-architecture)). The projection reads them by name, so a value
-    missing one is a Facts request that fails rather than a level reported
-    without a capacity.
 
 #### 4.1.1 SM90
 

@@ -17,6 +17,8 @@ from tilefoundry.target.base import (
     register_target,
     select,
 )
+from tilefoundry.target.cuda.architecture import CudaArchitecture
+from tilefoundry.target.cuda.device import CudaDevice
 from tilefoundry.target.cuda.spec import (
     ARCHITECTURE_SCHEMA,
     DEVICE_SCHEMA,
@@ -77,17 +79,18 @@ class CudaTarget(Target):
         if architecture is None:
             architecture = _architecture_of(
                 device,
+                device_type=CudaDevice,
                 role="CudaTarget.device",
                 hardware=self.hardware,
             )
         architecture = select(
             architecture,
-            Architecture,
+            CudaArchitecture,
             role="CudaTarget.architecture",
             hardware=self.hardware,
         )
         device = select(
-            device, Device, role="CudaTarget.device", hardware=self.hardware
+            device, CudaDevice, role="CudaTarget.device", hardware=self.hardware
         )
         architecture_id, device_id = architecture.id, device.id
         if arch is not None and arch != architecture.value.name:
