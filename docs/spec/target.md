@@ -704,6 +704,18 @@ conditions = "No validated number."
   - A Target's schema mapping is fixed by its class. A complete document MAY be
     adopted as another product only when its schema is in that mapping; adding
     another schema is adding a backend, not adding a hardware product.
+  - Explicitly registered documents MUST be routed to the one registered Target
+    class that declares their schema in its own `HardwareSpec`. An inherited
+    reference to another Target's `HardwareSpec` MUST NOT claim that schema.
+    Removing such a document MUST discard its resolved cache entry as well as
+    its ID, without changing the Target's built-in package data.
+  - An adopted device document MUST NOT become available until its declared
+    architecture document is present in the same `HardwareSpec`. Explicit
+    registration MUST reject that incomplete pair and name the architecture
+    document required first.
+  - Device document IDs and every provider Target identity share one uniqueness
+    boundary. A collision MUST fail before persistent registration and name the
+    existing Target value; it MUST NOT choose one source by load order.
   - A schema MAY validate the documents of several products when they state the
     same fact paths, and MUST build one value type from all of them. A product is
     what its document records, so a schema MUST NOT select a type by the identity

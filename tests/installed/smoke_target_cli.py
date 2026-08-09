@@ -7,11 +7,16 @@ def test_target_describes_its_commands(tf) -> None:
     done = tf("target")
     assert done.returncode == 0, done.stderr
     assert done.stdout.startswith(
-        "tilefoundry target — list available targets, or show one of them\n"
+        "tilefoundry target — list, show, add, or remove compilation targets\n"
     )
-    assert "Usage:\n  tilefoundry target <command> [options]\n" in done.stdout
-    assert "list  list every available target" in done.stdout
-    assert "show  show the documents retained" in done.stdout
+    assert (
+        "Usage:\n  tilefoundry [--registry PATH] target <command> [options]\n"
+        in done.stdout
+    )
+    assert "list    list every available target" in done.stdout
+    assert "show    show the documents retained" in done.stdout
+    assert "add     add one Target provider or hardware document" in done.stdout
+    assert "remove  remove one entry shown by target list" in done.stdout
     assert done.stderr == ""
 
 

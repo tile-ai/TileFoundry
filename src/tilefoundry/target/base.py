@@ -72,6 +72,7 @@ class HardwareSpec:
         self._schemas = dict(schemas)
         self._documents: dict[str, HardwareDocument] = {}
         self._cache: dict[str, ResolvedResource] = {}
+        self._adopted: set[str] = set()
         self._scanned = False
 
     def _build(self, document: HardwareDocument) -> ResolvedResource:
@@ -126,6 +127,20 @@ class HardwareSpec:
         """Add one document whose schema is owned by this Target."""
         self._scan()
         self._add(document)
+        self._adopted.add(document.id)
+
+    def discard(self, document_id: str) -> HardwareDocument | None:
+        """Remove one adopted document without affecting built-in package data."""
+        self._scan()
+        if document_id not in self._adopted:
+            return None
+        self._adopted.remove(document_id)
+        self._cache.pop(document_id, None)
+        return self._documents.pop(document_id, None)
+
+    def supports_schema(self, schema: str) -> bool:
+        """Whether this Target owns the typed builder for *schema*."""
+        return schema in self._schemas
 
     def resolve(self, spec_id: str) -> ResolvedResource:
         """Build one available product by exact document ID."""
@@ -302,6 +317,14 @@ def register_target(target_type: type[TargetT]) -> type[TargetT]:
 def registered_targets() -> Mapping[str, type[Target]]:
     """Return a read-only view of registered Target classes by name."""
     return MappingProxyType(_TARGET_CLASSES)
+
+
+def _unregister_target(target_type: type[Target]) -> None:
+    """Remove one exact provider class while undoing a persisted module load."""
+    name = target_type.name
+    if _TARGET_CLASSES.get(name) is target_type:
+        _TARGET_CLASSES.pop(name)
+        _TARGET_PROVIDERS.pop(name)
 
 
 def select(

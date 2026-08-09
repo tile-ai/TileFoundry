@@ -385,7 +385,9 @@ decided different things.
 
 `target list` prints every Target value constructible in the current
 environment. Each row contains its exact `identity` and a Python expression
-that reconstructs an equal value; the required imports follow the rows.
+that reconstructs an equal value; the required imports follow the rows. Values
+made available by an explicit addition are marked, and the persistent entries
+and their absolute sources are listed separately.
 
 `target show IDENTITY` addresses those same rows by exact identity. For a
 document-backed Target it prints the architecture and device documents retained
@@ -399,6 +401,35 @@ attempt to enumerate `get_facts`: a Target exposes facts on demand but has no
 interface that claims to list every Facts projection it supports.
 
 - constraints:
+  - Target discovery MUST be an explicit `target add` operation. Installing a
+    Python distribution MUST NOT implicitly register a Target through package
+    metadata or entry points.
+  - `target add --document PATH` MUST parse a complete hardware document, find
+    the Target that owns its schema, validate and adopt it, and persist its
+    absolute source path and content digest. Adding a device whose declared
+    architecture is unavailable MUST fail naming the architecture to add first.
+  - Without `--document`, `target add` MUST import a module name unless the
+    argument ends in `.py` or names an existing file. A file source MUST be
+    stored as an absolute path, executed on every command that loads the
+    registry, and reported as such when added.
+  - Every command MUST replay the registry before doing its own work, so an
+    added Target is equally available to inspection, analysis, and scheduling.
+    A missing or changed source MUST produce a warning naming that entry while
+    valid entries continue to load and the requested command continues.
+  - The default writable registry MUST be
+    `<sys.prefix>/share/tilefoundry/registry.toml`. It MUST NOT use checkout
+    data-file discovery or a user-global directory. `--registry PATH` MUST
+    override it without reading or writing the default path.
+  - A document entry MUST retain its original bytes at its source: replay MUST
+    compare the content digest and MUST NOT silently adopt changed contents or
+    store a private copy. Adding the document again is the explicit update.
+  - Every available Target identity MUST be unique across registered provider
+    classes and device documents. A document ID already in a `HardwareSpec`
+    MUST retain the document-duplicate diagnostic; a Target identity collision
+    MUST instead name the value and provider that already occupy it.
+  - `target remove` MUST accept a document ID, a module name, or any identity
+    loaded from that module. Removing a module MUST report every identity it
+    removes, and the next command MUST no longer load those values.
   - Every expression printed by `target list` MUST be executable with the
     accompanying imports and MUST reconstruct the Target named by that row.
   - `target show` MUST accept every identity printed by `target list`. An

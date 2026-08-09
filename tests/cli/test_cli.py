@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +16,47 @@ from tilefoundry.target import CpuTarget, registered_targets
 
 class ListedCpuTarget(CpuTarget):
     name = "tests.cli.listed_cpu"
+
+
+_SMOKE_TARGET = Path(__file__).parents[1] / "installed" / "smoke_target"
+
+
+def _run_cli(registry: Path, cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tilefoundry.cli",
+            "--registry",
+            str(registry),
+            *arguments,
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _copy(source: Path, destination: Path) -> Path:
+    destination.write_bytes(source.read_bytes())
+    return destination
+
+
+def _write_registered_model(
+    path: Path, *, target: str, topology: str
+) -> Path:
+    path.write_text(
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl import Tensor, Topology, tf\n"
+        "from tilefoundry.target import CudaTarget, registered_targets\n"
+        f"_target = {target}\n"
+        f"@func(target=_target, topologies=(Topology('{topology}', 1),))\n"
+        "def model(source: Tensor[(8,), 'f32']):\n"
+        "    return tf.add(source, source)\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_parse_dims_reads_one_extent_per_dimension() -> None:
@@ -205,3 +250,254 @@ def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) ->
 
     assert type(first.target) is not type(second.target)
     assert registered_targets()["tests.cli.reload_target"] is type(first.target)
+
+
+def test_persisted_targets_drive_every_command_without_touching_the_default_registry(
+    tmp_path,
+) -> None:
+    registry = tmp_path / "registry.toml"
+    default = target_cli.registry_path()
+    default_before = default.read_bytes() if default.exists() else None
+    architecture = _copy(
+        _SMOKE_TARGET / "hw" / "vendor_sm70.toml",
+        tmp_path / "vendor_sm70.toml",
+    )
+    device = _copy(
+        _SMOKE_TARGET / "hw" / "vendor_v100_sxm2_32gb.toml",
+        tmp_path / "vendor_v100_sxm2_32gb.toml",
+    )
+    provider = _copy(
+        _SMOKE_TARGET / "vendor_npu" / "__init__.py",
+        tmp_path / "vendor_npu.py",
+    )
+
+    added_architecture = _run_cli(
+        registry, tmp_path, "target", "add", "--document", str(architecture)
+    )
+    assert added_architecture.returncode == 0, added_architecture.stderr
+    assert "vendor.sm70" in added_architecture.stdout
+    added_device = _run_cli(
+        registry, tmp_path, "target", "add", "--document", str(device)
+    )
+    assert added_device.returncode == 0, added_device.stderr
+    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in added_device.stdout
+    added_provider = _run_cli(registry, tmp_path, "target", "add", str(provider))
+    assert added_provider.returncode == 0, added_provider.stderr
+    assert "VendorNpuTarget()" in added_provider.stdout
+    assert "executed on every tilefoundry run" in added_provider.stdout
+
+    stored = tomllib.loads(registry.read_text(encoding="utf-8"))
+    assert [item["source"] for item in stored["document"]] == [
+        str(architecture),
+        str(device),
+    ]
+    assert stored["module"] == [{"source": str(provider)}]
+    assert all(len(item["digest"]) == 64 for item in stored["document"])
+
+    listed = _run_cli(registry, tmp_path, "target", "list")
+    assert listed.returncode == 0, listed.stderr
+    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in listed.stdout
+    assert "VendorNpuTarget()" in listed.stdout
+    assert "identity: vendor.v100_sxm2_32gb   added" in listed.stdout
+    assert "identity: vendor.npu   added" in listed.stdout
+    assert "Added to this environment:" in listed.stdout
+
+    shown = _run_cli(registry, tmp_path, "target", "show", "vendor.v100_sxm2_32gb")
+    assert shown.returncode == 0, shown.stderr
+    assert "architecture: vendor.sm70" in shown.stdout
+    assert "device: vendor.v100_sxm2_32gb" in shown.stdout
+    assert shown.stdout.count("  digest: ") == 2
+
+    npu_model = _write_registered_model(
+        tmp_path / "npu_model.py",
+        target="registered_targets()['vendor.npu']()",
+        topology="core",
+    )
+    analyzed_npu = _run_cli(
+        registry,
+        tmp_path,
+        "analyze",
+        f"{npu_model}:model",
+        "--compute-cost",
+        "--memory",
+        "--roofline",
+        "--timeline",
+        "--json",
+    )
+    assert analyzed_npu.returncode == 0, analyzed_npu.stderr
+    assert json.loads(analyzed_npu.stdout)["target"] == "vendor.npu"
+    scheduled_npu = _run_cli(
+        registry,
+        tmp_path,
+        "schedule",
+        f"{npu_model}:model",
+        "--topology",
+        "core",
+        "--json",
+    )
+    assert scheduled_npu.returncode == 0, scheduled_npu.stderr
+    assert json.loads(scheduled_npu.stdout) == {"topology": "core", "extent": 1}
+
+    cuda_model = _write_registered_model(
+        tmp_path / "cuda_model.py",
+        target='CudaTarget("vendor.v100_sxm2_32gb")',
+        topology="cta",
+    )
+    analyzed_cuda = _run_cli(
+        registry,
+        tmp_path,
+        "analyze",
+        f"{cuda_model}:model",
+        "--compute-cost",
+        "--json",
+    )
+    assert analyzed_cuda.returncode == 0, analyzed_cuda.stderr
+    assert json.loads(analyzed_cuda.stdout)["target"] == "vendor.v100_sxm2_32gb"
+
+    removed_module = _run_cli(registry, tmp_path, "target", "remove", "vendor.npu")
+    assert removed_module.returncode == 0, removed_module.stderr
+    assert "identities: ['vendor.npu']" in removed_module.stdout
+    removed_device = _run_cli(
+        registry, tmp_path, "target", "remove", "vendor.v100_sxm2_32gb"
+    )
+    assert removed_device.returncode == 0, removed_device.stderr
+    after = _run_cli(registry, tmp_path, "target", "list")
+    assert after.returncode == 0, after.stderr
+    assert "VendorNpuTarget()" not in after.stdout
+    assert 'CudaTarget("vendor.v100_sxm2_32gb")' not in after.stdout
+
+    if default_before is None:
+        assert not default.exists()
+    else:
+        assert default.read_bytes() == default_before
+
+
+def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
+    tmp_path,
+) -> None:
+    source_architecture = (_SMOKE_TARGET / "hw" / "vendor_sm70.toml").read_text(
+        encoding="utf-8"
+    )
+    source_device = (
+        _SMOKE_TARGET / "hw" / "vendor_v100_sxm2_32gb.toml"
+    ).read_text(encoding="utf-8")
+
+    missing_registry = tmp_path / "missing-registry.toml"
+    missing_device = tmp_path / "missing_architecture.toml"
+    missing_device.write_text(
+        source_device.replace("vendor.sm70", "vendor.absent_sm70"),
+        encoding="utf-8",
+    )
+    missing = _run_cli(
+        missing_registry,
+        tmp_path,
+        "target",
+        "add",
+        "--document",
+        str(missing_device),
+    )
+    assert missing.returncode == 1
+    assert "needs architecture 'vendor.absent_sm70'; add it first" in missing.stderr
+    assert not missing_registry.exists()
+
+    registry = tmp_path / "registry.toml"
+    architecture = tmp_path / "vendor_sm70.toml"
+    architecture.write_text(source_architecture, encoding="utf-8")
+    first = _run_cli(
+        registry, tmp_path, "target", "add", "--document", str(architecture)
+    )
+    assert first.returncode == 0, first.stderr
+    duplicate = _run_cli(
+        registry, tmp_path, "target", "add", "--document", str(architecture)
+    )
+    assert duplicate.returncode == 1
+    assert "hardware document 'vendor.sm70' is already registered" in duplicate.stderr
+
+    collision_provider = tmp_path / "collision.py"
+    collision_provider.write_text(
+        "from tilefoundry.target import Target, register_target\n"
+        "@register_target\n"
+        "class CollisionTarget(Target):\n"
+        "    name = 'nvidia.h200_sxm'\n",
+        encoding="utf-8",
+    )
+    collision = _run_cli(registry, tmp_path, "target", "add", str(collision_provider))
+    assert collision.returncode == 1
+    assert "target identity 'nvidia.h200_sxm' is already occupied by" in collision.stderr
+    assert 'CudaTarget("nvidia.h200_sxm")' in collision.stderr
+    stored = tomllib.loads(registry.read_text(encoding="utf-8"))
+    assert "module" not in stored
+
+    named_provider = tmp_path / "named_provider.py"
+    named_provider.write_text(
+        "from tilefoundry.target import Target, register_target\n"
+        "@register_target\n"
+        "class NamedTarget(Target):\n"
+        "    name = 'vendor.named'\n",
+        encoding="utf-8",
+    )
+    named_registry = tmp_path / "named-registry.toml"
+    named = _run_cli(named_registry, tmp_path, "target", "add", "named_provider")
+    assert named.returncode == 0, named.stderr
+    assert "NamedTarget()" in named.stdout
+    named_stored = tomllib.loads(named_registry.read_text(encoding="utf-8"))
+    assert named_stored == {"module": [{"name": "named_provider"}]}
+    named_list = _run_cli(named_registry, tmp_path, "target", "list")
+    assert named_list.returncode == 0, named_list.stderr
+    assert "identity: vendor.named   added" in named_list.stdout
+    named_provider.write_text("raise RuntimeError('provider changed')\n", encoding="utf-8")
+    named_removed = _run_cli(
+        named_registry, tmp_path, "target", "remove", "named_provider"
+    )
+    assert named_removed.returncode == 0, named_removed.stderr
+    assert "module 'named_provider' failed: provider changed" in named_removed.stderr
+    assert "identities: []" in named_removed.stdout
+
+    bad_architecture = tmp_path / "vendor_bad_sm70.toml"
+    bad_architecture.write_text(
+        source_architecture.replace('id = "vendor.sm70"', 'id = "vendor.bad_sm70"'),
+        encoding="utf-8",
+    )
+    good_device = tmp_path / "vendor_v100_sxm2_32gb.toml"
+    good_device.write_text(source_device, encoding="utf-8")
+    added_bad = _run_cli(
+        registry, tmp_path, "target", "add", "--document", str(bad_architecture)
+    )
+    assert added_bad.returncode == 0, added_bad.stderr
+    added_good = _run_cli(
+        registry, tmp_path, "target", "add", "--document", str(good_device)
+    )
+    assert added_good.returncode == 0, added_good.stderr
+    bad_architecture.write_text(
+        bad_architecture.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+
+    listed = _run_cli(registry, tmp_path, "target", "list")
+    assert listed.returncode == 0
+    assert "document 'vendor.bad_sm70' content changed" in listed.stderr
+    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in listed.stdout
+    good_model = _write_registered_model(
+        tmp_path / "good_model.py",
+        target='CudaTarget("vendor.v100_sxm2_32gb")',
+        topology="cta",
+    )
+    analyzed = _run_cli(
+        registry,
+        tmp_path,
+        "analyze",
+        f"{good_model}:model",
+        "--compute-cost",
+        "--json",
+    )
+    assert analyzed.returncode == 0
+    assert "document 'vendor.bad_sm70' content changed" in analyzed.stderr
+    assert json.loads(analyzed.stdout)["target"] == "vendor.v100_sxm2_32gb"
+
+    repaired = _run_cli(
+        registry, tmp_path, "target", "add", "--document", str(bad_architecture)
+    )
+    assert repaired.returncode == 0, repaired.stderr
+    repaired_list = _run_cli(registry, tmp_path, "target", "list")
+    assert repaired_list.returncode == 0, repaired_list.stderr
+    assert "vendor.bad_sm70" in repaired_list.stdout
