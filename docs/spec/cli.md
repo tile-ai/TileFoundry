@@ -410,8 +410,10 @@ interface that claims to list every Facts projection it supports.
     architecture is unavailable MUST fail naming the architecture to add first.
   - Without `--document`, `target add` MUST import a module name unless the
     argument ends in `.py` or names an existing file. A file source MUST be
-    stored as an absolute path, executed on every command that loads the
-    registry, and reported as such when added.
+    stored as an absolute path, loaded under its filename stem, executed on
+    every command that loads the registry, and reported as such when added.
+    Only one file source with a given stem may be added; a collision MUST fail
+    naming the absolute path that already occupies that module name.
   - Every command MUST replay the registry before doing its own work, so an
     added Target is equally available to inspection, analysis, and scheduling.
     A missing or changed source MUST produce a warning naming that entry while

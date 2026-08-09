@@ -338,6 +338,34 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     assert "identity: vendor.v100_sxm2_32gb   added" in listed.stdout
     assert "identity: vendor.npu   added" in listed.stdout
     assert "Added to this environment:" in listed.stdout
+    assert "from vendor_npu import VendorNpuTarget" in listed.stdout
+
+    reconstructed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "namespace = {}\n"
+            "exec('from vendor_npu import VendorNpuTarget', namespace)\n"
+            "target = eval('VendorNpuTarget()', namespace)\n"
+            "assert target.identity == 'vendor.npu'\n",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert reconstructed.returncode == 0, reconstructed.stderr
+
+    alternate_provider = tmp_path / "alternate" / provider.name
+    alternate_provider.parent.mkdir()
+    _copy(provider, alternate_provider)
+    duplicate_module_name = _run_cli(
+        registry, tmp_path, "target", "add", str(alternate_provider)
+    )
+    assert duplicate_module_name.returncode == 1
+    assert "module name 'vendor_npu' is already added from" in duplicate_module_name.stderr
+    assert str(provider) in duplicate_module_name.stderr
+    assert str(alternate_provider) not in registry.read_text(encoding="utf-8")
 
     shown = _run_cli(registry, tmp_path, "target", "show", "vendor.v100_sxm2_32gb")
     assert shown.returncode == 0, shown.stderr

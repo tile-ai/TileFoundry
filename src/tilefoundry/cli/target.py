@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import importlib
 import importlib.util
 import io
@@ -187,11 +186,6 @@ def _hardware_owner(schema: str) -> type[Target]:
     return owners[0]
 
 
-def _module_name(path: Path) -> str:
-    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
-    return f"tilefoundry_target_{path.stem}_{digest}"
-
-
 def _load_module(entry: _ModuleEntry) -> ModuleType:
     with contextlib.redirect_stdout(io.StringIO()):
         if entry.name is not None:
@@ -199,7 +193,7 @@ def _load_module(entry: _ModuleEntry) -> ModuleType:
         path = entry.source
         if path is None or not path.is_file():
             raise FileNotFoundError(f"target module file {path} does not exist")
-        name = _module_name(path)
+        name = path.stem
         spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:
             raise ImportError(f"cannot load target module from {path}")
@@ -505,6 +499,19 @@ def _module_entry(source: str) -> _ModuleEntry:
 def run_add_module(source: str, registrations: LoadedRegistrations) -> int:
     """Execute and persist one Target provider module."""
     entry = _module_entry(source)
+    if entry.source is not None:
+        occupied = next(
+            (
+                item
+                for item in registrations.state.modules
+                if item.source is not None and item.key == entry.key
+            ),
+            None,
+        )
+        if occupied is not None:
+            raise ValueError(
+                f"module name {entry.key!r} is already added from {occupied.source}"
+            )
     if entry in registrations.state.modules:
         raise ValueError(f"target module {entry.key!r} is already added")
     before = dict(registered_targets())
