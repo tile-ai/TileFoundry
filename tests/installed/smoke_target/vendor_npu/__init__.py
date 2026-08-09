@@ -61,9 +61,11 @@ class VendorNpuTarget(Target):
         elif facts_type is MemoryHierarchyFacts:
             value = MemoryHierarchyFacts(
                 explicit_levels=(
-                    ExplicitMemoryLevelFacts("gmem", 64_000_000_000, "npu"),
-                    ExplicitMemoryLevelFacts("smem", 4_194_304, "core"),
-                    ExplicitMemoryLevelFacts("rmem", 1_048_576, "core"),
+                    ExplicitMemoryLevelFacts(
+                        "gmem", 64_000_000_000, "npu", "target"
+                    ),
+                    ExplicitMemoryLevelFacts("smem", 4_194_304, "core", "core"),
+                    ExplicitMemoryLevelFacts("rmem", 1_048_576, "core", "core"),
                 ),
                 implicit_levels=(),
                 relations=(),
