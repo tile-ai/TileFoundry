@@ -34,7 +34,19 @@ def test_builtin_targets_own_their_facts_projections() -> None:
 
     assert throughput.memory_bandwidth_bytes_per_second == 4_800_000_000_000
     assert memory.explicit("gmem").capacity_bytes == cuda.device.hbm_capacity_bytes
+    assert {
+        level.name: level.owner for level in memory.explicit_levels
+    } == {
+        "gmem": "target",
+        "smem": "cta",
+        "rmem": "thread",
+        "tmem": "cta",
+    }
     assert AmxTarget().get_facts(ThroughputFacts).bandwidth_level == "gmem"
+    assert {
+        level.name: level.owner
+        for level in AmxTarget().get_facts(MemoryHierarchyFacts).explicit_levels
+    } == {"host": "target", "gmem": "target", "rmem": "amx"}
 
 
 def test_two_cuda_products_project_the_hardware_each_one_is() -> None:

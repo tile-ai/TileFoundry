@@ -5,6 +5,7 @@ from __future__ import annotations
 from tilefoundry.ir.types import DType
 from tilefoundry.target.amx.architecture import AppleAmx
 from tilefoundry.target.amx.device import AppleM2Pro
+from tilefoundry.target.facts import TARGET_MEMORY_OWNER
 from tilefoundry.target.hardware.envelope import (
     HardwareDocument,
     SchemaValidationError,
@@ -12,13 +13,25 @@ from tilefoundry.target.hardware.envelope import (
 from tilefoundry.target.hardware.registry import HARDWARE_SPECS, HardwareSpecRegistry
 from tilefoundry.target.hardware.schema import SchemaReader
 
-ARCHITECTURE_SCHEMA = "tilefoundry.amx.architecture/v1"
-DEVICE_SCHEMA = "tilefoundry.amx.device/v1"
+ARCHITECTURE_SCHEMA = "tilefoundry.amx.architecture/v2"
+DEVICE_SCHEMA = "tilefoundry.amx.device/v2"
 
 APPLE_AMX_ID = "apple.amx"
 APPLE_M2_PRO_ID = "apple.m2_pro"
 
 _PACKAGE = "tilefoundry.target.hardware"
+
+
+def _memory_owner(reader: SchemaReader, path: str) -> str:
+    """Read an owner in the AMX target's topology vocabulary."""
+    owner = reader.text(path)
+    allowed = (TARGET_MEMORY_OWNER, "core", "amx")
+    if owner not in allowed:
+        raise SchemaValidationError(
+            f"{reader.document.id}: memory owner {owner!r} at {path!r} must be "
+            f"one of {list(allowed)}"
+        )
+    return owner
 
 
 def _dtypes(names: tuple[str, ...], document: HardwareDocument) -> tuple[DType, ...]:
@@ -46,6 +59,7 @@ def build_apple_amx(document: HardwareDocument) -> AppleAmx:
         amx_units_per_core=reader.integer("compute.units_per_core", unit="count"),
         staging_bytes=reader.integer("register.x_file", unit="byte"),
         accumulator_bytes=reader.integer("register.z_file", unit="byte"),
+        rmem_owner=_memory_owner(reader, "register.owner"),
     )
     y_file = reader.integer("register.y_file", unit="byte")
     reader.text("geometry.f32_outer_product")
@@ -93,6 +107,7 @@ def build_apple_m2_pro(document: HardwareDocument) -> AppleM2Pro:
         unified_memory_capacity_bytes=reader.integer(
             "memory.unified.capacity", unit="byte"
         ),
+        unified_memory_owner=_memory_owner(reader, "memory.unified.owner"),
         unified_memory_bandwidth_bytes_per_second=reader.integer(
             "memory.unified.bandwidth", unit="byte/s"
         ),

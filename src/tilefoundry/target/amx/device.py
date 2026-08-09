@@ -29,6 +29,7 @@ class AppleM2Pro(Device):
     l2_bytes_per_efficiency_cluster: int
     cache_line_bytes: int
     unified_memory_capacity_bytes: int
+    unified_memory_owner: str
     unified_memory_bandwidth_bytes_per_second: int
     # Measured throughput per execution unit, not a published peak: Apple
     # states neither an AMX nor a NEON instruction rate.

@@ -234,9 +234,12 @@ class CudaArchitecture(Architecture):
     max_resident_ctas_per_sm: int
     shared_memory_per_sm_bytes: int
     shared_memory_per_cta_bytes: int
+    smem_owner: str
     unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
+    rmem_owner: str
     tensor_memory_per_cta_bytes: int | None
+    tmem_owner: str
 
     def supports_compute_dtype(self, dtype: DType) -> bool: ...
 
@@ -270,6 +273,10 @@ class CudaArchitecture(Architecture):
     in columns spanning every lane and one CTA may hold all of them. It MUST be
     `None` where the architecture has no such store, which is the same statement
     the document makes by recording that leaf unavailable.
+  - CUDA explicit memory ownership MUST be read from the installed hardware
+    values as `smem -> cta`, `rmem -> thread`, and `tmem -> cta`. `scope` MUST
+    NOT be used as an ownership map: register capacity is stated per SM while
+    each thread owns its register values.
   - Every architecture document MUST declare the leaf behind every field, so a
     value the architecture does not have is recorded as absent rather than left
     out ([§10.2](#102-registry-and-resolution)).
@@ -318,6 +325,7 @@ class CudaDevice(Device):
     name: str
     sm_count: int
     hbm_capacity_bytes: int
+    gmem_owner: str
     hbm_bandwidth_bytes_per_second: int
     l2_capacity_bytes: int | None
     _dense_flops: tuple[tuple[DType, int], ...]
@@ -346,6 +354,8 @@ class CudaDevice(Device):
   - `l2_capacity_bytes` MUST be `None` when the installed document records no
     value for it. A recorded absence and a number are both statements about the
     product; a substituted figure would not be.
+  - `gmem_owner` MUST be `target`: all execution units of this single-device
+    Target share one HBM allocation.
   - No field MAY carry a default, and no resource value MAY be written as a
     Python literal: the installed document is the single source
     ([§10](#10-installed-hardware-resources)). Selecting a different installed
@@ -438,6 +448,7 @@ class AppleAmx:
     amx_units_per_core: int
     staging_bytes: int
     accumulator_bytes: int
+    rmem_owner: str
 
     def supports_compute_dtype(self, dtype: DType) -> bool: ...
 
@@ -453,6 +464,7 @@ class AppleAmx:
     ISA geometry, so every part carrying this coprocessor shares them and a
     device MUST NOT restate them. `staging_bytes` MUST be the size of one
     staging file, the X and Y files being equal.
+  - `rmem_owner` MUST be `amx`: each AMX unit owns its register-file values.
   - Product- and frequency-dependent throughput values MUST NOT be stored on
     AppleAmx.
   - AMX has no CTA thread level, so AppleAmx MUST carry no CTA thread limit.
@@ -475,6 +487,7 @@ class AppleM2Pro:
     l2_bytes_per_efficiency_cluster: int
     cache_line_bytes: int
     unified_memory_capacity_bytes: int
+    unified_memory_owner: str
     unified_memory_bandwidth_bytes_per_second: int
     _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
 
@@ -494,6 +507,8 @@ class AppleM2Pro:
     `l1d_bytes_per_performance_core`. The AMX register files bound one atom
     instance instead, which the storage filter enforces rather than a per-tile
     capacity, so the two MUST NOT be conflated.
+  - `unified_memory_owner` MUST be `target`; both the `host` and `gmem`
+    explicit levels project that one target-wide ownership fact.
   - `throughput_for` MUST be keyed by execution unit as well as DType, because
     the AMX coprocessor and the core's NEON pipes have separate measured rates.
   - A tile's traffic MUST be charged against
@@ -578,7 +593,7 @@ compatibility, never a single combined record.
 
 ```toml
 [spec]
-schema = "tilefoundry.cuda.device/v2"
+schema = "tilefoundry.cuda.device/v3"
 kind = "device"
 id = "nvidia.h200_sxm"
 
@@ -617,10 +632,17 @@ conditions = "No validated number."
     MUST NOT be recorded as `measured`; a reading rather than a citation MUST be
     recorded as `estimated`. `derived` and `estimated` MUST state how in
     `conditions`.
-  - Compiler policy and program Topology MUST NOT appear in a hardware
-    document. They are inputs to scheduling, not immutable hardware truth: a
-    fixed-wave parallel capacity is a scheduling policy even when its current
-    value equals a device count.
+  - Compiler policy and a program's Topology extents MUST NOT appear in a
+    hardware document. They are inputs to scheduling, not immutable hardware
+    truth: a fixed-wave parallel capacity is a scheduling policy even when its
+    current value equals a device count. An explicit memory level's `owner` is
+    different: it MUST name one topology from the Target's hardware vocabulary,
+    or the reserved word `target` for an allocation shared by the whole device.
+    The document states that ownership directly and MUST NOT encode it as an
+    absent value.
+  - Only explicit memory levels MUST record an owner. Implicit caches receive no
+    program residency and MUST NOT add an owner leaf merely to make their
+    capacity scope look like a Target topology.
 
 ### 10.2 Registry and resolution
 

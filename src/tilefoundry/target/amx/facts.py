@@ -48,6 +48,7 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
                 name="host",
                 capacity_bytes=device.unified_memory_capacity_bytes,
                 scope="device",
+                owner=device.unified_memory_owner,
             ),
             # Unified memory is one pool, so the level a kernel names as global
             # and the level the host allocates from are the same bytes.
@@ -55,6 +56,7 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
                 name="gmem",
                 capacity_bytes=device.unified_memory_capacity_bytes,
                 scope="device",
+                owner=device.unified_memory_owner,
             ),
             ExplicitMemoryLevelFacts(
                 name="rmem",
@@ -62,6 +64,7 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
                     architecture.staging_bytes + architecture.accumulator_bytes
                 ),
                 scope="amx",
+                owner=architecture.rmem_owner,
             ),
         ),
         implicit_levels=(

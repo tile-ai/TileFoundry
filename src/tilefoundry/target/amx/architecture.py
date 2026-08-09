@@ -26,6 +26,7 @@ class AppleAmx(Architecture):
     amx_units_per_core: int
     staging_bytes: int
     accumulator_bytes: int
+    rmem_owner: str
 
     def _python_import_module(self) -> str:
         if type(self) is AppleAmx:

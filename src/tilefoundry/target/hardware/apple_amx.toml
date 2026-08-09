@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.amx.architecture/v1"
+schema = "tilefoundry.amx.architecture/v2"
 kind = "architecture"
 id = "apple.amx"
 
@@ -51,6 +51,13 @@ unit = "byte"
 origin = "reference"
 source = "https://github.com/corsix/amx"
 conditions = "sixty-four 64-byte Z rows; the accumulator file an outer product lands in"
+
+[facts.register.owner]
+value = "amx"
+unit = "name"
+origin = "reference"
+source = "https://github.com/corsix/amx"
+conditions = "the X, Y, and Z files belong to one AMX coprocessor, the execution unit TileFoundry names amx"
 
 [facts.geometry.f32_outer_product]
 value = "16x16"

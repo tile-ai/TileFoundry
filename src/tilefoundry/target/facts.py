@@ -7,6 +7,8 @@ from typing import TypeVar
 
 FactsT = TypeVar("FactsT")
 
+TARGET_MEMORY_OWNER = "target"
+
 
 @dataclasses.dataclass(frozen=True)
 class TopologyLimitFacts:
@@ -46,4 +48,10 @@ def facts_result(
     return value
 
 
-__all__ = ["FactsT", "TargetFactsError", "TopologyLimitFacts", "facts_result"]
+__all__ = [
+    "FactsT",
+    "TARGET_MEMORY_OWNER",
+    "TargetFactsError",
+    "TopologyLimitFacts",
+    "facts_result",
+]

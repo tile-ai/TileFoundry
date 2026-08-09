@@ -231,6 +231,15 @@ def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
         cuda_spec.build_cuda_architecture(parse_document(stray, origin_label="stray"))
 
 
+def test_a_memory_owner_must_use_the_target_vocabulary() -> None:
+    document = _hardware_text("nvidia_h200_sxm.toml").replace(
+        'value = "target"', 'value = "warp"'
+    )
+
+    with pytest.raises(SchemaValidationError, match=r"memory owner 'warp'.*target.*cta.*thread"):
+        cuda_spec.build_cuda_device(parse_document(document, origin_label="bad-owner"))
+
+
 def test_registration_and_resolution_failures_are_each_distinguishable() -> None:
     """AC-1-2. Unknown IDs, unknown schemas, duplicate registrations, and
     incompatible pairs are separate diagnostics."""
@@ -289,9 +298,28 @@ def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
     assert unavailable.status == "unavailable"
     assert unavailable.conditions
 
-    for spec_id in (_SM90, _SM100, _H200, _B200, "apple.amx", "apple.m2_pro"):
+    owners = {
+        _SM90: {
+            "memory.shared.owner": "cta",
+            "memory.register.owner": "thread",
+            "memory.tensor.owner": "cta",
+        },
+        _SM100: {
+            "memory.shared.owner": "cta",
+            "memory.register.owner": "thread",
+            "memory.tensor.owner": "cta",
+        },
+        _H200: {"memory.hbm.owner": "target"},
+        _B200: {"memory.hbm.owner": "target"},
+        "apple.amx": {"register.owner": "amx"},
+        "apple.m2_pro": {"memory.unified.owner": "target"},
+    }
+    for spec_id, expected_owners in owners.items():
         document = HARDWARE_SPECS.document(spec_id)
         assert not any("policy" in path for path in document.facts)
         assert not any("topology" in path for path in document.facts)
+        assert {
+            path: document.fact(path).value for path in expected_owners
+        } == expected_owners
         for fact in document.facts.values():
             assert (fact.value is None) == (not fact.available)

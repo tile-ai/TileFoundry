@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from tilefoundry.ir.types import DType
+from tilefoundry.target.facts import TARGET_MEMORY_OWNER
 
 
 class MemoryRelationKind(Enum):
@@ -33,12 +34,15 @@ class ExplicitMemoryLevelFacts:
     """A level a program places values in by name.
 
     ``scope`` is the topology level ``capacity_bytes`` is stated per, so a
-    per-CTA and a per-device capacity are not accidentally compared.
+    per-CTA and a per-device capacity are not accidentally compared. ``owner``
+    is the topology level whose units own separate values, or ``"target"`` when
+    every unit shares the target-wide allocation.
     """
 
     name: str
     capacity_bytes: int | None
     scope: str
+    owner: str
 
 
 @dataclass(frozen=True)
@@ -179,5 +183,6 @@ __all__ = [
     "MemoryLevelRelation",
     "MemoryRelationKind",
     "ParallelCapacityFacts",
+    "TARGET_MEMORY_OWNER",
     "ThroughputFacts",
 ]

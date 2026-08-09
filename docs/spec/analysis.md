@@ -539,11 +539,13 @@ class ExplicitMemoryLevelFacts:
         name: attribute; The storage level name.
         capacity_bytes: attribute; Stated capacity, or None when unknown.
         scope: attribute; The topology level the capacity is stated per.
+        owner: attribute; The topology whose units own separate values, or target.
     """
 
     name: str
     capacity_bytes: int | None
     scope: str
+    owner: str
 
 class ImplicitMemoryLevelFacts:
     """A level traffic passes through without being placed there.
@@ -600,6 +602,16 @@ class MemoryHierarchyFacts:
   - An implicit level MUST NOT be given a capacity of its own where its usable
     capacity depends on the program. That capacity MUST be derived from the
     sharing edge and the sharing level's measured peak.
+  - Every explicit level MUST carry an `owner` supplied by the Target. Its value
+    MUST be one of that Target's declared topology names, or the reserved word
+    `target` when all of its units share one allocation. An implicit cache MUST
+    NOT carry an owner: program values are never resident there, and cache
+    advisories compare capacity scopes instead.
+  - A residency MUST be projected through every declared split at or coarser
+    than its explicit level's owner. A `target`-owned residency MUST remain
+    global. The analysis MUST NOT derive ownership from the storage-level name
+    or from `scope`; in particular, CUDA register capacity is stated per SM while
+    register values are owned by threads.
   - One value exceeding an explicit level's stated capacity MUST raise
     `AnalysisError`: no schedule can place that value there. A measured peak
     exceeding the capacity MUST instead be recorded as an advisory and MUST NOT

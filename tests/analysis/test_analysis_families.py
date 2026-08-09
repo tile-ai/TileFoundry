@@ -563,6 +563,47 @@ def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
         analyze(_SharedTile, functions["broadcast"], analysis="memory")
 
 
+def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
+    matmul = next(fn for fn in _MatmulLayouts.functions if fn.name == "split")
+    analyze(_MatmulLayouts, matmul, analysis="memory")
+    gmem = get_metadata(matmul, MemoryMetadata)
+    assert gmem is not None
+    gmem_lifetimes = {
+        item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"
+    }
+    assert gmem_lifetimes["local_lhs"] == gmem_lifetimes["lhs"] == 4_325_376
+
+    shared = next(fn for fn in _SharedTile.functions if fn.name == "split")
+    analyze(_SharedTile, shared, analysis="memory")
+    cta_owned = get_metadata(shared, MemoryMetadata)
+    assert cta_owned is not None
+    assert next(
+        item.bytes
+        for item in cta_owned.lifetimes
+        if item.binding == "local" and item.level == "smem"
+    ) == 211_200
+
+    thread_shared = _entry(_modest_shared)
+    analyze(_modest_shared, thread_shared, analysis="memory")
+    still_cta_owned = get_metadata(thread_shared, MemoryMetadata)
+    assert still_cta_owned is not None
+    assert next(
+        item.bytes
+        for item in still_cta_owned.lifetimes
+        if item.binding == "local" and item.level == "smem"
+    ) == 4_096
+
+    registers = _entry(_thread_sharded)
+    analyze(_thread_sharded, registers, analysis="memory")
+    thread_owned = get_metadata(registers, MemoryMetadata)
+    assert thread_owned is not None
+    assert next(
+        item.bytes
+        for item in thread_owned.lifetimes
+        if item.binding == "local" and item.level == "rmem"
+    ) == 8
+
+
 def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None:
     """An over-full cache costs speed, so the analysis still succeeds.
 

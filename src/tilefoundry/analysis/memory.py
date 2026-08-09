@@ -26,12 +26,16 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.types import local_type_of
+from tilefoundry.ir.types import Type, local_type_of
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import Target
 
 from .errors import AnalysisError
-from .facts import ImplicitMemoryLevelFacts, MemoryHierarchyFacts
+from .facts import (
+    TARGET_MEMORY_OWNER,
+    ImplicitMemoryLevelFacts,
+    MemoryHierarchyFacts,
+)
 from .metadata import (
     ComputeCostMetadata,
     LevelFootprint,
@@ -116,7 +120,11 @@ def _unique_labels(order: list[Expr]) -> dict[int, str]:
 
 
 def _residencies(
-    fn: Function, *, level: str | None, topologies: tuple[Topology, ...]
+    fn: Function,
+    *,
+    facts: MemoryHierarchyFacts,
+    topology_levels: tuple[str, ...],
+    topologies: tuple[Topology, ...],
 ) -> tuple[tuple[_Residency, ...], int]:
     """Every allocation resident in *fn*, with the length of its value order.
 
@@ -147,12 +155,19 @@ def _residencies(
         if _is_view(expr):
             continue
         persistent = isinstance(expr, Var)
-        type_ = (
-            expr.type
-            if level is None
-            else local_type_of(expr.type, level=level, topologies=topologies)
-        )
-        for storage, amount in bytes_by_storage(type_).items():
+        for storage in bytes_by_storage(expr.type):
+            declared = facts.explicit(storage)
+            type_ = (
+                expr.type
+                if declared is None
+                else _type_at_owner(
+                    expr.type,
+                    owner=declared.owner,
+                    topology_levels=topology_levels,
+                    topologies=topologies,
+                )
+            )
+            amount = bytes_by_storage(type_)[storage]
             result.append(
                 _Residency(
                     binding=labels[id(expr)],
@@ -166,6 +181,34 @@ def _residencies(
                 )
             )
     return tuple(result), len(order)
+
+
+def _type_at_owner(
+    type_: Type,
+    *,
+    owner: str,
+    topology_levels: tuple[str, ...],
+    topologies: tuple[Topology, ...],
+) -> Type:
+    """Project *type_* through every declared split no finer than *owner*."""
+    if owner == TARGET_MEMORY_OWNER:
+        return type_
+    try:
+        owner_index = topology_levels.index(owner)
+    except ValueError:
+        available = ", ".join((TARGET_MEMORY_OWNER, *topology_levels))
+        raise ValueError(
+            f"memory owner {owner!r} is not declared by the target; "
+            f"available owners are {available}"
+        ) from None
+    projection_levels = tuple(
+        topology.name
+        for topology in topologies
+        if topology_levels.index(topology.name) <= owner_index
+    )
+    if not projection_levels:
+        return type_
+    return local_type_of(type_, level=projection_levels[-1], topologies=topologies)
 
 
 def _peaks(
@@ -363,7 +406,10 @@ def analyze_memory(
     for fn in reachable_functions(function):
         try:
             residencies, length = _residencies(
-                fn, level=level, topologies=topologies
+                fn,
+                facts=facts,
+                topology_levels=target.topology_levels,
+                topologies=topologies,
             )
         except ValueError as error:
             raise AnalysisError(str(error)) from None

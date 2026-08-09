@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.amx.device/v1"
+schema = "tilefoundry.amx.device/v2"
 kind = "device"
 id = "apple.m2_pro"
 
@@ -75,6 +75,13 @@ unit = "byte"
 origin = "measured"
 source = "sysctl(8)"
 conditions = "32 GiB from sysctl hw.memsize"
+
+[facts.memory.unified.owner]
+value = "target"
+unit = "name"
+origin = "derived"
+source = "sysctl(8)"
+conditions = "the unified-memory capacity is one pool shared by all execution units of this single-device target"
 
 [facts.memory.unified.bandwidth]
 value = 200000000000

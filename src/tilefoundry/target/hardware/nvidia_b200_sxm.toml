@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.cuda.device/v2"
+schema = "tilefoundry.cuda.device/v3"
 kind = "device"
 id = "nvidia.b200_sxm"
 
@@ -26,6 +26,13 @@ unit = "byte"
 origin = "derived"
 source = "https://www.nvidia.com/en-us/data-center/dgx-b200/"
 conditions = "the published 1,440 GB across the eight GPUs of a DGX B200 divided by eight, decimal; a part provisioned with more HBM reports more through the CUDA runtime, so this is what every B200 SXM has rather than the most that some have"
+
+[facts.memory.hbm.owner]
+value = "target"
+unit = "name"
+origin = "derived"
+source = "https://www.nvidia.com/en-us/data-center/dgx-b200/"
+conditions = "the per-GPU HBM capacity is one pool shared by all execution units of this single-device target"
 
 [facts.memory.hbm.bandwidth]
 value = 7672320000000

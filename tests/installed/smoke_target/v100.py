@@ -36,9 +36,12 @@ class Volta70(Architecture):
     max_resident_ctas_per_sm: int = 32
     shared_memory_per_sm_bytes: int = 96 * 1024
     shared_memory_per_cta_bytes: int = 96 * 1024
+    smem_owner: str = "cta"
     unified_l1_shared_per_sm_bytes: int = 128 * 1024
     registers_per_sm_32bit: int = 64 * 1024
+    rmem_owner: str = "thread"
     tensor_memory_per_cta_bytes: int | None = None
+    tmem_owner: str = "cta"
 
     def topology_limit(self, name: str) -> int:
         if name == "thread":
@@ -53,6 +56,7 @@ class TeslaV100SXM2_32GB(Device):
     name: str = "tesla_v100_sxm2_32gb"
     sm_count: int = 80
     hbm_capacity_bytes: int = 32_000_000_000
+    gmem_owner: str = "target"
     hbm_bandwidth_bytes_per_second: int = 900_000_000_000
     l2_capacity_bytes: int = 6 * 1024 * 1024
 

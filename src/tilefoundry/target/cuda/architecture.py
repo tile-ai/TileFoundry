@@ -31,14 +31,17 @@ class CudaArchitecture(Architecture):
     max_resident_ctas_per_sm: int
     shared_memory_per_sm_bytes: int
     shared_memory_per_cta_bytes: int
+    smem_owner: str
     # The shared-memory carveout and the L1 data cache divide one physical
     # block, so L1's usable capacity is what a kernel's shared memory leaves of
     # this figure rather than a constant of its own.
     unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
+    rmem_owner: str
     # None where the MMA accumulates in registers, so there is no separate store
     # to state a capacity for.
     tensor_memory_per_cta_bytes: int | None
+    tmem_owner: str
 
     def _python_import_module(self) -> str:
         # The package re-exports this type, so a rendered constructor imports it

@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.cuda.architecture/v2"
+schema = "tilefoundry.cuda.architecture/v3"
 kind = "architecture"
 id = "nvidia.sm90"
 
@@ -66,6 +66,13 @@ origin = "vendor"
 source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
 conditions = "227 KiB maximum dynamic shared-memory allocation per CTA"
 
+[facts.memory.shared.owner]
+value = "cta"
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory"
+conditions = "shared memory is allocated per thread block, the CUDA execution unit TileFoundry names cta"
+
 [facts.memory.unified_l1_shared.per_sm]
 value = 262144
 unit = "byte"
@@ -84,6 +91,13 @@ origin = "vendor"
 source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
 conditions = "SM90 maximum 32-bit register-file capacity per SM"
 
+[facts.memory.register.owner]
+value = "thread"
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#variable-memory-space-specifiers"
+conditions = "automatic variables ordinarily reside in a thread's private registers, the CUDA execution unit TileFoundry names thread"
+
 [facts.memory.register.bandwidth]
 status = "unavailable"
 conditions = "NVIDIA publishes no static register-file bandwidth to use for a roofline."
@@ -91,3 +105,10 @@ conditions = "NVIDIA publishes no static register-file bandwidth to use for a ro
 [facts.memory.tensor.per_cta]
 status = "unavailable"
 conditions = "SM90 has no tensor-memory store: wgmma accumulates in the register file, so there is no separate capacity to state."
+
+[facts.memory.tensor.owner]
+value = "cta"
+unit = "name"
+origin = "derived"
+source = "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#tensor-memory"
+conditions = "where tensor memory exists its allocation is CTA-scoped; SM90 records no capacity because it has no tensor-memory store"

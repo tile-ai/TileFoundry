@@ -54,11 +54,13 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
                 name="gmem",
                 capacity_bytes=device.hbm_capacity_bytes,
                 scope="device",
+                owner=device.gmem_owner,
             ),
             ExplicitMemoryLevelFacts(
                 name="smem",
                 capacity_bytes=architecture.shared_memory_per_cta_bytes,
                 scope="cta",
+                owner=architecture.smem_owner,
             ),
             ExplicitMemoryLevelFacts(
                 name="rmem",
@@ -66,6 +68,7 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
                 # slot is four bytes wide.
                 capacity_bytes=architecture.registers_per_sm_32bit * 4,
                 scope="sm",
+                owner=architecture.rmem_owner,
             ),
             # Tensor memory is the store the tensor cores accumulate in where the
             # architecture has one. It is allocated in columns spanning every
@@ -76,6 +79,7 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
                 name="tmem",
                 capacity_bytes=architecture.tensor_memory_per_cta_bytes,
                 scope="cta",
+                owner=architecture.tmem_owner,
             ),
         ),
         implicit_levels=(
