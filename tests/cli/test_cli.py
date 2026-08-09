@@ -47,11 +47,13 @@ def _write_registered_model(
     path: Path, *, target: str, topology: str
 ) -> Path:
     path.write_text(
+        "import json\n"
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor, Topology, tf\n"
         "from tilefoundry.target import CudaTarget, registered_targets\n"
+        "_extent = json.loads('{\"extent\": 1}')[\"extent\"]\n"
         f"_target = {target}\n"
-        f"@func(target=_target, topologies=(Topology('{topology}', 1),))\n"
+        f"@func(target=_target, topologies=(Topology('{topology}', _extent),))\n"
         "def model(source: Tensor[(8,), 'f32']):\n"
         "    return tf.add(source, source)\n",
         encoding="utf-8",
@@ -477,6 +479,28 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     )
     assert duplicate.returncode == 1
     assert "hardware document 'vendor.sm70' is already registered" in duplicate.stderr
+
+    shadow_dir = tmp_path / "shadow"
+    shadow_dir.mkdir()
+    json_provider = shadow_dir / "json.py"
+    json_provider.write_text(
+        "from tilefoundry.target import Target, register_target\n"
+        "@register_target\n"
+        "class JsonTarget(Target):\n"
+        "    name = 'vendor.json'\n",
+        encoding="utf-8",
+    )
+    shadowed = _run_cli(
+        tmp_path / "shadow-registry.toml",
+        tmp_path,
+        "target",
+        "add",
+        str(json_provider),
+    )
+    assert shadowed.returncode == 1
+    assert "module name 'json' is already taken by" in shadowed.stderr
+    assert "json/__init__.py" in shadowed.stderr
+    assert not (tmp_path / "shadow-registry.toml").exists()
 
     collision_provider = tmp_path / "collision.py"
     collision_provider.write_text(

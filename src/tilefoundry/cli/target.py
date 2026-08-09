@@ -186,6 +186,27 @@ def _hardware_owner(schema: str) -> type[Target]:
     return owners[0]
 
 
+def _module_occupant(name: str) -> Path | str | None:
+    loaded = sys.modules.get(name)
+    if loaded is not None:
+        origin = getattr(loaded, "__file__", None)
+        if origin is not None:
+            return Path(origin).resolve()
+        spec = getattr(loaded, "__spec__", None)
+    else:
+        spec = importlib.util.find_spec(name)
+    if spec is None:
+        return None if loaded is None else repr(loaded)
+    if spec.origin not in (None, "built-in", "frozen"):
+        return Path(spec.origin).resolve()
+    if spec.origin is not None:
+        return spec.origin
+    locations = spec.submodule_search_locations
+    if locations:
+        return ", ".join(str(Path(location).resolve()) for location in locations)
+    return repr(spec)
+
+
 def _load_module(entry: _ModuleEntry) -> ModuleType:
     with contextlib.redirect_stdout(io.StringIO()):
         if entry.name is not None:
@@ -194,6 +215,9 @@ def _load_module(entry: _ModuleEntry) -> ModuleType:
         if path is None or not path.is_file():
             raise FileNotFoundError(f"target module file {path} does not exist")
         name = path.stem
+        occupant = _module_occupant(name)
+        if occupant is not None and occupant != path:
+            raise ValueError(f"module name {name!r} is already taken by {occupant}")
         spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:
             raise ImportError(f"cannot load target module from {path}")

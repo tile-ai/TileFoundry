@@ -413,7 +413,9 @@ interface that claims to list every Facts projection it supports.
     stored as an absolute path, loaded under its filename stem, executed on
     every command that loads the registry, and reported as such when added.
     Only one file source with a given stem may be added; a collision MUST fail
-    naming the absolute path that already occupies that module name.
+    naming the absolute path that already occupies that module name. A stem
+    already occupied by any other importable module MUST likewise be rejected
+    without replacing that module in `sys.modules`.
   - Every command MUST replay the registry before doing its own work, so an
     added Target is equally available to inspection, analysis, and scheduling.
     A missing or changed source MUST produce a warning naming that entry while
