@@ -18,7 +18,7 @@ import pytest
 
 from tests.fixtures.gqa_online import MAX_CTX, GqaOnline
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
-from tilefoundry.analysis import TimelineMetadata, analyze
+from tilefoundry.analysis import MemoryMetadata, TimelineMetadata, analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.inspection.analysis_report import render_text, report
 from tilefoundry.ir.core import get_metadata
@@ -129,7 +129,7 @@ def test_without_a_size_the_call_is_what_it_was() -> None:
 
 @pytest.mark.parametrize(
     ("ctx_len", "makespan_ns"),
-    ((1, 21_098), (1024, 29_009)),
+    ((1, 21_101), (1024, 32_504)),
 )
 def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length(
     ctx_len: int, makespan_ns: int
@@ -146,6 +146,21 @@ def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length(
     assert record.grid_units == 1
     assert record.waves == 7
     assert record.end_ns == makespan_ns
+
+
+def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:
+    module = QWEN3_1_7B.build()
+    function = module.lookup("decoder_layer")
+
+    result = analyze(
+        module, function, analysis="memory", dims={"ctx_len": 1024}
+    )
+
+    record = get_metadata(result.function, MemoryMetadata)
+    assert record is not None
+    lifetimes = {item.binding: item for item in record.lifetimes}
+    cache_names = ("cos_cache", "sin_cache", "k_cache", "v_cache")
+    assert all(lifetimes[name].persistent for name in cache_names)
 
 
 def test_a_size_no_variant_covers_is_refused() -> None:

@@ -320,7 +320,8 @@ def _reshape(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Transpose)
 def _transpose(call: Call, ctx: CostContext) -> Cost:
-    return Cost({}, _idle(call))
+    moved = tensor_bytes(_output_type(call, ctx))
+    return Cost({}, (TrafficBytes(read=moved), TrafficBytes(write=moved)))
 
 
 @register_cost_evaluator(Reshard)

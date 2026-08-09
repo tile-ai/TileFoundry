@@ -98,8 +98,8 @@ class ValueLifetime:
     """One value's residency, as positions in the function's definition order.
 
     ``persistent`` marks a value that is resident for the whole function rather
-    than until its last use: a constant weight is not reclaimable, so treating
-    it like a temporary would under-report every peak it contributes to.
+    than until its last use. Every parameter is persistent because a function
+    cannot reclaim caller-owned storage.
 
     ``binding`` names one value: where an authored name covers several, the later
     ones carry the numeric suffix the printed form of the same program uses.

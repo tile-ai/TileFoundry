@@ -475,11 +475,14 @@ class TimelineMetadata(IRMetadata):
     omit the operand breakdown for such a call rather than emit it empty.
   - `MemoryMetadata` MUST be attached per `Function`: a peak is a property of the
     whole function's live ranges and belongs to no single expression.
-  - Parameters MUST be resident from the start of the value order. A parameter
-    declared constant is a weight and MUST be `persistent`, held past its last
-    reader for the whole function; every other value MUST be measured by first
-    definition and last use. A pure view — a reshape or a transpose — MUST
-    allocate nothing.
+  - Parameters MUST be resident from the start of the value order and MUST be
+    `persistent`, held for the whole function: a function cannot reclaim storage
+    its caller owns. Every non-parameter allocation MUST be measured by first
+    definition and last use.
+  - `Reshape` MUST allocate nothing: it re-indexes the same elements. `Slice`
+    and `Transpose` MUST allocate their results. Analysis MUST NOT infer buffer
+    aliasing from layouts; whether an optimization later makes values share a
+    buffer is not an analysis-owned decision.
   - `RooflineMetadata` MUST be computed from the recorded work rather than from a
     second reading of the program. On a `Function` the compute and memory times
     MUST each be summed over the function before being compared, because

@@ -577,6 +577,13 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     each level instead. What the evaluator reported stands as the operand's own
     amount; a per-level total is therefore not always the sum of the amounts
     reported here.
+  - `Reshape` MUST report zero traffic because it re-indexes the same elements.
+    `Slice` MUST report one result-sized read and write, for both static and
+    runtime bounds, because it moves only the region it keeps. `Transpose` MUST
+    report one result-sized read and write because its evaluator materializes the
+    permutation. Each evaluator answers from its operation's semantics and MUST
+    NOT infer buffer identity from layouts; buffer aliasing is a later
+    optimization decision.
   - With no level, `CostContext.local_type_of` MUST return the selected Type as
     written. With a level, it MUST apply `local_type_of` using the context's
     topology hierarchy and MUST reject unresolved or non-concrete local extents

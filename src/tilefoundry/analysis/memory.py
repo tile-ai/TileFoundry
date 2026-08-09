@@ -26,7 +26,6 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.types import local_type_of
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import Target
@@ -66,10 +65,10 @@ class _Residency:
 def _is_view(expr: Expr) -> bool:
     """Whether *expr* aliases its operand rather than allocating.
 
-    A reshape or a transpose describes the same bytes differently. Charging it
-    for its result would count one buffer twice.
+    Reshape re-indexes the same elements. Other operations produce values at
+    addresses of their own; buffer aliasing may optimize those later.
     """
-    return isinstance(expr, Call) and isinstance(expr.target, (Reshape, Transpose))
+    return isinstance(expr, Call) and isinstance(expr.target, Reshape)
 
 
 def _label(expr: Expr, position: int) -> str:
@@ -123,8 +122,8 @@ def _residencies(
 
     Parameters are part of the order and start at its beginning: the function
     did not produce them, so they are already resident when it is entered. A
-    parameter declared constant is a weight, and a weight is never reclaimable
-    -- it stays resident past its last reader, for the whole function.
+    function cannot reclaim storage its caller owns, so every parameter stays
+    resident past its last reader for the whole function.
     """
     order: list[Expr] = [
         *fn.params,
@@ -147,7 +146,7 @@ def _residencies(
     for expr in order:
         if _is_view(expr):
             continue
-        persistent = isinstance(expr, Var) and expr.is_const
+        persistent = isinstance(expr, Var)
         type_ = (
             expr.type
             if level is None

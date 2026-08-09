@@ -29,12 +29,14 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_json, render_text, report
-from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core import Call, Var, get_metadata
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import DType, numel
+from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.types import DType, make_tensor_type, numel
 from tilefoundry.target import AmxTarget, CudaTarget
 from tilefoundry.visitor_registry import cost_evaluator_registry
-from tilefoundry.visitor_registry.contexts import Cost
+from tilefoundry.visitor_registry.contexts import Cost, CostContext, TrafficBytes
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
@@ -96,6 +98,28 @@ class _Allocated:
     @func
     def main(source: Tensor[(64,), "f32"]):
         return tf.add(source, tf.zeros(shape=(64,), dtype="f32"))
+
+
+@module(entry="row", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+class _MovementCosts:
+
+    @func
+    def row(source: Tensor[(1024, 2048), "f32"]):
+        return source[0:256, :]
+
+    @func
+    def column(source: Tensor[(1024, 2048), "f32"]):
+        return source[:, 0:512]
+
+    @func
+    def materialized(source: Tensor[(1024, 2048), "f32"]):
+        transposed = tf.transpose(source, perm=(1, 0))
+        return tf.reshape(transposed, new_shape=(1024 * 2048,))
+
+    @func
+    def copied(source: Tensor[(1024, 2048), "f32"]):
+        selected = source[0:256, :]
+        return tf.concat(selected, selected, axis=0)
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -432,25 +456,87 @@ def test_an_evaluator_that_misses_an_operand_is_refused(monkeypatch) -> None:
         _run(_wide_grid, "compute-cost")
 
 
-def test_memory_holds_a_weight_resident_past_its_last_reader() -> None:
-    """A constant weight is never reclaimable within the function, while an
-    ordinary value is live only between its definition and its last use."""
+def test_memory_holds_parameters_resident_past_their_last_reader() -> None:
+    """A function cannot reclaim storage its caller handed to it."""
     entry = _WeightedAdd.entry_function()
     analyze(_WeightedAdd, entry, analysis="memory")
 
     record = get_metadata(entry, MemoryMetadata)
     assert record is not None
-    weights = [item for item in record.lifetimes if item.persistent]
+    held = [item for item in record.lifetimes if item.persistent]
     ordinary = [item for item in record.lifetimes if not item.persistent]
-    assert [item.binding for item in weights] == ["weight"]
-    assert ordinary, "the other values are still measured by their live ranges"
+    assert [item.binding for item in held] == ["source", "weight"]
+    assert ordinary, "body allocations are still measured by their live ranges"
+    assert all(
+        item.last_used_at == max(row.last_used_at for row in record.lifetimes)
+        for item in held
+    )
 
-    # The weight is read early and still held to the end; an ordinary value that
-    # is read as early releases at that point.
-    (held,) = weights
-    assert held.last_used_at == max(item.last_used_at for item in record.lifetimes)
-    assert any(item.last_used_at < held.last_used_at for item in ordinary)
-    assert any(item.last_used_at > item.defined_at for item in ordinary)
+
+def test_movement_costs_follow_each_operations_materialization() -> None:
+    functions = {function.name: function for function in _MovementCosts.functions}
+
+    for name in ("row", "column"):
+        function = functions[name]
+        analyze(_MovementCosts, function, analysis="compute-cost")
+        (move,) = _calls(function)
+        record = get_metadata(move, ComputeCostMetadata)
+        assert record is not None
+        kept = 256 * 2048 * 4
+        assert record.traffic_at("gmem") == TrafficBytes(read=kept, write=kept)
+
+    materialized = functions["materialized"]
+    analyze(_MovementCosts, materialized, analysis="memory")
+    transpose, reshape = _calls(materialized)
+    transpose_cost = get_metadata(transpose, ComputeCostMetadata)
+    reshape_cost = get_metadata(reshape, ComputeCostMetadata)
+    assert transpose_cost is not None
+    moved = 1024 * 2048 * 4
+    assert transpose_cost.traffic_at("gmem") == TrafficBytes(
+        read=moved, write=moved
+    )
+    assert reshape_cost is not None
+    assert reshape_cost.traffic_at("gmem").total_bytes == 0
+    footprint = get_metadata(materialized, MemoryMetadata)
+    assert footprint is not None
+    assert any(not item.persistent and item.bytes == moved for item in footprint.lifetimes)
+
+    copied = functions["copied"]
+    analyze(_MovementCosts, copied, analysis="compute-cost")
+    selected, concat = _calls(copied)
+    selected_cost = get_metadata(selected, ComputeCostMetadata)
+    concat_cost = get_metadata(concat, ComputeCostMetadata)
+    assert selected_cost is not None
+    selected_bytes = 256 * 2048 * 4
+    assert selected_cost.traffic_at("gmem") == TrafficBytes(
+        read=selected_bytes, write=selected_bytes
+    )
+    assert concat_cost is not None
+    assert concat_cost.traffic_at("gmem") == TrafficBytes(
+        read=2 * selected_bytes,
+        write=2 * selected_bytes,
+    )
+
+
+def test_runtime_slice_costs_the_selected_region() -> None:
+    source = Var(type=make_tensor_type((1024, 2048)), name="source")
+    runtime_end = Var(type=make_tensor_type((), DType.i64), name="end")
+    output = make_tensor_type((256, 2048))
+    call = Call(
+        type=output,
+        target=Slice(
+            begin=(0, 0), end=(runtime_end, 2048), strides=(1, 1)
+        ),
+        args=(source,),
+    )
+
+    cost = CostEvaluator(CostContext(selected_output_type=output)).visit_Call(call)
+
+    kept = 256 * 2048 * 4
+    assert cost.traffic == (
+        TrafficBytes(read=kept),
+        TrafficBytes(write=kept),
+    )
 
 
 def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
