@@ -46,7 +46,7 @@ def test_document_free_target_analyses_and_selects_its_scheduler(
     report = json.loads(analyzed.stdout)
     assert report["target"] == "vendor.npu"
     assert report["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
-    assert report["function_records"]["roofline"]["theoretical_ns"] > 0
+    assert report["function_records"]["roofline"]["ideal_ns"] > 0
     assert report["function_records"]["timeline"]["grid_units"] == 1
 
     scheduled = tf(
