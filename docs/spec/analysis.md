@@ -597,10 +597,13 @@ class MemoryHierarchyFacts:
   - An implicit level MUST NOT be given a capacity of its own where its usable
     capacity depends on the program. That capacity MUST be derived from the
     sharing edge and the sharing level's measured peak.
-  - Exceeding an explicit level's stated capacity MUST raise `AnalysisError`: the
-    program placed more there than the level holds. Exceeding an implicit level's
-    capacity MUST be recorded as an advisory and MUST NOT fail the call, because
-    a working set larger than a cache still runs.
+  - One value exceeding an explicit level's stated capacity MUST raise
+    `AnalysisError`: no schedule can place that value there. A measured peak
+    exceeding the capacity MUST instead be recorded as an advisory and MUST NOT
+    fail the call. The peak holds under the value order the analysis walked; it
+    is order-dependent and is not a bound over schedules. Exceeding an implicit
+    level's capacity MUST likewise be recorded as an advisory and MUST NOT fail
+    the call, because a working set larger than a cache still runs.
 
 ### 2.4 Throughput and parallel-capacity facts
 

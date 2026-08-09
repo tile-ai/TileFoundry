@@ -123,8 +123,9 @@ class MemoryMetadata(IRMetadata):
 
     ``advisories`` carries the capacity findings that are not errors. A cache
     too small for the working set it fronts costs performance, so it is worth
-    reporting; it does not make the program invalid, so it must not fail the
-    call the way an over-full addressable level does.
+    reporting; an explicit-level peak is likewise order-dependent. Neither
+    makes the program invalid. Only one value too large for an addressable
+    level fails the call, because no schedule can place it.
     """
 
     footprint: tuple[LevelFootprint, ...] = ()

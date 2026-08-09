@@ -202,11 +202,20 @@ def _multi_topology_mesh(source: Tensor[(4,), "f32"]):
         return tf.add(local, local)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 4),))
-def _oversized_shared(source: Tensor[(131072,), "f32"]):
-    with Mesh(("thread",), layout=(4,), names=("lane",)) as thread:
-        local = tf.reshard(source, (131072 @ thread.lane,), "smem")
-        return tf.add(local, local)
+@module(entry="split", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
+class _SharedTile:
+
+    @func
+    def split(source: Tensor[(1056, 6600), "f32"]):
+        with Mesh(("cta",), layout=(132,), names=("tile",)) as cta:
+            local = tf.reshard(source, (1056 @ cta.tile, 6600), "smem")
+            return tf.add(local, local)
+
+    @func
+    def broadcast(source: Tensor[(1056, 6600), "f32"]):
+        with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
+            local = tf.reshard(source, (1056, 6600), "smem")
+            return tf.add(local, local)
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 4),))
@@ -444,10 +453,28 @@ def test_memory_holds_a_weight_resident_past_its_last_reader() -> None:
     assert any(item.last_used_at > item.defined_at for item in ordinary)
 
 
-def test_an_addressable_level_that_overflows_fails_the_analysis() -> None:
-    """AC-1-3: too much shared memory is an invalid program, not a warning."""
-    with pytest.raises(AnalysisError, match="smem needs"):
-        _run(_oversized_shared, "memory")
+def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
+    functions = {function.name: function for function in _SharedTile.functions}
+    split = functions["split"]
+    analyze(_SharedTile, split, analysis="memory")
+
+    record = get_metadata(split, MemoryMetadata)
+    assert record is not None
+    smem = next(item for item in record.footprint if item.level == "smem")
+    assert smem.capacity_bytes == 232_448
+    assert smem.peak_bytes == 422_400
+    assert max(
+        item.bytes for item in record.lifetimes if item.level == "smem"
+    ) == 211_200
+    assert any(
+        "smem peak is 422400 B" in note
+        and "order-dependent" in note
+        and "not a bound" in note
+        for note in record.advisories
+    )
+
+    with pytest.raises(AnalysisError, match=r"27878400 B in smem"):
+        analyze(_SharedTile, functions["broadcast"], analysis="memory")
 
 
 def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None:
