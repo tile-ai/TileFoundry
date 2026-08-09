@@ -4,9 +4,14 @@ import json
 
 import pytest
 
+import tilefoundry.cli.target as target_cli
 from tilefoundry import cli
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim
-from tilefoundry.target import registered_targets
+from tilefoundry.target import CpuTarget, registered_targets
+
+
+class ListedCpuTarget(CpuTarget):
+    name = "tests.cli.listed_cpu"
 
 
 def test_parse_dims_reads_one_extent_per_dimension() -> None:
@@ -93,13 +98,21 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
 
 
 def test_target_list_expressions_execute_and_show_accepts_their_identities(
-    capsys,
+    capsys, monkeypatch
 ) -> None:
+    builtins = target_cli.available_targets()
+    monkeypatch.setattr(
+        target_cli,
+        "available_targets",
+        lambda: (*builtins, ListedCpuTarget()),
+    )
     assert cli.main(["target", "list"]) == 0
     listed = capsys.readouterr()
     namespace: dict[str, object] = {}
-    import_line = next(line for line in listed.out.splitlines() if line.startswith("from "))
-    exec(import_line, namespace)
+    for import_line in (
+        line for line in listed.out.splitlines() if line.startswith("from ")
+    ):
+        exec(import_line, namespace)
 
     rows = [line.strip() for line in listed.out.splitlines() if "  identity: " in line]
     identities = []
@@ -112,18 +125,22 @@ def test_target_list_expressions_execute_and_show_accepts_their_identities(
         assert cli.main(["target", "show", identity]) == 0
         shown = capsys.readouterr()
         assert shown.err == ""
-        if identity == "cpu":
-            assert shown.out == "identity: cpu\nCpuTarget()\nfacts: unavailable\n"
-        else:
+        if "device:" in shown.out:
             assert f"device: {identity}\n" in shown.out
             assert shown.out.count("  digest: ") == 2
+        else:
+            assert shown.out == (
+                f"identity: {identity}\n{expression.rstrip()}\n"
+                "facts: unavailable\n"
+            )
 
-    assert identities == [
+    assert {
         "apple.m2_pro",
         "cpu",
         "nvidia.b200_sxm",
         "nvidia.h200_sxm",
-    ]
+    } < set(identities)
+    assert "tests.cli.listed_cpu" in identities
 
 
 def test_target_show_rejects_unknown_identity_and_inspect_is_gone(capsys) -> None:

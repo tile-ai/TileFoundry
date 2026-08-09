@@ -6,6 +6,7 @@ import sys
 
 from tilefoundry.target import Target, registered_targets
 from tilefoundry.target.hardware import format_capabilities, hardware_documents
+from tilefoundry.target.hardware.envelope import UnknownDocumentError
 from tilefoundry.utils.python_source import PythonExpr
 
 
@@ -74,13 +75,9 @@ def format_document_target(target: Target) -> str:
 def run_show(identity: str) -> int:
     """Show one available Target by exact identity."""
     target = target_by_identity(identity)
-    has_documents = all(
-        getattr(target, attribute, None) is not None
-        for attribute in ("_architecture_document", "_device_document")
-    )
-    if has_documents:
+    try:
         output = format_document_target(target)
-    else:
+    except UnknownDocumentError:
         output = f"identity: {target.identity}\n{target.to_python().text}\nfacts: unavailable"
     sys.stdout.write(output + "\n")
     return 0

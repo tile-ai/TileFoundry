@@ -350,6 +350,19 @@ def select(
     return resolved
 
 
+def _available_device_ids(hardware: HardwareSpec) -> tuple[str, ...]:
+    """Return devices whose sole compatible architecture is available."""
+    documents = hardware.documents()
+    return tuple(
+        document.id
+        for document in sorted(documents.values(), key=lambda item: item.id)
+        if document.kind == "device"
+        and len(document.compatibility) == 1
+        and document.compatibility[0] in documents
+        and documents[document.compatibility[0]].kind == "architecture"
+    )
+
+
 def _architecture_of(
     device: Any,
     *,

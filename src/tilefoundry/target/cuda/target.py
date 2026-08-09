@@ -11,6 +11,7 @@ from tilefoundry.target.base import (
     Device,
     HardwareSpec,
     _architecture_of,
+    _available_device_ids,
     _BuiltinAnalysisTarget,
     check_compatible,
     register_target,
@@ -64,15 +65,7 @@ class CudaTarget(_BuiltinAnalysisTarget):
 
     @classmethod
     def available(cls) -> tuple[CudaTarget, ...]:
-        documents = cls.hardware.documents()
-        return tuple(
-            cls(document.id)
-            for document in sorted(documents.values(), key=lambda item: item.id)
-            if document.kind == "device"
-            and len(document.compatibility) == 1
-            and document.compatibility[0] in documents
-            and documents[document.compatibility[0]].kind == "architecture"
-        )
+        return tuple(cls(device_id) for device_id in _available_device_ids(cls.hardware))
 
     def __init__(
         self,

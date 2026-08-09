@@ -16,7 +16,9 @@ class CpuTarget(Target):
     name = "cpu"
 
     def _python_import_module(self) -> str:
-        return "tilefoundry.target"
+        if type(self) is CpuTarget:
+            return "tilefoundry.target"
+        return super()._python_import_module()
 
     def get_code_generator(self) -> CodeGenerator:
         from tilefoundry.codegen.cpu.module import CPU_CODE_GENERATOR  # noqa: PLC0415
