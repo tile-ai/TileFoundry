@@ -1,9 +1,9 @@
 """What a function needs from the memory hierarchy, and whether it fits.
 
 Lifetime order is read from the authored program, while residency bytes are
-projected to one unit of the analysed level. Whether they fit is asked against
-the target's levels. These remain separate in the record so a caller can see
-the measured footprint and the capacity finding independently.
+projected to the owner of each explicit memory level. Whether they fit is asked
+against the target's levels. These remain separate in the record so a caller can
+see the measured footprint and the capacity finding independently.
 
 Overflow is not one verdict. One value larger than an explicit level cannot be
 placed by any schedule, so it fails the analysis. A peak depends on the order in

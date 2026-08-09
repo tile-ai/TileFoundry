@@ -61,8 +61,8 @@ def guidance() -> str:
         ------------   --------------------------------------  ---------------------
         compute-cost   flops_per_unit. flops and traffic are   the program shards
                        the device's and do not move
-        memory         the footprint each capacity is          the program shards, or
-                       compared against                        places values in smem
+        memory         nothing. Each storage level's footprint  never
+                       is projected to that level's owner
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
         timeline       which level's parallel capacity the     the program shards
