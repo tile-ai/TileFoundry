@@ -184,14 +184,29 @@ def _local_layout_shape(
             f"local_type_of: shard uses undeclared topology level {topology.name!r}"
         )
     topology_level, resolved_extent = resolved
+    mesh_shape = layout.mesh.layout.shape
+    launch_split_axes = tuple(
+        mesh_axis
+        for mesh_axis, attr in enumerate(layout.attrs)
+        if isinstance(attr, Split)
+        and mesh_axis < len(mesh_shape)
+        and mesh_shape[mesh_axis] is None
+    )
+    if len(launch_split_axes) > 1:
+        raise ValueError(
+            f"local_type_of: mesh {layout.mesh!r} has launch-provided extents "
+            f"on Split axes {launch_split_axes}; topology level {topology.name!r} "
+            "has one parallel width with no per-axis source, so assigning it "
+            "to those axes would be a guess"
+        )
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
         if topology_level > selected_level:
             continue
-        if mesh_axis >= len(layout.mesh.layout.shape):
+        if mesh_axis >= len(mesh_shape):
             raise ValueError("local_type_of: shard attribute exceeds mesh layout rank")
-        mesh_extent = layout.mesh.layout.shape[mesh_axis]
+        mesh_extent = mesh_shape[mesh_axis]
         extent = resolved_extent if mesh_extent is None else mesh_extent
         axis = attr.axis
         if not isinstance(axis, int) or isinstance(axis, bool) or not 0 <= axis < len(shape):

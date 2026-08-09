@@ -120,23 +120,38 @@ def test_local_type_preserves_canonical_split_projection(
     ).shape == expected
 
 
-def test_local_type_projects_every_axis_of_a_single_topology_mesh() -> None:
+@pytest.mark.parametrize(
+    ("shape", "mesh_shape", "attrs", "expected"),
+    [
+        ((16, 64), (4, 8), (Split(0), Split(1)), (4, 8)),
+        ((128,), (4, 32), (Split(0), Split(0)), (1,)),
+    ],
+)
+def test_local_type_projects_every_axis_of_a_single_topology_mesh(
+    shape: tuple[int, ...],
+    mesh_shape: tuple[int, ...],
+    attrs: tuple[Split, ...],
+    expected: tuple[int, ...],
+) -> None:
+    topology_extent = mesh_shape[0] * mesh_shape[1]
     mesh = Mesh(
-        topologies=(Topology("cta", 32),),
-        layout=Layout(shape=(4, 8), strides=(8, 1)),
+        topologies=(Topology("cta", topology_extent),),
+        layout=Layout(shape=mesh_shape, strides=(mesh_shape[1], 1)),
     )
     layout = ShardLayout(
-        layout=Layout(shape=(16, 64), strides=(64, 1)),
-        attrs=(Split(0), Split(1)),
+        layout=Layout(shape=shape, strides=None),
+        attrs=attrs,
         mesh=mesh,
     )
-    tensor = TensorType(shape=(16, 64), dtype=DType.f32, layout=layout, storage="gmem")
+    tensor = TensorType(shape=shape, dtype=DType.f32, layout=layout, storage="gmem")
 
     local = local_type_of(
-        tensor, level="cta", topologies=(Topology("cta", 32),)
+        tensor,
+        level="cta",
+        topologies=(Topology("cta", topology_extent),),
     )
 
-    assert local.shape == (4, 8)
+    assert local.shape == expected
 
 
 @pytest.mark.parametrize(("shape", "extent"), [(1024, 132), (64, 128)])
@@ -158,6 +173,24 @@ def test_local_type_uses_ceildiv_for_a_resolved_launch_extent(
     assert local_type_of(
         tensor, level="cta", topologies=(Topology("cta", 132),)
     ).shape == (1, expected, 128, 2048)
+
+
+def test_local_type_rejects_multiple_launch_provided_split_axes() -> None:
+    mesh = Mesh(
+        topologies=(Topology("cta", None),),
+        layout=Layout(shape=(None, None), strides=None),
+    )
+    tensor = make_shard_tensor_type(
+        (1056, 128), mesh=mesh, attrs=(Split(0), Split(1))
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"mesh Mesh\(.*Split axes \(0, 1\).*one parallel width with no per-axis source",
+    ):
+        local_type_of(
+            tensor, level="cta", topologies=(Topology("cta", 132),)
+        )
 
 
 @pytest.mark.parametrize(

@@ -122,7 +122,9 @@ def local_type_of(
     A mesh axis's stated extent MUST take precedence; only an axis whose extent
     is launch-provided MAY use the corresponding resolved topology extent, and
     that division MUST round up. A stated static extent that does not divide the
-    split dimension MUST still raise.
+    split dimension MUST still raise. A Mesh with launch-provided extents on
+    more than one `Split` axis MUST raise: one topology level supplies one
+    parallel width and states no way to assign it among those axes.
   - Every axis of a Mesh carrying one topology MUST be read at that topology
     level. A Mesh carrying multiple topologies remains a valid Mesh, but local
     projection MUST reject it when asking for a position count by topology name
