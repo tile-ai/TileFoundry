@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -39,9 +40,10 @@ class VendorNpuPlan(SchedulePlan):
 
 
 def _schedule_vendor_npu(module, function, target, topology, options) -> SchedulePlan:
-    marker = Path(__file__).with_name("scheduler_calls.txt")
-    with marker.open("a", encoding="utf-8") as calls:
-        calls.write(f"{topology.name}\n")
+    marker = os.environ.get("TF_VENDOR_NPU_SCHEDULER_CALLS")
+    if marker is not None:
+        with Path(marker).open("a", encoding="utf-8") as calls:
+            calls.write(f"{topology.name}\n")
     return VendorNpuPlan(topology.name, topology.size)
 
 

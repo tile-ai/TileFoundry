@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 
-def _vendor_npu_model(cmine: Path, tmp_path: Path) -> tuple[Path, Path]:
+def _vendor_npu_model(cmine: Path, tmp_path: Path) -> Path:
     provider = tmp_path / "vendor_npu"
     shutil.copytree(Path(__file__).parent / "vendor_npu", provider)
     model = tmp_path / "vendor_npu_model.py"
@@ -24,11 +24,15 @@ def _vendor_npu_model(cmine: Path, tmp_path: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
-    return model, provider
+    return model
 
 
-def test_document_free_target_analyses_and_selects_its_scheduler(tf, cmine, tmp_path) -> None:
-    model, provider = _vendor_npu_model(cmine, tmp_path)
+def test_document_free_target_analyses_and_selects_its_scheduler(
+    tf, cmine, tmp_path, monkeypatch
+) -> None:
+    model = _vendor_npu_model(cmine, tmp_path)
+    scheduler_calls = tmp_path / "scheduler_calls.txt"
+    monkeypatch.setenv("TF_VENDOR_NPU_SCHEDULER_CALLS", str(scheduler_calls))
     analyzed = tf(
         "analyze",
         f"{model}:CMine.root",
@@ -54,4 +58,4 @@ def test_document_free_target_analyses_and_selects_its_scheduler(tf, cmine, tmp_
     )
     assert scheduled.returncode == 0, scheduled.stderr
     assert json.loads(scheduled.stdout) == {"topology": "core", "extent": 1}
-    assert (provider / "scheduler_calls.txt").read_text(encoding="utf-8") == "core\n"
+    assert scheduler_calls.read_text(encoding="utf-8") == "core\n"
