@@ -1,4 +1,4 @@
-"""An installed external Target can analyse a copied shipped model."""
+"""External CUDA documents can analyse and schedule a copied shipped model."""
 
 from __future__ import annotations
 
@@ -14,14 +14,22 @@ def _v100_qwen(tf, tmp_path: Path) -> Path:
     assert source.is_absolute()
     copied = tmp_path / "qwen3_1_7b_v100"
     shutil.copytree(source, copied)
-    provider = Path(__file__).with_name("v100.py")
-    shutil.copy2(provider, copied / "v100.py")
+    shutil.copytree(Path(__file__).parent / "hw", copied / "hw")
 
     model = copied / "model.py"
     model.write_text(
         model.read_text(encoding="utf-8")
-        .replace("from tilefoundry.target import CudaTarget", "from v100 import V100Target")
-        .replace('CudaTarget("nvidia.h200_sxm")', "V100Target()"),
+        .replace(
+            "from tilefoundry.target import CudaTarget",
+            "from pathlib import Path\nfrom tilefoundry.target import CudaTarget",
+        )
+        .replace(
+            'CudaTarget("nvidia.h200_sxm")',
+            'CudaTarget(\n'
+            '    Path(__file__).parent / "hw" / "vendor_v100_sxm2_32gb.toml",\n'
+            '    Path(__file__).parent / "hw" / "vendor_sm70.toml",\n'
+            ')',
+        ),
         encoding="utf-8",
     )
     config = copied / "config.json"
@@ -31,7 +39,7 @@ def _v100_qwen(tf, tmp_path: Path) -> Path:
     return model
 
 
-def test_external_v100_target_analyses_a_copied_installed_model(
+def test_external_v100_documents_analyse_a_copied_installed_model(
     tf, tmp_path
 ) -> None:
     model = _v100_qwen(tf, tmp_path)
@@ -47,7 +55,7 @@ def test_external_v100_target_analyses_a_copied_installed_model(
     assert done.returncode == 0, done.stderr
     report = json.loads(done.stdout)
 
-    assert report["target"] == "nvidia.v100_sxm2_32gb"
+    assert report["target"] == "vendor.v100_sxm2_32gb"
     assert report["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
     assert report["totals"]["flops"]["f16"] > 0
     assert report["function_records"]["roofline"]["ideal_ns"] > 0
@@ -74,14 +82,3 @@ def test_external_v100_target_analyses_a_copied_installed_model(
         "--first-plan",
     )
     assert scheduled.returncode == 0, scheduled.stderr
-
-    service_calls = (model.parent / "v100_service_calls.txt").read_text(
-        encoding="utf-8"
-    ).splitlines()
-    assert {
-        "analyzer:compute-cost",
-        "analyzer:memory",
-        "analyzer:roofline",
-        "analyzer:timeline",
-        "scheduler:thread",
-    } <= set(service_calls)

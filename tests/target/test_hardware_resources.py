@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
 from tilefoundry.ir.types import DType
 from tilefoundry.target.amx import AmxTarget
 from tilefoundry.target.amx import spec as amx_spec
@@ -40,6 +41,7 @@ _SM90 = "nvidia.sm90"
 _SM100 = "nvidia.sm100"
 _H200 = "nvidia.h200_sxm"
 _B200 = "nvidia.b200_sxm"
+_EXTERNAL_HARDWARE = Path(__file__).parents[1] / "installed" / "smoke_target" / "hw"
 
 _MINIMAL_DEVICE = """
 [spec]
@@ -69,6 +71,11 @@ def _hardware_text(resource: str) -> str:
     """The installed hardware document *resource* as authored."""
     hardware = Path(cuda_spec.__file__).parent / "hardware"
     return (hardware / resource).read_text(encoding="utf-8")
+
+
+def _external_hardware_text(resource: str) -> str:
+    """One external CUDA document used by the installed smoke workflow."""
+    return (_EXTERNAL_HARDWARE / resource).read_text(encoding="utf-8")
 
 
 def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
@@ -160,38 +167,88 @@ def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
         hopper.device.peak_for(DType.f4e2m1)
 
 
-def test_an_explicitly_loaded_document_stays_out_of_the_available_namespace(
+def test_an_external_document_pair_stays_out_of_the_available_namespace(
     tmp_path: Path,
 ) -> None:
     """A complete custom pair keeps provenance without joining available IDs."""
     before = tuple(CudaTarget.hardware.documents())
-    architecture_path = tmp_path / "custom_sm90.toml"
-    architecture_path.write_text(
-        _hardware_text("nvidia_sm90.toml").replace(
-            'id = "nvidia.sm90"', 'id = "vendor.sm90_custom"'
-        )
-    )
-    device_path = tmp_path / "custom_h200.toml"
-    device_path.write_text(
-        _hardware_text("nvidia_h200_sxm.toml")
-        .replace('id = "nvidia.h200_sxm"', 'id = "vendor.h200_custom"')
-        .replace('architectures = ["nvidia.sm90"]', 'architectures = ["vendor.sm90_custom"]')
-    )
+    architecture_path = tmp_path / "vendor_sm70.toml"
+    architecture_path.write_text(_external_hardware_text(architecture_path.name))
+    device_path = tmp_path / "vendor_v100_sxm2_32gb.toml"
+    device_path.write_text(_external_hardware_text(device_path.name))
 
     target = CudaTarget(device_path, architecture_path)
-    assert target.architecture_id == "vendor.sm90_custom"
-    assert target.device_id == "vendor.h200_custom"
+    assert target.architecture_id == "vendor.sm70"
+    assert target.device_id == "vendor.v100_sxm2_32gb"
     assert re.fullmatch(r"[0-9a-f]{64}", target.architecture_digest)
     assert re.fullmatch(r"[0-9a-f]{64}", target.device_digest)
     assert target.architecture.max_threads_per_cta == 1024
+    assert target.device.sm_count == 80
+    memory = target.get_facts(MemoryHierarchyFacts)
+    throughput = target.get_facts(ThroughputFacts)
+    assert memory.explicit("gmem").capacity_bytes == 32_000_000_000
+    assert memory.explicit("tmem").capacity_bytes is None
+    assert throughput.peak_for(DType.f16) == 125_000_000_000_000
+    assert throughput.peak_for(DType.bf16) is None
     architecture_document, device_document = hardware_documents(target)
     assert architecture_document.id == target.architecture_id
     assert device_document.id == target.device_id
     assert architecture_document.digest == target.architecture_digest
     assert device_document.digest == target.device_digest
+    for document in (architecture_document, device_document):
+        for fact in document.facts.values():
+            if fact.available:
+                assert fact.origin and fact.source and fact.conditions
+    for document, path in (
+        (architecture_document, "memory.tensor.per_cta"),
+        (device_document, "throughput.bf16"),
+        (device_document, "throughput.fp8e4m3"),
+        (device_document, "throughput.f4e2m1"),
+    ):
+        fact = document.fact(path)
+        assert fact.status == "unavailable" and fact.conditions
     assert tuple(CudaTarget.hardware.documents()) == before
     with pytest.raises(UnknownDocumentError):
-        CudaTarget.hardware.resolve("vendor.sm90_custom")
+        CudaTarget.hardware.resolve("vendor.sm70")
+
+
+def test_external_cuda_documents_reject_incompatibility_and_a_missing_leaf(
+    tmp_path: Path,
+) -> None:
+    architecture = _external_hardware_text("vendor_sm70.toml")
+    architecture_path = tmp_path / "vendor_sm70.toml"
+    architecture_path.write_text(architecture)
+    device = _external_hardware_text("vendor_v100_sxm2_32gb.toml")
+    device_path = tmp_path / "vendor_v100_sxm2_32gb.toml"
+    device_path.write_text(device)
+    incompatible_path = tmp_path / "incompatible_v100.toml"
+    incompatible_path.write_text(
+        device.replace(
+            'architectures = ["vendor.sm70"]',
+            'architectures = ["vendor.other"]',
+        )
+    )
+
+    with pytest.raises(
+        IncompatiblePairError,
+        match=r"declares compatibility with \['vendor.other'\], not 'vendor.sm70'",
+    ):
+        CudaTarget(incompatible_path, architecture_path)
+
+    missing_path = tmp_path / "missing_tensor_memory.toml"
+    missing_path.write_text(
+        architecture.replace(
+            '\n[facts.memory.tensor.per_cta]\nstatus = "unavailable"\n'
+            'conditions = "Volta Tensor Cores accumulate into registers and provide '
+            'no separately addressable tensor-memory store."\n',
+            "\n",
+        )
+    )
+    with pytest.raises(
+        SchemaValidationError,
+        match=r"required fact 'memory.tensor.per_cta' is missing",
+    ):
+        CudaTarget(device_path, missing_path)
 
 
 @pytest.mark.parametrize(

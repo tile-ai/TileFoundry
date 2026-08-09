@@ -1,0 +1,114 @@
+[spec]
+schema = "tilefoundry.cuda.architecture/v3"
+kind = "architecture"
+id = "vendor.sm70"
+
+[facts.identity.name]
+value = "sm_70"
+unit = "name"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "Volta compute capability 7.0 compilation identity"
+
+[facts.instruction.capabilities]
+value = ["tensor_core"]
+unit = "name"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "first-generation Tensor Core matrix-multiply-accumulate instructions"
+
+[facts.instruction.compute_dtypes]
+value = ["f32", "f16"]
+unit = "name"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "native CUDA and Tensor Core compute modes; later BF16, FP8, and FP4 modes are absent"
+
+[facts.compute.max_threads_per_cta]
+value = 1024
+unit = "thread"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#features-and-technical-specifications"
+conditions = "compute capability 7.0 maximum threads per thread block"
+
+[facts.compute.max_threads_per_warp]
+value = 32
+unit = "thread"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#features-and-technical-specifications"
+conditions = "compute capability 7.0 warp width"
+
+[facts.compute.max_warps_per_cta]
+value = 32
+unit = "count"
+origin = "derived"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#features-and-technical-specifications"
+conditions = "1024 threads per CTA divided by the 32-thread warp width"
+
+[facts.compute.max_resident_ctas_per_sm]
+value = 32
+unit = "count"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#features-and-technical-specifications"
+conditions = "compute capability 7.0 hardware maximum; resource usage can lower occupancy"
+
+[facts.memory.shared.per_sm]
+value = 98304
+unit = "byte"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#shared-memory-7-x"
+conditions = "96 KiB maximum shared-memory carveout per Volta SM"
+
+[facts.memory.shared.per_cta]
+value = 98304
+unit = "byte"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#shared-memory-7-x"
+conditions = "96 KiB opt-in maximum shared-memory allocation per CTA on compute capability 7.0"
+
+[facts.memory.shared.owner]
+value = "cta"
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#shared-memory-7-x"
+conditions = "shared memory is allocated per thread block, the CUDA execution unit TileFoundry names cta"
+
+[facts.memory.unified_l1_shared.per_sm]
+value = 131072
+unit = "byte"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#shared-memory-7-x"
+conditions = "128 KiB unified L1 data cache and shared-memory block on Volta"
+
+[facts.memory.shared.bandwidth]
+status = "unavailable"
+conditions = "NVIDIA publishes no static shared-memory bandwidth to use for a roofline."
+
+[facts.memory.register.per_sm]
+value = 65536
+unit = "register"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#features-and-technical-specifications"
+conditions = "compute capability 7.0 32-bit register-file capacity per SM"
+
+[facts.memory.register.owner]
+value = "thread"
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#features-and-technical-specifications"
+conditions = "registers are private to one CUDA thread"
+
+[facts.memory.register.bandwidth]
+status = "unavailable"
+conditions = "NVIDIA publishes no static register-file bandwidth to use for a roofline."
+
+[facts.memory.tensor.per_cta]
+status = "unavailable"
+conditions = "Volta Tensor Cores accumulate into registers and provide no separately addressable tensor-memory store."
+
+[facts.memory.tensor.owner]
+value = "cta"
+unit = "name"
+origin = "derived"
+source = "https://docs.nvidia.com/cuda/archive/10.0/cuda-c-programming-guide/index.html#shared-memory-7-x"
+conditions = "where tensor memory exists its allocation is CTA-scoped; Volta records no tensor-memory capacity"

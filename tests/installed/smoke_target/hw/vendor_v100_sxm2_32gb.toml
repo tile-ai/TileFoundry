@@ -1,0 +1,79 @@
+[spec]
+schema = "tilefoundry.cuda.device/v3"
+kind = "device"
+id = "vendor.v100_sxm2_32gb"
+
+[compatibility]
+architectures = ["vendor.sm70"]
+
+[facts.identity.name]
+value = "tesla_v100_sxm2_32gb"
+unit = "name"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "Tesla V100 SXM2 product with 32 GB HBM2"
+
+[facts.compute.sm_count]
+value = 80
+unit = "count"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "Tesla V100 SXM2 streaming multiprocessor count"
+
+[facts.memory.hbm.capacity]
+value = 32000000000
+unit = "byte"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "32 GB HBM2, decimal"
+
+[facts.memory.hbm.owner]
+value = "target"
+unit = "name"
+origin = "derived"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "the HBM2 capacity is one pool shared by all execution units of this single-device target"
+
+[facts.memory.hbm.bandwidth]
+value = 900000000000
+unit = "byte/s"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "900 GB/s peak HBM2 bandwidth, decimal"
+
+[facts.memory.l2.capacity]
+value = 6291456
+unit = "byte"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "6 MiB L2 cache"
+
+[facts.memory.l2.bandwidth]
+status = "unavailable"
+conditions = "NVIDIA publishes no static L2 bandwidth to use for a roofline."
+
+[facts.throughput.f32]
+value = 15700000000000
+unit = "flop/s"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "15.7 TFLOP/s peak FP32"
+
+[facts.throughput.f16]
+value = 125000000000000
+unit = "flop/s"
+origin = "vendor"
+source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+conditions = "125 Tensor TFLOP/s peak FP16"
+
+[facts.throughput.bf16]
+status = "unavailable"
+conditions = "Volta Tensor Cores have no BF16 mode, so this product has no BF16 peak."
+
+[facts.throughput.fp8e4m3]
+status = "unavailable"
+conditions = "Volta Tensor Cores have no FP8 mode, so this product has no FP8 peak."
+
+[facts.throughput.f4e2m1]
+status = "unavailable"
+conditions = "Volta Tensor Cores have no FP4 mode, so this product has no FP4 peak."
