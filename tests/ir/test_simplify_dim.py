@@ -33,8 +33,11 @@ def _i64(v: int) -> Constant:
 
 
 def _sym(name: str) -> Call:
-    """A symbolic dim Expr — wrap a DimVar in a Call so its
-    presence breaks all-Constant folding."""
+    """A symbolic dim Expr — wrap a DimVar in a Call so its presence breaks all-Constant folding.
+
+    A symbolic dim Expr — wrap a DimVar in a Call so its
+    presence breaks all-Constant folding.
+    """
     return Call(
         type=TensorType.scalar(DType.i64),
         target=DimVar(name=name, lo=1, hi=1024),
@@ -43,10 +46,13 @@ def _sym(name: str) -> Call:
 
 
 def test_simplify_dim_folds_all_constant_args() -> None:
-    """When both args are int Constants, simplify_dim returns a folded
+    """Test simplify dim folds all constant args.
+
+    When both args are int Constants, simplify_dim returns a folded
     Constant with the canonical i64 dim type. Floor division follows Python
     ``//`` (floor), not C truncation, which is the convention every tiling
-    expression is written against."""
+    expression is written against.
+    """
     table = [
         (DimAdd, 3, 4, 7),
         (DimSub, 10, 4, 6),
@@ -67,8 +73,9 @@ def test_simplify_dim_folds_all_constant_args() -> None:
 
 
 def test_simplify_dim_refuses_to_fold_outside_all_int_constants() -> None:
-    """Three non-foldable inputs, in either operand position:
+    """Three non-foldable inputs, in either operand position.
 
+    Three non-foldable inputs, in either operand position:
     - a non-Constant arg (a symbolic DimVar Call): the Call survives with no
       algebraic identity applied, so ``x + 0`` stays a Call;
     - division by zero: folding to ``Constant(0)`` would mask a real bug, so the
@@ -95,7 +102,9 @@ def test_simplify_dim_refuses_to_fold_outside_all_int_constants() -> None:
 
 
 def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
-    """``TensorType`` folds integer-valued ``Constant`` shape dims to plain ``int``,
+    """Test a fully static dim has one canonical int representation.
+
+    ``TensorType`` folds integer-valued ``Constant`` shape dims to plain ``int``,
     leaving ``DimVar`` / dynamic dims alone, and a typeinfer result built through
     ``simplify_dim`` arrives the same way.
 
@@ -133,9 +142,12 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
 
 
 def test_unary_propagates_dim_var_in_shape() -> None:
-    """Unary(NEG) on a tensor whose first axis is a ``DimVar`` keeps
+    """Test unary propagates dim var in shape.
+
+    Unary(NEG) on a tensor whose first axis is a ``DimVar`` keeps
     that ``DimVar`` (with the same bounds) on the result type — the
-    dynamic dim is not collapsed to a concrete int."""
+    dynamic dim is not collapsed to a concrete int.
+    """
     s = DimVar(name="S_ti", lo=1, hi=8)
     in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
     x = Var(type=in_ty, name="x")

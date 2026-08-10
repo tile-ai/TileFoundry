@@ -84,8 +84,11 @@ class NarrowLoad:
     "cls,cols", [(WideLoad, 4), (NarrowLoad, 2)], ids=["wide_128b", "narrow_64b_fallback"]
 )
 def test_wide_load_roundtrip_matches(cls, cols):
-    """Both the 128-bit vector path and the sub-128-bit scalar fallback copy the
-    input through the rmem fragment unchanged."""
+    """Test wide load roundtrip matches.
+
+    Both the 128-bit vector path and the sub-128-bit scalar fallback copy the
+    input through the rmem fragment unchanged.
+    """
     rm = tilefoundry.compile(cls, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     a = torch.randn(128, cols, dtype=torch.float32, device="cuda")

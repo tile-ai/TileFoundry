@@ -39,7 +39,9 @@ _SHARD_ATTR = "[shard §6](docs/spec/shard.md#6-shardattr)"
 
 
 class LayoutSugarError(VerifyError):
-    """A layout-sugar node was recognized structurally but is malformed
+    """Report a structurally recognized but malformed layout-sugar node.
+
+    A layout-sugar node was recognized structurally but is malformed
     (e.g. a dynamic ``DimVar`` / ``bool`` static extent).
 
     It subclasses ``VerifyError`` (itself a ``ValueError``) so both
@@ -479,8 +481,11 @@ def _split_layout_outer(
 def _parse_value_state(
     node: "ast.Set", mesh_resolver: MeshResolver
 ) -> list[tuple[Mesh, int, str]]:
-    """Parse a ``{mesh.axis @ P("reduction"), ...}`` value-state set into a list
-    of ``(mesh, mesh_axis_index, reduction)``. Element order carries no meaning."""
+    """Parse value-state entries into mesh-axis reductions.
+
+    Parse a ``{mesh.axis @ P("reduction"), ...}`` value-state set into a list
+    of ``(mesh, mesh_axis_index, reduction)``. Element order carries no meaning.
+    """
     if not isinstance(node, ast.Set):
         raise VerifyError(f"value-state must be a set literal, got {ast.dump(node)}")
     out: list[tuple[Mesh, int, str]] = []
@@ -731,7 +736,9 @@ def try_parse_sugar_tensor_type(
     node: ast.AST,
     closure: dict[str, Any],
 ) -> TensorType | None:
-    """Parse a ``Tensor[...]`` or ``ConstTensor[...]`` annotation with sugar
+    """Parse a ``Tensor[...]`` or ``ConstTensor[...]`` annotation with sugar layout.
+
+    Parse a ``Tensor[...]`` or ``ConstTensor[...]`` annotation with sugar
     layout.
 
     ``ConstTensor[...]`` resolves to the same ``TensorType`` as

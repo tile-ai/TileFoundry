@@ -38,7 +38,7 @@ repos:
         name: comment-hygiene
         entry: python scripts/comment_hygiene_lint.py
         language: system
-        types_or: [python]
+        files: \.(py|h|hpp|cuh|cu|cpp|cc)$
       - id: no-machine-paths
         name: no-machine-paths
         entry: python scripts/no_machine_paths_lint.py

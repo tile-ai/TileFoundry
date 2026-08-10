@@ -1,4 +1,6 @@
-"""``extract`` over a ``GridRegionExpr`` body -- an authored ``for ... in
+"""Define test poly grid region behavior.
+
+``extract`` over a ``GridRegionExpr`` body -- an authored ``for ... in
 tile(...)`` loop, which used to be rejected outright.
 
 What the model has to say, and what each test pins:
@@ -97,8 +99,11 @@ def _writer_of(tg, buffer: str) -> str:
 
 
 def _self_deltas(tg, statement: str) -> "isl.set":
-    """``statement``'s own dependence distances, tuple name dropped so the
-    expected set reads as plain coordinates."""
+    """Self deltas.
+
+    ``statement``'s own dependence distances, tuple name dropped so the
+    expected set reads as plain coordinates.
+    """
     own = _domains(tg)[statement].to_union_set()
     pieces: list["isl.set"] = []
     tg.deps.intersect_domain(own).intersect_range(own).deltas().foreach_set(pieces.append)
@@ -135,7 +140,9 @@ def _lex_nonpositive(deltas: "isl.union_set") -> "isl.union_set":
 
 
 def test_carried_arg_is_a_distance_one_dependence_on_the_loop_axis():
-    """The carry is one buffer: the ``add`` reads and writes ``o``, so isl's
+    """The carry is one buffer: the ``add`` reads and writes ``o``.
+
+    The carry is one buffer: the ``add`` reads and writes ``o``, so isl's
     own flow analysis reports exactly ``[1, 0, 0]`` -- iteration ``i`` needs
     what ``i - 1`` wrote.
 
@@ -167,8 +174,11 @@ def test_carried_arg_is_a_distance_one_dependence_on_the_loop_axis():
 
 
 def test_nested_loops_contribute_one_dimension_each():
-    """Two axes, innermost last: the carry advances by one inner step, and
-    wraps to the next outer step from the last inner one."""
+    """Two axes, innermost last: the carry advances by one inner step.
+
+    Two axes, innermost last: the carry advances by one inner step, and
+    wraps to the next outer step from the last inner one.
+    """
     tg = extract(nested_carry)
     dom = _domains(tg)["Binary1"]
     assert dom.dim(isl.dim_type.SET) == 4
@@ -181,8 +191,11 @@ def test_nested_loops_contribute_one_dimension_each():
 
 
 def test_dynamic_extent_becomes_an_isl_parameter():
-    """A loop whose trip count is only known at the call: the axis is bounded by
-    the parameter itself, and the carry distance is still one step of it."""
+    """A loop whose trip count is only known at the call.
+
+    A loop whose trip count is only known at the call: the axis is bounded by
+    the parameter itself, and the carry distance is still one step of it.
+    """
     tg = extract(dyn_carry)
     assert tg.params == {"seq": SEQ}
     dom = _domains(tg)["Binary1"]
@@ -193,7 +206,10 @@ def test_dynamic_extent_becomes_an_isl_parameter():
 
 
 def test_data_dependent_gather_fails_closed():
-    """A gather whose index is a value, not the loop's own induction variable,
-    has no affine access map -- so extraction refuses rather than inventing one."""
+    """Test data dependent gather fails closed.
+
+    A gather whose index is a value, not the loop's own induction variable,
+    has no affine access map -- so extraction refuses rather than inventing one.
+    """
     with pytest.raises(ExtractError, match="not an enclosing loop's induction variable"):
         extract(data_gather)

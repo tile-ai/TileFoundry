@@ -1,6 +1,7 @@
 #!/usr/bin/env python
-"""Lint ``docs/spec/*.md`` against the mechanically-checkable subset of
-``docs/SPEC-RULES.md``.
+"""Lint specification Markdown against mechanically checkable rules.
+
+The authority is ``docs/SPEC-RULES.md``.
 
 Two check families:
 

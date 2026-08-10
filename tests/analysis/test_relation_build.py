@@ -42,10 +42,13 @@ def _relation(extents, out_dst):
 
 
 def test_shape_from_relation_reads_static_dynamic_and_broadcast_axes():
-    """One projection, three kinds of axis: a static extent comes back as itself,
+    """One projection, three kinds of axis.
+
+    One projection, three kinds of axis: a static extent comes back as itself,
     a dynamic axis resolves back to the same ``DimVar`` by parameter name (the
     decode shape), and an output position that is a constant is a size-1 axis
-    rather than an axis of that constant's value."""
+    rather than an axis of that constant's value.
+    """
     assert shape_from_relation(_relation((16, 8), "d0, d1")) == (16, 8)
 
     n = DimVar("N", 1, 64)

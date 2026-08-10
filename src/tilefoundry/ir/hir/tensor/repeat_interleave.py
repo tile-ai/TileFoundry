@@ -21,9 +21,12 @@ from tilefoundry.visitor_registry.relation_build import build_domain
 
 @register_op(name="repeat_interleave")
 class RepeatInterleave(Op):
-    """Repeat each element of ``x`` along ``axis`` ``repeats`` times,
+    """Repeat each element of ``x`` along ``axis`` ``repeats`` times, interleaved.
+
+    Repeat each element of ``x`` along ``axis`` ``repeats`` times,
     interleaved (GQA head expansion). The named axis grows by ``repeats``;
-    all other dims are unchanged."""
+    all other dims are unchanged.
+    """
     x = ParamDef(kind="input", pattern=Tensor)
     repeats = ParamDef(kind="attribute", annotation=int)
     axis = ParamDef(kind="attribute", annotation=int)
@@ -35,7 +38,9 @@ def _normalize_axis(axis: int, rank: int) -> int:
 
 @register_type_relation(RepeatInterleave)
 def _repeat_interleave_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for RepeatInterleave: the iteration domain is the
+    """Forward relation for RepeatInterleave.
+
+    Forward relation for RepeatInterleave: the iteration domain is the
     *output* shape (the named axis already expanded to ``in_extent *
     repeats``); the output map is identity -- every domain point writes
     exactly one output element. The input map reads the source element at

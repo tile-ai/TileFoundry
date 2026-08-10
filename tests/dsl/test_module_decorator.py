@@ -36,10 +36,13 @@ class _Demo:
 
 
 def test_module_collects_functions_in_order_and_resolves_them_by_name():
-    """Members land on the Module in definition order and each collected name
+    """Test module collects functions in order and resolves them by name.
+
+    Members land on the Module in definition order and each collected name
     resolves through ``lookup`` (the IR-node path — bare attribute access
     instead returns a runnable callable, see ``ir.core.module.Module``); a name
-    the class never declared raises ``AttributeError``."""
+    the class never declared raises ``AttributeError``.
+    """
     assert _Demo.name == "_Demo"
     assert [fn.name for fn in _Demo.functions] == ["leaf", "composed"]
     assert _Demo.lookup("leaf").name == "leaf"
@@ -49,9 +52,12 @@ def test_module_collects_functions_in_order_and_resolves_them_by_name():
 
 
 def test_attribute_access_ambiguous_name_and_real_fields():
-    """A duplicated function name is ambiguous under attribute access (raises),
+    """Test attribute access ambiguous name and real fields.
+
+    A duplicated function name is ambiguous under attribute access (raises),
     real Module fields are never intercepted, and ``function_named`` returns all
-    matches — the core-ir [parser §2.1](docs/spec/parser.md#21-model) ambiguity rule."""
+    matches — the core-ir [parser §2.1](docs/spec/parser.md#21-model) ambiguity rule.
+    """
     base = _Demo.lookup("leaf")
     dup_a = dataclasses.replace(base, name="dup")
     dup_b = dataclasses.replace(base, name="dup")
@@ -64,9 +70,12 @@ def test_attribute_access_ambiguous_name_and_real_fields():
 
 
 def test_collects_orchestration_method_and_rejects_other_members():
-    """A plain Python method is the third member kind — an orchestration method,
+    """A plain Python method is the third member kind.
+
+    A plain Python method is the third member kind — an orchestration method,
     bound on the resulting Module. A member that is none of the three kinds
-    (DSL function / child Module / plain function) is still rejected."""
+    (DSL function / child Module / plain function) is still rejected.
+    """
 
     @module(entry="only")
     class _WithMethod:
@@ -91,11 +100,13 @@ def test_collects_orchestration_method_and_rejects_other_members():
 
 
 def test_what_a_class_body_must_declare_to_be_a_module():
-    """Only an empty body is refused: one function, one child, or one plain method
+    """Only an empty body is refused: one function, one child, or one plain method is enough.
+
+    Only an empty body is refused: one function, one child, or one plain method
     is enough, so a body of methods alone — refused before for owning no function —
     is valid. A supplied ``entry`` is still checked, and a class-body ``__call__``
-    is refused rather than dropped."""
-
+    is refused rather than dropped.
+    """
     with pytest.raises(TypeError, match="empty class body"):
 
         @module
@@ -131,9 +142,12 @@ def test_what_a_class_body_must_declare_to_be_a_module():
 
 
 def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
-    """A bare call is answered by naming what to call; asking for the entry is
+    """A bare call is answered by naming what to call.
+
+    A bare call is answered by naming what to call; asking for the entry is
     answered by saying there is no default step. Neither may read as ``entry``
-    being wrong, which is what ``None`` reaching the entry lookup produces."""
+    being wrong, which is what ``None`` reaching the entry lookup produces.
+    """
 
     @module
     class _NoStep:
@@ -151,10 +165,13 @@ def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
 
 
 def test_the_runner_on_an_authored_module_takes_the_weights_too():
-    """A Module's callable takes every declared param, a ``ConstTensor`` one
+    """A Module's callable takes every declared param, a ``ConstTensor`` one included.
+
+    A Module's callable takes every declared param, a ``ConstTensor`` one
     included; a ``LoadedModule``'s takes activations alone. Each wrong argument
     list is refused naming the runner it wanted, and neither is sent to the
-    other's."""
+    other's.
+    """
     import torch  # noqa: PLC0415 — only this test needs a real tensor
 
     from tilefoundry.dsl import ConstTensor  # noqa: PLC0415
@@ -190,8 +207,11 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
 
 
 def test_one_shared_child_binds_once_per_owner():
-    """Two owners over one child IR read their own subtrees rather than the last
-    one loaded winning."""
+    """Two owners over one child IR read their own subtrees rather than the last one loaded winning.
+
+    Two owners over one child IR read their own subtrees rather than the last
+    one loaded winning.
+    """
     import copy  # noqa: PLC0415
 
     import torch  # noqa: PLC0415
@@ -233,9 +253,12 @@ def test_one_shared_child_binds_once_per_owner():
 
 
 def test_forward_reference_sibling_fails_loudly():
-    """A method that calls a sibling defined *below* it cannot resolve the
+    """Test forward reference sibling fails loudly.
+
+    A method that calls a sibling defined *below* it cannot resolve the
     sibling (only callee-before-caller is supported) and raises rather than
-    silently mis-parsing the call."""
+    silently mis-parsing the call.
+    """
     with pytest.raises(VerifyError):
 
         @module(entry="caller")
@@ -251,9 +274,12 @@ def test_forward_reference_sibling_fails_loudly():
 
 
 def test_prim_func_host_resolves_sibling_device_in_class_body():
-    """A ``@prim_func`` cpu host can ``launch`` a sibling cuda device kernel
+    """Test prim func host resolves sibling device in class body.
+
+    A ``@prim_func`` cpu host can ``launch`` a sibling cuda device kernel
     defined above it in the same ``@module`` class body — class-local sibling
-    resolution works for prim_func, not only @func."""
+    resolution works for prim_func, not only @func.
+    """
 
     @module(entry="host")
     class _Launch:

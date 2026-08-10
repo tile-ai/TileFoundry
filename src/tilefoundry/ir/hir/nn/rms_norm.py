@@ -73,9 +73,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_access_relation(RMSNorm)
 def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
-    """GLOBAL level: x identity, weight identity (broadcast along last dim
+    """GLOBAL level: x identity, weight identity.
+
+    GLOBAL level: x identity, weight identity (broadcast along last dim
     treated as identity at GLOBAL black-box; reduction is internal to the
-    op)."""
+    op).
+    """
     x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     return AccessRelations(

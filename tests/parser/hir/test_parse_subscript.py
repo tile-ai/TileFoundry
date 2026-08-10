@@ -30,8 +30,11 @@ from tilefoundry.dsl import Tensor
 
 
 def _src(signature: str, *body: str) -> str:
-    """A one-``@func`` script: *signature* closes the param list and states the
-    return annotation, *body* lines carry their own nesting."""
+    """A one-``@func`` script.
+
+    A one-``@func`` script: *signature* closes the param list and states the
+    return annotation, *body* lines carry their own nesting.
+    """
     lines = "\n".join(f"    {line}" for line in body)
     return f"{_PRELUDE}\n@func\ndef f({signature}:\n{lines}\n"
 
@@ -67,10 +70,13 @@ def _partial_slice(x: Tensor[(1, 2048), "f32"]) -> Tensor[(1, 2048), "f32"]:
 
 
 def test_tile_loop_var_in_a_subscript_lifts_to_a_slice():
-    """A ``:`` axis becomes the full static extent, an authored ``0:1`` keeps its
+    """Test tile loop var in a subscript lifts to a slice.
+
+    A ``:`` axis becomes the full static extent, an authored ``0:1`` keeps its
     constant bounds, and the loop var's axis becomes symbolic bounds computed from
     the induction var (``iv * step`` .. ``iv * step + step``) — the chunk the
-    iteration owns, not a copy of the whole axis. Strides default to 1."""
+    iteration owns, not a copy of the whole axis. Strides default to 1.
+    """
     chunked = _slice_op(_chunked_subscript)
     assert isinstance(chunked.begin[0], Constant) and chunked.begin[0].value == 0
     assert isinstance(chunked.end[0], Constant) and chunked.end[0].value == 1
@@ -111,9 +117,12 @@ def _counted_back(x: Tensor[(1, 4, 8), "f32"]) -> Tensor[(1, 4), "f32"]:
 
 
 def test_an_integer_index_drops_its_axis_and_a_slice_keeps_it():
-    """``x[..., 3]`` and ``x[..., 3:4]`` select the same element and differ only in
+    """``x[..., 3]`` and ``x[..., 3:4]`` select the same element and differ only in rank.
+
+    ``x[..., 3]`` and ``x[..., 3:4]`` select the same element and differ only in
     rank, and ``-1`` counts from the extent — the distinctions torch draws. The
-    dropped form is a one-element ``Slice`` reshaped."""
+    dropped form is a one-element ``Slice`` reshaped.
+    """
     assert _collapsed.body.type.shape == (1, 4)
     assert _kept.body.type.shape == (1, 4, 1)
     assert _counted_back.body.type.shape == (1, 4)
@@ -126,8 +135,11 @@ def test_an_integer_index_drops_its_axis_and_a_slice_keeps_it():
 
 
 def test_a_compile_time_list_is_indexed_where_it_is_written():
-    """A comprehension and a plain list literal both bind a Python list of Exprs;
-    indexing either picks an expression rather than emitting an op."""
+    """A comprehension and a plain list literal both bind a Python list of Exprs.
+
+    A comprehension and a plain list literal both bind a Python list of Exprs;
+    indexing either picks an expression rather than emitting an op.
+    """
     taps = _PRELUDE + (
         '\n@func\ndef f(x: Tensor[(1, 4, 8), "f32"]) -> Tensor[(1, 4, 1), "f32"]:\n'
         "    taps = [x[:, :, j:j + 1] for j in range(4)]\n"
@@ -150,9 +162,12 @@ def test_a_compile_time_list_is_indexed_where_it_is_written():
 
 
 def test_unsupported_subscripts_are_rejected():
-    """Two shapes of illegal indexer, each named by its own diagnostic: a subscript
+    """Two shapes of illegal indexer, each named by its own diagnostic.
+
+    Two shapes of illegal indexer, each named by its own diagnostic: a subscript
     whose rank does not match the tensor's, and a runtime value as a tuple index
-    (the field must be known at parse time to give the result a type)."""
+    (the field must be known at parse time to give the result a type).
+    """
     rank_mismatch = _src(
         'x: Tensor[(1, 2048), "f32"]) -> Tensor[(1, 2048), "f32"]',
         "o = relu(x)",

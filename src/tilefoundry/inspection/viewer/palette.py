@@ -74,8 +74,10 @@ def depth_border(depth: int) -> str:
 
 def stable_hash(s: str) -> int:
     """Deterministic 32-bit djb2 hash (NOT Python's salted ``hash``).
+
     Mirrored byte-for-byte in ``viewer.js`` so the detail panel colours
-    unknown storage tokens identically to the graph."""
+    unknown storage tokens identically to the graph.
+    """
     h = 5381
     for ch in s:
         h = (h * 33 + ord(ch)) & 0xFFFFFFFF
@@ -84,10 +86,12 @@ def stable_hash(s: str) -> int:
 
 def storage_color(name: str) -> str:
     """Colour for a storage-class token, from the ordered ``STORAGE_POOL``.
+
     Canonical classes (gmem / smem / rmem + aliases) pin to slots 0-2; any
     *other* memory level (e.g. ``hbm`` / ``pmem``) hashes stably into the
     spare slots so it is never left colourless and never collides with a
-    known class's colour."""
+    known class's colour.
+    """
     canon = _STORAGE_ALIASES.get(name, name)
     if canon in STORAGE_CLASSES:
         return STORAGE_POOL[STORAGE_CLASSES.index(canon)]

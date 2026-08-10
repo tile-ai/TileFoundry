@@ -1,4 +1,6 @@
-"""Unary's Partial algebra by class, its low-precision dtype, and the two kinds
+"""Unary's Partial algebra by class, its low-precision dtype.
+
+Unary's Partial algebra by class, its low-precision dtype, and the two kinds
 no corpus model uses.
 
 Shape / layout / storage pass through the input, and the corpus decoders apply

@@ -61,8 +61,11 @@ def _S(env=(1, 7)) -> DimVar:
 
 def _variant(name: str, lo: int, hi: int, *, calls: HirFunction | None = None,
              env=(1, 7)) -> HirFunction:
-    """A specialization variant over ``DimVar('S', *env)``. With ``calls``, its
-    body is a sub-call to that callee (a prototype); otherwise it is identity."""
+    """A specialization variant over ``DimVar('S', *env)``.
+
+    A specialization variant over ``DimVar('S', *env)``. With ``calls``, its
+    body is a sub-call to that callee (a prototype); otherwise it is identity.
+    """
     ty = _tensor((_S(env),))
     x = Var(type=ty, name="x")
     body = Call(type=ty, target=calls, args=(x,)) if calls is not None else x

@@ -1,6 +1,5 @@
 """nncase-style scoped filesystem dump.
 
-
 Public surface:
 
 - ``DumpScope``: context manager. Enter to nest a sub-scope (or replace

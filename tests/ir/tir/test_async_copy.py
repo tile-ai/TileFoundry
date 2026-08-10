@@ -1,4 +1,6 @@
-"""Async ``cp.async`` staging ops: ``copy_async`` / ``cp_async_commit`` /
+"""Async ``cp.async`` staging ops: ``copy_async`` / ``cp_async_commit`` / ``cp_async_wait``.
+
+Async ``cp.async`` staging ops: ``copy_async`` / ``cp_async_commit`` /
 ``cp_async_wait``.
 
 No corpus model stages through ``cp.async``, so this file is the whole witness
@@ -140,8 +142,11 @@ class AsyncStage:
 
 
 def test_async_copy_emits_cp_async() -> None:
-    """The kernel forwards ``copy_async`` to the runtime entry and emits the
-    group fences for commit / wait."""
+    """Test async copy emits cp async.
+
+    The kernel forwards ``copy_async`` to the runtime entry and emits the
+    group fences for commit / wait.
+    """
     from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
     from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
 
@@ -156,8 +161,11 @@ def test_async_copy_emits_cp_async() -> None:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_async_copy_stage_matches_input() -> None:
-    """A ``copy_async -> commit -> wait`` staging of a Split gmem source into a
-    full shared tile reproduces the input (matches a synchronous copy)."""
+    """Test async copy stage matches input.
+
+    A ``copy_async -> commit -> wait`` staging of a Split gmem source into a
+    full shared tile reproduces the input (matches a synchronous copy).
+    """
     rm = tilefoundry.compile(AsyncStage, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     a = torch.randn(128, 4, dtype=torch.float32, device="cuda")

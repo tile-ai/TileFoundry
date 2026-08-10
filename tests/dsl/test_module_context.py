@@ -56,9 +56,12 @@ class _Root:
 
 
 def test_the_root_declaration_is_the_only_target_anywhere_below() -> None:
-    """One Target is declared at the outermost Module and every Module below it
+    """Test the root declaration is the only target anywhere below.
+
+    One Target is declared at the outermost Module and every Module below it
     resolves to that one; a child that declares its own is rejected rather than
-    shadowing its owner, and a Module with none says which path it searched."""
+    shadowing its owner, and a Module with none says which path it searched.
+    """
     assert _Root.resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert _Root.inherits.resolve_target() == CudaTarget("nvidia.h200_sxm")
     assert _Root.topology_free.resolve_target() == CudaTarget("nvidia.h200_sxm")
@@ -74,9 +77,12 @@ def test_the_root_declaration_is_the_only_target_anywhere_below() -> None:
 
 
 def test_a_module_owns_its_children_so_a_copy_cannot_retarget_the_original() -> None:
-    """Placing the same child value under a second owner -- as a re-export
+    """Placing the same child value under a second owner.
+
+    Placing the same child value under a second owner -- as a re-export
     that declares its own Target does -- must not change what the first
-    owner's child resolves against."""
+    owner's child resolves against.
+    """
     child = Module("child", (_Root.lookup("forward"),), "forward")
     on_cuda = Module("root", (), "forward", modules=(child,), target=CudaTarget("nvidia.h200_sxm"))
     on_cpu = replace(on_cuda, name="copy", target=CpuTarget())
@@ -87,10 +93,13 @@ def test_a_module_owns_its_children_so_a_copy_cannot_retarget_the_original() -> 
 
 
 def test_a_topology_tuple_is_undeclared_empty_or_a_whole_replacement() -> None:
-    """The three declaration forms are three different domains: omitting the
+    """The three declaration forms are three different domains.
+
+    The three declaration forms are three different domains: omitting the
     tuple inherits the owner's hierarchy, an explicit empty tuple declares a
     topology-free domain (it does not fall back to the owner), and an explicit
-    tuple replaces the inherited hierarchy whole rather than extending it."""
+    tuple replaces the inherited hierarchy whole rather than extending it.
+    """
     assert _Root.inherits.topologies is None
     assert _Root.inherits.effective_topologies() == (_CTA, _WARP)
     assert _Root.inherits.resolve_topology("warp") is _WARP
@@ -156,9 +165,12 @@ def test_a_failed_body_is_not_inherited_by_a_deeper_module() -> None:
 
 
 def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
-    """An unresolved level lists the levels in scope, and a repeated level is
+    """An unresolved level lists the levels in scope.
+
+    An unresolved level lists the levels in scope, and a repeated level is
     rejected at construction -- a duplicate name would make lexical resolution
-    answer with whichever declaration happened to come first."""
+    answer with whichever declaration happened to come first.
+    """
     with pytest.raises(ValueError, match="effective topology levels are cta, warp"):
         _Root.resolve_topology("block")
 
@@ -170,9 +182,12 @@ def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
 
 
 def test_declaring_context_on_a_function_yields_its_own_module() -> None:
-    """A Function never carries execution context of its own: ``@func`` with a
+    """A Function never carries execution context of its own.
+
+    A Function never carries execution context of its own: ``@func`` with a
     Target or a topology declaration (including an explicit empty one) yields the
-    Module that owns it, and a plain ``@func`` stays a Function."""
+    Module that owns it, and a plain ``@func`` stays a Function.
+    """
 
     @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
     def standalone(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:

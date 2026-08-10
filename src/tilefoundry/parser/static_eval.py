@@ -1,4 +1,6 @@
-"""Shared static-AST evaluator, parameterized over caller policy (legal
+"""Shared static-AST evaluator, parameterized over caller policy.
+
+Shared static-AST evaluator, parameterized over caller policy (legal
 node set, name lookup, ``ast.Div`` semantics). Raises ``VerifyError``;
 callers needing another error contract translate at the call site.
 """

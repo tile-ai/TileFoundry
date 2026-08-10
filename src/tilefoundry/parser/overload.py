@@ -1,6 +1,5 @@
 """Pattern-based overload resolution for OpSchema candidates.
 
-
 Given a list of :class:`~tilefoundry.ir.core.op_schema.OpSchema` candidates
 sharing the same ``(dialect, name)`` and the runtime arg types of a
 call site, this module:

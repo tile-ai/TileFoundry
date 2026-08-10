@@ -64,12 +64,15 @@ def _range_start_stop_step(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
 
 
 def test_iteration_domain_forms():
-    """One loop domain behind both spellings: a single-arg ``tile`` steps by 1
+    """One loop domain behind both spellings.
+
+    One loop domain behind both spellings: a single-arg ``tile`` steps by 1
     from 0, the second arg is the step, and the extent may be a static int, a
     ``DimVar``, or a dim expression (a ``Call``, not a bare DimVar). ``range``
     carries the start and binds a scalar induction var; its ``extent`` is the stop
     endpoint of the half-open ``[start, extent)`` domain. A loop that rebinds
-    nothing outer carries nothing."""
+    nothing outer carries nothing.
+    """
     grid = _tile_default_step.body
     assert isinstance(grid, GridRegionExpr)
     assert (grid.start, grid.extent, grid.step) == (0, 8, 1)
@@ -103,10 +106,13 @@ def _inner_only(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
 
 
 def test_carry_lifting_is_scoped_to_outer_bindings():
-    """Rebinding a Var bound before the loop lifts it to a phi carry whose yield
+    """Test carry lifting is scoped to outer bindings.
+
+    Rebinding a Var bound before the loop lifts it to a phi carry whose yield
     is the rebinding RHS, and the loop's own type is the phi's. Names first bound
     inside the body are not outer-scope when scanned, so they create no carry slot
-    — otherwise every temporary would become a loop-carried value."""
+    — otherwise every temporary would become a loop-carried value.
+    """
     grid = _single_carry.body
     assert isinstance(grid, GridRegionExpr)
     (phi,) = grid.carried_args
@@ -129,9 +135,12 @@ def _nested(x: Tensor[(8, 4), "f32"]) -> Tensor[(8, 4), "f32"]:
 
 
 def test_nested_for_builds_nested_grid_region():
-    """`o` is bound before the outer loop and rebound only inside the inner loop:
+    """`o` is bound before the outer loop and rebound only inside the inner loop.
+
+    `o` is bound before the outer loop and rebound only inside the inner loop:
     the recursive carry scan still lifts it as the outer carry, and the outer
-    loop's yield is the inner GridRegionExpr."""
+    loop's yield is the inner GridRegionExpr.
+    """
     outer = _nested.body
     assert isinstance(outer, GridRegionExpr)
     assert [v.name for v in outer.carried_args] == ["o"]

@@ -54,9 +54,12 @@ def _distribution_directory(known: Kind) -> Path | None:
 
 
 def directory(kind: str) -> Path:
-    """The directory *kind* is read from: this checkout when it is one, else the
+    """The directory *kind* is read from: this checkout when it is one, else the installation.
+
+    The directory *kind* is read from: this checkout when it is one, else the
     installation. The checkout comes first because it is the only place the two
-    can disagree, and there the working copy is what its author means."""
+    can disagree, and there the working copy is what its author means.
+    """
     known = _KINDS[kind]
     source = _REPOSITORY_ROOT.joinpath(*known.source)
     if source.is_dir():

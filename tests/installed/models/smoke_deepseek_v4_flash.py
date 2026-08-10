@@ -121,7 +121,9 @@ def _asked(tf, work, source, step, *, out_held):
 def test_the_disagreement_is_smaller_than_the_oracles_own_rounding(
     tf, shipped_source, tmp_path
 ) -> None:
-    """Against an f32 accumulation of the same weights, the kernel is at least as
+    """Test the disagreement is smaller than the oracles own rounding.
+
+    Against an f32 accumulation of the same weights, the kernel is at least as
     close as Hugging Face's own bf16 run.
 
     Which is what says the comparison above is a comparison and not a tolerance wide
@@ -176,7 +178,9 @@ def test_the_step_is_authored_over_a_range_of_context_lengths(
 
 @cuda_only
 def test_the_step_returns_the_cache_entry_to_append(tf, shipped_source, tmp_path) -> None:
-    """The returned latent is this token's cache entry: appending it to the cache the
+    """The returned latent is this token's cache entry.
+
+    The returned latent is this token's cache entry: appending it to the cache the
     step was given reproduces the cache a context one token longer holds.
 
     Checked against a rebuilt cache rather than against the step's own input, so a

@@ -25,7 +25,7 @@ _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 
 
 def test_softplus_rejects_partial_sum_input():
-    """softplus is monotone increasing: it commutes with max/min, not sum."""
+    """Softplus is monotone increasing: it commutes with max/min, not sum."""
     run_typeinfer_case(
         TypeInferCase(
             "partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="Softplus")

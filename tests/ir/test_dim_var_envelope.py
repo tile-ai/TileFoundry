@@ -40,7 +40,9 @@ def _identity_fn(
 
 
 def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
-    """A specialization range must stay inside the DimVar envelope and reference a
+    """Test a signature may not forge its dim var envelope.
+
+    A specialization range must stay inside the DimVar envelope and reference a
     DimVar that exists in the params, and one name may not carry two envelopes
     anywhere in the signature.
 
@@ -90,9 +92,12 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
 
 
 def _dispatch_proto(name: str, env, ranges):
-    """A dispatch prototype over ``DimVar(name, *env)`` with one variant per
+    """A dispatch prototype over ``DimVar`` with one variant per ```` in *ranges*.
+
+    A dispatch prototype over ``DimVar(name, *env)`` with one variant per
     ``(lo, hi)`` in *ranges*. Used to exercise the half-open-interval partition
-    verifier (`_verify_partition`)."""
+    verifier (`_verify_partition`).
+    """
     s = DimVar(name=name, lo=env[0], hi=env[1])
     ty = _tensor((s,))
     base = HirFunction.build(name="g", params=(Var(type=ty, name="x"),),
@@ -107,9 +112,12 @@ def _dispatch_proto(name: str, env, ranges):
 
 
 def test_variants_must_tile_the_envelope_exactly() -> None:
-    """The variants of a prototype partition its half-open envelope: complete and
+    """The variants of a prototype partition its half-open envelope: complete and disjoint.
+
+    The variants of a prototype partition its half-open envelope: complete and
     disjoint. A gap leaves a runtime shape with no arm, and an overlap makes the
-    selected arm depend on evaluation order."""
+    selected arm depend on evaluation order.
+    """
     # [1,5) + [5,8) exactly tile the half-open envelope [1,8); a
     # single-point variant [4,5) (= the value 4) is a legal range.
     verify_function(_dispatch_proto("S_par_ok", (1, 8), [(1, 5), (5, 8)]))

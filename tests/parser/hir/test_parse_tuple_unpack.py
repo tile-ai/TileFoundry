@@ -35,8 +35,11 @@ def quant_unpack(
 
 
 def test_tuple_unpack_emits_tuple_get_item_with_field_dtype() -> None:
-    """An unpack target binds to a ``TupleGetItem`` over the producing Call, and
-    takes the dtype of *its* field rather than the tuple's first."""
+    """An unpack target binds to a ``TupleGetItem`` over the producing Call.
+
+    An unpack target binds to a ``TupleGetItem`` over the producing Call, and
+    takes the dtype of *its* field rather than the tuple's first.
+    """
     body = quant_unpack.body
     assert isinstance(body, Call) and isinstance(body.target, TupleGetItem)
     assert body.target.index == 0
@@ -56,9 +59,12 @@ def _caller(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32
 
 
 def test_a_literal_tuple_return_is_unpackable_by_a_caller() -> None:
-    """A literal tuple return folds to a core ``Tuple`` body with a ``TupleType``
+    """Test a literal tuple return is unpackable by a caller.
+
+    A literal tuple return folds to a core ``Tuple`` body with a ``TupleType``
     of the element field types, which is what lets a caller destructure a nested
-    ``@func`` the same way it destructures a multi-output op."""
+    ``@func`` the same way it destructures a multi-output op.
+    """
     assert isinstance(_ret_pair.body, Tuple), f"body is {type(_ret_pair.body).__name__}"
     assert len(_ret_pair.body.elements) == 2
     assert isinstance(_ret_pair.return_type, TupleType)
@@ -83,8 +89,11 @@ def _unpacked_dims(x: Tensor[(1, 32, 128), "f32"]) -> Tensor[(1, 64, 64), "f32"]
 
 
 def test_unpacking_compile_time_values_binds_the_values() -> None:
-    """``nv, kd, vd = _NV, _KD, _VD`` names three numbers, so each can serve where a
-    number is required — here a shape, which no ``TupleGetItem`` could."""
+    """``nv, kd, vd = _NV, _KD, _VD`` names three numbers.
+
+    ``nv, kd, vd = _NV, _KD, _VD`` names three numbers, so each can serve where a
+    number is required — here a shape, which no ``TupleGetItem`` could.
+    """
     assert _unpacked_dims.body.target.new_shape == (1, _NV * _KD // _VD, _VD)
     assert _unpacked_dims.body.type.shape == (1, 64, 64)
 

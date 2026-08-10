@@ -28,7 +28,9 @@ from .registries import (
 
 
 class TypeInferVisitor(ExprVisitor[Type]):
-    """The one typeinfer derivation rule per ``Expr`` kind. [hir §1.1](docs/spec/hir.md#11-function),
+    """The one typeinfer derivation rule per ``Expr`` kind.
+
+    The one typeinfer derivation rule per ``Expr`` kind. [hir §1.1](docs/spec/hir.md#11-function),
     [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
 
     ``TypeInferContext.type_of`` is the caller-facing cache + dispatch
@@ -58,14 +60,20 @@ class TypeInferVisitor(ExprVisitor[Type]):
         return fn(call, self.ctx)
 
     def visit_Tuple(self, tup: Tuple) -> Type:
-        """Structural: the field types of the (possibly just-elaborated)
-        elements, never the node's own stamped ``.type`` ([hir §1.1](docs/spec/hir.md#11-function))."""
+        """Visit Tuple.
+
+        Structural: the field types of the (possibly just-elaborated)
+        elements, never the node's own stamped ``.type`` ([hir §1.1](docs/spec/hir.md#11-function)).
+        """
         return TupleType(fields=tuple(self.ctx.type_of(e) for e in tup.elements))
 
     def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Type:
-        """Carry/body: a no-carry loop's value is its body; a carrying loop's
+        """Carry/body: a no-carry loop's value is its body.
+
+        Carry/body: a no-carry loop's value is its body; a carrying loop's
         value is its ``carried_args`` phi Vars' own declared type(s) — the
-        same rule the parser applies when constructing the node ([hir §1.2](docs/spec/hir.md#12-gridregionexpr))."""
+        same rule the parser applies when constructing the node ([hir §1.2](docs/spec/hir.md#12-gridregionexpr)).
+        """
         self.ctx.type_of(grid.body)
         for y in grid.yield_values:
             self.ctx.type_of(y)
@@ -76,8 +84,11 @@ class TypeInferVisitor(ExprVisitor[Type]):
         return TupleType(fields=tuple(p.type for p in grid.carried_args))
 
     def visit_ShapeOf(self, shape_of: ShapeOf) -> Type:
-        """A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32)
-        type at construction; it has no children to derive from."""
+        """A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32) type at construction.
+
+        A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32)
+        type at construction; it has no children to derive from.
+        """
         return shape_of.type
 
     def generic_visit(self, expr: Expr) -> Type:

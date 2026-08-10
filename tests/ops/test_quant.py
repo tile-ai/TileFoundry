@@ -1,5 +1,8 @@
-"""Quant typeinfer: returns (quantized values, per-group f32 scales); the last
-dim must be divisible by the group size."""
+"""Quant typeinfer: returns; the last dim must be divisible by the group size.
+
+Quant typeinfer: returns (quantized values, per-group f32 scales); the last
+dim must be divisible by the group size.
+"""
 from __future__ import annotations
 
 import pytest

@@ -1,4 +1,6 @@
-"""``tilefoundry.visitor_registry`` — dispatch on the Op class, and what happens
+"""``tilefoundry.visitor_registry`` — dispatch on the Op class.
+
+``tilefoundry.visitor_registry`` — dispatch on the Op class, and what happens
 when nothing is registered for it.
 
 Every model run dispatches thousands of registered visits, so the positive path
@@ -30,9 +32,11 @@ def _t() -> TensorType:
 
 
 def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough() -> None:
-    """``Evaluate(Copy, ...)`` dispatches verify on Op class;
-    unregistered structural Stmts (Return / LetStmt) pass through silently."""
+    """``Evaluate(Copy, ...)`` dispatches verify on Op class.
 
+    ``Evaluate(Copy, ...)`` dispatches verify on Op class;
+    unregistered structural Stmts (Return / LetStmt) pass through silently.
+    """
     src = Var(type=TensorType(shape=(4,), dtype=DType.f32, layout=None, storage="rmem"), name="src")
     dst = Var(type=TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="rmem"), name="dst")
     stmt = Evaluate(callable=Copy(), args=(src, dst))
@@ -53,8 +57,11 @@ def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough() ->
 
 
 def test_visitors_fail_closed_when_unregistered() -> None:
-    """An Op with no registered handler is an error, never a silent no-op
-    or a zero result — for codegen and Cost Evaluators alike."""
+    """An Op with no registered handler is an error, never a silent no-op or a zero result.
+
+    An Op with no registered handler is an error, never a silent no-op
+    or a zero result — for codegen and Cost Evaluators alike.
+    """
     class _UnknownOp(Op):
         pass
 

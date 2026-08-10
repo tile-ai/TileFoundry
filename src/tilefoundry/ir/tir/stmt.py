@@ -1,4 +1,6 @@
-"""Backwards-compat shim: ``Stmt`` base now lives in
+"""Backwards-compat shim: ``Stmt`` base now lives in ``tilefoundry.ir.core.stmt``.
+
+Backwards-compat shim: ``Stmt`` base now lives in
 ``tilefoundry.ir.core.stmt``.
 
 Existing imports ``from tilefoundry.ir.tir.stmt import Stmt`` keep

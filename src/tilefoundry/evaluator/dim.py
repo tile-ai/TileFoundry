@@ -30,7 +30,9 @@ _FOLDERS = {
 
 
 def resolve_dim(dim, bindings: dict[str, int]) -> int:
-    """Resolve a ``Dim`` (``ShapeDim``) to a concrete ``int`` given a ``DimVar``
+    """Resolve a ``Dim`` to a concrete ``int`` given a ``DimVar`` name → size binding.
+
+    Resolve a ``Dim`` (``ShapeDim``) to a concrete ``int`` given a ``DimVar``
     name → size binding.
 
     Raises ``ValueError`` on an unbound ``DimVar``, a ``bool`` / non-integer

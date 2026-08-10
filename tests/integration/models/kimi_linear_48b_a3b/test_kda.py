@@ -1,4 +1,6 @@
-"""Kimi Delta Attention: what can be established without an oracle, and the
+"""Kimi Delta Attention: what can be established without an oracle.
+
+Kimi Delta Attention: what can be established without an oracle, and the
 block recording that its values cannot.
 
 Read the assertions here for what they are. **None of them checks a value.** The
@@ -145,7 +147,9 @@ def test_kda_executes_and_stays_finite():
 
 
 def test_short_conv_window_shifts_by_exactly_one_position():
-    """The convolution window returned is the input window with this token
+    """Test short conv window shifts by exactly one position.
+
+    The convolution window returned is the input window with this token
     appended and the oldest position dropped.
 
     True by construction rather than by transcription from any implementation, so

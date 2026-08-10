@@ -23,12 +23,15 @@ from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 def raw_shard_tensor_type(
     shape, layout_shape, strides, attrs, mesh, *, dtype=DType.f32, storage="gmem"
 ) -> TensorType:
-    """A sharded ``TensorType`` built directly from an explicit (possibly
+    """Raw shard tensor type.
+
+    A sharded ``TensorType`` built directly from an explicit (possibly
     non-canonical) ``layout_shape``/``strides``, bypassing
     ``make_shard_tensor_type``'s canonicalization. Only for the handful of
     tests exercising a layout shape ``make_shard_tensor_type`` cannot itself
     produce (an implicit ``strides=None`` layout, or a stride pattern that
-    isn't plain C-order)."""
+    isn't plain C-order).
+    """
     return TensorType(
         shape=shape,
         dtype=dtype,
@@ -38,8 +41,11 @@ def raw_shard_tensor_type(
 
 
 def split_local_extents(ty) -> list:
-    """`shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s
-    layout — every entry MUST be 1 on a canonical layout ([shard §7.1.1](docs/spec/shard.md#711-layoutshape))."""
+    """`shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s layout.
+
+    `shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s
+    layout — every entry MUST be 1 on a canonical layout ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
+    """
     local = shard_layout_local_shape(ty.layout)
     return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
 
@@ -60,9 +66,12 @@ def infer_call(op, *input_types):
 
 @dataclass(frozen=True)
 class ExpectedError:
-    """Expected outcome: typeinfer raises ``exc`` matching ``match``. ``exc``
+    """Expected outcome: typeinfer raises ``exc`` matching ``match``.
+
+    Expected outcome: typeinfer raises ``exc`` matching ``match``. ``exc``
     defaults to ``VerifyError`` (relation-driven ops); ops that validate before
-    the verify layer (e.g. ``TypeError`` on a bad axis) pass their own type."""
+    the verify layer (e.g. ``TypeError`` on a bad axis) pass their own type.
+    """
 
     match: str
     exc: type = VerifyError
@@ -70,7 +79,9 @@ class ExpectedError:
 
 @dataclass(frozen=True)
 class TypeInferCase:
-    """One declarative typeinfer case: apply ``op`` to ``inputs`` and expect
+    """One declarative typeinfer case.
+
+    One declarative typeinfer case: apply ``op`` to ``inputs`` and expect
     either an output ``Type`` (``TensorType`` or ``TupleType``) or a raised
     error.
 
@@ -85,16 +96,22 @@ class TypeInferCase:
 
 
 def _norm_shape(shape) -> tuple:
-    """Unwrap ``Constant``-wrapped static dims to their int value so a shape of
+    """Norm shape.
+
+    Unwrap ``Constant``-wrapped static dims to their int value so a shape of
     ``Constant(8)`` compares equal to a plain ``8`` (slice/concat emit wrapped
     dims). ``DimVar`` / dim-arithmetic ``Call`` dims (no ``value``) are left
-    structural for canonical comparison."""
+    structural for canonical comparison.
+    """
     return tuple(getattr(d, "value", d) for d in shape)
 
 
 def assert_tensor_type(actual: TensorType, expected: TensorType) -> None:
-    """Compare the typeinfer output against an expected ``TensorType`` on
-    shape / dtype / storage, and on layout when the expected one pins it."""
+    """Compare the typeinfer output against an expected ``TensorType`` on shape / dtype / storage.
+
+    Compare the typeinfer output against an expected ``TensorType`` on
+    shape / dtype / storage, and on layout when the expected one pins it.
+    """
     assert _norm_shape(actual.shape) == _norm_shape(expected.shape), (
         f"shape {actual.shape} != {expected.shape}"
     )
@@ -108,8 +125,11 @@ def assert_tensor_type(actual: TensorType, expected: TensorType) -> None:
 
 
 def assert_type(actual, expected) -> None:
-    """Compare a typeinfer output ``Type`` against ``expected``: ``TupleType``
-    fieldwise, ``TensorType`` on shape/dtype/storage/layout."""
+    """Compare a typeinfer output ``Type`` against ``expected``.
+
+    Compare a typeinfer output ``Type`` against ``expected``: ``TupleType``
+    fieldwise, ``TensorType`` on shape/dtype/storage/layout.
+    """
     if isinstance(expected, TupleType):
         assert isinstance(actual, TupleType), f"expected TupleType, got {actual!r}"
         assert len(actual.fields) == len(expected.fields), (

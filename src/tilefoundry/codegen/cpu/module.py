@@ -60,9 +60,12 @@ _LAUNCH_ABI_DECL = ["int", "int", "int", "int", "int", "int", "int", "void*"]
 
 
 def _static_smem(value) -> int:
-    """Resolve ``dynamic_smem`` to a static int. Host index-expr codegen
+    """Resolve ``dynamic_smem`` to a static int.
+
+    Resolve ``dynamic_smem`` to a static int. Host index-expr codegen
     covers grid/block extents only; a dynamic shared-memory size expression
-    is not supported."""
+    is not supported.
+    """
     sv = static_dim_value(value)
     if sv is not None:
         return sv
@@ -90,7 +93,8 @@ def _emit_host_int_expr(expr) -> str:
     Accepts an ``int`` / integer ``Constant`` (emitted as a literal), a
     ``ShapeOf`` (the forwarded tensor's ``shape()`` access), or a
     dim-arithmetic ``Call`` over those. Any unsupported node raises — there
-    is no silent zero/default."""
+    is no silent zero/default.
+    """
     sv = static_dim_value(expr)
     if sv is not None:
         return str(sv)
@@ -442,8 +446,11 @@ def _arg_descriptor(arg):
 
 
 def _param_contract(vp, v_hidden):
-    """Visible ABI contract of a variant parameter: kind + dtype + (for
-    tensors) static shape structure + storage."""
+    """Visible ABI contract of a variant parameter: kind + dtype + static shape structure + storage.
+
+    Visible ABI contract of a variant parameter: kind + dtype + (for
+    tensors) static shape structure + storage.
+    """
     if _is_tensor(vp, v_hidden):
         t = vp.type
         return ("tensor", t.dtype, repr(t.shape), t.storage)
@@ -453,11 +460,14 @@ def _param_contract(vp, v_hidden):
 
 
 def _require_uniform_case_args(case_calls, module) -> None:
-    """v1: every dispatch case must expose the same visible ABI — both the
+    """v1: every dispatch case must expose the same visible ABI.
+
+    v1: every dispatch case must expose the same visible ABI — both the
     forwarded host arguments AND each variant parameter's tensor/scalar
     contract (kind, dtype, static shape, storage). The host entry does
     placement once against the entry params, so a branch whose variant has a
-    different parameter contract would be a silent ABI/placement mismatch."""
+    different parameter contract would be a silent ABI/placement mismatch.
+    """
     def _key(call):
         variant = module.lookup(call.callable.name)
         if len(call.args) != len(variant.params):

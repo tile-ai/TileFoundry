@@ -211,8 +211,11 @@ def _carried_for(
 def _held_by_statement(
     footprints: tuple[AccessFootprint, ...],
 ) -> dict[str, dict[str, tuple[tuple[int, ...], int]]]:
-    """Group *footprints* by statement then buffer, widening each buffer
-    dimension to every extent any access in that group needs there."""
+    """Held by statement.
+
+    Group *footprints* by statement then buffer, widening each buffer
+    dimension to every extent any access in that group needs there.
+    """
     dims: dict[tuple[str, str], list[set[int]]] = {}
     elem_bytes: dict[tuple[str, str], int] = {}
     for footprint in footprints:

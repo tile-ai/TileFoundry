@@ -30,7 +30,7 @@ from tilefoundry.ir.types import DType, make_tensor_type
 
 
 def test_self_recursive_call_raises_naming_the_callee():
-    """AC-1-3: a hand-built ``Function`` whose body calls itself."""
+    """A hand-built self-recursive function reports its callee name."""
     ty = make_tensor_type((2, 2), DType.f32)
     x = Var(type=ty, name="x")
     stub = Function.build(name="loopy", params=(x,), body=x, return_type=ty)
@@ -51,15 +51,17 @@ def _call_dispatch_prototype(x: Tensor[(4, 4), "f32"]) -> Tensor[(4, 4), "f32"]:
 
 
 def test_dispatch_prototype_call_raises_naming_the_callee():
-    """AC-1-3: a callee with no body (dispatch by variant, unresolved
-    without a concrete runtime shape) cannot be penetrated statically."""
+    """A callee with no body cannot be penetrated statically.
+
+    A dispatch prototype is unresolved
+    without a concrete runtime shape) cannot be penetrated statically.
+    """
     with pytest.raises(ExtractError, match="_dispatch_prototype_helper"):
         extract(_call_dispatch_prototype)
 
 
 def test_arity_mismatch_call_raises_naming_the_callee():
-    """AC-1-3: a hand-built call passing fewer args than the callee
-    declares."""
+    """A call passing fewer arguments than declared reports its callee."""
     ty = make_tensor_type((2, 2), DType.f32)
     x = Var(type=ty, name="x")
     y = Var(type=ty, name="y")

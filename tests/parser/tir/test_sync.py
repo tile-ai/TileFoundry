@@ -80,9 +80,12 @@ def test_parse_sync_builds_evaluate_wrapped_op() -> None:
 
 
 def test_parse_sync_slice_records_offset_and_extent() -> None:
-    """``T.sync(m[1:3, :])`` records the participating sub-box (extents + slice
+    """Test parse sync slice records offset and extent.
+
+    ``T.sync(m[1:3, :])`` records the participating sub-box (extents + slice
     origin) in a composed-layout ``layout``; the full sync's ``layout`` is a
-    plain ``Layout``."""
+    plain ``Layout``.
+    """
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001
@@ -144,17 +147,23 @@ def test_verify_rejects_sync_with_no_enclosing_mesh() -> None:
 
 
 def test_verify_rejects_non_contiguous_slice() -> None:
-    """A lane subset across warps (``m[:, 1:3]``) is not a contiguous thread
-    interval — rejected, not split into several barriers."""
+    """A lane subset across warps (``m[:, 1:3]``) is not a contiguous thread interval.
+
+    A lane subset across warps (``m[:, 1:3]``) is not a contiguous thread
+    interval — rejected, not split into several barriers.
+    """
     m = _thread_mesh()
     with pytest.raises(VerifyError, match="contiguous"):
         verify_prim_function(_scoped(m, m[:, 1:3]))
 
 
 def test_verify_rejects_forged_subbox_exceeding_parent() -> None:
-    """A hand-forged slice that is not constructible by ``Mesh.__getitem__``
+    """Test verify rejects forged subbox exceeding parent.
+
+    A hand-forged slice that is not constructible by ``Mesh.__getitem__``
     (a (1, 64) sub-box of a (4, 32) parent) is rejected — the legal-slice proof
-    bounds each sub-extent by the parent shape, not by field equality."""
+    bounds each sub-extent by the parent shape, not by field equality.
+    """
     e = _thread_mesh()  # (4, 32)
     forged = Mesh(
         topologies=e.topologies,
@@ -166,8 +175,11 @@ def test_verify_rejects_forged_subbox_exceeding_parent() -> None:
 
 
 def test_verify_rejects_forged_topology_mismatch() -> None:
-    """A forged sync mesh that shares the primary topology but differs in the
-    full topology tuple is rejected (the proof compares the full tuple)."""
+    """Test verify rejects forged topology mismatch.
+
+    A forged sync mesh that shares the primary topology but differs in the
+    full topology tuple is rejected (the proof compares the full tuple).
+    """
     e = Mesh(
         topologies=(Topology("warp", 4), Topology("thread", 32)),
         layout=Layout(shape=(4, 32), strides=(32, 1)),
@@ -194,8 +206,11 @@ def test_verify_rejects_cross_warp_unaligned_slice() -> None:
 
 
 def test_classify_rejects_partial_cta_slice() -> None:
-    """Only the full cta mesh maps to the grid barrier; a cta slice (a subset of
-    CTAs) has no supported barrier and is rejected."""
+    """Only the full cta mesh maps to the grid barrier.
+
+    Only the full cta mesh maps to the grid barrier; a cta slice (a subset of
+    CTAs) has no supported barrier and is rejected.
+    """
     with pytest.raises(VerifyError, match="partial grid"):
         classify(_cta_mesh()[0:64])
 

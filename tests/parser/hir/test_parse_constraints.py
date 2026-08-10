@@ -31,8 +31,11 @@ _MESH_PRELUDE = 'from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n
 
 
 def _source(body: str, preamble: str = _MESH_PRELUDE, ret: str = '(8, 16), "bf16"') -> str:
-    """A one-``@func`` script; *preamble* holds module-level (closure) bindings,
-    for names the parser resolves via ``fn.__globals__`` rather than the SSA env."""
+    """A one-``@func`` script.
+
+    A one-``@func`` script; *preamble* holds module-level (closure) bindings,
+    for names the parser resolves via ``fn.__globals__`` rather than the SSA env.
+    """
     return f'''from __future__ import annotations
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
@@ -84,9 +87,12 @@ def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
 
 
 def test_layout_extent_names_resolve_through_the_closure_or_fail() -> None:
-    """A named layout extent is read out of the function's globals, so it may be
+    """A named layout extent is read out of the function's globals.
+
+    A named layout extent is read out of the function's globals, so it may be
     an int or a ``DimVar``; a name that resolves to neither -- or to nothing --
-    must fail at the annotation rather than silently drop the extent."""
+    must fail at the annotation rather than silently drop the extent.
+    """
     body = '''    y: where(layout=(_, N @ cta)) = tf.add(x, x)
     return y'''
     as_int = _layout_of(import_dsl(_source(body, preamble=_MESH_PRELUDE + "\nN = 16")))
@@ -107,10 +113,13 @@ def test_layout_extent_names_resolve_through_the_closure_or_fail() -> None:
 
 
 def test_partial_value_state_and_the_subjects_that_accept_a_constraint() -> None:
-    """The ``{mesh @ P(...)}`` set reuses the existing shard attrs rather than a
+    """Test partial value state and the subjects that accept a constraint.
+
+    The ``{mesh @ P(...)}`` set reuses the existing shard attrs rather than a
     parser-local value state, and prints back as it was written. Besides a bound
     name, a parameter and a bound tuple element are constraint subjects too -- the
-    tuple element is what lets a multi-output op's second result carry intent."""
+    tuple element is what lets a multi-output op's second result carry intent.
+    """
     partial = import_dsl(
         _source(
             '''    y: where(layout=((_, 16), {cta @ P("sum")})) = tf.add(x, x)
@@ -166,8 +175,11 @@ def test_invalid_constraints_fail_at_source_annotation(body: str) -> None:
 
 
 def test_tuple_and_subscript_annotation_subjects_are_rejected() -> None:
-    """A constraint names one value, so its subject must be a bound plain Name of
-    tensor type: a subscript lvalue and a whole tuple binding are both refused."""
+    """A constraint names one value, so its subject must be a bound plain Name of tensor type.
+
+    A constraint names one value, so its subject must be a bound plain Name of
+    tensor type: a subscript lvalue and a whole tuple binding are both refused.
+    """
     with pytest.raises(VerifyError, match="bound plain Name|annotation lvalue"):
         import_dsl(
             _source(

@@ -63,10 +63,13 @@ def _shard2(shape, *attrs) -> ShardLayout:
 
 
 def test_a_split_of_a_surviving_axis_reaches_the_output():
-    """Either operand may be the sharded one, and the axis it splits decides the
+    """Either operand may be the sharded one, and the axis it splits decides the output axis.
+
+    Either operand may be the sharded one, and the axis it splits decides the
     output axis: rhs[K,N] split on N lands on out axis 1, lhs[M,K] split on M on
     out axis 0. With no sharded input at all there is nothing to propagate, which
-    is ``None`` rather than an unsharded layout."""
+    is ``None`` rather than an unsharded layout.
+    """
     rhs_t = make_tensor_type((4, 8), layout=_shard((4, 8), Split(1)))
     on_n = derive_output_shard_layout(
         (make_tensor_type((16, 4)), rhs_t), _matmul_relation(), (16, 8)
@@ -172,7 +175,9 @@ def test_two_mesh_axes_on_same_output_axis_factorize():
 
 
 def test_a_synthesised_layout_agrees_with_a_from_scratch_one():
-    """``make_shard_tensor_type`` (a from-scratch sharding) and
+    """Test a synthesised layout agrees with a from scratch one.
+
+    ``make_shard_tensor_type`` (a from-scratch sharding) and
     ``derive_output_shard_layout`` (a propagated one) both build a [shard §7.1.1](docs/spec/shard.md#711-layoutshape) layout through the shared ``canonical_shard_layout``, so for the same
     logical sharding they must compare equal -- otherwise a propagated value and
     an authored one describing the same distribution would need a reshard between
@@ -195,7 +200,9 @@ def test_a_synthesised_layout_agrees_with_a_from_scratch_one():
 
 
 def test_an_input_partial_propagates_on_its_own_mesh_axis():
-    """A Partial is a value state with no layout axis, so what identifies it is
+    """A Partial is a value state with no layout axis.
+
+    A Partial is a value state with no layout axis, so what identifies it is
     the mesh axis it sits on. It propagates through an elementwise identity rather
     than being dropped, and two different reductions on two axes stay two
     reductions -- collapsing them would make a sum-partial and a max-partial

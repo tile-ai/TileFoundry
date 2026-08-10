@@ -42,10 +42,13 @@ from .palette import (
 
 
 def _renderable_functions(root) -> list[tuple[str, "HirFunction"]]:
-    """The ``(label, function)`` units to draw. A dispatch prototype (body
+    """The ``(label, function)`` units to draw.
+
+    The ``(label, function)`` units to draw. A dispatch prototype (body
     ``None``) is expanded to its variants — each labelled by its canonical
     specialization signature — so the graph shows the executable bodies, never a
-    bodyless prototype."""
+    bodyless prototype.
+    """
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
     from tilefoundry.ir.hir.function import (  # noqa: PLC0415
         Function as _HirFunction,
@@ -67,7 +70,9 @@ def _renderable_functions(root) -> list[tuple[str, "HirFunction"]]:
 
 
 def _collect_view_meshes(root) -> dict[int, "Mesh"]:
-    """Collect unique ``Mesh`` objects referenced anywhere in *root* — params,
+    """Collect unique ``Mesh`` objects referenced anywhere in *root*.
+
+    Collect unique ``Mesh`` objects referenced anywhere in *root* — params,
     return type, every node's result type, and ``Reshard`` layout attrs.
 
     The viewer renders shard sugar on intermediate node result types too, so it
@@ -122,9 +127,12 @@ _CONST_DTYPE_SUFFIX: dict[str, str] = {
 
 
 def _format_constant(c: Constant) -> str:
-    """Compact constant rendering (ported from the old viewer's pretty
+    """Compact constant rendering (ported from the old viewer's pretty view).
+
+    Compact constant rendering (ported from the old viewer's pretty
     view). Scalars: ``const(1)`` / ``const(1.0f)``; sequences:
-    ``const([1.0f, 2.0f, ...])`` truncated to the first 8 elements."""
+    ``const([1.0f, 2.0f, ...])`` truncated to the first 8 elements.
+    """
     ty = getattr(c, "type", None)
     suffix = (
         _CONST_DTYPE_SUFFIX.get(ty.dtype.name, "")
@@ -151,9 +159,12 @@ def _format_constant(c: Constant) -> str:
 
 
 def _shard_layout_text(sl: ShardLayout, mesh_name_map: dict[int, str] | None) -> str:
-    """Render a bare ``ShardLayout`` attr (e.g. a ``Reshard`` layout) through the
+    """Shard layout text.
+
+    Render a bare ``ShardLayout`` attr (e.g. a ``Reshard`` layout) through the
     canonical sugar core, falling back to the verbose ``ShardLayout(...)`` form
-    when the mesh is unnamed or the layout is not sugar-expressible."""
+    when the mesh is unnamed or the layout is not sugar-expressible.
+    """
     mesh_name = mesh_name_map.get(id(sl.mesh)) if mesh_name_map else None
     if mesh_name and getattr(sl.mesh, "names", None):
         mesh_unique = mesh_name_map is not None and len(mesh_name_map) == 1
@@ -164,9 +175,12 @@ def _shard_layout_text(sl: ShardLayout, mesh_name_map: dict[int, str] | None) ->
 
 
 def _pretty_attr_value(value, *, full: bool = False, mesh_name_map: dict[int, str] | None = None) -> str:
-    """Readable rendering of an Op attribute value — pretty constants /
+    """Readable rendering of an Op attribute value.
+
+    Readable rendering of an Op attribute value — pretty constants /
     tuples / lists / types instead of raw ``repr``. ``full`` selects the
-    canonical type form (detail panel) vs the compact one (graph label)."""
+    canonical type form (detail panel) vs the compact one (graph label).
+    """
     if isinstance(value, Constant):
         return _format_constant(value)
     if isinstance(value, DType):
@@ -192,10 +206,13 @@ def _pretty_attr_value(value, *, full: bool = False, mesh_name_map: dict[int, st
 def _op_attributes(
     target, *, full: bool = False, mesh_name_map: dict[int, str] | None = None
 ) -> list[tuple[str, str]]:
-    """The Op's non-input (attribute) params as ``(name, pretty-value)``
+    """Op attributes.
+
+    The Op's non-input (attribute) params as ``(name, pretty-value)``
     pairs — e.g. ``("axis", "2")`` / ``("begin", "(const(0), ...)")``.
     ``full`` selects canonical (detail) vs compact (graph) type text.
-    Empty when the Op has no attributes or doesn't expose ``params()``."""
+    Empty when the Op has no attributes or doesn't expose ``params()``.
+    """
     try:
         pdefs = type(target).params()
     except (AttributeError, TypeError):
@@ -211,7 +228,9 @@ def _op_attributes(
 
 
 def _format_dim(dim) -> list[Span]:
-    """Render a shape dim as inline spans, driven by the same
+    """Format dim.
+
+    Render a shape dim as inline spans, driven by the same
     ``python_printer._DIM_INFIX_OPS`` / ``_DIM_FUNC_OPS`` tables that
     ``shape_entry_str`` uses — so a compact graph label renders
     ``DimFloorDiv`` / ``DimMod`` / ``min`` / ``max`` exactly like the
@@ -247,9 +266,12 @@ def _format_dim(dim) -> list[Span]:
 
 
 def _shard_inline(ty: TensorType, mesh_name_map: dict[int, str] | None):
-    """Compact shard decomposition for *ty*: ``(split_ref_by_tensor_axis,
+    """Compact shard decomposition for *ty*.
+
+    Compact shard decomposition for *ty*: ``(split_ref_by_tensor_axis,
     partials)`` or ``None`` when there is no named sugar-expressible shard
-    layout (caller renders the plain shape)."""
+    layout (caller renders the plain shape).
+    """
     layout = getattr(ty, "layout", None)
     if not isinstance(layout, ShardLayout):
         return None
@@ -260,14 +282,17 @@ def _shard_inline(ty: TensorType, mesh_name_map: dict[int, str] | None):
 
 
 def _compact_type_spans(ty, mesh_name_map: dict[int, str] | None = None) -> list[Span]:
-    """The **compact** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) as inline coloured spans —
+    """Compact type spans.
+
+    The **compact** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) as inline coloured spans —
     DimVar / storage tinted for the graph node label. ``type_to_compact_pretty``
     joins these to plain text.
 
     A sharded tensor inlines each ``Split`` on its tensor axis
     (``size @ mesh.axis``) and appends a ``{mesh.axis @ P("reduction")}`` suffix
     for ``Partial`` value states; layouts that cannot be inlined fall back to the
-    canonical annotation text."""
+    canonical annotation text.
+    """
     if isinstance(ty, TensorType):
         inline = _shard_inline(ty, mesh_name_map)
         if isinstance(ty.layout, ShardLayout) and inline is None:
@@ -305,14 +330,19 @@ def _compact_type_spans(ty, mesh_name_map: dict[int, str] | None = None) -> list
 
 def type_to_compact_pretty(ty, mesh_name_map: dict[int, str] | None = None) -> str:
     """**Compact** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) as plain text — e.g.
-    ``bf16[4 @ trd.l, 64] {trd.t @ P("sum")} @smem`` — for the graph node label."""
+
+    ``bf16[4 @ trd.l, 64] {trd.t @ P("sum")} @smem`` — for the graph node label.
+    """
     return "".join(s.text for s in _compact_type_spans(ty, mesh_name_map))
 
 
 def type_to_canonical_pretty(ty, mesh_name_map: dict[int, str] | None = None) -> str:
-    """**Canonical** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) — the round-trippable DSL
+    """Type to canonical pretty.
+
+    **Canonical** pretty mode (spec [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)) — the round-trippable DSL
     annotation ``Tensor[(1, 2, CTX_LEN + 1, 256), "bf16", ...]`` (with shard
-    layout / non-default storage when present) — for the detail panel."""
+    layout / non-default storage when present) — for the detail panel.
+    """
     if isinstance(ty, TensorType):
         return _tensor_annotation(ty, mesh_name_map=mesh_name_map)
     if isinstance(ty, TupleType):
@@ -334,7 +364,9 @@ def _returns_of(ty, mesh_name_map: dict[int, str] | None = None) -> list[dict]:
 def format_detail(
     visual_id: str, ref: "DetailRef", mesh_name_map: dict[int, str] | None = None
 ) -> dict:
-    """Format a detail-panel payload from a ``DetailRef`` on demand (no
+    """Format a detail-panel payload from a ``DetailRef`` on demand.
+
+    Format a detail-panel payload from a ``DetailRef`` on demand (no
     pre-baked JSON in the index). Shape:
     ``{id, kind, name, params:[{name,type}], returns:[{idx,type}], attrs:[{key,value}]}``.
 
@@ -439,14 +471,20 @@ class ViewerBuilder:
 
     @staticmethod
     def _output_arity(ty) -> int:
-        """Number of result slots a value of type ``ty`` exposes — one per
-        ``TupleType`` field, else a single output."""
+        """Number of result slots a value of type ``ty`` exposes.
+
+        Number of result slots a value of type ``ty`` exposes — one per
+        ``TupleType`` field, else a single output.
+        """
         return len(ty.fields) if isinstance(ty, TupleType) else 1
 
     @staticmethod
     def _output_marker_row(slot: int, width: int) -> Cell:
-        """Bottom ``out<i>`` marker row appended to a region's real return
-        producer node (instead of a separate anchor node)."""
+        """Bottom ``out<i>`` marker row appended to a region's real return producer node.
+
+        Bottom ``out<i>`` marker row appended to a region's real return
+        producer node (instead of a separate anchor node).
+        """
         return Cell(
             text=f"▼ out{slot}", colspan=(width if width > 1 else None),
             bgcolor="#e7efe1", color=MUTED, align="CENTER", font_size=10,
@@ -454,9 +492,12 @@ class ViewerBuilder:
 
     @staticmethod
     def _out_port_cells(n_out: int, width: int) -> list[Cell]:
-        """Quiet ``:out<i>`` anchor cells (one per result slot) whose
+        """Out port cells.
+
+        Quiet ``:out<i>`` anchor cells (one per result slot) whose
         colspans sum to ``width`` so the row never goes ragged (ragged
-        HTML-table rows make ``dot`` warn)."""
+        HTML-table rows make ``dot`` warn).
+        """
         cells = []
         for i in range(n_out):
             if n_out <= width:
@@ -482,7 +523,9 @@ class ViewerBuilder:
         local_idx: int,
         call_args: tuple | None = None,
     ) -> tuple[str, list[str]]:
-        """Emit a Function region. Returns ``(node_vid, outputs)`` where
+        """Emit a Function region.
+
+        Emit a Function region. Returns ``(node_vid, outputs)`` where
         ``node_vid`` is the title-row node (carrying the input ports) and
         ``outputs`` is the per-result-slot producer ref an outer consumer
         attaches to.
@@ -492,7 +535,8 @@ class ViewerBuilder:
         **expanded**, the header has no output port; the body's real
         producer node(s) carry the return value directly, so consumers
         connect to them (wiring body producers back up to a header port
-        would read as the function depending on itself)."""
+        would read as the function depending on itself).
+        """
         region_vid = self._visual_id(call_path, f"r{local_idx}")
         node_vid = self._visual_id(call_path, f"fn{local_idx}")
         is_collapsed = region_vid in self.collapsed
@@ -571,12 +615,15 @@ class ViewerBuilder:
         *,
         collapsed: bool,
     ) -> None:
-        """Title-row node. Toggle port + clickable title cell + per-param
+        """Title-row node.
+
+        Title-row node. Toggle port + clickable title cell + per-param
         ports. When expanded the params span two rows — row 1 ``:pin<i>``
         (the external caller connects) and row 2 ``:pout<i>`` (the body
         reads the param) — so one port is never both an external sink and
         an internal source (untangles the edges).
-        Collapsed has no body, so it shows only the ``:pin<i>`` row."""
+        Collapsed has no body, so it shows only the ``:pin<i>`` row.
+        """
         icon = "▶" if collapsed else "▼"
         n_params = len(fn.params)
         two_row = (not collapsed) and n_params > 0
@@ -656,7 +703,9 @@ class ViewerBuilder:
         local_counter: list[int],
         output_slot: int | None = None,
     ) -> str:
-        """Emit ``expr`` (and its dependencies) into ``g``. Returns the
+        """Emit ``expr`` (and its dependencies) into ``g``.
+
+        Emit ``expr`` (and its dependencies) into ``g``. Returns the
         DOT id (possibly with ``:port`` suffix) that an outer Call can
         attach an edge to.
 
@@ -876,10 +925,13 @@ class ViewerBuilder:
         visited: dict[int, str],
         local_counter: list[int],
     ) -> str:
-        """Emit a value-form ``Tuple`` bundler. Each element flows into an
+        """Emit a value-form ``Tuple`` bundler.
+
+        Emit a value-form ``Tuple`` bundler. Each element flows into an
         ``:in<i>`` port; a consuming ``TupleGetItem`` reads field ``i`` from
         the matching ``:out<i>`` port. (A ``return (...)`` Tuple is handled
-        directly by ``_emit_function_region`` and never reaches here.)"""
+        directly by ``_emit_function_region`` and never reaches here.)
+        """
         local = f"t{local_counter[0]}"
         local_counter[0] += 1
         vid = self._visual_id(call_path, local)

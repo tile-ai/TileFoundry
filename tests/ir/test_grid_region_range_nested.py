@@ -1,4 +1,6 @@
-"""End-to-end (parse + evaluate) tests for the unified ``range`` / ``tile``
+"""Define test grid region range nested behavior.
+
+End-to-end (parse + evaluate) tests for the unified ``range`` / ``tile``
 loop surface, nested GridRegions, and dim-expression loop bounds.
 
 ``range`` and ``tile`` share one loop domain ``(start, extent, step)`` and lower
@@ -55,8 +57,11 @@ def _dim_expr_half_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
 
 
 def test_range_start_step():
-    """The three-argument `range` surface: a scalar loop var over a DimVar extent
-    with a non-unit start and step, none of which is unrolled."""
+    """The three-argument `range` surface.
+
+    The three-argument `range` surface: a scalar loop var over a DimVar extent
+    with a non-unit start and step, none of which is unrolled.
+    """
     n = 7
     x = torch.arange(n, dtype=torch.float32)
     out = evaluate(_range_start_step, x, device="cpu")

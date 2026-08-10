@@ -19,8 +19,11 @@ _COMMUTES_WITH = frozenset()
 
 @register_op
 class Gelu(Op):
-    """Gaussian Error Linear Unit. ``approximate="tanh"`` is the tanh-based
-    approximation (HF ``gelu_pytorch_tanh`` / Gemma-2 MLP activation)."""
+    """Gaussian Error Linear Unit.
+
+    Gaussian Error Linear Unit. ``approximate="tanh"`` is the tanh-based
+    approximation (HF ``gelu_pytorch_tanh`` / Gemma-2 MLP activation).
+    """
     x = ParamDef(kind="input", pattern=Tensor)
     approximate = ParamDef(kind="attribute", annotation=str, default="tanh")
 @register_typeinfer(Gelu)

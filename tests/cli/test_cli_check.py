@@ -323,8 +323,11 @@ def test_a_random_input_fail_against_a_reference_states_its_limits(routing, caps
 
 
 def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsys) -> None:
-    """Reaching `router.routing` reads `router.w_router`: the checkpoint holds
-    that one tensor and none of the eight the block around it declares."""
+    """Reaching `router.routing` reads `router.w_router`.
+
+    Reaching `router.routing` reads `router.w_router`: the checkpoint holds
+    that one tensor and none of the eight the block around it declares.
+    """
     assert cli.main(_routing_argv(
         routing, "indices",
         "--out", "output[0]", "--fn", "nan_inf", "--out", "output[1]", "--fn", "equal",

@@ -1,4 +1,6 @@
-"""Shared ``__getattr__`` / ``__dir__`` factory for the ``tf`` / ``T`` DSL
+"""Define namespace behavior.
+
+Shared ``__getattr__`` / ``__dir__`` factory for the ``tf`` / ``T`` DSL
 namespace modules ([parser §2.1](docs/spec/parser.md#21-model)-[parser §2.3](docs/spec/parser.md#23-resolution-algorithm)).
 
 Both dialect namespaces resolve names on demand against the OpSchema

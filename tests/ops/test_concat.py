@@ -1,5 +1,8 @@
-"""Concat's sharded-layout boundary: a genuine sharding on any input drops to an
-unsharded output rather than carrying a fake layout onto the concatenated shape."""
+"""Concat's sharded-layout boundary.
+
+Concat's sharded-layout boundary: a genuine sharding on any input drops to an
+unsharded output rather than carrying a fake layout onto the concatenated shape.
+"""
 from __future__ import annotations
 
 from tests.ops.typeinfer_utils import (

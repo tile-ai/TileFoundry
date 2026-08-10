@@ -95,8 +95,11 @@ def _is_device_target(target) -> bool:
 
 
 def _dim_var_names_in_type(ty: Any) -> set[str]:
-    """DimVar names appearing in a ``TensorType``'s shape (and the shape of its
-    ``ShardLayout``'s inner layout)."""
+    """DimVar names appearing in a ``TensorType``'s shape.
+
+    DimVar names appearing in a ``TensorType``'s shape (and the shape of its
+    ``ShardLayout``'s inner layout).
+    """
     names: set[str] = set()
     for d in getattr(ty, "shape", None) or ():
         if isinstance(d, DimVar):
@@ -109,10 +112,13 @@ def _dim_var_names_in_type(ty: Any) -> set[str]:
 
 
 class _DimVarRefCollector(StmtVisitor):
-    """Collect DimVar names the body actually references via the types of bound
+    """Represent DimVarRefCollector.
+
+    Collect DimVar names the body actually references via the types of bound
     results and op operands. A dynamic tensor dim surfaces in these
     ``TensorType`` shapes; the codegen plumbs each as a ``<param>_shape_<axis>``
-    runtime scalar, so the kernel signature must declare it."""
+    runtime scalar, so the kernel signature must declare it.
+    """
 
     def __init__(self) -> None:
         self.names: set[str] = set()
@@ -130,10 +136,13 @@ class _DimVarRefCollector(StmtVisitor):
 def _shape_scalar_params(
     params: tuple[Var, ...], referenced: set[str]
 ) -> tuple[Var, ...]:
-    """Hidden ``<param>_shape_<axis>`` i32 scalar params for each referenced
+    """Shape scalar params.
+
+    Hidden ``<param>_shape_<axis>`` i32 scalar params for each referenced
     dynamic dim, mirroring the HIR→TIR lowering. Each DimVar maps to its first
     occurrence in a tensor param's shape (the same rule codegen uses to source
-    the runtime extent). Idempotent: a param that already exists is skipped."""
+    the runtime extent). Idempotent: a param that already exists is skipped.
+    """
     existing = {p.name for p in params}
     scalar_i32 = TensorType.scalar(dtype=DType.i32)
     seen: set[str] = set()
@@ -299,12 +308,15 @@ class _TirBodyVisitor(BaseExprVisitor):
         )
 
     def _is_platform_rooted(self, node: ast.AST) -> bool:
-        """True when ``node`` is a ``T.<platform>...`` expression — an
+        """True when ``node`` is a ``T.<platform>...`` expression.
+
+        True when ``node`` is a ``T.<platform>...`` expression — an
         attribute/call chain whose root Name resolves to the ``dsl.T`` module
         and whose first attribute is a platform name (``cuda``, later other
         targets). Such expressions are compile-time descriptors
         (``MmaOpSpec`` / ``MmaAtom``), bound statically rather than lowered to
-        a ``LetStmt``."""
+        a ``LetStmt``.
+        """
         cur = node
         first_attr_on_root: str | None = None
         while isinstance(cur, (ast.Attribute, ast.Call)):
@@ -416,9 +428,12 @@ class _TirBodyVisitor(BaseExprVisitor):
         return tuple(elts)
 
     def _eval_launch_extent(self, node: ast.AST):
-        """Statically evaluate one grid / block extent to an ``int`` (wrapped as
+        """Eval launch extent.
+
+        Statically evaluate one grid / block extent to an ``int`` (wrapped as
         a constant), a ``DimVar``, or a dim-arithmetic ``Expr``; reject anything
-        else loudly (extents are shape arithmetic, not arbitrary values)."""
+        else loudly (extents are shape arithmetic, not arbitrary values).
+        """
         val = self._eval_static(node)
         if not is_dim_expr(val):
             raise VerifyError(

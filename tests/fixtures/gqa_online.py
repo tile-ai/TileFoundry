@@ -1,4 +1,6 @@
-"""Flash / online-softmax GQA decode core + context-length `specialize`, with
+"""Flash / online-softmax GQA decode core + context-length `specialize`.
+
+Flash / online-softmax GQA decode core + context-length `specialize`, with
 the two compute-distribution strategies expressed in the dataflow itself.
 
 Decode regime: batch 1, **one token per step**, ``NUM_Q_HEADS`` query heads
@@ -94,9 +96,12 @@ _SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 @module(entry="gqa_online_attend", topologies=(Topology("cta", NUM_CTA),))
 class GqaOnline:
-    """The two decode strategies and the shared context-split kernels, in one
+    """The two decode strategies and the shared context-split kernels, in one execution domain.
+
+    The two decode strategies and the shared context-split kernels, in one
     execution domain: an HIR Function may only call a Function its own Module
-    owns, and every body here names the same ``cta`` level."""
+    owns, and every body here names the same ``cta`` level.
+    """
 
 
     @func

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Plan finalizer for `docs/plans/<name>.md`.
+"""Finalize an authored plan.
 
-Reads a plan written against `docs/plans/TEMPLATE.md`, matches each
+The CLI input shape is ``docs/plans/<name>.md``. hygiene: required CLI path template.
+Reads a plan written against the repository template, matches each
 milestone's ``#### Related Files`` against
 `docs/policies/project-policy.json`, and rewrites two kinds of
 generated regions:
@@ -63,8 +64,7 @@ FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
 
 
 class FinalizeError(Exception):
-    """Validation failure surfaced to the CLI as exit-non-zero with
-    a clear message."""
+    """Report a validation failure clearly through a nonzero CLI exit."""
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +117,11 @@ def _heading_text(line: str) -> str:
 def _find_section(
     lines: list[str], level: int, name: str, start: int = 0, end: int | None = None
 ) -> tuple[int, int] | None:
-    """Find ``(heading_index, body_end_exclusive)`` for a heading whose
-    level is *level* and whose text matches *name* (case-sensitive,
-    surrounding whitespace ignored). Body ends at the next heading with
-    level <= *level* or at *end*.
+    """Find the bounds of a heading matching *level* and *name*.
+
+    Matching is case-sensitive, with surrounding whitespace ignored. The
+    result is ``(heading_index, body_end_exclusive)``. Body ends at the next
+    heading with level <= *level* or at *end*.
     """
     if end is None:
         end = len(lines)
@@ -162,8 +163,10 @@ def _policy_check_states(lines: list[str], start: int, end: int) -> dict[str, bo
 def _related_files_from_section(
     lines: list[str], section_start: int, section_end: int
 ) -> list[str]:
-    """Collect bullets verbatim from a Related Files section. Skips
-    empty / comment-only lines. Does NOT interpret ``inherit:`` — that
+    """Collect bullets verbatim from a Related Files section.
+
+    Empty and comment-only lines are skipped. This does not interpret
+    ``inherit:`` — that
     is resolved at a higher level so callers can detect explicit
     inheritance vs. concrete paths.
     """
@@ -179,8 +182,9 @@ _PATH_FROM_BULLET_RE = re.compile(r"`([^`]+)`")
 
 
 def _strip_path_bullet(item: str) -> str:
-    """Extract the leading repo-relative path from a Related Files
-    bullet. Authors commonly write ``- `<path>` — short description``
+    """Extract the leading repository-relative path from a bullet.
+
+    Related Files commonly uses ``- `<path>` — short description``
     so the matcher pulls the FIRST backtick-wrapped span; an item
     without backticks is taken whole (after whitespace strip).
     """
@@ -409,8 +413,9 @@ def render_final_gate_body(
 def _replace_range(
     lines: list[str], start_idx: int, end_idx: int, body: list[str]
 ) -> list[str]:
-    """Return a new list where `lines[start_idx + 1 : end_idx]` is
-    replaced by *body*. Marker lines themselves are preserved.
+    """Replace a range's contents while preserving its marker lines.
+
+    The replaced slice is `lines[start_idx + 1 : end_idx]`.
     """
     return lines[: start_idx + 1] + body + lines[end_idx:]
 
@@ -429,8 +434,9 @@ def finalize_plan(
     role: str = "implementer",
     write: bool = True,
 ) -> tuple[str, str]:
-    """Rewrite *plan_path* to a canonical form. Returns the
-    ``(before, after)`` text pair.
+    """Rewrite *plan_path* to canonical form.
+
+    Returns the ``(before, after)`` text pair.
 
     When *write* is False the plan file is not modified — useful for
     dry-runs in tests and for the ``--check`` mode.

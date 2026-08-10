@@ -214,8 +214,9 @@ def _shard_layout_surface_str(
     *,
     mesh_unique: bool = False,
 ) -> str | None:
-    """Canonical shard-layout sugar (parser layout-sugar outer-tuple form):
+    """Canonical shard-layout sugar (parser layout-sugar outer-tuple form).
 
+    Canonical shard-layout sugar (parser layout-sugar outer-tuple form):
     - ``(dims)``                          implicit strides, no value-state
     - ``((dims), (strides))``             explicit strides
     - ``((dims), {mesh.axis @ P(...)})``  value-state (Partial) set
@@ -408,8 +409,11 @@ def _shard_layout_str(sl: ShardLayout, indent: str = "") -> str:
 
 
 def _tensor_import_names(fn: HirFunction) -> str:
-    """``"Tensor"`` or ``"ConstTensor, Tensor"`` — whichever the printed
-    signature (base plus every variant) actually references."""
+    """``"Tensor"`` or ``"ConstTensor, Tensor"``.
+
+    ``"Tensor"`` or ``"ConstTensor, Tensor"`` — whichever the printed
+    signature (base plus every variant) actually references.
+    """
     if any(p.is_const for f in (fn, *fn.variants) for p in f.params):
         return "ConstTensor, Tensor"
     return "Tensor"
@@ -483,7 +487,9 @@ def _op_name(target) -> str:
 
 
 def _kinded_alias_name(target) -> str | None:
-    """Return the surface alias name (``add`` / ``neg`` / ...) for a
+    """Return the surface alias name for a kinded ``Binary`` / ``Unary`` instance, else ``None``.
+
+    Return the surface alias name (``add`` / ``neg`` / ...) for a
     kinded ``Binary`` / ``Unary`` instance, else ``None``.
 
     Per-name HIR math classes are gone; the IR instance is
@@ -524,11 +530,14 @@ _BINARY_KIND_TO_ALIAS, _UNARY_KIND_TO_ALIAS = _build_kinded_alias_maps()
 
 
 def _op_display_name(target) -> str:
-    """Display-only op name for DOT / viewer graph labels: the target's class
+    """Display-only op name for DOT / viewer graph labels.
+
+    Display-only op name for DOT / viewer graph labels: the target's class
     name with a trailing ``Op`` / ``Expr`` / ``Stmt`` suffix stripped
     (``MatMul``, ``TupleGetItem``, ...). Distinct from ``_op_name``, which
     renders the round-trippable DSL callable name — this one is shared by
-    ``dot.py`` and ``viewer/builder.py`` for human-facing labels only."""
+    ``dot.py`` and ``viewer/builder.py`` for human-facing labels only.
+    """
     cls = type(target).__name__
     for suffix in ("Op", "Expr", "Stmt"):
         if cls.endswith(suffix) and cls != suffix:
@@ -613,11 +622,14 @@ def _constraint_line(expr: Expr, indent: str, name: str) -> str | None:
 
 
 def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr]:
-    """Post-order traversal of *root* and its descendants via
+    """Iter exprs.
+
+    Post-order traversal of *root* and its descendants via
     ``tilefoundry.ir.visitor._expr_children`` (which, unlike the hand-rolled
     walkers this replaces, descends into ``GridRegionExpr``). Each node is
     yielded exactly once by object identity; *seen* lets callers share dedup
-    state across repeated calls (e.g. one per function param)."""
+    state across repeated calls (e.g. one per function param).
+    """
     if root is None:
         return
     if seen is None:
@@ -632,7 +644,9 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
 
 
 def _collect_meshes(fn: HirFunction, *, include_node_types: bool = False) -> dict[int, Mesh]:
-    """Collect unique Mesh objects referenced anywhere in *fn* — params,
+    """Collect unique Mesh objects referenced anywhere in *fn* — params, return type.
+
+    Collect unique Mesh objects referenced anywhere in *fn* — params,
     return type, and every ``Reshard`` layout in the body.
 
     With ``include_node_types=True`` (the viewer's wider scan, via
@@ -690,9 +704,12 @@ def _emit_def(
     fn: HirFunction, def_name: str, mesh_map: dict, indent: str,
     options: PythonPrintOptions,
 ) -> list[str]:
-    """Render one function ``def`` block: signature + body (or ``pass`` for a
+    """Render one function ``def`` block: signature + body (or ``pass`` for a prototype).
+
+    Render one function ``def`` block: signature + body (or ``pass`` for a
     prototype). The caller prepends the decorator line(s). Each call builds its
-    own SSA name scope, so a base and its variants do not share names."""
+    own SSA name scope, so a base and its variants do not share names.
+    """
     lines: list[str] = []
 
     # Collect all SSA values and assign names.
@@ -845,11 +862,14 @@ def _emit_def(
     printed: set[int] = {id(param) for param in fn.params}
 
     def _format_call(expr: Call, indent_here: str) -> str:
-        """Render a Call's RHS expression text: the ``reshard(...)`` /
+        """Render a Call's RHS expression text.
+
+        Render a Call's RHS expression text: the ``reshard(...)`` /
         ``<HirFunction>(...)`` special forms, else ``op_name(args, attr=val,
         ...)``. Shared by the inline (tile-loop body) emitter and the
         top-level emit loop so an attribute-rendering rule (``ShardLayout``,
-        ``DType``, ...) only needs one edit."""
+        ``DType``, ...) only needs one edit.
+        """
         target = expr.target
         args_str = ", ".join(_arg_ref(arg) for arg in expr.args)
         if isinstance(target, Reshard):
@@ -1022,9 +1042,12 @@ def _pattern_ctor(pat: Pattern) -> str:
 
 
 def _collect_all_meshes(fn: HirFunction) -> dict[int, Mesh]:
-    """Meshes referenced by *fn* and every specialization variant — the
+    """Meshes referenced by *fn* and every specialization variant.
+
+    Meshes referenced by *fn* and every specialization variant — the
     printer's mesh-name map must stay stable across the base prototype and
-    each ``.specialize`` block."""
+    each ``.specialize`` block.
+    """
     meshes: dict[int, Mesh] = {}
     for f in (fn, *fn.variants):
         meshes.update(_collect_meshes(f))
@@ -1041,11 +1064,14 @@ def _emit_header(
     target: object | None = None,
     dim_vars: "dict[str, object] | None" = None,
 ) -> list[str]:
-    """Import header + mesh-prelude shared by ``hir_function_to_python`` and
+    """Import header + mesh-prelude shared by ``hir_function_to_python`` and ``_module_to_python``.
+
+    Import header + mesh-prelude shared by ``hir_function_to_python`` and
     ``_module_to_python`` — the only source for the imports/mesh-defs a
     dispatch prototype needs (the conditional ``DimVarRangePat`` import for
     ``fn.variants``, the ``ConstTensor``/``Tensor`` selection), so standalone
-    and module-wrapped output cannot drift out of sync."""
+    and module-wrapped output cannot drift out of sync.
+    """
     lines: list[str] = ["from __future__ import annotations", ""]
     if for_module:
         lines.append("from tilefoundry.module import module")
@@ -1094,10 +1120,13 @@ def _emit_header(
 def _emit_decorated_defs(
     fn: HirFunction, mesh_map: dict[int, str], indent: str, options: PythonPrintOptions,
 ) -> list[str]:
-    """Base ``@func`` decorator + ``def`` block, followed by one
+    """Emit decorated defs.
+
+    Base ``@func`` decorator + ``def`` block, followed by one
     ``@<name>.specialize(pattern)`` block per variant ([inspection §2.6](docs/spec/inspection.md#26-specialization-printing)). Shared by
     standalone and module-wrapped output so a dispatch prototype prints
-    identically in both."""
+    identically in both.
+    """
     lines: list[str] = ["@func"]
     lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options))
 
@@ -1150,6 +1179,7 @@ def as_script(
         fn: The HIR function or module.
         module: Optional module class name.  When set, the output is
             wrapped in ``@module(entry="<fn>") class <name>:``.
+        options: Optional canonical-source rendering settings.
 
     Returns:
         Python source string.

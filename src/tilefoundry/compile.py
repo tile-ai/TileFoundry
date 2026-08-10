@@ -130,7 +130,6 @@ def build(
     *mod* must be a ``Module``. *target* defaults to ``mod.metadata["target"]``.
     Raises ``ValueError`` if missing or if explicit *target* conflicts.
     """
-
     if not isinstance(mod, Module):
         raise TypeError(
             f"tilefoundry.build: expected Module, got {type(mod).__name__}."
@@ -338,7 +337,7 @@ def _jit_cache_key_payload(
     target: Target | None = None,
     options: CompilerOptions | None = None,
 ) -> tuple[str, str, str]:
-    """For testing only: return ``(module_text, target_repr, options_text)``.
+    r"""For testing only: return ``(module_text, target_repr, options_text)``.
 
     The actual cache key is ``sha256(text + "\0" + target + "\0" + opts)``.
     """

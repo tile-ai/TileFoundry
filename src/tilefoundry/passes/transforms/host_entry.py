@@ -31,8 +31,9 @@ def _fresh_entry_name(taken: set[str]) -> str:
 
 
 def insert_default_host_entry(module: Module) -> Module:
-    """Return a module whose entry is host-callable (CPU-target):
+    """Return a module whose entry is host-callable (CPU-target).
 
+    Return a module whose entry is host-callable (CPU-target):
     - a CPU entry is already present → unchanged;
     - the entry is a dispatch entry (host-only ``DispatchCall``) → retarget it
       to CPU in place of the original (``module.entry`` name unchanged);

@@ -210,9 +210,12 @@ class Target:
 
 
 def _walk_ir(top: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...], str | None]:
-    """*path* below *top*, as (the Module, the child names walked, the function
+    """*path* below *top*, as (the Module, the child names walked, the function named).
+
+    *path* below *top*, as (the Module, the child names walked, the function
     named). A non-child segment must be last and must name one of the reached
-    Module's functions."""
+    Module's functions.
+    """
     reached = top
     children: list[str] = []
     for index, name in enumerate(path):
@@ -236,8 +239,11 @@ def _walk_ir(top: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...],
 def _walk_twin(
     root: type, segments: Sequence[str]
 ) -> tuple[RuntimeModule, Module, Module, tuple[str, ...], str | None]:
-    """A twin class and a dotted path into it, as (node, the top Module, the
-    node's Module, the child names walked, the function named)."""
+    """A twin class and a dotted path into it.
+
+    A twin class and a dotted path into it, as (node, the top Module, the
+    node's Module, the child names walked, the function named).
+    """
     top = root()
     node = top
     children: list[str] = []
@@ -426,8 +432,11 @@ def _weights_needed(module: Module) -> tuple[str, ...]:
 
 
 def _resource(target: Target, generator, device: str, ckpt: str | None):
-    """Where both sides read their weights: one seeded draw, or the checkpoint,
-    rooted at the top-level Module and scoped by *target*'s child names."""
+    """Where both sides read their weights.
+
+    Where both sides read their weights: one seeded draw, or the checkpoint,
+    rooted at the top-level Module and scoped by *target*'s child names.
+    """
     resource = (
         RandomWeights(target.top, generator, device)
         if ckpt is None

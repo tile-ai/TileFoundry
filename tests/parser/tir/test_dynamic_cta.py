@@ -57,8 +57,11 @@ def test_device_dynamic_dim_injects_shape_scalar() -> None:
 
 
 def test_host_entry_not_polluted() -> None:
-    """A ``cpu`` host entry carrying the same DimVar param gets no hidden scalar
-    — it reads the shape from its tensor argument at launch time."""
+    """A ``cpu`` host entry carrying the same DimVar param gets no hidden scalar.
+
+    A ``cpu`` host entry carrying the same DimVar param gets no hidden scalar
+    — it reads the shape from its tensor argument at launch time.
+    """
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(_NT, _TILE), "f32"]):

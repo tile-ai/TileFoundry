@@ -1,4 +1,6 @@
-"""Flash / online-softmax GQA decode core (`@func` DSL) with context-length
+"""Define test gqa online behavior.
+
+Flash / online-softmax GQA decode core (`@func` DSL) with context-length
 `specialize` and the two CTA-distribution strategies.
 
 Decode regime: one token per step (the query length is a fixed 1), handed the
@@ -42,8 +44,11 @@ _HEAD_VARIANT, _CTX_VARIANT = gqa_online_attend.variants
 
 
 def _ref(q, k, v, k_new, v_new):
-    """Standard (materialized, non-causal) GQA softmax attention over the prior
-    cache plus this step's own position, f32."""
+    """Standard GQA softmax attention over the prior cache plus this step's own position, f32.
+
+    Standard (materialized, non-causal) GQA softmax attention over the prior
+    cache plus this step's own position, f32.
+    """
     kb = torch.cat([k, k_new], dim=1).repeat_interleave(G, dim=2).float()  # [1, C+1, Hq, D]
     vb = torch.cat([v, v_new], dim=1).repeat_interleave(G, dim=2).float()
     scores = torch.einsum("bshd,bchd->bshc", q.float(), kb) * _SCALE  # [1, 1, Hq, C+1]

@@ -1,5 +1,8 @@
-"""ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the
-implementation base class). See [runtime §1.1.1](docs/spec/runtime.md#111-runtimefunction)."""
+"""ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the implementation base class).
+
+ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the
+implementation base class). See [runtime §1.1.1](docs/spec/runtime.md#111-runtimefunction).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,9 +19,12 @@ class ParamABI:
 
 @dataclass(frozen=True)
 class EntryABI:
-    """Host-visible ABI for a function entry. ``params`` lists ALL parameters
+    """Host-visible ABI for a function entry.
+
+    Host-visible ABI for a function entry. ``params`` lists ALL parameters
     (inputs + outputs) in declaration order; ``output_count`` is the trailing
-    count of output parameters."""
+    count of output parameters.
+    """
     name: str
     params: tuple[ParamABI, ...]
     output_count: int = 0
@@ -37,9 +43,12 @@ class EntryABI:
 
 
 class RuntimeFunction:
-    """Implementation base class: an ABI ``type`` plus a subclass-overridden
+    """Implementation base class.
+
+    Implementation base class: an ABI ``type`` plus a subclass-overridden
     ``__call__`` that takes whatever it needs (weights, caches) at
-    construction and returns its value(s) directly."""
+    construction and returns its value(s) directly.
+    """
 
     def __init__(self, type: EntryABI) -> None:
         self.type = type
@@ -51,8 +60,11 @@ class RuntimeFunction:
 
 
 def param_abi_of(var) -> ParamABI:
-    """One ``ParamABI`` for a declared parameter ``Var``: its name and IR
-    ``TensorType``."""
+    """One ``ParamABI`` for a declared parameter ``Var``: its name and IR ``TensorType``.
+
+    One ``ParamABI`` for a declared parameter ``Var``: its name and IR
+    ``TensorType``.
+    """
     ty = var.type
     assert isinstance(ty, TensorType), (
         f"param {var.name!r} must be TensorType, got {type(ty).__name__}"
@@ -61,8 +73,11 @@ def param_abi_of(var) -> ParamABI:
 
 
 def entry_abi_of(fn) -> EntryABI:
-    """Derive an ``EntryABI`` for a HIR ``Function``: one ``ParamABI`` per
-    parameter, ``output_count=0`` (value-returning, not an out-param entry)."""
+    """Derive an ``EntryABI`` for a HIR ``Function``.
+
+    Derive an ``EntryABI`` for a HIR ``Function``: one ``ParamABI`` per
+    parameter, ``output_count=0`` (value-returning, not an out-param entry).
+    """
     params = tuple(param_abi_of(var) for var in fn.params)
     return EntryABI(name=fn.name, params=params, output_count=0)
 

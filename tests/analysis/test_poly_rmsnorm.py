@@ -1,4 +1,6 @@
-"""``extract`` coverage for ``RMSNorm`` now that it carries a registered
+"""Define test poly rmsnorm behavior.
+
+``extract`` coverage for ``RMSNorm`` now that it carries a registered
 forward ``type_relation`` (``rms_norm.py``'s ``_rms_norm_type_relation``,
 modelled on ``SoftMax``'s) instead of a poly-private fallback: the domain is
 the batch axes only (``x.shape[:-1]``) and the reduced (last) axis is an
@@ -34,9 +36,12 @@ def rmsnorm_only(
 
 
 def test_extract_rmsnorm_single_statement():
-    """``y = rms_norm(x, weight)`` extracts to one statement: domain =
+    """``y = rms_norm(x, weight)`` extracts to one statement.
+
+    ``y = rms_norm(x, weight)`` extracts to one statement: domain =
     the batch axis only, reads/writes both range over the whole
-    (existentially-quantified) row -- exactly like ``SoftMax``'s shape."""
+    (existentially-quantified) row -- exactly like ``SoftMax``'s shape.
+    """
     tg = extract(rmsnorm_only)
     assert isinstance(tg, TileGraph)
     assert len(tg.units) == 1
@@ -64,7 +69,9 @@ def test_extract_rmsnorm_single_statement():
 
 
 def test_local_type_divides_the_split_axis_and_keeps_tensor_rank():
-    """A ``Split`` axis contributes its per-shard extent, and the result keeps
+    """A ``Split`` axis contributes its per-shard extent.
+
+    A ``Split`` axis contributes its per-shard extent, and the result keeps
     the tensor's own rank.
 
     The layout a real sharding path produces (``make_shard_tensor_type`` ->

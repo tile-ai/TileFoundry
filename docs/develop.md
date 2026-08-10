@@ -74,8 +74,18 @@ short bullet list — keep it that way.
 
 ### Code comments
 
+- Documentation lives in a module / class / function docstring. A `#` line is
+  for a tool (`ruff:` / `noqa` / `type:` / `pragma:` / `mypy:` / `fmt:` /
+  `isort:`) or a shebang, never for a reader. In C / C++ / CUDA the docstring's
+  place is a Doxygen block above the declaration (`/** */`, `///`, trailing
+  `///<`); `//` and `/* */` are not used.
+- A docstring spends at most 8 prose lines and stays inside 100 columns.
+  Google sections (`Args:` / `Returns:` / `Raises:` / `Yields:` /
+  `Attributes:`) are structure, not prose, and do not count.
+- Docstrings follow Google style, validated by ruff `D2,D3,D4` under
+  `convention = "google"`.
 - Describe local logic only.
-- The spec is the only durable document a comment may reference
+- The spec is the only durable document a docstring may reference
   (`docs/spec/... §...`). Never reference `docs/plans/...` — plans are
   working-process docs, not a stable contract.
 - A constraint that must guide code long-term belongs in the spec
@@ -85,6 +95,9 @@ short bullet list — keep it that way.
 - No PR / task / commit / issue / msg / thread coordinates.
 - No agent or human names; no discussion / review narration.
 - No prose cataloguing what the code does NOT do.
+- A line that genuinely names one of these shapes says `hygiene:` and why. It
+  excuses that line from the reference checks alone, never from placement,
+  length or width.
 
 ### Scope
 

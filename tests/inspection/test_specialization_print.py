@@ -36,11 +36,14 @@ def _prototype() -> HirFunction:
 
 
 def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
-    """The base is a pass-bodied prototype and each variant a ``.specialize`` block
+    """Test prototype prints pass base and specialize blocks.
+
+    The base is a pass-bodied prototype and each variant a ``.specialize`` block
     over a throwaway ``def _``. The ``@module``-wrapped form must emit the same
     ``DimVarRangePat`` import as the standalone form — module and standalone output
     share one header emitter, so a construct requiring an extra import in one mode
-    requires it in both."""
+    requires it in both.
+    """
     standalone = as_script(_prototype())
     in_module = as_script(_prototype(), module="M")
 

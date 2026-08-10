@@ -88,7 +88,9 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
 
 
 def test_the_attention_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
-    """`self_attention` -- input_layernorm plus Gemma2's GQA, RoPE and soft-capped
+    """Test the attention matches hugging face.
+
+    `self_attention` -- input_layernorm plus Gemma2's GQA, RoPE and soft-capped
     logits over the cache and the new token -- against Hugging Face's own attention
     at the decoded position.
 

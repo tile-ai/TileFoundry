@@ -24,11 +24,14 @@ def _clean_schema_registry():
 
 
 def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:
-    """``tf`` and ``T`` are two dialects behind one ``__getattr__``. A name
+    """``tf`` and ``T`` are two dialects behind one ``__getattr__``.
+
+    ``tf`` and ``T`` are two dialects behind one ``__getattr__``. A name
     registered in one dialect resolves there to a callable that builds the Op,
     is listed by ``dir`` for that dialect only, and stays an ``AttributeError``
     in the other — an unknown name must not quietly resolve to something else's
-    op."""
+    op.
+    """
 
     @register_op(dialect="tf", category="math", name="my_add")
     class _MyAdd:

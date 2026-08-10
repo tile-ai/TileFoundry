@@ -68,8 +68,11 @@ class SyncSquare:
 
 
 def test_sync_barrier_forms_emit_expected_cuda() -> None:
-    """The kernel lowers each barrier form to the expected CUDA, with two
-    distinct named-barrier ids for the two multi-warp groups."""
+    """The kernel lowers each barrier form to the expected CUDA.
+
+    The kernel lowers each barrier form to the expected CUDA, with two
+    distinct named-barrier ids for the two multi-warp groups.
+    """
     from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
     from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
 
@@ -100,9 +103,12 @@ class GridSync:
 
 
 def test_grid_scope_sync_emits_grid_barrier() -> None:
-    """A ``T.sync`` over a full ``cta``-topology mesh lowers to the grid-wide
+    """Test grid scope sync emits grid barrier.
+
+    A ``T.sync`` over a full ``cta``-topology mesh lowers to the grid-wide
     software barrier helper (not a within-block ``__syncthreads``), and the
-    module defines its own internal-linkage counter for it."""
+    module defines its own internal-linkage counter for it.
+    """
     from tilefoundry.codegen.cuda.module import emit_cuda_module  # noqa: PLC0415
     from tilefoundry.codegen.registry import group_functions_by_target  # noqa: PLC0415
 
@@ -120,8 +126,11 @@ def test_grid_scope_sync_emits_grid_barrier() -> None:
 
 
 def test_sync_kernel_runs_and_squares() -> None:
-    """All four barrier forms compile and run on GPU without deadlock/fault,
-    and the elementwise square is correct."""
+    """All four barrier forms compile and run on GPU without deadlock/fault.
+
+    All four barrier forms compile and run on GPU without deadlock/fault,
+    and the elementwise square is correct.
+    """
     rm = tilefoundry.compile(SyncSquare, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     x = torch.randn(4, 32, dtype=torch.float32, device="cuda")

@@ -149,8 +149,11 @@ def load_authored_ir(source: str) -> Module:
 
 
 def entry_function(ir: Module | Function) -> Function:
-    """Resolve the HIR Function a command runs its pipeline over -- the
-    same Module -> entry_function() convention as `selected_target`."""
+    """Resolve the HIR Function a command runs its pipeline over.
+
+    Resolve the HIR Function a command runs its pipeline over -- the
+    same Module -> entry_function() convention as `selected_target`.
+    """
     function = ir.entry_function() if isinstance(ir, Module) else ir
     if not isinstance(function, Function):
         raise TypeError(f"schedule requires a HIR Function entry, got {type(function).__name__}")
@@ -158,9 +161,12 @@ def entry_function(ir: Module | Function) -> Function:
 
 
 def selected_target(ir: Module):
-    """The Target the selection declares. Schedule and Analyze read hardware
+    """The Target the selection declares.
+
+    The Target the selection declares. Schedule and Analyze read hardware
     facts off it, so an undeclared Target is an authoring error rather than a
-    cue to pick one: the selection must name the device it was written for."""
+    cue to pick one: the selection must name the device it was written for.
+    """
     if not isinstance(ir, Module):
         raise TypeError(
             f"expected a Module selection, got {type(ir).__name__}. A Function "

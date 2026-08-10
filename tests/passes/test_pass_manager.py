@@ -15,7 +15,9 @@ from tilefoundry.passes import ModulePass, PassManager
 
 
 def test_pass_manager_runs_in_registered_order_and_enforces_requires():
-    """The order passes were added is the order they run, and a declared
+    """The order passes were added is the order they run.
+
+    The order passes were added is the order they run, and a declared
     dependency has to have been added before its dependant.
 
     There is no topological sort: the manager checks rather than reorders, so a

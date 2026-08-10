@@ -126,10 +126,13 @@ def test_binary_partial_typeinfer(case):
 
 
 def test_lower_rank_split_right_aligns():
-    """A lower-rank sharded operand's Split lands on the *output* axis it
+    """Test lower rank split right aligns.
+
+    A lower-rank sharded operand's Split lands on the *output* axis it
     right-aligns to, whichever side carries it. Checked as which mesh axis holds
     Split on that output axis, not as the internal layout position count a valid
-    derivation happens to produce."""
+    derivation happens to produce.
+    """
     split_1d = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
     plain_2d = make_tensor_type((4, 8), _F)
     for lhs, rhs in ((plain_2d, split_1d), (split_1d, plain_2d)):

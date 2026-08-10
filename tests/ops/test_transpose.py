@@ -53,10 +53,13 @@ def test_plain_input_permutes_its_layout_when_one_is_stated():
 
 
 def test_factorized_split_reorders_subaxes():
-    """tensor (4096, 2048), axis 0 split on cta -> layout (128, 32, 2048). The
+    """Tensor (4096, 2048), axis 0 split on cta -> layout (128, 32, 2048).
+
+    Tensor (4096, 2048), axis 0 split on cta -> layout (128, 32, 2048). The
     transpose moves tensor axis 1 (layout pos 2) first; axis 0's
     sub-positions (layout pos 0, 1) follow in order; the Split moves from
-    layout pos 0 to pos 1."""
+    layout pos 0 to pos 1.
+    """
     x_ty = make_shard_tensor_type(
         (4096, 2048),
         mesh=_M,
@@ -71,8 +74,11 @@ def test_factorized_split_reorders_subaxes():
 
 
 def test_implicit_strides_no_crash():
-    """implicit (None) strides: shape + attrs permute, output keeps implicit
-    strides (regression: no None-stride indexing crash)."""
+    """Implicit strides: shape + attrs permute, output keeps implicit strides.
+
+    Implicit (None) strides: shape + attrs permute, output keeps implicit
+    strides (regression: no None-stride indexing crash).
+    """
     x_ty = raw_shard_tensor_type(
         (16, 8), (16, 8), None, (Split(0), *_B4[1:]), _M, dtype=DType.bf16,
     )

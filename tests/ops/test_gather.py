@@ -1,7 +1,10 @@
-"""Gather's batched, sharded and unlowerable cases: the ``batch_dims`` prefix is
+"""Gather's batched, sharded and unlowerable cases.
+
+Gather's batched, sharded and unlowerable cases: the ``batch_dims`` prefix is
 collapsed rather than flattened and is never entered by accident, a sharded
 operand migrates its shard attrs or derives a ``Partial``, and the batched
-lowering fails closed rather than silently take the single-coordinate path."""
+lowering fails closed rather than silently take the single-coordinate path.
+"""
 from __future__ import annotations
 
 import itertools
@@ -30,8 +33,11 @@ _M = make_mesh((2,))
 
 
 def _gather_ref(x, axis, idx):
-    """Reference gather: select along ``axis`` by (possibly multi-dim) ``idx``,
-    expanding the indexed axis into ``idx``'s shape."""
+    """Gather ref.
+
+    Reference gather: select along ``axis`` by (possibly multi-dim) ``idx``,
+    expanding the indexed axis into ``idx``'s shape.
+    """
     axis %= x.ndim
     flat = x.index_select(axis, idx.flatten().long())
     return flat.reshape(*x.shape[:axis], *idx.shape, *x.shape[axis + 1 :])
@@ -78,11 +84,14 @@ def test_a_scalar_gather_carries_the_shard(attrs, expected):
 
 
 def _ref_batched(x, index, axis, batch_dims):
-    """Definitional reference for the TF-style batched gather:
+    """Definitional reference for the TF-style batched gather.
+
+    Definitional reference for the TF-style batched gather:
     ``out[c.., i.., t..] = x[c.., index[b.., i..], t..]`` where ``c..`` are the
     ``axis`` leading dims of ``x`` (the first ``batch_dims`` of which also index
     ``index``), ``i..`` are ``index``'s remaining dims, and ``t..`` are ``x``'s
-    trailing dims. A plain nested loop, independent of the vectorized op."""
+    trailing dims. A plain nested loop, independent of the vectorized op.
+    """
     axis %= x.ndim
     b = batch_dims
     batch = x.shape[:b]
@@ -99,8 +108,11 @@ def _ref_batched(x, index, axis, batch_dims):
 
 
 def test_gather_two_batch_anti_flatten() -> None:
-    """Two batch dims are collapsed, not flattened into the output: the aligned
-    ``[2, 3]`` prefix appears once, not duplicated."""
+    """Two batch dims are collapsed, not flattened into the output.
+
+    Two batch dims are collapsed, not flattened into the output: the aligned
+    ``[2, 3]`` prefix appears once, not duplicated.
+    """
     torch.manual_seed(1)
     x = torch.randn(2, 3, 7, 5)
     index = torch.randint(0, 7, (2, 3, 4), dtype=torch.int32)
@@ -110,9 +122,12 @@ def test_gather_two_batch_anti_flatten() -> None:
 
 
 def test_gather_default_batch_dims_zero_keeps_non_batched() -> None:
-    """Default ``batch_dims=0`` keeps non-batched insert semantics even when the
+    """Test gather default batch dims zero keeps non batched.
+
+    Default ``batch_dims=0`` keeps non-batched insert semantics even when the
     leading dims coincide (``index(6,)`` on ``x(6,3,4)`` axis 1 → ``[6,6,4]``),
-    and the explicit ``batch_dims=1`` form of the same index → ``[6,4]``."""
+    and the explicit ``batch_dims=1`` form of the same index → ``[6,4]``.
+    """
     torch.manual_seed(2)
     x = torch.randn(6, 3, 4)
     idx6 = torch.randint(0, 3, (6,), dtype=torch.int32)
@@ -167,9 +182,12 @@ def _batched_gather_lower_fn(
 
 
 def test_batched_gather_lowering_rejected() -> None:
-    """A ``batch_dims>0`` gather must not silently fall through to the existing
+    """Test batched gather lowering rejected.
+
+    A ``batch_dims>0`` gather must not silently fall through to the existing
     single-coordinate TensorView lowering: HIR->TIR fail-closes with a named
-    ``Gather`` error."""
+    ``Gather`` error.
+    """
     module = Module(name="t", functions=(_batched_gather_lower_fn,), entry=_batched_gather_lower_fn.name)
     with pytest.raises(NotImplementedError, match="Gather: batched gather lowering"):
         HirToTirPass().run(module)

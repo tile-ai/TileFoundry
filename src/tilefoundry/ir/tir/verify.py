@@ -73,8 +73,11 @@ def verify_prim_function(fn: PrimFunction, *, module_fns: Iterable[PrimFunction]
 
 
 def _check_param_homogeneity(fn: PrimFunction) -> None:
-    """Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)): all params' layouts must be
-    consistently ShardLayout or all non-ShardLayout. Mixed is error."""
+    """Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)).
+
+    Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)): all params' layouts must be
+    consistently ShardLayout or all non-ShardLayout. Mixed is error.
+    """
     kinds = []
     for p in fn.params:
         ty = p.type
@@ -217,8 +220,11 @@ def _check_rank0_bool(ctx, stmt, expr):
 
 
 def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
-    """`AllocTensor` placement ([tir §1.3](docs/spec/tir.md#13-primfunction)): `Call(AllocTensor, ...)` may only
-    appear directly as `LetStmt.value`. Raise if nested in any other Expr."""
+    """Reject an ``AllocTensor`` call nested outside a ``LetStmt`` value.
+
+    `AllocTensor` placement ([tir §1.3](docs/spec/tir.md#13-primfunction)): `Call(AllocTensor, ...)` may only
+    appear directly as `LetStmt.value`. Raise if nested in any other Expr.
+    """
     if isinstance(expr, Call) and isinstance(expr.target, AllocTensorOp):
         if at_letstmt_value:
             # Top-level LetStmt value — legal. Still scan args (none expected).
@@ -235,8 +241,11 @@ def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
 
 
 def _check_embedded_sharding(expr: Expr, scope, fn):
-    """`MeshScope` mesh in scope ([tir §1.3](docs/spec/tir.md#13-primfunction)), tir branch: for any ShardLayout
-    inside an Expr, its mesh must be on the current scope stack or a param's."""
+    """`MeshScope` mesh in scope ([tir §1.3](docs/spec/tir.md#13-primfunction)), tir branch.
+
+    `MeshScope` mesh in scope ([tir §1.3](docs/spec/tir.md#13-primfunction)), tir branch: for any ShardLayout
+    inside an Expr, its mesh must be on the current scope stack or a param's.
+    """
     to_visit = [expr]
     while to_visit:
         e = to_visit.pop()
@@ -356,7 +365,8 @@ def _resolve_symbol_ref(name, module_fn_map):
     """Resolve a SymbolRef name to its unique module ``PrimFunction``.
 
     Zero or more than one same-name match is an error — the same
-    uniqueness contract as ``Module.lookup``."""
+    uniqueness contract as ``Module.lookup``.
+    """
     matches = module_fn_map.get(name, ())
     if len(matches) != 1:
         raise VerifyError(
@@ -412,9 +422,12 @@ _LAUNCH_EXTENT_OPS = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMa
 
 
 def _verify_launch_extent(extent, extent_params, ref_name) -> None:
-    """A grid/block launch extent Expr is an integer ``Constant``, a
+    """Verify launch extent.
+
+    A grid/block launch extent Expr is an integer ``Constant``, a
     ``ShapeOf`` of a forwarded / entry tensor parameter, or a dim-arithmetic
-    ``Call`` whose operands are themselves valid extents."""
+    ``Call`` whose operands are themselves valid extents.
+    """
     if isinstance(extent, Constant):
         if isinstance(extent.value, bool) or not isinstance(extent.value, int):
             raise VerifyError(
@@ -449,11 +462,14 @@ def _verify_launch_extent(extent, extent_params, ref_name) -> None:
 
 
 def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
-    """Host-launch checks; full placement validation lands in CUDA lowering
+    """Host-launch checks; full placement validation lands in CUDA lowering.
+
+    Host-launch checks; full placement validation lands in CUDA lowering
     (a launch tensor arg's storage vs the runtime device type).
 
     The launch is ``Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y,
-    grid_z, block_x, block_y, block_z, *forwarded))``."""
+    grid_z, block_x, block_y, block_z, *forwarded))``.
+    """
     ref = stmt.args[0]
     if not isinstance(ref, SymbolRef):
         raise VerifyError(

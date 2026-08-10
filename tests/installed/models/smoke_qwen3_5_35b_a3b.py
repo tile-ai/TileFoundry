@@ -61,7 +61,9 @@ LINEAR = next(case for case in CASES if case.id == "qwen3_5_35b_a3b")
 
 @pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
 def test_full_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
-    """`full_attention` -- input_layernorm plus GQA with per-head q_norm/k_norm,
+    """Test full attention matches hugging face.
+
+    `full_attention` -- input_layernorm plus GQA with per-head q_norm/k_norm,
     partial RoPE and the output gate, over the cache and the new token -- against
     Hugging Face's own attention at the decoded position, at two lengths.
 
@@ -93,7 +95,9 @@ def test_full_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_l
 
 @pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
 def test_linear_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
-    """`linear_attention` -- input_layernorm plus the causal convolution,
+    """Test linear attention matches hugging face.
+
+    `linear_attention` -- input_layernorm plus the causal convolution,
     L2-normalised query and key, the gated delta rule and the gated output norm --
     against Hugging Face's own mixer at the decoded position, at two lengths.
 
@@ -128,7 +132,9 @@ MOE = next(case for case in CASES if case.id.endswith("_moe"))
 
 
 def test_the_moe_block_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
-    """The whole block -- post_attention_layernorm plus `Qwen3_5MoeSparseMoeBlock`,
+    """Test the moe block matches hugging face.
+
+    The whole block -- post_attention_layernorm plus `Qwen3_5MoeSparseMoeBlock`,
     routed experts and the shared expert together -- against Hugging Face's own.
 
     Named as a Module so `check` compares the block's own orchestration rather than
@@ -193,7 +199,9 @@ def test_each_half_of_the_state_reaches_the_answer(
 
 
 def test_the_output_gate_is_applied(tf, shipped_source, tmp_path) -> None:
-    """Half of `q_proj`'s fan-out never reaches a score, and this measures that it
+    """Half of `q_proj`'s fan-out never reaches a score.
+
+    Half of `q_proj`'s fan-out never reaches a score, and this measures that it
     reaches the output instead.
 
     The gate is a sigmoid, so it lies strictly between 0 and 1: an implementation

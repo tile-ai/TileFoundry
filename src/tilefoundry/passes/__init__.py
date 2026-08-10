@@ -1,6 +1,4 @@
-"""TileFoundry pass pipeline.
-
-"""
+"""TileFoundry pass pipeline."""
 from __future__ import annotations
 
 from .pass_base import FunctionPass, ModulePass, Pass, PrimFuncPass

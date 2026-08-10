@@ -117,9 +117,12 @@ def check_multilinear_partials(
 
 
 def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name):
-    """Require *dst* and *update* to carry the identical per-mesh-axis Partial
+    """Require *dst* and *update* to carry the identical per-mesh-axis Partial state.
+
+    Require *dst* and *update* to carry the identical per-mesh-axis Partial
     state (an in-place-style write can only merge two operands whose shard
-    states already agree)."""
+    states already agree).
+    """
     dst_partials = [
         (axis, reduction)
         for axis, reduction in enumerate(partial_reductions_by_axis(dst.layout))

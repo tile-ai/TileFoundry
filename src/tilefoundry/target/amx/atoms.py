@@ -1,4 +1,6 @@
-"""``candidate_atoms(op, target) -> list[AtomFact]`` -- bridge one HIR
+"""``candidate_atoms(op, target) -> list[AtomFact]``.
+
+``candidate_atoms(op, target) -> list[AtomFact]`` -- bridge one HIR
 compute op to the atom catalogue of the AMX target, which spans two
 execution units: the AMX coprocessor and the core's own NEON SIMD pipes.
 It only *lists* candidates (a hard filter over shape, dtype, layout and
@@ -21,9 +23,12 @@ from tilefoundry.target.base import target_instance
 
 @dataclass(frozen=True)
 class StorageLevel:
-    """Where an atom's operands sit while it executes: per operand role, the
+    """Where an atom's operands sit while it executes.
+
+    Where an atom's operands sit while it executes: per operand role, the
     bytes that role has to fit into. A level backed by a larger store only
-    streams its operands through, so it budgets no role and holds anything."""
+    streams its operands through, so it budgets no role and holds anything.
+    """
 
     name: str
     budget: tuple[tuple[str, int], ...] = ()
@@ -56,8 +61,11 @@ CORE_CACHE = StorageLevel(name="core_cache")
 
 @dataclass(frozen=True)
 class AmxOpSpec:
-    """A named, fully-specified matrix instruction: which execution unit issues
-    it, and which storage level has to hold the operands it is handed."""
+    """A named, fully-specified matrix instruction: which execution unit issues it.
+
+    A named, fully-specified matrix instruction: which execution unit issues
+    it, and which storage level has to hold the operands it is handed.
+    """
 
     name: str
     unit: str
@@ -114,7 +122,9 @@ def _dense_bytes(shape: tuple[int, ...], dtype: DType) -> int:
 
 
 def _operand_bytes(shape_mnk: tuple[int, int, int], op: AmxOpSpec) -> dict[str, int]:
-    """Bytes each of a ``shape_mnk`` matmul's operand roles has to hold at
+    """Bytes each of a ``shape_mnk`` matmul's operand roles has to hold at ``op``'s dtypes.
+
+    Bytes each of a ``shape_mnk`` matmul's operand roles has to hold at
     ``op``'s dtypes.
 
     A and B are *staged* one reduction step at a time, so their roles hold one
@@ -137,7 +147,9 @@ def make_atom(op: AmxOpSpec) -> AmxAtom:
 
 
 def _roofline_duration_ns(atom: AmxAtom, target: AmxTarget) -> tuple[float, float]:
-    """Nominal roofline estimate (ns) for *one* atom instance, as
+    """Nominal roofline estimate (ns) for *one* atom instance, as ``(duration, compute_only)``.
+
+    Nominal roofline estimate (ns) for *one* atom instance, as
     ``(duration, compute_only)``.
 
     Compute is the atom's own MNK flops over the measured f32 throughput of
@@ -160,7 +172,9 @@ def _roofline_duration_ns(atom: AmxAtom, target: AmxTarget) -> tuple[float, floa
 
 
 def _operands_layout_ok(lhs: TensorType, rhs: TensorType) -> bool:
-    """Layout hard filter: the X/Y operand packing is derived for dense,
+    """Layout hard filter: the X/Y operand packing is derived for dense, unsharded operands.
+
+    Layout hard filter: the X/Y operand packing is derived for dense,
     unsharded operands. A ShardLayout-carrying operand may need a repack step to
     feed this atom, which is an agent-filled hole rather than a candidate here.
     """

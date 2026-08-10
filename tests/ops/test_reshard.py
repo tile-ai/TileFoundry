@@ -1,4 +1,6 @@
-"""``Reshard``'s materialization boundaries: which strides a direction produces,
+"""``Reshard``'s materialization boundaries: which strides a direction produces.
+
+``Reshard``'s materialization boundaries: which strides a direction produces,
 and which destinations it refuses.
 
 - ``layout`` and ``storage`` are optional, but a storage change requires an

@@ -52,7 +52,9 @@ def _i64(value: int) -> Constant:
     return i64_const(value)
 
 def _slice_dim(begin: Expr, end: Expr, stride: Expr) -> Expr:
-    """`(end - begin + stride - 1) // stride` — ceil-div — to correctly handle
+    """` // stride` — ceil-div — to correctly handle the final partial window when ` % stride != 0`.
+
+    `(end - begin + stride - 1) // stride` — ceil-div — to correctly handle
     the final partial window when `(end - begin) % stride != 0`.
 
     Construction-time folding via ``simplify_dim`` collapses

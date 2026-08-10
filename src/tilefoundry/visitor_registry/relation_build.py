@@ -8,9 +8,11 @@ from tilefoundry.visitor_registry.isl_utility import to_dim, to_domain
 
 def build_domain(extents: tuple) -> "isl.set":
     """Bounded iteration domain for *extents* (see ``isl_utility.to_domain``).
+
     A caller that also needs the output shape back (``shape_from_relation``)
     should call ``to_domain`` directly instead, to keep its param map
-    alongside the relation."""
+    alongside the relation.
+    """
     domain, _ = to_domain(extents)
     return domain
 
@@ -62,9 +64,12 @@ def shape_from_relation(relation, source_extents: tuple | None = None) -> tuple:
 
 
 def validate_output_map_arity(output_map: "isl.map", output_shape: tuple) -> None:
-    """Check the output access map's range rank matches the claimed output
+    """Check the output access map's range rank matches the claimed output shape rank.
+
+    Check the output access map's range rank matches the claimed output
     shape rank. The relation carries no shape, so this is the consistency
-    point between the relation and the typeinfer-side output shape."""
+    point between the relation and the typeinfer-side output shape.
+    """
     n_out = output_map.dim(isl.dim_type.OUT)
     if n_out != len(output_shape):
         raise ValueError(

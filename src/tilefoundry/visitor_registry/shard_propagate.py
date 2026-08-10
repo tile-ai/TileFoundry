@@ -42,8 +42,9 @@ def partial_reductions_by_axis(
 
 
 def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
-    """Classify each result (out) axis of *m* by how it accesses the domain:
+    """Classify each result (out) axis of *m* by how it accesses the domain: - ``("proj", d)``.
 
+    Classify each result (out) axis of *m* by how it accesses the domain:
     - ``("proj", d)`` — a pure projection of domain dim ``d`` (single in-dim,
       unit coefficient): the access tracks that domain dim.
     - ``("const", None)`` — no domain dim involved: a constant (broadcast)
@@ -72,8 +73,11 @@ def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
 
 
 def _involved_domain_dims(m: "isl.map") -> "set[int]":
-    """All domain (in) dims referenced by any result axis of *m* — including
-    those that appear only inside a non-projection (complex) access."""
+    """All domain (in) dims referenced by any result axis of *m*.
+
+    All domain (in) dims referenced by any result axis of *m* — including
+    those that appear only inside a non-projection (complex) access.
+    """
     ma = m.as_pw_multi_aff().as_multi_aff()
     n_in = ma.dim(isl.dim_type.IN)
     n_out = ma.dim(isl.dim_type.OUT)
@@ -97,7 +101,9 @@ def _carrier_layout(
     complete_reduction_dims,
     fresh_strides,
 ):
-    """Transform one input's ``ShardLayout`` into the output layout when
+    """Carrier layout.
+
+    Transform one input's ``ShardLayout`` into the output layout when
     that input's relation covers every output axis.
 
     Each input layout position is routed to an output axis via its domain dim

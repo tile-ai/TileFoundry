@@ -44,8 +44,11 @@ def test_an_index_the_caller_wrote_is_left_alone() -> None:
 
 
 def test_it_follows_the_selection_rather_than_reading_it_once() -> None:
-    """The resolved device tracks a later `set_device`, so a worker assigned a card
-    after import still loads onto that card."""
+    """The resolved device tracks a later `set_device`.
+
+    The resolved device tracks a later `set_device`, so a worker assigned a card
+    after import still loads onto that card.
+    """
     if torch.cuda.device_count() < 2:
         pytest.skip("tracking a later set_device needs a second card to move to")
     original = torch.cuda.current_device()

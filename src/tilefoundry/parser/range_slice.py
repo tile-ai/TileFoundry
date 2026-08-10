@@ -1,6 +1,5 @@
 """Parser-side ``RangeSlice`` for chunked tile iteration.
 
-
 A ``RangeSlice`` represents the per-iteration sub-range yielded by a
 two-arg ``tile(extent, step)`` form. It exists only at parse time —
 it does **not** appear in the IR. The IR-level induction variable
@@ -43,7 +42,7 @@ def _to_i64_expr(value: Any) -> Expr:
 class RangeSlice:
     """Parser-side iter binding for ``for ok in tile(extent, step)``.
 
-    Attributes
+    Attributes:
     ----------
     induction_var : Var
         The IR i64 scalar Var emitted as the GridRegionExpr induction

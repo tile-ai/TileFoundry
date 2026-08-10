@@ -10,14 +10,17 @@ from .shape_dim import ShapeDim
 
 
 def _canonicalize_static_dims(shape: tuple) -> tuple:
-    """Fold any integer-valued ``Constant`` shape dim into a plain ``int`` so a
+    """Canonicalize static dims.
+
+    Fold any integer-valued ``Constant`` shape dim into a plain ``int`` so a
     static dim has a single canonical representation (``Slice`` / parser-sugar
     emit ``Constant`` while params / ``Reduce`` emit ``int``; mixing the two
     breaks ``==`` shape checks). Narrow on purpose: only a real integer
     ``Constant`` *in the shape tuple* is folded — ``DimVar`` and dynamic dim
     ``Call`` exprs pass through untouched. The ``Constant`` import is deferred to
     avoid the ``ir.core.expr`` ↔ ``ir.types.tensor_type`` cycle and fails closed
-    (returns ``shape`` unchanged) so no non-``Constant`` object is ever folded."""
+    (returns ``shape`` unchanged) so no non-``Constant`` object is ever folded.
+    """
     try:
         from tilefoundry.ir.core.expr import Constant  # noqa: PLC0415 - cycle guard
     except ImportError:  # pragma: no cover - import-cycle guard, fail closed
@@ -67,7 +70,9 @@ class TensorType:
 
     @staticmethod
     def meta_scalar(dtype: DType = DType.i64) -> "TensorType":
-        """Canonical rank-0 shape/meta scalar (``layout=EMPTY_LAYOUT``,
+        """Canonical rank-0 shape/meta scalar.
+
+        Canonical rank-0 shape/meta scalar (``layout=EMPTY_LAYOUT``,
         ``storage=None`` — a non-memory-resident compile-time value).
         Every shape-element / dim-arithmetic type must use this single
         form so structural type equality holds across construction sites.

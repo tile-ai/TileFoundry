@@ -33,7 +33,9 @@ from .registries import AnalysisRegistry
 
 
 class OpaqueRelation:
-    """Marker object for an access relation that cannot be expressed in the
+    """Represent OpaqueRelation.
+
+    Marker object for an access relation that cannot be expressed in the
     affine framework at the queried memory level.
 
     Data-dependent or otherwise non-affine operations return ``OPAQUE`` for
@@ -141,7 +143,9 @@ def _identity(rank: int) -> "isl.multi_aff":
 
 
 def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
-    """Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
+    """Identity relations.
+
+    Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
     inputs and single output are all elementwise identity.
 
     Each input contributes its own-rank identity; the output uses its own
@@ -173,8 +177,11 @@ def register_type_relation(op_cls: type) -> Callable[[Callable], Callable]:
 
 
 def build_relation(call, input_types, ctx) -> "AccessRelationResult | None":
-    """Build the forward access relation for *call*, or ``None`` if its op has
-    no registered builder."""
+    """Build relation.
+
+    Build the forward access relation for *call*, or ``None`` if its op has
+    no registered builder.
+    """
     fn = type_relation_registry.lookup(type(call.target))
     if fn is None:
         return None

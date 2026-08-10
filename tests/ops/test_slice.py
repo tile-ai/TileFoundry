@@ -1,6 +1,9 @@
-"""Slice's sharded-layout boundary: the sliced shape can no longer be described
+"""Slice's sharded-layout boundary.
+
+Slice's sharded-layout boundary: the sliced shape can no longer be described
 by the input's layout, so a genuinely-sharded input drops to an unsharded output
-rather than carrying a fake layout forward."""
+rather than carrying a fake layout forward.
+"""
 from __future__ import annotations
 
 from tests.ops.typeinfer_utils import (

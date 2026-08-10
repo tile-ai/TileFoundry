@@ -45,7 +45,9 @@ def _reduced_axes(call: "Call", rank: int) -> tuple:
 
 @register_type_relation(Reduce)
 def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for Reduce: an identity input map; the output map keeps
+    """Forward relation for Reduce: an identity input map.
+
+    Forward relation for Reduce: an identity input map; the output map keeps
     every axis (keepdim) or drops the reduced axes (no keepdim). The reduced
     axes are reported as completely-reduced dims, so a Split on them collapses
     to Broadcast and their layout positions collapse to size 1.
@@ -124,8 +126,11 @@ _EMPTY_IDENTITY = (ReduceKind.MAX, ReduceKind.ABS_MAX)
 
 
 def _least_representable(dtype: "torch.dtype"):
-    """The smallest value *dtype* can hold: ``False``, ``iinfo.min``, or ``-inf``
-    where the dtype round-trips it and ``finfo.min`` where it does not."""
+    """The smallest value *dtype* can hold.
+
+    The smallest value *dtype* can hold: ``False``, ``iinfo.min``, or ``-inf``
+    where the dtype round-trips it and ``finfo.min`` where it does not.
+    """
     if dtype is torch.bool:
         return False
     if not dtype.is_floating_point:

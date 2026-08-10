@@ -105,7 +105,9 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
 
 @register_type_relation(RoPE)
 def _rope_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for one RoPE branch: the value input paired with
+    """Forward relation for one RoPE branch.
+
+    Forward relation for one RoPE branch: the value input paired with
     itself (``x, x, cos, sin, pos``) -- GQA's Hq != Hkv means q_rope and
     k_rope cannot share one domain, so ``analysis.poly``'s
     ``_rope_access`` calls this once per branch (q or k) and keeps only

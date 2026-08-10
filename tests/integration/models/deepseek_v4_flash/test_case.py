@@ -24,8 +24,11 @@ from tilefoundry.ir.types.substitute import DimSubstitutionError
 
 
 def test_the_case_selects_every_function_the_description_defines():
-    """Analyze has no reason to leave a function out, and schedule admits only
-    the entry function -- so the other one is untested rather than blocked."""
+    """Analyze has no reason to leave a function out, and schedule admits only the entry function.
+
+    Analyze has no reason to leave a function out, and schedule admits only
+    the entry function -- so the other one is untested rather than blocked.
+    """
     module = CASE.build()
     assert CASE.untested("analyze", module) == ()
     assert CASE.selected("schedule") == (module.entry_function().name,)
@@ -33,9 +36,12 @@ def test_the_case_selects_every_function_the_description_defines():
 
 
 def test_the_context_lengths_the_case_names_are_ones_the_model_has():
-    """The window is what bounds the range, so the corpus's usual 1024 is not a
+    """The window is what bounds the range.
+
+    The window is what bounds the range, so the corpus's usual 1024 is not a
     context this layer type has rather than a long one -- and the length the case
-    analyses at sits below the ceiling, which is asked about separately."""
+    analyses at sits below the ceiling, which is asked about separately.
+    """
     function = CASE.build().lookup("mla_attend")
 
     assert ANALYZED_AT["ctx_len"] < REAL.max_ctx < REAL.window

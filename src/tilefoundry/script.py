@@ -1,6 +1,8 @@
 """`@tilefoundry.func` / `@tilefoundry.prim_func` decorator entry (spec 011 [parser §1](docs/spec/parser.md#1-dsl-syntax)).
+
 Wraps the parser in `tilefoundry.parser` and verifies the resulting IR; the
-decorator evaluates to the parsed IR node, not the original function."""
+decorator evaluates to the parsed IR node, not the original function.
+"""
 
 from __future__ import annotations
 
@@ -50,9 +52,12 @@ def _validate_converter_weight_name(base: HirFunction, weight_name: str) -> None
 
 
 def _definition_namespace() -> dict[str, Any]:
-    """Locals visible where this decorator is applied: walks to the first
+    """Locals visible where this decorator is applied.
+
+    Locals visible where this decorator is applied: walks to the first
     frame outside this module and collects its (and outer scopes') locals,
-    inner scope winning over outer."""
+    inner scope winning over outer.
+    """
     frame = sys._getframe(1)
     here = __file__
     while frame is not None and frame.f_code.co_filename == here:
@@ -97,7 +102,8 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     execution domain, so the decorated name binds to the implicit
     single-function ``Module`` carrying that context. A ``pass`` body declares
     a dispatch prototype; implementations are registered via
-    :meth:`Function.specialize`."""
+    :meth:`Function.specialize`.
+    """
     if target is not None:
         target_instance(target)
     resolved_target = target
@@ -135,7 +141,8 @@ def _specialize(self: HirFunction, pattern: Any):
     Parses the decorated ``def`` into a variant ``hir.Function`` and appends it to
     ``base.variants``. The identifier becomes the variant's display label, or
     nothing when it is ``_``; the variant's ``name`` is the base's either way.
-    Legal only before ``base`` enters a ``Module`` (a later call raises)."""
+    Legal only before ``base`` enters a ``Module`` (a later call raises).
+    """
     pat = _validate_one_pattern(pattern)
 
     def _wrap_variant(fn_inner):
@@ -165,8 +172,11 @@ HirFunction.specialize = _specialize
 
 
 def _converter(self: HirFunction, weight_name: str):
-    """``@base.converter(weight_name)`` — register a per-weight offline
-    converter. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)."""
+    """``@base.converter(weight_name)`` — register a per-weight offline converter.
+
+    ``@base.converter(weight_name)`` — register a per-weight offline
+    converter. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+    """
     _validate_converter_weight_name(self, weight_name)
 
     def _wrap_converter(fn_inner):
@@ -194,7 +204,8 @@ def prim_func(fn=None, *, target=None):
 
     The decorated name binds to the resulting IR node. ``target`` (a Target
     object) selects the compilation target; omitted, it uses the
-    normal compile-entry default."""
+    normal compile-entry default.
+    """
     if target is not None:
         target_instance(target)
     resolved_target = target

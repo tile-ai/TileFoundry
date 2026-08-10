@@ -1,4 +1,6 @@
-"""HIR insert_slice (dynamic-update-slice): its bounds, and the in-place
+"""HIR insert_slice (dynamic-update-slice): its bounds.
+
+HIR insert_slice (dynamic-update-slice): its bounds, and the in-place
 loop-carry lowering exercised through a single decode step.
 
 ``insert_slice(dst, update, offsets)`` returns ``dst`` with ``update`` written
@@ -77,9 +79,11 @@ _DSL_PRELUDE = (
 
 def _eval_rankn(dst: torch.Tensor, upd: torch.Tensor, lit_offsets, runtime_axis=None):
     """Evaluate a rank-N insert_slice through the parsed DSL surface.
+
     ``lit_offsets`` are per-axis literals; if ``runtime_axis`` is given, that
     axis's offset is a runtime rank-0 i32 param carrying
-    ``lit_offsets[runtime_axis]`` instead."""
+    ``lit_offsets[runtime_axis]`` instead.
+    """
     d = ", ".join(str(int(x)) for x in dst.shape)
     u = ", ".join(str(int(x)) for x in upd.shape)
     extra_params, inputs, elems = [], [dst, upd], []
@@ -153,10 +157,13 @@ def test_insert_slice_typeinfer(case):
 # ── rank-N per-axis offset tuple (typeinfer) ──────────────────────────────
 
 def test_insert_slice_rankn_static_oob_names_axis():
-    """An all-literal offset that puts the window past dst on one axis is
+    """An all-literal offset that puts the window past dst on one axis is rejected at typeinfer.
+
+    An all-literal offset that puts the window past dst on one axis is
     rejected at typeinfer, and the error names the offending axis. A negative
     literal is the same check from the other side, so it is not asserted
-    separately."""
+    separately.
+    """
     with pytest.raises(VerifyError, match="axis 1"):
         _infer_insert(
             make_tensor_type((1, 16512, 512), _F),
@@ -175,11 +182,14 @@ def test_insert_slice_tuple_len_must_equal_rank():
 # ── rank-N per-axis offset tuple (evaluation) ─────────────────────────────
 
 def test_insert_slice_rankn_eval_matches_reference_scatter():
-    """A rank-3 window at ``(0, P%128, 0)`` (the middle offset a runtime member)
+    """A rank-3 window at ```` evaluates to the same tensor as a reference scatter.
+
+    A rank-3 window at ``(0, P%128, 0)`` (the middle offset a runtime member)
     evaluates to the same tensor as a reference scatter. This is also where
     typeinfer accepting a runtime offset member is shown to be sound: the
     literal members are still bounds-checked, the runtime one is deferred to
-    here."""
+    here.
+    """
     torch.manual_seed(0)
     dst = torch.randn(1, 16512, 512)
     upd = torch.randn(1, 1, 512)
@@ -189,8 +199,11 @@ def test_insert_slice_rankn_eval_matches_reference_scatter():
 
 
 def test_insert_slice_rankn_eval_runtime_oob_raises():
-    """A runtime offset member that puts the window out of bounds is caught by
-    the eval guard (typeinfer cannot see the runtime value)."""
+    """A runtime offset member that puts the window out of bounds is caught by the eval guard.
+
+    A runtime offset member that puts the window out of bounds is caught by
+    the eval guard (typeinfer cannot see the runtime value).
+    """
     dst = torch.zeros(1, 8, 4)
     upd = torch.zeros(1, 3, 4)
     with pytest.raises(ValueError, match="out of bounds"):
@@ -222,10 +235,13 @@ _HEAD_DIM = 4
 
 @module(entry="decode_step", topologies=(Topology("thread", 1),))
 class _DecodeStep:
-    """A single decode step exercising the in-place loop-carry lowerings: a
+    """A single decode step exercising the in-place loop-carry lowerings.
+
+    A single decode step exercising the in-place loop-carry lowerings: a
     two-carry grid region (output accumulator + running total → a tuple, so
     ``tuple_get_item``), ``full_like`` inits, an in-place ``insert_slice`` write
-    at a dynamic scalar offset, and a rank-4 ``cache_update`` KV write."""
+    at a dynamic scalar offset, and a rank-4 ``cache_update`` KV write.
+    """
 
 
     @func
@@ -253,8 +269,11 @@ class _DecodeStep:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_decode_step_matches_torch() -> None:
-    """The decode step compiles and runs on GPU; the accumulator write at a
-    dynamic offset and the KV cache update match a torch reference."""
+    """The decode step compiles and runs on GPU.
+
+    The decode step compiles and runs on GPU; the accumulator write at a
+    dynamic offset and the KV cache update match a torch reference.
+    """
     import tilefoundry  # noqa: PLC0415
 
     rm = tilefoundry.compile(_DecodeStep, target=CudaTarget("nvidia.h200_sxm"))
@@ -312,10 +331,13 @@ def _cross_cta_reshard_output(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_
 
 
 def test_cross_cta_reshard_owned_sync() -> None:
-    """An output-position cross-CTA reshard (ownership change) still lowers to
+    """An output-position cross-CTA reshard (ownership change) still lowers to sync-then-reshard.
+
+    An output-position cross-CTA reshard (ownership change) still lowers to
     sync-then-reshard: the grid sync is emitted before the output copy, proving
     the output-sink path routes through the same reshard-owned fence as an
-    intermediate reshard."""
+    intermediate reshard.
+    """
     pf = _lower(_cross_cta_reshard_output)
     nodes = []
     _walk(pf.body, False, nodes)
@@ -345,9 +367,12 @@ _NW_STEPS = 2
 
 @module(entry="nd_window", topologies=(Topology("thread", 1),))
 class _NdWindow:
-    """A loop-carried rank-3 in-place ``insert_slice`` writing a non-trivial,
+    """Represent NdWindow.
+
+    A loop-carried rank-3 in-place ``insert_slice`` writing a non-trivial,
     non-contiguous window (full axis 0, window 2 on axis 1, partial 3-of-6 on
-    axis 2) at the induction variable as the middle-axis tile coordinate."""
+    axis 2) at the induction variable as the middle-axis tile coordinate.
+    """
 
 
     @func
@@ -368,9 +393,12 @@ class _NdWindow:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_insert_slice_rankn_gpu_oracle() -> None:
-    """The rank-N in-place ``insert_slice`` runs on GPU and matches a torch
+    """The rank-N in-place ``insert_slice`` runs on GPU and matches a torch scatter reference.
+
+    The rank-N in-place ``insert_slice`` runs on GPU and matches a torch
     scatter reference: a non-contiguous window at a dynamic, non-zero
-    middle-axis coordinate."""
+    middle-axis coordinate.
+    """
     import tilefoundry  # noqa: PLC0415
 
     rm = tilefoundry.compile(_NdWindow, target=CudaTarget("nvidia.h200_sxm"))

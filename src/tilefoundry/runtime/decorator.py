@@ -1,4 +1,6 @@
-"""``@runtime_func`` / ``@runtime_module`` — authoring surface for the runtime
+"""``@runtime_func`` / ``@runtime_module``.
+
+``@runtime_func`` / ``@runtime_module`` — authoring surface for the runtime
 twin of a semantic ``Module``. See [runtime §1.1](docs/spec/runtime.md#11-runtimemodule).
 """
 from __future__ import annotations
@@ -20,8 +22,11 @@ _RESERVED = ("module",)
 
 
 def runtime_func(fn: Callable) -> Callable:
-    """Tag *fn* as a kernel body, signature-identical to the semantic ``@func``
-    of the same name. Returns *fn* unwrapped."""
+    """Tag *fn* as a kernel body, signature-identical to the semantic ``@func`` of the same name.
+
+    Tag *fn* as a kernel body, signature-identical to the semantic ``@func``
+    of the same name. Returns *fn* unwrapped.
+    """
     if not inspect.isfunction(fn):
         raise TypeError(f"runtime_func: expected a plain function, got {type(fn).__name__}")
     setattr(fn, _RUNTIME_FUNC_MARK, True)
@@ -33,8 +38,11 @@ def _is_runtime_func(value: object) -> bool:
 
 
 def _is_kernel_impl(value: object) -> bool:
-    """A ``@runtime_func`` method, or a ``RuntimeFunction`` instance standing in
-    for one."""
+    """A ``@runtime_func`` method, or a ``RuntimeFunction`` instance standing in for one.
+
+    A ``@runtime_func`` method, or a ``RuntimeFunction`` instance standing in
+    for one.
+    """
     return _is_runtime_func(value) or isinstance(value, RuntimeFunction)
 
 
@@ -43,8 +51,11 @@ def _is_child_impl(value: object) -> bool:
 
 
 def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Callable:
-    """Bind *body* into a callable taking activations only: ``is_const`` params
-    come from *instance*'s loaded weights by name, the rest positionally."""
+    """Bind *body* into a callable taking activations only.
+
+    Bind *body* into a callable taking activations only: ``is_const`` params
+    come from *instance*'s loaded weights by name, the rest positionally.
+    """
     is_kernel_obj = isinstance(body, RuntimeFunction)
 
     def _call(*acts):
@@ -67,8 +78,11 @@ def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Calla
 
 
 class _Twin(RuntimeModule):
-    """Base class of every ``@runtime_module`` result, holding the behaviour that
-    is identical for all of them."""
+    """Represent Twin.
+
+    Base class of every ``@runtime_module`` result, holding the behaviour that
+    is identical for all of them.
+    """
 
     _ir: Module
 
@@ -91,8 +105,11 @@ class _Twin(RuntimeModule):
             child.load(resource.subtree(child.name))
 
     def forward(self, *acts):
-        """Run the semantic module's own orchestration method against this twin,
-        or its entry function if it declares none."""
+        """Forward.
+
+        Run the semantic module's own orchestration method against this twin,
+        or its entry function if it declares none.
+        """
         method = self._ir.methods.get("forward")
         if method is not None:
             return method(self, *acts)
@@ -129,8 +146,11 @@ def _check_one_to_one(
 
 
 def runtime_module(sem: Module) -> Callable[[type], type]:
-    """Class decorator returning *sem*'s runtime twin: same function names, same
-    child names, same entry, validated one-to-one here at decoration time."""
+    """Class decorator returning *sem*'s runtime twin.
+
+    Class decorator returning *sem*'s runtime twin: same function names, same
+    child names, same entry, validated one-to-one here at decoration time.
+    """
 
     def _decorate(cls_inner: type) -> type:
         declared = (

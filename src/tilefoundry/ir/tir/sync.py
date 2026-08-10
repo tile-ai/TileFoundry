@@ -31,7 +31,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
-    """Is ``m`` (a sliced mesh, ``m.layout`` a ``ComposedLayout``) a legal
+    """Is ``m`` a legal constant slice of the enclosing full mesh ``e``?.
+
+    Is ``m`` (a sliced mesh, ``m.layout`` a ``ComposedLayout``) a legal
     constant slice of the enclosing full mesh ``e``?
 
     Mechanically checkable, not inferred from a few equal fields: ``e`` must be
@@ -39,7 +41,8 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
     slice must reconstruct as ``e[start_i : start_i+sub_i]`` — same strides,
     per-axis sub-extents bounded by ``e``'s shape, and an offset that decomposes
     into in-range per-axis starts. The proof ends by rebuilding ``e[key]`` and
-    comparing it to ``m`` (so a forged slice cannot pass)."""
+    comparing it to ``m`` (so a forged slice cannot pass).
+    """
     if isinstance(e.layout, ComposedLayout):
         return False
     if e.topologies != m.topologies or e.names != m.names:
@@ -78,7 +81,9 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
 
 @register_verify_stmt(Sync)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    """A ``Sync`` must reference an enclosing ``with Mesh(...) as m`` — either
+    """A ``Sync`` must reference an enclosing ``with Mesh(...) as m``.
+
+    A ``Sync`` must reference an enclosing ``with Mesh(...) as m`` — either
     ``m`` itself (full mesh) or a legal constant slice ``m[...]`` — and its
     participant set must lower to a supported barrier.
 
@@ -87,7 +92,8 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     the slice-derived-from-enclosing proof (:func:`_legal_slice_of`). The
     enclosing ``MeshScope`` stack arrives on ``ctx.mesh_scope``. ``classify``
     then rejects a dynamic / non-contiguous / cross-warp-unaligned participant
-    set."""
+    set.
+    """
     m = call.target.mesh
     if not isinstance(m, Mesh):
         raise VerifyError(
@@ -133,7 +139,8 @@ def _participant_layout(mesh: Mesh) -> "tuple[Layout, int]":
 
     For a sliced mesh ``layout`` is a ``ComposedLayout`` whose ``outer`` is the
     participating sub-box and ``offset`` the slice origin; for an un-sliced mesh
-    the whole plain-``Layout`` ``layout`` participates at offset 0."""
+    the whole plain-``Layout`` ``layout`` participates at offset 0.
+    """
     ly = mesh.layout
     if isinstance(ly, ComposedLayout):
         outer = ly.outer
@@ -147,7 +154,8 @@ def participation(mesh: Mesh) -> Participation:
     """Derive the participating thread set of ``mesh``.
 
     Raises ``VerifyError`` for a malformed mesh (dynamic extent) or an
-    unsupported slice (non-contiguous / overlapping)."""
+    unsupported slice (non-contiguous / overlapping).
+    """
     domain = product(mesh.topologies)
     if domain is None:
         raise VerifyError(
@@ -198,8 +206,11 @@ def participation(mesh: Mesh) -> Participation:
 
 
 def classify(mesh: Mesh) -> SyncBarrier:
-    """Pick the hardware barrier for ``mesh``. Raises ``VerifyError`` for a
-    cross-warp subset that is not warp-aligned."""
+    """Pick the hardware barrier for ``mesh``.
+
+    Pick the hardware barrier for ``mesh``. Raises ``VerifyError`` for a
+    cross-warp subset that is not warp-aligned.
+    """
     topos = mesh.topologies
     if all(t.name == "cta" for t in topos):
         # A cta-scope mesh maps to the grid-wide barrier; only the full mesh

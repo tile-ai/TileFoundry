@@ -68,7 +68,9 @@ def link_modules(
     cuda_arch: str = "90",
     include_dirs: tuple[Path, ...] = (),
 ) -> LinkedModule:
-    """Separately compile a device ``cu`` module and a host ``cpp`` module, then
+    """Link modules.
+
+    Separately compile a device ``cu`` module and a host ``cpp`` module, then
     link them into one host-callable shared library; return the ``LinkedModule``.
 
     Requires exactly one ``cu`` module and exactly one ``cpp`` module. The device

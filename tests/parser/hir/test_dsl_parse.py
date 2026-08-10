@@ -37,9 +37,12 @@ def _insert_slice_offset_tuple(
 
 
 def test_parse_insert_slice_offset_tuple() -> None:
-    """The rank-N ``insert_slice`` per-axis offset argument parses to an
+    """Test parse insert slice offset tuple.
+
+    The rank-N ``insert_slice`` per-axis offset argument parses to an
     core ``Tuple`` with ordered rank-0 integer scalar fields (a literal,
-    a runtime scalar, a literal) — not a rank-1 offset tensor."""
+    a runtime scalar, a literal) — not a rank-1 offset tensor.
+    """
     body = _insert_slice_offset_tuple.body
     assert isinstance(body, Call) and isinstance(body.target, InsertSlice)
     offsets = body.args[2]
@@ -50,9 +53,12 @@ def test_parse_insert_slice_offset_tuple() -> None:
 
 
 def test_tuple_input_rejected_for_non_offsets_param() -> None:
-    """Containment: the tuple-literal input path is open ONLY for a param that
+    """Containment: the tuple-literal input path is open ONLY for a param that declares it.
+
+    Containment: the tuple-literal input path is open ONLY for a param that
     declares it (``insert_slice.offsets``). A tuple literal bound to any other
-    op's plain tensor input keeps the pre-existing rejection."""
+    op's plain tensor input keeps the pre-existing rejection.
+    """
     bad = """
 from tilefoundry import func
 from tilefoundry.dsl.tf import *
@@ -85,9 +91,12 @@ def _compile_time_operands(x: Tensor[(1, 2048), "bf16"]) -> Tensor[(1, 16, 128),
 
 
 def test_compile_time_values_reach_an_op_as_constants() -> None:
-    """``config.head_dim ** -0.5``, ``config.rms_eps`` and a body-local
+    """Test compile time values reach an op as constants.
+
+    ``config.head_dim ** -0.5``, ``config.rms_eps`` and a body-local
     ``_NK * _KD`` are numbers by parse time: the first two arrive as bf16 scalar
-    Constants, and the third serves as a shape."""
+    Constants, and the third serves as a shape.
+    """
     scaled, eps = _compile_time_operands.body.args[0].args
     operand, scale = scaled.args
 

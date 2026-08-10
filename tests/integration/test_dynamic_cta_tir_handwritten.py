@@ -64,8 +64,11 @@ class DynSquare:
 
 
 def test_handwritten_tir_dynamic_cta_matches_torch_at_several_shapes() -> None:
-    """One compiled artifact squares the tensor at three ``Ntile`` shapes via
-    the host-computed grid; all match torch with no recompile."""
+    """Test handwritten tir dynamic cta matches torch at several shapes.
+
+    One compiled artifact squares the tensor at three ``Ntile`` shapes via
+    the host-computed grid; all match torch with no recompile.
+    """
     rm = tilefoundry.compile(DynSquare, target=CudaTarget("nvidia.h200_sxm"))
     for nt in (4, 8, 17):
         torch.manual_seed(nt)

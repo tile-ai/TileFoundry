@@ -1,6 +1,5 @@
 """HIR matrix-multiply-accumulate ops (per-shape op classes).
 
-
 - ``Mma`` is an abstract marker base class only — ``isinstance``
   dispatch entry point for cost model / lowering.
 - Concrete classes encode arch + shape in the class name

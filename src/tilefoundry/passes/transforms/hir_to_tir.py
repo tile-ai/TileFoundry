@@ -103,12 +103,15 @@ def _eval_call(op, args: tuple) -> Evaluate:
 
 
 def _is_full_layout(layout) -> bool:
-    """True when ``layout`` is a full (bijective) embedding — its
+    """True when ``layout`` is a full (bijective) embedding.
+
+    True when ``layout`` is a full (bijective) embedding — its
     cosize (``1 + Σ (shape[i]-1)·stride[i]``) equals the product of its
     shape — so the strides describe a complete global gather mapping
     rather than a collapsed per-instance form. Returns ``False`` when the
     strides are unavailable (unmaterialized layout), so callers fall back
-    to the shared-engine path instead of crashing."""
+    to the shared-engine path instead of crashing.
+    """
     strides = getattr(layout, "strides", None)
     if strides is None:
         return False
@@ -138,7 +141,9 @@ def _is_full_layout(layout) -> bool:
 
 
 def _analyze_cross_warp_workspace(input_ty, reduce_axes):
-    """Compute the cross-warp staging workspace requirement for a
+    """Compute the cross-warp staging workspace requirement for a sharded ``Reduce``.
+
+    Compute the cross-warp staging workspace requirement for a
     sharded ``Reduce``.
 
     Returns ``(workspace_size, dtype, lane_reduced)`` — the values the lowering
@@ -150,7 +155,6 @@ def _analyze_cross_warp_workspace(input_ty, reduce_axes):
     (warp, lane, cell). The runtime — not the lowering — derives the reduction
     tier and its ``warps_per_group`` from the operand layouts.
     """
-
     layout = getattr(input_ty, "layout", None)
     if not isinstance(layout, ShardLayout):
         return 0, input_ty.dtype, True
@@ -301,15 +305,20 @@ class _Lowerer:
         return Var(type=type_, name=f"{hint}{self._name_counter}")
 
     def _alloc(self, type_, hint: str = "r") -> Var:
-        """Fresh Var + ``AllocTensor`` Call + ``_Bind`` — the alloc-and-bind
-        boilerplate shared by every buffer-introducing lowering handler."""
+        """Fresh Var + ``AllocTensor`` Call + ``_Bind``.
+
+        Fresh Var + ``AllocTensor`` Call + ``_Bind`` — the alloc-and-bind
+        boilerplate shared by every buffer-introducing lowering handler.
+        """
         r = self._fresh(type_, hint=hint)
         alloc_r = Call(type=r.type, target=AllocTensorOp(tensor_type=r.type), args=())
         self._items.append(_Bind(var=r, value=alloc_r))
         return r
 
     def _fork(self, *, bind: "dict[int, Var]") -> "_Lowerer":
-        """Create a sub-lowerer for a nested lexical scope (a GridRegion
+        """Create a sub-lowerer for a nested lexical scope (a GridRegion body).
+
+        Create a sub-lowerer for a nested lexical scope (a GridRegion
         body): shares the read-only dispatch context by reference
         (``_dispatch_groups`` / ``_mangled_registry`` / ``_caller_fn`` /
         ``_shape_param_names`` — mutations to ``_shape_param_names`` inside
@@ -317,7 +326,8 @@ class _Lowerer:
         a snapshot copy of the accumulated walk state (``_cache`` /
         ``_tuple_parts`` / ``_carry_init`` / ``_name_counter``). ``bind``
         seeds extra ``id(expr) -> Var`` cache entries (e.g. the loop
-        induction Var) beyond the inherited snapshot."""
+        induction Var) beyond the inherited snapshot.
+        """
         sub = _Lowerer(
             dispatch_groups=self._dispatch_groups,
             mangled_registry=self._mangled_registry,
@@ -332,8 +342,11 @@ class _Lowerer:
         return sub
 
     def _close(self, sub: "_Lowerer") -> Sequential:
-        """Sync the name counter forward from a forked sub-lowerer and fold
-        its collected items into a nested ``LetStmt``/``Sequential`` chain."""
+        """Close.
+
+        Sync the name counter forward from a forked sub-lowerer and fold
+        its collected items into a nested ``LetStmt``/``Sequential`` chain.
+        """
         self._name_counter = sub._name_counter
         return _fold_items_to_sequential(sub._items)
 
@@ -538,7 +551,9 @@ class _Lowerer:
         return acc_vars[0]
 
     def _reshard_cross_cta_sync(self, expr) -> "Var | None":
-        """The reshard-owned grid fence. A reshard whose SOURCE chain is a
+        """The reshard-owned grid fence.
+
+        The reshard-owned grid fence. A reshard whose SOURCE chain is a
         param-rooted gmem cta-shard view and whose DEST is a *different* gmem
         cta-ShardLayout re-views the ROOT buffer under new ownership — a
         cross-CTA read. The sync is intrinsic to the reshard lowering: the naive
@@ -548,7 +563,8 @@ class _Lowerer:
         async path could skip the fence); it owns only the fence — cross-CTA data
         redistribution is not implemented here. Both the intermediate reshard
         path and the output-sink reshard path route through this helper so the
-        fence is never bypassed."""
+        fence is never bypassed.
+        """
         dst_sl = expr.type.layout
         src_expr = expr.args[0]
         if (
@@ -573,9 +589,12 @@ class _Lowerer:
         return None
 
     def _param_alias_root(self, expr, _depth: int = 0):
-        """Walk Reshard / loop-carry chains to the underlying kernel-param Var
+        """Walk Reshard / loop-carry chains to the underlying kernel-param Var, or ``None``.
+
+        Walk Reshard / loop-carry chains to the underlying kernel-param Var
         (the gmem alias root), or ``None``. Used by the cross-CTA
-        sync-then-reshard rule in ``_lower_reshard``."""
+        sync-then-reshard rule in ``_lower_reshard``.
+        """
         if _depth > 64:
             return None
         if isinstance(expr, Var):
@@ -1146,12 +1165,15 @@ def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
 
 
 def _insert_slice_coord(ctx: "_Lowerer", off_expr):
-    """The scalar window index for an in-place ``insert_slice``: the window
+    """The scalar window index for an in-place ``insert_slice``.
+
+    The scalar window index for an in-place ``insert_slice``: the window
     is one tile of the update's own extent starting at the offset, so the
     offset is the tile index (matching the ``local_tile`` coord). A
     compile-time offset folds to a ``Constant`` scalar (emitted as a
     literal coordinate); a runtime scalar offset lowers to its scalar Var
-    (its single element is read at the coordinate site)."""
+    (its single element is read at the coordinate site).
+    """
     i32 = TensorType.scalar(dtype=DType.i32)
     if isinstance(off_expr, Constant):
         val = off_expr.value
@@ -1329,8 +1351,11 @@ def _mangle_variant_name(variant: HirFunction) -> str:
 
 
 def _fold_items_to_sequential(items: list[_Item]) -> Sequential:
-    """Turn a flat item list into a nested ``LetStmt`` chain wrapped in a
-    ``Sequential``."""
+    """Turn a flat item list into a nested ``LetStmt`` chain wrapped in a ``Sequential``.
+
+    Turn a flat item list into a nested ``LetStmt`` chain wrapped in a
+    ``Sequential``.
+    """
     def fold(i: int) -> list[Stmt]:
         out: list[Stmt] = []
         while i < len(items):
@@ -1358,7 +1383,6 @@ def _lower_single_output(
     out_var: Var,
 ) -> None:
     """Lower a single HIR body expression and copy the result to *out_var*."""
-
     if (
         isinstance(body_expr, Call)
         and isinstance(body_expr.target, Reshard)
@@ -1411,7 +1435,9 @@ def _lower_function(
     dispatch_groups: "dict[str, tuple[HirFunction, ...]] | None" = None,
     mangled_registry: "dict[str, PrimFunction] | None" = None,
 ) -> PrimFunction:
-    """Materialise the HIR `Function(params) -> tensor` as an
+    """Materialise the HIR `Function -> tensor` as an explicit-output-param ``PrimFunction``.
+
+    Materialise the HIR `Function(params) -> tensor` as an
     explicit-output-param ``PrimFunction``. The function-end
     sink — the outermost Reshard write to global — is rewritten as a
     ``Copy(<reg/shared result>, out)`` into the new ``out`` parameter
@@ -1710,7 +1736,9 @@ def _collect_hir_callee_names(expr) -> set[str]:
 def _topo_order_dispatch_groups(
     dispatch_view: dict[str, tuple[HirFunction, ...]],
 ) -> list[str]:
-    """Order dispatch group names so every group appears after the
+    """Order dispatch group names so every group appears after the groups its variants call into.
+
+    Order dispatch group names so every group appears after the
     groups its variants call into.
 
     Only edges to other dispatch groups matter — calls into static
@@ -1877,10 +1905,13 @@ class HirToTirPass(ModulePass):
 
 
 def _retarget_launch_callees(fns: list) -> list:
-    """Rebuild a host launch's ``SymbolRef`` callee to the unique lowered cuda
+    """Retarget launch callees.
+
+    Rebuild a host launch's ``SymbolRef`` callee to the unique lowered cuda
     ``PrimFunction`` of the same name. A callee that maps to zero or several
     lowered cuda functions is an error (no guessing) — this also rejects a
-    launch of a specialization group, whose variants carry mangled names."""
+    launch of a specialization group, whose variants carry mangled names.
+    """
     from tilefoundry.codegen.cuda.tir.prim_function import (  # noqa: PLC0415
         _is_dispatch_entry_shape,
     )

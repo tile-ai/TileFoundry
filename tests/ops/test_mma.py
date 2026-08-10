@@ -1,5 +1,8 @@
-"""HIR matrix-multiply-accumulate ops typeinfer: the (M, N) accumulator
-fragment in the accumulator dtype."""
+"""HIR matrix-multiply-accumulate ops typeinfer: the accumulator fragment in the accumulator dtype.
+
+HIR matrix-multiply-accumulate ops typeinfer: the (M, N) accumulator
+fragment in the accumulator dtype.
+"""
 from __future__ import annotations
 
 import pytest

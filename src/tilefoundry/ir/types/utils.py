@@ -78,7 +78,9 @@ def make_shard_tensor_type(
     mesh: Optional[Mesh] = None,
     attrs: tuple = (),
 ) -> "TensorType":
-    """Build the canonical sharded ``TensorType`` (``docs/spec/shard.md``
+    """Create shard tensor type.
+
+    Build the canonical sharded ``TensorType`` (``docs/spec/shard.md``
     [shard §7.1.1](docs/spec/shard.md#711-layoutshape)) from a logical description: ``shape`` is the logical tensor
     shape, ``attrs`` is one entry per mesh axis (``Split(logical_axis)`` /
     ``Broadcast()`` / ``Partial(reduction)``). ``mesh=None`` / ``attrs=()``

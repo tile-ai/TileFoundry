@@ -31,10 +31,13 @@ def _emit_plain_alloc(
     storage: StorageKind | None,
     local_shape: tuple,
 ) -> str:
-    """Emit the per-thread / per-CTA backing cute tensor and return
+    """Emit plain alloc.
+
+    Emit the per-thread / per-CTA backing cute tensor and return
     the C++ identifier the caller can use as the engine for a
     ``make_shard_tensor`` wrap (or directly as the visible name when
-    no shard wrap is needed)."""
+    no shard wrap is needed).
+    """
     if storage is None:
         raise ValueError(
             f"AllocTensor for {name!r} has no memory space (storage=None); a "

@@ -155,7 +155,6 @@ def test_rmsnorm_quant_seq_2_e2e_gpu_precision() -> None:
     (one thread per reduced cell + warp-shuffle / shmem workspace),
     so the kernel output matches the reference bitwise.
     """
-
     rm = tilefoundry.compile(RmsnormQuantSeq2Module, target=CudaTarget("nvidia.h200_sxm"))
 
     torch.manual_seed(42)

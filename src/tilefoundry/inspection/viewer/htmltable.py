@@ -24,9 +24,12 @@ def _html_escape(text: str) -> str:
 
 @dataclass
 class Span:
-    """One inline run inside a cell. ``color`` (and ``face`` / ``size``)
+    """One inline run inside a cell.
+
+    One inline run inside a cell. ``color`` (and ``face`` / ``size``)
     emit a ``<FONT>`` wrap so DimVar / storage tokens render colored
-    without breaking the outer cell's font."""
+    without breaking the outer cell's font.
+    """
     text: str
     color: str | None = None
     face: str | None = None
@@ -51,9 +54,12 @@ class Span:
 
 @dataclass
 class Cell:
-    """A single ``<TD>``. ``spans`` (inline colored runs) take precedence
+    """A single ``<TD>``.
+
+    A single ``<TD>``. ``spans`` (inline colored runs) take precedence
     over ``text``; supply spans for cells with mixed coloring (DimVar +
-    plain shape numbers + ``@gmem`` storage etc.)."""
+    plain shape numbers + ``@gmem`` storage etc.).
+    """
     text: str = ""
     spans: tuple[Span, ...] = ()
     port: str | None = None

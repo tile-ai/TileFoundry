@@ -34,8 +34,11 @@ class ModulePass(Pass):
 
 
 class FunctionPass(Pass):
-    """Per-hir-Function pass. Framework iterates `module.functions` and
-    calls `run_function` on each `HirFunction`; tir entries pass through."""
+    """Per-hir-Function pass.
+
+    Per-hir-Function pass. Framework iterates `module.functions` and
+    calls `run_function` on each `HirFunction`; tir entries pass through.
+    """
 
     @abstractmethod
     def run_function(self, fn: HirFunction, module: Module) -> HirFunction:
@@ -58,8 +61,11 @@ class FunctionPass(Pass):
 
 
 class PrimFuncPass(Pass):
-    """Per-tir-PrimFunction pass. Framework iterates `module.functions` and
-    calls `run_prim_func` on each `PrimFunction`; hir entries pass through."""
+    """Per-tir-PrimFunction pass.
+
+    Per-tir-PrimFunction pass. Framework iterates `module.functions` and
+    calls `run_prim_func` on each `PrimFunction`; hir entries pass through.
+    """
 
     @abstractmethod
     def run_prim_func(self, fn: PrimFunction, module: Module) -> PrimFunction:

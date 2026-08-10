@@ -29,15 +29,21 @@ _DTYPE_OF = {
 
 
 def tensor_type_of(t: torch.Tensor, storage: str = "gmem") -> TensorType:
-    """The ``TensorType`` a torch tensor's shape/dtype maps to (for building
-    typeinfer inputs from concrete eval-case values)."""
+    """Tensor type of.
+
+    The ``TensorType`` a torch tensor's shape/dtype maps to (for building
+    typeinfer inputs from concrete eval-case values).
+    """
     return make_tensor_type(tuple(t.shape), _DTYPE_OF[t.dtype], storage)
 
 
 @dataclass(frozen=True)
 class EvalCase:
-    """One declarative value case: apply ``op`` to concrete ``inputs`` and
-    expect ``expected`` (a torch tensor) within tolerance."""
+    """One declarative value case.
+
+    One declarative value case: apply ``op`` to concrete ``inputs`` and
+    expect ``expected`` (a torch tensor) within tolerance.
+    """
 
     name: str
     op: object
@@ -49,8 +55,11 @@ class EvalCase:
 
 
 def run_eval_case(case: EvalCase) -> None:
-    """Run one ``EvalCase``: build the op's Function, evaluate on CPU, and
-    assert the result matches ``expected``."""
+    """Run one ``EvalCase``: build the op's Function, evaluate on CPU.
+
+    Run one ``EvalCase``: build the op's Function, evaluate on CPU, and
+    assert the result matches ``expected``.
+    """
     storages = case.storages or ("gmem",) * len(case.inputs)
     params = tuple(
         Var(type=tensor_type_of(t, s), name=f"x{i}")

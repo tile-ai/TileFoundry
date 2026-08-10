@@ -61,8 +61,11 @@ _ENV_OVERRIDE = "TILEFOUNDRY_VIEWER_ASSET_DIR"
 
 
 def manifest_version(manifest: tuple[AssetEntry, ...] = _ASSET_MANIFEST) -> str:
-    """Short stable id for a manifest — bumping any URL/hash migrates the
-    cache to a fresh subdirectory and orphans the old one."""
+    """Short stable id for a manifest.
+
+    Short stable id for a manifest — bumping any URL/hash migrates the
+    cache to a fresh subdirectory and orphans the old one.
+    """
     h = hashlib.sha1()  # noqa: S324 — cache-key only, not security
     for e in manifest:
         h.update(f"{e.name}\0{e.url}\0{e.sha256}\0".encode())
@@ -85,10 +88,13 @@ def _resolve_cache_root(manifest: tuple[AssetEntry, ...] = _ASSET_MANIFEST) -> P
 
 
 def _selfcheck_pinned(manifest: tuple[AssetEntry, ...]) -> None:
-    """Refuse to run if any unpkg URL slipped back to a bare ``@<major>``
+    """Selfcheck pinned.
+
+    Refuse to run if any unpkg URL slipped back to a bare ``@<major>``
     shorthand (a floating tag), or if a hash is not 64 hex chars. This is
     the static defence-in-depth that replaces a network redirect-follow
-    (CI / sandboxes must never hit the network)."""
+    (CI / sandboxes must never hit the network).
+    """
     for e in manifest:
         if len(e.sha256) != 64 or not re.fullmatch(r"[0-9a-f]{64}", e.sha256):
             raise RuntimeError(f"asset {e.name!r}: sha256 must be 64 hex chars, got {e.sha256!r}")
@@ -106,8 +112,11 @@ def _sha256_of(path: Path) -> str:
 
 
 def _download(entry: AssetEntry, target: Path) -> None:
-    """Fetch ``entry.url`` to ``target`` atomically; verify SHA256. One
-    retry on transient ``URLError``; otherwise raise with an offline hint."""
+    """Fetch ``entry.url`` to ``target`` atomically; verify SHA256.
+
+    Fetch ``entry.url`` to ``target`` atomically; verify SHA256. One
+    retry on transient ``URLError``; otherwise raise with an offline hint.
+    """
     last_err: Exception | None = None
     for _attempt in range(2):
         try:
@@ -139,7 +148,9 @@ def ensure_assets(
     manifest: tuple[AssetEntry, ...] | None = None,
     cache_root: Path | None = None,
 ) -> dict[str, Path]:
-    """Ensure every manifest asset is present and hash-verified in the
+    """Ensure assets.
+
+    Ensure every manifest asset is present and hash-verified in the
     cache, downloading any that are missing. Returns ``{name: path}``.
 
     * present + hash matches → used as-is (no network).

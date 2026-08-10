@@ -118,8 +118,11 @@ def test_reduce_partial_rejects_noncommuting(case):
 
 
 def test_preserves_non_reduced_axis_split():
-    """A Split on the non-reduced axis is preserved; the reduced axis ->
-    Broadcast, with its layout positions shrunk to local extent 1."""
+    """A Split on the non-reduced axis is preserved; the reduced axis -> Broadcast.
+
+    A Split on the non-reduced axis is preserved; the reduced axis ->
+    Broadcast, with its layout positions shrunk to local extent 1.
+    """
     x_ty = make_shard_tensor_type(
         (12, 32), mesh=_M, attrs=(Split(0), Split(1)), dtype=_BF, storage=_RMEM,
     )

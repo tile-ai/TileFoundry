@@ -71,10 +71,13 @@ def _build_module(
 
 
 def test_subject_must_be_a_shape_of_an_enclosing_param_axis() -> None:
-    """The subject is the one value read at runtime to pick an arm. It must be a
+    """The subject is the one value read at runtime to pick an arm.
+
+    The subject is the one value read at runtime to pick an arm. It must be a
     ``ShapeOf``, of a param the enclosing PrimFunction actually declares (so the
     kernel is passed that extent), at an axis that param has. A stranger Var or an
-    out-of-rank axis would read memory the launch never bound."""
+    out-of-rank axis would read memory the launch never bound.
+    """
     x_entry = Var(type=_x_type(), name="x")
     with pytest.raises(VerifyError, match="ShapeOf"):
         verify_module(_build_module(subjects=(x_entry,)))
@@ -105,9 +108,12 @@ def test_subject_must_be_a_shape_of_an_enclosing_param_axis() -> None:
 
 
 def test_case_patterns_must_be_one_range_per_arm() -> None:
-    """Every arm is selected by a ``DimVarRangePat``, and there are exactly as many
+    """Every arm is selected by a ``DimVarRangePat``.
+
+    Every arm is selected by a ``DimVarRangePat``, and there are exactly as many
     pattern tuples as calls: a shorter list silently drops an arm, and a
-    non-range pattern has no runtime comparison to lower to."""
+    non-range pattern has no runtime comparison to lower to.
+    """
     with pytest.raises(VerifyError, match="DimVarRangePat"):
         verify_module(_build_module(case_patterns=(
             (DimVarRangePat(dim_var="S", lo=1, hi=4),),
@@ -121,8 +127,11 @@ def test_case_patterns_must_be_one_range_per_arm() -> None:
 
 
 def test_dispatch_call_rejects_multi_axis() -> None:
-    """Dispatch selects on a single extent; a second subject would need a product
-    of ranges no lowering produces."""
+    """Dispatch selects on a single extent.
+
+    Dispatch selects on a single extent; a second subject would need a product
+    of ranges no lowering produces.
+    """
     x_entry = Var(type=_x_type(), name="x")
     with pytest.raises(VerifyError, match="len\\(subjects\\) == 1"):
         verify_module(_build_module(
@@ -144,15 +153,21 @@ def test_dispatch_call_rejects_multi_axis() -> None:
 
 
 def test_dispatch_call_rejects_non_abort_fallback() -> None:
-    """An unmatched extent must abort. Returning instead would leave the output
-    buffer untouched and look like a numerical bug."""
+    """An unmatched extent must abort.
+
+    An unmatched extent must abort. Returning instead would leave the output
+    buffer untouched and look like a numerical bug.
+    """
     with pytest.raises(VerifyError, match="Sequential\\(\\(Abort"):
         verify_module(_build_module(fallback=Sequential(body=(Return(),))))
 
 
 def test_symbol_call_rejects_nonempty_nested() -> None:
-    """verify rejects an ``Evaluate(SymbolRef)`` whose ``nested`` is non-empty
-    (nested MUST be empty under the top-level-only module)."""
+    """Verify rejects an ``Evaluate`` whose ``nested`` is non-empty.
+
+    Verify rejects an ``Evaluate(SymbolRef)`` whose ``nested`` is non-empty
+    (nested MUST be empty under the top-level-only module).
+    """
     x_callee = Var(type=_x_type(), name="x")
     callee = PrimFunction(
         name="callee", params=(x_callee,), body=Sequential(body=(Return(),))

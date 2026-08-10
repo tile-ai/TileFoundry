@@ -31,9 +31,12 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 
 def test_tensor_type_equality_over_a_dim_var_shape_entry() -> None:
-    """A TensorType carrying a bounded ``DimVar(name, lo, hi)`` stays hashable and
+    """Test tensor type equality over a dim var shape entry.
+
+    A TensorType carrying a bounded ``DimVar(name, lo, hi)`` stays hashable and
     compares equal to an independently constructed one: the DimVar is interned by
-    ``(name, lo, hi)``, so an independently built signature uses the same key."""
+    ``(name, lo, hi)``, so an independently built signature uses the same key.
+    """
     s = DimVar("S_a", 1, 8)
     t = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
     assert t.shape == (s, 8)

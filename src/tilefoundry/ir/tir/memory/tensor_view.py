@@ -64,9 +64,12 @@ TensorView.layout_for_slice = staticmethod(layout_for_slice)
 
 
 def layout_for_slice_nd(src_shape: tuple, sliced_shape: tuple) -> Layout:
-    """Plain Layout for an N-D window: the sub-block keeps the source's C-order
+    """Plain Layout for an N-D window: the sub-block keeps the source's C-order strides.
+
+    Plain Layout for an N-D window: the sub-block keeps the source's C-order
     strides, so it is a strided view of the original buffer (all axes retained,
-    each shrunk to the window extent)."""
+    each shrunk to the window extent).
+    """
     return Layout(shape=sliced_shape, strides=tuple(_c_order_strides(src_shape)))
 
 TensorView.layout_for_slice_nd = staticmethod(layout_for_slice_nd)

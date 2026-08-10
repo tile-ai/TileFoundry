@@ -1,5 +1,8 @@
-"""``RuntimeModule`` — the runtime twin of an ir ``Module``; ``CompiledModule``
-is the compiled-path variant the loader binds. See [runtime §1.1](docs/spec/runtime.md#11-runtimemodule)."""
+"""``RuntimeModule`` — the runtime twin of an ir ``Module``.
+
+``RuntimeModule`` — the runtime twin of an ir ``Module``; ``CompiledModule``
+is the compiled-path variant the loader binds. See [runtime §1.1](docs/spec/runtime.md#11-runtimemodule).
+"""
 from __future__ import annotations
 
 from typing import Callable
@@ -12,8 +15,10 @@ __all__ = ["CompiledModule", "RuntimeModule"]
 
 class RuntimeModule:
     """Base runtime module: explicit child registration + recursive load.
+
     Subclasses override ``forward`` (the step) and ``load`` (own weights,
-    ending with ``super().load``)."""
+    ending with ``super().load``).
+    """
 
     def __init__(
         self, name: str, entry: str | None = None, modules: tuple["RuntimeModule", ...] = ()
@@ -25,8 +30,11 @@ class RuntimeModule:
 
     @property
     def module(self):
-        """The authored ``Module`` this twin stands for, or ``None`` when there is
-        no such thing to name -- a compiled entry or a hand-written subclass."""
+        """Module.
+
+        The authored ``Module`` this twin stands for, or ``None`` when there is
+        no such thing to name -- a compiled entry or a hand-written subclass.
+        """
         return None
 
     def forward(self, *args):
@@ -38,18 +46,24 @@ class RuntimeModule:
         return self.forward(*args)
 
     def load(self, resource: RuntimeResource) -> None:
-        """Recurse ``load`` into every child under its own name prefix; a
+        """Recurse ``load`` into every child under its own name prefix.
+
+        Recurse ``load`` into every child under its own name prefix; a
         subclass resolves its own tensors first, then calls
-        ``super().load(resource)`` (the base itself owns nothing)."""
+        ``super().load(resource)`` (the base itself owns nothing).
+        """
         for child in self.modules:
             child.load(resource.subtree(child.name))
 
 
 class CompiledModule(RuntimeModule):
-    """One compiled entry as a ``RuntimeModule``: ``load`` is the inherited
+    """One compiled entry as a ``RuntimeModule``.
+
+    One compiled entry as a ``RuntimeModule``: ``load`` is the inherited
     no-op and ``modules`` is empty (weights are ordinary entry args).
     ``forward``: ``rm(x)`` allocates the trailing ``output_count`` outputs;
-    ``rm(x, out)`` writes into the ones given."""
+    ``rm(x, out)`` writes into the ones given.
+    """
 
     def __init__(self, type: EntryABI, fn: Callable) -> None:
         super().__init__(name=type.name, entry=type.name)

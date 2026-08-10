@@ -1,4 +1,6 @@
-"""The AMX target's own facts: its topology levels, its atom candidate
+"""The AMX target's own facts.
+
+The AMX target's own facts: its topology levels, its atom candidate
 enumeration and the recorded origin of every fact it stands on.
 
 The device facts are the ones actually measured on the host this target
@@ -87,7 +89,9 @@ def bf16_gemm(
 
 
 def test_amx_target_reports_and_validates_its_own_topology_levels():
-    """The AMX levels are the core a tile stream runs on and the AMX unit inside
+    """Test amx target reports and validates its own topology levels.
+
+    The AMX levels are the core a tile stream runs on and the AMX unit inside
     it that issues one atom. The core limit is the measured performance-core
     count; the unit limit comes from the architecture.
 
@@ -121,7 +125,7 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
 
 
 def test_both_catalogue_atoms_are_priced_at_their_own_measured_rates():
-    """AC-4-2: the two units of one core, each listed with its real numbers.
+    """Price both core units using their own measured rates.
 
     A gemm whose M=16, N=16 divide the AMX atom's 16x16 shape, whose K divides its
     own extent of one, and whose three operands fit the X/Y/Z register files gets
@@ -175,7 +179,7 @@ def test_both_catalogue_atoms_are_priced_at_their_own_measured_rates():
 
 
 def test_the_hard_filter_is_per_atom_and_covers_storage_shape_and_dtype():
-    """AC-4-2: three independent reasons an atom is not a candidate.
+    """Reject atoms independently for storage, shape, and dtype mismatches.
 
     Storage is what separates the two units, and it is the recorded X/Y/Z geometry
     that decides it: an untiled 64x128 f32 A operand is 32 KiB against 512 B of X,
@@ -224,7 +228,9 @@ def test_the_hard_filter_is_per_atom_and_covers_storage_shape_and_dtype():
 
 
 def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got():
-    """The architecture carries the ISA geometry, the device the per-part
+    """Test amx values stand on the installed documents and say how they were got.
+
+    The architecture carries the ISA geometry, the device the per-part
     resources, each built from its own installed document -- so a number moved to
     the other side would be claimed of the wrong thing.
 
@@ -268,9 +274,12 @@ def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got()
 
 
 def test_a_core_tile_is_bounded_by_the_l1d_not_by_the_register_files():
-    """A core-level tile's resident working set is bounded by the performance
+    """A core-level tile's resident working set is bounded by the performance core's L1d.
+
+    A core-level tile's resident working set is bounded by the performance
     core's L1d; the register files bound one atom instance instead, which the
-    storage filter enforces rather than a per-tile capacity."""
+    storage filter enforces rather than a per-tile capacity.
+    """
     target = AmxTarget()
     facts = target.get_facts(
         PipelineFacts, PipelineFactsQuery(topology="core", statements=())
@@ -283,9 +292,12 @@ def test_a_core_tile_is_bounded_by_the_l1d_not_by_the_register_files():
 
 
 def test_unmeasured_units_and_dtypes_have_no_throughput_entry():
-    """FMA16 exists in the instruction set, but no f16 rate was measured on
+    """FMA16 exists in the instruction set, but no f16 rate was measured on either unit.
+
+    FMA16 exists in the instruction set, but no f16 rate was measured on
     either unit, so asking for one raises instead of returning a guess -- as does
-    naming a unit that has no recorded rate at all."""
+    naming a unit that has no recorded rate at all.
+    """
     target = AmxTarget()
     assert target.architecture.supports_compute_dtype(DType.f16)
     assert target.device.throughput_for("amx", DType.f32) == 504_900_000_000

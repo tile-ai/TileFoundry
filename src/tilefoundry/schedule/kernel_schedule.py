@@ -1,4 +1,6 @@
-"""``build_schedule_tree(tg) -> TileGraph`` -- construct an isl schedule
+"""``build_schedule_tree(tg) -> TileGraph``.
+
+``build_schedule_tree(tg) -> TileGraph`` -- construct an isl schedule
 tree over a ``TileGraph`` directly from its topological statement order,
 plus the band operations the resource solve needs: enumerate the bands to
 decide over (:func:`schedule_bands`, :func:`band_statement`) and split one
@@ -23,8 +25,11 @@ from tilefoundry.analysis.poly import TileGraph
 
 
 class KernelScheduleError(RuntimeError):
-    """A schedule tree the band operations cannot work on -- always raised
-    with a message naming what was found instead."""
+    """A schedule tree the band operations cannot work on.
+
+    A schedule tree the band operations cannot work on -- always raised
+    with a message naming what was found instead.
+    """
 
 
 def _domain_sets(domain: "isl.union_set") -> dict[str, "isl.set"]:
@@ -34,8 +39,11 @@ def _domain_sets(domain: "isl.union_set") -> dict[str, "isl.set"]:
 
 
 def _statement_schedule(s: "isl.set") -> "isl.schedule":
-    """One statement's own domain under one identity band, so the band's
-    members are that statement's own dimensions, in order."""
+    """One statement's own domain under one identity band.
+
+    One statement's own domain under one identity band, so the band's
+    members are that statement's own dimensions, in order.
+    """
     sched = isl.schedule.from_domain(s.to_union_set())
     if not s.dim(isl.dim_type.SET):
         return sched
@@ -80,8 +88,11 @@ def build_schedule_tree(tg: TileGraph) -> "isl.schedule":
 
 
 def schedule_bands(tree: "isl.schedule") -> tuple["isl.schedule_node_band", ...]:
-    """Every band in ``tree``, in top-down order -- which for a
-    :func:`build_schedule_tree` tree is ``tg.units`` order."""
+    """Every band in ``tree``, in top-down order.
+
+    Every band in ``tree``, in top-down order -- which for a
+    :func:`build_schedule_tree` tree is ``tg.units`` order.
+    """
     found: list["isl.schedule_node_band"] = []
 
     def visit(node) -> bool:
@@ -109,8 +120,11 @@ def band_statement(band: "isl.schedule_node_band") -> str:
 
 
 def tile_band(band: "isl.schedule_node_band", sizes: tuple[int, ...]) -> "isl.schedule":
-    """``band`` split into a tile band over ``sizes`` plus a point band
-    holding the remainder, returned as the whole schedule."""
+    """Tile band.
+
+    ``band`` split into a tile band over ``sizes`` plus a point band
+    holding the remainder, returned as the whole schedule.
+    """
     if band.n_member() != len(sizes):
         raise KernelScheduleError(
             f"tile_band: band has {band.n_member()} member(s) but got "

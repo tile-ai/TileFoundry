@@ -86,11 +86,14 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 
 
 def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
-    """Merge two non-sharded operand layouts. Equal layouts or one ``None``
+    """Merge two non-sharded operand layouts.
+
+    Merge two non-sharded operand layouts. Equal layouts or one ``None``
     pass through. Two fully-replicated (all-``Broadcast``) ``ShardLayout``s are
     mesh-agnostic (the data is replicated everywhere) so the first is kept.
     Any other genuine mismatch raises — there is no silent lhs pick; a real
-    shard mismatch is propagated through the shard engine, not merged here."""
+    shard mismatch is propagated through the shard engine, not merged here.
+    """
     if a == b:
         if a is None:
             return None

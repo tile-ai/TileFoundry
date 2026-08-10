@@ -1,4 +1,6 @@
-"""``DumpFlags`` IntFlag — which categories actually emit when a scope is
+"""``DumpFlags`` IntFlag — which categories actually emit when a scope is active.
+
+``DumpFlags`` IntFlag — which categories actually emit when a scope is
 active.
 
 Initial set per `#tilefoundry:3beef367` 2026-04-27:

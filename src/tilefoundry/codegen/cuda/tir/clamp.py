@@ -9,8 +9,11 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_lo
 
 
 def _materialised_shape_dyn(ty) -> tuple:
-    """Per-thread materialised shape, preserving ``DimVar`` entries so a
-    runtime element count can be derived via ``shape_runtime_total``."""
+    """Materialised shape dyn.
+
+    Per-thread materialised shape, preserving ``DimVar`` entries so a
+    runtime element count can be derived via ``shape_runtime_total``.
+    """
     layout = getattr(ty, "layout", None)
     if isinstance(layout, ShardLayout):
         # [shard §7.1.1](docs/spec/shard.md#711-layoutshape): ``layout.shape`` is global; derive per-thread local.

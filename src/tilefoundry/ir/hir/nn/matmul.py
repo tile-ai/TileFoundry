@@ -41,16 +41,22 @@ def _k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
 
 
 def _broadcast_batch(lhs_batch, rhs_batch):
-    """Right-aligned per-dim broadcast of two batch shapes (ranks may differ —
+    """Right-aligned per-dim broadcast of two batch shapes (ranks may differ.
+
+    Right-aligned per-dim broadcast of two batch shapes (ranks may differ —
     the shorter is padded on the left with 1s), or ``None`` when a dim pair is
-    neither equal nor broadcastable."""
+    neither equal nor broadcastable.
+    """
     return broadcast_shapes(tuple(lhs_batch), tuple(rhs_batch), raising=False)
 
 
 @register_access_relation(MatMul)
 def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
-    """GLOBAL black-box — declare identity multi_aff (the K-dim reduction is
-    internal to the op semantics at this level)."""
+    """GLOBAL black-box — declare identity multi_aff.
+
+    GLOBAL black-box — declare identity multi_aff (the K-dim reduction is
+    internal to the op semantics at this level).
+    """
     lhs_ty = ctx.type_of(call.args[0])
     rhs_ty = ctx.type_of(call.args[1])
     out_ty = ctx.type_of(call)

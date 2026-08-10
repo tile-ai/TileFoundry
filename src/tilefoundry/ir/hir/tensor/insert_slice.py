@@ -24,9 +24,12 @@ class InsertSlice(Op):
 
 
 def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
-    """Per-axis window checks: the update extent must fit, and a *literal*
+    """Per-axis window checks: the update extent must fit.
+
+    Per-axis window checks: the update extent must fit, and a *literal*
     (``Constant``) offset must place an in-bounds, non-negative window. A
-    runtime offset is deferred to the eval bounds guard."""
+    runtime offset is deferred to the eval bounds guard.
+    """
     off_ty = ctx.type_of(off_expr)
     if off_ty.shape != ():
         ctx.error(

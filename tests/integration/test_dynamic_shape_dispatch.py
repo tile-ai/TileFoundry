@@ -49,9 +49,12 @@ def _build_runtime_module():
 
 
 def test_entry_dispatch_both_variants_in_one_session() -> None:
-    """Both dispatch arms run through the same compiled binary in
+    """Both dispatch arms run through the same compiled binary in sequence.
+
+    Both dispatch arms run through the same compiled binary in
     sequence. Verifies that the dispatch entry routes each call to its
-    matching variant based on the current tensor's runtime shape."""
+    matching variant based on the current tensor's runtime shape.
+    """
     rm = _build_runtime_module()
 
     x_a = torch.tensor([2.0, 3.0, 4.0], dtype=torch.float32, device="cuda")  # S=3 → variant A

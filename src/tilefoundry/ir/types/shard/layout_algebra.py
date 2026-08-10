@@ -10,7 +10,7 @@ uses. The ported pieces are exactly what the mesh model needs:
   coordinate from a thread index;
 - ``contains`` / ``project`` over a ``ComposedLayout`` execution scope:
   ``project`` is ``left_inverse`` applied to the thread index, ``contains`` adds
-  the domain-bounds + round-trip check (see ``docs/plans/mesh-warp-specialization.md``).
+  the domain-bounds and round-trip check.
 
 ``image(c) = inner(offset + outer(c))`` matches CuTeDSL ``make_composed_layout``.
 Only inverse-projectable (injective, compact-image) layouts are admissible
@@ -49,7 +49,9 @@ def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
 
 
 def c_order_strides(shape: tuple, *, mul=None) -> tuple:
-    """Row-major (C-order) contiguous strides: ``strides[-1] == 1``,
+    """Row-major (C-order) contiguous strides.
+
+    Row-major (C-order) contiguous strides: ``strides[-1] == 1``,
     ``strides[i] == strides[i+1] * shape[i+1]``.
 
     The single home for this computation. *mul* defaults to ``int``
@@ -67,8 +69,11 @@ def c_order_strides(shape: tuple, *, mul=None) -> tuple:
 
 
 def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
-    """``c_order_strides`` when every entry is a static non-bool ``int``,
-    else ``None`` (symbolic / dynamic shapes have no static strides)."""
+    """``c_order_strides`` when every entry is a static non-bool ``int``, else ``None``.
+
+    ``c_order_strides`` when every entry is a static non-bool ``int``,
+    else ``None`` (symbolic / dynamic shapes have no static strides).
+    """
     if not all(isinstance(s, int) and not isinstance(s, bool) for s in shape):
         return None
     return c_order_strides(shape)
@@ -141,14 +146,17 @@ def _make_flat(a: Layout, b: Layout) -> Layout:
 
 
 def is_inverse_projectable(layout: Layout) -> bool:
-    """Can ``layout`` be inverted by the CuTe ``left_inverse`` algorithm (and so
+    """Can ``layout`` be inverted by the CuTe ``left_inverse`` algorithm — i.e.
+
+    Can ``layout`` be inverted by the CuTe ``left_inverse`` algorithm (and so
     serve as a mesh execution scope) — i.e. is it injective *and* compact-ordered.
 
     Drop shape-1 modes, sort the rest by stride; each stride must be non-zero
     (no broadcast collision) and a multiple of the running codomain extent
     ``Π prev (stride*shape)`` (so the gap is integral and modes do not overlap).
     Necessary and sufficient for ``left_inverse(layout)`` to round-trip.
-    Note ``(5,3):(3,8)`` is injective yet NOT projectable (``8 % 15 != 0``)."""
+    Note ``(5,3):(3,8)`` is injective yet NOT projectable (``8 % 15 != 0``).
+    """
     current = 1
     modes = sorted(
         (stride, shape)
@@ -190,8 +198,11 @@ def _left_inverse_layout(layout: Layout) -> Layout:
 
 
 def _is_identity_inner(inner: object) -> bool:
-    """An ``inner`` that is ``None`` or a unit-stride contiguous layout acts as
-    identity on the ``offset + outer(coord)`` index (the mesh affine case)."""
+    """Return whether identity inner.
+
+    An ``inner`` that is ``None`` or a unit-stride contiguous layout acts as
+    identity on the ``offset + outer(coord)`` index (the mesh affine case).
+    """
     if inner is None:
         return True
     if isinstance(inner, Layout):
@@ -200,9 +211,12 @@ def _is_identity_inner(inner: object) -> bool:
 
 
 def _check_admissible(scope: ComposedLayout) -> None:
-    """A ``ComposedLayout`` is an admissible mesh execution scope only if its
+    """Check admissible.
+
+    A ``ComposedLayout`` is an admissible mesh execution scope only if its
     ``inner`` is identity (v1) and its ``outer`` is a plain injective ``Layout``.
-    Anything else fails closed with ``NotProjectable`` (no colliding fallback)."""
+    Anything else fails closed with ``NotProjectable`` (no colliding fallback).
+    """
     if not _is_identity_inner(scope.inner):
         raise NotProjectable("non-identity inner is not an admissible mesh scope (v1)")
     if not isinstance(scope.outer, Layout):
@@ -219,7 +233,8 @@ def left_inverse(layout: Union[Layout, ComposedLayout]):
     (``layout_composed.hpp:428``). For the v1-admissible identity-``inner`` case
     this is ``ComposedLayout(inner=left_inverse(outer), offset=-offset,
     outer=None)`` (``outer=None`` ≡ identity), i.e. ``image⁻¹(t) =
-    outer⁻¹(t − offset)``."""
+    outer⁻¹(t − offset)``.
+    """
     if isinstance(layout, ComposedLayout):
         _check_admissible(layout)
         return ComposedLayout(
@@ -260,14 +275,17 @@ def image(scope: ComposedLayout, coord: int) -> int:
 
 
 def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
-    """Recover the multi-dim domain coord ``(warp, lane, …)`` of thread ``t``,
+    """Project.
+
+    Recover the multi-dim domain coord ``(warp, lane, …)`` of thread ``t``,
     or ``None`` if ``t`` is not in this scope. Raises ``NotProjectable`` if the
     scope itself is inadmissible (non-identity inner / non-injective outer).
 
     Built on the composed ``left_inverse``: ``coord_1d = left_inverse(scope)(t)``
     (``= left_inverse(outer)(t − offset)``); the multi-dim coord is ``idx2crd``
     of that over ``outer``'s shape. Returns ``None`` unless the coord is
-    in-domain *and* round-trips (``image(coord) == t``)."""
+    in-domain *and* round-trips (``image(coord) == t``).
+    """
     _check_admissible(scope)
     outer = scope.outer
     if t - scope.offset < 0:

@@ -87,8 +87,11 @@ def solved():
 
 
 def test_partition_schedules_through_the_public_operation_without_rewriting() -> None:
-    """The plan is a decision about the program, so the program comes back as the
-    same objects and prints identically -- nothing about scheduling rewrites it."""
+    """The plan is a decision about the program.
+
+    The plan is a decision about the program, so the program comes back as the
+    same objects and prints identically -- nothing about scheduling rewrites it.
+    """
     module, function, _, _ = _closed()
     before = as_script(module)
 
@@ -137,11 +140,14 @@ def test_partition_problem_closes_every_hardware_number_before_solving() -> None
 
 
 def test_partition_prices_a_move_as_one_more_candidate_and_only_where_needed() -> None:
-    """A reshard is not a side channel: it is priced as an ordinary candidate of
+    """A reshard is not a side channel: it is priced as an ordinary candidate of the same kind.
+
+    A reshard is not a side channel: it is priced as an ordinary candidate of
     the same kind, with bytes moved and no topology of its own. And it is
     synthesised only where nothing authored already produces the placement -- a
     bucket holding both an authored producer and a synthesised one would be
-    charging for a move that has an original."""
+    charging for a move that has an original.
+    """
     _, _, program, facts = _closed()
 
     problem = build_partition_problem(program, facts, Topology("cta", 4))
@@ -191,9 +197,12 @@ def test_partition_refuses_a_level_the_facts_and_the_program_do_not_share() -> N
 
 
 def test_partition_refuses_hardware_it_cannot_charge_the_work_against() -> None:
-    """An extent wider than the machine states and a missing rate are both
+    """An extent wider than the machine states and a missing rate are both refusals, not defaults.
+
+    An extent wider than the machine states and a missing rate are both
     refusals, not defaults: a problem that guessed either would return a plan
-    priced against a machine nobody has."""
+    priced against a machine nobody has.
+    """
     _, _, program, facts = _closed()
 
     with pytest.raises(PartitionProblemError, match="exceeds the 2 parallel units"):
@@ -221,10 +230,13 @@ def test_partition_plan_names_values_and_operations_from_the_authored_program(
 
 
 def test_partition_plan_states_a_reshard_as_an_operation_with_both_placements() -> None:
-    """A moved value is one of the plan's own operations, and both placements of
+    """A moved value is one of the plan's own operations.
+
+    A moved value is one of the plan's own operations, and both placements of
     it are named values: same shape and dtype, different type, and more than one
     placement sharing a base name. A plan that reported the move on the side
-    would leave a reader unable to say where a value is."""
+    would leave a reader unable to say where a value is.
+    """
     module = static_online_attend
     plan = schedule(
         module,
@@ -265,7 +277,9 @@ def test_partition_plan_states_a_reshard_as_an_operation_with_both_placements() 
 
 
 def test_verification_rejects_an_edge_the_two_ends_do_not_agree_on(solved) -> None:
-    """Every producer/consumer edge is stated twice, and both statements have to
+    """Every producer/consumer edge is stated twice, and both statements have to say the same thing.
+
+    Every producer/consumer edge is stated twice, and both statements have to
     say the same thing.
 
     A named producer that does not list the placement among its outputs, a named
@@ -304,8 +318,11 @@ def test_verification_rejects_an_edge_the_two_ends_do_not_agree_on(solved) -> No
 
 
 def _with_value(plan, target, **changes):
-    """*plan* with one placement replaced -- the only difference from the plan the
-    solver returned, so a rejection can only be about that one field."""
+    """*plan* with one placement replaced -- the only difference from the plan the solver returned.
+
+    *plan* with one placement replaced -- the only difference from the plan the
+    solver returned, so a rejection can only be about that one field.
+    """
     return replace(
         plan,
         values=tuple(
@@ -353,9 +370,12 @@ def test_verification_rejects_a_value_nothing_runs_and_a_root_nothing_reaches(
 
 
 def test_verification_rejects_a_placement_the_level_does_not_contain(solved) -> None:
-    """A plan is solved for one extent of one level, so it is only meaningful
+    """A plan is solved for one extent of one level, so it is only meaningful against that extent.
+
+    A plan is solved for one extent of one level, so it is only meaningful
     against that extent: a placement outside the positions the level declares, and
-    a level of a different width than the one solved for, are both refused."""
+    a level of a different width than the one solved for, are both refused.
+    """
     module, function, plan = solved
 
     first = plan.values[0]
@@ -369,8 +389,11 @@ def test_verification_rejects_a_placement_the_level_does_not_contain(solved) -> 
 
 
 def test_verification_rejects_two_operations_sharing_a_position(solved) -> None:
-    """Two operations placed on one position at one time is the one thing a
-    spatial partition exists to decide, so an overlap is not a preference."""
+    """Test verification rejects two operations sharing a position.
+
+    Two operations placed on one position at one time is the one thing a
+    spatial partition exists to decide, so an overlap is not a preference.
+    """
     module, function, plan = solved
     placed = next(
         operation
@@ -385,8 +408,11 @@ def test_verification_rejects_two_operations_sharing_a_position(solved) -> None:
 
 
 def test_verification_rejects_a_reshard_that_moves_nothing(solved) -> None:
-    """A move whose source and destination are the same placement is a cost the
-    plan charges for work it does not do."""
+    """Test verification rejects a reshard that moves nothing.
+
+    A move whose source and destination are the same placement is a cost the
+    plan charges for work it does not do.
+    """
     module, function, plan = solved
     held = next(value for value in plan.values if value.producer_id is None)
     identity = PartitionedOperation(
@@ -413,9 +439,12 @@ def test_verification_rejects_a_reshard_that_moves_nothing(solved) -> None:
 
 
 def test_verification_rejects_a_bound_above_its_own_objective(solved) -> None:
-    """The proof is part of the plan: a lower bound above the objective it bounds
+    """The proof is part of the plan.
+
+    The proof is part of the plan: a lower bound above the objective it bounds
     is an arithmetic impossibility, and reading one as optimality would report a
-    plan as proven that is not."""
+    plan as proven that is not.
+    """
     module, function, plan = solved
 
     broken = replace(
@@ -445,9 +474,12 @@ def test_verification_needs_no_solver(solved) -> None:
 
 
 def test_partition_plan_renders_the_same_decision_as_text_and_json(solved) -> None:
-    """One decision, two renderings, and the type each value was placed in stated
+    """One decision, two renderings, and the type each value was placed in stated exactly.
+
+    One decision, two renderings, and the type each value was placed in stated
     exactly -- a serialization that dropped the selected type would describe a
-    placement without saying what is placed there."""
+    placement without saying what is placed there.
+    """
     _, _, plan = solved
 
     assert plan.to_json() == plan.to_json()

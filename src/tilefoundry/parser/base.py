@@ -121,8 +121,11 @@ def _collect_closure(fn, extra: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def _annotation_head_name(node: ast.AST) -> str | None:
-    """Return the subscript base identifier (``Tensor`` / ``ConstTensor``),
-    resolving through an attribute path such as ``dsl.ConstTensor``."""
+    """Annotation head name.
+
+    Return the subscript base identifier (``Tensor`` / ``ConstTensor``),
+    resolving through an attribute path such as ``dsl.ConstTensor``.
+    """
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -131,8 +134,11 @@ def _annotation_head_name(node: ast.AST) -> str | None:
 
 
 def _is_const_tensor_annotation(node: ast.AST) -> bool:
-    """``ConstTensor[...]`` marks a parameter ``is_const=True``; ``Tensor[...]``
-    and every other annotation form leave it ``False``."""
+    """``ConstTensor[...]`` marks a parameter ``is_const=True``.
+
+    ``ConstTensor[...]`` marks a parameter ``is_const=True``; ``Tensor[...]``
+    and every other annotation form leave it ``False``.
+    """
     return (
         isinstance(node, ast.Subscript)
         and _annotation_head_name(node.value) == "ConstTensor"
@@ -140,7 +146,9 @@ def _is_const_tensor_annotation(node: ast.AST) -> bool:
 
 
 def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
-    """Resolve a tensor type annotation. Shared by ``@func`` and
+    """Resolve a tensor type annotation.
+
+    Resolve a tensor type annotation. Shared by ``@func`` and
     ``@prim_func`` param / return annotations ([parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations)) so a layout-
     sugar ``Tensor[...]`` annotation resolves identically in both dialects.
 
@@ -377,7 +385,9 @@ class BaseExprVisitor:
         return value if isinstance(value, (int, float)) else None
 
     def _static_iterable(self, node: ast.AST):
-        """The compile-time sequence a comprehension walks: builtin ``range`` over
+        """The compile-time sequence a comprehension walks.
+
+        The compile-time sequence a comprehension walks: builtin ``range`` over
         compile-time integers, or a tuple / list of compile-time values.
 
         No other call is evaluated here — resolving one would run it.
@@ -725,7 +735,6 @@ class BaseExprVisitor:
           the matching dialect's OpSchema registry via
           ``dispatch.resolve_schema``, alias-aware.
         """
-
         if isinstance(func, ast.Name):
             val = self.env.lookup(func.id)
             if val is None:
@@ -759,7 +768,9 @@ class BaseExprVisitor:
         return None
 
     def _resolve_function_target(self, func: ast.AST):
-        """Return the ``hir.Function`` instance behind a callee AST, or
+        """Resolve function target.
+
+        Return the ``hir.Function`` instance behind a callee AST, or
         ``None`` when the callee is not an ``@func``-decorated function.
         ``@func`` evaluates to the ``hir.Function`` directly, so a sibling
         callee binding *is* that Function (see :func:`tilefoundry.script.func`).
@@ -779,7 +790,9 @@ class BaseExprVisitor:
     def _build_function_call(
         self, callee: Any, node: ast.Call, name: str
     ) -> Expr:
-        """Build a ``Call(target=<hir.Function>, args=...)`` for a nested
+        """Build a ``Call`` for a nested ``@func`` → ``@func`` call site.
+
+        Build a ``Call(target=<hir.Function>, args=...)`` for a nested
         ``@func`` → ``@func`` call site. Arg-count enforcement lives in
         the parser; argument *types* are bound by elaboration
         (``tilefoundry.ir.hir.function.elaborate``, [hir §1.1](docs/spec/hir.md#11-function)) before the
@@ -1002,7 +1015,9 @@ class BaseExprVisitor:
         return self._with_binding(expr, name)
 
     def _maybe_autofill_binding_default(self, expr: Expr) -> Expr:
-        """Set the Call binding label to the DSL callable name (default) when the
+        """Maybe autofill binding default.
+
+        Set the Call binding label to the DSL callable name (default) when the
         user did not supply ``loc=`` explicitly. Used for tuple-unpack
         parents where there is no single LHS variable name to inherit.
         """
@@ -1150,7 +1165,9 @@ class BaseExprVisitor:
         return getattr(owner, attr)
 
     def _eval_static(self, node: ast.AST):
-        """Evaluate an AST node statically for attribute kwargs (axis=1,
+        """Eval static.
+
+        Evaluate an AST node statically for attribute kwargs (axis=1,
         new_shape=(M,K), layout=ShardLayout(...), etc.).
 
         Thin policy wrapper over :func:`eval_static` (parser/static_eval.py):

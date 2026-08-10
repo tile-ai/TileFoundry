@@ -34,8 +34,11 @@ register_access_relation(Cast)(identity_relations(1))
 
 @register_type_relation(Cast)
 def _cast_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for Cast: identity — only the dtype changes, shape and
-    layout pass through unchanged."""
+    """Forward relation for Cast: identity.
+
+    Forward relation for Cast: identity — only the dtype changes, shape and
+    layout pass through unchanged.
+    """
     (x,) = input_types
     dims = [f"d{i}" for i in range(len(x.shape))]
     src = "[" + ", ".join(dims) + "]"

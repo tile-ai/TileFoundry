@@ -57,7 +57,9 @@ class ShardLayout(LayoutBase):
 
 
 def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
-    """Build the canonical ``ShardLayout`` (``docs/spec/shard.md`` [shard §7.1.1](docs/spec/shard.md#711-layoutshape))
+    """Canonical shard layout.
+
+    Build the canonical ``ShardLayout`` (``docs/spec/shard.md`` [shard §7.1.1](docs/spec/shard.md#711-layoutshape))
     binding ``attrs`` (one entry per mesh axis; each ``Split`` names a
     ``logical_shape`` axis) to ``mesh``.
 
@@ -156,10 +158,12 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
 
 
 def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
-    """Derive the per-thread local layout shape from a global
+    """Derive the per-thread local layout shape from a global ``ShardLayout``.
+
+    Derive the per-thread local layout shape from a global
     ``ShardLayout``.
 
-. ``sl.layout.shape`` is the global / unsharded
+    . ``sl.layout.shape`` is the global / unsharded
     layout shape; this helper divides each layout dim by its bound
     ``Split`` mesh extent to produce the per-thread local layout shape.
 
@@ -206,7 +210,9 @@ def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
 def layout_axis_to_tensor_axis(
     layout_shape: tuple, tensor_shape: tuple
 ) -> list[int]:
-    """Map each ``Layout`` position to the logical tensor axis it lives
+    """Map each ``Layout`` position to the logical tensor axis it lives within.
+
+    Map each ``Layout`` position to the logical tensor axis it lives
     within.
 
     Convention: layout positions are consumed left-to-right; each tensor
@@ -252,8 +258,11 @@ def layout_axis_to_tensor_axis(
 
 
 def split_target_axes(sl: "ShardLayout", tensor_shape: tuple) -> tuple:
-    """Per mesh axis in ``sl.attrs``, the logical ``tensor_shape`` axis its
-    ``Split`` targets (``None`` for a non-``Split`` attr)."""
+    """Per mesh axis in ``sl.attrs``, the logical ``tensor_shape`` axis its ``Split`` targets.
+
+    Per mesh axis in ``sl.attrs``, the logical ``tensor_shape`` axis its
+    ``Split`` targets (``None`` for a non-``Split`` attr).
+    """
     la2ta = layout_axis_to_tensor_axis(sl.layout.shape, tensor_shape)
     return tuple(la2ta[a.axis] if isinstance(a, Split) else None for a in sl.attrs)
 

@@ -35,10 +35,13 @@ class Unary(Op):
 
 @register_type_relation(Unary)
 def _unary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward access relation for the elementwise Unary (kind-dispatched --
+    """Forward access relation for the elementwise Unary (kind-dispatched.
+
+    Forward access relation for the elementwise Unary (kind-dispatched --
     neg/abs/not/relu/square/rsqrt/exp/log all share this shape): single
     input, no broadcast, no reduction -- the iteration domain is the input
-    shape and both the input map and the output map are the identity."""
+    shape and both the input map and the output map are the identity.
+    """
     (x,) = input_types
     domain, param_map = to_domain(x.shape)
     dims = [f"d{i}" for i in range(len(x.shape))]

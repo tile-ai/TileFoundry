@@ -1,4 +1,6 @@
-"""``extract`` dynamic-shape (``DimVar``) coverage: a parametrised domain
+"""``extract`` dynamic-shape (``DimVar``) coverage.
+
+``extract`` dynamic-shape (``DimVar``) coverage: a parametrised domain
 used to make ``extract`` raise outright; now a ``DimVar`` axis flows straight
 through as an isl parameter (``to_domain`` already produces one), and
 resolves back to its ``ShapeDim`` in ``TileGraph.params``.
@@ -38,13 +40,16 @@ def dyn_matmul(
 
 
 def test_dynamic_matmul_extract_params_and_domain():
-    """A DimVar M axis extracts a parametrised ``[seq]->{...}`` domain
+    """Test dynamic matmul extract params and domain.
+
+    A DimVar M axis extracts a parametrised ``[seq]->{...}`` domain
     (``0 <= i < seq``, straight from ``to_domain`` -- no tiling), resolves
     ``TileGraph.params['seq']`` back to the exact ``DimVar``, and the M
     axis is still bounded (``dim_max_val`` a finite 126, not ``infty``,
     since ``seq``'s own half-open range ``[1, 128)`` tops out at 127 --
     an unbounded ``DimVar`` is not constructible in the first place).
-    ``build_schedule_tree()`` stays parametrised too."""
+    ``build_schedule_tree()`` stays parametrised too.
+    """
     tg = extract(dyn_matmul)
     assert isinstance(tg, TileGraph)
 
@@ -73,8 +78,11 @@ def test_dynamic_matmul_extract_params_and_domain():
 
 
 def test_dynamic_matmul_end_to_end_emits_symbolic_loop():
-    """extract -> build_schedule_tree -> emit_scaffold: the M loop's upper bound
-    names the isl parameter directly, never a fixed integer trip count."""
+    """Extract -> build_schedule_tree -> emit_scaffold.
+
+    Extract -> build_schedule_tree -> emit_scaffold: the M loop's upper bound
+    names the isl parameter directly, never a fixed integer trip count.
+    """
     tg = extract(dyn_matmul)
     tree = build_schedule_tree(tg)
     skeleton, _swimlane, contracts = emit_scaffold(tg, tree, {})

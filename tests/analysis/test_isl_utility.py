@@ -52,9 +52,12 @@ def test_dim_range_symbolic_divisor_unsupported():
 
 
 def test_to_domain_encoding():
-    """Static extents inline; a bare DimVar keeps its own param name; a
+    """Static extents inline.
+
+    Static extents inline; a bare DimVar keeps its own param name; a
     composite mints one opaque param bounded by ``dim_range`` and dedups
-    across axes on the canonical expression."""
+    across axes on the canonical expression.
+    """
     dom, param_map = to_domain((8, 4))
     assert dom.dim(isl.dim_type.PARAM) == 0
     assert dom.dim(isl.dim_type.SET) == 2

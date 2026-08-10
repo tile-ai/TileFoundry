@@ -40,15 +40,21 @@ def _reshape(new_shape):
 
 
 def _split_mesh_axes(ty) -> set:
-    """Mesh axes carrying a genuine `Split` in *ty*'s output layout — the
+    """Mesh axes carrying a genuine `Split` in *ty*'s output layout.
+
+    Mesh axes carrying a genuine `Split` in *ty*'s output layout — the
     public "did the sharding survive" signal, independent of which layout
-    position a `Split` happens to reference internally."""
+    position a `Split` happens to reference internally.
+    """
     return {i for i, a in enumerate(ty.layout.attrs) if isinstance(a, Split)}
 
 
 def _partial_reductions(ty) -> dict:
-    """Mesh axes carrying a `Partial` in *ty*'s output layout, keyed by mesh
-    axis and valued by reduction op."""
+    """Partial reductions.
+
+    Mesh axes carrying a `Partial` in *ty*'s output layout, keyed by mesh
+    axis and valued by reduction op.
+    """
     return {i: a.reduction for i, a in enumerate(ty.layout.attrs) if isinstance(a, Partial)}
 
 
@@ -71,9 +77,12 @@ def test_noncontiguous_plain_layout_is_not_claimed_as_a_reshape_view():
 
 
 def test_straddling_split_fails_closed():
-    """layout position 0 (size 6) would divide across the new size-3 boundary,
+    """Test straddling split fails closed.
+
+    Layout position 0 (size 6) would divide across the new size-3 boundary,
     but the mesh extent (2) does not divide the outer sub-factor (3) -> the
-    split genuinely straddles a device boundary and stays rejected."""
+    split genuinely straddles a device boundary and stays rejected.
+    """
     run_typeinfer_case(
         TypeInferCase(
             "straddle_fails_closed",
@@ -97,9 +106,12 @@ def test_merge_carries():
 
 
 def test_split_remaps_partial_carries():
-    """On a two-axis mesh, the `Split` mesh axis survives the reshape while
+    """On a two-axis mesh, the `Split` mesh axis survives the reshape while the `Partial` mesh axis.
+
+    On a two-axis mesh, the `Split` mesh axis survives the reshape while
     the `Partial` mesh axis — a value state with no layout axis of its own —
-    carries through unchanged."""
+    carries through unchanged.
+    """
     ty = infer_call(
         _reshape((1, 32, 128)),
         make_shard_tensor_type((32, 128), mesh=make_mesh((2, 2)), attrs=(Split(0), Partial("sum"))),
@@ -110,9 +122,12 @@ def test_split_remaps_partial_carries():
 
 
 def test_split_divides_carries():
-    """layout position 0 (size 16) divides across the new size-4 boundary: the
+    """Layout position 0 (size 16) divides across the new size-4 boundary.
+
+    Layout position 0 (size 16) divides across the new size-4 boundary: the
     outer sub-factor (4) is exactly the mesh extent, so the Split-bound mesh
-    axis survives with local extent 1 ([shard §7.1.1](docs/spec/shard.md#711-layoutshape))."""
+    axis survives with local extent 1 ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
+    """
     ty = infer_call(_reshape((4, 32)), make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)))
     assert tuple(ty.shape) == (4, 32)
     assert _split_mesh_axes(ty) == {0}
@@ -120,13 +135,16 @@ def test_split_divides_carries():
 
 
 def test_reshape_then_reshard_rmem_no_split_aliasing():
-    """A flat split dim (4096) splits into (32, 128): the outer sub-factor (32)
+    """A flat split dim (4096) splits into (32, 128).
+
+    A flat split dim (4096) splits into (32, 128): the outer sub-factor (32)
     is divisible by the mesh extent (4) but exceeds it, so the `Split`-bound mesh
     axis must still keep local extent 1 ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)) after the
     further factorization — and a follow-on `Reshard(rmem)`, which assigns
     stride 0 to every `Split`-bound layout dim, is what makes a lost local
     extent observable: it would alias distinct per-device coordinates onto one
-    physical slot."""
+    physical slot.
+    """
     reshaped = infer_call(_reshape((32, 128)), make_shard_tensor_type((4096,), mesh=_M, attrs=(Split(0),)))
     assert _split_mesh_axes(reshaped) == {0}
     assert split_local_extents(reshaped) == [1]

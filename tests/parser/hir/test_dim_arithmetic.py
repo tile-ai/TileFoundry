@@ -21,11 +21,14 @@ CTX_LEN = DimVar("CTX_LEN", 1, 4097)
 
 
 def test_a_bool_is_not_an_int_dim_operand() -> None:
-    """``bool`` is a subclass of ``int`` in Python, so both the operator surface
+    """``bool`` is a subclass of ``int`` in Python.
+
+    ``bool`` is a subclass of ``int`` in Python, so both the operator surface
     and ``simplify_dim`` (which canonicalises raw ints to ``Constant(i64, v)``)
     must reject it explicitly on either side -- otherwise ``CTX_LEN + True``
     silently becomes ``CTX_LEN + 1``, and a stray bool reaches a dim ``Call`` as
-    an operand."""
+    an operand.
+    """
     with pytest.raises(TypeError):
         _ = CTX_LEN + True
     with pytest.raises(TypeError):
@@ -46,9 +49,12 @@ def _dim_add_consistency(
 
 
 def test_verify_anchors_one_name_bare_and_nested_in_a_dim_call() -> None:
-    """Two params share the same ``CTX_LEN``, one directly and one nested inside
+    """Two params share the same ``CTX_LEN``, one directly and one nested inside ``DimAdd``.
+
+    Two params share the same ``CTX_LEN``, one directly and one nested inside
     ``DimAdd``; the verifier's recurse-into-Call walk must anchor both and not
-    report a consistency error."""
+    report a consistency error.
+    """
     nested = _dim_add_consistency.params[1].type.shape[0]
     assert isinstance(nested, Call) and isinstance(nested.target, DimAdd)
     verify_function(_dim_add_consistency)

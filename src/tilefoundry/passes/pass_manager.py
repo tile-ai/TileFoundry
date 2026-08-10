@@ -44,9 +44,12 @@ class PassManager:
         return module
 
     def _post_pass_recheck(self, prev: Module, curr: Module) -> None:
-        """Re-run typeinfer (HIR) / verify (TIR) on every function whose
+        """Post pass recheck.
+
+        Re-run typeinfer (HIR) / verify (TIR) on every function whose
         object identity changed between ``prev`` and ``curr``. Whole-
-        function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes)."""
+        function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes).
+        """
         prev_by_name = {f.name: f for f in prev.functions}
         prim_fns = [f for f in curr.functions if isinstance(f, PrimFunction)]
         for fn in curr.functions:

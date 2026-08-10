@@ -21,9 +21,12 @@ _M_CTA = Mesh((Topology("cta", 128),), Layout((128,), (1,)), names=("cta",))
 
 
 def test_prim_func_param_layout_sugar_canonicalises() -> None:
-    """On a single-axis mesh, ``8192 @ cta`` (extent 128) canonicalises into
+    """Test prim func param layout sugar canonicalises.
+
+    On a single-axis mesh, ``8192 @ cta`` (extent 128) canonicalises into
     ``(128, 64)`` with the mesh axis bound as a Split on the new layout axis
-    — the same result the HIR parser produces for an identical annotation."""
+    — the same result the HIR parser produces for an identical annotation.
+    """
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(1, 8192), "f32", (1, 8192 @ _M_CTA), "smem"]):  # noqa: F821

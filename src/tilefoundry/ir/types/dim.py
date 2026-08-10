@@ -89,8 +89,11 @@ class DimVar(Op, metaclass=_DimVarMeta):
 
 
 def _dim_binop(op_cls, a, b):
-    """Build a dim-arithmetic Call, or ``NotImplemented`` for operands outside
-    ``ShapeDim = int | DimVar | Expr``."""
+    """Dim binop.
+
+    Build a dim-arithmetic Call, or ``NotImplemented`` for operands outside
+    ``ShapeDim = int | DimVar | Expr``.
+    """
     def _ok(v):
         # bool subclasses int; reject it so ``CTX_LEN + True`` is not ``+ 1``.
         if isinstance(v, bool):
@@ -218,7 +221,9 @@ _DIM_OP_TYPES = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
 
 
 def is_dim_expr(value) -> bool:
-    """True iff *value* is a valid static-or-symbolic dim expression:
+    """True iff *value* is a valid static-or-symbolic dim expression.
+
+    True iff *value* is a valid static-or-symbolic dim expression:
     a non-bool ``int``, a ``DimVar``, an ``int``-valued ``Constant``, or a
     ``Call`` over the dim-arithmetic ops whose args all satisfy this.
 
@@ -241,7 +246,9 @@ def is_dim_expr(value) -> bool:
 
 
 def dim_min(a, b) -> Expr:
-    """Symbolic ``min(a, b)`` dim expression, folded to a ``Constant`` when both
+    """Symbolic ``min`` dim expression, folded to a ``Constant`` when both operands are static.
+
+    Symbolic ``min(a, b)`` dim expression, folded to a ``Constant`` when both
     operands are static.
     """
     result = _dim_binop(DimMin, a, b)

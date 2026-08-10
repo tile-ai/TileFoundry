@@ -1,6 +1,5 @@
 """``@register_op`` decorator.
 
-
 Usage:
 
 .. code-block:: python
@@ -193,7 +192,9 @@ def register_alias(
     name: str,
     params: "list[ParamDef] | tuple[ParamDef, ...]",
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Register a **surface alias** schema — a callable name routed to a
+    """Register a **surface alias** schema.
+
+    Register a **surface alias** schema — a callable name routed to a
     custom builder, without an IR Op class of its own.
 
     HIR math sugar names like ``add`` / ``cmp_eq`` previously each had a

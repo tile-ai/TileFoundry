@@ -131,7 +131,9 @@ class DimVarRangePat(Pattern):
 
 
 def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:
-    """First ``(param_index, axis)`` where a ``DimVar`` named *name* appears in
+    """First ``(param_index, axis)`` where a ``DimVar`` named *name* appears in *params*' shapes.
+
+    First ``(param_index, axis)`` where a ``DimVar`` named *name* appears in
     *params*' shapes.
 
     Canonical scan order is ``(param_index ascending, axis ascending)`` — the

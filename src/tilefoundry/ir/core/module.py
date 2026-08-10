@@ -1,4 +1,6 @@
-"""``Module`` — top-level compilation unit: functions, child modules, and plain
+"""``Module`` — top-level compilation unit: functions, child modules.
+
+``Module`` — top-level compilation unit: functions, child modules, and plain
 orchestration methods. See [core-ir §1](docs/spec/core-ir.md#1-module).
 """
 from __future__ import annotations
@@ -41,8 +43,11 @@ def _validate_declared(module_name, source, value, decl_type) -> None:
 
 
 def _refuse_bare_call(module: "Module", kind: str) -> None:
-    """Refuse a bare call on a *kind* whose *module* has neither a ``forward``
-    method nor an entry, naming what to call instead."""
+    """Refuse bare call.
+
+    Refuse a bare call on a *kind* whose *module* has neither a ``forward``
+    method nor an entry, naming what to call instead.
+    """
     if module.entry is not None:
         return
     named = sorted({fn.name for fn in module.functions} | set(module.methods))
@@ -95,9 +100,12 @@ class Module:
     methods: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Seal each function against further authoring mutation, reject a
+        """Post init.
+
+        Seal each function against further authoring mutation, reject a
         name shared by two of functions / modules / methods, validate the
-        declared execution context, and link each child to this owner."""
+        declared execution context, and link each child to this owner.
+        """
         if self.target is not None:
             target_instance(self.target)
         for fn in self.functions:
@@ -169,8 +177,11 @@ class Module:
         )
 
     def effective_topologies(self) -> tuple[Topology, ...]:
-        """The effective ordered Topology tuple: this Module's declaration,
-        else the nearest owner's, else empty at an undeclared root."""
+        """The effective ordered Topology tuple.
+
+        The effective ordered Topology tuple: this Module's declaration,
+        else the nearest owner's, else empty at an undeclared root.
+        """
         node: "Module | None" = self
         while node is not None:
             if node.topologies is not None:
@@ -179,8 +190,11 @@ class Module:
         return ()
 
     def resolve_topology(self, name: str) -> Topology:
-        """The effective Topology named *name*; raises unless exactly one of
-        the effective levels matches."""
+        """The effective Topology named *name*.
+
+        The effective Topology named *name*; raises unless exactly one of
+        the effective levels matches.
+        """
         levels = self.effective_topologies()
         matches = tuple(t for t in levels if t.name == name)
         if not matches:
@@ -198,8 +212,11 @@ class Module:
 
     @property
     def weights(self) -> Mapping[str, TensorType]:
-        """The union of every function's ``ConstTensor`` params, in (function,
-        param) order."""
+        """The union of every function's ``ConstTensor`` params, in (function, param) order.
+
+        The union of every function's ``ConstTensor`` params, in (function,
+        param) order.
+        """
         result: dict[str, TensorType] = {}
         owner: dict[str, str] = {}
         for fn in self.functions:
@@ -218,10 +235,13 @@ class Module:
         return result
 
     def __getattr__(self, name: str):
-        """Resolve *name* to a function, a child module, or a bound method. A
+        """Resolve *name* to a function, a child module, or a bound method.
+
+        Resolve *name* to a function, a child module, or a bound method. A
         function resolves to a **callable that runs it over every declared
         parameter**, not to the IR node — use ``lookup`` for the node, and
-        ``load(resource)`` for a runner that fills constants from bindings."""
+        ``load(resource)`` for a runner that fills constants from bindings.
+        """
         if name.startswith("_"):
             raise AttributeError(name)
         matches = tuple(fn for fn in self.functions if fn.name == name)
@@ -248,8 +268,11 @@ class Module:
         )
 
     def function_named(self, name: str) -> tuple[ModuleFunction, ...]:
-        """The functions whose name matches, in source order (0 or 1 of them in
-        a verified module)."""
+        """The functions whose name matches, in source order (0 or 1 of them in a verified module).
+
+        The functions whose name matches, in source order (0 or 1 of them in
+        a verified module).
+        """
         return tuple(fn for fn in self.functions if fn.name == name)
 
     def lookup(self, name: str) -> ModuleFunction:
@@ -347,8 +370,11 @@ class Module:
         )
 
     def _run_authored(self, fn: ModuleFunction, *args):
-        """Evaluate *fn* over the arguments given, one per declared parameter --
-        a ``ConstTensor`` one included, since a Module holds no constants."""
+        """Evaluate *fn* over the arguments given, one per declared parameter.
+
+        Evaluate *fn* over the arguments given, one per declared parameter --
+        a ``ConstTensor`` one included, since a Module holds no constants.
+        """
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
         if len(args) != len(fn.params):
@@ -367,8 +393,11 @@ class Module:
         return evaluate(fn, *args)
 
     def forward(self, *args):
-        """Run this node's step: its ``forward`` orchestration method if it has
-        one, else the entry function over the arguments given."""
+        """Run this node's step.
+
+        Run this node's step: its ``forward`` orchestration method if it has
+        one, else the entry function over the arguments given.
+        """
         method = self.methods.get("forward")
         if method is not None:
             return method(self, *args)
@@ -378,9 +407,12 @@ class Module:
     __call__ = forward
 
     def prepare(self, raw, out_dir: str, *, device: str = "cpu") -> None:
-        """Run every node's per-weight converters over *raw* and write the
+        """Prepare.
+
+        Run every node's per-weight converters over *raw* and write the
         canonical weights to *out_dir* as one safetensors shard plus an index.
-        See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)."""
+        See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+        """
         flat: dict[str, object] = {}
         self._prepare_into(raw, "", flat, device)
 
@@ -433,9 +465,12 @@ class Module:
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
 
     def cloned(self) -> "Module":
-        """An independent copy of the IR graph: functions, bodies, children, and
+        """An independent copy of the IR graph: functions, bodies, children.
+
+        An independent copy of the IR graph: functions, bodies, children, and
         every internal ``Call.target`` redirected to the copy. Immutable outside
-        context -- owner, ``target``, ``topologies`` -- stays shared."""
+        context -- owner, ``target``, ``topologies`` -- stays shared.
+        """
         memo: dict[int, object] = {}
         for kept in (getattr(self, "_parent", None), self.target, *(self.topologies or ())):
             # Kept out of the copy: following the owner would clone upwards.
@@ -469,8 +504,11 @@ class LoadedModule:
         return self.module.name
 
     def __getattr__(self, name: str):
-        """Resolve *name* against the Module, with functions and children
-        answering from this loading rather than from the IR."""
+        """Resolve *name* against the Module.
+
+        Resolve *name* against the Module, with functions and children
+        answering from this loading rather than from the IR.
+        """
         if name.startswith("_"):
             raise AttributeError(name)
         module = self.module
@@ -501,7 +539,9 @@ class LoadedModule:
         )
 
     def _run_bound(self, fn: ModuleFunction, *acts):
-        """Evaluate *fn* over *acts*, its ``ConstTensor`` parameters filled by
+        """Run bound.
+
+        Evaluate *fn* over *acts*, its ``ConstTensor`` parameters filled by
         name from these bindings.
 
         Weights and activations must already agree on one device, which is where
@@ -532,8 +572,11 @@ class LoadedModule:
         return evaluate(fn, *args, device=self._placement(fn, acts))
 
     def _placement(self, fn: ModuleFunction, acts: tuple) -> str | None:
-        """The one device every bound constant and tensor activation agrees on,
-        or ``None`` when none names one. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)."""
+        """Placement.
+
+        The one device every bound constant and tensor activation agrees on,
+        or ``None`` when none names one. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+        """
         where: dict[str, list[str]] = {}
         for name, value in self.constants.items():
             device = getattr(value, "device", None)
@@ -555,8 +598,11 @@ class LoadedModule:
         return next(iter(where), None)
 
     def forward(self, *acts):
-        """Run this node's step: its ``forward`` orchestration method if it has
-        one, else the entry function over the activations given."""
+        """Run this node's step.
+
+        Run this node's step: its ``forward`` orchestration method if it has
+        one, else the entry function over the activations given.
+        """
         method = self.module.methods.get("forward")
         if method is not None:
             return method(self, *acts)

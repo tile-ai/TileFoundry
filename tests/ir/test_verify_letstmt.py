@@ -31,9 +31,12 @@ def _pf(*stmts) -> PrimFunction:
 
 
 def test_letstmt_requires_a_fresh_var_anywhere_in_the_function():
-    """Binding the same Var object twice must raise whether the second binding is
+    """Test letstmt requires a fresh var anywhere in the function.
+
+    Binding the same Var object twice must raise whether the second binding is
     nested inside the first or a sibling of it — fresh-Var applies across the whole
-    function, not merely within the current lexical scope."""
+    function, not merely within the current lexical scope.
+    """
     rmem = make_tensor_type((4,), storage="rmem")
     v = Var(type=rmem, name="v")
 
@@ -59,8 +62,11 @@ def test_letstmt_rejects_type_mismatch():
 
 
 def test_letstmt_rejects_alloc_nested_in_other_expr():
-    """Call(AllocTensor, ...) may only appear directly as
-    LetStmt.value, never nested inside another Expr operand."""
+    """Call may only appear directly as LetStmt.value, never nested inside another Expr operand.
+
+    Call(AllocTensor, ...) may only appear directly as
+    LetStmt.value, never nested inside another Expr operand.
+    """
     t_scalar = TensorType.scalar(DType.f32)
     # Illegal nesting: PtrOf(AllocTensor(...)).
     nested = Call(

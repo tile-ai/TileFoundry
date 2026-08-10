@@ -17,8 +17,11 @@ def _snake_to_camel(name: str) -> str:
 
 
 def intrinsic(fn):
-    """Per [tir §1.8](docs/spec/tir.md#18-intrinsic--user-defined-effect-stmts). Generate a Stmt subclass, register verify_stmt from the original
-    function body, and wire parser dispatch."""
+    """Per [tir §1.8](docs/spec/tir.md#18-intrinsic--user-defined-effect-stmts).
+
+    Per [tir §1.8](docs/spec/tir.md#18-intrinsic--user-defined-effect-stmts). Generate a Stmt subclass, register verify_stmt from the original
+    function body, and wire parser dispatch.
+    """
     sig = inspect.signature(fn)
     param_names: list[str] = []
     for p in sig.parameters.values():

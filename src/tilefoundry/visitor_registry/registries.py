@@ -24,8 +24,11 @@ class AnalysisRegistry[Key]:
         return cls in self._map
 
     def decorator(self) -> Callable[[type], Callable[[Callable], Callable]]:
-        """``@registry.decorator()`` factory: ``register_X = registry.decorator()``
-        gives the conventional ``register_X(cls)`` decorator for this registry."""
+        """``@registry.decorator()`` factory.
+
+        ``@registry.decorator()`` factory: ``register_X = registry.decorator()``
+        gives the conventional ``register_X(cls)`` decorator for this registry.
+        """
 
         def register_for(cls: type) -> Callable[[Callable], Callable]:
             def decorator(fn: Callable) -> Callable:

@@ -97,8 +97,11 @@ def _argmax_type_relation(call: "Call", input_types, ctx) -> AccessRelationResul
 
 @register_access_relation(ArgMax)
 def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
-    """GLOBAL: input scanned over the reduction axis (isl.map). Output is
-    identity over the leading dims (axis collapsed away)."""
+    """GLOBAL: input scanned over the reduction axis (isl.map).
+
+    GLOBAL: input scanned over the reduction axis (isl.map). Output is
+    identity over the leading dims (axis collapsed away).
+    """
     x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis

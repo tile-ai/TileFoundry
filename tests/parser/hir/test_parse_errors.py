@@ -1,6 +1,5 @@
 """DSL parser error coverage.
 
-
 Pins the diagnostic shape of common DSL surface errors:
 
 1. Unknown name (no Op / Stmt registered under that callable).

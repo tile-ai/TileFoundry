@@ -273,9 +273,12 @@ def test_the_attention_costs_its_projections_and_its_context(tf, shipped_source)
 
 
 def test_the_layer_costs_its_two_halves_and_nothing_else(tf, shipped_source) -> None:
-    """A decoder layer is the attention and the MLP. Asserted against the sum of
+    """A decoder layer is the attention and the MLP.
+
+    A decoder layer is the attention and the MLP. Asserted against the sum of
     the two derivations rather than against the layer's own report, so a layer
-    that counted a half twice fails even though each half is right."""
+    that counted a half twice fails even though each half is right.
+    """
     data = _reported(tf, shipped_source(MODEL), "decoder_layer", {"ctx_len": CTX})
 
     _holds(
@@ -314,7 +317,9 @@ def test_the_layer_reads_at_least_its_weights_and_its_cache(tf, shipped_source) 
 
 
 def test_a_decode_step_is_bound_by_memory(tf, shipped_source) -> None:
-    """The conclusion the whole analysis exists to reach, and the one that was
+    """The conclusion the whole analysis exists to reach, and the one that was wrong.
+
+    The conclusion the whole analysis exists to reach, and the one that was
     wrong.
 
     One token through one layer does about a hundred million flops and moves about

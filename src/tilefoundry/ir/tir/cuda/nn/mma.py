@@ -1,4 +1,4 @@
-"""CUDA (NVIDIA) MMA op, instructions, and their fragment layouts.
+r"""CUDA (NVIDIA) MMA op, instructions, and their fragment layouts.
 
 The CUDA MMA surface: the effect-form ``Mma`` op (``acc += lhs @ rhs``,
 ``T.mma(acc, a, b, atom=...)``), the concrete named instructions, their A / B /

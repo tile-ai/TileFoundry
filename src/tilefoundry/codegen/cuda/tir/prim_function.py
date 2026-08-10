@@ -1,4 +1,6 @@
-"""Emitter for ``tir.PrimFunction`` — produces the `__global__` kernel plus
+"""Emitter for ``tir.PrimFunction``.
+
+Emitter for ``tir.PrimFunction`` — produces the `__global__` kernel plus
 a ``tvm::ffi::Tensor``-parameterised host wrapper.
 
 Host entry signature and launch config follow
@@ -109,7 +111,9 @@ def _collect_mesh_dims(body: Sequential) -> tuple[tuple[int, int, int], tuple[in
 
 
 def _is_dispatch_entry(node: PrimFunction) -> bool:
-    """A dispatch entry PrimFunction's body is ``Sequential`` whose
+    """Return whether dispatch entry.
+
+    A dispatch entry PrimFunction's body is ``Sequential`` whose
     statements consist of one ``DispatchCall`` plus an optional trailing
     ``Return``. The HIR→TIR lowering produces exactly this shape for
     overload-group entries.
@@ -121,12 +125,15 @@ def _is_dispatch_entry(node: PrimFunction) -> bool:
 
 
 def _is_dispatch_entry_shape(node: PrimFunction) -> bool:
-    """Narrow dispatch-entry recognition: the body is exactly
+    """Narrow dispatch-entry recognition: the body is exactly ``Sequential()`` or ``Sequential()``.
+
+    Narrow dispatch-entry recognition: the body is exactly
     ``Sequential((DispatchCall,))`` or ``Sequential((DispatchCall, Return))``.
 
     Stricter than :func:`_is_dispatch_entry` (which matches any body that
     merely contains a ``DispatchCall``); used where a host-only dispatch entry
-    must be recognized precisely rather than guessed."""
+    must be recognized precisely rather than guessed.
+    """
     body = node.body
     if not isinstance(body, Sequential):
         return False
@@ -139,7 +146,9 @@ def _is_dispatch_entry_shape(node: PrimFunction) -> bool:
 
 
 def _has_nested_dispatch(node: PrimFunction) -> bool:
-    """Walk *node*'s body and return True if any nested stmt is a
+    """Walk *node*'s body and return True if any nested stmt is a ``DispatchCall``.
+
+    Walk *node*'s body and return True if any nested stmt is a
     ``DispatchCall``. Used to guard non-entry PrimFunctions, where
     a nested dispatch would require host-side dispatch from inside a
     ``__global__`` kernel — not supported in v0.
@@ -155,8 +164,11 @@ def _has_nested_dispatch(node: PrimFunction) -> bool:
 
 @dataclass(frozen=True)
 class _KernelFields:
-    """Per-PrimFunction codegen pieces shared by the single-source kernel
-    emitter and the split device / host fragment emitters."""
+    """Represent KernelFields.
+
+    Per-PrimFunction codegen pieces shared by the single-source kernel
+    emitter and the split device / host fragment emitters.
+    """
 
     kernel_name: str
     internal_wrapper_name: str

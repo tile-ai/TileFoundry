@@ -217,8 +217,11 @@ PREDICATES: Mapping[str, type[Predicate]] = {
 
 
 def _ordered_bits(tensor: torch.Tensor) -> torch.Tensor:
-    """A float tensor's bits as integers ordered the way the floats are, so their
-    difference is a count of representable values."""
+    """A float tensor's bits as integers ordered the way the floats are.
+
+    A float tensor's bits as integers ordered the way the floats are, so their
+    difference is a count of representable values.
+    """
     try:
         as_integer = tensor.view(_SIGNED_BITS[tensor.dtype])
     except KeyError:
@@ -259,8 +262,11 @@ class Report:
 
 
 def _flatten(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
-    """Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
-    the path list doubles as a structural signature for comparing outputs."""
+    """Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``.
+
+    Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
+    the path list doubles as a structural signature for comparing outputs.
+    """
     if isinstance(x, torch.Tensor):
         return [(path, x)]
     if isinstance(x, tuple):
@@ -323,7 +329,9 @@ def check(
     *,
     expect: Mapping[str, Sequence[Predicate]],
 ) -> Report:
-    """Run *candidate* — and *reference* when there is one — on the same *inputs*,
+    """Run *candidate* — and *reference* when there is one — on the same *inputs*.
+
+    Run *candidate* — and *reference* when there is one — on the same *inputs*,
     and measure each output against the predicates *expect* states for it.
 
     A result may be a bare tensor or an arbitrarily nested tuple of tensors. With

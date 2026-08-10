@@ -52,8 +52,11 @@ def to_torch_dtype(dtype: DType) -> torch.dtype:
 
 
 def from_torch_dtype(dtype: torch.dtype) -> DType:
-    """The declared dtype a torch dtype stands for -- ``to_torch_dtype`` inverted,
-    off the same table, so a name reported back cannot drift from one accepted."""
+    """The declared dtype a torch dtype stands for.
+
+    The declared dtype a torch dtype stands for -- ``to_torch_dtype`` inverted,
+    off the same table, so a name reported back cannot drift from one accepted.
+    """
     for declared, torch_dtype in _TORCH_DTYPE.items():
         if torch_dtype == dtype:
             return declared
@@ -72,8 +75,11 @@ def _flatten_ints(shape) -> tuple[int, ...]:
 
 
 def _layout_shape(type) -> tuple[int, ...] | None:
-    """The element organisation of ``type.layout`` as a flat int tuple, or
-    ``None`` when there is no layout to project onto."""
+    """Layout shape.
+
+    The element organisation of ``type.layout`` as a flat int tuple, or
+    ``None`` when there is no layout to project onto.
+    """
     layout = getattr(type, "layout", None)
     if layout is None:
         return None
@@ -88,9 +94,12 @@ def _layout_shape(type) -> tuple[int, ...] | None:
 
 
 def as_layout_view(value: TensorValue) -> torch.Tensor:
-    """Project ``value.data`` from its logical shape to the layout-domain
+    """Project ``value.data`` from its logical shape to the layout-domain element organisation.
+
+    Project ``value.data`` from its logical shape to the layout-domain
     element organisation. Returns ``data`` unchanged when there is no layout
-    or the element count does not match."""
+    or the element count does not match.
+    """
     shape = _layout_shape(value.type)
     if shape is None:
         return value.data
@@ -103,6 +112,9 @@ def as_layout_view(value: TensorValue) -> torch.Tensor:
 
 
 def from_layout_view(data: torch.Tensor, type: TensorType) -> torch.Tensor:
-    """Inverse of :func:`as_layout_view`: reshape a layout-domain tensor back
-    to the logical shape of ``type``."""
+    """Inverse of :func:`as_layout_view`.
+
+    Inverse of :func:`as_layout_view`: reshape a layout-domain tensor back
+    to the logical shape of ``type``.
+    """
     return data.reshape(tuple(int(d) for d in type.shape))

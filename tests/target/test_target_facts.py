@@ -50,7 +50,9 @@ def test_builtin_targets_own_their_facts_projections() -> None:
 
 
 def test_two_cuda_products_project_the_hardware_each_one_is() -> None:
-    """One projection serves both products, so what separates them is what their
+    """One projection serves both products.
+
+    One projection serves both products, so what separates them is what their
     documents record rather than a branch per architecture.
 
     Tensor memory is the case that matters: a level with no capacity says the

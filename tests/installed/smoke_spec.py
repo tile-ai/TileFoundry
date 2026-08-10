@@ -50,9 +50,12 @@ def test_spec_lists_and_prints_cache_update(tf) -> None:
 
 
 def test_spec_separates_two_sections_that_would_share_a_key(tf) -> None:
-    """`tir.md` names a field `name` twice, under `SymbolRef` and under
+    """`tir.md` names a field `name` twice, under `SymbolRef` and under `MmaOpSpec`.
+
+    `tir.md` names a field `name` twice, under `SymbolRef` and under
     `MmaOpSpec`. Each is reachable by its enclosing section; the bare key is
-    not, because it would have to pick one."""
+    not, because it would have to pick one.
+    """
     symbol = tf("spec", "tir", "symbolref/name")
     assert symbol.returncode == 0, symbol.stderr
     assert "canonical name of a `PrimFunction`" in symbol.stdout

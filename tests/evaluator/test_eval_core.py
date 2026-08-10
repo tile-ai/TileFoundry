@@ -1,4 +1,6 @@
-"""Evaluator core mechanics: function-call binding, SSA identity, loop carry and
+"""Evaluator core mechanics.
+
+Evaluator core mechanics: function-call binding, SSA identity, loop carry and
 scalar-constant materialization.
 
 Op-level value oracles live in the model References, which run whole decoders

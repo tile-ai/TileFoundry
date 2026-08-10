@@ -123,8 +123,11 @@ def test_implicit_entry_within_cta_reduce() -> None:
 
 
 def test_launch_rejects_cpu_tensor_at_host_wrapper() -> None:
-    """A CPU tensor handed to a CUDA launch must error at the host wrapper's
-    device-placement check (naming the argument and the expected device)."""
+    """A CPU tensor handed to a CUDA launch must error at the host wrapper's device-placement check.
+
+    A CPU tensor handed to a CUDA launch must error at the host wrapper's
+    device-placement check (naming the argument and the expected device).
+    """
     rm = tilefoundry.compile(
         double_rows,
         target=CudaTarget("nvidia.h200_sxm"),
@@ -190,9 +193,12 @@ def _dyn_module() -> Module:
 
 
 def test_dynamic_cta_two_shapes_one_compile() -> None:
-    """One compiled artifact launches the dynamic-CTA kernel at two different
+    """Test dynamic cta two shapes one compile.
+
+    One compiled artifact launches the dynamic-CTA kernel at two different
     ``Ntile`` shapes via the host-computed grid; both match torch with no
-    recompile."""
+    recompile.
+    """
     rm = tilefoundry.compile(_dyn_module(), target=CudaTarget("nvidia.h200_sxm"))
     for nt in (4, 8):
         torch.manual_seed(nt)
@@ -204,9 +210,12 @@ def test_dynamic_cta_two_shapes_one_compile() -> None:
 
 
 def test_dynamic_cta_rejects_implicit_entry() -> None:
-    """A dynamic-CTA kernel has no compile-time grid, so the implicit
+    """A dynamic-CTA kernel has no compile-time grid.
+
+    A dynamic-CTA kernel has no compile-time grid, so the implicit
     auto-inserted host entry cannot derive one — it must error loudly rather
-    than guess a CTA count."""
+    than guess a CTA count.
+    """
     mod = Module(
         name="m", functions=(dyn_double.entry_function(),), entry="dyn_double",
         topologies=dyn_double.effective_topologies()
@@ -216,16 +225,22 @@ def test_dynamic_cta_rejects_implicit_entry() -> None:
 
 
 def test_dynamic_thread_topology_rejected() -> None:
-    """Only a ``cta`` topology may carry a launch-provided (``None``) extent; a
+    """Only a ``cta`` topology may carry a launch-provided (``None``) extent.
+
+    Only a ``cta`` topology may carry a launch-provided (``None``) extent; a
     dynamic thread/warp extent has no launch source and is rejected at
-    construction."""
+    construction.
+    """
     with pytest.raises(ValueError, match=r"only a 'cta' topology"):
         Topology("thread", None)
 
 
 def _launch_entry_with_grid_x(extent):
-    """A CPU host entry whose single launch uses *extent* as ``grid_x`` — for
-    exercising the grid/block extent verifier on constructed IR."""
+    """A CPU host entry whose single launch uses *extent* as ``grid_x``.
+
+    A CPU host entry whose single launch uses *extent* as ``grid_x`` — for
+    exercising the grid/block extent verifier on constructed IR.
+    """
     from tilefoundry.ir.core import Constant, Var  # noqa: PLC0415
     from tilefoundry.ir.tir.launch import Launch  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
@@ -247,8 +262,11 @@ def _launch_entry_with_grid_x(extent):
 
 
 def test_launch_extent_rejects_raw_dimvar() -> None:
-    """A grid/block extent slot must be an Expr; a raw ``DimVar`` Op (which is
-    not an Expr) is rejected by verify ([tir §1.3](docs/spec/tir.md#13-primfunction))."""
+    """A grid/block extent slot must be an Expr.
+
+    A grid/block extent slot must be an Expr; a raw ``DimVar`` Op (which is
+    not an Expr) is rejected by verify ([tir §1.3](docs/spec/tir.md#13-primfunction)).
+    """
     from tilefoundry.ir.core import VerifyError  # noqa: PLC0415
     from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
 
@@ -258,8 +276,11 @@ def test_launch_extent_rejects_raw_dimvar() -> None:
 
 
 def test_launch_extent_rejects_external_shapeof() -> None:
-    """A grid/block ``ShapeOf`` extent must reference a forwarded / entry
-    parameter; a ShapeOf of an unrelated Var is rejected by verify."""
+    """A grid/block ``ShapeOf`` extent must reference a forwarded / entry parameter.
+
+    A grid/block ``ShapeOf`` extent must reference a forwarded / entry
+    parameter; a ShapeOf of an unrelated Var is rejected by verify.
+    """
     from tilefoundry.ir.core import Var, VerifyError  # noqa: PLC0415
     from tilefoundry.ir.tir.shape import ShapeOf  # noqa: PLC0415
     from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415

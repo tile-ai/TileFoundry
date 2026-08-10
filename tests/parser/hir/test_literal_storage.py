@@ -23,10 +23,13 @@ _EPS = 1e-6
 
 
 def test_umat_is_not_an_accepted_surface_storage() -> None:
-    """`umat` is compiler-internal: a runtime annotation MUST NOT carry it, so
+    """`umat` is compiler-internal: a runtime annotation MUST NOT carry it.
+
+    `umat` is compiler-internal: a runtime annotation MUST NOT carry it, so
     the storage surface rejects the string. This keeps an unmaterialized value
     from being smuggled onto a runtime param/return, where it would reach
-    codegen without materialization."""
+    codegen without materialization.
+    """
     src = (
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor\n"
@@ -50,8 +53,11 @@ def _captured_float_on_bf16(x: Tensor[(1, 8), "bf16"]) -> Tensor[(1, 8), "bf16"]
 
 
 def test_a_python_float_scalar_takes_the_dtype_of_the_operand_it_meets() -> None:
-    """A float is bf16 throughout, spelled inline or captured by name; an integer
-    keeps its own dtype and still reports the mismatch."""
+    """A float is bf16 throughout, spelled inline or captured by name.
+
+    A float is bf16 throughout, spelled inline or captured by name; an integer
+    keeps its own dtype and still reports the mismatch.
+    """
     for fn in (_literal_on_bf16, _captured_float_on_bf16):
         assert fn.body.args[1].type.dtype == DType.bf16, fn.name
         assert fn.body.type.dtype == DType.bf16, fn.name

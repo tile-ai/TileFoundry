@@ -21,9 +21,7 @@ from tilefoundry.ir.types.shard.mesh import Mesh
 
 @dataclass(frozen=True)
 class Sequential(Stmt):
-    """TIR stmt-list wrapper: wraps a ``tuple[Stmt, ...]`` as one ``Stmt``.
-
-    """
+    """Wrap a ``tuple[Stmt, ...]`` as one TIR statement."""
     body: tuple[Stmt, ...]
 
     def __iter__(self):
@@ -38,9 +36,7 @@ class Sequential(Stmt):
 
 @dataclass(frozen=True)
 class LetStmt(Stmt):
-    """TIR's single value-binding node.
-
-    """
+    """TIR's single value-binding node."""
     var: Var
     value: Expr
     body: Sequential

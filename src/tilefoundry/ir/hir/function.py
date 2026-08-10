@@ -121,7 +121,6 @@ def canonical_specialization_signature(
     only allowed pattern is ``DimVarRangePat``, so the signature is
     ``"<dim_var>$<lo>_<hi>"`` joined by ``;`` in declared order.
     """
-
     parts: list[str] = []
     for pat in specializations:
         if isinstance(pat, DimVarRangePat):
@@ -170,7 +169,9 @@ def elaborate(
     callee: "Function", arg_types: tuple[Type, ...], ctx: TypeInferContext | None = None,
     call: Call | None = None,
 ) -> "Function":
-    """Construct the concrete callee instance for one call site's argument
+    """Construct a concrete callee instance for one call site's argument types.
+
+    Construct the concrete callee instance for one call site's argument
     types ([hir §1.1](docs/spec/hir.md#11-function)). The template lives at the Python-source level;
     every differently-typed call gets its own IR construction here.
 
@@ -242,9 +243,12 @@ def _elaborate_from_bound_types(
     pinned: list[object] = []
 
     class _Elaborator(ExprMutator):
-        """Rebuild ``callee.body`` under ``subst`` (memoized by node
+        """Represent Elaborator.
+
+        Rebuild ``callee.body`` under ``subst`` (memoized by node
         identity so SSA-as-DAG sharing survives), re-stamping every
-        changed node's type through the shared typeinfer visitor."""
+        changed node's type through the shared typeinfer visitor.
+        """
 
         def __init__(self, body_ctx: TypeInferContext) -> None:
             self.body_ctx = body_ctx
@@ -265,11 +269,14 @@ def _elaborate_from_bound_types(
             return c
 
         def visit_Call(self, call_expr: Call) -> Expr:
-            """Rebuild args as usual; additionally, a Call whose target is
+            """Rebuild args as usual.
+
+            Rebuild args as usual; additionally, a Call whose target is
             a hir Function is re-elaborated against the rewritten arg
             types so ``.target`` (not just ``.type``) reflects the fresh
             instance — required per [hir §1.1](docs/spec/hir.md#11-function) for a viewer/printer read
-            of ``call.target.body`` under a wildcard chain."""
+            of ``call.target.body`` under a wildcard chain.
+            """
             new_args = tuple(self.visit(a) for a in call_expr.args)
             args_changed = any(na is not oa for na, oa in zip(new_args, call_expr.args))
             new_target = call_expr.target
@@ -303,11 +310,14 @@ def _elaborate_from_bound_types(
             return self._retyped(rebuilt)
 
         def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
-            """Re-stamp the loop-phi ``carried_args`` from the rewritten
+            """Visit GridRegionExpr.
+
+            Re-stamp the loop-phi ``carried_args`` from the rewritten
             ``init_args`` ([hir §1.2](docs/spec/hir.md#12-gridregionexpr): "the first-iteration value of each
             carried_args phi is its init_args entry"), the same rule the
             parser applies when constructing the node, then substitute the
-            fresh phi into the body/yield_values before rebuilding them."""
+            fresh phi into the body/yield_values before rebuilding them.
+            """
             new_init_args = tuple(self.visit(a) for a in grid.init_args)
             new_phis = tuple(
                 old_phi if new_init.type == old_phi.type
@@ -459,11 +469,14 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
 
 @register_typeinfer(Function)
 def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
-    """Typeinfer handler for ``Call(target=hir.Function, args=...)``:
+    """Derive a function call's type by elaborating its callee.
+
+    Typeinfer handler for ``Call(target=hir.Function, args=...)``:
     derive the type by elaboration ([hir §1.1](docs/spec/hir.md#11-function)). The Call's type is always
     the freshly re-derived type of the (possibly deduped) instance's body —
     never a possibly-stale ``Function.return_type`` field — except for a
-    dispatch prototype, whose ``None`` body is never inspected."""
+    dispatch prototype, whose ``None`` body is never inspected.
+    """
     callee: Function = call.target  # type: ignore[assignment]
     arg_types = tuple(ctx.type_of(a) for a in call.args)
     instance = elaborate(callee, arg_types, ctx, call=call)

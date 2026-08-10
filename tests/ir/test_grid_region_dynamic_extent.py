@@ -30,8 +30,11 @@ def _f32(shape):
 
 
 def _sum_loop_fn(extent, *, step=1, extra_params=()):
-    """`acc = 0; for i in range(0, extent, step): acc += x[i]` over a
-    `(seq_len,)` x, plus any *extra_params* whose lengths bind further DimVars."""
+    """`acc = 0; for i in range(0, extent, step).
+
+    `acc = 0; for i in range(0, extent, step): acc += x[i]` over a
+    `(seq_len,)` x, plus any *extra_params* whose lengths bind further DimVars.
+    """
     N = DimVar("seq_len", 1, 100)
     x = Var(type=_f32((N,)), name="x")
     acc = Var(type=_f32(()), name="acc")
@@ -50,9 +53,12 @@ def _sum_loop_fn(extent, *, step=1, extra_params=()):
 
 
 def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
-    """A DimVar or dim `Expr` in either position resolves against the bindings the
+    """Test dynamic extent and step resolve from the argument shapes.
+
+    A DimVar or dim `Expr` in either position resolves against the bindings the
     call's argument shapes provide, and nothing else: `resolve_dim` is given the
-    same environment the evaluator builds."""
+    same environment the evaluator builds.
+    """
     N = DimVar("seq_len", 1, 100)
     assert resolve_dim(ceildiv(N, 4), {"seq_len": 10}) == 3
     assert resolve_dim(ceildiv(N, 4), {"seq_len": 8}) == 2

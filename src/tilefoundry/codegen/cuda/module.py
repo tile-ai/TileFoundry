@@ -22,8 +22,11 @@ from tilefoundry.target import Target
 
 
 def shim_symbol(kernel_name: str) -> str:
-    """The ``extern "C"`` launch-shim symbol for *kernel_name* (a plain C
-    identifier; mangled-variant ``$`` is replaced)."""
+    """The ``extern "C"`` launch-shim symbol for *kernel_name*.
+
+    The ``extern "C"`` launch-shim symbol for *kernel_name* (a plain C
+    identifier; mangled-variant ``$`` is replaced).
+    """
     return "tilefoundry_" + kernel_name.replace("$", "__") + "_launch"
 
 
@@ -66,8 +69,11 @@ def _emit_kernel_and_shim(fields) -> str:
 def emit_cuda_module(
     module: Module, cuda_fns: tuple[PrimFunction, ...], target: Target
 ) -> LinkableModule:
-    """Emit the device ``.cu`` linkable module for *cuda_fns* (the CUDA-target
-    PrimFunctions of a module)."""
+    """Emit the device ``.cu`` linkable module for *cuda_fns*.
+
+    Emit the device ``.cu`` linkable module for *cuda_fns* (the CUDA-target
+    PrimFunctions of a module).
+    """
     from tilefoundry.codegen.cuda.emit import _topology_shape_specializations  # noqa: PLC0415
 
     ctx = CodegenContext(target)

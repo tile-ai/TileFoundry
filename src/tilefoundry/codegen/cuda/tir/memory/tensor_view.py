@@ -1,4 +1,6 @@
-"""Emitter for ``tir.memory.TensorView`` — emits ``cute::make_tensor`` (plain)
+"""Emitter for ``tir.memory.TensorView``.
+
+Emitter for ``tir.memory.TensorView`` — emits ``cute::make_tensor`` (plain)
 or ``tilefoundry::make_shard_tensor`` (shard) depending on ``layout`` type.
 """
 
@@ -28,7 +30,7 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
 
 
 def _render_layout(shape, strides) -> str:
-    """cute::Layout<cute::Shape<Int<N>...>, cute::Stride<Int<M>...>>"""
+    """Render a CuTe layout type."""
     shape_args = ", ".join(f"cute::Int<{s}>" for s in shape)
     stride_args = ", ".join(f"cute::Int<{s}>" for s in strides)
     return (
@@ -85,9 +87,7 @@ def _render_attr(a) -> str:
 
 
 def _render_shard_layout_type(sl: SL, ctx=None) -> str:
-    """Full ShardLayout<...> C++ type string.
-
-    """
+    """Render a full ShardLayout C++ type string."""
     layout_str = _render_layout(sl.layout.shape, sl.layout.strides)
     attrs_str = ", ".join(_render_attr(a) for a in sl.attrs)
     mesh_str = _render_mesh_type(sl.mesh, ctx)
@@ -102,7 +102,9 @@ def _render_shard_layout_type(sl: SL, ctx=None) -> str:
 
 
 def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
-    """Build the per-axis layout and mesh as runtime C++ *values* and return
+    """Render shard layout value.
+
+    Build the per-axis layout and mesh as runtime C++ *values* and return
     ``(preamble_lines, value_expr)`` for constructing a ``ShardLayout`` value.
 
     For an all-static layout the constructed value's ``decltype`` is the type
@@ -202,14 +204,17 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
 
 
 def _coord_ref(index_var, ctx: CodegenContext) -> str:
-    """Render a ``local_tile`` coordinate. A compile-time integer literal is
+    """Render a ``local_tile`` coordinate.
+
+    Render a ``local_tile`` coordinate. A compile-time integer literal is
     emitted directly (``make_coord(1)``). A rank-0 scalar is a native integer (a
     kernel-param scalar lowers to an ``int`` argument, a loop induction variable
     is already native), so it is used by name. A one-element ``(1,)`` offset
     tensor (a ``cache_update`` ``cur_pos`` / gather index) is a cute tensor whose
     single element is read out (``off_tensor(0)`` for a kernel param, ``off(0)``
     otherwise). Any other rank fails closed — there is no general
-    tensor→coordinate mechanism."""
+    tensor→coordinate mechanism.
+    """
     if isinstance(index_var, Constant):
         return str(int(index_var.value))
     name = ctx.name_for(index_var)

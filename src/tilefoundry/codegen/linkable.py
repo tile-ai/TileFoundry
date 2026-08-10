@@ -24,7 +24,7 @@ class LinkableFunction:
 
 @dataclass(frozen=True)
 class LinkableModule:
-    """One target's pre-link translation unit.
+    r"""One target's pre-link translation unit.
 
     ``target`` is the function target name (``cuda`` / ``cpu``); ``language``
     is the source language (``cu`` for an nvcc translation unit, ``cpp`` for a

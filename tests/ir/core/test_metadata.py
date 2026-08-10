@@ -50,9 +50,12 @@ def test_source_labels_do_not_change_expr_identity() -> None:
 
 
 def test_expr_rejects_malformed_metadata() -> None:
-    """Two entries of one concrete class would make ``get_metadata`` ambiguous,
+    """Two entries of one concrete class would make ``get_metadata`` ambiguous.
+
+    Two entries of one concrete class would make ``get_metadata`` ambiguous,
     and a non-``IRMetadata`` entry has no class to look up by. Both are
-    construction-time errors, and the first reports the span it was given."""
+    construction-time errors, and the first reports the span it was given.
+    """
     with pytest.raises(VerifyError, match=r"duplicate _Label metadata") as exc_info:
         Var(
             type=_type(),

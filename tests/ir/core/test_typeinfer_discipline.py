@@ -1,4 +1,6 @@
-"""Typeinfer diagnostic discipline (hir.md: constraints enforced via
+"""Typeinfer diagnostic discipline (hir.md.
+
+Typeinfer diagnostic discipline (hir.md: constraints enforced via
 ``ctx.error(...)``, never a bare ``raise TypeError``).
 """
 from __future__ import annotations
@@ -12,8 +14,11 @@ _HIR_ROOT = (
 
 
 def _is_register_typeinfer_decorator(node: ast.expr) -> bool:
-    """True if *node* is (a call to) ``register_typeinfer``, however
-    imported (``register_typeinfer`` / ``visitor_registry.register_typeinfer``)."""
+    """True if *node* is ``register_typeinfer``, however imported.
+
+    True if *node* is (a call to) ``register_typeinfer``, however
+    imported (``register_typeinfer`` / ``visitor_registry.register_typeinfer``).
+    """
     target = node.func if isinstance(node, ast.Call) else node
     if isinstance(target, ast.Name):
         return target.id == "register_typeinfer"

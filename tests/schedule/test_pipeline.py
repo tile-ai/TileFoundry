@@ -71,8 +71,11 @@ def _problem():
 
 
 def test_a_buffer_that_carries_a_dependence_gets_more_than_one_slot() -> None:
-    """The property that makes this a pipeline: `h` is the accumulator the
-    matmul carries along k, so it has to hold two tiles at once."""
+    """The property that makes this a pipeline: `h` is the accumulator the matmul carries along k.
+
+    The property that makes this a pipeline: `h` is the accumulator the
+    matmul carries along k, so it has to hold two tiles at once.
+    """
     problem = _problem()
     carried = {buffer.id: buffer.carried_distances for buffer in problem.buffers}
     assert carried["h"] == (("MM", (0, 0, 1)),)

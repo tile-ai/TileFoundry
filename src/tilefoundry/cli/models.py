@@ -12,8 +12,11 @@ from tilefoundry.cli import data
 
 
 def catalog() -> dict[str, Any]:
-    """The shipped catalog. The installed package carries no corpus, so the
-    inventory is read from data rather than built by importing anything."""
+    """The shipped catalog.
+
+    The shipped catalog. The installed package carries no corpus, so the
+    inventory is read from data rather than built by importing anything.
+    """
     return json.loads(data.path("models", "catalog.json").read_text(encoding="utf-8"))
 
 

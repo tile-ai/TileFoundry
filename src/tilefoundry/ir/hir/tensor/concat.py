@@ -17,9 +17,12 @@ from tilefoundry.visitor_registry import register_typeinfer
 
 @register_op
 class Concat(Op):
-    """Variadic input op. `Call.args` is a
+    """Variadic input op.
+
+    Variadic input op. `Call.args` is a
     plain `tuple[Expr, ...]` of rank-equal TensorType Exprs (NOT a TupleType
-    Expr). The lone Param entry documents element type."""
+    Expr). The lone Param entry documents element type.
+    """
     is_variadic: ClassVar[bool] = True
 
     inputs = ParamDef(kind="input", pattern=Tensor)

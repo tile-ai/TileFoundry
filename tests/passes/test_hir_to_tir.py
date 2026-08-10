@@ -1,4 +1,6 @@
-"""What HirToTirPass refuses, what it decides about storage, and where its walk
+"""What HirToTirPass refuses, what it decides about storage, and where its walk has to reach.
+
+What HirToTirPass refuses, what it decides about storage, and where its walk
 has to reach.
 
 That the pass produces a well-formed ``PrimFunction`` for a real program is
@@ -48,10 +50,13 @@ from tilefoundry.passes.transforms.hir_to_tir import (
 
 
 def test_umat_param_rejected_at_lowering() -> None:
-    """An unmaterialized value must not reach TIR: a function param carrying
+    """Test umat param rejected at lowering.
+
+    An unmaterialized value must not reach TIR: a function param carrying
     `StorageKind.UMAT` (e.g. an explicit `Tensor[..., StorageKind.UMAT]`
     annotation or programmatic IR) is rejected at the HIR->TIR boundary, since
-    a kernel param has no memory space for the launch ABI / placement."""
+    a kernel param has no memory space for the launch ABI / placement.
+    """
 
     @func
     def f(x: Tensor[(8,), "f32", None, StorageKind.UMAT]) -> Tensor[(8,), "f32"]:
@@ -64,10 +69,13 @@ def test_umat_param_rejected_at_lowering() -> None:
 
 
 def test_binary_dst_storage_follows_hir_output_not_operand_order() -> None:
-    """A value literal lowers/materializes to a register buffer, but the TIR
+    """Test binary dst storage follows hir output not operand order.
+
+    A value literal lowers/materializes to a register buffer, but the TIR
     Binary destination follows the HIR-resolved output residency (the gmem
     tensor operand), independent of which side the literal is on — no
-    operand-order dependence reintroduced at lowering."""
+    operand-order dependence reintroduced at lowering.
+    """
 
     @func
     def _lit_rhs(x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 8), "f32"]:
@@ -102,10 +110,13 @@ def test_binary_dst_storage_follows_hir_output_not_operand_order() -> None:
 
 
 def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
-    """When every Split on the reduce axis sits on a ``thread``
+    """Test hir reduce no workspace when only thread topology split.
+
+    When every Split on the reduce axis sits on a ``thread``
     topology, ``__shfl_xor_sync`` covers the cross-lane fold and
     no workspace is needed; lowering must emit the 2-arg
-    ``Reduce(src, dst)`` form."""
+    ``Reduce(src, dst)`` form.
+    """
 
     @func(topologies=(Topology("thread", 32),))
     def f(a: Tensor[(1, 256), DType.f32]):
@@ -142,7 +153,9 @@ def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
 
 
 def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
-    """A ``GridRegionExpr`` has children a hand-rolled Tuple/Call walk does not
+    """A ``GridRegionExpr`` has children a hand-rolled Tuple/Call walk does not know about.
+
+    A ``GridRegionExpr`` has children a hand-rolled Tuple/Call walk does not
     know about, and both of the pass's own walks depend on reaching them.
 
     A mesh referenced only inside the region's body must still be derived --

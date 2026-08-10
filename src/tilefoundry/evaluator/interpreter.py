@@ -31,9 +31,12 @@ def _default_device() -> str:
 
 
 def _bind_dim_vars(params, values) -> dict[str, int]:
-    """Map each ``DimVar`` appearing directly as a parameter-shape axis to the
+    """Bind dim vars.
+
+    Map each ``DimVar`` appearing directly as a parameter-shape axis to the
     concrete size of the matching argument. Conflicting bindings for the same
-    name raise ``EvalError``."""
+    name raise ``EvalError``.
+    """
     binding: dict[str, int] = {}
     for p, v in zip(params, values):
         shape = getattr(p.type, "shape", None)
@@ -120,8 +123,11 @@ class Evaluator(ExprVisitor):
         return Evaluator(sub_env, self.device, sub_dim_env).visit(target.body)
 
     def _resolve_loop_field(self, dim, what: str) -> int:
-        """Resolve a ``GridRegionExpr`` ``extent`` / ``step`` ``ShapeDim`` to a
-        concrete ``int`` against the current DimVar bindings; fail closed."""
+        """Resolve loop field.
+
+        Resolve a ``GridRegionExpr`` ``extent`` / ``step`` ``ShapeDim`` to a
+        concrete ``int`` against the current DimVar bindings; fail closed.
+        """
         if isinstance(dim, bool):
             raise EvalError(f"evaluator: GridRegion {what} must be an integer")
         if isinstance(dim, int):

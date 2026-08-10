@@ -20,18 +20,24 @@ from tilefoundry.visitor_registry import register_typeinfer
 
 
 def _dim_mul(a, b):
-    """Multiply two shape dims. Folds ``int * int`` to ``int`` (keeping
+    """Multiply two shape dims.
+
+    Multiply two shape dims. Folds ``int * int`` to ``int`` (keeping
     static strides static); produces a symbolic dim-expr when either
     operand is a dynamic ``DimVar`` / ``Expr`` (so dynamic shapes do not
-    force a premature ``int()`` coercion)."""
+    force a premature ``int()`` coercion).
+    """
     if isinstance(a, int) and isinstance(b, int):
         return a * b
     return simplify_dim(DimMul, (a, b))
 
 def _c_order_strides(shape: tuple) -> tuple:
-    """C-order contiguous strides for *shape*. A dynamic axis yields a
+    """C-order contiguous strides for *shape*.
+
+    C-order contiguous strides for *shape*. A dynamic axis yields a
     symbolic stride for the axes above it via ``_dim_mul``; static inner
-    strides stay plain ints."""
+    strides stay plain ints.
+    """
     return c_order_strides(shape, mul=_dim_mul)
 
 def _shared_engine_strides(sl: ShardLayout) -> tuple:
@@ -89,7 +95,9 @@ def _storage_level(storage: StorageKind) -> int:
         raise ValueError(f"unknown storage tier: {storage!r}") from exc
 
 def _src_form_is_per_instance(sl_src: "ShardLayout | None") -> bool:
-    """True iff *sl_src* carries the per-instance stride form
+    """True iff *sl_src* carries the per-instance stride form (every Split axis has stride 0).
+
+    True iff *sl_src* carries the per-instance stride form
     (every Split axis has stride 0). Used to inherit the source's
     form on same-storage sugar reshards.
     """

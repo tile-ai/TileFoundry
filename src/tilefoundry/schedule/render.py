@@ -1,4 +1,6 @@
-"""Render ``tg``'s schedule tree into a holed C-like skeleton, a Mermaid
+"""Render ``tg``'s schedule tree into a holed C-like skeleton, a Mermaid swimlane.
+
+Render ``tg``'s schedule tree into a holed C-like skeleton, a Mermaid
 swimlane, and one hole per statement, via ``isl.ast_build`` codegen.
 
 ``BufferAccess`` is local rather than the TIR ``TensorView`` Op: this needs
@@ -26,9 +28,12 @@ from tilefoundry.ir.core import Var, binding_name
 
 
 class EmitScaffoldError(RuntimeError):
-    """A construct `emit_scaffold` does not (yet) support, or a ``tg``
+    """Represent EmitScaffoldError.
+
+    A construct `emit_scaffold` does not (yet) support, or a ``tg``
     consistency precondition that did not hold -- always raised with
-    a specific, actionable message; V1 never silently guesses."""
+    a specific, actionable message; V1 never silently guesses.
+    """
 
 
 @dataclass(frozen=True)
@@ -50,7 +55,9 @@ class _RenderProgram:
 
 @dataclass(frozen=True)
 class Skeleton:
-    """A holed, C-like loop-nest skeleton: isl ``ast_build`` codegen (PoC
+    """A holed, C-like loop-nest skeleton.
+
+    A holed, C-like loop-nest skeleton: isl ``ast_build`` codegen (PoC
     11) with every naked statement call (``MM(c0, c1, c2);``) rendered as
     a ``HOLE_<name>(...)`` call instead (see ``_build_skeleton``).
     ``holes`` names every hole in ``text``, in first-appearance order.
@@ -62,23 +69,29 @@ class Skeleton:
 
 @dataclass(frozen=True)
 class Swimlane:
-    """A human-readable Mermaid ``gantt`` rendering of the schedule: one
+    """A human-readable Mermaid ``gantt`` rendering of the schedule.
+
+    A human-readable Mermaid ``gantt`` rendering of the schedule: one
     section (swimlane) per statement, minimally unrolled (prologue + a
     handful of steady-state iterations + epilogue, see
-    ``_illustrative_instances``) rather than the full iteration count."""
+    ``_illustrative_instances``) rather than the full iteration count.
+    """
 
     text: str
 
 
 @dataclass(frozen=True)
 class BufferAccess:
-    """V1 fallback view of one buffer touched by one statement (see the
+    """V1 fallback view of one buffer touched by one statement.
+
+    V1 fallback view of one buffer touched by one statement (see the
     module docstring's "BufferAccess reuse note" for why the existing TIR
     ``TensorView`` is not reused here). ``index_map`` is the ``isl.map``
     (from ``TileGraph.reads``/``writes``) taking this statement's
     coordinates to elements of buffer ``tensor_name``; ``dtype`` is
     best-effort HIR dtype recovery (``None`` if it could not be resolved,
-    e.g. an unbound intermediate -- see ``_dtype_table``)."""
+    e.g. an unbound intermediate -- see ``_dtype_table``).
+    """
 
     tensor_name: str
     index_map: "isl.map"
@@ -87,11 +100,14 @@ class BufferAccess:
 
 @dataclass(frozen=True)
 class HoleContract:
-    """One per statement: what a hole must compute, as a pure function
+    """One per statement: what a hole must compute.
+
+    One per statement: what a hole must compute, as a pure function
     ``(inputs, coords) -> output`` -- no side effects, no indexing/sync (the
     skeleton already carries those). ``op_ref`` is ``TileUnit.op`` (the HIR
     ``Call``) so M3 can fill the hole and diff it against the HIR
-    Evaluator's own op subgraph result; M2 itself never runs it."""
+    Evaluator's own op subgraph result; M2 itself never runs it.
+    """
 
     name: str
     op_ref: object
@@ -106,7 +122,9 @@ class HoleContract:
 
 
 def _dtype_table(units: tuple[TileUnit, ...]) -> dict[str, object]:
-    """buffer name -> HIR dtype, reconstructed by re-applying poly.py's
+    """Dtype table.
+
+    Buffer name -> HIR dtype, reconstructed by re-applying poly.py's
     own naming rule (``Var.name`` / ``binding_name``) to every HIR value any
     statement touches: each ``op.args[i]`` and each statement's own output
     (``binding_name(op)``). ``TileGraph`` does not expose
@@ -117,7 +135,8 @@ def _dtype_table(units: tuple[TileUnit, ...]) -> dict[str, object]:
     reproduced here -- last-write-wins on the colliding key; (2) an
     unbound intermediate (no source-level name, ``binding_name`` is
     ``None``) is skipped, so its buffer keeps ``dtype=None`` downstream.
-    Neither gap is hit by today's MM/RN extraction."""
+    Neither gap is hit by today's MM/RN extraction.
+    """
     table: dict[str, object] = {}
     for unit in units:
         call = unit.op
@@ -132,9 +151,12 @@ def _dtype_table(units: tuple[TileUnit, ...]) -> dict[str, object]:
 
 
 def _by_buf(union_map: "isl.union_map", stmt_name: str) -> dict[str, "isl.map"]:
-    """Decompose ``union_map`` (``tg.reads`` or ``tg.writes``) into the
+    """By buf.
+
+    Decompose ``union_map`` (``tg.reads`` or ``tg.writes``) into the
     per-buffer maps whose ``IN`` tuple is ``stmt_name``, keyed by ``OUT``
-    tuple (buffer) name."""
+    tuple (buffer) name.
+    """
     maps: list["isl.map"] = []
     union_map.foreach_map(maps.append)
     return {
@@ -147,14 +169,17 @@ def _by_buf(union_map: "isl.union_map", stmt_name: str) -> dict[str, "isl.map"]:
 def _ordered_inputs(
     unit: TileUnit, read_by_buf: dict[str, "isl.map"], dtype_table: dict[str, object]
 ) -> tuple[BufferAccess, ...]:
-    """Reads of ``unit``, as ``BufferAccess``es ordered to match
+    """Order buffer reads to match the operation arguments.
+
+    Reads of ``unit``, as ``BufferAccess``es ordered to match
     ``unit.op.args`` (the natural, human-readable source-call order) --
     e.g. MM's ``(x, w)`` before its own read-modify-write self-read on
     ``h``. Any read not reachable from ``op.args`` (that self-read: the
     output buffer, read again because its write map is not injective --
     see ``poly._registered_access``) is appended after, sorted by
     buffer name for determinism, since ``foreach_map``'s own union-map
-    iteration order is not guaranteed stable."""
+    iteration order is not guaranteed stable.
+    """
     ordered: list[str] = []
     used: set[str] = set()
     for arg in unit.op.args:
@@ -192,14 +217,17 @@ def _output_view(
 
 
 def _call_coords(expr: "isl.ast_expr") -> tuple[str, tuple[str, ...]]:
-    """Decode an isl ``ast_expr_op_call`` (e.g. ``MM(c0, c1, c2)``, from a
+    """Decode an isl ``ast_expr_op_call``.
+
+    Decode an isl ``ast_expr_op_call`` (e.g. ``MM(c0, c1, c2)``, from a
     domain leaf's ``node.get_expr()``) into ``(stmt_name, coord_texts)``.
     ``op_arg(0)`` is always the statement-name id; every following
     ``op_arg`` (there are ``op_n_arg() - 1`` of them) is a coordinate,
     rendered via its own ``to_C_str()`` -- not hand-parsed from text --
     so a non-trivial affine coordinate (e.g. a future strip-mined
     schedule) would still print correctly, not just the bare
-    iterator-id case this V1 schedule always produces."""
+    iterator-id case this V1 schedule always produces.
+    """
     name = expr.op_arg(0).id().name()
     coords = tuple(expr.op_arg(i).to_C_str() for i in range(1, expr.op_n_arg()))
     return name, coords
@@ -210,7 +238,8 @@ def _ring_ref(buf_name: str, coords: tuple[str, ...], ring: dict) -> str:
 
     A graph whose ring depths were never decided leaves ``tg.ring`` empty, and
     every reference is then the bare buffer name; a decided depth above one
-    indexes the buffer by its innermost coordinate mod that depth."""
+    indexes the buffer by its innermost coordinate mod that depth.
+    """
     n = ring.get(buf_name)
     if not n or n <= 1:
         return buf_name
@@ -222,11 +251,14 @@ def _ring_ref(buf_name: str, coords: tuple[str, ...], ring: dict) -> str:
 def _render_hole_call(
     hole_name: str, in_refs: tuple[str, ...], out_ref: str, coords: tuple[str, ...]
 ) -> str:
-    """``HOLE_<name>(/*in*/ a, b, /*out*/ c, /*coords*/ c0, c1, c2);`` --
+    """``HOLE_<name>(/*in*/ a, b, /*out*/ c, /*coords*/ c0, c1, c2);``.
+
+    ``HOLE_<name>(/*in*/ a, b, /*out*/ c, /*coords*/ c0, c1, c2);`` --
     the hole's *inputs* (all reads, including any RMW self-read on the
     output buffer -- included honestly rather than silently dropped, see
     ``_ordered_inputs``), its *output*, and the raw schedule coordinates
-    it is parametrised by, each behind its own comment marker."""
+    it is parametrised by, each behind its own comment marker.
+    """
     sections = [
         "/*in*/ " + ", ".join(in_refs),
         "/*out*/ " + out_ref,
@@ -244,12 +276,15 @@ def _print_to_str(node: "isl.ast_node", options: "isl.ast_print_options") -> str
 def _build_skeleton(
     tg: TileGraph, dtype_table: dict[str, object]
 ) -> tuple[Skeleton, dict[str, HoleContract]]:
-    """isl ``ast_build`` codegen (PoC 11) over ``tg.tree``, with an
+    """Isl ``ast_build`` codegen (PoC 11) over ``tg.tree``.
+
+    Isl ``ast_build`` codegen (PoC 11) over ``tg.tree``, with an
     ``at_each_domain`` hook (validated in ``m2_hook_probe.py``) that
     records each statement's hole-call replacement text in visit order,
     then splices those replacements into the final ``to_C_str()`` text.
     Also builds each statement's ``HoleContract`` along the way (first
-    occurrence only -- one contract per *statement*, not per call site)."""
+    occurrence only -- one contract per *statement*, not per call site).
+    """
     if tg.tree is None:
         raise EmitScaffoldError(
             "emit_scaffold: tg.tree is None -- call build_schedule_tree(tg) "
@@ -283,7 +318,9 @@ def _build_skeleton(
         return printer.start_line().print_str(text).end_line()
 
     def print_user(printer, options, node):
-        """isl asks for one statement's text and owns the loop nest and the
+        """Isl asks for one statement's text and owns the loop nest and the indentation around it.
+
+        Isl asks for one statement's text and owns the loop nest and the
         indentation around it, so the hole is emitted here rather than spliced
         into finished output.
 
@@ -316,9 +353,12 @@ def _build_skeleton(
 
 
 def _statement_extents(tg: TileGraph, stmt_name: str) -> tuple[int, ...]:
-    """Per-axis ``[lo, hi]`` extent of ``stmt_name``'s own domain piece
+    """Per-axis ``[lo, hi]`` extent of ``stmt_name``'s own domain piece.
+
+    Per-axis ``[lo, hi]`` extent of ``stmt_name``'s own domain piece
     (same ``dim_min_val``/``dim_max_val`` technique, applied to the one
-    ``isl.set`` in ``tg.domain`` whose tuple name matches)."""
+    ``isl.set`` in ``tg.domain`` whose tuple name matches).
+    """
     sets: list["isl.set"] = []
     tg.domain.foreach_set(sets.append)
     for s in sets:
@@ -334,7 +374,9 @@ def _statement_extents(tg: TileGraph, stmt_name: str) -> tuple[int, ...]:
 def _illustrative_instances(
     extents: tuple[int, ...],
 ) -> tuple[list[tuple[int, ...]], int]:
-    """Minimal loop unrolling for the swimlane: the first instance
+    """Minimal loop unrolling for the swimlane.
+
+    Minimal loop unrolling for the swimlane: the first instance
     (prologue) + up to ``depth + 1`` following instances (steady-state) +
     the last instance (epilogue) -- never the full ``K``-instance unroll.
     Returns ``(shown, n_collapsed)``; ``n_collapsed == 0`` when the whole
@@ -343,7 +385,8 @@ def _illustrative_instances(
     A real kernel's domain runs to hundreds of millions of points, so the
     head is taken off ``product``'s lazy stream and the last coordinate --
     which its lexicographic order puts at ``extent - 1`` on every axis -- is
-    read off the extents rather than by exhausting it."""
+    read off the extents rather than by exhausting it.
+    """
     depth = len(extents)
     total = math.prod(extents)
     head_n = min(1 + (depth + 1), total)

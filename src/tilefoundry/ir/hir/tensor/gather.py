@@ -163,9 +163,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_access_relation(Gather)
 def _gather_access_relation(call: "Call", ctx) -> AccessRelations:
-    """GLOBAL level: Gather pulls per-index slices; access pattern is
+    """GLOBAL level: Gather pulls per-index slices.
+
+    GLOBAL level: Gather pulls per-index slices; access pattern is
     data-dependent on the indices arg -> input data is OPAQUE; indices
-    identity; output identity."""
+    identity; output identity.
+    """
     idx_rank = len(ctx.type_of(call.args[1]).shape)
     out_rank = len(ctx.type_of(call).shape)
     return AccessRelations(

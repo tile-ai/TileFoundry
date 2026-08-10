@@ -1,4 +1,6 @@
-"""``RuntimeResource`` — checkpoint access surface: load a tensor (or group)
+"""``RuntimeResource`` — checkpoint access surface.
+
+``RuntimeResource`` — checkpoint access surface: load a tensor (or group)
 by name, scope to a child namespace. ``DictResource`` is an in-memory/test
 double; ``SafetensorsResource`` reads a safetensors checkpoint
 directory. See [runtime §1.5](docs/spec/runtime.md#15-runtimeresource).
@@ -118,8 +120,11 @@ def _reject_group(where: str, name: str, resolved: "str | tuple[str, ...]") -> s
 
 
 class RuntimeResource(Protocol):
-    """Checkpoint access surface: load one tensor (or group) by name, scope
-    to a subtree."""
+    """Checkpoint access surface: load one tensor (or group) by name, scope to a subtree.
+
+    Checkpoint access surface: load one tensor (or group) by name, scope
+    to a subtree.
+    """
 
     def load(self, name: str) -> torch.Tensor: ...
 

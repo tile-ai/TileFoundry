@@ -29,9 +29,12 @@ _SHARD_IMPORT = (
 
 
 def test_positional_and_keyword_attrs_are_the_same_program() -> None:
-    """``reshard(a, shared_layout)`` ≡ ``reshard(a, layout=shared_layout)``: an
+    """``reshard(a, shared_layout)`` ≡ ``reshard(a, layout=shared_layout)``.
+
+    ``reshard(a, shared_layout)`` ≡ ``reshard(a, layout=shared_layout)``: an
     attribute may be passed either way at the call site, and the printer has one
-    canonical form for both, so the two sources print identically."""
+    canonical form for both, so the two sources print identically.
+    """
     body = (
         "sl = ShardLayout(\n"
         "    layout=Layout((1, 1536), (1536, 1)),\n"
@@ -52,10 +55,13 @@ def test_positional_and_keyword_attrs_are_the_same_program() -> None:
 
 
 def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
-    """A rank-3 ``insert_slice`` whose offset is a literal tuple argument prints
+    """Test insert slice tuple offset arg roundtrips.
+
+    A rank-3 ``insert_slice`` whose offset is a literal tuple argument prints
     the tuple inline as a literal ``(e0, e1, e2)`` at the call site (the parser
     lifts an inline offset tuple back to a hir Tuple), so importing the source
-    leaves no dangling reference and re-printing is identical."""
+    leaves no dangling reference and re-printing is identical.
+    """
     fn = import_dsl(
         _HEADER
         + "\n@func\n"
@@ -68,12 +74,15 @@ def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
 
 
 def test_shadowed_call_loc_roundtrips() -> None:
-    """When a call's source loc collides with an op name (``vals, idx = topk``
+    """Test shadowed call loc roundtrips.
+
+    When a call's source loc collides with an op name (``vals, idx = topk``
     gives the ``topk`` call loc ``"topk"``), the printer renames the binding to
     ``topk_out`` to avoid shadowing the op. The renamed binding is carried by the
     left-hand side and nothing else, so re-printing the imported source is what
     proves the label survived: had it come back as ``topk``, the fixed point would
-    not hold."""
+    not hold.
+    """
     fn = import_dsl(
         _HEADER
         + "\n@func\n"
@@ -87,9 +96,12 @@ def test_shadowed_call_loc_roundtrips() -> None:
 
 
 def test_low_precision_dtype_names_roundtrip() -> None:
-    """A ``@func`` whose parameters are typed with the three low-precision dtype
+    """Test low precision dtype names roundtrip.
+
+    A ``@func`` whose parameters are typed with the three low-precision dtype
     names (fp8e4m3, f8e8m0, f4e2m1) prints those names and imports with the same
-    dtypes."""
+    dtypes.
+    """
     expected = [DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1]
     fn = import_dsl(
         _HEADER
@@ -109,9 +121,12 @@ def test_low_precision_dtype_names_roundtrip() -> None:
 
 
 def test_tuple_return_with_mesh_element_roundtrips() -> None:
-    """A tuple-return element that introduces a mesh (a ``reshard``) must be
+    """Test tuple return with mesh element roundtrips.
+
+    A tuple-return element that introduces a mesh (a ``reshard``) must be
     discovered by the printer's mesh collection via ``Tuple.elements``; the
-    rendered call references the declared mesh and round-trips."""
+    rendered call references the declared mesh and round-trips.
+    """
     fn = import_dsl(
         _HEADER
         + _SHARD_IMPORT
@@ -132,8 +147,11 @@ def test_tuple_return_with_mesh_element_roundtrips() -> None:
 
 
 def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
-    """A ``ComposedLayout`` whose outer is a prior ``ShardLayout`` stage must print
-    as that nesting: flattening it would lose which mesh level owns which axis."""
+    """A ``ComposedLayout`` whose outer is a prior ``ShardLayout`` stage must print as that nesting.
+
+    A ``ComposedLayout`` whose outer is a prior ``ShardLayout`` stage must print
+    as that nesting: flattening it would lose which mesh level owns which axis.
+    """
     fn = import_dsl(
         "from __future__ import annotations\n"
         "from tilefoundry import func\n"
@@ -161,9 +179,12 @@ def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
 
 
 def test_a_loop_used_as_a_value_prints_the_name_its_carry_has() -> None:
-    """A ``for`` statement binds no name of its own. A loop with one carried
+    """A ``for`` statement binds no name of its own.
+
+    A ``for`` statement binds no name of its own. A loop with one carried
     value, consumed by a later statement, has to render as that carry — a
-    dangling reference does not survive importing the emitted file."""
+    dangling reference does not survive importing the emitted file.
+    """
     fn = import_dsl(
         _HEADER
         + "\n@func\n"

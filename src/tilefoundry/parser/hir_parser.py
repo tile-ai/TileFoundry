@@ -243,8 +243,11 @@ def _parse_layout_constraint(
     return LayoutConstraint(layout=Layout(shape=tuple(shape)), bindings=tuple(bindings))
 
 def _is_pass_body(stmts: list[ast.stmt]) -> bool:
-    """A dispatch-prototype body is exactly ``pass``. A ``pass`` mixed with any
-    other statement is rejected (it is not a partial body form)."""
+    """A dispatch-prototype body is exactly ``pass``.
+
+    A dispatch-prototype body is exactly ``pass``. A ``pass`` mixed with any
+    other statement is rejected (it is not a partial body form).
+    """
     if not any(isinstance(s, ast.Pass) for s in stmts):
         return False
     if len(stmts) != 1:
@@ -494,11 +497,14 @@ class _HirBodyVisitor(BaseExprVisitor):
         )
 
     def _resolve_layout_extent(self, node: ast.AST) -> int | DimVar:
-        """Resolve one ``where(layout=...)`` shape entry to a concrete
+        """Resolve one ``where`` shape entry to a concrete ``int``/``DimVar``.
+
+        Resolve one ``where(layout=...)`` shape entry to a concrete
         ``int``/``DimVar`` (the ``_`` wildcard is handled by the caller before
         this is reached). A literal resolves directly; a symbolic name
         resolves through the lexical env / authoring closure, matching
-        ``_eval_static``'s ``Name`` resolution."""
+        ``_eval_static``'s ``Name`` resolution.
+        """
         if isinstance(node, ast.Constant):
             value = node.value
             if isinstance(value, bool) or not isinstance(value, int):
@@ -526,14 +532,17 @@ class _HirBodyVisitor(BaseExprVisitor):
         )
 
     def _resolve_loop_bound(self, node: ast.AST):
-        """Resolve a ``tile`` / ``range`` bound (extent / step / start) to an
+        """Resolve a ``tile`` / ``range`` bound to an ``int``, ``DimVar``, or dim ``Expr``.
+
+        Resolve a ``tile`` / ``range`` bound (extent / step / start) to an
         ``int``, ``DimVar``, or dim ``Expr``.
 
         Unlike ``_eval_static`` (which only folds numeric constants), a
         ``BinOp`` whose operands reach a ``DimVar`` builds a dim expression via
         ``simplify_dim`` (e.g. ``C // NUM_SPLITS`` → ``DimFloorDiv(C, N)``). The
         IR / evaluator already resolve dim-expression loop bounds; this lets the
-        DSL surface write them."""
+        DSL surface write them.
+        """
         if isinstance(node, ast.BinOp):
             op = _AST_DIM_OPS.get(type(node.op))
             if op is None:
@@ -552,7 +561,9 @@ class _HirBodyVisitor(BaseExprVisitor):
         return self._eval_static(node)
 
     def _visit_loop_for(self, node: ast.For, stmts, idx, require_return: bool = True):
-        """[parser §3.3](docs/spec/parser.md#33-description) / [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only): `for i in tile(...)` / `for i in range(...)` →
+        """Visit loop for.
+
+        [parser §3.3](docs/spec/parser.md#33-description) / [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only): `for i in tile(...)` / `for i in range(...)` →
         GridRegionExpr, then continue the statement chain.
 
         ``tile`` and ``range`` share the same loop domain ``(start, extent,
@@ -570,7 +581,9 @@ class _HirBodyVisitor(BaseExprVisitor):
         return grid if require_return else None
 
     def _build_grid_for(self, node: ast.For) -> Expr:
-        """Build a ``GridRegionExpr`` from a ``for ... in tile/range(...)`` node,
+        """Build a ``GridRegionExpr`` from a for loop.
+
+        Build a ``GridRegionExpr`` from a ``for ... in tile/range(...)`` node,
         rebinding its carry names in the *current* frame, and return the grid.
 
         Carry-out lifting: any ``ast.Assign`` in the body whose single Name
@@ -797,8 +810,11 @@ class _HirBodyVisitor(BaseExprVisitor):
         return last_expr
 
     def _static_body_value(self, node: ast.AST):
-        """A body-local name's compile-time value — a number or a list of Exprs —
-        or ``_NOT_STATIC`` when the right-hand side belongs to the IR."""
+        """A body-local name's compile-time value.
+
+        A body-local name's compile-time value — a number or a list of Exprs —
+        or ``_NOT_STATIC`` when the right-hand side belongs to the IR.
+        """
         number = self._static_number(node)
         if number is not None:
             return number

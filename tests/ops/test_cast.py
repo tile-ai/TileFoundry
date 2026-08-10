@@ -1,6 +1,9 @@
-"""Cast's sharded layout and its low-precision boundary: a sharded input keeps
+"""Cast's sharded layout and its low-precision boundary.
+
+Cast's sharded layout and its low-precision boundary: a sharded input keeps
 its ShardLayout (Cast's relation is the identity), fp8 round-trips through the
-evaluator, and a sub-byte destination dtype is refused there."""
+evaluator, and a sub-byte destination dtype is refused there.
+"""
 from __future__ import annotations
 
 import pytest

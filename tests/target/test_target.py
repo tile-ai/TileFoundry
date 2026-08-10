@@ -1,4 +1,6 @@
-"""What a Target validates about a program, which scheduler it reaches, and how
+"""What a Target validates about a program, which scheduler it reaches.
+
+What a Target validates about a program, which scheduler it reaches, and how
 codegen groups by one.
 
 The composed hardware facts themselves -- which documents a default target
@@ -333,10 +335,13 @@ def test_public_schedule_overrides_refuses_and_rejects_unknown_topologies(
 
 
 def test_static_topologies_use_target_resource_facts() -> None:
-    """A declared extent is validated against the level's own resource fact: a
+    """A declared extent is validated against the level's own resource fact.
+
+    A declared extent is validated against the level's own resource fact: a
     grid may be far wider than the machine's SMs and a block may not exceed the
     threads one supports, and a grid whose size is only known at launch is
-    accepted as declared."""
+    accepted as declared.
+    """
     target = CudaTarget("nvidia.h200_sxm")
     target.validate_program_topology(Topology("cta", 132))
     target.validate_program_topology(Topology("cta", 310_000))
@@ -357,8 +362,11 @@ def test_static_topologies_use_target_resource_facts() -> None:
 
 
 def test_group_functions_by_target_fact_matching() -> None:
-    """CUDA functions must agree on Target facts before grouping; CPU
-    functions are exempt from the CUDA fact-matching."""
+    """CUDA functions must agree on Target facts before grouping.
+
+    CUDA functions must agree on Target facts before grouping; CPU
+    functions are exempt from the CUDA fact-matching.
+    """
     body = Sequential(body=())
     first = PrimFunction(name="first", params=(), body=body, target=CudaTarget("nvidia.h200_sxm"))
     second = PrimFunction(

@@ -48,7 +48,9 @@ class Placement:
 
 
 class LifetimeCollector(StmtVisitor):
-    """Walk a ``PrimFunction`` body and collect every ``LetStmt`` that binds
+    """Represent LifetimeCollector.
+
+    Walk a ``PrimFunction`` body and collect every ``LetStmt`` that binds
     a ``Call(AllocTensor, ...)`` together with its lifetime range.
 
     Traversal completeness (``For`` / ``While`` / ``If`` / ``MeshScope`` /
@@ -101,9 +103,12 @@ class BufferScheduler:
 
 @dataclass
 class BufferizePass(PrimFuncPass):
-    """Collect lifetimes, schedule placements, and (for the MVP trivial
+    """Collect lifetimes, schedule placements, and leave the ``PrimFunction`` body unchanged.
+
+    Collect lifetimes, schedule placements, and (for the MVP trivial
     policy) leave the ``PrimFunction`` body unchanged. Real placement
-    rewrites land here when the scheduler emits non-trivial pools."""
+    rewrites land here when the scheduler emits non-trivial pools.
+    """
 
     collector: LifetimeCollector = None
     scheduler: BufferScheduler = None

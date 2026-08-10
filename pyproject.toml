@@ -89,7 +89,7 @@ target-version = "py312"
 # Plus targeted rules from pylint and flake8-tidy-imports:
 #   PLC0415  import-outside-top-level
 #   TID251   banned-api
-select = ["E", "F", "W", "I", "PLC0415", "TID251"]
+select = ["E", "F", "W", "I", "D2", "D3", "D4", "PLC0415", "TID251"]
 
 # Ignored rules:
 #   E501  line-too-long — long strings / compact code stay on one line.
@@ -110,3 +110,7 @@ ignore = ["E501", "F821", "E741"]
 # authoring-surface ergonomics. Internal implementation code in
 # `src/` must NOT use star imports (no exception here).
 "tests/**/*.py" = ["F403", "F405"]
+"tests/models/**/*.py" = ["D2", "D3", "D4"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

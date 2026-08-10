@@ -41,9 +41,12 @@ def _content_type(name: str) -> str:
 
 
 class ViewerHTTPServer(ThreadingHTTPServer):
-    """Carries the HIR root + asset cache root for the handler, plus the
+    """Represent ViewerHTTPServer.
+
+    Carries the HIR root + asset cache root for the handler, plus the
     most recent ``(dot_text, detail_index)`` so ``/api/expr`` can
-    resolve ids from the same build the client is viewing."""
+    resolve ids from the same build the client is viewing.
+    """
 
     daemon_threads = True
     allow_reuse_address = True
@@ -131,10 +134,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
 
 def start_server(root, *, port: int, cache_root: Path, host: str = "127.0.0.1") -> ViewerHTTPServer:
-    """Bind a :class:`ViewerHTTPServer` on ``<host>:<port>`` and start
+    """Start server.
+
+    Bind a :class:`ViewerHTTPServer` on ``<host>:<port>`` and start
     serving in a background daemon thread. Returns the live server (its
     actual port is ``server.server_address[1]``). ``host`` defaults to
-    loopback; pass ``0.0.0.0`` to expose it on the LAN."""
+    loopback; pass ``0.0.0.0`` to expose it on the LAN.
+    """
     server = ViewerHTTPServer((host, port), root, cache_root)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

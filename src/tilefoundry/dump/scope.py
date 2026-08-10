@@ -69,9 +69,12 @@ class DumpScope:
         return self._flags
 
     def dump(self, name: str, content: str | bytes, flag: DumpFlags) -> None:
-        """Write ``content`` to logical path ``name`` if ``flag`` is enabled
+        """Write ``content`` to logical path ``name`` if ``flag`` is enabled in this scope.
+
+        Write ``content`` to logical path ``name`` if ``flag`` is enabled
         in this scope. Falls through to ``NullDumper`` when the scope has
-        no active dumper (e.g. ``DumpScope("foo")`` outside any parent)."""
+        no active dumper (e.g. ``DumpScope("foo")`` outside any parent).
+        """
         if not (self._flags & flag):
             return
         self.dumper.write(name, content)

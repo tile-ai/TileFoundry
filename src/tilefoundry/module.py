@@ -15,7 +15,8 @@ class _Undeclared:
     while omitting it declares nothing and inherits from the owning Module. A
     plain ``None`` default cannot express both, because ``None`` is already the
     IR's encoding of "inherit". This applies to both declaration surfaces: the
-    ``topologies=`` arguments of ``@module`` and standalone ``@func``."""
+    ``topologies=`` arguments of ``@module`` and standalone ``@func``.
+    """
 
     def __repr__(self) -> str:
         return "UNDECLARED"
@@ -48,7 +49,9 @@ def _validate(topologies) -> tuple:
 def module(
     cls=None, *, entry: str | None = None, target=None, topologies=UNDECLARED
 ):
-    """Collect a class body into a ``Module``: DSL functions, child ``Module``s
+    """Collect a class body into a ``Module``.
+
+    Collect a class body into a ``Module``: DSL functions, child ``Module``s
     (or a tuple/list of them), and plain orchestration methods. See the module
     authoring surface in docs/spec/parser.md.
 
@@ -57,7 +60,8 @@ def module(
     ``target`` declares the hardware this execution domain runs on; only the
     outermost Module declares it and nested Modules inherit it. ``topologies``
     declares the ordered parallel-resource hierarchy; omitting it inherits the
-    owning Module's hierarchy and ``()`` declares a topology-free Module."""
+    owning Module's hierarchy and ``()`` declares a topology-free Module.
+    """
     from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415

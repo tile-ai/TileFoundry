@@ -110,8 +110,11 @@ def test_a_clean_file_passes(lint, tmp_path, capsys) -> None:
 
 
 def test_this_repository_is_clean(lint) -> None:
-    """Every tracked file, so the guard is a fact about the tree and not only
-    about the commit that happens to be in flight."""
+    """Test this repository is clean.
+
+    Every tracked file, so the guard is a fact about the tree and not only
+    about the commit that happens to be in flight.
+    """
     import subprocess  # noqa: PLC0415
 
     root = _SCRIPT.parent.parent

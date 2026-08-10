@@ -24,9 +24,12 @@ from .python_printer import _collect_meshes, _mesh_name_map, _op_display_name, _
 
 
 def _type_lines(ty, mesh_name_map: dict[int, str]) -> list[str]:
-    """Type-annotation lines for a node label: the shared canonical
+    """Type-annotation lines for a node label.
+
+    Type-annotation lines for a node label: the shared canonical
     ``Tensor[...]`` text ([inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)), split on newline for the verbose multi-line
-    ``ShardLayout(...)`` fallback."""
+    ``ShardLayout(...)`` fallback.
+    """
     text = _tensor_annotation(ty, mesh_name_map=mesh_name_map) if isinstance(ty, TensorType) else str(ty)
     return text.split("\n")
 

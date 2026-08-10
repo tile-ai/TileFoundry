@@ -45,8 +45,11 @@ def _materialised_shape(ty) -> tuple:
 
 
 def _materialised_shape_dyn(ty) -> tuple:
-    """Like ``_materialised_shape`` but preserves ``DimVar`` entries so
-    the caller can ask for a runtime (string) iteration count."""
+    """Materialised shape dyn.
+
+    Like ``_materialised_shape`` but preserves ``DimVar`` entries so
+    the caller can ask for a runtime (string) iteration count.
+    """
     layout = getattr(ty, "layout", None)
     if isinstance(layout, ShardLayout):
         return shard_layout_local_shape(layout)
@@ -64,9 +67,12 @@ def _runtime_total(ty, ctx: CodegenContext) -> object:
 
 
 def _tensor_expr(var, ctx: CodegenContext) -> str:
-    """Kernel-param tensor operands are accessed through the cute wrap
+    """Tensor expr.
+
+    Kernel-param tensor operands are accessed through the cute wrap
     (``<name>_tensor``) the PrimFunction emitter materialises at the
-    top of the body; non-param vars are referenced directly."""
+    top of the body; non-param vars are referenced directly.
+    """
     base = ctx.name_for(var)
     return f"{base}_tensor" if ctx.is_kernel_param(var) else base
 

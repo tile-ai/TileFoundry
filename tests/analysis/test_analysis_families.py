@@ -623,8 +623,11 @@ def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None
 
 
 def test_a_shared_block_reports_what_the_program_leaves_the_cache() -> None:
-    """The sharing edge makes L1's usable size depend on the program, and that
-    division is reportable without any working set."""
+    """The sharing edge makes L1's usable size depend on the program.
+
+    The sharing edge makes L1's usable size depend on the program, and that
+    division is reportable without any working set.
+    """
     _, entry = _run(_modest_shared, "memory")
 
     record = get_metadata(entry, MemoryMetadata)
@@ -739,7 +742,9 @@ def test_the_gpu_memory_graph_is_not_a_tree() -> None:
 
 
 def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -> None:
-    """A requested root pulls its dependencies in, so their records land on the
+    """A requested root pulls its dependencies in.
+
+    A requested root pulls its dependencies in, so their records land on the
     IR without having been asked for. A report shows what was requested; the
     dependency's records stay on the IR for whoever does ask.
 

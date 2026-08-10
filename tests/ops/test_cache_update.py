@@ -41,10 +41,13 @@ def _i32(v):
 
 
 def test_cache_update_evaluate():
-    """Functional KV-cache write: the first ``s`` rows of ``new`` scatter into
+    """Functional KV-cache write.
+
+    Functional KV-cache write: the first ``s`` rows of ``new`` scatter into
     ``cache`` at ``cur_pos``; ``s`` < S_CAP leaves the rest unchanged. The
     partial-width write is the informative one -- a full-width write cannot show
-    that the untouched tail survives."""
+    that the untouched tail survives.
+    """
     torch.manual_seed(0)
     cache = torch.randn(1, 16, 4, 8)
     new = torch.randn(1, 4, 4, 8)

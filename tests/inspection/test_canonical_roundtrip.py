@@ -63,9 +63,11 @@ def _attr_equal(a, b) -> bool:
 
 
 def test_canonical_roundtrip_preserves_topologies_and_compiles() -> None:
-    """Round-trip is structurally equal + printed text is valid Python +
-    the owning module's topology declaration survives."""
+    """Test canonical roundtrip preserves topologies and compiles.
 
+    Round-trip is structurally equal + printed text is valid Python +
+    the owning module's topology declaration survives.
+    """
     mod1 = build_demo_canonical()
     src = as_script(mod1)
     compile(src, "<test>", "exec")

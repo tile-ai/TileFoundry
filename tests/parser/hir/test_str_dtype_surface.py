@@ -30,9 +30,12 @@ from tilefoundry.dsl.tf import *
 
 
 def test_string_and_symbolic_forms_print_to_the_same_canonical_ir() -> None:
-    """A string and the descriptor / enum it names are one authoring surface over
+    """A string and the descriptor / enum it names are one authoring surface over one IR.
+
+    A string and the descriptor / enum it names are one authoring surface over
     one IR: both normalize at the call boundary and print back as the string, so
-    a reader never has to know which spelling the author used."""
+    a reader never has to know which spelling the author used.
+    """
     string_dtype = _HEADER + """
 @func
 def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
@@ -98,8 +101,11 @@ def g(x: Tensor[(8,), "f32"]) -> Tensor[(1,), "f32"]:
 def test_an_unknown_surface_string_names_the_type_it_failed(
     src: str, error_type: type[Exception], message: str
 ) -> None:
-    """A misspelled string must not fall through as an opaque value: the
+    """A misspelled string must not fall through as an opaque value.
+
+    A misspelled string must not fall through as an opaque value: the
     annotation position and the call position both name the type and the value,
-    which is the whole benefit of accepting strings at the surface."""
+    which is the whole benefit of accepting strings at the surface.
+    """
     with pytest.raises(error_type, match=message):
         import_dsl(_dedent(src))

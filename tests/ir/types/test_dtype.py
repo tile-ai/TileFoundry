@@ -27,9 +27,12 @@ def test_builtin_dtype_facts() -> None:
 
 
 def test_dtype_members_are_canonically_named_singletons() -> None:
-    """A dtype is addressed by exactly one name and interned by its facts, so a
+    """A dtype is addressed by exactly one name and interned by its facts.
+
+    A dtype is addressed by exactly one name and interned by its facts, so a
     parsed ``"f32"`` and a constructed ``FloatDType`` are one key, and no
-    alternate spelling of the low-precision names exists to diverge from."""
+    alternate spelling of the low-precision names exists to diverge from.
+    """
     assert DType.f32 is DType.f32
     assert DType.f32 is not DType.f16
     assert {DType.f32, FloatDType("f32", 32, 8, 23)} == {DType.f32}

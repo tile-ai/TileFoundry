@@ -78,10 +78,13 @@ def _range_expr(dim, params: dict) -> str:
 
 
 def dim_range(dim) -> tuple[int, int]:
-    """Half-open value bounds ``[lo, hi)`` of *dim*: build its isl value
+    """Half-open value bounds ``[lo, hi)`` of *dim*.
+
+    Half-open value bounds ``[lo, hi)`` of *dim*: build its isl value
     expression, bind every identifier to its own bound, and read the range
     back from isl. The one case isl cannot express -- a product of two
-    non-constant terms -- falls back to interval arithmetic."""
+    non-constant terms -- falls back to interval arithmetic.
+    """
     if isinstance(dim, bool):
         raise TypeError("ShapeDim must not be bool")
     if isinstance(dim, int):
@@ -200,9 +203,12 @@ def _visit(expr, param_map: dict):
 
 
 def to_dim(pw_aff: "isl.pw_aff", param_map: dict):
-    """Decode *pw_aff* into a ``ShapeDim`` via ``ast_build.expr_from`` plus
+    """To dim.
+
+    Decode *pw_aff* into a ``ShapeDim`` via ``ast_build.expr_from`` plus
     a generic ``ast_expr`` visitor. *param_map* resolves each isl
-    identifier the expression bottoms out on (from a prior ``to_domain``)."""
+    identifier the expression bottoms out on (from a prior ``to_domain``).
+    """
     build = isl.ast_build.from_context(pw_aff.domain_space().universe_set())
     return _visit(build.expr_from(pw_aff), param_map)
 

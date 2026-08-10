@@ -20,7 +20,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 
 @register_op(dialect="tf", category="custom", name="custom_parse_addsq")
 class CustomParseAddSq(Op):
-    """Custom op: lhs + rhs, then squared. (Test-only fixture.)"""
+    """Test-only custom op that squares the sum of its inputs."""
     lhs = ParamDef(kind="input", pattern=TensorPattern)
     rhs = ParamDef(kind="input", pattern=TensorPattern)
 
@@ -44,8 +44,11 @@ def _use_custom_op(
 
 
 def test_parse_custom_op_resolves_to_custom_op_call_target() -> None:
-    """A ``@func`` calling the registered custom op parses to a
-    ``Call`` whose target is the custom ``Op`` instance."""
+    """Test parse custom op resolves to custom op call target.
+
+    A ``@func`` calling the registered custom op parses to a
+    ``Call`` whose target is the custom ``Op`` instance.
+    """
     body = _use_custom_op.body
     assert isinstance(body, Call)
     assert isinstance(body.target, CustomParseAddSq)

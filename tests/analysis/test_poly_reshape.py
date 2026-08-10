@@ -1,4 +1,6 @@
-"""``extract`` coverage for ``Reshape`` -- the view-fold (not a fallback
+"""``extract`` coverage for ``Reshape``.
+
+``extract`` coverage for ``Reshape`` -- the view-fold (not a fallback
 relation like ``RMSNorm``, not a registered ``type_relation`` like
 ``Transpose``): before this task ``Reshape`` had no forward ``type_relation``
 and no V1 fallback, so ``analysis.extract`` raised at any ``Reshape`` call
@@ -94,8 +96,11 @@ def test_a_reshape_is_a_view_its_consumer_reads_through():
 
 
 def test_boundary_reshape_with_no_consumer_fails_closed():
-    """A body that is *nothing but* a reshape (``return reshape(x, ...)``) has no
+    """Test boundary reshape with no consumer fails closed.
+
+    A body that is *nothing but* a reshape (``return reshape(x, ...)``) has no
     compute op left once the reshape folds away -- ``extract`` fails closed with
-    its empty-body error rather than fabricating a copy statement."""
+    its empty-body error rather than fabricating a copy statement.
+    """
     with pytest.raises(ExtractError, match="no compute ops to extract"):
         extract(bare_reshape_return)

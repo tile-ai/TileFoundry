@@ -39,7 +39,9 @@ register_access_relation(Reshape)(identity_relations(1))
 
 
 def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
-    """Carry a genuine sharding across a reshape (a view) when the layout
+    """Carry sharded reshape.
+
+    Carry a genuine sharding across a reshape (a view) when the layout
     factorization aligns with *new_shape*.
 
     A reshape is a view: it inserts/removes size-1 axes and groups along
@@ -279,9 +281,12 @@ def _row_major_strides(shape: list) -> list:
 
 
 def flat_reshape_map(old_shape: tuple, new_shape: tuple) -> "isl.map":
-    """``new_shape``'s multi-index -> ``old_shape``'s multi-index via
+    """``new_shape``'s multi-index -> ``old_shape``'s multi-index via row-major flat-index equality.
+
+    ``new_shape``'s multi-index -> ``old_shape``'s multi-index via
     row-major flat-index equality (no bounds attached, like every other
-    ``build_relation`` map -- the caller's domain supplies them)."""
+    ``build_relation`` map -- the caller's domain supplies them).
+    """
     m, n = len(old_shape), len(new_shape)
     pre = 0
     while pre < m and pre < n and old_shape[pre] == new_shape[pre]:

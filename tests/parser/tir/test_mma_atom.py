@@ -44,19 +44,25 @@ def _alloc_frag_kernel(topology, mesh_layout, names=()):
 
 
 def _first_alloc_layout(prim_fn) -> ShardLayout:
-    """Pull the ShardLayout off the single alloc'd fragment inside the kernel's
-    mesh scope."""
+    """Pull the ShardLayout off the single alloc'd fragment inside the kernel's mesh scope.
+
+    Pull the ShardLayout off the single alloc'd fragment inside the kernel's
+    mesh scope.
+    """
     mesh_scope = next(s for s in prim_fn.body.body if isinstance(s, MeshScope))
     let = next(s for s in mesh_scope.body.body if isinstance(s, LetStmt))
     return let.var.type.layout
 
 
 def test_a_valid_scope_takes_the_atom_contract_as_is() -> None:
-    """A/B/C and ``required_scope`` are the atom's contracts, canonical across
+    """A/B/C and ``required_scope`` are the atom's contracts, canonical across builds.
+
+    A/B/C and ``required_scope`` are the atom's contracts, canonical across
     builds — the resolver returns the same fragment objects rather than rebinding
     them to a caller mesh. A valid (4,8)/(1,4) thread(32) scope passes the
     use-point check whatever its axes are named, and the alloc'd fragment carries
-    the atom's own layout unchanged."""
+    the atom's own layout unchanged.
+    """
     atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
     assert isinstance(atom, MmaAtom)
     assert (atom.A, atom.B, atom.C) == (_ATOM.A, _ATOM.B, _ATOM.C)
@@ -72,9 +78,12 @@ def test_a_valid_scope_takes_the_atom_contract_as_is() -> None:
 
 
 def test_infunc_op_and_atom_emit_no_letstmt() -> None:
-    """`op = T.cuda.mma.<NAME>` and `atom = T.cuda.mma.atom(op=op)` are
+    """`op = T.cuda.mma.<NAME>` and `atom = T.cuda.mma.atom(op=op)` are static bindings.
+
+    `op = T.cuda.mma.<NAME>` and `atom = T.cuda.mma.atom(op=op)` are
     static bindings: neither lowers to a LetStmt, so a body with only these
-    assignments is empty."""
+    assignments is empty.
+    """
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
@@ -103,11 +112,14 @@ def test_infunc_op_and_atom_emit_no_letstmt() -> None:
     ],
 )
 def test_a_scope_that_cannot_host_the_fragment_is_rejected(topology, layout) -> None:
-    """Five distinct ways a scope fails the thread-participation match: a flat
+    """Five distinct ways a scope fails the thread-participation match.
+
+    Five distinct ways a scope fails the thread-participation match: a flat
     (32,) scope cannot host the 2-axis (4,8) fragment; the right shape in the
     wrong lane order is a different thread-value decomposition; a `cta` scope is
     not a warp scope however it is shaped; 64 lanes do not match a 32-lane atom;
-    and a thread(64) topology carrying a 32-element layout is malformed."""
+    and a thread(64) topology carrying a 32-element layout is malformed.
+    """
     with pytest.raises(VerifyError, match="required thread scope"):
         prim_func(target=CudaTarget("nvidia.h200_sxm"))(_alloc_frag_kernel(topology, layout))
 

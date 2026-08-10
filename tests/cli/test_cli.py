@@ -86,7 +86,9 @@ def test_parse_dims_rejects_an_argument_that_states_no_extent(stated) -> None:
 
 
 def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
-    """Repeating the flag states another dimension, not another value for one
+    """Repeating the flag states another dimension, not another value for one already stated.
+
+    Repeating the flag states another dimension, not another value for one
     already stated.
 
     Taking the last would answer an ambiguous request by picking silently, and

@@ -32,7 +32,8 @@ def static_dim_value(dim):
     ``DimVar`` / dynamic dim ``Call`` exprs are not static → ``None``. The
     detection is exact (real ``Constant`` with an ``int`` value), never "anything
     with a ``.value``"; the ``Constant`` import is deferred to dodge the
-    ``ir.core.expr`` ↔ ``ir.types`` cycle and fails closed (returns ``None``)."""
+    ``ir.core.expr`` ↔ ``ir.types`` cycle and fails closed (returns ``None``).
+    """
     if isinstance(dim, int) and not isinstance(dim, bool):
         return dim
     try:
@@ -65,8 +66,11 @@ def upper_bound(dim) -> int:
 
 
 def shape_numel_upper_bound(shape) -> int:
-    """Product of per-dim upper bounds: the static element count a buffer or
-    layout must hold across every runtime shape in the dispatch envelope."""
+    """Product of per-dim upper bounds.
+
+    Product of per-dim upper bounds: the static element count a buffer or
+    layout must hold across every runtime shape in the dispatch envelope.
+    """
     n = 1
     for s in shape:
         n *= upper_bound(s)

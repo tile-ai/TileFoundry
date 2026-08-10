@@ -1,4 +1,6 @@
-"""``extract(hir) -> TileGraph`` -- lift an HIR ``Function`` body into a
+"""``extract(hir) -> TileGraph``.
+
+``extract(hir) -> TileGraph`` -- lift an HIR ``Function`` body into a
 polyhedral (isl) representation: one statement per compute op, at element
 granularity, with reads/writes/deps ready for the schedule layer to build a
 tree over (see ``schedule/kernel_schedule.py``).
@@ -145,16 +147,22 @@ _STATEMENT_ABBREV = {"MatMul": "MM", "RMSNorm": "RN"}
 
 
 class ExtractError(NotImplementedError):
-    """A construct `extract` does not (yet) support -- always raised with
-    a specific, actionable message; V1 never silently guesses."""
+    """A construct `extract` does not (yet) support.
+
+    A construct `extract` does not (yet) support -- always raised with
+    a specific, actionable message; V1 never silently guesses.
+    """
 
 
 @dataclass(frozen=True)
 class _Loop:
-    """One enclosing ``GridRegionExpr``'s iteration axis, as extract models
+    """Represent Loop.
+
+    One enclosing ``GridRegionExpr``'s iteration axis, as extract models
     it: a domain dimension ranging over the raw induction values
     ``[start, extent)`` at stride ``step``. One object per grid node, shared
-    by every statement that grid encloses, so identity names the axis."""
+    by every statement that grid encloses, so identity names the axis.
+    """
 
     var: Var
     start: object
@@ -164,10 +172,13 @@ class _Loop:
 
 @dataclass(frozen=True)
 class _StatementAccess:
-    """Extraction-internal: one statement's domain + tuple-named access
+    """Extraction-internal.
+
+    Extraction-internal: one statement's domain + tuple-named access
     maps, before they are unioned into the returned ``TileGraph``.
     ``loops`` is the enclosing loop nest, outermost first -- the first
-    ``len(loops)`` dimensions of ``domain`` are its axes."""
+    ``len(loops)`` dimensions of ``domain`` are its axes.
+    """
 
     name: str
     domain: "isl.set"
@@ -180,7 +191,9 @@ class _StatementAccess:
 
 
 def _buffer_namer():
-    """Stable ``id(expr) -> isl tuple name`` assignment, shared across the
+    """Buffer namer.
+
+    Stable ``id(expr) -> isl tuple name`` assignment, shared across the
     whole extraction so the same SSA value (e.g. matmul's ``h`` output,
     read again by rms_norm) gets the same buffer name everywhere it is
     referenced. Prefers the authored name (``Var.name`` for a parameter,
@@ -236,18 +249,23 @@ def _buffer_namer():
 
     def alias(phi: Var, yielded) -> None:
         """One buffer for a loop carry: ``phi`` and ``yielded`` share a name.
+
         Chained carries (a nested loop re-carrying the same value) all land
-        on whichever name the group already has."""
+        on whichever name the group already has.
+        """
         name = seen.get(id(yielded)) or seen.get(id(phi)) or name_for(phi)
         seen[id(phi)] = name
         seen[id(yielded)] = name
 
     def pierce(m: "isl.map", expr, loops: tuple[_Loop, ...] = ()) -> "isl.map":
-        """``m`` (a read of ``expr``) rewritten to address ``expr``'s ultimate
+        """Pierce.
+
+        ``m`` (a read of ``expr``) rewritten to address ``expr``'s ultimate
         buffer, folding each view hop between the two into the map's range: a
         reshape recomputes the coordinates, a gather indexed by an enclosing
         loop's induction variable inserts that loop's own domain dimension at
-        the gathered axis."""
+        the gathered axis.
+        """
         while isinstance(expr, Call):
             target = expr.target
             if isinstance(target, Reshape):
@@ -268,10 +286,13 @@ def _buffer_namer():
 
 
 def _gather_loop_axis(call: Call, loops: tuple[_Loop, ...]) -> tuple[int, int]:
-    """``(gathered axis, enclosing-loop position)`` for a ``Gather`` extract
+    """``(gathered axis, enclosing-loop position)`` for a ``Gather`` extract can fold as a view.
+
+    ``(gathered axis, enclosing-loop position)`` for a ``Gather`` extract
     can fold as a view: a scalar index that *is* one enclosing loop's
     induction variable. Anything else raises -- extract has no way to place a
-    data-dependent index in an affine access map."""
+    data-dependent index in an affine access map.
+    """
     x_rank = len(call.args[0].type.shape)
     axis = call.target.axis
     axis = axis + x_rank if axis < 0 else axis
@@ -293,9 +314,12 @@ def _gather_loop_axis(call: Call, loops: tuple[_Loop, ...]) -> tuple[int, int]:
 
 
 def _assign_statement_names(ops: list[object]) -> list[str]:
-    """One isl tuple name per statement, in call order: the bare (possibly
+    """One isl tuple name per statement, in call order.
+
+    One isl tuple name per statement, in call order: the bare (possibly
     abbreviated) op name when it is unique in this extraction, else
-    suffixed ``NAME0``, ``NAME1``, ... in first-seen order."""
+    suffixed ``NAME0``, ``NAME1``, ... in first-seen order.
+    """
     bases = [_STATEMENT_ABBREV.get(type(op).__name__, type(op).__name__) for op in ops]
     counts: dict[str, int] = {}
     for base in bases:
@@ -313,7 +337,9 @@ def _assign_statement_names(ops: list[object]) -> list[str]:
 
 
 def _local_type(ty: TensorType) -> TensorType:
-    """*ty* narrowed to its per-shard local shape when ``ty.layout`` is a
+    """Local type.
+
+    *ty* narrowed to its per-shard local shape when ``ty.layout`` is a
     ``ShardLayout``, else *ty* unchanged.
 
     ``shard_layout_local_shape`` divides *layout* positions, not tensor
@@ -367,7 +393,9 @@ def _static_loop_bound(dim, what: str) -> int:
 
 
 def _loop_domain(inner: "isl.set", loops: tuple[_Loop, ...]) -> tuple["isl.set", dict]:
-    """``inner`` with one leading dimension per enclosing loop, outermost
+    """Loop domain.
+
+    ``inner`` with one leading dimension per enclosing loop, outermost
     first: dimension ``j`` ranges over loop ``j``'s ``[start, extent)`` at
     stride ``step``.
 
@@ -402,13 +430,18 @@ def _loop_domain(inner: "isl.set", loops: tuple[_Loop, ...]) -> tuple["isl.set",
 
 
 def _lift(m: "isl.map", depth: int) -> "isl.map":
-    """One access map given ``depth`` extra leading input dimensions -- the
-    enclosing loop axes, which the op's own relation knows nothing about."""
+    """One access map given ``depth`` extra leading input dimensions -- the enclosing loop axes.
+
+    One access map given ``depth`` extra leading input dimensions -- the
+    enclosing loop axes, which the op's own relation knows nothing about.
+    """
     return m if not depth else m.insert_dims(isl.dim_type.IN, 0, depth)
 
 
 def _bind_map(m: "isl.map", stmt_name: str, domain: "isl.set", buffer_name: str) -> "isl.map":
-    """Stamp one ``build_relation`` access map (element-granularity, no
+    """Stamp one ``build_relation`` access map (element-granularity, no bounds of its own.
+
+    Stamp one ``build_relation`` access map (element-granularity, no
     bounds of its own -- the bounds live entirely in the paired ``domain``)
     with its statement/buffer tuple names and restrict it to ``domain``.
     isl requires a map's ``IN`` tuple identity (name *and* param space) to
@@ -427,17 +460,23 @@ def _bind_map(m: "isl.map", stmt_name: str, domain: "isl.set", buffer_name: str)
 def _read_map(
     m: "isl.map", stmt_name: str, domain: "isl.set", arg, namer, loops=(),
 ) -> "isl.map":
-    """A read access for input ``arg``, pierced through any reshape / loop-index
+    """Read map.
+
+    A read access for input ``arg``, pierced through any reshape / loop-index
     gather view (``namer.pierce``) before binding -- the view-fold's landing
     point for every op's input side (an op's own output buffer never needs
-    piercing, a reshape output is never written to)."""
+    piercing, a reshape output is never written to).
+    """
     return _bind_map(namer.pierce(m, arg, loops), stmt_name, domain, namer(arg))
 
 
 def _out_dtype(call: Call, out_idx: int):
-    """The dtype of ``call``'s ``out_idx``-th output: a multi-output op
+    """The dtype of ``call``'s ``out_idx``-th output.
+
+    The dtype of ``call``'s ``out_idx``-th output: a multi-output op
     (``RoPE``) types its result as a ``TupleType``, a single-output one as
-    the ``TensorType`` itself."""
+    the ``TensorType`` itself.
+    """
     ty = call.type
     if isinstance(ty, TupleType) and out_idx < len(ty.fields):
         return getattr(ty.fields[out_idx], "dtype", None)
@@ -448,9 +487,12 @@ def _registered_access(
     call: Call, stmt_name: str, result: AccessRelationResult, namer, prefix: str,
     loops: tuple[_Loop, ...] = (),
 ) -> _StatementAccess:
-    """Statement extraction for an op with a registered forward relation
+    """Registered access.
+
+    Statement extraction for an op with a registered forward relation
     (``access_relation.build_relation`` returned non-``None``, e.g. MatMul,
-    RMSNorm)."""
+    RMSNorm).
+    """
     prefixed, loop_params = _loop_domain(result.domain, loops)
     domain = prefixed.set_tuple_name(stmt_name)
     depth = len(loops)
@@ -500,9 +542,12 @@ def _rope_branch(
     call: Call, x, cos_cache, sin_cache, pos_ids, out_idx: int,
     stmt_name: str, namer, prefix: str, loops: tuple[_Loop, ...] = (),
 ) -> _StatementAccess:
-    """One RoPE branch (q or k): calls the registered relation with *x*
+    """One RoPE branch (q or k).
+
+    One RoPE branch (q or k): calls the registered relation with *x*
     standing in for both value-input slots, keeping only *x*'s own reads
-    and its ``out_idx`` output."""
+    and its ``out_idx`` output.
+    """
     x_ty, cos_ty, sin_ty, pos_ty = (
         _local_type(t.type) for t in (x, cos_cache, sin_cache, pos_ids)
     )
@@ -532,7 +577,9 @@ def _rope_branch(
 def _rope_access(
     call: Call, stmt_name: str, namer, prefix: str, loops: tuple[_Loop, ...] = (),
 ) -> list[_StatementAccess]:
-    """RoPE -> two statements, one per value input: GQA's Hq != Hkv means
+    """RoPE -> two statements, one per value input.
+
+    RoPE -> two statements, one per value input: GQA's Hq != Hkv means
     q_rope/k_rope cannot share one domain (see the task report's path A).
     Output buffers use the same ``_{out_idx}`` suffix ``_registered_access``
     uses for a same-domain multi-output op, so ``_buffer_namer``'s
@@ -569,7 +616,9 @@ def _extract_statement(
 
 
 def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
-    """A total execution order sufficient to seed ``compute_flow`` --
+    """A total execution order sufficient to seed ``compute_flow`` -- *not* the final schedule.
+
+    A total execution order sufficient to seed ``compute_flow`` --
     *not* the final schedule (``kernel_schedule.py`` builds that).
     Concatenated as ``[*loop_dims, stage, *own_dims, 0-pad]``: one leading
     coordinate per authored loop axis (0 for a statement that axis does not
@@ -611,7 +660,9 @@ def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
 
 
 def _parallel_dims(domain: "isl.union_set", deps: "isl.union_map") -> dict[str, tuple[bool, ...]]:
-    """Per statement, per own domain dimension, whether that dimension is
+    """Per statement, per own domain dimension, whether that dimension is free of dependence.
+
+    Per statement, per own domain dimension, whether that dimension is
     free of dependence -- the fact ``coincident`` names in isl.
 
     Only a statement's *self*-dependence can constrain its own loop
@@ -640,20 +691,26 @@ def _parallel_dims(domain: "isl.union_set", deps: "isl.union_map") -> dict[str, 
 
 
 def _resolve(expr, table: dict[int, object]):
-    """``expr`` if it is not (transitively) bound in ``table``, else the
+    """``expr`` if it is not (transitively) bound in ``table``, else the expression it resolves to.
+
+    ``expr`` if it is not (transitively) bound in ``table``, else the
     expression it resolves to -- a penetrated callee's own param Var
     bound to the caller's argument, or a penetrated wrapper Call aliased
-    to whatever its body ultimately resolves to."""
+    to whatever its body ultimately resolves to.
+    """
     return table.get(id(expr), expr)
 
 
 def _bind_dim_vars(params: tuple[Var, ...], args: tuple, callee_name: str) -> None:
-    """Mirrors ``evaluator.interpreter._bind_dim_vars`` at the type level:
+    """Mirrors ``evaluator.interpreter._bind_dim_vars`` at the type level.
+
+    Mirrors ``evaluator.interpreter._bind_dim_vars`` at the type level:
     each ``DimVar`` in a callee param's declared shape binds to the
     caller argument's ``ShapeDim`` at that axis. A conflicting bind for
     the same name is an actionable error naming the callee -- defense in
     depth, since ``hir.function.elaborate`` already requires a call's
-    argument shapes to equal the callee's own declared ones exactly."""
+    argument shapes to equal the callee's own declared ones exactly.
+    """
     binding: dict[str, object] = {}
     for p, a in zip(params, args):
         p_shape = getattr(p.type, "shape", None)
@@ -675,11 +732,14 @@ def _bind_dim_vars(params: tuple[Var, ...], args: tuple, callee_name: str) -> No
 
 @dataclass(frozen=True)
 class _Gathered:
-    """One compute-op ``Call``, args already resolved against every
+    """Represent Gathered.
+
+    One compute-op ``Call``, args already resolved against every
     enclosing penetrated call's argument substitution, ready for
     ``_extract_statement``. ``prefix`` is its owning scope's call-site
     tag (empty at the top level); ``stmt_name`` already carries it.
-    ``loops`` is the loop nest the call sits inside, outermost first."""
+    ``loops`` is the loop nest the call sits inside, outermost first.
+    """
 
     call: Call
     stmt_name: str
@@ -694,11 +754,14 @@ def _maybe_replace_args(e: Call, resolved_args: tuple) -> Call:
 
 
 def _loop_axes(root):
-    """Every ``GridRegionExpr`` reachable from ``root``, as ``(axis per grid,
+    """Every ``GridRegionExpr`` reachable from ``root``.
+
+    Every ``GridRegionExpr`` reachable from ``root``, as ``(axis per grid,
     (axis, initial value) per induction/carry Var, nesting depth per axis)``.
     A carry phi's initial value is what makes it variant in an *enclosing*
     loop as well as its own. Depth is the number of enclosing grids, taken at
-    first sight."""
+    first sight.
+    """
     axis_of: dict[int, _Loop] = {}
     seed: dict[int, tuple] = {}
     depth: dict[int, int] = {}
@@ -729,7 +792,9 @@ def _loop_axes(root):
 
 
 def _loop_scopes(root) -> dict[int, tuple[_Loop, ...]]:
-    """Per expression of one function body, the loop axes it varies with,
+    """Per expression of one function body, the loop axes it varies with, outermost first.
+
+    Per expression of one function body, the loop axes it varies with,
     outermost first -- its iteration domain's leading dimensions.
 
     Variance, not reachability: a value is inside a loop only when it
@@ -773,7 +838,9 @@ def _walk_calls(
     site_counter: dict[str, int], table: dict[int, object],
     loops: tuple[_Loop, ...] = (), carries: list | None = None,
 ) -> list["_Gathered"]:
-    """Postorder over one function body, penetrating every ``Call``
+    """Postorder over one function body, penetrating every ``Call`` whose target is a ``Function``.
+
+    Postorder over one function body, penetrating every ``Call``
     whose target is a ``Function``: bind its params to the caller's own
     (already-resolved) argument expressions in ``table``, recurse into
     its body under a callee-name-plus-call-site-index-prefixed scope,
@@ -895,10 +962,13 @@ def _walk_calls(
 
 
 def extract(hir: Function) -> TileGraph:
-    """Lift ``hir``'s body into a :class:`TileGraph`: one statement per
+    """Lift ``hir``'s body into a :class:`TileGraph`.
+
+    Lift ``hir``'s body into a :class:`TileGraph`: one statement per
     compute op at element granularity, penetrating every nested ``@func``
     call and every authored loop, with ``deps`` auto-inferred from
-    ``reads``/``writes`` (see module docstring for the full algorithm)."""
+    ``reads``/``writes`` (see module docstring for the full algorithm).
+    """
     if hir.body is None:
         raise ExtractError(
             f"extract: hir Function {hir.name!r} has no body "
@@ -966,7 +1036,9 @@ def extract(hir: Function) -> TileGraph:
 
 @dataclass(frozen=True)
 class AxisExtent:
-    """One buffer dimension inside one statement's whole access: how many of
+    """One buffer dimension inside one statement's whole access.
+
+    One buffer dimension inside one statement's whole access: how many of
     its elements are reached (``extent``), and which time dimensions reach
     them (``axes``, empty when none does -- the whole dimension is touched
     every iteration, as in ``RN[i] -> weight[j]``).
@@ -984,7 +1056,9 @@ class AxisExtent:
 
 @dataclass(frozen=True)
 class AccessFootprint:
-    """One (statement, buffer) access sized per buffer dimension, so the
+    """One access sized per buffer dimension, so the element count is the product over ``dims``.
+
+    One (statement, buffer) access sized per buffer dimension, so the
     element count is the product over ``dims``.
 
     The count is the bounding box of the access's range, which is exact for a
@@ -1000,8 +1074,11 @@ class AccessFootprint:
 
 
 def _as_map(value) -> "isl.map":
-    """The single ``isl.map`` in ``value``, which isl-python returns as a
-    ``union_map`` when a ``map`` is composed with one."""
+    """The single ``isl.map`` in ``value``.
+
+    The single ``isl.map`` in ``value``, which isl-python returns as a
+    ``union_map`` when a ``map`` is composed with one.
+    """
     if not hasattr(value, "foreach_map"):
         return value
     maps: list["isl.map"] = []
@@ -1020,9 +1097,11 @@ def _only_out_dim(m: "isl.map", pos: int) -> "isl.map":
 
 def _travels_with(m: "isl.map", pos: int) -> tuple[int, ...]:
     """The input dimensions output dimension ``pos`` of ``m`` moves with.
+
     The map's own domain bounds mention every input dimension, so they are
     dropped first -- only the constraints that tie ``pos`` to an input can
-    answer this."""
+    answer this.
+    """
     coupled = _only_out_dim(m.drop_constraints_not_involving_dims(isl.dim_type.OUT, pos, 1), pos)
     return tuple(
         i for i in range(m.dim(isl.dim_type.IN))
@@ -1042,8 +1121,10 @@ def _static_extent(s: "isl.set", pos: int, what: str) -> tuple[int, int]:
 
 def time_extents(tg: TileGraph, time_map: "isl.union_map") -> tuple[int, ...]:
     """Per-dimension extent of ``time_map``'s range over ``tg.domain``.
+
     Raises unless every dimension starts at 0, since a tile index counts
-    from the origin."""
+    from the origin.
+    """
     sets: list["isl.set"] = []
     time_map.intersect_domain(tg.domain).range().foreach_set(sets.append)
     if len(sets) != 1:
@@ -1065,11 +1146,14 @@ def time_extents(tg: TileGraph, time_map: "isl.union_map") -> tuple[int, ...]:
 
 
 def statement_time_dims(tg: TileGraph, time_map: "isl.union_map") -> dict[str, tuple[int, ...]]:
-    """Per statement, one entry per time dimension: the statement's own
+    """Per statement, one entry per time dimension.
+
+    Per statement, one entry per time dimension: the statement's own
     domain dimension that dimension travels with, or ``-1`` when it is
     constant there (``RN[d0] -> [d0, 63, 127]`` gives ``(0, -1, -1)``).
     Raises on a skewed time dimension, which no per-axis tile size can
-    describe."""
+    describe.
+    """
     maps: list["isl.map"] = []
     time_map.foreach_map(maps.append)
     out: dict[str, tuple[int, ...]] = {}
@@ -1102,10 +1186,13 @@ def _buffers_by_statement(um: "isl.union_map") -> dict[str, set[str]]:
 def carried_distances(
     tg: TileGraph, time_map: "isl.union_map", n_dims: int
 ) -> dict[str, tuple[int, ...]]:
-    """Per buffer, the largest dependence distance isl reports along each
+    """Per buffer, the largest dependence distance isl reports along each time dimension.
+
+    Per buffer, the largest dependence distance isl reports along each
     time dimension. A flow dependence ``a -> b`` is attributed to every
     buffer ``a`` writes and ``b`` reads, which for a RAW must-dependence is
-    exactly the memory it travels through."""
+    exactly the memory it travels through.
+    """
     written = _buffers_by_statement(tg.writes)
     read = _buffers_by_statement(tg.reads)
     names = {buf for bufs in (*written.values(), *read.values()) for buf in bufs}
@@ -1130,9 +1217,12 @@ def carried_distances(
 
 
 def access_footprints(tg: TileGraph, time_map: "isl.union_map") -> tuple[AccessFootprint, ...]:
-    """Every read and write of ``tg``, expressed against ``time_map``'s
+    """Access footprints.
+
+    Every read and write of ``tg``, expressed against ``time_map``'s
     range so a tile size per time dimension sizes it (see
-    :class:`AccessFootprint`)."""
+    :class:`AccessFootprint`).
+    """
     out: list[AccessFootprint] = []
     for um, is_read in ((tg.reads, True), (tg.writes, False)):
         maps: list["isl.map"] = []

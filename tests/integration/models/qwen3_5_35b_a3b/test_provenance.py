@@ -291,9 +291,12 @@ def test_the_uncovered_semantics_are_stated_with_reasons():
 
 @pytest.mark.parametrize("block_type", ("full_attention", "linear_attention"))
 def test_both_published_token_mixers_are_covered(block_type):
-    """Three layers in four are linear attention and one in four is full
+    """Three layers in four are linear attention and one in four is full attention.
+
+    Three layers in four are linear attention and one in four is full
     attention; a fixture that covered only one of them would cover a model the
-    published stack does not contain."""
+    published stack does not contain.
+    """
     assert block_type in reference.CONFIG.layer_types
     layer = LAYER_TYPE[block_type].cloned()
     assert {child.name for child in layer.modules} == {"mixer", "moe"}

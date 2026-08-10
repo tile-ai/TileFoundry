@@ -82,8 +82,11 @@ def _verify_variants(base: Function) -> None:
 
 
 def _verify_partition(base: Function) -> None:
-    """Check the variants' ranges partition the base DimVar envelope —
-    pairwise disjoint and jointly complete over the half-open ``[lo, hi)``."""
+    """Verify partition.
+
+    Check the variants' ranges partition the base DimVar envelope —
+    pairwise disjoint and jointly complete over the half-open ``[lo, hi)``.
+    """
     dim_vars: set[str] = set()
     ranges: list[tuple[int, int]] = []
     for v in base.variants:
@@ -126,7 +129,9 @@ def _verify_partition(base: Function) -> None:
 
 
 def _ingest_dim_vars(ty: object, bounds: dict[str, tuple[int, int]]) -> None:
-    """Recurse into ``TensorType`` / ``TupleType`` collecting ``DimVar``
+    """Recurse into ``TensorType`` / ``TupleType`` collecting ``DimVar`` bounds.
+
+    Recurse into ``TensorType`` / ``TupleType`` collecting ``DimVar``
     bounds. Raises ``VerifyError`` if two same-name ``DimVar``s disagree
     on ``(lo, hi)``.
 

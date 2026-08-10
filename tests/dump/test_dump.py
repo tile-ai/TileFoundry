@@ -14,7 +14,9 @@ from tilefoundry.dump import (
 
 
 def test_file_dumper_writes_files(tmp_path) -> None:
-    """A real file lands at the nested path a subdir scope composes, and a
+    """A real file lands at the nested path a subdir scope composes.
+
+    A real file lands at the nested path a subdir scope composes, and a
     flag the parent masked off leaves nothing behind.
 
     Asserted against the filesystem rather than a MemoryDumper: the gate is what
@@ -31,8 +33,11 @@ def test_file_dumper_writes_files(tmp_path) -> None:
 
 
 def test_dump_scope_isolation_across_threads_and_asyncio_tasks() -> None:
-    """Child thread / asyncio.Task with its own ``DumpScope`` writes only
-    into that scope's dumper; parent's ContextVar is untouched."""
+    """Child thread / asyncio.Task with its own ``DumpScope`` writes only into that scope's dumper.
+
+    Child thread / asyncio.Task with its own ``DumpScope`` writes only
+    into that scope's dumper; parent's ContextVar is untouched.
+    """
     parent_dumper = MemoryDumper()
     thread_results: list[dict[str, str | bytes]] = []
 

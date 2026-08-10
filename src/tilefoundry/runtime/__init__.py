@@ -1,4 +1,6 @@
-"""TileFoundry runtime layer — the ``RuntimeModule`` twin of an ir ``Module``
+"""TileFoundry runtime layer.
+
+TileFoundry runtime layer — the ``RuntimeModule`` twin of an ir ``Module``
 (authored with ``@runtime_module`` / ``@runtime_func``), the
 ``RuntimeFunction`` implementation base, the compiled-path ``CompiledModule``,
 checkpoint ``RuntimeResource``s, and ``check``. See

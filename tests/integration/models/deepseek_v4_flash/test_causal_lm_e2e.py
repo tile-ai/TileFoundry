@@ -1,4 +1,6 @@
-"""End-to-end test of the ``Module`` / ``RuntimeModule`` twin model on a real
+"""Define test causal lm e2e behavior.
+
+End-to-end test of the ``Module`` / ``RuntimeModule`` twin model on a real
 DeepSeek-V4-Flash subtree: prepare a fabricated checkpoint, load both sides,
 check parity.
 """
@@ -95,8 +97,11 @@ def _fabricate_one(shape, dtype, name, generator):
 
 
 def _raw_key(path, leaf, alias):
-    """Where the checkpoint keeps *leaf*, resolved the way the resource resolves it:
-    a path-qualified entry first, then a bare one, and an ``Absolute`` unprefixed."""
+    """Where the checkpoint keeps *leaf*, resolved the way the resource resolves it.
+
+    Where the checkpoint keeps *leaf*, resolved the way the resource resolves it:
+    a path-qualified entry first, then a bare one, and an ``Absolute`` unprefixed.
+    """
     prefix = "".join(f"{alias.get(seg, seg)}." for seg in path)
     hit = alias.get(f"{prefix}{leaf}", alias.get(leaf, leaf))
     if isinstance(hit, Absolute):
@@ -153,8 +158,11 @@ def config():
 
 @pytest.fixture(scope="module")
 def semantic(config):
-    """The whole tree at the small shape: the size this end-to-end path is
-    affordable at, named rather than derived."""
+    """The whole tree at the small shape.
+
+    The whole tree at the small shape: the size this end-to-end path is
+    affordable at, named rather than derived.
+    """
     return build_deepseek_v4_flash(config)
 
 
@@ -199,9 +207,12 @@ def _node_inputs(semantic, config):
 
 
 def test_prepare_and_parity(config, raw_tensors, prepared, twins):
-    """``prepare`` digests the checkpoint's naming and really converts, one leaf of
+    """Test prepare and parity.
+
+    ``prepare`` digests the checkpoint's naming and really converts, one leaf of
     the prepared store loads on its own, and the twin agrees with the evaluator node
-    by node."""
+    by node.
+    """
     semantic, runtime = twins
     store = SafetensorsResource(str(prepared), device="cuda")
 
@@ -404,8 +415,11 @@ def test_decode_times_only_the_sampled_steps(monkeypatch):
 
 
 def test_structure_mismatch_rejected(config, twins):
-    """``@runtime_module`` rejects a missing, extra, or mismatched kernel/child
-    at decoration time."""
+    """``@runtime_module`` rejects a missing, extra, or mismatched kernel/child at decoration time.
+
+    ``@runtime_module`` rejects a missing, extra, or mismatched kernel/child
+    at decoration time.
+    """
     semantic, runtime = twins
     # `runtime_module` decorates against the IR's function and child names, so it
     # takes the Module rather than this loading of it.

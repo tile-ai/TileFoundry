@@ -29,9 +29,12 @@ class Tanh(Op):
 
 @register_type_relation(Tanh)
 def _tanh_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward access relation for the elementwise Tanh: single input, no
+    """Forward access relation for the elementwise Tanh: single input, no broadcast, no reduction.
+
+    Forward access relation for the elementwise Tanh: single input, no
     broadcast, no reduction -- the iteration domain is the input shape and
-    both the input map and the output map are the identity."""
+    both the input map and the output map are the identity.
+    """
     (x,) = input_types
     domain, param_map = to_domain(x.shape)
     dims = [f"d{i}" for i in range(len(x.shape))]

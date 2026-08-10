@@ -1,4 +1,4 @@
-"""Rank-5 ShardLayout encoding for SM80 16x8x16 mma fragment distribution.
+r"""Rank-5 ShardLayout encoding for SM80 16x8x16 mma fragment distribution.
 
 The canonical A / B / C fragment ``ShardLayout``\\s + the ``(4, 8)`` thread
 mesh live in ``tilefoundry.ir.tir.cuda.nn.mma`` (the single source of truth, with
@@ -28,9 +28,12 @@ C_FRAG_SHARD = _ATOM.C
 
 
 def test_per_thread_element_counts_and_split_extents() -> None:
-    """Each lane holds 8 bf16 of A (4 b16x2 register pairs), 4 bf16 of B, and
+    """Each lane holds 8 bf16 of A (4 b16x2 register pairs), 4 bf16 of B, and 4 f32 of C/D.
+
+    Each lane holds 8 bf16 of A (4 b16x2 register pairs), 4 bf16 of B, and
     4 f32 of C/D. The Split-axis rule is identical across operands, so A stands
-    for all three: every Split axis' tensor extent equals its mesh extent."""
+    for all three: every Split axis' tensor extent equals its mesh extent.
+    """
     assert _per_thread_size(A_FRAG_SHARD) == 8
     assert _per_thread_size(B_FRAG_SHARD) == 4
     assert _per_thread_size(C_FRAG_SHARD) == 4
@@ -74,11 +77,13 @@ def _check_split_extents_match_mesh(sl: ShardLayout) -> None:
 def _assert_reshard_typeinfer_ok(
     src_shape: tuple[int, ...], src_dtype_name: str, dst_layout: ShardLayout
 ) -> None:
-    """Run the registered Reshard typeinfer rule against a synthesised
+    """Assert reshard typeinfer ok.
+
+    Run the registered Reshard typeinfer rule against a synthesised
     Call whose source is a plain global-storage tensor. Assert the
     resulting TensorType pins the requested rank-5 ShardLayout while
-    preserving the logical shape."""
-
+    preserving the logical shape.
+    """
     dtype = getattr(DType, src_dtype_name)
     src_ty = TensorType(
         shape=src_shape, dtype=dtype, layout=None, storage=StorageKind.GMEM

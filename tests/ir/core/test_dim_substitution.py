@@ -31,8 +31,11 @@ def test_a_bound_dimension_becomes_the_extent_it_was_given() -> None:
 
 
 def test_an_unbound_dimension_stays_a_range() -> None:
-    """A context length is chosen while the sequence length stays open, so
-    binding one dimension must not demand the others."""
+    """A context length is chosen while the sequence length stays open.
+
+    A context length is chosen while the sequence length stays open, so
+    binding one dimension must not demand the others.
+    """
     bound = substitute_dims(_tensor(1, SEQ, CTX, 128), {"seq_len": 1})
 
     assert bound.shape == (1, 1, CTX, 128)
@@ -41,8 +44,11 @@ def test_an_unbound_dimension_stays_a_range() -> None:
 
 
 def test_arithmetic_over_a_bound_dimension_folds_to_its_value() -> None:
-    """A shape written as a division has to become a number, or the analysis
-    inherits an expression it cannot count."""
+    """Test arithmetic over a bound dimension folds to its value.
+
+    A shape written as a division has to become a number, or the analysis
+    inherits an expression it cannot count.
+    """
     folded = substitute_dims(_tensor(1, CTX // 8), {"ctx_len": 4096})
 
     assert folded.shape == (1, 512)
@@ -62,8 +68,11 @@ def test_a_tuple_substitutes_every_leaf() -> None:
 
 
 def test_an_extent_outside_the_declared_range_is_refused() -> None:
-    """The declaration states what the model was written to handle. Accepting
-    a length outside it would report an answer for a program nobody wrote."""
+    """The declaration states what the model was written to handle.
+
+    The declaration states what the model was written to handle. Accepting
+    a length outside it would report an answer for a program nobody wrote.
+    """
     with pytest.raises(DimSubstitutionError, match=r"\[1, 262145\) and cannot take"):
         substitute_dims(_tensor(CTX), {"ctx_len": 262145})
 
@@ -74,9 +83,12 @@ def test_an_extent_outside_the_declared_range_is_refused() -> None:
 
 
 def test_the_bounds_are_half_open_like_the_specialisations_that_state_them() -> None:
-    """A specialisation states its range half-open. If substitution disagreed
+    """A specialisation states its range half-open.
+
+    A specialisation states its range half-open. If substitution disagreed
     about the endpoint, a length would be admitted by one and refused by the
-    other."""
+    other.
+    """
     assert substitute_dims(_tensor(CTX), {"ctx_len": CTX.lo}).shape == (CTX.lo,)
     with pytest.raises(DimSubstitutionError):
         substitute_dims(_tensor(CTX), {"ctx_len": CTX.hi})
@@ -91,8 +103,11 @@ def test_a_non_integer_extent_is_refused() -> None:
 
 
 def test_a_type_with_nothing_to_bind_is_returned_unchanged() -> None:
-    """Identity, not a copy: a caller comparing before and after should see
-    that nothing happened."""
+    """Identity, not a copy: a caller comparing before and after should see that nothing happened.
+
+    Identity, not a copy: a caller comparing before and after should see
+    that nothing happened.
+    """
     static = _tensor(1, 64, 128)
 
     assert substitute_dims(static, {"ctx_len": 4096}) is static

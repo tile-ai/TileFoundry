@@ -1,4 +1,6 @@
-"""Trailing-underscore effect-form selector ([parser §1.3](docs/spec/parser.md#13-op-call)/[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution)) on the real
+"""Define test effect form selector behavior.
+
+Trailing-underscore effect-form selector ([parser §1.3](docs/spec/parser.md#13-op-call)/[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution)) on the real
 ``@prim_func`` path.
 
 ``dispatch.resolve_callable`` implements the ``foo_`` convention, but the actual

@@ -79,7 +79,9 @@ def _output_count_from_fn(fn) -> int:
 def _derive_launch_config(
     body: Sequential,
 ) -> tuple[tuple[int | None, int, int], tuple[int, int, int]]:
-    """Derive ``(grid, block)`` dims from the mesh topologies the kernel
+    """Derive grid and block dimensions from the body's mesh topologies.
+
+    Derive ``(grid, block)`` dims from the mesh topologies the kernel
     body opens via ``MeshScope``.
 
     Walk every ``MeshScope`` reached from *body* and accumulate:
@@ -100,8 +102,11 @@ def _derive_launch_config(
     cta_dynamic = False
 
     def _topo_dims(mesh) -> tuple[int, int]:
-        """Return ``(grid_size_contribution, block_size_contribution)``
-        for *mesh*'s full topology list."""
+        """Return grid and block contributions for *mesh*.
+
+        Return ``(grid_size_contribution, block_size_contribution)``
+        for *mesh*'s full topology list.
+        """
         nonlocal cta_dynamic
         g = 1
         b = 1

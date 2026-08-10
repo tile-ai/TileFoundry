@@ -1,4 +1,6 @@
-"""Emitter for `tir.memory.Copy` — dispatches ``tilefoundry::copy`` (when either
+"""Emitter for `tir.memory.Copy` — dispatches ``tilefoundry::copy`` or ``cute::copy``.
+
+Emitter for `tir.memory.Copy` — dispatches ``tilefoundry::copy`` (when either
 operand carries ``ShardLayout``) or ``cute::copy`` (plain↔plain).
 """
 

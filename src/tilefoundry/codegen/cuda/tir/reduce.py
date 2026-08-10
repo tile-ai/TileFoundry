@@ -13,10 +13,13 @@ _REDUCE_TAG = {
 
 
 def _axes_pack_typename(axes: tuple) -> str:
-    """Render the HIR ``axes`` tuple as a ``cute::tuple<cute::Int<i>...>``
+    """Axes pack typename.
+
+    Render the HIR ``axes`` tuple as a ``cute::tuple<cute::Int<i>...>``
     template type for the runtime entry point. Using cute's native
     tuple keeps the reduce dispatch idiomatic with the rest of the
-    codegen."""
+    codegen.
+    """
     args = ", ".join(f"cute::Int<{int(a)}>" for a in axes)
     return f"cute::tuple<{args}>"
 

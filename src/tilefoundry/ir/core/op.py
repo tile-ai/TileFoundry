@@ -1,4 +1,6 @@
-"""Op base class — every callable IR Op inherits from ``Op`` and declares
+"""Define op behavior.
+
+Op base class — every callable IR Op inherits from ``Op`` and declares
 its parameters as ``ParamDef`` class-body descriptors.
 
 Post-M1c the legacy ``Param[T, "kind"]`` annotation form, the
@@ -23,7 +25,9 @@ from tilefoundry.ir.types.storage import resolve_storage
 
 
 def _signature(cls: type) -> tuple[ParamDef, ...]:
-    """The ``ParamDef`` tuple for ``cls``: the attached ``OpSchema``'s
+    """Signature.
+
+    The ``ParamDef`` tuple for ``cls``: the attached ``OpSchema``'s
     ``signature`` when ``@register_op`` has run, else a fresh reflection
     walk (e.g. an unregistered test fixture subclassing ``Op`` directly).
     """

@@ -56,9 +56,12 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 @pytest.mark.parametrize("family", FAMILIES)
 def test_the_result_names_the_function_that_carries_the_records(family: str) -> None:
-    """The records are written onto the program that was measured, and that is
+    """The records are written onto the program that was measured, and that is the derived one.
+
+    The records are written onto the program that was measured, and that is
     the derived one. Handing back the symbolic input would send a reader looking
-    for records on a function that has none."""
+    for records on a function that has none.
+    """
     module = _aimed()
     authored = module.entry_function()
 
@@ -97,7 +100,9 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
 
 
 def test_a_report_at_a_size_carries_the_per_call_records_of_every_family() -> None:
-    """The same for the per-Call rows, which are keyed by position rather than by
+    """The same for the per-Call rows, which are keyed by position rather than by identity.
+
+    The same for the per-Call rows, which are keyed by position rather than by
     identity: two rebuilds share no Call object, so a report that matched them by
     identity would find none of the second family's.
 
@@ -188,9 +193,12 @@ def test_a_dimension_the_function_does_not_have_is_refused() -> None:
 
 
 def test_a_dimension_left_unbound_is_refused() -> None:
-    """Stating some other dimension is useful while the choices are being made
+    """Test a dimension left unbound is refused.
+
+    Stating some other dimension is useful while the choices are being made
     and useless to an analysis, which would meet the unbound one as an extent
-    that is not a number."""
+    that is not a number.
+    """
     module = _aimed()
 
     with pytest.raises(AnalysisError, match="was not given a size"):
@@ -212,8 +220,11 @@ def test_an_empty_or_malformed_size_is_refused_rather_than_ignored() -> None:
 
 
 def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
-    """Ownership is settled before a size is looked at, so a foreign function
-    is refused for being foreign rather than for its dimensions."""
+    """Ownership is settled before a size is looked at.
+
+    Ownership is settled before a size is looked at, so a foreign function
+    is refused for being foreign rather than for its dimensions.
+    """
     module = _aimed()
     foreign = QWEN3_1_7B.build().lookup("mlp")
 
@@ -222,8 +233,11 @@ def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
 
 
 def test_scheduling_at_a_stated_size_plans_and_verifies() -> None:
-    """The plan is a plan for one size, and it is checked against the program of
-    that size -- which is the one the result names."""
+    """The plan is a plan for one size, and it is checked against the program of that size.
+
+    The plan is a plan for one size, and it is checked against the program of
+    that size -- which is the one the result names.
+    """
     module = _aimed()
     authored = module.entry_function()
 
@@ -252,9 +266,12 @@ def test_scheduling_refuses_a_size_no_variant_covers() -> None:
 
 
 def test_the_entry_at_a_chosen_size_is_still_the_entry() -> None:
-    """The device-wide solver admits only the entry, and it decides that by
+    """The device-wide solver admits only the entry, and it decides that by name.
+
+    The device-wide solver admits only the entry, and it decides that by
     name: a function specialised from the entry is a different object and the
-    same program."""
+    same program.
+    """
     module = _aimed()
     variant = variant_for(module.entry_function(), DIMS)
 

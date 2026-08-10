@@ -113,7 +113,9 @@ def test_only_an_accumulated_dimension_is_serial() -> None:
 
 
 def test_an_expanded_axis_reads_through_a_floor_division() -> None:
-    """GQA's kv-head expansion, which aliases: `repeats` consecutive output
+    """GQA's kv-head expansion, which aliases.
+
+    GQA's kv-head expansion, which aliases: `repeats` consecutive output
     positions read one input element.
 
     The domain is the *output* space, so the read map has to divide axis 2 by

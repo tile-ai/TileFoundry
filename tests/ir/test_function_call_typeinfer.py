@@ -1,4 +1,6 @@
-"""hir Function call typeinfer: the callee body is re-derived under the actual
+"""hir Function call typeinfer: the callee body is re-derived under the actual argument types.
+
+hir Function call typeinfer: the callee body is re-derived under the actual
 argument types.
 
 A parameter declared without sharding (``layout is None``) is a layout-
@@ -33,8 +35,11 @@ _SPLIT0 = make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),))
 
 
 def _add_callee(param_type):
-    """A callee ``f(x) = x + x``; the body's output layout is whatever the
-    Binary engine derives from the actual ``x`` type."""
+    """A callee ``f(x) = x + x``.
+
+    A callee ``f(x) = x + x``; the body's output layout is whatever the
+    Binary engine derives from the actual ``x`` type.
+    """
     x = Var(type=param_type, name="x")
     body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(x, x))
     return Function.build(
@@ -53,10 +58,13 @@ def test_plain_formal_specializes_per_call_site():
 
 
 def test_carrying_loop_propagates_split():
-    """A callee whose body is a single-carry loop-phi ``GridRegionExpr``
+    """Test carrying loop propagates split.
+
+    A callee whose body is a single-carry loop-phi ``GridRegionExpr``
     (``acc = x + x`` before the loop, ``acc = acc + x`` inside it): the loop-phi's
     own type must re-derive from the elaborated init value ([hir §1.2](docs/spec/hir.md#12-gridregionexpr)), not stay
-    at the callee's parse-time unsharded type."""
+    at the callee's parse-time unsharded type.
+    """
     param_type = make_tensor_type((8,), _F)
     x = Var(type=param_type, name="x")
     init = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(x, x))

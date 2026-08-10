@@ -72,7 +72,9 @@ def _expr_children(expr: Expr) -> tuple[Expr, ...]:
 
 def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
     """Rebuild `expr` with replaced children (same order as _expr_children).
-    Binding-site fields are carried over untouched."""
+
+    Binding-site fields are carried over untouched.
+    """
     match expr:
         case Var() | Constant() | SymbolRef():
             return expr
@@ -99,7 +101,9 @@ def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
 
 
 def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
-    """Direct child Stmt nodes. (Not Expr fields — StmtVisitor does not descend
+    """Direct child Stmt nodes.
+
+    Direct child Stmt nodes. (Not Expr fields — StmtVisitor does not descend
     into embedded Expr by default; see StmtExprMutator for combined traversal.)
 
     P2: ``body`` fields are ``Sequential`` (a Stmt), so control-flow /
@@ -165,10 +169,13 @@ def _rebuild_stmt_children(stmt: Stmt, new_children: tuple[Stmt, ...]) -> Stmt:
 
 
 def _stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
-    """Names of Expr-typed fields on `stmt`. StmtExprMutator uses this to
+    """Names of Expr-typed fields on `stmt`.
+
+    Names of Expr-typed fields on `stmt`. StmtExprMutator uses this to
     rewrite the Expr subtrees embedded inside a Stmt. Var-binding fields
     (For.induction_var, LetStmt.var, MeshScope.binding) are intentionally
-    excluded — a rewrite must not turn a binding site into a non-Var."""
+    excluded — a rewrite must not turn a binding site into a non-Var.
+    """
     match stmt:
         case LetStmt():
             return ("value",)
@@ -202,8 +209,11 @@ class ExprVisitor[T]:
         return self.generic_visit(expr)
 
     def generic_visit(self, expr: Expr) -> T:
-        """Default: recurse into all children; return None. Subclasses may
-        override to aggregate."""
+        """Default: recurse into all children; return None.
+
+        Default: recurse into all children; return None. Subclasses may
+        override to aggregate.
+        """
         for child in _expr_children(expr):
             self.visit(child)
         return None  # type: ignore[return-value]
@@ -223,9 +233,12 @@ def _dispatch(obj: Any, node: Any, generic: Callable[[Any], Any]) -> Any:
 
 
 def _generic_expr_rewrite(expr: Expr, visit_fn: Callable[[Expr], Expr]) -> Expr:
-    """Rebuild `expr` from `visit_fn`-rewritten children, preserving
+    """Rebuild `expr` from `visit_fn`-rewritten children, preserving identity when no child changed.
+
+    Rebuild `expr` from `visit_fn`-rewritten children, preserving
     identity when no child changed. Shared by `ExprMutator.generic_visit`
-    and `StmtExprMutator._expr_generic_visit`."""
+    and `StmtExprMutator._expr_generic_visit`.
+    """
     children = _expr_children(expr)
     new_children = tuple(visit_fn(c) for c in children)
     if all(nc is oc for nc, oc in zip(new_children, children)):
@@ -261,8 +274,11 @@ from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: E402
 
 
 class StmtVisitor[T]:
-    """Read-only Stmt traversal. Does NOT descend into embedded Expr fields
-    (use StmtExprMutator if you need Expr-level rewriting too)."""
+    """Read-only Stmt traversal.
+
+    Read-only Stmt traversal. Does NOT descend into embedded Expr fields
+    (use StmtExprMutator if you need Expr-level rewriting too).
+    """
 
     def visit(self, stmt: Stmt) -> T:
         method = getattr(self, f"visit_{type(stmt).__name__}", None)
@@ -277,8 +293,11 @@ class StmtVisitor[T]:
 
 
 class StmtMutator:
-    """Stmt → Stmt rewrite with identity preservation. Does not rewrite
-    embedded Expr fields by default."""
+    """Stmt → Stmt rewrite with identity preservation.
+
+    Stmt → Stmt rewrite with identity preservation. Does not rewrite
+    embedded Expr fields by default.
+    """
 
     def visit(self, stmt: Stmt) -> Stmt:
         method = getattr(self, f"visit_{type(stmt).__name__}", None)
@@ -295,7 +314,9 @@ class StmtMutator:
 
 
 class StmtExprMutator(StmtMutator):
-    """Rewrites both the Stmt tree structure AND the Expr subtrees embedded
+    """Rewrites both the Stmt tree structure AND the Expr subtrees embedded inside Stmts.
+
+    Rewrites both the Stmt tree structure AND the Expr subtrees embedded
     inside Stmts.
 
     Stmt path: `visit(stmt)` → `visit_<StmtClass>` override or `generic_visit`.
@@ -324,8 +345,11 @@ class StmtExprMutator(StmtMutator):
 
 
 def _rewrite_stmt_exprs(stmt: Stmt, fn) -> Stmt:
-    """Walk the Expr fields of `stmt`, rewrite each via `fn`, return a new
-    Stmt if any changed, else the original (identity preservation)."""
+    """Rewrite stmt exprs.
+
+    Walk the Expr fields of `stmt`, rewrite each via `fn`, return a new
+    Stmt if any changed, else the original (identity preservation).
+    """
     field_names = _stmt_expr_fields(stmt)
     if not field_names:
         return stmt
@@ -363,8 +387,11 @@ def walk_prim_function(visitor: StmtVisitor, pf: PrimFunction) -> None:
 
 
 def rewrite_prim_function(mutator: StmtMutator, pf: PrimFunction) -> PrimFunction:
-    """Rewrite ``pf.body`` through ``mutator``. Returns the original ``pf``
-    when the rewritten Sequential is identity-equal to the original."""
+    """Rewrite ``pf.body`` through ``mutator``.
+
+    Rewrite ``pf.body`` through ``mutator``. Returns the original ``pf``
+    when the rewritten Sequential is identity-equal to the original.
+    """
     new_body = mutator.visit(pf.body)
     if new_body is pf.body:
         return pf

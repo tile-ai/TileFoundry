@@ -69,9 +69,12 @@ class TopK(Op):
 
 
 def _static_dim_value(d) -> "int | None":
-    """The concrete ``int`` value of a ``ShapeDim`` *d* if statically known (a
+    """The concrete ``int`` value of a ``ShapeDim`` *d* if statically known, else ``None``.
+
+    The concrete ``int`` value of a ``ShapeDim`` *d* if statically known (a
     raw ``int`` or an int-valued ``Constant``), else ``None`` (a ``DimVar`` or
-    a ``Call`` not fully folded — genuinely symbolic)."""
+    a ``Call`` not fully folded — genuinely symbolic).
+    """
     if isinstance(d, bool):
         return None
     if isinstance(d, int):
@@ -82,7 +85,9 @@ def _static_dim_value(d) -> "int | None":
 
 
 def _dim_upper_bound(d) -> "int | None":
-    """Best-effort static upper bound (inclusive) for a ``ShapeDim``; ``None``
+    """Best-effort static upper bound for a ``ShapeDim``; ``None`` when not statically derivable.
+
+    Best-effort static upper bound (inclusive) for a ``ShapeDim``; ``None``
     when not statically derivable (fails open — the caller only flags an
     oversized ``k`` when this resolves AND the axis length is static).
 
@@ -126,7 +131,9 @@ def _dim_upper_bound(d) -> "int | None":
 
 
 def _canonical_shard(sl: "ShardLayout", out_shape) -> "ShardLayout":
-    """Canonical output ``ShardLayout`` for a replicated input (nothing for the
+    """Canonical shard.
+
+    Canonical output ``ShardLayout`` for a replicated input (nothing for the
     generic propagator to carry): C-order strides over ``out_shape``, all-ones
     when the shape is non-static; ``attrs`` and ``mesh`` pass through.
     """
@@ -217,7 +224,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 
 @register_type_relation(TopK)
 def _topk_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for shard propagation. Every non-selected axis projects
+    """Forward relation for shard propagation.
+
+    Forward relation for shard propagation. Every non-selected axis projects
     to itself, so its sharding carries through unchanged. The selected axis is a
     fresh, data-dependent selection (not a view of the input axis), so it does
     not project — the output extent is synthesized from the shrunk output shape.
@@ -262,7 +271,9 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
 
 
 def _local_dim_bindings(x: "TensorValue") -> dict:
-    """``DimVar`` name → concrete size bindings recoverable from ``x`` alone:
+    """``DimVar`` name → concrete size bindings recoverable from ``x`` alone.
+
+    ``DimVar`` name → concrete size bindings recoverable from ``x`` alone:
     ``x.type.shape`` is the (possibly symbolic) type-level shape and
     ``x.data.shape`` its concrete runtime counterpart, so zipping the two
     binds every axis where the type carries a bare ``DimVar``. Mirrors

@@ -72,7 +72,8 @@ def build_demo_canonical() -> Module:
     """Return the canonical Module of the topology-aware fixture.
 
     The fixture declares its execution context on the function, so the
-    decorated name is the single-function Module that owns it."""
+    decorated name is the single-function Module that owns it.
+    """
     ir = demo_canonical
     if not isinstance(ir, Module):
         raise TypeError(f"expected Module, got {type(ir)}")

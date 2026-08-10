@@ -76,9 +76,12 @@ def _eval_call(op: Op, *args: Expr) -> Evaluate:
 
 
 def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -> None:
-    """``visit_<ClassName>`` dispatch, in child order; a plain ExprMutator is the
+    """``visit_<ClassName>`` dispatch, in child order.
+
+    ``visit_<ClassName>`` dispatch, in child order; a plain ExprMutator is the
     identity; and replacing one Var rebuilds its containing Call while sharing the
-    siblings that were not touched."""
+    siblings that were not touched.
+    """
     visits = []
 
     class V(ExprVisitor[None]):
@@ -114,9 +117,11 @@ def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -
 
 
 def test_expr_mutator_skips_grid_region_binding_vars() -> None:
-    """Binding-site Vars (``induction_var`` / ``carried_args``) are not
-    exposed to a generic ExprMutator (would otherwise be type-illegal)."""
+    """Binding-site Vars are not exposed to a generic ExprMutator.
 
+    Binding-site Vars (``induction_var`` / ``carried_args``) are not
+    exposed to a generic ExprMutator (would otherwise be type-illegal).
+    """
     ind = _var("i", _i32())
     carried = (_var("a"), _var("b"))
     init = (_var("a0"), _var("b0"))
@@ -166,10 +171,13 @@ def _simple_for_body() -> For:
 
 
 def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> None:
-    """``StmtVisitor`` walks child Stmts only — embedded Expr fields are NOT
+    """``StmtVisitor`` walks child Stmts only.
+
+    ``StmtVisitor`` walks child Stmts only — embedded Expr fields are NOT
     traversed (use ``StmtExprMutator`` for that) — and replacing one
     ``Evaluate(Copy)`` rebuilds the For body while sharing the untouched
-    ``Evaluate(Fill)`` sibling."""
+    ``Evaluate(Fill)`` sibling.
+    """
     seen: list[str] = []
     visited_vars: list[str] = []
 
@@ -239,10 +247,13 @@ def test_stmt_mutator_covers_all_subclasses_with_identity_invariant() -> None:
 
 
 def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> None:
-    """Rewrites scalar Expr fields (``For.stop``) and tuple Expr fields
+    """Test stmt expr mutator rewrites expr fields tuples and symbolref leaf.
+
+    Rewrites scalar Expr fields (``For.stop``) and tuple Expr fields
     (``Evaluate.args``) with partial-share semantics, and visits an ``Evaluate``
     whose callable is a ``SymbolRef`` (an Expr leaf) without error — guarding
-    against a missing SymbolRef branch in the Expr child/rebuild tables."""
+    against a missing SymbolRef branch in the Expr child/rebuild tables.
+    """
     s = _simple_for_body()
 
     class RewriteConst(StmtExprMutator):
@@ -275,8 +286,11 @@ def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> N
 
 
 def test_prim_function_walk_and_identity_preserving_rewrite() -> None:
-    """``walk_prim_function`` is read-only; ``rewrite_prim_function`` with a
-    no-op mutator returns the original PrimFunction."""
+    """``walk_prim_function`` is read-only.
+
+    ``walk_prim_function`` is read-only; ``rewrite_prim_function`` with a
+    no-op mutator returns the original PrimFunction.
+    """
     seen: list[str] = []
     s = _simple_for_body()
     pf = PrimFunction(name="foo", params=(), body=Sequential(body=(s,)))
