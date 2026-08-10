@@ -1,4 +1,5 @@
 """HIR SoftMax's Partial-input rejection."""
+
 from __future__ import annotations
 
 from tests.ops.typeinfer_utils import (
@@ -13,7 +14,7 @@ from tilefoundry.ir.types.shard.shard_layout import Partial
 
 
 def test_softmax_typeinfer_partial_input_errors():
-    # softmax normalizes across an axis (non-monotonic); no reduction commutes.
+
     m = make_mesh((4,))
     run_typeinfer_case(
         TypeInferCase(

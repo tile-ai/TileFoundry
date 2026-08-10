@@ -1,4 +1,5 @@
 """Sigmoid's Partial(R) commutation."""
+
 from __future__ import annotations
 
 from tests.ops.typeinfer_utils import (

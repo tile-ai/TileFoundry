@@ -29,7 +29,7 @@ def test_each_page_renders_from_the_installation(tf, page) -> None:
 def test_optimize_tells_the_reader_to_copy_the_shipped_model_directory(tf) -> None:
     done = tf("tutorial", "optimize")
     assert done.returncode == 0, done.stderr
-    assert 'source=$(tilefoundry models qwen3_5_35b_a3b --source | sed -n \'1p\')' in done.stdout
+    assert "source=$(tilefoundry models qwen3_5_35b_a3b --source | sed -n '1p')" in done.stdout
     assert 'cp -r "$source" mine' in done.stdout
     assert "tilefoundry check mine/model.py:MyFused.fused" in done.stdout
 

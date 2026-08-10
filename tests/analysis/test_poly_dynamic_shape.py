@@ -1,16 +1,11 @@
-"""``extract`` dynamic-shape (``DimVar``) coverage.
+"""Pin ``extract`` behavior for dynamic ``DimVar`` shapes.
 
-``extract`` dynamic-shape (``DimVar``) coverage: a parametrised domain
-used to make ``extract`` raise outright; now a ``DimVar`` axis flows straight
-through as an isl parameter (``to_domain`` already produces one), and
-resolves back to its ``ShapeDim`` in ``TileGraph.params``.
-
-Two things have to hold for a decode kernel, and they are the two below: the
-parameter stays *bounded* (a domain nothing bounds cannot be scheduled), and the
-loop that comes out of it names the parameter instead of a trip count somebody
-guessed. The static counterpart of this graph is pinned in
-``test_analysis_invariants.py``.
+A ``DimVar`` flows through as a bounded isl parameter and resolves to its
+``ShapeDim`` in ``TileGraph.params``. Emitted loops name that parameter rather
+than inventing a fixed trip count. ``test_analysis_invariants.py`` pins the
+static counterpart.
 """
+
 from __future__ import annotations
 
 import re
@@ -24,9 +19,6 @@ from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul resolved dynamical
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import emit_scaffold
 
-# Dynamic M axis: x:[seq,4] @ w:[4,2], seq a DimVar (real variable
-# sequence length). N/K stay small so the expected extents below remain
-# hand-checkable literals.
 SEQ = DimVar("seq", 1, 128)
 
 
@@ -65,11 +57,9 @@ def test_dynamic_matmul_extract_params_and_domain():
     (mm_set,) = sets
     assert mm_set.get_tuple_name() == "MM"
 
-    # M axis: 0 <= i < seq directly, so i's max possible value (maximizing
-    # over every valid seq up to its own range's 127) is 126.
     assert int(mm_set.dim_min_val(0).num_si()) == 0
     assert int(mm_set.dim_max_val(0).num_si()) == 126
-    # N=2, K=4: static axes, unaffected by M.
+
     assert int(mm_set.dim_max_val(1).num_si()) == 1
     assert int(mm_set.dim_max_val(2).num_si()) == 3
 

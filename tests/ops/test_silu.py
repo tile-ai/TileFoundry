@@ -1,4 +1,5 @@
 """Silu evaluator value oracle + Partial(R) commutation typeinfer."""
+
 from __future__ import annotations
 
 import pytest
@@ -21,7 +22,6 @@ _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 
 PARTIAL_CASES = [
-    # Both reductions are rejected; Sigmoid / Softplus pass Partial(max).
     TypeInferCase("partial_max_errors", _OP, (_PMAX,), ExpectedError(match="Silu")),
     TypeInferCase("partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="Silu")),
 ]
@@ -41,8 +41,12 @@ def test_silu_evaluate():
     x_bf16 = (torch.randn(10_000) * 0.003).to(torch.bfloat16)
     run_eval_case(
         EvalCase(
-            "silu_bf16", Silu(), (x_bf16,),
-            torch.nn.functional.silu(x_bf16), atol=0, rtol=0,
+            "silu_bf16",
+            Silu(),
+            (x_bf16,),
+            torch.nn.functional.silu(x_bf16),
+            atol=0,
+            rtol=0,
         )
     )
 

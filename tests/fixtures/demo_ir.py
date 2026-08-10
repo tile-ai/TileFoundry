@@ -23,8 +23,6 @@ from tilefoundry.ir.types.shard import (
     Topology,
 )
 
-# ── Mesh / Layout definitions ────────────────────────────────────────
-
 cta_topo = Topology("cta", 128)
 thread_topo = Topology("thread", 8 * 32)
 
@@ -46,9 +44,6 @@ reg_layout = ShardLayout(
 )
 
 
-# ── @func DSL definition ─────────────────────────────────────────────
-
-
 @func
 def demo(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:
     b = reshard(a, layout=shared_layout, storage="smem")
@@ -56,9 +51,6 @@ def demo(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:
     d = relu(c)
     e = reshard(d, layout=reg_layout, storage="gmem")
     return e
-
-
-# ── Legacy API for test compatibility ────────────────────────────────
 
 
 def build_demo():

@@ -20,7 +20,7 @@ from pathlib import Path
 
 MAX_PROSE_LINES = 8
 MAX_COLUMNS = 100
-EXEMPT_PREFIXES = ("tests/", "scripts/", "examples/")
+EXEMPT_PREFIXES = ("tests/models/", "examples/")
 DIRECTIVE_PREFIXES = ("ruff:", "noqa", "type:", "pragma:", "mypy:", "fmt:", "isort:")
 PYTHON_SUFFIXES = frozenset({".py"})
 C_SUFFIXES = frozenset({".h", ".hpp", ".cuh", ".cu", ".cpp", ".cc"})

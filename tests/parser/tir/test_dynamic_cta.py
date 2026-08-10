@@ -6,6 +6,7 @@ runtime extent — the same ABI the HIR→TIR lowering appends. Host entries rea
 shapes from their tensor args, so they must stay unpolluted; static device
 kernels get no hidden scalars.
 """
+
 from __future__ import annotations
 
 from tilefoundry import prim_func

@@ -4,6 +4,7 @@ Two corpus functions apply ``softplus``, and the one that distinguishes it -- th
 KDA forget gate -- sits behind a blocked Reference, so that comparison is not
 running. The value oracle stays here until it is.
 """
+
 from __future__ import annotations
 
 import torch
@@ -27,13 +28,13 @@ _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 def test_softplus_rejects_partial_sum_input():
     """Softplus is monotone increasing: it commutes with max/min, not sum."""
     run_typeinfer_case(
-        TypeInferCase(
-            "partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="Softplus")
-        )
+        TypeInferCase("partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="Softplus"))
     )
 
 
 def test_softplus_evaluate():
     torch.manual_seed(0)
     x = torch.rand(4) + 0.5
-    run_eval_case(EvalCase("softplus", Softplus(), (x,), torch.nn.functional.softplus(x), atol=1e-6))
+    run_eval_case(
+        EvalCase("softplus", Softplus(), (x,), torch.nn.functional.softplus(x), atol=1e-6)
+    )

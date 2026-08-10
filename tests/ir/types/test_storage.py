@@ -4,6 +4,7 @@ Every canonical short name is resolved on the model path (each parsed tensor
 annotation goes through it); a removed alias has no such witness, and accepting
 one again would silently place a tensor in the wrong memory.
 """
+
 from __future__ import annotations
 
 import pytest

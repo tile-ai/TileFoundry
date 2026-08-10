@@ -21,13 +21,10 @@ from tilefoundry.cli.source import load_namespace, select_ir
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.runtime import DictResource
 
-#: Two outputs of different kinds from one call: routing weights and i64 indices.
-#: A router that picked a different eight would be a different model even if every
-#: number matched, so the indices are compared exactly. A child Module of the MoE
-#: block, so this is also the real nested selector path.
 ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5MoE.router.routing"
 
 DISPATCHING = f"{gqa_online.__file__}:GqaOnline.gqa_online_attend"
+
 
 @pytest.fixture(scope="module")
 def routing(tmp_path_factory) -> dict[str, Path]:
@@ -60,7 +57,7 @@ def routing(tmp_path_factory) -> dict[str, Path]:
     changed = indices.clone()
     changed[0, 0] = (changed[0, 0] + 1) % w_router.shape[-1]
     numpy.save(where / "one_off.npy", changed.cpu().numpy())
-    # Exactly the leaf's own tensor, under the path the selector walks to it.
+
     save_file({"router.w_router": w_router.cpu()}, str(where / "model.safetensors"))
     return {
         "dir": where,
@@ -74,22 +71,43 @@ def routing(tmp_path_factory) -> dict[str, Path]:
 
 def _routing_argv(routing: dict[str, Path], indices: str, *comparison: str) -> list[str]:
     return [
-        "check", ROUTING,
-        "--input", str(routing["tokens"]),
-        "--ckpt", str(routing["dir"]),
-        "--expected", str(routing["weights"]),
-        "--expected", str(routing[indices]),
+        "check",
+        ROUTING,
+        "--input",
+        str(routing["tokens"]),
+        "--ckpt",
+        str(routing["dir"]),
+        "--expected",
+        str(routing["weights"]),
+        "--expected",
+        str(routing[indices]),
         *comparison,
     ]
 
 
 def test_each_output_is_judged_by_a_predicate_its_dtype_admits(routing, capsys) -> None:
     """One call, two kinds of output, each with its own comparison and verdict."""
-    assert cli.main(_routing_argv(
-        routing, "indices",
-        "--out", "output[0]", "--fn", "allclose", "--atol", "1e-3", "--rtol", "4e-3",
-        "--out", "output[1]", "--fn", "equal",
-    )) == 0
+    assert (
+        cli.main(
+            _routing_argv(
+                routing,
+                "indices",
+                "--out",
+                "output[0]",
+                "--fn",
+                "allclose",
+                "--atol",
+                "1e-3",
+                "--rtol",
+                "4e-3",
+                "--out",
+                "output[1]",
+                "--fn",
+                "equal",
+            )
+        )
+        == 0
+    )
     reported = capsys.readouterr().out
 
     assert "output[0]   bf16[1,8]" in reported and "output[1]   i64[1,8]" in reported
@@ -100,11 +118,27 @@ def test_each_output_is_judged_by_a_predicate_its_dtype_admits(routing, capsys) 
 
 def test_one_wrong_index_fails_and_the_command_says_so(routing, capsys) -> None:
     """A single changed index is a total failure that no aggregate would see."""
-    assert cli.main(_routing_argv(
-        routing, "one_off",
-        "--out", "output[0]", "--fn", "allclose", "--atol", "1e-3", "--rtol", "4e-3",
-        "--out", "output[1]", "--fn", "equal",
-    )) == 1
+    assert (
+        cli.main(
+            _routing_argv(
+                routing,
+                "one_off",
+                "--out",
+                "output[0]",
+                "--fn",
+                "allclose",
+                "--atol",
+                "1e-3",
+                "--rtol",
+                "4e-3",
+                "--out",
+                "output[1]",
+                "--fn",
+                "equal",
+            )
+        )
+        == 1
+    )
     reported = capsys.readouterr().out
 
     assert "mismatched 1" in reported
@@ -113,33 +147,69 @@ def test_one_wrong_index_fails_and_the_command_says_so(routing, capsys) -> None:
 
 def test_a_zero_reference_is_reported_rather_than_divided_by(routing, capsys) -> None:
     """`ref_norm` 0 and an absolute distance, not a number scaled by a clamp."""
-    assert cli.main([
-        "check", ROUTING,
-        "--input", str(routing["tokens"]),
-        "--ckpt", str(routing["dir"]),
-        "--expected", str(routing["zeros"]),
-        "--expected", str(routing["indices"]),
-        "--out", "output[0]", "--fn", "rel_l2", "--max", "1e-3", "--fn", "cosine", "--min", "0.999",
-        "--out", "output[1]", "--fn", "equal",
-    ]) == 1
+    assert (
+        cli.main(
+            [
+                "check",
+                ROUTING,
+                "--input",
+                str(routing["tokens"]),
+                "--ckpt",
+                str(routing["dir"]),
+                "--expected",
+                str(routing["zeros"]),
+                "--expected",
+                str(routing["indices"]),
+                "--out",
+                "output[0]",
+                "--fn",
+                "rel_l2",
+                "--max",
+                "1e-3",
+                "--fn",
+                "cosine",
+                "--min",
+                "0.999",
+                "--out",
+                "output[1]",
+                "--fn",
+                "equal",
+            ]
+        )
+        == 1
+    )
     reported = capsys.readouterr().out
 
     assert "ref_norm 0" in reported
     assert "absolute_l2" in reported
     assert "the reference norm is zero" in reported
     assert "one side is entirely zero" in reported
-    # The old behaviour divided by a clamp and reported a number of that scale.
+
     assert "e+12" not in reported
 
 
 def test_the_json_report_carries_the_same_facts_as_the_text(routing, capsys) -> None:
     """Including `ref_norm` and each predicate's own bound and value."""
-    assert cli.main(_routing_argv(
-        routing, "indices",
-        "--out", "output[0]", "--fn", "rel_l2", "--max", "1e-3",
-        "--out", "output[1]", "--fn", "equal",
-        "--json",
-    )) == 0
+    assert (
+        cli.main(
+            _routing_argv(
+                routing,
+                "indices",
+                "--out",
+                "output[0]",
+                "--fn",
+                "rel_l2",
+                "--max",
+                "1e-3",
+                "--out",
+                "output[1]",
+                "--fn",
+                "equal",
+                "--json",
+            )
+        )
+        == 0
+    )
     reported = json.loads(capsys.readouterr().out)
 
     assert reported["passed"] is True
@@ -147,7 +217,10 @@ def test_the_json_report_carries_the_same_facts_as_the_text(routing, capsys) -> 
     assert [output["path"] for output in outputs] == ["output[0]", "output[1]"]
     assert outputs[0]["ref_norm"] > 0
     assert outputs[0]["fns"][0] == {
-        "fn": "rel_l2", "max": 1e-3, "rel_l2": outputs[0]["fns"][0]["rel_l2"], "passed": True
+        "fn": "rel_l2",
+        "max": 1e-3,
+        "rel_l2": outputs[0]["fns"][0]["rel_l2"],
+        "passed": True,
     }
     assert "verification" not in reported
 
@@ -156,15 +229,37 @@ def test_the_json_report_carries_the_same_facts_as_the_text(routing, capsys) -> 
     "comparison, refused",
     [
         pytest.param(
-            ["--out", "output[0]", "--fn", "rel_l2", "--max", "1e-3",
-             "--out", "output[1]", "--fn", "cosine", "--min", "0.99"],
+            [
+                "--out",
+                "output[0]",
+                "--fn",
+                "rel_l2",
+                "--max",
+                "1e-3",
+                "--out",
+                "output[1]",
+                "--fn",
+                "cosine",
+                "--min",
+                "0.99",
+            ],
             "output[1] is i64; cosine is not meaningful on a discrete output",
             id="an-aggregate-over-indices",
         ),
         pytest.param([], "no comparison requested", id="no-predicate-at-all"),
         pytest.param(
-            ["--out", "output[0]", "--fn", "allclose", "--atol", "1e-3",
-             "--out", "output[1]", "--fn", "equal"],
+            [
+                "--out",
+                "output[0]",
+                "--fn",
+                "allclose",
+                "--atol",
+                "1e-3",
+                "--out",
+                "output[1]",
+                "--fn",
+                "equal",
+            ],
             "--fn allclose needs ['--rtol']",
             id="a-bound-left-out",
         ),
@@ -184,27 +279,73 @@ def test_check_refuses_what_it_cannot_answer(routing, capsys, comparison, refuse
 
 def test_inputs_must_be_stated_and_weights_must_come_from_somewhere(routing, capsys) -> None:
     """Neither the inputs nor the weights have a default form."""
-    assert cli.main([
-        "check", ROUTING, "--out", "output[0]", "--fn", "nan_inf",
-    ]) == 1
+    assert (
+        cli.main(
+            [
+                "check",
+                ROUTING,
+                "--out",
+                "output[0]",
+                "--fn",
+                "nan_inf",
+            ]
+        )
+        == 1
+    )
     assert "needs weights ['w_router']" in capsys.readouterr().err
 
-    assert cli.main([
-        "check", DISPATCHING, "--out", "output", "--fn", "nan_inf",
-    ]) == 1
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+            ]
+        )
+        == 1
+    )
     assert "no inputs stated" in capsys.readouterr().err
 
 
 def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> None:
     """Running the evaluator alone measures the candidate, and says only that."""
-    assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--out", "output", "--fn", "rel_l2", "--max", "1",
-    ]) == 1
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--inputs",
+                "random",
+                "--out",
+                "output",
+                "--fn",
+                "rel_l2",
+                "--max",
+                "1",
+            ]
+        )
+        == 1
+    )
     assert "with no reference to compare against" in capsys.readouterr().err
 
-    assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--out", "output", "--fn", "nan_inf",
-    ]) == 0
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--inputs",
+                "random",
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+            ]
+        )
+        == 0
+    )
     reported = capsys.readouterr().out
     assert "reference: none" in reported
     assert "nan 0 inf 0" in reported
@@ -212,18 +353,43 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
 
 def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(capsys) -> None:
     """The pin is a decision this run made, so it is said out loud, in both forms."""
-    assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--out", "output", "--fn", "nan_inf",
-    ]) == 0
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--inputs",
+                "random",
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+            ]
+        )
+        == 0
+    )
     reported = capsys.readouterr().out
     assert "ctx_len is a range [0, 262144) that nothing bound; this run pinned it to 0" in reported
-    # Both ways out of a pin: bind the size, or declare a variant that covers it.
+
     assert "--dim ctx_len=" in reported
     assert "`tilefoundry spec parser 1.1`" in reported
 
-    assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--out", "output", "--fn", "nan_inf", "--json",
-    ]) == 0
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--inputs",
+                "random",
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+                "--json",
+            ]
+        )
+        == 0
+    )
     pinned = json.loads(capsys.readouterr().out)["runs"][0]["pinned"]
     assert {entry["dim"]: entry["pinned"] for entry in pinned} == {"ctx_len": 0}
 
@@ -234,23 +400,57 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys) 
     The label is what a person reads and the canonical signature is what anything
     deciding reads, so both are reported and the text carries the label too.
     """
-    assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=0,64,4096,32768",
-        "--out", "output", "--fn", "nan_inf", "--json",
-    ]) == 0
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--inputs",
+                "random",
+                "--dim",
+                "ctx_len=0,64,4096,32768",
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+                "--json",
+            ]
+        )
+        == 0
+    )
     runs = json.loads(capsys.readouterr().out)["runs"]
 
     assert [run["dims"]["ctx_len"] for run in runs] == [0, 64, 4096, 32768]
     assert [run["variant"]["display_name"] for run in runs] == [
-        "head_on_cta", "head_on_cta", "ctx_split_kv", "ctx_split_kv"
+        "head_on_cta",
+        "head_on_cta",
+        "ctx_split_kv",
+        "ctx_split_kv",
     ]
     assert [run["variant"]["signature"] for run in runs] == [
-        "ctx_len$0_4096", "ctx_len$0_4096", "ctx_len$4096_262144", "ctx_len$4096_262144"
+        "ctx_len$0_4096",
+        "ctx_len$0_4096",
+        "ctx_len$4096_262144",
+        "ctx_len$4096_262144",
     ]
 
-    assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=4096", "--out", "output", "--fn", "nan_inf",
-    ]) == 0
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--inputs",
+                "random",
+                "--dim",
+                "ctx_len=4096",
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+            ]
+        )
+        == 0
+    )
     assert "variant:   ctx_split_kv  ctx_len$4096_262144" in capsys.readouterr().out
 
 
@@ -260,9 +460,23 @@ def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) ->
     Naming the ranges that are covered is the point -- a hole is only actionable
     if the reader can see where the coverage stops.
     """
-    assert cli.main([
-        "check", DISPATCHING, "--inputs", "random", "--dim", "ctx_len=262144", "--out", "output", "--fn", "nan_inf",
-    ]) == 1
+    assert (
+        cli.main(
+            [
+                "check",
+                DISPATCHING,
+                "--inputs",
+                "random",
+                "--dim",
+                "ctx_len=262144",
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+            ]
+        )
+        == 1
+    )
     refused = capsys.readouterr().err
 
     assert "declares no variant covering ctx_len=262144" in refused
@@ -276,10 +490,25 @@ def test_a_passing_check_carries_no_verification_ranking(routing, capsys) -> Non
     about tests, carried in data the command cannot check, and it outlived the test
     it named -- so it is gone, and the warnings that are about *this run* stay.
     """
-    assert cli.main(_routing_argv(
-        routing, "indices", "--out", "output[0]", "--fn", "rel_l2", "--max", "1e-3",
-        "--out", "output[1]", "--fn", "equal",
-    )) == 0
+    assert (
+        cli.main(
+            _routing_argv(
+                routing,
+                "indices",
+                "--out",
+                "output[0]",
+                "--fn",
+                "rel_l2",
+                "--max",
+                "1e-3",
+                "--out",
+                "output[1]",
+                "--fn",
+                "equal",
+            )
+        )
+        == 0
+    )
     reported = capsys.readouterr().out
 
     assert "PASS" in reported
@@ -288,15 +517,30 @@ def test_a_passing_check_carries_no_verification_ranking(routing, capsys) -> Non
     assert "--inputs random makes each activation independently" not in reported
     assert "FAIL says the candidate and reference differ" not in reported
 
+
 def test_a_random_input_fail_against_a_reference_states_its_limits(routing, capsys) -> None:
     """A failed random-input comparison qualifies both limits through the CLI."""
     argv = [
-        "check", ROUTING,
-        "--inputs", "random",
-        "--expected", str(routing["zeros"]),
-        "--expected", str(routing["indices"]),
-        "--out", "output[0]", "--fn", "allclose", "--atol", "1e-3", "--rtol", "4e-3",
-        "--out", "output[1]", "--fn", "equal",
+        "check",
+        ROUTING,
+        "--inputs",
+        "random",
+        "--expected",
+        str(routing["zeros"]),
+        "--expected",
+        str(routing["indices"]),
+        "--out",
+        "output[0]",
+        "--fn",
+        "allclose",
+        "--atol",
+        "1e-3",
+        "--rtol",
+        "4e-3",
+        "--out",
+        "output[1]",
+        "--fn",
+        "equal",
     ]
 
     assert cli.main(argv) == 1
@@ -328,8 +572,21 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsy
     Reaching `router.routing` reads `router.w_router`: the checkpoint holds
     that one tensor and none of the eight the block around it declares.
     """
-    assert cli.main(_routing_argv(
-        routing, "indices",
-        "--out", "output[0]", "--fn", "nan_inf", "--out", "output[1]", "--fn", "equal",
-    )) == 0
+    assert (
+        cli.main(
+            _routing_argv(
+                routing,
+                "indices",
+                "--out",
+                "output[0]",
+                "--fn",
+                "nan_inf",
+                "--out",
+                "output[1]",
+                "--fn",
+                "equal",
+            )
+        )
+        == 0
+    )
     assert "weights the checkpoint" in capsys.readouterr().out

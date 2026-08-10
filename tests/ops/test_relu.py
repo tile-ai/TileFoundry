@@ -1,4 +1,5 @@
 """ReLU typeinfer + Partial(R) commutation."""
+
 from __future__ import annotations
 
 import pytest
@@ -19,12 +20,8 @@ _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 
 CASES = [
-    # relu is monotone increasing: commutes with max/min, not sum. The passing
-    # case is also this op's shape/dtype/layout passthrough witness.
     TypeInferCase("partial_max_passes", _OP, (_PMAX,), _PMAX),
-    TypeInferCase(
-        "partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="ReLU")
-    ),
+    TypeInferCase("partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="ReLU")),
 ]
 
 

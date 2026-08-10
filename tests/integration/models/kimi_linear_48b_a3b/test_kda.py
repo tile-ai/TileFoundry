@@ -1,19 +1,11 @@
-"""Kimi Delta Attention: what can be established without an oracle.
+"""State what Kimi Delta Attention establishes without an oracle.
 
-Kimi Delta Attention: what can be established without an oracle, and the
-block recording that its values cannot.
-
-Read the assertions here for what they are. **None of them checks a value.** The
-KDA reference is blocked (`reference.KDA_BLOCK_REASON`), so nothing in this file
-claims `kda_attention` computes the right thing -- only that it is well-formed,
-that it executes, that its state is shaped and typed the way the decode contract
-requires, and that the two properties which are true by construction rather than
-by transcription really hold.
-
-That distinction is the point. A file of config assertions labelled as if it were
-a correctness suite would be exactly the substitution of a convenient proxy for
-the real property that this package is trying not to make.
+The blocked reference means these tests claim no value correctness. They cover
+well-formed execution, decode state shapes and dtypes, and properties true by
+construction. Keeping that boundary explicit prevents configuration assertions
+from masquerading as a correctness suite.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -33,9 +25,7 @@ from tilefoundry.evaluator import evaluate
 DEV = "cpu"
 CONFIG = reference.CONFIG
 
-#: The two 0-based layer indices a minimum model must contain: one KDA layer and
-#: one MLA layer. Layer 0 is KDA + dense MLP; layer 3 is MLA + MoE. Layers 1 and 2
-#: are KDA + MoE and add no attention kind, so they are not replicated.
+
 MINIMUM_LAYERS = (0, 3)
 
 
@@ -138,7 +128,9 @@ def test_kda_executes_and_stays_finite():
     only type-checks symbolically, an exp or softplus that overflows on ordinary
     inputs -- without pretending to check what the numbers are.
     """
-    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args(), device=DEV)
+    out, state, *windows = evaluate(
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args(), device=DEV
+    )
 
     assert torch.isfinite(out).all()
     assert torch.isfinite(state).all()
@@ -149,17 +141,10 @@ def test_kda_executes_and_stays_finite():
 def test_short_conv_window_shifts_by_exactly_one_position():
     """Test short conv window shifts by exactly one position.
 
-    The convolution window returned is the input window with this token
-    appended and the oldest position dropped.
-
-    True by construction rather than by transcription from any implementation, so
-    it is checkable with no oracle: the stored window is a slice of
-    `concat(state, x)`, and appending then evicting is what a depthwise causal
-    convolution of kernel 4 needs its caller to hold. Measured exact (0.0), and
-    still exact at the bf16 the checkpoint publishes: the claim is about which
-    positions are kept, not about arithmetic, so rounding the draw to the kernel's
-    dtype and then slicing is the same tensor as slicing and then rounding. The
-    comparison is therefore left at equality rather than given a tolerance.
+    The returned window appends this token and drops the oldest position. This is
+    checkable without an oracle because it is a slice of ``concat(state, x)``.
+    The claim concerns positions, not arithmetic, so it remains exact at bf16 and
+    uses equality rather than a tolerance.
     """
     torch.manual_seed(1)
     window = SHORT_CONV_KERNEL_SIZE - 1
@@ -167,7 +152,9 @@ def test_short_conv_window_shifts_by_exactly_one_position():
     conv_w = (torch.randn(SHORT_CONV_KERNEL_SIZE, KDA_PROJ) * 0.05).to(reference.DTYPE)
     state = (torch.randn(1, window, KDA_PROJ) * 0.05).to(reference.DTYPE)
 
-    _out, next_state = evaluate(KimiLinear48BA3B.kda.lookup("short_conv"), x, conv_w, state, device=DEV)
+    _out, next_state = evaluate(
+        KimiLinear48BA3B.kda.lookup("short_conv"), x, conv_w, state, device=DEV
+    )
 
     want = torch.cat([state, x], dim=1)[:, 1:].to(next_state.dtype)
     assert (next_state - want).abs().max().item() == 0.0
@@ -182,11 +169,15 @@ def test_kda_state_is_load_bearing():
     every other assertion in this file pass.
     """
     args = _kda_args()
-    base_out, base_state, *_ = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *args, device=DEV)
+    base_out, base_state, *_ = evaluate(
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *args, device=DEV
+    )
 
     perturbed = list(args)
     perturbed[20] = args[20] + 1.0
-    other_out, other_state, *_ = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *perturbed, device=DEV)
+    other_out, other_state, *_ = evaluate(
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *perturbed, device=DEV
+    )
 
     assert (other_out - base_out).abs().max().item() > 1e-3
     assert (other_state - base_state).abs().max().item() > 1e-3

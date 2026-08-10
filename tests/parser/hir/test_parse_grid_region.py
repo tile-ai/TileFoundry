@@ -150,7 +150,7 @@ def test_nested_for_builds_nested_grid_region():
 
 
 def test_tile_rejects_non_dim_expr():
-    # A bare tensor (not int / DimVar / dim-op Expr) is not a legal extent.
+
     with pytest.raises(VerifyError, match="dim expression"):
         import_dsl(_src("for i in tile(x):", "    y = relu(x)"))
 
@@ -161,6 +161,6 @@ def test_return_inside_tile_body_rejected():
 
 
 def test_augassign_in_body_rejected():
-    # v1 supports only `=`; an augmented assignment would hide a carry.
+
     with pytest.raises(VerifyError, match="augmented assignment"):
         import_dsl(_src("o = relu(x)", "for i in tile(8):", "    o += x", "return o"))

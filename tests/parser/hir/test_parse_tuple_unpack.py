@@ -105,19 +105,25 @@ from tilefoundry.dsl import Tensor
 """
 
 
-_BAD_RHS = _HEADER + """
+_BAD_RHS = (
+    _HEADER
+    + """
 @func
 def bad_rhs(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(1, 4), "f32"]:
     p, q = add(a, b)
     return p
 """
+)
 
-_BAD_TARGETS = _HEADER + """
+_BAD_TARGETS = (
+    _HEADER
+    + """
 @func
 def bad_targets(x: Tensor[(1, 1536), "bf16"]) -> Tensor[(1, 1536), "fp8e4m3"]:
     {targets} = quant(x)
     return a
 """
+)
 
 
 def test_tuple_unpack_errors() -> None:

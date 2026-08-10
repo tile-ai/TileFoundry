@@ -1,9 +1,10 @@
-"""String dtype / reduce-kind authoring surface ([parser §2.4](docs/spec/parser.md#24-pyi-stub-regeneration)).
+"""String dtype and reduce-kind surface.
 
 The DSL surface accepts the string form (`dtype="f32"`, `kind="sum"`); the
 parser normalizes it to the IR-canonical descriptor or enum at the call
 boundary, and an unknown string raises a clear error. Both authoring forms
-print to the same canonical IR.
+print to the same canonical IR
+([parser §2.4](docs/spec/parser.md#24-pyi-stub-regeneration)).
 """
 
 from __future__ import annotations
@@ -36,17 +37,23 @@ def test_string_and_symbolic_forms_print_to_the_same_canonical_ir() -> None:
     one IR: both normalize at the call boundary and print back as the string, so
     a reader never has to know which spelling the author used.
     """
-    string_dtype = _HEADER + """
+    string_dtype = (
+        _HEADER
+        + """
 @func
 def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
     return cast(x, dtype="bf16")
 """
-    descriptor_dtype = _HEADER + """
+    )
+    descriptor_dtype = (
+        _HEADER
+        + """
 from tilefoundry.ir.types import DType
 @func
 def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
     return cast(x, dtype=DType.bf16)
 """
+    )
     string_ir = import_dsl(_dedent(string_dtype))
     descriptor_ir = import_dsl(_dedent(descriptor_dtype))
     assert string_ir.body.target.dtype is DType.bf16
@@ -54,39 +61,52 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
     assert as_script(string_ir) == as_script(descriptor_ir)
     assert 'dtype="bf16"' in as_script(string_ir)
 
-    string_kind = _HEADER + """
+    string_kind = (
+        _HEADER
+        + """
 @func
 def g(x: Tensor[(8,), "f32"]) -> Tensor[(1,), "f32"]:
     return reduce(x, axes=(0,), keepdim=True, kind="sum")
 """
-    enum_kind = _HEADER + """
+    )
+    enum_kind = (
+        _HEADER
+        + """
 from tilefoundry.ir.core.kinds import ReduceKind
 @func
 def g(x: Tensor[(8,), "f32"]) -> Tensor[(1,), "f32"]:
     return reduce(x, axes=(0,), keepdim=True, kind=ReduceKind.SUM)
 """
-    assert as_script(import_dsl(_dedent(string_kind))) == as_script(
-        import_dsl(_dedent(enum_kind))
     )
+    assert as_script(import_dsl(_dedent(string_kind))) == as_script(import_dsl(_dedent(enum_kind)))
 
 
-_BAD_CALL_DTYPE = _HEADER + """
+_BAD_CALL_DTYPE = (
+    _HEADER
+    + """
 @func
 def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
     return cast(x, dtype="float32")
 """
+)
 
-_BAD_ANNOTATION_DTYPE = _HEADER + """
+_BAD_ANNOTATION_DTYPE = (
+    _HEADER
+    + """
 @func
 def f(x: Tensor[(8,), "float32"]) -> Tensor[(8,), "f32"]:
     return cast(x, dtype="f32")
 """
+)
 
-_BAD_REDUCE_KIND = _HEADER + """
+_BAD_REDUCE_KIND = (
+    _HEADER
+    + """
 @func
 def g(x: Tensor[(8,), "f32"]) -> Tensor[(1,), "f32"]:
     return reduce(x, axes=(0,), keepdim=True, kind="plus")
 """
+)
 
 
 @pytest.mark.parametrize(

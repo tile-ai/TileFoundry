@@ -4,6 +4,7 @@ Binary derives its output ``ShardLayout`` from the shared shard-propagation
 engine: a layout mismatch between genuinely-sharded operands is an error, not a
 silent lhs pick, and output storage anchors on concrete residency.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -27,32 +28,35 @@ _MUL = Binary(kind=BinaryKind.MUL)
 _SUB = Binary(kind=BinaryKind.SUB)
 _F = DType.f32
 
-# A single-axis mesh (g=4) for flat shards and a two-axis mesh (a=2, b=4) for
-# factorized shards; cases reuse these so no test hand-builds a Mesh.
+
 _M = make_mesh((4,))
 _MAB = make_mesh((2, 4), ("a", "b"))
 _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 _BCAST = make_tensor_type((16, 8), _F)
-_PSUM_AXIS0 = make_shard_tensor_type(
-    (16, 8), mesh=_MAB, attrs=(Partial("sum"), Broadcast())
-)
-_PSUM_AXIS1 = make_shard_tensor_type(
-    (16, 8), mesh=_MAB, attrs=(Broadcast(), Partial("sum"))
-)
+_PSUM_AXIS0 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Partial("sum"), Broadcast()))
+_PSUM_AXIS1 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Broadcast(), Partial("sum")))
 
 CASES = [
-    # Right-aligned NumPy broadcast: a lower-rank operand against a higher-rank one.
-    TypeInferCase("different_rank_broadcast", _ADD, (make_tensor_type((4, 8), _F), make_tensor_type((8,), _F)), make_tensor_type((4, 8), _F)),
-    # An axis of no elements. The iteration domain is then empty, so the extents
-    # come from the shapes the domain was built from rather than back out of it.
-    TypeInferCase("empty_axis", _ADD, (make_tensor_type((1, 0, 8), _F), make_tensor_type((8,), _F)), make_tensor_type((1, 0, 8), _F)),
-    # An unmaterialized literal operand abstains, but two *different* concrete
-    # residencies have no anchor → error, not a pick.
+    TypeInferCase(
+        "different_rank_broadcast",
+        _ADD,
+        (make_tensor_type((4, 8), _F), make_tensor_type((8,), _F)),
+        make_tensor_type((4, 8), _F),
+    ),
+    TypeInferCase(
+        "empty_axis",
+        _ADD,
+        (make_tensor_type((1, 0, 8), _F), make_tensor_type((8,), _F)),
+        make_tensor_type((1, 0, 8), _F),
+    ),
     TypeInferCase(
         "conflicting_concrete_storage",
         _ADD,
-        (make_tensor_type((4, 8), _F, storage="gmem"), make_tensor_type((4, 8), _F, storage="rmem")),
+        (
+            make_tensor_type((4, 8), _F, storage="gmem"),
+            make_tensor_type((4, 8), _F, storage="rmem"),
+        ),
         ExpectedError(match="conflicting storage"),
     ),
 ]
@@ -71,9 +75,7 @@ def test_broadcast_layout_fallback_does_not_weaken_shard_mismatch():
     assert infer_call(_MUL, lhs, rhs).layout is None
     assert infer_call(_MUL, lhs, make_tensor_type(wide, _F)).layout is None
 
-    replicated = make_shard_tensor_type(
-        narrow, mesh=_M, attrs=(Broadcast(),)
-    )
+    replicated = make_shard_tensor_type(narrow, mesh=_M, attrs=(Broadcast(),))
     replicated_out = infer_call(_MUL, replicated, rhs)
     assert replicated_out.layout.layout.shape == wide
 

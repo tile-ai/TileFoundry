@@ -1,12 +1,14 @@
-"""``Tensor[...]`` layout sugar on ``@prim_func`` params ([parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations)/[parser §1.5](docs/spec/parser.md#15-layout-sugar)).
+"""``Tensor[...]`` layout sugar on ``@prim_func`` parameters.
 
 ``_build_params`` (parser/base.py) is now the single HIR+TIR parameter walk,
 routing both through the same ``_resolve_tensor_type`` — this locks that a
 layout-sugar annotation resolves on a device ``@prim_func`` parameter exactly
 as it already does on an ``@func`` parameter (the HIR twin of this scenario is
-the ``int-at-single-axis-mesh`` case in
-``tests/parser/hir/test_parse_shard_sugar.py``).
+the ``int-at-single-axis-mesh`` case). See
+[parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations) and
+[parser §1.5](docs/spec/parser.md#15-layout-sugar).
 """
+
 from __future__ import annotations
 
 from tilefoundry import prim_func

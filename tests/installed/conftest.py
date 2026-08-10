@@ -20,10 +20,8 @@ from pathlib import Path
 
 import pytest
 
-#: The checkout to build a wheel from.
 REPO = Path(__file__).resolve().parents[2]
 
-# Every kind that ships, looked up inside the installation.
 _PROBE = """\
 import json
 
@@ -38,8 +36,7 @@ print(json.dumps({
 }))
 """
 
-# A model and its twin in a sibling module: the two-file layout.
-_MINE_MODEL = '''\
+_MINE_MODEL = """\
 from tilefoundry import module
 from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
 from tilefoundry.target import CpuTarget
@@ -53,9 +50,9 @@ class Mine:
         with Mesh(("cta",), (168,), ("block",)) as cta:
             local = tf.reshard(x, (168 @ cta.block,), "rmem")
             return tf.reshard(tf.square(local), (168 @ cta.block,), "gmem")
-'''
+"""
 
-_MINE_RUNTIME = '''\
+_MINE_RUNTIME = """\
 from model import Mine
 from tilefoundry.runtime import runtime_func, runtime_module
 
@@ -65,9 +62,9 @@ class MineTwin:
     @runtime_func
     def main(self, x):
         return x * x
-'''
+"""
 
-_CMINE_MODEL = '''\
+_CMINE_MODEL = """\
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm
@@ -97,7 +94,7 @@ class CMine:
         ) -> Tensor[(16, 16), "bf16"]:
             h = matmul(x, w)
             return rms_norm(h, weight)
-'''
+"""
 
 
 def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -116,7 +113,12 @@ def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture(scope="session")
 def installation(tmp_path_factory) -> Path:
-    """The environment under test; ``TF_SMOKE_VENV`` reuses one already built."""
+    """Build the environment under test or reuse ``TF_SMOKE_VENV``.
+
+    Xdist workers must share a prebuilt environment. Per-worker wheel builds
+    race in setuptools' checkout-local build directory and can remove files
+    another worker is copying.
+    """
     reused = os.environ.get("TF_SMOKE_VENV")
     if reused:
         venv = Path(reused)
@@ -124,10 +126,6 @@ def installation(tmp_path_factory) -> Path:
             pytest.fail(f"TF_SMOKE_VENV={venv} holds no installed tilefoundry")
         return venv
     if os.environ.get("PYTEST_XDIST_WORKER"):
-        # This fixture is session-scoped per worker, so every worker would build a
-        # wheel from the same checkout at once, and setuptools' build directory sits
-        # inside it: one build removes what another is still copying into, and the
-        # whole run errors in the fixture with a missing file.
         pytest.fail(
             "-n needs one environment for the workers to share: build it and point "
             "TF_SMOKE_VENV at it, as .github/workflows/ci.yml does"
@@ -220,7 +218,7 @@ def siblings(tmp_path) -> Callable[[str, str], Path]:
     return write
 
 
-_TWIN_SOURCE = '''
+_TWIN_SOURCE = """
 from dataclasses import replace
 
 from tilefoundry import module
@@ -376,7 +374,7 @@ class Mislabelled(RuntimeModule):
 
     def __init__(self):
         super().__init__(name="mislabelled")
-'''
+"""
 
 
 @pytest.fixture(scope="module")
@@ -386,8 +384,7 @@ def twin(tmp_path_factory) -> Path:
     return path
 
 
-# A statement body, which `analyze` annotates per statement, over 168 CTAs.
-_CWIDE_MODEL = '''\
+_CWIDE_MODEL = """\
 from tilefoundry import module
 from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
 from tilefoundry.target import CudaTarget
@@ -402,7 +399,7 @@ class Model:
             x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
             squared = tf.square(x_local)
             return tf.reshard(squared, (168 @ cta.block,), "gmem")
-'''
+"""
 
 
 @pytest.fixture

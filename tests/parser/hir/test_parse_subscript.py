@@ -179,8 +179,7 @@ def test_unsupported_subscripts_are_rejected():
         import_dsl(rank_mismatch)
 
     runtime_tuple_index = _src(
-        'x: Tensor[(1, 1536), "bf16"], i: Tensor[(), "i64"])'
-        ' -> Tensor[(1, 1536), "fp8e4m3"]',
+        'x: Tensor[(1, 1536), "bf16"], i: Tensor[(), "i64"]) -> Tensor[(1, 1536), "fp8e4m3"]',
         "out = quant(x)",
         "return out[i]",
     )

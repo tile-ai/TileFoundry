@@ -7,6 +7,7 @@ value state, so their print / re-import path is witnessed there; the cases here
 are the exact metadata one canonical annotation produces, and the diagnostics for
 annotations that cannot mean anything.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -26,8 +27,10 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Partial, Split
 
-_MESH_PRELUDE = 'from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n\n' \
+_MESH_PRELUDE = (
+    "from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n\n"
     'cta_mesh = Mesh((Topology("cta", 8),), Layout((8,), (1,)))'
+)
 
 
 def _source(body: str, preamble: str = _MESH_PRELUDE, ret: str = '(8, 16), "bf16"') -> str:
@@ -36,7 +39,7 @@ def _source(body: str, preamble: str = _MESH_PRELUDE, ret: str = '(8, 16), "bf16
     A one-``@func`` script; *preamble* holds module-level (closure) bindings,
     for names the parser resolves via ``fn.__globals__`` rather than the SSA env.
     """
-    return f'''from __future__ import annotations
+    return f"""from __future__ import annotations
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
 
@@ -45,7 +48,7 @@ from tilefoundry.dsl import Tensor, tf
 @func
 def candidate(x: Tensor[(8, 16), "bf16"]) -> Tensor[{ret}]:
 {body}
-'''
+"""
 
 
 def _layout_of(fn) -> LayoutConstraint:
@@ -57,8 +60,8 @@ def _layout_of(fn) -> LayoutConstraint:
 def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
     fn = import_dsl(
         _source(
-            '''    y: where(layout=(_, 16 @ cta), mesh=cta_mesh, storage="gmem") = tf.add(x, x)
-    return y'''
+            """    y: where(layout=(_, 16 @ cta), mesh=cta_mesh, storage="gmem") = tf.add(x, x)
+    return y"""
         )
     )
     verify_function(fn)
@@ -75,7 +78,7 @@ def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
     assert isinstance(storage, StorageConstraint)
 
     printed = as_script(fn)
-    assert 'where(layout=(_, 16 @ cta), mesh=Mesh(' in printed
+    assert "where(layout=(_, 16 @ cta), mesh=Mesh(" in printed
     assert 'storage="gmem"' in printed
     imported = import_dsl(printed)
     verify_function(imported)
@@ -93,8 +96,8 @@ def test_layout_extent_names_resolve_through_the_closure_or_fail() -> None:
     an int or a ``DimVar``; a name that resolves to neither -- or to nothing --
     must fail at the annotation rather than silently drop the extent.
     """
-    body = '''    y: where(layout=(_, N @ cta)) = tf.add(x, x)
-    return y'''
+    body = """    y: where(layout=(_, N @ cta)) = tf.add(x, x)
+    return y"""
     as_int = _layout_of(import_dsl(_source(body, preamble=_MESH_PRELUDE + "\nN = 16")))
     assert repr(as_int.layout.shape[0]) == "_"
     assert as_int.layout.shape[1] == 16
@@ -122,23 +125,25 @@ def test_partial_value_state_and_the_subjects_that_accept_a_constraint() -> None
     """
     partial = import_dsl(
         _source(
-            '''    y: where(layout=((_, 16), {cta @ P("sum")})) = tf.add(x, x)
-    return y'''
+            """    y: where(layout=((_, 16), {cta @ P("sum")})) = tf.add(x, x)
+    return y"""
         )
     )
     assert _layout_of(partial).bindings == (("cta", Partial("sum")),)
     assert 'layout=((_, 16), {cta @ P("sum")})' in as_script(partial)
 
-    parameter = import_dsl(_source('''    x: where(storage="smem")
-    return x'''))
+    parameter = import_dsl(
+        _source("""    x: where(storage="smem")
+    return x""")
+    )
     assert isinstance(constraint_metadata(parameter.params[0]), ScheduleConstraintMetadata)
 
     tuple_fn = import_dsl(
         _source(
-            '''    values = tf.topk(x, k=4, axis=-1)
+            """    values = tf.topk(x, k=4, axis=-1)
     ids = values[1]
     ids: where(storage="gmem")
-    return ids''',
+    return ids""",
             preamble="",
             ret='(8, 4), "i64"',
         )
@@ -155,10 +160,10 @@ def test_partial_value_state_and_the_subjects_that_accept_a_constraint() -> None
     [
         "    y: where() = tf.add(x, x)\n    return y",
         "    y: where(layout=()) = tf.add(x, x)\n    return y",
-        "    y: where(layout=(_, {cta @ B(), cta @ P(\"sum\")})) = tf.add(x, x)\n    return y",
-        "    y: where(partial=P(\"sum\")) = tf.add(x, x)\n    return y",
+        '    y: where(layout=(_, {cta @ B(), cta @ P("sum")})) = tf.add(x, x)\n    return y',
+        '    y: where(partial=P("sum")) = tf.add(x, x)\n    return y',
         "    y: where(layout=(1.5,)) = tf.add(x, x)\n    return y",
-        "    y: where(storage=\"gmem\") = tf.add(x, x)\n    y: where(storage=\"gmem\")\n    return y",
+        '    y: where(storage="gmem") = tf.add(x, x)\n    y: where(storage="gmem")\n    return y',
     ],
     ids=[
         "no-kwargs",

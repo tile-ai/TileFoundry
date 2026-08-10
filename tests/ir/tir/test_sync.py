@@ -1,20 +1,12 @@
-"""GPU e2e for ``T.sync`` over a (4, 32) thread-128 mesh.
+"""Exercise every CUDA barrier form emitted for ``T.sync``.
 
-A hand-authored 128-thread ``@prim_func`` exercises every barrier form the sync
-codegen produces, on real hardware:
+A 128-thread mesh covers whole CTA, single-warp subset, and two named multi-warp
+barriers. Successful completion plus correct output catches invalid masks,
+barrier ids, and deadlocks.
 
-- ``T.sync(m)``        → ``__syncthreads()`` (whole CTA),
-- ``T.sync(m[0, :])``  → ``__syncwarp(mask)`` under a participant predicate,
-- ``T.sync(m[0:2, :])``→ a named ``bar.sync`` (warps 0-1),
-- ``T.sync(m[2:4, :])``→ a second named ``bar.sync`` (warps 2-3).
-
-Each thread owns one element of a (4, 32) tensor (split over the warp×lane
-mesh) and squares it. The square is barrier-independent by construction —
-hand-written TIR has no cross-thread shared-memory surface yet — so the test's
-value is that all four barrier forms compile to valid CUDA, allocate distinct
-named-barrier ids, and run to completion (a mis-emitted ``bar.sync`` would
-deadlock or fault) while the data result stays correct.
+See [tir §1.5](docs/spec/tir.md#15-sync).
 """
+
 from __future__ import annotations
 
 import torch
@@ -33,7 +25,9 @@ from tilefoundry.target import CpuTarget, CudaTarget
 class SyncSquare:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def sync_square_device(a: Tensor[(4, 32), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
+        with Mesh(
+            (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
+        ) as m:
             view = T.tensor_view(
                 a,
                 layout=ShardLayout(
@@ -55,10 +49,10 @@ class SyncSquare:
                 )
             )
             T.copy(view, reg)
-            T.sync(m)            # whole CTA  -> __syncthreads()
-            T.sync(m[0, :])      # warp 0     -> __syncwarp(mask) + predicate
-            T.sync(m[0:2, :])    # warps 0-1  -> bar.sync <id1>, 64
-            T.sync(m[2:4, :])    # warps 2-3  -> bar.sync <id2>, 64
+            T.sync(m)
+            T.sync(m[0, :])
+            T.sync(m[0:2, :])
+            T.sync(m[2:4, :])
             T.binary(reg, reg, reg, kind=BinaryKind.MUL)
             T.copy(reg, view)
 
@@ -81,11 +75,9 @@ def test_sync_barrier_forms_emit_expected_cuda() -> None:
     target, functions = next(iter(groups.items()))
     src = emit_cuda_module(lowered, functions, target).source
 
-    # Codegen emits one uniform sync<Kind, geometry...> entry per barrier; the
-    # participant predicate + hardware impl live in the runtime.
     assert "SyncKind::syncthreads>();" in src
     assert "SyncKind::syncwarp_masked, 0, 32, 0xffffffffu>();" in src
-    # Two distinct named-barrier ids (warps 0-1 and 2-3), 64-thread counts.
+
     assert "SyncKind::bar_sync, 0, 64, 0u, 1>();" in src
     assert "SyncKind::bar_sync, 64, 64, 0u, 2>();" in src
 
@@ -120,8 +112,7 @@ def test_grid_scope_sync_emits_grid_barrier() -> None:
         "tilefoundry::ops::sync<tilefoundry::ops::SyncKind::grid>"
         "(tilefoundry::tf_grid_bar_state);" in src
     )
-    # The backing counter is defined per module with internal linkage, not
-    # pulled from a shared header global.
+
     assert "static __device__ unsigned int tf_grid_bar_state[2];" in src
 
 

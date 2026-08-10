@@ -1,15 +1,12 @@
-r"""Rank-5 ShardLayout encoding for SM80 16x8x16 mma fragment distribution.
+r"""Pin structural invariants of SM80 MMA fragment layouts.
 
-The canonical A / B / C fragment ``ShardLayout``\\s + the ``(4, 8)`` thread
-mesh live in ``tilefoundry.ir.tir.cuda.nn.mma`` (the single source of truth, with
-the full per-operand derivation recipe); this module reads them off the
-realized ``MmaAtom`` (via ``make_atom``) and pins their structural invariants —
-shape, per-thread element count (= PTX register count per thread: 8 / 4 / 4),
-Split-axis extents, and reshard-typeinfer acceptance — so a change to the
-derived strides fails a test rather than silently miscompiling. The thread scope
-these fragments require is checked at its use point, in
-``tests/parser/tir/test_mma_atom.py``.
+The realized atom supplies A/B/C layouts and its thread mesh. Tests cover shape,
+per-thread register counts, Split extents, and reshard acceptance; parser tests
+cover required thread scope.
+
+See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Call, Var
@@ -20,7 +17,6 @@ from tilefoundry.ir.types.shard import ShardLayout, Split, product
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
-# Fragment shards are read off the realized atom, not a separate export.
 _ATOM = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
 A_FRAG_SHARD = _ATOM.A
 B_FRAG_SHARD = _ATOM.B
@@ -41,11 +37,8 @@ def test_per_thread_element_counts_and_split_extents() -> None:
 
 
 def test_reshard_typeinfer_accepts_a_fragment() -> None:
-    # Rule is identical across A/B/C operands; one representative covers it.
+
     _assert_reshard_typeinfer_ok((16, 16), "bf16", A_FRAG_SHARD)
-
-
-# ── helpers ──────────────────────────────────────────────────────────────
 
 
 def _product(shape: tuple[int, ...]) -> int:
@@ -64,9 +57,7 @@ def _check_split_extents_match_mesh(sl: ShardLayout) -> None:
         f"attrs len {len(sl.attrs)} != mesh rank {len(mesh_shape)}"
     )
     for mesh_i, attr in enumerate(sl.attrs):
-        assert isinstance(attr, Split), (
-            f"mma fragment shard attrs must be Split, got {attr}"
-        )
+        assert isinstance(attr, Split), f"mma fragment shard attrs must be Split, got {attr}"
         ax = attr.axis
         assert sl.layout.shape[ax] == mesh_shape[mesh_i], (
             f"split tensor axis {ax} extent {sl.layout.shape[ax]} != "
@@ -85,20 +76,16 @@ def _assert_reshard_typeinfer_ok(
     preserving the logical shape.
     """
     dtype = getattr(DType, src_dtype_name)
-    src_ty = TensorType(
-        shape=src_shape, dtype=dtype, layout=None, storage=StorageKind.GMEM
-    )
+    src_ty = TensorType(shape=src_shape, dtype=dtype, layout=None, storage=StorageKind.GMEM)
     src = Var(type=src_ty, name="x")
     op = Reshard(layout=dst_layout, storage=StorageKind.RMEM)
-    # The registry-driven typeinfer ignores the Call's declared ``type``
-    # field and recomputes from the op + args; we satisfy the dataclass
-    # with a placeholder.
+
     call = Call(type=src_ty, target=op, args=(src,))
     ctx = TypeInferContext()
     out_ty = ctx.type_of(call)
     assert isinstance(out_ty, TensorType), f"expected TensorType, got {out_ty}"
     assert out_ty.layout is dst_layout, "output layout must reference the rank-5 ShardLayout"
-    # Reshard preserves logical tensor shape.
+
     assert out_ty.shape == src_shape
     assert out_ty.dtype == dtype
     assert out_ty.storage == StorageKind.RMEM

@@ -36,7 +36,7 @@ def test_pattern_match_contract() -> None:
     combined = AndPat(parts=(TensorPat(rank=2), TensorPat(dtype="f16")))
     assert combined.match(FakeTy(shape=(3, 4), dtype="f16"))
     assert not combined.match(FakeTy(shape=(3,), dtype="f16"))
-    assert AndPat(parts=()).match(FakeTy(shape=()))  # empty AND is a tautology
+    assert AndPat(parts=()).match(FakeTy(shape=()))
 
 
 def test_dim_var_range_pat_contract() -> None:
@@ -48,7 +48,7 @@ def test_dim_var_range_pat_contract() -> None:
     """
     p = DimVarRangePat("S", 1, 4)
     assert p.match(1) and p.match(3)
-    assert not p.match(4)  # hi exclusive
+    assert not p.match(4)
     assert not p.match(0)
     assert not p.match(2.0)
     assert not p.match(True)

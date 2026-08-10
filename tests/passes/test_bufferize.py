@@ -7,6 +7,7 @@ fail, it silently leaves an allocation out of the schedule it is supposed to
 place, and the arm most easily missed is the one a hand-rolled walk does not know
 about.
 """
+
 from __future__ import annotations
 
 from tests.fixtures.demo_ir import build_demo
@@ -35,8 +36,7 @@ def test_bufferize_returns_module_unchanged():
     pf_before, module = _lower()
     new_module = BufferizePass().run(module)
     [pf_after] = new_module.functions
-    # Trivial policy: each logical buffer keeps its own AllocTensor; IR
-    # identity is preserved (PrimFuncPass returns the same fn object).
+
     assert pf_after is pf_before
 
 

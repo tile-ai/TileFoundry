@@ -1,20 +1,11 @@
-"""GPU end-to-end for entry-level dynamic-shape dispatch.
+"""GPU end-to-end for dynamic-shape dispatch.
 
-A ``pass``-bodied ``main`` prototype declares a single envelope
-``DimVar('S', 1, 8)`` on a 1-D input tensor; two ``main.specialize``
-variants partition it (half-open ranges ``[lo, hi)``). The runtime tensor
-shape selects which variant executes:
-
-- ``S in [1, 4)`` (1..3) → ``mul(x, x)`` (element-wise square).
-- ``S in [4, 8)`` (4..7) → ``add(x, x)`` (element-wise double).
-
-``tilefoundry.compile(...)`` lowers the prototype into a single ``main``
-host wrapper that holds the dispatch if-chain and forwards to each
-variant's mangled host wrapper. The kernels iterate at runtime extent
-(``tilefoundry::ops::binary(... , x_shape_0, ...)``) and copy out via
-``tilefoundry::ops::copy_n``, so the same compiled binary handles any shape
-inside the envelope.
+A ``pass`` prototype partitions ``DimVar('S', 1, 8)`` into half-open ranges:
+``[1, 4)`` squares and ``[4, 8)`` doubles. Compilation emits one host dispatch
+wrapper forwarding to specialized kernels. Runtime extents drive their loops
+and copies, so one binary handles every shape in the envelope.
 """
+
 from __future__ import annotations
 
 import torch
@@ -25,7 +16,7 @@ from tilefoundry.dsl import DimVar, DimVarRangePat, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — binds bare ``mul`` / ``add``
 from tilefoundry.target import CudaTarget
 
-_S = DimVar("S", 1, 8)   # half-open [1, 8) = 1..7
+_S = DimVar("S", 1, 8)
 
 
 @module(entry="main")
@@ -57,12 +48,11 @@ def test_entry_dispatch_both_variants_in_one_session() -> None:
     """
     rm = _build_runtime_module()
 
-    x_a = torch.tensor([2.0, 3.0, 4.0], dtype=torch.float32, device="cuda")  # S=3 → variant A
+    x_a = torch.tensor([2.0, 3.0, 4.0], dtype=torch.float32, device="cuda")
     out_a = torch.empty_like(x_a)
     rm(x_a, out_a)
 
-    x_b = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
-                       dtype=torch.float32, device="cuda")  # S=7 → variant B
+    x_b = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], dtype=torch.float32, device="cuda")
     out_b = torch.empty_like(x_b)
     rm(x_b, out_b)
     torch.cuda.synchronize()

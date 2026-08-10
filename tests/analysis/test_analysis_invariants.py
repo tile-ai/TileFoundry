@@ -1,20 +1,9 @@
-"""The access relations and dependences themselves, on the shapes that are hard.
+"""Compare hard decoder access relations and dependences to hand-written maps.
 
-Analysing a real model proves that every op resolves a relation and that a report
-comes out. It does not prove the relations are right: a report is produced from
-whatever the maps say, so a map that reads the wrong element, aliases two
-elements it should not, or loses a dependence produces a perfectly well-formed
-answer. What that costs is decided later -- a lost carry is a wrong ring depth, a
-lost fusion edge is an illegal schedule -- and by then nothing points back here.
-
-So these compare maps to maps, hand-written. The subjects are the shapes a
-decoder actually stops on and that a real model cannot pin because its own
-extents are too large to transcribe: a reduction that owns a whole row, an axis
-expanded by a floor division, one call that produces two tensors of different
-widths, and a gather whose index is data. Each expected map is authored here from
-the op's semantics rather than copied from a run, and deliberately not in the
-syntax the implementation emits -- a floor division is written as the inequality
-it means, so a round-trip of the same formula cannot pass for a check of it.
+Real-model analysis proves coverage, not correctness. These tests pin row
+reductions, floor-divided expansion, multi-output calls, and data-dependent
+gathers at readable dimensions. Expected maps use semantic forms rather than
+implementation output, so a formula round-trip cannot validate itself.
 """
 
 from __future__ import annotations
@@ -40,8 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
 REPEATS = 4
 B, S, H, D = 1, 5, 2, 3
 
-#: GQA: the query heads outnumber the key/value heads, which is the whole reason
-#: a rotation of both cannot be one iteration domain.
+
 HQ, HKV, HEAD_DIM, MAX_POS = 16, 8, 128, 8
 
 
@@ -127,9 +115,7 @@ def test_an_expanded_axis_reads_through_a_floor_division() -> None:
     tg = extract(gqa_expand)
 
     bounds = f"0<=d0<{B} and 0<=d1<{S} and 0<=d2<{H * REPEATS} and 0<=d3<{D}"
-    assert tg.domain.is_equal(
-        isl.union_set(f"{{ RepeatInterleave[d0,d1,d2,d3] : {bounds} }}")
-    )
+    assert tg.domain.is_equal(isl.union_set(f"{{ RepeatInterleave[d0,d1,d2,d3] : {bounds} }}"))
     assert tg.reads.is_equal(
         isl.union_map(
             f"{{ RepeatInterleave[d0,d1,d2,d3] -> x[d0,d1,o2,d3] : {bounds} "
@@ -139,7 +125,7 @@ def test_an_expanded_axis_reads_through_a_floor_division() -> None:
     assert tg.writes.is_equal(
         isl.union_map(f"{{ RepeatInterleave[d0,d1,d2,d3] -> y[d0,d1,d2,d3] : {bounds} }}")
     )
-    # Elementwise and alone: the write map is injective and nothing reads y.
+
     assert tg.deps.is_equal(isl.union_map("{}"))
 
 
@@ -216,17 +202,10 @@ def softmax_row(x: Tensor[(2, 64), "f32"]) -> Tensor[(2, 64), "f32"]:
 def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     """Which is why every op a decoder reaches has to carry one.
 
-    `extract` consults the relation registry and has nothing else to try, so an
-    op that carries no relation stops extraction outright rather than degrading
-    to something conservative. The elementwise family and the fused row
-    reduction are asserted here because each was once exactly that failure, and
-    because analysing a real model does not exercise this path: `analyze` walks
-    the IR itself and never asks for a relation.
-
-    SoftMax is stated exactly, since its shape is the one worth being sure of: it
-    is a single fused op, so one statement instance owns an entire row -- the
-    reduced axis is an existential dimension of the access maps and never a
-    dimension of the domain.
+    ``extract`` has no fallback when the relation registry has no entry. Elementwise
+    and fused row reductions therefore must register relations. ``SoftMax`` is
+    pinned exactly: one statement owns a row, with the reduced axis existential
+    in access maps and absent from the domain.
     """
     elementwise = extract(elementwise_pair)
     assert [type(u.op.target).__name__ for u in elementwise.units] == [
@@ -243,8 +222,7 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     assert rows.writes.is_equal(
         isl.union_map("{ SoftMax[i] -> y[i, j] : 0 <= i < 2 and 0 <= j < 64 }")
     )
-    # The row write is injective, so it is a write and not an accumulation: the
-    # output buffer must not also appear on the read side.
+
     assert "-> y[" not in str(rows.reads)
 
 
@@ -269,7 +247,7 @@ def test_a_data_dependent_read_is_a_relation_and_not_a_function() -> None:
     logits = _relations(TopK(k=8), (1, 128))
     assert len(logits.inputs) == 1
     assert isinstance(logits.inputs[0], isl.map)
-    # values and indices, both plain identities over what the scan produced.
+
     assert len(logits.outputs) == 2
     assert all(isinstance(item, isl.multi_aff) for item in logits.outputs)
 
@@ -319,7 +297,7 @@ def test_a_quantised_scale_is_written_once_per_group() -> None:
 
     assert len(relation.inputs) == 1
     assert isinstance(relation.inputs[0], isl.multi_aff)
-    # x_q, then x_scale.
+
     assert len(relation.outputs) == 2
     scale = relation.outputs[1]
     assert isinstance(scale, isl.map)

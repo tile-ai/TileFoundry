@@ -21,8 +21,7 @@ def _annotation(param: Any) -> str:
     from tilefoundry.ir.types import TensorType, TupleType  # noqa: PLC0415
 
     def extent_text(extent: object) -> str:
-        # A ranged dimension is written by name in the DSL, and its repr carries
-        # the bounds, which belong to the model's own declaration and not here.
+
         return getattr(extent, "name", None) or str(extent)
 
     def render(ty: object) -> str:
@@ -50,9 +49,7 @@ _NUMBERED = re.compile(r"^(.*?)(\d+)$")
 
 def _shape(node: dict[str, Any]) -> str:
     """A node's functions and whole subtree, excluding only its own name."""
-    return json.dumps(
-        {"functions": node["functions"], "modules": node["modules"]}, sort_keys=True
-    )
+    return json.dumps({"functions": node["functions"], "modules": node["modules"]}, sort_keys=True)
 
 
 def _grouped(children: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -117,10 +114,12 @@ def catalog() -> dict[str, Any]:
     models = []
     for name in sorted(MODELS):
         counts = {"leaf_modules": 0, "functions": 0}
-        roots = _grouped([
-            _node(root, counts)
-            for root in _roots(importlib.import_module(f"tests.models.{name}.model"))
-        ])
+        roots = _grouped(
+            [
+                _node(root, counts)
+                for root in _roots(importlib.import_module(f"tests.models.{name}.model"))
+            ]
+        )
         models.append({"name": name, "counts": counts, "modules": roots})
     return {"models": models}
 
@@ -136,8 +135,10 @@ def main(argv: list[str] | None = None) -> int:
     rendered = json.dumps(catalog(), indent=2, sort_keys=True) + "\n"
     if arguments.check:
         if not destination.is_file() or destination.read_text(encoding="utf-8") != rendered:
-            print(f"{destination} is stale; regenerate it with "
-                  f"python -m scripts.generate_model_catalog")
+            print(
+                f"{destination} is stale; regenerate it with "
+                f"python -m scripts.generate_model_catalog"
+            )
             return 1
         return 0
     destination.write_text(rendered, encoding="utf-8")

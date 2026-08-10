@@ -21,9 +21,6 @@ def _dedent(s: str) -> str:
     return textwrap.dedent(s).lstrip("\n")
 
 
-# ── 1. Unknown callable name ─────────────────────────────────────────────
-
-
 def test_unknown_op_name_in_hir_raises() -> None:
     src = """
 from tilefoundry import func
@@ -36,9 +33,6 @@ def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
 """
     with pytest.raises(VerifyError, match=r"unknown HIR callable|unknown Op name"):
         import_dsl(_dedent(src))
-
-
-# ── 3. Forbidden AST node ────────────────────────────────────────────────
 
 
 def test_yield_in_hir_body_raises() -> None:

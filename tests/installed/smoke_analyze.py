@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_BAD_MODULE = '''
+_BAD_MODULE = """
 from tilefoundry import module
 from tilefoundry.dsl import Tensor, func, tf
 
@@ -15,13 +15,17 @@ class Bad:
     def main(x: Tensor[(8,), "f32"]):
         wrong = tf.add(x, tf.cast(x, "i32"))
         return wrong
-'''
+"""
 
 
 def test_every_analysis_the_command_offers_runs(tf, cmine) -> None:
     done = tf(
-        "analyze", f"{cmine}:CMine.root",
-        "--compute-cost", "--memory", "--roofline", "--timeline",
+        "analyze",
+        f"{cmine}:CMine.root",
+        "--compute-cost",
+        "--memory",
+        "--roofline",
+        "--timeline",
     )
     assert done.returncode == 0, done.stderr
     for conclusion in ("flops ", "traffic ", "peak-footprint ", "ideal-bound="):
@@ -96,22 +100,18 @@ def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
     assert "dtype mismatch" in done.stderr
 
 
-def test_analyze_loads_sibling_modules_without_leaking_paths_or_output(
-    tf, siblings
-) -> None:
+def test_analyze_loads_sibling_modules_without_leaking_paths_or_output(tf, siblings) -> None:
     first = siblings("first", "First")
     second = siblings("second", "Second")
 
     for source, name in ((first, "First"), (second, "Second")):
         done = tf("analyze", f"{source}:{name}", "--memory")
         assert done.returncode == 0, done.stderr
-        # The sibling is imported, so its print runs -- but not onto this output.
+
         assert "source output" not in done.stdout
 
 
-def test_analyze_names_the_source_directory_when_a_sibling_is_missing(
-    tf, tmp_path
-) -> None:
+def test_analyze_names_the_source_directory_when_a_sibling_is_missing(tf, tmp_path) -> None:
     source = tmp_path / "runtime_model.py"
     source.write_text("from model import Model\n", encoding="utf-8")
 

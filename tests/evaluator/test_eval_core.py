@@ -8,6 +8,7 @@ through this same walker; what a real model's shape cannot make visible is kept
 here on small parsed programs -- two params that are structurally equal, and a
 carry whose init comes from the IR rather than from a first iteration.
 """
+
 from __future__ import annotations
 
 import torch

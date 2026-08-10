@@ -1,16 +1,10 @@
-"""``tilefoundry.jit()``: what a caller can observe about it.
+"""Pin caller-visible ``tilefoundry.jit`` behavior.
 
-Two things, and the rest is gone for stated reasons. What compiling really does is
-witnessed by `tests/e2e/`, which builds kernels with nvcc and runs them; repeating a
-compile here bought a second compile and no second fact, and it was one of the
-slowest cases in the suite. The cache key's structure went with it -- the key is
-private, and what a caller can observe is that a second `jit` of the same program
-hands back the same module and that clearing makes it stop doing so.
-
-What is left is the part no end-to-end test can localise: which inputs are refused,
-and that the cache is a cache rather than something that merely returns an answer.
+End-to-end tests cover compilation. These tests localize rejected inputs and the
+observable cache contract: repeated JIT of one program returns the same module,
+while clearing the cache ends that identity. Private key structure is not part of
+the contract.
 """
-
 
 import pytest
 
@@ -33,6 +27,7 @@ def test_jit_rejects_non_ir_inputs_and_string_targets() -> None:
         jit(fn, target="vulkan")
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         jit(fn, target=CudaTarget("nvidia.h200_sxm"), foo=1)
+
 
 def test_jit_caches_and_clears() -> None:
     """Same IR → same RuntimeModule; ``cache_clear()`` evicts."""

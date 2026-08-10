@@ -4,6 +4,7 @@ The growing axis invalidates the input layout, so a genuinely-sharded input
 fails closed rather than emit a stale layout, and an out-of-range axis is named
 rather than normalized.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,7 +23,6 @@ _F = DType.f32
 _M = make_mesh((4,))
 
 CASES = [
-    # a genuine sharding cannot be re-expressed across the repeat -> fail closed.
     TypeInferCase(
         "sharded_fails_closed",
         RepeatInterleave(repeats=2, axis=1),

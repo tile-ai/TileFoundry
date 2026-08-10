@@ -2,15 +2,12 @@
 
     <venv>/bin/python tests/integration/qwen3_1_7b_l3.py --venv <venv> --work <dir>
 
-Sixteen greedy continuation steps against Hugging Face, compared as token IDs. The
-IR side comes from the directory `tilefoundry models qwen3_1_7b --source` names in
-an installation, copied and executed here rather than imported from this checkout.
-Run by the installation's own interpreter, so the `tilefoundry` it imports is the
-one tested.
-
-Prefill is Hugging Face's: these kernels express one step at a time and not the
-prompt pass before it, so what is compared is continuation decode.
+Sixteen greedy continuation steps compare token IDs with Hugging Face. IR comes
+from the installed ``models --source`` directory and runs under that installation's
+interpreter, never this checkout. Hugging Face performs prefill because these
+kernels express one decode step; the comparison therefore covers continuation.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,10 +33,10 @@ PROMPT = "Explain why the sky appears blue in one sentence."
 STEPS = 16
 DEV = "cuda"
 
-#: The dtype the checkpoint publishes, and so the dtype both sides decode at.
+
 DTYPE = torch.bfloat16
 
-# The published keys this run reads off the mounted checkpoint.
+
 _PUBLISHED = (
     "hidden_size",
     "head_dim",
@@ -50,6 +47,7 @@ _PUBLISHED = (
     "max_position_embeddings",
     "num_hidden_layers",
 )
+
 
 def _installed(venv: Path) -> None:
     """Refuse to run unless the `tilefoundry` imported here came out of *venv*."""
@@ -83,12 +81,14 @@ def _source_directory(venv: Path, *command: str, outside: Path) -> Path:
     """The first directory a source-listing command from *venv* names."""
     done = subprocess.run(
         [str(venv / "bin" / "tilefoundry"), *command],
-        cwd=str(outside), capture_output=True, text=True, check=False,
+        cwd=str(outside),
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if done.returncode != 0:
         raise SystemExit(
-            f"`tilefoundry {' '.join(command)}` exited {done.returncode}\n"
-            f"{done.stderr.strip()}"
+            f"`tilefoundry {' '.join(command)}` exited {done.returncode}\n{done.stderr.strip()}"
         )
     lines = done.stdout.splitlines()
     if not lines:
@@ -126,9 +126,7 @@ def _loaded(source: Path, mount: Path):
     """The emitted decoder with its published weights bound directly."""
     namespace = runpy.run_path(str(source))
     root = namespace["Qwen3_1_7B"].cloned()
-    alias = runpy.run_path(str(source.with_name("hf_alias.py")))["hf_alias"](
-        namespace["config"]
-    )
+    alias = runpy.run_path(str(source.with_name("hf_alias.py")))["hf_alias"](namespace["config"])
     return root.load(SafetensorsResource(str(mount), device=DEV, alias=alias))
 
 
@@ -168,9 +166,7 @@ def _recorded_greedy(generation: dict[str, object], tokens: list[int]):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--venv", required=True, type=Path, help="the installation under test"
-    )
+    parser.add_argument("--venv", required=True, type=Path, help="the installation under test")
     parser.add_argument(
         "--work", required=True, type=Path, help="scratch directory for copied source"
     )
@@ -224,8 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     if got != want:
         step = next(i for i, (a, b) in enumerate(zip(got, want)) if a != b)
         raise SystemExit(
-            f"diverged at step {step}: {tokenizer.decode(got)!r} "
-            f"against {tokenizer.decode(want)!r}"
+            f"diverged at step {step}: {tokenizer.decode(got)!r} against {tokenizer.decode(want)!r}"
         )
     print(
         f"{done.tokens} greedy steps agree at "

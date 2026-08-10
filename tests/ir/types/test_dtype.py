@@ -1,10 +1,9 @@
 """DType descriptor declarations and hardware-relevant facts."""
+
 from __future__ import annotations
 
 from tilefoundry.ir.types import BoolDType, DType, FloatDType, IntegerDType
 
-# The declared facts of every builtin dtype. Exponent / mantissa widths are what
-# codegen and the numerical oracles read, so a silent edit here must fail a test.
 _FACTS = (
     ("f32", FloatDType("f32", 32, 8, 23)),
     ("f16", FloatDType("f16", 16, 5, 10)),
@@ -38,5 +37,5 @@ def test_dtype_members_are_canonically_named_singletons() -> None:
     assert {DType.f32, FloatDType("f32", 32, 8, 23)} == {DType.f32}
     assert not hasattr(DType.f32, "value")
     assert not hasattr(DType, "__members__")
-    # fp8e4m3 is the sole canonical fp8 spelling; no alternate is introduced.
+
     assert not hasattr(DType, "f8e4m3")

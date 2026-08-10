@@ -96,7 +96,11 @@ class BrokenScheduler:
     scale = scale
 
 
-@module(entry="scale", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 1025)))
+@module(
+    entry="scale",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 1), Topology("thread", 1025)),
+)
 class OverLimitCuda:
     scale = scale
 

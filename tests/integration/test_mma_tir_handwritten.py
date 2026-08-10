@@ -9,6 +9,7 @@ against ``torch.matmul`` within bf16 tolerance.
 Mirrors the HIR reference in ``test_mma_runtime.py`` (same data + tolerance) but
 authored entirely in TIR rather than lowered from HIR.
 """
+
 from __future__ import annotations
 
 import torch
@@ -33,12 +34,13 @@ class MmHandwritten:
         c: Tensor[(16, 8), "f32"],
     ):
         atom = T.cuda.mma.atom(op=_OP)
-        with Mesh((Topology("thread", 32),), Layout(shape=(4, 8), strides=(1, 4))) as warp:  # noqa: F841
-            # gmem → register fragments (distributed load, like HIR reshard).
+        with Mesh((Topology("thread", 32),), Layout(shape=(4, 8), strides=(1, 4))) as _warp:
             a_view = T.tensor_view(a, layout=atom.A)
             b_view = T.tensor_view(b, layout=atom.B)
             a_frag = T.alloc_tensor(
-                TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A, storage=StorageKind.RMEM)
+                TensorType(
+                    shape=(16, 16), dtype=DType.bf16, layout=atom.A, storage=StorageKind.RMEM
+                )
             )
             b_frag = T.alloc_tensor(
                 TensorType(shape=(16, 8), dtype=DType.bf16, layout=atom.B, storage=StorageKind.RMEM)
@@ -50,7 +52,7 @@ class MmHandwritten:
             T.copy(b_view, b_frag)
             T.fill(acc, 0.0)
             T.mma(acc, a_frag, b_frag, atom=atom)
-            # register → gmem store.
+
             c_view = T.tensor_view(c, layout=atom.C)
             T.copy(acc, c_view)
 

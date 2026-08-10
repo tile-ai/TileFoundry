@@ -5,6 +5,7 @@ Single SM80 16x8x16 BF16 mma atom: ``c = a @ b`` with ``a`` shape
 (M=16, N=8) f32. Numerical match against ``torch.matmul(a.float(),
 b.float())`` within bf16 tolerance.
 """
+
 from __future__ import annotations
 
 import torch
@@ -21,9 +22,6 @@ from tilefoundry.ir.types.shard import (
     Topology,
 )
 from tilefoundry.target import CudaTarget
-
-# ── Fragment layouts (cf. tests/ir_types/shard/test_mma_fragment_layouts.py) ──
-
 
 _THREAD = Topology("thread", 32)
 _THREAD_MESH = Mesh(
@@ -49,9 +47,6 @@ _C_FRAG = ShardLayout(
 )
 
 
-# ── @func DSL kernel: single-atom matmul (16,16) bf16 × (16,8) bf16 → (16,8) f32 ──
-
-
 @module(entry="matmul_16x8x16")
 class MatmulModule:
     @func
@@ -59,13 +54,15 @@ class MatmulModule:
         a: Tensor[(16, 16), "bf16"],
         b: Tensor[(16, 8), "bf16"],
     ) -> Tensor[(16, 8), "f32"]:
-        # ShardLayouts carry the closure-captured ``_THREAD_MESH`` directly;
-        # ``HirToTirPass`` derives the matching ``MeshScope`` from the body.
+
         a_frag = reshard(a, layout=_A_FRAG, storage="rmem")
         b_frag = reshard(b, layout=_B_FRAG, storage="rmem")
         c_frag = mma_sm80_16x8x16(
-            a_frag, b_frag,
-            dtype_a="bf16", dtype_b="bf16", dtype_acc="f32",
+            a_frag,
+            b_frag,
+            dtype_a="bf16",
+            dtype_b="bf16",
+            dtype_acc="f32",
         )
         return reshard(c_frag, layout=_C_FRAG, storage="gmem")
 
@@ -79,6 +76,5 @@ def test_mma_sm80_16x8x16_bf16_matches_torch_matmul() -> None:
     torch.cuda.synchronize()
 
     expected = torch.matmul(a.float(), b.float())
-    # bf16 tolerance: each accumulated mac may have ≤ 2^-7 relative error,
-    # over K=16 → cumulative ~ K · 2^-7 ≈ 0.125 in worst case.
+
     assert torch.allclose(out, expected, rtol=2e-2, atol=2e-2)

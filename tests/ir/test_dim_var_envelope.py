@@ -42,15 +42,11 @@ def _identity_fn(
 def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
     """Test a signature may not forge its dim var envelope.
 
-    A specialization range must stay inside the DimVar envelope and reference a
-    DimVar that exists in the params, and one name may not carry two envelopes
-    anywhere in the signature.
-
-    ``DispatchCall.subject`` lowers to ``ShapeOf(param, axis)``, so a DimVar that
-    appears only in the return type cannot be read at runtime and is reported as
-    unknown rather than accepted. The consistency scan covers params, return_type
-    and nested ``TupleType`` fields, because any of them can introduce the second
-    envelope.
+    A specialization range stays inside the envelope of a parameter DimVar, and
+    one name cannot carry two envelopes anywhere in a signature.
+    ``DispatchCall.subject`` lowers to ``ShapeOf(param, axis)``, so a DimVar only
+    in the return type is unreadable at runtime and remains unknown. The scan
+    covers params, return type, and nested ``TupleType`` fields.
     """
     s = DimVar(name="S_env", lo=1, hi=8)
     forged = _identity_fn(
@@ -66,24 +62,22 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
             _identity_fn(params=(known,), specializations=(DimVarRangePat("OTHER", 1, 4),))
         )
 
-    # Anchored to the return type only: not readable from any param at runtime.
     r = DimVar(name="R_ret_only", lo=1, hi=8)
     with pytest.raises(VerifyError, match="references unknown DimVar"):
-        verify_function(_identity_fn(
-            params=(Var(type=_tensor((4,)), name="x"),),
-            return_type=_tensor((r,)),
-            specializations=(DimVarRangePat("R_ret_only", 1, 4),),
-        ))
+        verify_function(
+            _identity_fn(
+                params=(Var(type=_tensor((4,)), name="x"),),
+                return_type=_tensor((r,)),
+                specializations=(DimVarRangePat("R_ret_only", 1, 4),),
+            )
+        )
 
     lo_var = DimVar(name="S_inc", lo=1, hi=8)
     hi_var = DimVar(name="S_inc", lo=4, hi=16)
     x = Var(type=_tensor((lo_var,)), name="x")
     inconsistent = (
-        # Across two params.
         _identity_fn(params=(x, Var(type=_tensor((hi_var,)), name="y"))),
-        # Between params and return_type.
         _identity_fn(params=(x,), return_type=_tensor((hi_var,))),
-        # Inside a TupleType field of return_type.
         _identity_fn(params=(x,), return_type=TupleType(fields=(_tensor((hi_var,)),))),
     )
     for fn in inconsistent:
@@ -100,14 +94,18 @@ def _dispatch_proto(name: str, env, ranges):
     """
     s = DimVar(name=name, lo=env[0], hi=env[1])
     ty = _tensor((s,))
-    base = HirFunction.build(name="g", params=(Var(type=ty, name="x"),),
-                             body=None, return_type=ty)
+    base = HirFunction.build(name="g", params=(Var(type=ty, name="x"),), body=None, return_type=ty)
     for lo, hi in ranges:
         x = Var(type=ty, name="x")
-        base.add_variant(HirFunction.build(
-            name="g", params=(x,), body=x, return_type=ty,
-            specializations=(DimVarRangePat(name, lo, hi),),
-        ))
+        base.add_variant(
+            HirFunction.build(
+                name="g",
+                params=(x,),
+                body=x,
+                return_type=ty,
+                specializations=(DimVarRangePat(name, lo, hi),),
+            )
+        )
     return base
 
 
@@ -118,17 +116,14 @@ def test_variants_must_tile_the_envelope_exactly() -> None:
     disjoint. A gap leaves a runtime shape with no arm, and an overlap makes the
     selected arm depend on evaluation order.
     """
-    # [1,5) + [5,8) exactly tile the half-open envelope [1,8); a
-    # single-point variant [4,5) (= the value 4) is a legal range.
     verify_function(_dispatch_proto("S_par_ok", (1, 8), [(1, 5), (5, 8)]))
     verify_function(_dispatch_proto("S_par_pt", (1, 8), [(1, 4), (4, 5), (5, 8)]))
 
-    # [1,5) and [4,8) overlap at 4 (next must start at 5).
     with pytest.raises(VerifyError, match="gap or overlap at 4"):
         verify_function(_dispatch_proto("S_par_ov", (1, 8), [(1, 5), (4, 8)]))
-    # [1,3) then [5,8) leaves 3,4 uncovered.
+
     with pytest.raises(VerifyError, match="gap or overlap at 5"):
         verify_function(_dispatch_proto("S_par_gap", (1, 8), [(1, 3), (5, 8)]))
-    # [1,5) + [5,7) stop at 7 but the envelope reaches 8.
+
     with pytest.raises(VerifyError, match=r"cover \[1, 7\) but the envelope is \[1, 8\)"):
         verify_function(_dispatch_proto("S_par_inc", (1, 8), [(1, 5), (5, 7)]))

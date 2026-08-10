@@ -1,4 +1,5 @@
 """DumpScope / IDumper / ContextVar coverage."""
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,7 @@ def test_file_dumper_writes_files(tmp_path) -> None:
     with DumpScope(dumper=fd, flags=DumpFlags.CODEGEN_SOURCE):
         with DumpScope("nested", DumpFlags.ALL):
             dump("module.cu", "kernel", DumpFlags.CODEGEN_SOURCE)
-            dump("ir.txt", "pass", DumpFlags.PASS_IR)  # parent masked → drop
+            dump("ir.txt", "pass", DumpFlags.PASS_IR)
     assert (tmp_path / "scope" / "nested" / "module.cu").read_text() == "kernel"
     assert not (tmp_path / "scope" / "nested" / "ir.txt").exists()
 
@@ -49,7 +50,8 @@ def test_dump_scope_isolation_across_threads_and_asyncio_tasks() -> None:
 
     with DumpScope(dumper=parent_dumper, flags=DumpFlags.ALL):
         t = threading.Thread(target=worker)
-        t.start(); t.join()  # noqa: E702
+        t.start()
+        t.join()  # noqa: E702
         dump("p.txt", "self", DumpFlags.PASS_IR)
     assert thread_results == [{"t.txt": "child"}]
     assert parent_dumper.entries == {"p.txt": "self"}

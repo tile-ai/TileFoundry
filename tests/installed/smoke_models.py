@@ -42,10 +42,12 @@ def test_models_renders_the_whole_forest_with_leaf_modules_marked(tf) -> None:
     assert "* Qwen3_1_7B_DecoderLayer\n" not in forest
     assert "*   layer0..layer27  (28 identical, each as shown)" in forest
     assert "layer1\n" not in forest
-    assert "input_rms_norm(hidden: Tensor[(1, 1, 2048), \"bf16\"]" in forest
+    assert 'input_rms_norm(hidden: Tensor[(1, 1, 2048), "bf16"]' in forest
 
 
-def test_models_source_names_the_shipped_directory_and_its_files(tf, shipped, installation, tmp_path) -> None:
+def test_models_source_names_the_shipped_directory_and_its_files(
+    tf, shipped, installation, tmp_path
+) -> None:
     done = tf("models", "qwen3_1_7b", "--source")
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()

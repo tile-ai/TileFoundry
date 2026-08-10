@@ -1,32 +1,9 @@
 #!/usr/bin/env python3
-"""Reject a reference to a spec section that does not point at that section.
+"""Validate durable links to numbered spec sections.
 
-A reference is written `[<doc> §<number>](<path>#<github-anchor>)`. The display
-text carries the light form a reader wants; the target carries the heading's
-name. Both halves are checked against each other and against the document, which
-is what makes the reference survive editing: rename a heading and its anchor stops
-resolving, renumber one and the display text stops agreeing with what it points
-at. A bare `§2.3` has neither property -- it is a number that was true once.
-
-Five things are refused:
-
-* an anchor that names no heading in the target document;
-* an anchor that names a heading other than the section the display text numbers,
-  including a heading nested under it -- a reference to `§2.3` goes to `§2.3`, not
-  to one of its subsections;
-* a display text naming a different document than the target;
-* a reference link with no anchor at all, `[types §4](./types.md)`, which has
-  nothing in it that can break when a heading is renamed;
-* a bare `§2.3`, outside a fenced block, where a link belongs.
-
-Headings come from `tilefoundry.utils.markdown`, the same scan
-`tilefoundry.cli.spec.sections` reads a document through, so a `#` line inside a
-fenced block is a comment here exactly as it is there and the two cannot grow
-separate answers to what sections a document has.
-
-Run over the files a commit touches (the pre-commit hook passes them); a
-reference is reported with the line it is on, and the exit status is non-zero if
-any was found.
+Display document and number must match the target heading and GitHub anchor.
+Missing, nested, anchorless, cross-document, and bare section references fail.
+Heading discovery shares ``tilefoundry.utils.markdown`` with the spec CLI.
 """
 
 from __future__ import annotations
@@ -38,25 +15,19 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 
-#: A markdown link whose display text carries a section number. The character
-#: classes admit newlines, so a reference reflowed across two lines is still one
-#: reference rather than two halves that each look like prose.
+
 _REFERENCE = re.compile(r"\[([^\[\]]*?§[0-9][^\[\]]*?)\]\(([^()]*?)\)", re.DOTALL)
 
-#: A section number standing on its own, once the references around it are out
-#: of the way. `§2.3` says which section was true when it was written and stops
-#: saying anything the moment one is inserted above it.
+
 _BARE = re.compile(r"§[0-9](?:\.[0-9]+)*")
 
-#: A line break plus whatever the next line opens with: a C++ `//`, a block
-#: comment `*`, or nothing at all.
+
 _CONTINUATION = re.compile(r"\s*\n\s*(?://+|\*)?\s*")
 
-#: A fence opens or closes a block in which `§2.3` is example text.
+
 _FENCE = re.compile(r"^\s*(```|~~~)")
 
-#: The display text: an optional document, then the number. The document may be
-#: written with or without `.md`, and the whole may be wrapped in backticks.
+
 _DISPLAY = re.compile(
     r"^\s*`?\s*(?:(?P<doc>[a-z][\w-]*)(?:\.md)?\s+)?§(?P<number>[0-9][0-9.]*?)\.?\s*`?\s*$",
     re.DOTALL,
@@ -75,9 +46,7 @@ def _markdown():
     path = _ROOT / "src" / "tilefoundry" / "utils" / "markdown.py"
     spec = importlib.util.spec_from_file_location("tilefoundry_utils_markdown", path)
     module = importlib.util.module_from_spec(spec)
-    # Registered before it runs: `@dataclass` resolves annotations through
-    # `sys.modules[cls.__module__]`, which is not there for a module loaded by
-    # path alone.
+
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
@@ -91,9 +60,7 @@ def anchors(document: Path) -> dict[str, str | None]:
     """Each of a document's anchors to the section number carrying it."""
     if document not in _ANCHORS:
         text = document.read_text(encoding="utf-8")
-        _ANCHORS[document] = {
-            heading.anchor: heading.number for heading in markdown.headings(text)
-        }
+        _ANCHORS[document] = {heading.anchor: heading.number for heading in markdown.headings(text)}
     return _ANCHORS[document]
 
 
@@ -140,7 +107,7 @@ def findings(path: Path) -> list[tuple[int, str, str]]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return []  # unreadable or binary: nothing to claim about it
+        return []
     source = path.resolve()
     found = []
     for match in _REFERENCE.finditer(text):
@@ -152,11 +119,13 @@ def findings(path: Path) -> list[tuple[int, str, str]]:
     prose = _outside_references(text, path.suffix == ".md")
     for match in _BARE.finditer(prose):
         number = prose.count("\n", 0, match.start()) + 1
-        found.append((
-            number,
-            f"bare `{match.group(0)}`; a reference MUST name its heading",
-            text.splitlines()[number - 1].strip(),
-        ))
+        found.append(
+            (
+                number,
+                f"bare `{match.group(0)}`; a reference MUST name its heading",
+                text.splitlines()[number - 1].strip(),
+            )
+        )
     return sorted(found)
 
 
@@ -200,8 +169,7 @@ def _why(source: Path, display: str, target: str) -> str:
 def main(argv: list[str]) -> int:
     if not argv:
         print(
-            "usage: spec_refs_lint.py <path> ...  "
-            "(the pre-commit hook passes the staged files)",
+            "usage: spec_refs_lint.py <path> ...  (the pre-commit hook passes the staged files)",
             file=sys.stderr,
         )
         return 2

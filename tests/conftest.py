@@ -1,33 +1,12 @@
-"""Test infrastructure: autouse ``DumpScope`` wiring.
+"""Configure isolated dumps and devices for the test suite.
 
-Autouse fixture: each test runs inside a ``DumpScope(dumper=FileDumper(...),
-flags=ALL)`` rooted at ``test_results/{file_stem}/{test_name}`` for the
-common single-worker case. When pytest-xdist uses additional workers, the
-worker id is appended to the leaf test directory name so workers still do
-not collide.
-Two orthogonal isolation layers:
-
-- filesystem path keyed by pytest file stem first, with optional
-  ``__{worker_id}`` suffix on the test leaf so parallel pytest-xdist
-  workers do not collide.
-- ``ContextVar``-backed scope so multiple tests in the same process — and
-  any threads / asyncio Tasks they spawn — see only their own scope.
-
-Tests that produce a lot of dump output and want to opt out can mark
-themselves with ``pytest.mark.no_dump``; the autouse fixture then
-installs ``NullDumper`` for that test, leaving the rest of the wiring
-intact.
-
-All tests run by default; there is no marker-based skipping. Tests that
-need nvcc or a CUDA device will fail (not skip) on a machine that lacks
-them.
-
-On a machine with more than one CUDA device, each xdist worker is given one of
-them round-robin (see ``_spread_workers_across_devices``). Nothing in the tests
-names a device index, so ``"cuda"`` means whichever one the worker was given.
-
-``test_results/`` is gitignored.
+Each test gets a ``ContextVar``-backed ``DumpScope`` rooted by file, test, and
+xdist worker under gitignored ``test_results``; ``no_dump`` selects a null sink.
+Tests are never skipped for missing nvcc or CUDA. On multi-GPU hosts, xdist
+workers select devices round-robin before tests touch CUDA, so an unindexed
+``"cuda"`` consistently means that worker's device.
 """
+
 from __future__ import annotations
 
 import os
@@ -68,7 +47,7 @@ def _split_nodeid(nodeid: str) -> tuple[str, str | None]:
     if not sep:
         return file_stem, None
     if test_part.startswith("test_"):
-        test_part = test_part[len("test_"):]
+        test_part = test_part[len("test_") :]
     safe_test = _SANITIZE.sub("_", test_part).strip("_")
     return file_stem, safe_test
 
@@ -91,15 +70,9 @@ def _dump_relpath(nodeid: str, worker_id: str) -> Path:
 def _spread_workers_across_devices() -> None:
     """Give each xdist worker one CUDA device, round-robin.
 
-    Every worker defaulting to device 0 puts the whole suite's model weights on one
-    card while the others idle: measured, eight workers held 6 to 33 GB each on one
-    140 GB device and the production-sized decoder References ran it out of memory.
-    The models under test are real ones, so the fix is to use the machine that is
-    there rather than to shrink them.
-
-    Called at import so it lands before any test touches CUDA. `set_device` rather
-    than `CUDA_VISIBLE_DEVICES`, because the environment variable is read when the
-    driver initialises and a worker process has already imported torch by now.
+    Defaulting every worker to device 0 exhausts that card while others idle.
+    Called at import before tests touch CUDA. ``set_device`` is required because
+    workers have already imported torch, too late for ``CUDA_VISIBLE_DEVICES``.
     """
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker is None or not worker.startswith("gw"):

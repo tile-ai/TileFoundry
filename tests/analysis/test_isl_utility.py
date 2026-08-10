@@ -1,4 +1,5 @@
 """isl_utility — dim_range, to_domain encode, to_dim decode."""
+
 from __future__ import annotations
 
 import isl

@@ -52,9 +52,9 @@ def test_dim_var_range_validation() -> None:
     raising: cross-instance scoping is a signature-level rule enforced by HIR
     ``verify_function``, not by construction.
     """
-    DimVar("S_point", 4, 5)  # single value 4 as [4, 5) — no raise
+    DimVar("S_point", 4, 5)
     with pytest.raises(ValueError, match="require lo < hi"):
-        DimVar("S_empty", 4, 4)  # empty half-open range
+        DimVar("S_empty", 4, 4)
     with pytest.raises(ValueError, match="require lo < hi"):
         DimVar("S_inv", 5, 1)
 
@@ -71,9 +71,7 @@ def test_zero_extent_has_zero_logical_and_local_size() -> None:
     assert tensor_bytes(type) == 0
 
     sharded = make_shard_tensor_type((0,), mesh=make_mesh((2,)), attrs=(Split(0),))
-    assert local_type_of(
-        sharded, level="gpu", topologies=(Topology("gpu", 2),)
-    ).shape == (1, 0)
+    assert local_type_of(sharded, level="gpu", topologies=(Topology("gpu", 2),)).shape == (1, 0)
 
 
 def test_size_rejects_symbolic_and_negative_extents() -> None:
@@ -118,9 +116,9 @@ def test_local_type_preserves_canonical_split_projection(
 ) -> None:
     tensor = make_shard_tensor_type(shape, mesh=_cta_mesh(extent), attrs=(Split(1),))
 
-    assert local_type_of(
-        tensor, level="cta", topologies=(Topology("cta", extent),)
-    ).shape == expected
+    assert (
+        local_type_of(tensor, level="cta", topologies=(Topology("cta", extent),)).shape == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -166,16 +164,15 @@ def test_canonical_shard_layout_keeps_rejecting_non_divisible_splits(
 
 
 @pytest.mark.parametrize(("axis", "expected"), [(1056, 8), (1000, 8), (8, 1)])
-def test_local_type_uses_ceildiv_for_a_resolved_launch_extent(
-    axis: int, expected: int
-) -> None:
-    tensor = make_shard_tensor_type(
-        (1, axis, 128, 2048), mesh=_cta_mesh(None), attrs=(Split(1),)
-    )
+def test_local_type_uses_ceildiv_for_a_resolved_launch_extent(axis: int, expected: int) -> None:
+    tensor = make_shard_tensor_type((1, axis, 128, 2048), mesh=_cta_mesh(None), attrs=(Split(1),))
 
-    assert local_type_of(
-        tensor, level="cta", topologies=(Topology("cta", 132),)
-    ).shape == (1, expected, 128, 2048)
+    assert local_type_of(tensor, level="cta", topologies=(Topology("cta", 132),)).shape == (
+        1,
+        expected,
+        128,
+        2048,
+    )
 
 
 def test_local_type_rejects_multiple_launch_provided_split_axes() -> None:
@@ -183,17 +180,13 @@ def test_local_type_rejects_multiple_launch_provided_split_axes() -> None:
         topologies=(Topology("cta", None),),
         layout=Layout(shape=(None, None), strides=None),
     )
-    tensor = make_shard_tensor_type(
-        (1056, 128), mesh=mesh, attrs=(Split(0), Split(1))
-    )
+    tensor = make_shard_tensor_type((1056, 128), mesh=mesh, attrs=(Split(0), Split(1)))
 
     with pytest.raises(
         ValueError,
         match=r"mesh Mesh\(.*Split axes \(0, 1\).*one parallel width with no per-axis source",
     ):
-        local_type_of(
-            tensor, level="cta", topologies=(Topology("cta", 132),)
-        )
+        local_type_of(tensor, level="cta", topologies=(Topology("cta", 132),))
 
 
 @pytest.mark.parametrize(
@@ -224,9 +217,9 @@ def test_cost_evaluator_uses_the_resolved_launch_extent() -> None:
     source = Var(type=tensor, name="source")
     call = Call(type=tensor, target=Unary(kind=UnaryKind.NEG), args=(source,))
 
-    cost = CostEvaluator(
-        CostContext(level="cta", topologies=(Topology("cta", 132),))
-    ).visit_Call(call)
+    cost = CostEvaluator(CostContext(level="cta", topologies=(Topology("cta", 132),))).visit_Call(
+        call
+    )
 
     assert cost.flops[DType.f32] == 128 * 2048
 
@@ -270,8 +263,6 @@ def test_local_type_stops_before_a_finer_split() -> None:
 def test_local_type_does_not_divide_replicated_or_partial_values(attr) -> None:
     tensor = make_shard_tensor_type((256,), mesh=_cta_mesh(4), attrs=(attr,))
 
-    local = local_type_of(
-        tensor, level="cta", topologies=(Topology("cta", 4),)
-    )
+    local = local_type_of(tensor, level="cta", topologies=(Topology("cta", 4),))
 
     assert numel(local) == 256

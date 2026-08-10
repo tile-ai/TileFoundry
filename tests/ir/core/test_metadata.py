@@ -5,6 +5,7 @@ printed model, so only the invariants a model happy path cannot localise stay
 here: identity is blind to metadata, malformed metadata is rejected at
 construction, and a no-attribute Op is a cached singleton.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,7 +36,8 @@ def _type() -> TensorType:
 def test_source_labels_do_not_change_expr_identity() -> None:
     plain = Var(type=_type(), name="x")
     located = Var(
-        type=_type(), name="x",
+        type=_type(),
+        name="x",
         metadata=(
             BindingMetadata("x"),
             SourceSpanMetadata("model.py", 7, 3, 7, 9),
@@ -45,7 +47,7 @@ def test_source_labels_do_not_change_expr_identity() -> None:
     assert located == plain
     assert hash(located) == hash(plain)
     assert get_metadata(located, BindingMetadata) == BindingMetadata("x")
-    # Lookup is by concrete class, so the abstract base matches nothing.
+
     assert get_metadata(located, IRMetadata) is None
 
 
@@ -74,6 +76,7 @@ def test_expr_rejects_malformed_metadata() -> None:
 
 def test_op_attribute_singleton_cache() -> None:
     """No-attribute Ops are cached — ``Foo() is Foo()`` (spec 001)."""
+
     class _OpB(Op):
         pass
 

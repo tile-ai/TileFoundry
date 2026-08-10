@@ -1,16 +1,9 @@
 """What `case.py` claims about this model, held to being true today.
 
-The corpus harness asks these questions once the case is named in the registry;
-until it is, a case is an unverified assertion, and an unverified case is exactly
-what a capability matrix exists to prevent. So each claim is checked here: the
-context length the case names is one the description can really be asked at, and
-every question the case selects really does get an answer.
-
-These questions were blocked when this package was migrated -- MLA splits each
-head into its unrotated and rotated halves and DeepSeek's interleaved rotation
-takes every other channel, so both kernels are built out of `tf.slice` and
-`tf.concat`, and the cost registry could evaluate neither. It can now, so the
-case states no gate and this file is what would notice if that regressed.
+The corpus verifies every registry claim: its context length is supported and
+each selected question gets an answer. MLA relies on ``tf.slice`` and
+``tf.concat`` for split head rotation; the cost registry now evaluates both, so
+the case has no gate. These tests detect any regression to an unverified case.
 """
 
 from __future__ import annotations
@@ -48,7 +41,10 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     sized = specialize_concretely(function, dict(ANALYZED_AT))
     cache = next(p for p in sized.params if p.name == "kv_cache")
     assert tuple(int(d) for d in cache.type.shape) == (
-        1, ANALYZED_AT["ctx_len"], 1, REAL.head_dim,
+        1,
+        ANALYZED_AT["ctx_len"],
+        1,
+        REAL.head_dim,
     )
 
     with pytest.raises(

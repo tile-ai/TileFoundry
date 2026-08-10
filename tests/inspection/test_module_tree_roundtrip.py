@@ -6,6 +6,7 @@ a class in its body. Importing that file runs the authoring decorators to build
 an equal tree, so a declared context stays declared and an inherited one stays
 absent.
 """
+
 from __future__ import annotations
 
 from tests._source import import_dsl
@@ -22,7 +23,6 @@ _THREAD = Topology("thread", 32)
 
 @module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
 class _Tree:
-
     @func
     def forward(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return tf.relu(x)
@@ -39,7 +39,6 @@ class _Tree:
 
     @module(entry="step", topologies=(_THREAD,))
     class replaces:
-
         @func
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.square(x)
@@ -69,7 +68,7 @@ def test_the_root_declaration_and_its_functions_survive_the_round_trip() -> None
     assert imported.entry == "forward"
     assert imported.target == CudaTarget("nvidia.h200_sxm")
     assert imported.topologies == (_CTA,)
-    # Every owned function, in the order the printer emits (callees first).
+
     assert [fn.name for fn in imported.functions] == ["spare", "forward"]
     assert imported.entry_function().name == "forward"
 
@@ -84,7 +83,10 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     imported = import_dsl(as_script(_Tree))
 
     assert sorted(child.name for child in imported.modules) == [
-        "inherits", "nominates_nothing", "replaces", "topology_free",
+        "inherits",
+        "nominates_nothing",
+        "replaces",
+        "topology_free",
     ]
     assert _child(imported, "inherits").entry == "step"
     assert _child(imported, "replaces").entry_function().name == "step"

@@ -1,17 +1,11 @@
 """What this fixture is sourced from, and what it does not cover.
 
-A model package named after a checkpoint makes two claims a reader cannot check
-by reading it: that its numbers came from that checkpoint, and that the tests
-next to it cover what they appear to. Both are asserted here.
-
-The coverage half is the more important one for a model this size. The published
-model is 40 layers and 35 billion parameters, and the reference for it is
-declared, boundary-complete submodules rather than a stack -- so what is *not*
-executed has to be written down, or "the tests pass" would read as a claim about
-the model. ``NOT_EXECUTED`` is that list, and it is checked against the Modules
-themselves: a function nobody runs has to be declared here before the suite will
-accept it.
+These tests establish that package numbers came from the named checkpoint and
+that coverage claims are exact. The 40-layer reference uses boundary-complete
+submodules rather than a full stack, so ``NOT_EXECUTED`` must enumerate every
+unrun function before the suite accepts the package.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -37,13 +31,6 @@ from tilefoundry.ir.core.module import select
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-# Where the numbers came from is `tests/models/test_provenance.py`: it pins this
-# fixture's `config.json` to the revision it was downloaded at, over the whole
-# published file rather than over a copied subset of its fields. What is left
-# here is what that cannot say -- which parts of the published model this fixture
-# covers, and which it does not.
-
-
 def test_the_stack_is_the_published_order_and_its_layers_are_independent():
     """The stack is `layer_types` in order, and each layer is an independent copy.
 
@@ -67,15 +54,12 @@ def test_the_stack_is_the_published_order_and_its_layers_are_independent():
     selected = select(stack, "layer0.moe.experts")
     assert selected.name == "moe"
     assert selected.entry_function().name == "experts"
-    # The router is a Module of its own, two levels down, and reachable as one.
+
     assert select(stack, "layer0.moe.router.routing").entry_function().name == "routing"
 
     assert "forward" in stack.methods
     with pytest.raises(ValueError, match=f"{shape.num_hidden_layers} layers but was given 0"):
         stack.decode_hidden(None, (), ())
-
-
-# ── what mrope actually covers here ─────────────────────────────────────
 
 
 def test_mrope_degenerates_in_a_text_only_fixture():
@@ -104,9 +88,7 @@ def test_mrope_degenerates_in_a_text_only_fixture():
 
     with torch.device(DEV):
         rotary = Qwen3_5MoeTextRotaryEmbedding(reference.CONFIG)
-    frequencies = torch.outer(
-        torch.arange(total, device=DEV).float(), rotary.inv_freq
-    )
+    frequencies = torch.outer(torch.arange(total, device=DEV).float(), rotary.inv_freq)
     plain = torch.cat([frequencies, frequencies], dim=-1)
 
     assert (plain.cos() - cos).abs().max().item() < 1e-9
@@ -139,23 +121,13 @@ def test_generation_inputs_match_the_drawn_position():
     assert caches is sentinel
 
 
-# ── the multi-token-prediction gap ──────────────────────────────────────
-
-
 def test_multi_token_prediction_has_no_oracle_in_the_installed_transformers():
     """``mtp_num_hidden_layers`` is 1, and there is nothing to compare against.
 
-    This is a gate on a limit that was measured, not expected. The published
-    configuration states a multi-token-prediction head; the installed
-    transformers implements none -- ``mtp`` appears in the Qwen3.5 modeling file
-    only in ``_keys_to_ignore_on_load_unexpected``, which *discards* those
-    weights on load, and no class, function or config field in the package
-    defines the head's semantics.
-
-    Without an oracle, a reference for it could only be this repository's own
-    reading of the configuration, compared against this repository's own kernels.
-    That proves nothing, so it is not written. If a future transformers ships the
-    head, this test fails and the gate has to be lifted deliberately.
+    The published configuration declares an MTP head, but installed transformers
+    only discards those weights and defines no semantics. A repository-local
+    reference would be circular. If transformers gains an oracle, this measured
+    gate fails and must be lifted deliberately.
     """
     import transformers.models.qwen3_5_moe.modeling_qwen3_5_moe as modeling  # noqa: PLC0415
 
@@ -167,19 +139,10 @@ def test_multi_token_prediction_has_no_oracle_in_the_installed_transformers():
     assert all("_keys_to_ignore_on_load_unexpected" in line for line in mentions), (
         f"transformers now mentions mtp outside its discard rule: {mentions}"
     )
-    # Nothing in the module namespace defines the head either, under any spelling.
-    assert not [
-        name for name, _ in inspect.getmembers(modeling)
-        if "mtp" in name.lower()
-    ]
+
+    assert not [name for name, _ in inspect.getmembers(modeling) if "mtp" in name.lower()]
 
 
-# ── declared coverage ───────────────────────────────────────────────────
-
-#: Every IR function this package authors, and whether a test runs it. A function
-#: that is neither executed nor declared unexecuted fails
-#: ``test_every_authored_function_is_either_executed_or_declared``, so coverage
-#: cannot drift by someone adding a kernel.
 EXECUTED: dict[str, tuple[str, ...]] = {
     "Qwen3_5Router": ("routing",),
     "Qwen3_5MoE": ("post_norm", "routed_experts", "shared_expert", "experts"),
@@ -190,26 +153,12 @@ EXECUTED: dict[str, tuple[str, ...]] = {
 }
 
 NOT_EXECUTED: dict[str, tuple[str, ...]] = {
-    # Same body as `partial_rope` over the key head count, exercised through
-    # `full_attention`, never called on its own.
     "Qwen3_5FullAttention": ("partial_rope_kv",),
-    # Exercised through `linear_attention`. Not called directly because neither
-    # has a Hugging Face module of its own to compare against: `conv_step` is a
-    # fragment of `Qwen3_5MoeGatedDeltaNet.forward` and `delta_step` a single
-    # token of `torch_recurrent_gated_delta_rule`, so a direct comparison would
-    # be against a slice of a function rather than against a module boundary.
     "Qwen3_5LinearAttention": ("conv_step", "l2_normalise", "delta_step"),
-    # The stack these belong to is not run against an oracle (see
-    # `the_40_layer_stack` below), so neither the norm that closes it nor the
-    # embedding and head at its two ends have anything to be compared with. They
-    # are authored because the model has them, and without them the root would
-    # describe a step that begins and ends nowhere.
     "Qwen3_5_35B_A3B": ("embed", "final_rms_norm", "lm_head"),
 }
 
-#: What no test in this package executes at all, with the reason. Not derived
-#: from the code -- it is the part a reader cannot see by looking at what is
-#: there, so it is stated.
+
 UNCOVERED_SEMANTICS: dict[str, str] = {
     "multi_token_prediction": (
         "mtp_num_hidden_layers is 1 and the installed transformers implements no "
@@ -250,8 +199,7 @@ UNCOVERED_SEMANTICS: dict[str, str] = {
         "measured by this package."
     ),
     "quantisation_and_tensor_parallelism": (
-        "the published config carries tp/ep plans; nothing here shards or "
-        "quantises anything."
+        "the published config carries tp/ep plans; nothing here shards or quantises anything."
     ),
 }
 

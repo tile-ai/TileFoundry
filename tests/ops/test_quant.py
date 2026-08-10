@@ -3,6 +3,7 @@
 Quant typeinfer: returns (quantized values, per-group f32 scales); the last
 dim must be divisible by the group size.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -21,8 +22,6 @@ _BF = DType.bf16
 _FP8 = DType.fp8e4m3
 
 CASES = [
-    # No corpus model calls quant, so one positive stays here: the default
-    # group size splits the last dim into per-group f32 scales.
     TypeInferCase(
         "rank2_per_token_group_128",
         Quant(),

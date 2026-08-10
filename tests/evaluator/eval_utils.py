@@ -6,6 +6,7 @@ Mirror of ``typeinfer_utils`` for value semantics: build a real
 reference. An op test file declares a list of ``EvalCase`` and runs each
 through ``run_eval_case``; only the per-op coverage table varies.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -70,10 +71,6 @@ def run_eval_case(case: EvalCase) -> None:
     call = replace(call, type=result_type)
     from tilefoundry.ir.hir.function import Function  # noqa: PLC0415 — avoid IR import cycle
 
-    fn = Function.build(
-        name="eval_case", params=params, body=call, return_type=result_type
-    )
+    fn = Function.build(name="eval_case", params=params, body=call, return_type=result_type)
     out = evaluate(fn, *case.inputs, device="cpu")
-    torch.testing.assert_close(
-        out.float(), case.expected.float(), atol=case.atol, rtol=case.rtol
-    )
+    torch.testing.assert_close(out.float(), case.expected.float(), atol=case.atol, rtol=case.rtol)

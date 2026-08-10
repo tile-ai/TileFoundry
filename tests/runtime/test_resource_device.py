@@ -1,17 +1,9 @@
-"""How a checkpoint directory is read: which device, which shard layout, which dtype.
+"""Pin checkpoint loading to the process-selected CUDA device.
 
-The device half comes first, and is about what the caller's word means.
-`safetensors` reads the device string itself, and it takes a bare ``"cuda"`` as
-index 0. Every torch spelling of the same word -- ``.cuda()``, ``device="cuda"``,
-a ``torch.device`` context -- means whichever device the process has selected. On
-a single-card machine the two agree and nothing here can go wrong; on a machine
-with several they disagree, and a weight loaded from the checkpoint cannot be
-compared against anything computed alongside it.
-
-That is what these check: not that loading works, but that the word means one
-thing. The comparison is against `torch.cuda.current_device()` rather than against
-a literal index, because a literal would pass on the very machine the defect
-cannot occur on.
+Safetensors interprets bare ``"cuda"`` as index 0, while torch uses the current
+device. They diverge only on multi-GPU hosts. These tests require all spellings
+to resolve through ``torch.cuda.current_device()`` so loaded weights and adjacent
+computations share a device.
 """
 
 from __future__ import annotations
@@ -77,10 +69,13 @@ def test_a_directory_with_neither_says_so(tmp_path) -> None:
 
 def test_the_stored_dtype_is_what_comes_back(tmp_path) -> None:
     """Every read preserves the checkpoint's dtype, including a subtree view."""
-    ckpt = _unsharded(tmp_path, {
-        "w": torch.ones(4, dtype=torch.bfloat16),
-        "nested.w": torch.ones(4, dtype=torch.bfloat16),
-    })
+    ckpt = _unsharded(
+        tmp_path,
+        {
+            "w": torch.ones(4, dtype=torch.bfloat16),
+            "nested.w": torch.ones(4, dtype=torch.bfloat16),
+        },
+    )
 
     assert SafetensorsResource(ckpt, device="cpu").load("w").dtype is torch.bfloat16
     read = SafetensorsResource(ckpt, device="cpu")
@@ -96,9 +91,12 @@ def test_preprocessed_rejects_a_group_at_construction() -> None:
 
 def test_preprocessed_cannot_name_a_subtree_segment() -> None:
     """M2 validates leaf preprocessing, so this public invalid segment needs coverage here."""
-    resource = SafetensorsResource("unused", alias={
-        "layer": Preprocessed("model.layers.0", lambda value: value),
-    })
+    resource = SafetensorsResource(
+        "unused",
+        alias={
+            "layer": Preprocessed("model.layers.0", lambda value: value),
+        },
+    )
 
     with pytest.raises(TypeError, match="path, not a tensor"):
         resource.subtree("layer")

@@ -45,7 +45,6 @@ def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough() ->
     with pytest.raises(VerifyError, match=r"^Copy: "):
         VerifyVisitor(ctx).visit(stmt)
 
-    # Unregistered structural Stmts are no-ops.
     VerifyVisitor(VerifyContext()).visit(Return())
     VerifyVisitor(VerifyContext()).visit(
         LetStmt(
@@ -62,6 +61,7 @@ def test_visitors_fail_closed_when_unregistered() -> None:
     An Op with no registered handler is an error, never a silent no-op
     or a zero result — for codegen and Cost Evaluators alike.
     """
+
     class _UnknownOp(Op):
         pass
 
@@ -70,8 +70,6 @@ def test_visitors_fail_closed_when_unregistered() -> None:
 
     call = Call(type=_t(), target=_UnknownOp(), args=())
     with pytest.raises(RuntimeError, match="no @register_codegen_cuda for Op _UnknownOp"):
-        CodegenVisitor(
-            _Ctx(), codegen_cuda_registry, backend="cuda"
-        ).emit_expr(call)
+        CodegenVisitor(_Ctx(), codegen_cuda_registry, backend="cuda").emit_expr(call)
     with pytest.raises(VerifyError, match="no cost evaluator registered for _UnknownOp"):
         CostEvaluator(CostContext()).visit_Call(call)

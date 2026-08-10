@@ -37,7 +37,7 @@ def test_pass_manager_runs_in_registered_order_and_enforces_requires():
 
     pm = PassManager()
     pm.add(_Traced("a")).add(_Traced("b")).add(_Traced("c"))
-    # entry_function() is not invoked by empty PassManager runs.
+
     pm.run(Module(name="m", functions=(), entry="x"))
     assert trace == ["a", "b", "c"]
 

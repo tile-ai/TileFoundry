@@ -7,6 +7,7 @@ axis — keeping each tensor axis's sub-axes together — and remap the
 ``Split`` / ``Partial`` references to the moved layout positions, rather than
 indexing layout positions with the tensor-axis permutation directly.
 """
+
 from __future__ import annotations
 
 from tests.ops.typeinfer_utils import (
@@ -23,29 +24,13 @@ from tilefoundry.ir.types.shard.shard_layout import (
     shard_layout_local_shape,
 )
 
-# A 4-axis mesh whose split axis factorizes a tensor dim into mesh-extent ×
-# per-shard sub-positions (cluster, cta, warp, lane).
 _M = make_mesh((1, 128, 8, 32), ("cluster", "cta", "warp", "lane"))
 _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 
 
-# ── sharded carries ───────────────────────────────────────────────────────
-# The unsharded permutation and its value oracle are what the corpus decoders
-# transpose for on every tiled matmul, so the model References carry them. The
-# factorized-layout cases below are what no model builds.
-# Transpose is a view: it reorders layout positions by owning tensor axis
-# rather than recomputing a fresh canonical layout, so its output strides are
-# a permutation of the input's, not necessarily C-order. These cases check
-# output shape and which mesh axis stays genuinely `Split` (and its local
-# extent), not the internal layout position / stride a valid `Transpose`
-# permutation produces.
-
-
 def test_plain_input_permutes_its_layout_when_one_is_stated():
-    source = make_tensor_type(
-        (16, 8), DType.bf16, layout=Layout(shape=(16, 8), strides=(8, 1))
-    )
+    source = make_tensor_type((16, 8), DType.bf16, layout=Layout(shape=(16, 8), strides=(8, 1)))
     ty = infer_call(_T10, source)
 
     assert ty.layout == Layout(shape=(8, 16), strides=(1, 8))
@@ -80,7 +65,12 @@ def test_implicit_strides_no_crash():
     strides (regression: no None-stride indexing crash).
     """
     x_ty = raw_shard_tensor_type(
-        (16, 8), (16, 8), None, (Split(0), *_B4[1:]), _M, dtype=DType.bf16,
+        (16, 8),
+        (16, 8),
+        None,
+        (Split(0), *_B4[1:]),
+        _M,
+        dtype=DType.bf16,
     )
     ty = infer_call(_T10, x_ty)
     assert tuple(ty.shape) == (8, 16)

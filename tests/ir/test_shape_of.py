@@ -1,4 +1,5 @@
 """Verify ``tir.ShapeOf`` construction + ``shape_var_name`` helper."""
+
 from __future__ import annotations
 
 import pytest
@@ -10,7 +11,9 @@ from tilefoundry.ir.types import DType, TensorType
 
 
 def _x_param() -> Var:
-    return Var(type=TensorType(shape=(4, 8), dtype=DType.f32, layout=None, storage="gmem"), name="x")
+    return Var(
+        type=TensorType(shape=(4, 8), dtype=DType.f32, layout=None, storage="gmem"), name="x"
+    )
 
 
 def test_shape_of_rejects_negative_axis():

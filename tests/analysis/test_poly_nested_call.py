@@ -1,22 +1,12 @@
-"""What ``extract`` refuses when it walks into a nested ``@func`` call.
+"""Pin the nested ``@func`` call shapes that ``extract`` refuses.
 
-Penetrating a call is the ordinary path -- the walker binds the callee's params to
-the caller's own argument expressions and recurses into its body, prefixing every
-statement and buffer it contributes with the callee name and a per-call-site
-index (``poly._walk_calls``). A real decoder layer is nothing but nested calls, so
-that path is exercised wholesale by the corpus Analyze witness. What is left here
-are the three shapes it cannot walk, each of which has to name the callee it
-stopped at: without the name, a failure in a module of many small helpers says
-only that something somewhere could not be extracted.
-
-Self-recursion and an arity mismatch cannot be authored through the normal
-``@func`` surface: ``tilefoundry.script._definition_namespace`` only resolves a
-callee bound *before* its caller (no forward references), and
-``hir.function.elaborate`` rejects an arity mismatch at parse time. Those two
-construct HIR directly instead. A dispatch prototype call *is* authorable
-normally (a ``pass`` body typechecks fine as a callee -- only extract, not
-elaboration, cannot resolve it statically).
+Normal calls bind arguments, recurse, and prefix contributed statements and
+buffers by callee and call-site index. Failures must name the stopped callee.
+Self-recursion and arity mismatches require hand-built HIR because the authoring
+surface rejects forward references and bad arity. A dispatch prototype is
+authorable normally, but extraction cannot resolve its ``pass`` body statically.
 """
+
 from __future__ import annotations
 
 import pytest

@@ -1,26 +1,15 @@
-"""What HirToTirPass refuses, what it decides about storage, and where its walk has to reach.
+"""Cover HirToTirPass rejection, storage decisions, and traversal reachability.
 
-What HirToTirPass refuses, what it decides about storage, and where its walk
-has to reach.
+Tests target diagnostics and decisions not observable from successful kernel
+execution, without pinning an interchangeable statement sequence.
 
-That the pass produces a well-formed ``PrimFunction`` for a real program is
-settled by every test that compiles one and runs it: a malformed lowering does not
-produce CUDA that computes the right answer. Pinning the emitted statement
-sequence here as well would fix the shape of a lowering that is free to change
-while it keeps producing the same kernel.
-
-What a runtime witness cannot say is why a program was rejected, which residency a
-value ended up in when two readings were available, and whether a walk reached a
-child that only some inputs have. Those are here.
+See [passes §7.1](docs/spec/passes.md#71-hirtotirpass).
 """
 
 from __future__ import annotations
 
 import pytest
 
-# DSL surface imported at module scope so ``@func`` closure
-# resolution sees ``Tensor`` / ``Mesh`` / ... when the tests below
-# build inline @func definitions.
 from tilefoundry.dsl import (
     Mesh,
     ReduceKind,
@@ -147,9 +136,6 @@ def test_hir_reduce_no_workspace_when_only_thread_topology_split() -> None:
     assert len(reduce_call.args) == 2, (
         f"intra-warp reduce should have 2 args (src, dst), got {len(reduce_call.args)}"
     )
-
-
-# ── ExprVisitor-based HIR walks reach every child ([visitor-mutator §1](docs/spec/visitor-mutator.md#1-role))
 
 
 def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:

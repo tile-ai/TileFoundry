@@ -1,18 +1,11 @@
-"""Platform namespace ``T.cuda.mma`` + ``MmaAtom``.
+"""Pin the ``T.cuda.mma`` namespace and ``MmaAtom`` contract.
 
-Covers:
-- ``T.cuda.mma.atom(op=...)`` builds an ``MmaAtom`` exposing A/B/C layout
-  contracts (the pinned fragment shards) and a required thread scope;
-- in a ``@prim_func`` body, ``op = ...`` / ``atom = ...`` are compile-time
-  static bindings — no ``LetStmt`` is emitted;
-- ``atom.A`` (a fragment layout) used to alloc a register tensor is checked at
-  the use point against the enclosing mesh scope. That check is
-  ``mesh_scope_matches_required_scope``, which matches on thread participation
-  (program level + static lane count + the exact required thread-value layout
-  shape and strides) and ignores binding-var names, axis names and mesh
-  identity; the cases below are its accept/reject categories seen through the
-  surface that uses it.
+Atoms expose A/B/C fragment layouts and a required thread scope; atom bindings
+are compile-time values, not ``LetStmt`` nodes. Register allocation validates
+the enclosing mesh by level, lane count, and exact thread-value layout while
+ignoring names and mesh identity ([tir §2.3](docs/spec/tir.md#23-tir-ops)).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -27,19 +20,21 @@ from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CudaTarget
 
-# Module-level pre-instantiated alias (equivalent to building it inline).
 _ATOM = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
 
 
 def _alloc_frag_kernel(topology, mesh_layout, names=()):
     """A kernel that allocs a fragment via `atom.A` inside the given scope."""
+
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
         atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
         with Mesh((topology,), mesh_layout, names=names) as warp:  # noqa: F841
             frag = T.alloc_tensor(  # noqa: F841
-                TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A,
-                           storage=StorageKind.RMEM)
+                TensorType(
+                    shape=(16, 16), dtype=DType.bf16, layout=atom.A, storage=StorageKind.RMEM
+                )
             )
+
     return kernel
 
 
@@ -70,7 +65,8 @@ def test_a_valid_scope_takes_the_atom_contract_as_is() -> None:
 
     kernel = prim_func(target=CudaTarget("nvidia.h200_sxm"))(
         _alloc_frag_kernel(
-            Topology("thread", 32), Layout(shape=(4, 8), strides=(1, 4)),
+            Topology("thread", 32),
+            Layout(shape=(4, 8), strides=(1, 4)),
             names=("warp", "lane"),
         )
     )
@@ -130,8 +126,7 @@ def test_atom_A_outside_mesh_scope_is_rejected() -> None:
     def kernel(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
         atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
         frag = T.alloc_tensor(  # noqa: F841
-            TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A,
-                       storage=StorageKind.RMEM)
+            TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A, storage=StorageKind.RMEM)
         )
 
     with pytest.raises(VerifyError, match="must be used inside a `with Mesh"):

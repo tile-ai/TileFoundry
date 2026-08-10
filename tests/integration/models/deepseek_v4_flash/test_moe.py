@@ -32,7 +32,6 @@ def _calls(fn):
     return tuple(expr for expr in _walk(fn.body) if isinstance(expr, Call))
 
 
-#: The real model's shapes, read off the config the block is authored at.
 DIM = REAL.dim
 MOE_INTER = REAL.moe_inter
 N_ACT = REAL.n_act
@@ -64,8 +63,7 @@ def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
     combined_call = next(
         call
         for call in _calls(deepseek_v4_flash_moe)
-        if isinstance(call.target, Function)
-        and call.target.name == "combine_expert_outputs"
+        if isinstance(call.target, Function) and call.target.name == "combine_expert_outputs"
     )
     combined = constraint_metadata(combined_call).constraints[0]
     assert isinstance(combined, LayoutConstraint)

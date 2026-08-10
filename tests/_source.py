@@ -25,10 +25,6 @@ def import_dsl(source: str, name: str | None = None) -> Module | Function:
         assert isinstance(value, (Module, Function))
         return value
 
-    values = [
-        value
-        for value in vars(loaded).values()
-        if isinstance(value, (Module, Function))
-    ]
+    values = [value for value in vars(loaded).values() if isinstance(value, (Module, Function))]
     assert len(values) == 1, "name the DSL binding when source builds more than one"
     return values[0]

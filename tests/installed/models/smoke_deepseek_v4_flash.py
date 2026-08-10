@@ -4,6 +4,7 @@ Its ``hf_alias.py`` sits in the checkout next to ``model.py`` and the packaging
 manifest does not list it, so the directory this file asks about does not carry it.
 Asking through the command is what makes that difference visible at all.
 """
+
 from __future__ import annotations
 
 import math
@@ -18,16 +19,13 @@ MODEL = "deepseek_v4_flash"
 CASES = contract.model_cases(MODEL)
 
 ANALYSED = [
-    pytest.param(case, selected, id=selected.id)
-    for case in CASES
-    for selected in case.analyze
+    pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
 ]
 PLANNED = [
-    pytest.param(case, planned, id=planned.id)
-    for case in CASES
-    for planned in case.schedule
+    pytest.param(case, planned, id=planned.id) for case in CASES for planned in case.schedule
 ]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
+
 
 @pytest.mark.parametrize(("case", "selected"), ANALYSED)
 def test_every_selected_function_analyses(tf, shipped_source, case, selected) -> None:
@@ -42,28 +40,17 @@ def test_every_selected_function_plans(tf, shipped_source, case, planned) -> Non
 
 
 @pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_every_analysis_answers_at_the_largest_context(
-    tf, shipped_source, case, sized
-) -> None:
+def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case, sized) -> None:
     """At the ceiling the case states, not at a sample of it."""
-    contract.analysed_every_family(
-        tf, shipped_source(MODEL), case, sized.selector, sized.ceiling
-    )
+    contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
 
 
-# ── against Hugging Face ─────────────────────────────────────────────────────
-#: The corpus's own contract for a reference comparison.
 ATOL = RTOL = 2e-3
 
-#: Two lengths, so a step that only works at the length it was authored against
-#: cannot pass. Neither divides the head count, and the longer is the most this
-#: sliding layer can attend.
+
 CTX_LENGTHS = (41, reference.CTX_LEN)
 
-#: The whole attention submodule, named as a Module rather than one of its
-#: functions: `check` then compares `forward`, which computes this token's latent
-#: and attends with it. Naming `mla_attend` would require feeding that latent in as
-#: an activation, which is an intermediate the orchestration produces.
+
 ATTENTION = ""
 
 cuda_only = pytest.mark.skipif(
@@ -89,16 +76,14 @@ def _fp8_step(latent) -> float:
     so two ways of computing the same latent may land one grid step apart. Derived
     from the block's own magnitude, so it cannot quietly widen.
     """
-    blocks = (
-        latent[..., : reference.REAL.nope_dim].float().reshape(-1, reference.KV_QUANT_BLOCK)
-    )
+    blocks = latent[..., : reference.REAL.nope_dim].float().reshape(-1, reference.KV_QUANT_BLOCK)
     return blocks.abs().amax(dim=-1).max().item() / 8.0
 
 
 def _entry(step):
     """The latent this token appends, and the grid it is stored on."""
     want = reference.appended_cache_oracle(step)
-    return want, want[:, step.ctx_len:]
+    return want, want[:, step.ctx_len :]
 
 
 def _asked(tf, work, source, step, *, out_held):
@@ -109,7 +94,11 @@ def _asked(tf, work, source, step, *, out_held):
     """
     _grown, entry = _entry(step)
     return contract.compared(
-        tf, work, source, CASES[0], ATTENTION,
+        tf,
+        work,
+        source,
+        CASES[0],
+        ATTENTION,
         activations=step.args,
         weights=step.weights,
         expected=(reference.attention_step_oracle(step), entry),
@@ -133,19 +122,19 @@ def test_the_disagreement_is_smaller_than_the_oracles_own_rounding(
     """
     step = reference.attention_step_inputs()
     device = step.hidden_ctx.device.type
-    layer_f32 = reference.build_hf_attention(
-        seed=reference.WEIGHT_SEED, device=device
-    ).float()
+    layer_f32 = reference.build_hf_attention(seed=reference.WEIGHT_SEED, device=device).float()
     oracle_f32 = reference.decode_reference(
         layer_f32, step.hidden_ctx.float(), step.hidden_new.float()
     )
-    oracle_gap = (
-        (reference.attention_step_oracle(step).float() - oracle_f32).abs().max().item()
-    )
+    oracle_gap = (reference.attention_step_oracle(step).float() - oracle_f32).abs().max().item()
     _grown, entry = _entry(step)
 
     contract.compared(
-        tf, tmp_path, shipped_source(MODEL), CASES[0], ATTENTION,
+        tf,
+        tmp_path,
+        shipped_source(MODEL),
+        CASES[0],
+        ATTENTION,
         activations=step.args,
         weights=step.weights,
         expected=(oracle_f32.to(reference.DTYPE), entry),
@@ -171,7 +160,10 @@ def test_the_step_is_authored_over_a_range_of_context_lengths(
 
     assert step.kv_cache.shape[1] == ctx_len
     _asked(
-        tf, tmp_path, shipped_source(MODEL), step,
+        tf,
+        tmp_path,
+        shipped_source(MODEL),
+        step,
         out_held=("allclose", {"atol": _bf16_ulps(want), "rtol": 0.0}),
     )
 
@@ -194,6 +186,9 @@ def test_the_step_returns_the_cache_entry_to_append(tf, shipped_source, tmp_path
     assert grown.shape[1] == step.ctx_len + 1
     assert torch.equal(grown[:, : step.ctx_len], step.kv_cache)
     _asked(
-        tf, tmp_path, shipped_source(MODEL), step,
+        tf,
+        tmp_path,
+        shipped_source(MODEL),
+        step,
         out_held=("allclose", {"atol": _bf16_ulps(want), "rtol": 0.0}),
     )

@@ -5,6 +5,7 @@ replication), the same family as MatMul: a pre-existing ``Partial(sum)`` on
 ``input`` or ``weight`` propagates; ``max``/``min`` do not (convolution does
 not preserve order).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -31,7 +32,9 @@ _BIAS_PSUM = make_shard_tensor_type((4,), mesh=_M, attrs=(Partial("sum"),), dtyp
 
 CASES = [
     TypeInferCase(
-        "partial_sum_input_passes", _OP, (_X_PSUM, _W, _BIAS),
+        "partial_sum_input_passes",
+        _OP,
+        (_X_PSUM, _W, _BIAS),
         make_tensor_type((1, 4, 6, 6), _F, layout=_X_PSUM.layout),
     ),
     TypeInferCase(
@@ -41,7 +44,9 @@ CASES = [
         ExpectedError(match="weight carries Partial.*mesh axis 0"),
     ),
     TypeInferCase(
-        "partial_max_input_errors", _OP, (_X_PMAX, _W, _BIAS),
+        "partial_max_input_errors",
+        _OP,
+        (_X_PMAX, _W, _BIAS),
         ExpectedError(match="Conv2D"),
     ),
     TypeInferCase(

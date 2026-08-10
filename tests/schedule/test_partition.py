@@ -1,16 +1,8 @@
-"""Closed spatial partition scheduling through the public boundary.
+"""Cover closed spatial partition scheduling through the public boundary.
 
-The solver itself is not asked to be optimal here; what is asked is that every
-plan it returns holds together, that a plan which does not is rejected with the
-reason it failed, and that the numbers it solved against were closed before it
-ran. Those are the only checks standing between a wrong plan and the code
-generated from one, so each distinct way a plan can be wrong keeps its own
-message: which edge disagreed, which position was outside the level, which two
-operations shared a position.
-
-Whether a real model's entry function plans and verifies is the corpus Schedule
-witness's subject. The program here is small so the mutations below can name
-exactly one thing each.
+Returned plans must verify and invalid plans identify the conflicting edge,
+position, or operation. A small program keeps each mutation isolated; corpus
+tests cover real model scheduling.
 """
 
 from __future__ import annotations
@@ -44,8 +36,6 @@ from tilefoundry.schedule.partition import solve as solve_module
 from tilefoundry.schedule.pipeline.problem import PipelineProblemError
 from tilefoundry.target import CudaTarget
 
-#: What the assertions below read is how a plan states a move, which any plan that
-#: verifies states the same way.
 _SOLVER = ScheduleOptions(workers=1, stop_at_first_solution=True)
 
 
@@ -67,9 +57,7 @@ def _closed(extent: int = 4):
     module = _module(extent)
     function = module.entry_function()
     program = build_partition_program(module, function)
-    facts = module.resolve_target().get_facts(
-        PartitionFacts, program.facts_query("cta")
-    )
+    facts = module.resolve_target().get_facts(PartitionFacts, program.facts_query("cta"))
     return module, function, program, facts
 
 
@@ -112,13 +100,9 @@ def test_partition_program_states_the_program_without_asking_the_hardware() -> N
 
     assert program.sites
     assert program.root_value_ids
-    assert all(
-        base.storage.name.lower() == "gmem"
-        for base in program.value_base_types.values()
-    )
+    assert all(base.storage.name.lower() == "gmem" for base in program.value_base_types.values())
     assert not any(
-        field.name in {"target", "facts", "device"}
-        for field in dataclasses.fields(program)
+        field.name in {"target", "facts", "device"} for field in dataclasses.fields(program)
     )
 
 
@@ -133,8 +117,7 @@ def test_partition_problem_closes_every_hardware_number_before_solving() -> None
     assert facts.memory_capacity_bytes > 0
     assert facts.peak_flops_per_second
     assert all(
-        not hasattr(candidate, "capacity_bytes")
-        for candidate in problem.candidates.values()
+        not hasattr(candidate, "capacity_bytes") for candidate in problem.candidates.values()
     )
     assert all(candidate.duration_ns >= 0 for candidate in problem.candidates.values())
 
@@ -187,9 +170,7 @@ def test_partition_refuses_a_level_the_facts_and_the_program_do_not_share() -> N
         build_partition_problem(program, replace(facts, topology="core"), Topology("cta", 4))
 
     with pytest.raises(ValueError, match="no partition facts for 'thread'"):
-        module.resolve_target().get_facts(
-            PartitionFacts, program.facts_query("thread")
-        )
+        module.resolve_target().get_facts(PartitionFacts, program.facts_query("thread"))
 
     thread_only = replace(gemm_norm, topologies=(Topology("thread", 128),))
     with pytest.raises(ScheduleError, match="cta"):
@@ -245,9 +226,7 @@ def test_partition_plan_states_a_reshard_as_an_operation_with_both_placements() 
         options=_SOLVER,
     ).plan
 
-    reshards = tuple(
-        operation for operation in plan.operations if operation.operation == "Reshard"
-    )
+    reshards = tuple(operation for operation in plan.operations if operation.operation == "Reshard")
     assert reshards
     assert not hasattr(plan, "routes")
     assert not hasattr(plan, "report")
@@ -270,9 +249,7 @@ def test_partition_plan_states_a_reshard_as_an_operation_with_both_placements() 
     qualified = tuple(value for value in plan.values if "@" in value.id)
     assert qualified
     for base in {value.id.split("@", 1)[0] for value in qualified}:
-        placements = tuple(
-            value for value in qualified if value.id.split("@", 1)[0] == base
-        )
+        placements = tuple(value for value in qualified if value.id.split("@", 1)[0] == base)
         assert len(placements) > 1
 
 
@@ -292,23 +269,19 @@ def test_verification_rejects_an_edge_the_two_ends_do_not_agree_on(solved) -> No
 
     produced = next(value for value in plan.values if value.producer_id)
     other_operation = next(
-        operation
-        for operation in plan.operations
-        if produced.id not in operation.output_ids
+        operation for operation in plan.operations if produced.id not in operation.output_ids
     )
     with pytest.raises(PlanVerificationError, match="does not produce it"):
-        _with_value(plan, produced, producer_id=other_operation.id).verify(
-            module, function, level
-        )
+        _with_value(plan, produced, producer_id=other_operation.id).verify(module, function, level)
 
     read = next(value for value in plan.values if value.consumer_ids)
     not_a_reader = next(
         operation for operation in plan.operations if read.id not in operation.input_ids
     )
     with pytest.raises(PlanVerificationError, match="does not read it"):
-        _with_value(
-            plan, read, consumer_ids=(*read.consumer_ids, not_a_reader.id)
-        ).verify(module, function, level)
+        _with_value(plan, read, consumer_ids=(*read.consumer_ids, not_a_reader.id)).verify(
+            module, function, level
+        )
 
     with pytest.raises(PlanVerificationError, match="which names producer None"):
         _with_value(plan, produced, producer_id=None).verify(module, function, level)
@@ -326,8 +299,7 @@ def _with_value(plan, target, **changes):
     return replace(
         plan,
         values=tuple(
-            replace(value, **changes) if value is target else value
-            for value in plan.values
+            replace(value, **changes) if value is target else value for value in plan.values
         ),
     )
 
@@ -364,9 +336,9 @@ def test_verification_rejects_a_value_nothing_runs_and_a_root_nothing_reaches(
         positions=plan.values[0].positions,
     )
     with pytest.raises(PlanVerificationError, match="does not produce it"):
-        replace(
-            plan, values=(*plan.values, orphan), root_results=("orphan",)
-        ).verify(module, function, level)
+        replace(plan, values=(*plan.values, orphan), root_results=("orphan",)).verify(
+            module, function, level
+        )
 
 
 def test_verification_rejects_a_placement_the_level_does_not_contain(solved) -> None:
@@ -447,9 +419,7 @@ def test_verification_rejects_a_bound_above_its_own_objective(solved) -> None:
     """
     module, function, plan = solved
 
-    broken = replace(
-        plan, proof=replace(plan.proof, best_bound_ns=plan.proof.objective_ns + 1)
-    )
+    broken = replace(plan, proof=replace(plan.proof, best_bound_ns=plan.proof.objective_ns + 1))
     with pytest.raises(PlanVerificationError, match="bound above its own objective"):
         broken.verify(module, function, Topology("cta", 4))
 
@@ -491,9 +461,7 @@ def test_partition_plan_renders_the_same_decision_as_text_and_json(solved) -> No
     assert data["extent"] == plan.extent
     assert data["proof"]["status"] == plan.proof.status
     assert data["root_results"] == list(plan.root_results)
-    assert {item["id"] for item in data["values"]} == {
-        value.id for value in plan.values
-    }
+    assert {item["id"] for item in data["values"]} == {value.id for value in plan.values}
     assert {item["id"] for item in data["operations"]} == {
         operation.id for operation in plan.operations
     }
@@ -528,9 +496,7 @@ def test_a_problem_that_cannot_be_formed_is_a_schedule_failure() -> None:
     """
     for error in (PartitionProblemError, PipelineProblemError):
         assert issubclass(error, ScheduleError), error.__name__
-        # Still a ValueError, so every existing caller keeps catching it.
+
         assert issubclass(error, ValueError), error.__name__
 
-    # A solve that finds nothing is the solver's own outcome rather than a
-    # malformed request, and stays a plain runtime failure.
     assert issubclass(solve_module.PartitionSolveError, RuntimeError)

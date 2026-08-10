@@ -1,17 +1,11 @@
-"""Define test poly rmsnorm behavior.
+"""Pin ``extract`` behavior for the registered ``RMSNorm`` relation.
 
-``extract`` coverage for ``RMSNorm`` now that it carries a registered
-forward ``type_relation`` (``rms_norm.py``'s ``_rms_norm_type_relation``,
-modelled on ``SoftMax``'s) instead of a poly-private fallback: the domain is
-the batch axes only (``x.shape[:-1]``) and the reduced (last) axis is an
-existential range dim on the read/write maps, with ``weight`` read over that
-same range. This is the reduction relation every fused row-wise op is built to
-the shape of; ``SoftMax``'s own is pinned in ``test_analysis_invariants.py``.
-
-Sharding is resolved one level up, in ``extract``'s ``_local_type``, so the
-relation itself never sees a layout; the localization tests below cover that
-helper directly.
+Its domain contains batch axes only; the reduced last axis is existential in
+read/write maps, including the weight read. ``extract._local_type`` resolves
+sharding before the relation sees the type. ``test_analysis_invariants.py``
+pins the corresponding ``SoftMax`` shape.
 """
+
 from __future__ import annotations
 
 import isl
@@ -28,9 +22,7 @@ _MESH = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), names=("a",))
 
 
 @func
-def rmsnorm_only(
-    x: Tensor[(2, 64), "f32"], weight: Tensor[(64,), "f32"]
-) -> Tensor[(2, 64), "f32"]:
+def rmsnorm_only(x: Tensor[(2, 64), "f32"], weight: Tensor[(64,), "f32"]) -> Tensor[(2, 64), "f32"]:
     y = rms_norm(x, weight)
     return y
 
@@ -64,32 +56,21 @@ def test_extract_rmsnorm_single_statement():
     expected_writes = isl.union_map("{ RN[i] -> y[i, j] : 0 <= i < 2 and 0 <= j < 64 }")
     assert tg.reads.is_equal(expected_reads)
     assert tg.writes.is_equal(expected_writes)
-    # Single statement, nothing else reads/writes x/weight/y: no dependence.
+
     assert tg.deps.is_empty()
 
 
 def test_local_type_divides_the_split_axis_and_keeps_tensor_rank():
     """A ``Split`` axis contributes its per-shard extent.
 
-    A ``Split`` axis contributes its per-shard extent, and the result keeps
-    the tensor's own rank.
-
-    The layout a real sharding path produces (``make_shard_tensor_type`` ->
-    ``canonical_shard_layout``) factors the split axis into several layout
-    positions, so ``layout.shape`` can outrank the tensor -- ``(8, 16)`` with
-    ``Split(0)`` over a 2-way mesh becomes ``(2, 4, 16)``. Localizing through
-    the layout would hand a rank-3 access map to a rank-2 buffer, which puts
-    reader and writer in different isl spaces and drops the dependence between
-    them; ``split_target_axes`` names the *tensor* axis each mesh axis splits
-    instead, which is what keeps the rank.
-
-    A non-leading split axis and an unsharded type are asserted beside it because
-    the helper has to answer all three: the axis the mesh names is divided, every
-    other axis is left whole, and a type with no layout at all comes back as the
-    very same object rather than a rebuilt copy of it.
+    Canonical layouts may outrank tensors: split ``(8, 16)`` becomes layout
+    ``(2, 4, 16)``. Localization must use ``split_target_axes`` to divide the
+    tensor axis while preserving rank, or reader and writer enter different isl
+    spaces and lose dependencies. The test also covers a trailing split and the
+    identity behavior for an unsharded type.
     """
     x = make_shard_tensor_type((8, 16), mesh=_MESH, attrs=(Split(0),))
-    assert len(x.layout.layout.shape) == 3  # the factored layout, not a typo
+    assert len(x.layout.layout.shape) == 3
 
     local = _local_type(x)
 

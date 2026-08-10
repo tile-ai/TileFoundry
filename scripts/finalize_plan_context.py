@@ -1,29 +1,12 @@
 #!/usr/bin/env python3
-"""Finalize an authored plan.
+"""Finalize policy-generated regions in an authored plan.
 
-The CLI input shape is ``docs/plans/<name>.md``. hygiene: required CLI path template.
-Reads a plan written against the repository template, matches each
-milestone's ``#### Related Files`` against
-`docs/policies/project-policy.json`, and rewrites two kinds of
-generated regions:
-
-- each milestone's ``<!-- policy_ac:start --> ... <!-- policy_ac:end -->``
-  range carries the policy ACs whose ``when.path_glob`` matches that
-  milestone's ``#### Related Files``;
-- the plan-level ``<!-- final_gate:start --> ... <!-- final_gate:end -->``
-  range carries final-tree gates such as spec discipline and formatting.
-
-Rules and knowledge are NOT injected into the plan. They are asked for
-when they are needed: ``scripts/get_policy.py --type rules --role
-implementer --paths ...``. A rule restated in every plan is a rule
-nobody rereads.
-
-The finalizer never touches handwritten content outside the marker
-ranges. A ``policy_*`` HTML comment appearing outside any allowed
-range is a hard validation failure. Every milestone must define its
-Target State Design; a milestone that changes a public contract declares
-so by listing the owning ``docs/spec/*.md`` path in its Related Files.
+Input is ``docs/plans/<name>.md``. hygiene: required CLI path template.
+Related Files select milestone acceptance criteria and final-tree gates.
+Handwritten content is preserved; misplaced markers or incomplete milestone
+structure fail validation.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -32,9 +15,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Allow ``from scripts.get_policy import ...`` when invoked from the
-# repo root via either ``python scripts/finalize_plan_context.py`` or
-# the test suite's ``import scripts.finalize_plan_context``.
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
@@ -49,16 +29,11 @@ MILESTONE_AC_END = "<!-- policy_ac:end -->"
 FINAL_GATE_START = "<!-- final_gate:start -->"
 FINAL_GATE_END = "<!-- final_gate:end -->"
 
-# Any ``<!-- policy_(ac|rules|knowledge): <id> -->`` tag. The
-# whitespace AFTER the colon is the rendered convention; the marker
-# pair sentinels ``policy_*:start`` / ``policy_*:end`` have no space
-# after the colon and are therefore NOT matched by this pattern.
+
 INLINE_POLICY_TAG_RE = re.compile(
     r"<!--\s+(?:policy_ac|policy_final|policy_rules|policy_knowledge):\s+[\w\-]+\s+-->"
 )
-POLICY_CHECK_RE = re.compile(
-    r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([\w\-]+)\s+-->"
-)
+POLICY_CHECK_RE = re.compile(r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([\w\-]+)\s+-->")
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
 FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
 
@@ -67,19 +42,12 @@ class FinalizeError(Exception):
     """Report a validation failure clearly through a nonzero CLI exit."""
 
 
-# ---------------------------------------------------------------------------
-# Plan parsing
-# ---------------------------------------------------------------------------
-
-
 def _strip_inline_comments(text: str) -> str:
     return re.sub(r"<!--.*?-->", "", text)
 
 
 def _split_lines(text: str) -> list[str]:
-    # ``splitlines(keepends=True)`` preserves trailing newline form; the
-    # finalizer prefers logical-line manipulation, so we strip then
-    # rejoin with `\n` at write time. The plan files are LF.
+
     return text.split("\n")
 
 
@@ -173,11 +141,6 @@ def _related_files_from_section(
     return _list_bullets(lines, section_start + 1, section_end)
 
 
-# ---------------------------------------------------------------------------
-# Whole-plan structure model
-# ---------------------------------------------------------------------------
-
-
 _PATH_FROM_BULLET_RE = re.compile(r"`([^`]+)`")
 
 
@@ -200,42 +163,30 @@ class PlanModel:
         self.path = plan_path
         self.text = plan_path.read_text()
         self.lines = _split_lines(self.text)
-        # Headings, bullets and markers are located on the masked copy; the
-        # verbatim lines are what gets rewritten.
+
         self.scan = _mask_fenced(self.lines)
         self._parse()
 
     def _parse(self) -> None:
         lines = self.scan
 
-        # There is no plan-level touch surface to write down: it is the union of
-        # the milestones', filled in after they are parsed. `## Description`
-        # above is free prose, and nothing here reads it.
         self.plan_related_files: list[str] = []
 
         self.final_gate_start_idx = self._require_unique_line(FINAL_GATE_START)
         self.final_gate_end_idx = self._require_unique_line(FINAL_GATE_END)
         if self.final_gate_end_idx <= self.final_gate_start_idx:
-            raise FinalizeError(
-                f"{self.path}: `final_gate:end` precedes `final_gate:start`."
-            )
+            raise FinalizeError(f"{self.path}: `final_gate:end` precedes `final_gate:start`.")
         self.final_gate_states = _policy_check_states(
             lines, self.final_gate_start_idx, self.final_gate_end_idx
         )
 
-        # Plan-level template sections: every level-2 heading the
-        # template promises must exist (and have a non-empty body for
-        # the prose ones).
         for name in ("Description", "Milestones", "Final Gate"):
             span = _find_section(lines, 2, name)
             if span is None:
-                raise FinalizeError(
-                    f"{self.path}: missing required `## {name}` section."
-                )
+                raise FinalizeError(f"{self.path}: missing required `## {name}` section.")
 
-        # Milestones: each `### Milestone <name>` block.
         milestones_span = _find_section(lines, 2, "Milestones")
-        assert milestones_span is not None  # guarded above
+        assert milestones_span is not None
         self.milestones: list[dict[str, Any]] = []
         i = milestones_span[0] + 1
         end = milestones_span[1]
@@ -243,7 +194,7 @@ class PlanModel:
             lvl = _heading_level(lines[i])
             if lvl == 3 and lines[i].startswith("### Milestone "):
                 ms_start = i
-                # Find this milestone's end: next level-3 within milestones or block end.
+
                 j = i + 1
                 while j < end:
                     jl = _heading_level(lines[j])
@@ -260,8 +211,6 @@ class PlanModel:
                 f"{self.path}: `## Milestones` block contains no `### Milestone …` entries."
             )
 
-        # The plan's touch surface is what its milestones touch -- stated once,
-        # per milestone, and unioned here in first-mention order.
         seen: set[str] = set()
         for m in self.milestones:
             for path in m["related_files"]:
@@ -278,17 +227,14 @@ class PlanModel:
             )
         if len(idxs) > 1:
             raise FinalizeError(
-                f"{self.path}: marker {marker!r} appears {len(idxs)} times "
-                "(expected exactly one)."
+                f"{self.path}: marker {marker!r} appears {len(idxs)} times (expected exactly one)."
             )
         return idxs[0]
 
     def _parse_milestone(self, ms_start: int, ms_end: int) -> dict[str, Any]:
         lines = self.scan
-        name = _heading_text(lines[ms_start])  # e.g. "Milestone M0: Schema"  comment-hygiene: allow
+        name = _heading_text(lines[ms_start])
 
-        # Every level-4 heading the template promises must exist and
-        # carry a non-empty body.
         sections: dict[str, tuple[int, int]] = {}
         for required in (
             "Depends",
@@ -299,23 +245,20 @@ class PlanModel:
         ):
             span = _find_section(lines, 4, required, ms_start + 1, ms_end)
             if span is None:
-                raise FinalizeError(
-                    f"{self.path}: milestone {name!r} missing `#### {required}`."
-                )
-            # Non-emptiness: there must be at least one non-blank, non-marker-only
-            # line in the body.
+                raise FinalizeError(f"{self.path}: milestone {name!r} missing `#### {required}`.")
+
             body = [
                 ln
                 for ln in self.lines[span[0] + 1 : span[1]]
-                if ln.strip() and ln.strip() not in (
+                if ln.strip()
+                and ln.strip()
+                not in (
                     MILESTONE_AC_START,
                     MILESTONE_AC_END,
                 )
             ]
             if not body:
-                raise FinalizeError(
-                    f"{self.path}: milestone {name!r} has empty `#### {required}`."
-                )
+                raise FinalizeError(f"{self.path}: milestone {name!r} has empty `#### {required}`.")
             sections[required] = span
 
         related = sections["Related Files"]
@@ -333,7 +276,6 @@ class PlanModel:
 
         ac_section = sections["Acceptance Criteria"]
 
-        # Locate the local policy_ac marker pair inside the AC section.
         ac_start = ac_end = None
         for k in range(ac_section[0] + 1, ac_section[1]):
             t = lines[k].strip()
@@ -349,8 +291,7 @@ class PlanModel:
             )
         if ac_end <= ac_start:
             raise FinalizeError(
-                f"{self.path}: milestone {name!r}: `policy_ac:end` precedes "
-                f"`policy_ac:start`."
+                f"{self.path}: milestone {name!r}: `policy_ac:end` precedes `policy_ac:start`."
             )
 
         return {
@@ -362,20 +303,13 @@ class PlanModel:
             "policy_states": _policy_check_states(lines, ac_start, ac_end),
         }
 
-# ---------------------------------------------------------------------------
-# Render
-# ---------------------------------------------------------------------------
-
 
 def _refs_phrase(refs: list[dict[str, str]]) -> str:
     parts = [f"`{r['path']} § {r['section']}`" for r in refs]
     return ", ".join(parts)
 
 
-
-def render_policy_ac_body(
-    matched: list[dict[str, Any]], states: dict[str, bool]
-) -> list[str]:
+def render_policy_ac_body(matched: list[dict[str, Any]], states: dict[str, bool]) -> list[str]:
     items: list[str] = []
     for p in matched:
         for n, ac in enumerate(p.get("ac") or []):
@@ -405,26 +339,12 @@ def render_final_gate_body(
     return items
 
 
-# ---------------------------------------------------------------------------
-# Finalize
-# ---------------------------------------------------------------------------
-
-
-def _replace_range(
-    lines: list[str], start_idx: int, end_idx: int, body: list[str]
-) -> list[str]:
+def _replace_range(lines: list[str], start_idx: int, end_idx: int, body: list[str]) -> list[str]:
     """Replace a range's contents while preserving its marker lines.
 
     The replaced slice is `lines[start_idx + 1 : end_idx]`.
     """
     return lines[: start_idx + 1] + body + lines[end_idx:]
-
-
-# Stray-marker detection: see `_collect_stray_diagnostics` inside
-# ``finalize_plan`` for the canonical implementation used after
-# rewrite. We deliberately do not export it — the detection runs
-# against the post-rewrite line list so that the allowed ranges have
-# stable indices.
 
 
 def finalize_plan(
@@ -444,21 +364,13 @@ def finalize_plan(
     plan = PlanModel(plan_path)
     policies = load_policies(policy_path)
 
-    # Plan-level scope: the union of what the milestones touch, used for the
-    # final-tree gates.
     plan_matched = filter_policies(policies, plan.plan_related_files)
 
-    # Build the full list of (start, end, body) rewrites, then apply
-    # them from highest-index to lowest. Higher-index rewrites do not
-    # shift the positions of lower-index ranges, so a single descending
-    # sort lets us splice without recomputing indices.
     rewrites: list[tuple[int, int, list[str]]] = []
     for m in plan.milestones:
         matched = filter_policies(policies, m["related_files"])
         body = render_policy_ac_body(matched, m["policy_states"])
-        rewrites.append(
-            (m["policy_ac_start_idx"], m["policy_ac_end_idx"], body)
-        )
+        rewrites.append((m["policy_ac_start_idx"], m["policy_ac_end_idx"], body))
     rewrites.append(
         (
             plan.final_gate_start_idx,
@@ -472,19 +384,11 @@ def finalize_plan(
     for start, end, body in rewrites:
         new_lines = _replace_range(new_lines, start, end, body)
 
-    # Stray-marker detection: any policy_ac:* / policy_rules:* /
-    # policy_knowledge:* tag that lands outside every marker range is
-    # a hard failure. Re-derive marker indices on the post-rewrite text
-    # so a stale tag inside the now-generated range is naturally caught
-    # as "inside an allowed range" while a tag living in author-written
-    # prose is caught here.
     allowed: list[tuple[int, int]] = []
     final_gate_start = next(
         i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_START
     )
-    final_gate_end = next(
-        i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_END
-    )
+    final_gate_end = next(i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_END)
     allowed.append((final_gate_start, final_gate_end))
     ac_starts = [i for i, line in enumerate(new_lines) if line.strip() == MILESTONE_AC_START]
     ac_ends = [i for i, line in enumerate(new_lines) if line.strip() == MILESTONE_AC_END]
@@ -496,11 +400,6 @@ def finalize_plan(
     for s, e in zip(sorted(ac_starts), sorted(ac_ends)):
         allowed.append((s, e))
 
-    # Stray-marker detection: any inline policy tag
-    # `<!-- policy_(ac|rules|knowledge): <id> -->` outside an allowed
-    # range is a hard failure. Code fences (``` / ~~~) and inline
-    # code spans (`backticks`) are stripped before the check so that
-    # prose / documentation MAY mention marker syntax in code spans.
     diagnostics: list[str] = []
     in_fence = False
     for i, line in enumerate(new_lines):
@@ -523,7 +422,7 @@ def finalize_plan(
 
     before = plan.text
     after = _join_lines(new_lines)
-    # Preserve the original file's trailing newline behaviour.
+
     if before.endswith("\n") and not after.endswith("\n"):
         after = after + "\n"
     if write and after != before:

@@ -5,6 +5,7 @@ collapsed rather than flattened and is never entered by accident, a sharded
 operand migrates its shard attrs or derives a ``Partial``, and the batched
 lowering fails closed rather than silently take the single-coordinate path.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -43,22 +44,9 @@ def _gather_ref(x, axis, idx):
     return flat.reshape(*x.shape[:axis], *idx.shape, *x.shape[axis + 1 :])
 
 
-# ── sharded input, shard-attr migration ───────────────────────────────────
-#
-# Gather output is a new tensor: the internal layout is always natural
-# contiguous over the output shape, so these check tensor shape and shard
-# attrs (the actual contract) rather than the derived layout.
-
-
-#: Where the input Split lands once the gather has removed axis 0. Off the sharded
-#: axis it renumbers, 1 -> 0. Along it the gather is masked: every device already
-#: holds a zero-filled partial of the gathered rows, so the output sums to the true
-#: gather across that mesh axis.
 GATHERED = [
     pytest.param((Split(1),), (Split(0),), id="leading_axis_scalar_remaps_split"),
-    pytest.param(
-        (Split(0),), (Partial(reduction="sum"),), id="shard_axis_gather_derives_partial"
-    ),
+    pytest.param((Split(0),), (Partial(reduction="sum"),), id="shard_axis_gather_derives_partial"),
 ]
 
 
@@ -72,15 +60,6 @@ def test_a_scalar_gather_carries_the_shard(attrs, expected):
 
     assert tuple(ty.shape) == (4, 8)
     assert isinstance(ty.layout, ShardLayout) and ty.layout.attrs == expected
-
-
-# ── batched gather (explicit TF-style ``batch_dims``) ────────────────────────
-#
-# ``Gather(axis=a, batch_dims=b)`` batches the leading ``b`` dims (which must
-# match between ``x`` and ``index``); the output is
-# ``x[:a] + index.shape[b:] + x[a+1:]``. ``batch_dims=0`` (default) keeps the
-# existing non-batched insert semantics for every prior call — including a
-# leading-dim shape coincidence, which does NOT implicitly switch to batched.
 
 
 def _ref_batched(x, index, axis, batch_dims):
@@ -117,7 +96,7 @@ def test_gather_two_batch_anti_flatten() -> None:
     x = torch.randn(2, 3, 7, 5)
     index = torch.randint(0, 7, (2, 3, 4), dtype=torch.int32)
     expected = _ref_batched(x, index, axis=2, batch_dims=2)
-    assert tuple(expected.shape) == (2, 3, 4, 5)  # NOT [2,3,2,3,4,5]
+    assert tuple(expected.shape) == (2, 3, 4, 5)
     run_eval_case(EvalCase("", Gather(axis=2, batch_dims=2), (x, index), expected))
 
 
@@ -141,29 +120,25 @@ def test_gather_default_batch_dims_zero_keeps_non_batched() -> None:
 
 
 BATCHED_TYPEINFER_CASES = [
-    # batch_dims must not exceed axis.
     TypeInferCase(
         "batch_dims_exceeds_axis_rejected",
         Gather(axis=0, batch_dims=1),
         (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((6,), DType.i32)),
         ExpectedError(match="batch_dims"),
     ),
-    # index must be an integer tensor (spec "integer index tensor") — reject
-    # a float index rather than silently truncating it in eval.
     TypeInferCase(
         "float_index_rejected_non_batched",
         Gather(axis=1),
         (make_tensor_type((6, 3, 4), DType.f32), make_tensor_type((2,), DType.f32)),
         ExpectedError(match="integer"),
     ),
-    # A batched gather over a sharded operand is not yet supported: fail-closed
-    # with a named error (the batch_dims attribute stays a stable interface for
-    # a future sharded/collective implementation). Either operand triggers it;
-    # a sharded source stands for a sharded index too.
     TypeInferCase(
         "sharded_source_batched_gather_not_implemented",
         Gather(axis=1, batch_dims=1),
-        (make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)), make_tensor_type((6, 2), DType.i32)),
+        (
+            make_shard_tensor_type((6, 4, 8), mesh=_M, attrs=(Split(0),)),
+            make_tensor_type((6, 2), DType.i32),
+        ),
         ExpectedError(match="Gather: batched gather .* sharded operand", exc=NotImplementedError),
     ),
 ]
@@ -188,6 +163,8 @@ def test_batched_gather_lowering_rejected() -> None:
     single-coordinate TensorView lowering: HIR->TIR fail-closes with a named
     ``Gather`` error.
     """
-    module = Module(name="t", functions=(_batched_gather_lower_fn,), entry=_batched_gather_lower_fn.name)
+    module = Module(
+        name="t", functions=(_batched_gather_lower_fn,), entry=_batched_gather_lower_fn.name
+    )
     with pytest.raises(NotImplementedError, match="Gather: batched gather lowering"):
         HirToTirPass().run(module)

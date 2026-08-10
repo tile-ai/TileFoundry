@@ -1,17 +1,12 @@
-"""Mesh-scoped ``T.sync(m)`` — parser → IR → verify → codegen-text.
+"""Pin mesh-scoped ``T.sync`` from parser through codegen text.
 
-Covers the contract:
-- parser lowers ``T.sync(m)`` / ``T.sync(m[slice])`` to an ``Evaluate``-wrapped
-  ``Sync`` op carrying the (possibly sliced) mesh as a compile-time attribute;
-- the participant set is derived from the mesh: full CTA → ``__syncthreads()``,
-  a single-warp subset → ``__syncwarp(mask)`` under a predicate, a warp-aligned
-  multi-warp subset → a named ``bar.sync`` under a predicate;
-- verify rejects a sync with no enclosing mesh, a mesh not derived from any
-  enclosing scope, a non-contiguous slice, and a cross-warp-unaligned slice;
-- codegen emits the predicate so non-participants never run the barrier, every
-  participant runs the same id/count, and distinct named barriers get distinct
-  ids within a kernel.
+The parser emits ``Evaluate(Sync)`` with a compile-time mesh. Full CTAs use
+``__syncthreads``; warp and aligned multi-warp subsets use predicated barriers.
+Verification rejects missing, unrelated, non-contiguous, or unaligned scopes.
+Codegen keeps nonparticipants out and assigns distinct named-barrier ids
+([tir §1.5](docs/spec/tir.md#15-sync)).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -61,15 +56,14 @@ def _syncs(body) -> list[Sync]:
     return out
 
 
-# --- parser → IR ---------------------------------------------------------
-
-
 def test_parse_sync_builds_evaluate_wrapped_op() -> None:
     """``T.sync(m)`` lowers to ``Evaluate(Sync(mesh=m))`` carrying the mesh."""
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001 — body-only smoke
-        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
+        with Mesh(
+            (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
+        ) as m:
             T.sync(m)
 
     mesh_scope = kernel.body.body[0]
@@ -89,7 +83,9 @@ def test_parse_sync_slice_records_offset_and_extent() -> None:
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001
-        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:
+        with Mesh(
+            (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
+        ) as m:
             T.sync(m)
             T.sync(m[0, :])
             T.sync(m[1:3, :])
@@ -104,14 +100,13 @@ def test_parse_sync_accepts_only_mesh() -> None:
     """A non-mesh ``T.sync`` argument fails to resolve to a mesh."""
 
     def kernel(a: Tensor[(128,), "f32"]):  # noqa: ARG001
-        with Mesh((Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")) as m:  # noqa: F841
+        with Mesh(
+            (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
+        ) as m:  # noqa: F841
             T.sync(a)
 
     with pytest.raises(VerifyError):
         prim_func(target=CudaTarget("nvidia.h200_sxm"))(kernel)
-
-
-# --- verify --------------------------------------------------------------
 
 
 def _scoped(mesh: Mesh, sync_mesh: Mesh) -> PrimFunction:
@@ -123,7 +118,9 @@ def _scoped(mesh: Mesh, sync_mesh: Mesh) -> PrimFunction:
                 MeshScope(
                     mesh=mesh,
                     binding=_binding(),
-                    body=Sequential(body=(Evaluate(callable=Sync(mesh=sync_mesh), args=()), Return())),
+                    body=Sequential(
+                        body=(Evaluate(callable=Sync(mesh=sync_mesh), args=()), Return())
+                    ),
                 ),
             )
         ),
@@ -164,7 +161,7 @@ def test_verify_rejects_forged_subbox_exceeding_parent() -> None:
     (a (1, 64) sub-box of a (4, 32) parent) is rejected — the legal-slice proof
     bounds each sub-extent by the parent shape, not by field equality.
     """
-    e = _thread_mesh()  # (4, 32)
+    e = _thread_mesh()
     forged = Mesh(
         topologies=e.topologies,
         layout=ComposedLayout(inner=None, offset=0, outer=Layout((1, 64), (32, 1))),
@@ -195,14 +192,9 @@ def test_verify_rejects_forged_topology_mismatch() -> None:
 
 def test_verify_rejects_cross_warp_unaligned_slice() -> None:
     """A contiguous but cross-warp-unaligned range (lanes 16..47) is rejected."""
-    # 64-thread block as (2 warps, 32 lanes); slice 16 lanes of warp 0 + 16 of
-    # warp 1 → contiguous [16, 48) but not warp-aligned.
     m = Mesh((Topology("thread", 64),), Layout(shape=(64,), strides=(1,)))
     with pytest.raises(VerifyError, match="warp-aligned"):
         verify_prim_function(_scoped(m, m[16:48]))
-
-
-# --- classification ------------------------------------------------------
 
 
 def test_classify_rejects_partial_cta_slice() -> None:
@@ -215,9 +207,6 @@ def test_classify_rejects_partial_cta_slice() -> None:
         classify(_cta_mesh()[0:64])
 
 
-# --- codegen text --------------------------------------------------------
-
-
 def _emit(*meshes: Mesh) -> str:
     """Emit the syncs for *meshes* under one (fresh) kernel context."""
     ctx = CodegenContext()
@@ -228,8 +217,7 @@ def _emit(*meshes: Mesh) -> str:
 
 
 def test_codegen_multi_warp_subset_emits_named_bar_sync_under_predicate() -> None:
-    # Warps 1-2 → base 32, count 64; the named-barrier id + predicate live in the
-    # runtime template.
+
     src = _emit(_thread_mesh()[1:3, :])
     assert "SyncKind::bar_sync, 32, 64, 0u," in src
 

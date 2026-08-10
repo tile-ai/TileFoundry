@@ -7,6 +7,7 @@ unit test: an unbound DimVar, a negative extent or a non-positive step each have
 a plausible-looking wrong answer (skip the loop, run it once, loop forever), so
 resolution must refuse rather than choose one.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -43,12 +44,20 @@ def _sum_loop_fn(extent, *, step=1, extra_params=()):
     row = Call(type=_f32(()), target=Gather(axis=0), args=(x, iv))
     new_acc = Call(type=_f32(()), target=Binary(kind=BinaryKind.ADD), args=(acc, row))
     grid = GridRegionExpr(
-        type=_f32(()), induction_var=iv, carried_args=(acc,),
-        init_args=(init,), body=new_acc, yield_values=(new_acc,),
-        extent=extent, step=step,
+        type=_f32(()),
+        induction_var=iv,
+        carried_args=(acc,),
+        init_args=(init,),
+        body=new_acc,
+        yield_values=(new_acc,),
+        extent=extent,
+        step=step,
     )
     return Function.build(
-        name="sumloop", params=(x, *extra_params), body=grid, return_type=_f32(()),
+        name="sumloop",
+        params=(x, *extra_params),
+        body=grid,
+        return_type=_f32(()),
     )
 
 
@@ -65,15 +74,12 @@ def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
     assert resolve_dim(N, {"seq_len": 7}) == 7
     assert resolve_dim(5, {}) == 5
 
-    # extent = seq_len, read off the length of x.
     x = torch.randn(5)
     assert torch.allclose(evaluate(_sum_loop_fn(N), x, device="cpu"), x.sum())
 
-    # step is a second DimVar, bound by the length of a second parameter, so the
-    # loop strides over `range(0, n, blk)`.
     blk = 2
     B = DimVar("blk", 1, 16)
-    stride_hint = Var(type=_f32((B,)), name="stride_hint")  # binds `blk` via its length
+    stride_hint = Var(type=_f32((B,)), name="stride_hint")
     fn = _sum_loop_fn(N, step=B, extra_params=(stride_hint,))
     xv = torch.randn(8)
     out = evaluate(fn, xv, torch.zeros(blk), device="cpu")
@@ -83,11 +89,9 @@ def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
 def test_dynamic_bounds_fail_closed():
     N = DimVar("seq_len", 1, 100)
 
-    # No parameter shape binds this name, so there is no extent to run.
     with pytest.raises(EvalError, match="unbound DimVar"):
         evaluate(_sum_loop_fn(DimVar("not_a_param_dim", 1, 100)), torch.randn(5), device="cpu")
 
-    # extent = seq_len - 100 resolves negative for small seq_len.
     with pytest.raises(EvalError, match="non-negative"):
         evaluate(_sum_loop_fn(simplify_dim(DimSub, (N, 100))), torch.randn(5), device="cpu")
 

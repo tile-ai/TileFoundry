@@ -11,6 +11,7 @@ Usage:
 With no ``--cache-dir`` the default cache root is used
 (``$TILEFOUNDRY_VIEWER_ASSET_DIR`` → ``$XDG_CACHE_HOME``/``~/.cache``).
 """
+
 from __future__ import annotations
 
 import argparse

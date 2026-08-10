@@ -1,27 +1,11 @@
-"""``extract`` coverage for ``Reshape``.
+"""Pin ``extract``'s zero-op view fold for ``Reshape``.
 
-``extract`` coverage for ``Reshape`` -- the view-fold (not a fallback
-relation like ``RMSNorm``, not a registered ``type_relation`` like
-``Transpose``): before this task ``Reshape`` had no forward ``type_relation``
-and no V1 fallback, so ``analysis.extract`` raised at any ``Reshape`` call
-(the last blocker to a real decoder layer's whole self-attention/mlp
-extracting -- a decoder reshapes q/k/v into heads and reshapes ``attn_out``
-back).
-
-A reshape is a zero-op at the buffer level (same memory, reinterpreted), so
-``extract`` never gives it a statement: ``extract()``'s postorder walk skips
-it exactly like ``TupleGetItem``, and ``_buffer_namer`` resolves any reference
-to its output straight through to its source buffer's name. Unlike
-``TupleGetItem`` (a pure name passthrough), a consumer's *access map* also
-needs recomposing -- the source has a different coordinate space -- via
-``namer.pierce``, which composes the consumer's own read formula with
-``reshape.flat_reshape_map`` (row-major flat-index equality between old/new
-shape, isl div/mod for a merge, plain multiply-add for a split; see that
-function's docstring for the general construction). Shapes below (``H=3, D=8,
-HD=24``, all pairwise distinct from ``B=1, S=4``) mirror a decoder's
-head-split/merge reshape at toy size; extraction is plain element granularity
-throughout, so the asserted access maps are exact per-element formulas.
+Reshape contributes no statement or buffer: consumers resolve through to the
+source and recompose access maps with ``reshape.flat_reshape_map``. Splits use
+multiply-add; merges use isl div/mod. Distinct toy dimensions mirror decoder
+head split/merge shapes while keeping exact per-element maps readable.
 """
+
 from __future__ import annotations
 
 import isl
@@ -59,16 +43,9 @@ def bare_reshape_return(x4: Tensor[(B, S, HD), "f32"]) -> Tensor[(B, S, H, D), "
 def test_a_reshape_is_a_view_its_consumer_reads_through():
     """Both directions, because they are not the same construction.
 
-    Splitting a merged head axis (the q/k/v-projection shape): the consumer's
-    read is not of the reshape's output at all, it is composed straight through
-    to the source's own merged coordinates, and the new (h, d) pair reconstructs
-    the old flat offset by plain multiply-add (``D*h + d``) -- no div/mod needed.
-
-    Merging back (the ``attn_out`` shape before the output projection):
-    reconstructing the *old* split (h, d) from the *new* flat offset genuinely
-    needs div/mod. That is inherent to unpacking a flat index rather than a design
-    gap. Either way the reshape contributes no statement and its own SSA name
-    never becomes a buffer, which is what makes the fold observable.
+    Splitting a merged head axis composes the consumer read through to the source
+    with ``D*h + d``. Merging reconstructs ``(h, d)`` with div/mod. In both
+    directions reshape contributes no statement and its SSA name is not a buffer.
     """
     split = extract(split_then_sigmoid)
     assert isinstance(split, TileGraph)
@@ -78,9 +55,7 @@ def test_a_reshape_is_a_view_its_consumer_reads_through():
     assert split.reads.is_equal(
         isl.union_map(f"{{ Sigmoid[b,s,h,d] -> x[b,s,{D}*h+d] : {bounds} }}")
     )
-    assert split.writes.is_equal(
-        isl.union_map(f"{{ Sigmoid[b,s,h,d] -> z[b,s,h,d] : {bounds} }}")
-    )
+    assert split.writes.is_equal(isl.union_map(f"{{ Sigmoid[b,s,h,d] -> z[b,s,h,d] : {bounds} }}"))
     assert "y[" not in str(split.reads) and "y[" not in str(split.writes)
     assert split.deps.is_empty()
 

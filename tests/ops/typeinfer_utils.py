@@ -5,6 +5,7 @@ Build a real ``Call(target=op, args=...)`` and run it through the
 typeinfer handler or treating the cache ``Context`` as the inferencer.
 ``TypeInferContext`` is only the visitor's internal cache/dispatch detail.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,15 +37,17 @@ def raw_shard_tensor_type(
         shape=shape,
         dtype=dtype,
         storage=storage,
-        layout=ShardLayout(layout=Layout(shape=layout_shape, strides=strides), attrs=attrs, mesh=mesh),
+        layout=ShardLayout(
+            layout=Layout(shape=layout_shape, strides=strides), attrs=attrs, mesh=mesh
+        ),
     )
 
 
 def split_local_extents(ty) -> list:
     """`shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s layout.
 
-    `shard_layout_local_shape` at every `Split`-bound layout dim of *ty*'s
-    layout — every entry MUST be 1 on a canonical layout ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
+    Every entry must be 1 on a canonical layout
+    ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
     """
     local = shard_layout_local_shape(ty.layout)
     return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
@@ -59,9 +62,6 @@ def make_call(op, input_types) -> Call:
 def infer_call(op, *input_types):
     """Run ``op`` applied to ``input_types`` through the TypeInfer visitor."""
     return TypeInferVisitor(TypeInferContext()).visit(make_call(op, input_types))
-
-
-# ─── declarative typeinfer test matrix ──────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -116,12 +116,8 @@ def assert_tensor_type(actual: TensorType, expected: TensorType) -> None:
         f"shape {actual.shape} != {expected.shape}"
     )
     assert actual.dtype == expected.dtype, f"dtype {actual.dtype} != {expected.dtype}"
-    assert actual.storage == expected.storage, (
-        f"storage {actual.storage} != {expected.storage}"
-    )
-    assert actual.layout == expected.layout, (
-        f"layout {actual.layout!r} != {expected.layout!r}"
-    )
+    assert actual.storage == expected.storage, f"storage {actual.storage} != {expected.storage}"
+    assert actual.layout == expected.layout, f"layout {actual.layout!r} != {expected.layout!r}"
 
 
 def assert_type(actual, expected) -> None:

@@ -1,4 +1,5 @@
 """LayerNorm typeinfer + Partial(R) commutation."""
+
 from __future__ import annotations
 
 import pytest
@@ -22,19 +23,13 @@ _B = make_tensor_type((8,), _F)
 _W_PSUM = make_shard_tensor_type((8,), mesh=_M, attrs=(Partial("sum"),))
 
 CASES = [
-    # No corpus model uses layer_norm -- they all use rms_norm -- so the
-    # output-type passthrough stays here; nothing else witnesses it.
     TypeInferCase("passthrough", _OP, (_X, _W, _B), _X),
-    # layer_norm normalizes across an axis (non-monotonic); no reduction
-    # commutes.
     TypeInferCase(
         "partial_sum_errors",
         _OP,
         (make_shard_tensor_type((4, 8), mesh=_M, attrs=(Partial("sum"),)), _W, _B),
         ExpectedError(match="LayerNorm"),
     ),
-    # A Partial on a secondary operand is rejected by operand name. Weight
-    # stands for bias too: one code path, one message, two operand positions.
     TypeInferCase(
         "partial_weight_errors",
         _OP,

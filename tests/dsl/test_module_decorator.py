@@ -8,6 +8,7 @@ explicit, required name that must resolve to a collected function. A composed
 member may call siblings defined above it (the call lowers to a ``Call``
 targeting the sibling); forward references stay unresolved and fail loudly.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -96,7 +97,7 @@ def test_collects_orchestration_method_and_rejects_other_members():
             def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
                 return tf.rms_norm(x, g)
 
-            budget = 3  # not a DSL function, a child Module, or a plain function
+            budget = 3
 
 
 def test_what_a_class_body_must_declare_to_be_a_module():
@@ -201,9 +202,12 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     refused = str(excinfo.value)
     assert "missing declared weight 'w'" in refused
     assert "prepare produces it" in refused
-    assert spec_ref_render(
-        "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
-    ) in refused
+    assert (
+        spec_ref_render(
+            "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
+        )
+        in refused
+    )
 
 
 def test_one_shared_child_binds_once_per_owner():
@@ -234,8 +238,7 @@ def test_one_shared_child_binds_once_per_owner():
             return x + x
 
     def aliasing(name):
-        # `copy.copy` skips __post_init__, and with it the claim that would clone
-        # the child -- normal construction cannot put one child under two owners.
+
         node = copy.copy(_Owner)
         object.__setattr__(node, "name", name)
         return node

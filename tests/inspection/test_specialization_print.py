@@ -1,8 +1,8 @@
 """Python printer renders a dispatch prototype as ``pass`` base + ``.specialize``.
 
-Per [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract) a dispatch prototype's rendering is display-only and must not be used as
-a structural round-trip validation artifact, so these check emitted text plus
-syntax validity instead.
+Per [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract), a dispatch
+prototype's rendering is display-only, so these check emitted text and syntax
+validity rather than structural round-trip validation.
 """
 
 from __future__ import annotations
@@ -23,7 +23,10 @@ def _fn(*, body_is_self: bool, lo: int = 0, hi: int = 0) -> HirFunction:
     ty = _s_type()
     x = Var(type=ty, name="x")
     return HirFunction.build(
-        name="main", params=(x,), body=x if body_is_self else None, return_type=ty,
+        name="main",
+        params=(x,),
+        body=x if body_is_self else None,
+        return_type=ty,
         specializations=(DimVarRangePat("S", lo, hi),) if lo else (),
     )
 
@@ -52,7 +55,7 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
         assert "def _(" in src
         assert '@main.specialize(DimVarRangePat("S", 1, 3))' in src
         assert '@main.specialize(DimVarRangePat("S", 4, 7))' in src
-        # The DimVarRangePat constructor is importable in the emitted source.
+
         assert "from tilefoundry.ir.core.pattern import DimVarRangePat" in src
         compile(src, "<test>", "exec")
 

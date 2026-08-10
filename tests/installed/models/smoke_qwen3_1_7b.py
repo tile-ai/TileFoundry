@@ -21,20 +21,16 @@ MODEL = "qwen3_1_7b"
 CASES = contract.model_cases(MODEL)
 
 ANALYSED = [
-    pytest.param(case, selected, id=selected.id)
-    for case in CASES
-    for selected in case.analyze
+    pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
 ]
 PLANNED = [
-    pytest.param(case, planned, id=planned.id)
-    for case in CASES
-    for planned in case.schedule
+    pytest.param(case, planned, id=planned.id) for case in CASES for planned in case.schedule
 ]
-#: One case per Module, as the levels a root declares are a property of the root.
+
 FIRST_PLAN = [pytest.param(case, case.schedule[0], id=case.id) for case in CASES]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
 
-#: The bindings whose cost is the context, so a zero context has to zero them.
+
 ZERO_SIZED = frozenset(("k_cache", "v_cache"))
 
 
@@ -67,13 +63,9 @@ def test_the_plan_reaches_the_level_below_the_one_it_partitions(
 
 
 @pytest.mark.parametrize(("case", "sized"), SIZED)
-def test_every_analysis_answers_at_the_largest_context(
-    tf, shipped_source, case, sized
-) -> None:
+def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case, sized) -> None:
     """At the ceiling the case states, not at a sample of it."""
-    contract.analysed_every_family(
-        tf, shipped_source(MODEL), case, sized.selector, sized.ceiling
-    )
+    contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
 
 
 @pytest.mark.parametrize(("case", "sized"), SIZED)
@@ -100,9 +92,7 @@ def test_the_ceiling_is_reasoned_about_at_its_stated_length(
 def test_the_open_dimensions_are_analysed_at_zero(tf, shipped_source, case, sized) -> None:
     """A binding whose whole cost is the context has to cost nothing without one."""
     source = shipped_source(MODEL)
-    zero = contract.lifetimes(
-        tf, source, case, sized.selector, {name: 0 for name in sized.dims}
-    )
+    zero = contract.lifetimes(tf, source, case, sized.selector, {name: 0 for name in sized.dims})
     nonzero = contract.lifetimes(tf, source, case, sized.selector, sized.dims)
 
     assert ZERO_SIZED <= zero.keys()
@@ -125,26 +115,17 @@ def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, plan
     assert json.loads(done.stdout)
 
 
-# ── against Hugging Face ─────────────────────────────────────────────────────
 @pytest.mark.parametrize("ctx_len", [0, 24])
 def test_the_decode_step_and_the_cache_entry_it_hands_back(
     tf, shipped_source, tmp_path, ctx_len
 ) -> None:
     """One decode step of one layer, and the state the step hands back.
 
-    The boundary: the fused `input_layernorm + self_attn` ending at `o_proj`, then
-    the layer's own output -- residual, post-attention norm and MLP -- against
-    `Qwen3DecoderLayer.forward`. Split that way so a disagreement localises to one
-    half instead of being reported against the composition.
-
-    The returned key and value are this token's cache entry: they are compared
-    against a cache rebuilt over a context one token longer, not against the step's
-    own inputs, so a step returning its inputs unchanged fails. A zero-length
-    context is the first step of a sequence, where the step attends only the token
-    it brings itself.
-
-    The command requires a predicate for every output a function returns, so the
-    attention half is judged on all three of its returns rather than only the first.
+    Attention through ``o_proj`` and the remaining layer are compared separately
+    with ``Qwen3DecoderLayer.forward`` to localize failures. Returned cache entries
+    are checked against oracle state rebuilt one token longer, so unchanged inputs
+    fail. A zero context covers the first token. All three attention outputs are
+    judged.
     """
     drawn = reference.decode_step_inputs(ctx_len=ctx_len, device="cpu")
     source, case = shipped_source(MODEL), CASES[0]
@@ -152,11 +133,13 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
     entry_k, entry_v = want_k[:, ctx_len:], want_v[:, ctx_len:]
     entry = (contract.one_rounding(entry_k), contract.one_rounding(entry_v))
 
-    want_attention = reference.attention_reference(
-        drawn.layer, drawn.hidden_ctx, drawn.hidden_new
-    )
+    want_attention = reference.attention_reference(drawn.layer, drawn.hidden_ctx, drawn.hidden_new)
     contract.compared(
-        tf, tmp_path, source, case, "self_attention",
+        tf,
+        tmp_path,
+        source,
+        case,
+        "self_attention",
         activations=drawn.args,
         weights=drawn.loaded.constants,
         expected=(want_attention, entry_k, entry_v),
@@ -166,7 +149,11 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
 
     want_out = reference.decode_step_oracle(drawn)
     contract.compared(
-        tf, tmp_path, source, case, "decoder_layer",
+        tf,
+        tmp_path,
+        source,
+        case,
+        "decoder_layer",
         activations=drawn.args,
         weights=drawn.loaded.constants,
         expected=(want_out, entry_k, entry_v),
@@ -178,35 +165,25 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
     assert entry_k.shape[1] == 1 and want_k.shape[1] == ctx_len + 1
 
 
-# ── the arithmetic ───────────────────────────────────────────────────────────
-#: The dimensions, from the checkpoint's own `config.json`.
 CONFIG = published()
 
-#: The dtype the checkpoint publishes, as the analysis buckets flops by. Read off
-#: the config rather than written down: the expectations are about the model, and
-#: the model states its own precision.
+
 DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
     str(CONFIG.dtype).removeprefix("torch.")
 ]
 BYTES_PER = torch.finfo(CONFIG.dtype).bits // 8
 
-#: The projection widths GQA makes unequal, derived where they are decided.
+
 Q_PROJ = CONFIG.num_attention_heads * CONFIG.head_dim
 KV_PROJ = CONFIG.num_key_value_heads * CONFIG.head_dim
 
-#: The context the layer is asked about. Any length works; this one is stated so
-#: the attention terms below can be written down.
+
 CTX = 1024
 
-#: A multiply and an add per multiply-accumulate.
+
 FLOPS_PER_MAC = 2
 
-#: How much of a total may be work this file does not derive. The elementwise
-#: stages -- the two norms, the rotary embedding, SiLU, the residual adds -- run
-#: over vectors of `hidden` or `intermediate` elements at a handful of flops each,
-#: so together they are thousandths of a matmul over the same widths. One percent
-#: leaves room for every convention an evaluator might use and no room for a
-#: missing or duplicated matmul.
+
 ELEMENTWISE_SHARE = 0.01
 
 _ARITHMETIC = ("compute-cost", "memory", "roofline")
@@ -301,12 +278,12 @@ def test_the_layer_reads_at_least_its_weights_and_its_cache(tf, shipped_source) 
     data = _reported(tf, shipped_source(MODEL), "decoder_layer", {"ctx_len": CTX})
 
     weights = BYTES_PER * (
-        3 * CONFIG.hidden_size * CONFIG.intermediate_size            # MLP
-        + 2 * CONFIG.hidden_size * Q_PROJ                # q, o
-        + 2 * CONFIG.hidden_size * KV_PROJ               # k, v
+        3 * CONFIG.hidden_size * CONFIG.intermediate_size
+        + 2 * CONFIG.hidden_size * Q_PROJ
+        + 2 * CONFIG.hidden_size * KV_PROJ
     )
     cache = BYTES_PER * 2 * CTX * CONFIG.num_key_value_heads * CONFIG.head_dim
-    # The layer rotates q and k, and each call indexes a cos and a sin cache.
+
     rope_rows = 2 * 2 * CONFIG.head_dim * BYTES_PER
     read = data["totals"]["traffic"]["gmem"]["read"]
 
@@ -319,15 +296,10 @@ def test_the_layer_reads_at_least_its_weights_and_its_cache(tf, shipped_source) 
 def test_a_decode_step_is_bound_by_memory(tf, shipped_source) -> None:
     """The conclusion the whole analysis exists to reach, and the one that was wrong.
 
-    The conclusion the whole analysis exists to reach, and the one that was
-    wrong.
-
-    One token through one layer does about a hundred million flops and moves about
-    three hundred million bytes. On any accelerator whose peak flop rate is far
-    above its bandwidth in bytes per second -- which is every accelerator this
-    targets -- that is memory-bound, and it is memory-bound by a wide margin rather
-    than marginally. Asserted as the reported verdict, because a reader acts on the
-    verdict and not on the two numbers behind it.
+    One token through one layer performs roughly 100 million flops while moving
+    roughly 300 million bytes, making it decisively memory-bound on supported
+    accelerators. The test pins the reported verdict because that is what callers
+    consume.
     """
     data = _reported(tf, shipped_source(MODEL), "decoder_layer", {"ctx_len": CTX})
 

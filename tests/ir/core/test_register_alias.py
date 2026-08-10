@@ -43,9 +43,6 @@ def clean_schema_registry():
     _schemas_by_dialect_name.update(snapshot)
 
 
-# ── Registry shape ──────────────────────────────────────────────────────
-
-
 def test_kinded_alias_registers_one_schema_no_legacy_op() -> None:
     """A kinded sugar name resolves to exactly one schema.
 
@@ -77,6 +74,7 @@ def test_kinded_alias_registers_one_schema_no_legacy_op() -> None:
 
 def test_register_op_overload_and_iter_dedupe(clean_schema_registry) -> None:
     """Multi-schema overloads append in registration order; iter dedupes names."""
+
     class _DummyBase:
         pass
 
@@ -95,15 +93,12 @@ def test_register_op_overload_and_iter_dedupe(clean_schema_registry) -> None:
     assert names.count("testdup_relu") == 1
 
 
-# ── Parser end-to-end ──────────────────────────────────────────────────
-
-
 @func
 def _alias_call(
-    a: Tensor[(8,), DType.f32], b: Tensor[(8,), DType.f32],
+    a: Tensor[(8,), DType.f32],
+    b: Tensor[(8,), DType.f32],
 ) -> Tensor[(8,), DType.f32]:
-    # Bare ``add`` is bound by ``from tilefoundry.dsl.tf import add`` at
-    # the top of this test file (closure capture).
+
     return _tf_add(a, b)
 
 

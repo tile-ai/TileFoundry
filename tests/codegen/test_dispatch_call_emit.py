@@ -46,9 +46,7 @@ def test_dispatch_call_emits_if_chain_and_trap_fallback() -> None:
 
     dispatch = DispatchCall(
         callee_name="main",
-        subjects=(
-            ShapeOf(param=x, axis=1, type=TensorType.scalar(dtype=DType.i32)),
-        ),
+        subjects=(ShapeOf(param=x, axis=1, type=TensorType.scalar(dtype=DType.i32)),),
         case_patterns=(
             (DimVarRangePat(dim_var="S", lo=1, hi=3),),
             (DimVarRangePat(dim_var="S", lo=4, hi=7),),
@@ -61,8 +59,7 @@ def test_dispatch_call_emits_if_chain_and_trap_fallback() -> None:
     )
 
     ctx = CodegenContext()
-    # Simulate the enclosing PrimFunction having registered its params,
-    # so the dispatch emitter renders args under their bare names.
+
     ctx.register_kernel_param(x)
     ctx.register_kernel_param(x_shape_1)
     ctx.emit_node(dispatch)
@@ -70,9 +67,7 @@ def test_dispatch_call_emits_if_chain_and_trap_fallback() -> None:
 
     assert "if (((1 <= (x_shape_1)) && ((x_shape_1) < 3))) {" in src
     assert "} else if (((4 <= (x_shape_1)) && ((x_shape_1) < 7))) {" in src
-    # Dispatch invokes the callees' internal C++ wrapper symbols, not
-    # their user-facing names (which may collide with ``::main`` or use
-    # ``$`` characters that are only valid via GCC extension).
+
     assert "__tilefoundry_main__S__1_3_host(x, x_shape_1);" in src
     assert "__tilefoundry_main__S__4_7_host(x, x_shape_1);" in src
     assert "} else {" in src

@@ -4,6 +4,7 @@ End-to-end test of the ``Module`` / ``RuntimeModule`` twin model on a real
 DeepSeek-V4-Flash subtree: prepare a fabricated checkpoint, load both sides,
 check parity.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,9 +33,7 @@ from tilefoundry.runtime import (
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 
-#: How far the twin follows the loop. Two steps is what it takes for one step to
-#: read the previous one's output; the remaining steps only fill the window, and
-#: running the runtime side over all of them buys the same fact per step.
+
 TWINNED_STEPS = 2
 
 
@@ -50,8 +49,7 @@ class _Tokeniser:
     def decode(self, ids):
         return " ".join(str(token) for token in ids)
 
-#: bf16 end to end, one f32->bf16 landing per kernel: the two bounds the real
-#: bring-up ran on throughout. Stated here because there is no default bound.
+
 _AGREES = (RelL2(max=1e-3), Cosine(min=0.999))
 
 EXPECTED_PREPARED_KEYS = {
@@ -138,8 +136,10 @@ def _write_checkpoint_dir(tensors, out_dir, shards=2):
         shard = f"model-{i + 1:05d}-of-{shards:05d}.safetensors"
         save_file({n: tensors[n].contiguous() for n in part}, str(out_dir / shard))
         weight_map.update({n: shard for n in part})
-    index = {"metadata": {"total_size": sum(t.numel() * t.element_size() for t in tensors.values())},
-             "weight_map": weight_map}
+    index = {
+        "metadata": {"total_size": sum(t.numel() * t.element_size() for t in tensors.values())},
+        "weight_map": weight_map,
+    }
     with open(out_dir / "model.safetensors.index.json", "w", encoding="utf-8") as fh:
         json.dump(index, fh, indent=1)
 
@@ -185,7 +185,7 @@ def prepared(tmp_path_factory, config, semantic, raw_tensors):
 @pytest.fixture(scope="module")
 def twins(config, semantic, prepared):
     runtime = build_runtime_causal_lm(config, ir=semantic)
-    # The ir module's `load` returns; the runtime twin's still binds in place.
+
     loaded = semantic.load(SafetensorsResource(str(prepared), device="cuda"))
     runtime.load(SafetensorsResource(str(prepared), device="cuda"))
     return loaded, runtime
@@ -217,15 +217,23 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
     store = SafetensorsResource(str(prepared), device="cuda")
 
     assert set(store._index()) == EXPECTED_PREPARED_KEYS
-    debris = [k for k in store._index() if any(
-        tag in k for tag in ("layers.", "attn.", "ffn", "experts.", "wkv", "wq_", "wo_", "raw")
-    )]
+    debris = [
+        k
+        for k in store._index()
+        if any(
+            tag in k for tag in ("layers.", "attn.", "ffn", "experts.", "wkv", "wq_", "wo_", "raw")
+        )
+    ]
     assert debris == []
 
     w_kv = store.load("layer0.attention.w_kv")
-    expected_w_kv = _dequant_blocks(
-        raw_tensors["layers.0.attn.wkv.weight"], raw_tensors["layers.0.attn.wkv.scale"]
-    ).t().to(torch.bfloat16)
+    expected_w_kv = (
+        _dequant_blocks(
+            raw_tensors["layers.0.attn.wkv.weight"], raw_tensors["layers.0.attn.wkv.scale"]
+        )
+        .t()
+        .to(torch.bfloat16)
+    )
     assert w_kv.shape == expected_w_kv.shape
     torch.testing.assert_close(w_kv.float(), expected_w_kv.float().cuda(), rtol=0, atol=0)
     assert raw_tensors["layers.0.attn.wkv.weight"].dtype == torch.float8_e4m3fn
@@ -233,25 +241,27 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
     assert (raw_tensors["layers.0.attn.wkv.scale"].float() != 1.0).any(), "scales must be non-unit"
 
     w1 = store.load("layer0.moe.w1_weight")
-    expected_w1 = torch.stack([
-        raw_tensors[f"layers.0.ffn.experts.{i}.w1.weight"] for i in range(config.n_routed)
-    ])
+    expected_w1 = torch.stack(
+        [raw_tensors[f"layers.0.ffn.experts.{i}.w1.weight"] for i in range(config.n_routed)]
+    )
     assert w1.shape == expected_w1.shape
     assert torch.equal(w1.float().cpu(), expected_w1.float())
 
-    # `prepare` read the router's table through an `Absolute` alias, from a raw key
-    # outside the child's own prefix, and wrote it under the canonical name.
     assert torch.equal(
         store.load("layer0.moe.gate_weight").float().cpu(),
         raw_tensors["layers.0.gate.weight"].float(),
     )
     assert "layers.0.ffn.gate.weight" not in raw_tensors
 
-    # The same escape on a scoped view; a subtree segment stays relative.
-    escaped = SafetensorsResource(
-        str(prepared), device="cuda",
-        alias={"pre_moe_norm_weight": Absolute("layer0.pre_moe_norm_weight")},
-    ).subtree("layer0").subtree("moe")
+    escaped = (
+        SafetensorsResource(
+            str(prepared),
+            device="cuda",
+            alias={"pre_moe_norm_weight": Absolute("layer0.pre_moe_norm_weight")},
+        )
+        .subtree("layer0")
+        .subtree("moe")
+    )
     assert torch.equal(
         escaped.load("pre_moe_norm_weight"), store.load("layer0.pre_moe_norm_weight")
     )
@@ -260,17 +270,16 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
         escaped.subtree("pre_moe_norm_weight")
 
     w1_scale = store.load("layer0.moe.w1_scale")
-    expected_scale = torch.stack([
-        raw_tensors[f"layers.0.ffn.experts.{i}.w1.scale"] for i in range(config.n_routed)
-    ])
+    expected_scale = torch.stack(
+        [raw_tensors[f"layers.0.ffn.experts.{i}.w1.scale"] for i in range(config.n_routed)]
+    )
     assert raw_tensors["layers.0.ffn.experts.0.w1.scale"].dtype == torch.float32
     assert w1_scale.dtype == torch.float8_e8m0fnu
     assert torch.equal(w1_scale.float().cpu(), expected_scale)
 
-    # One leaf against its own slice of the same store, with `prepare` patched to
-    # raise so that reaching it would fail here.
     leaf = semantic.layer0.moe.module
     with pytest.MonkeyPatch.context() as patched:
+
         def refuse(*_args, **_kwargs):
             raise AssertionError("loading one leaf reached Module.prepare")
 
@@ -344,9 +353,6 @@ def test_the_decode_loop_threads_state_across_both_twins(config, twins):
             output, fresh = model(*args)
             caches = model.append_cache(caches, fresh)
             if step == 0:
-                # A step hands back one position per layer -- this token's own
-                # latent -- and appending it leaves the context it was given
-                # unchanged with that position after it.
                 assert fresh[0].shape[1] == 1, type(model).__name__
                 assert caches[0].shape[1] == prior[0].shape[1] + 1, type(model).__name__
                 assert torch.equal(caches[0][:, :seed_ctx], prior[0])
@@ -406,7 +412,9 @@ def test_decode_times_only_the_sampled_steps(monkeypatch):
         return next(timestamps)
 
     monkeypatch.setattr(generation, "perf_counter", clock)
-    decoded = generation.decode(Model(), Tokenizer(), "prompt", max_new=1, sampler=sample, device="cpu")
+    decoded = generation.decode(
+        Model(), Tokenizer(), "prompt", max_new=1, sampler=sample, device="cpu"
+    )
 
     assert events == ["sample", "clock", "sample", "clock", "decode"]
     assert decoded.seconds == 3.5
@@ -421,12 +429,12 @@ def test_structure_mismatch_rejected(config, twins):
     at decoration time.
     """
     semantic, runtime = twins
-    # `runtime_module` decorates against the IR's function and child names, so it
-    # takes the Module rather than this loading of it.
+
     attention = semantic.layer0.attention.module
     layer = semantic.layer0.module
 
     with pytest.raises(TypeError, match=r"missing \['mla_kv_update'\]"):
+
         @runtime_module(attention)
         class MissingKernel:
             @runtime_func
@@ -434,6 +442,7 @@ def test_structure_mismatch_rejected(config, twins):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match=r"extra \['mla_attend_extra'\]"):
+
         @runtime_module(attention)
         class ExtraKernel:
             @runtime_func
@@ -448,9 +457,8 @@ def test_structure_mismatch_rejected(config, twins):
             def mla_attend_extra(self, *args):
                 raise AssertionError("never called")
 
-    # `module` is a name an authored Module may legitimately use, and a twin
-    # answers to it itself, so the collision is refused from either side.
     with pytest.raises(TypeError, match="a runtime twin reserves"):
+
         @runtime_module(replace(attention, methods={**attention.methods, "module": None}))
         class ReservedInTheModule:
             @runtime_func
@@ -462,6 +470,7 @@ def test_structure_mismatch_rejected(config, twins):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match="a runtime twin reserves"):
+
         @runtime_module(attention)
         class ReservedInTheTwin:
             module = "not a Module"
@@ -475,6 +484,7 @@ def test_structure_mismatch_rejected(config, twins):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match=r"child module names.*missing \['moe'\]"):
+
         @runtime_module(layer)
         class MissingChild:
             attention = type(runtime.layer0.attention)

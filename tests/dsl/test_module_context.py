@@ -7,6 +7,7 @@ owner's hierarchy, while an explicit empty tuple declares a topology-free
 domain. Resolution is lexical over the Module tree, so a selected Module
 answers for its own effective context without any Function carrying it.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -29,7 +30,6 @@ _THREAD = Topology("thread", 32)
 
 @module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA, _WARP))
 class _Root:
-
     @func
     def forward(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return tf.relu(x)
@@ -42,14 +42,12 @@ class _Root:
 
     @module(entry="step", topologies=())
     class topology_free:
-
         @func
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.relu(x)
 
     @module(entry="step", topologies=(_THREAD,))
     class replaces:
-
         @func
         def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.relu(x)
@@ -176,7 +174,9 @@ def test_topology_resolution_failures_name_what_the_domain_holds() -> None:
 
     with pytest.raises(ValueError, match="duplicate topology name"):
         Module(
-            "dupe", (_Root.lookup("forward"),), "forward",
+            "dupe",
+            (_Root.lookup("forward"),),
+            "forward",
             topologies=(_CTA, Topology("cta", 8)),
         )
 

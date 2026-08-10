@@ -26,7 +26,7 @@ def test_paramdef_rejects_an_unknown_kind_and_keeps_required_independent() -> No
     assert required.is_required and not required.has_default
 
     optional_required = ParamDef(kind="input", optional=True)
-    assert optional_required.is_required  # nullable type, still required at call-site
+    assert optional_required.is_required
 
     omittable = ParamDef(kind="attribute", default=0)
     assert not omittable.is_required and omittable.has_default

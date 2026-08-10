@@ -1,16 +1,11 @@
-"""hir Function call typeinfer: the callee body is re-derived under the actual argument types.
+"""Cover HIR call elaboration under concrete argument types.
 
-hir Function call typeinfer: the callee body is re-derived under the actual
-argument types.
+Layout-free parameters accept and propagate caller layouts; explicit layouts
+remain constraints. Boundary failures must identify the call site.
 
-A parameter declared without sharding (``layout is None``) is a layout-
-unconstrained logical tensor: an argument of any layout flows in and propagates
-through the body, so the same callee specializes per call site. A parameter
-that declares an explicit ``ShardLayout`` constrains its argument (mismatch
-fails at the boundary). A model call graph exercises the plain case only, so what
-is kept here is the layout-carrying propagation and every boundary rejection —
-the ones whose message has to name the call site to be actionable.
+See [hir §1.1](docs/spec/hir.md#11-function).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -48,9 +43,7 @@ def _add_callee(param_type):
 
 
 def test_plain_formal_specializes_per_call_site():
-    # A split argument flows into the layout-unconstrained parameter; the body
-    # re-derives, so the result carries the split and the same callee object
-    # returns different types for plain vs split actuals.
+
     f = _add_callee(_PLAIN)
     assert infer_call(f, _PLAIN) == _PLAIN
     assert infer_call(f, _SPLIT0) == _SPLIT0
@@ -62,8 +55,9 @@ def test_carrying_loop_propagates_split():
 
     A callee whose body is a single-carry loop-phi ``GridRegionExpr``
     (``acc = x + x`` before the loop, ``acc = acc + x`` inside it): the loop-phi's
-    own type must re-derive from the elaborated init value ([hir §1.2](docs/spec/hir.md#12-gridregionexpr)), not stay
-    at the callee's parse-time unsharded type.
+    own type must re-derive from the elaborated init value
+    ([hir §1.2](docs/spec/hir.md#12-gridregionexpr)), not retain the callee's
+    parse-time unsharded type.
     """
     param_type = make_tensor_type((8,), _F)
     x = Var(type=param_type, name="x")
@@ -72,9 +66,14 @@ def test_carrying_loop_propagates_split():
     iv = Var(type=make_tensor_type((), DType.i64), name="i")
     body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(phi, x))
     grid = GridRegionExpr(
-        type=param_type, induction_var=iv, carried_args=(phi,),
-        init_args=(init,), body=body, yield_values=(body,),
-        extent=8, step=1,
+        type=param_type,
+        induction_var=iv,
+        carried_args=(phi,),
+        init_args=(init,),
+        body=body,
+        yield_values=(body,),
+        extent=8,
+        step=1,
     )
     f = Function.build(name="carry", params=(x,), body=grid, return_type=param_type)
 
@@ -83,9 +82,7 @@ def test_carrying_loop_propagates_split():
 
 
 def test_explicit_sharded_formal_constrains_its_actual():
-    # An explicit sharded parameter is a layout constraint: only the matching
-    # actual flows in. A plain actual, or a differently split one, is a boundary
-    # mismatch rather than something silently accepted and re-derived.
+
     f = _add_callee(_SPLIT0)
     assert infer_call(f, _SPLIT0) == _SPLIT0
     with pytest.raises(VerifyError, match="type mismatch"):
@@ -95,7 +92,7 @@ def test_explicit_sharded_formal_constrains_its_actual():
 
 
 def test_plain_formal_rejects_shape_or_dtype_mismatch():
-    # Layout is unconstrained; shape and dtype never are.
+
     f = _add_callee(_PLAIN)
     with pytest.raises(VerifyError, match="shape/dtype mismatch"):
         infer_call(f, make_tensor_type((4, 16), _F))
@@ -105,9 +102,7 @@ def test_plain_formal_rejects_shape_or_dtype_mismatch():
 
 def test_function_call_preserves_partial_in_tuple_return():
     mesh_ab = make_mesh((2, 4), ("a", "b"))
-    partial = make_shard_tensor_type(
-        (4, 8), mesh=mesh_ab, attrs=(Broadcast(), Partial("max"))
-    )
+    partial = make_shard_tensor_type((4, 8), mesh=mesh_ab, attrs=(Broadcast(), Partial("max")))
     param = Var(type=_PLAIN, name="x")
     return_type = TupleType(fields=(_PLAIN, _PLAIN))
     body = Tuple(type=return_type, elements=(param, param))
@@ -125,7 +120,7 @@ def test_function_call_preserves_partial_in_tuple_return():
 
 
 def test_bind_error_reports_call_site_binding():
-    # A bind-mismatch VerifyError must report the call-site binding metadata.
+
     f = _add_callee(_SPLIT0)
     arg = Var(type=_PLAIN, name="x_arg")
     call = Call(

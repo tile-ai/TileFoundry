@@ -29,9 +29,7 @@ from tilefoundry.ir.types.shard import (
 def demo_canonical(
     a: Tensor[(1, 1536), "f32"],
 ) -> Tensor[(1, 1536), "f32"]:
-    with Mesh(
-        ("cta",), layout=Layout(shape=(128,), strides=(1,))
-    ) as cta_mesh:
+    with Mesh(("cta",), layout=Layout(shape=(128,), strides=(1,))) as cta_mesh:
         b = reshard(
             a,
             layout=ShardLayout(

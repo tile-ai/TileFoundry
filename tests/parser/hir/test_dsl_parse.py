@@ -1,15 +1,10 @@
 """Tuple-literal inputs on the DSL call surface.
 
-An op input is normally a single value; ``insert_slice.offsets`` is the one
-param kind that declares a per-axis tuple literal instead. The pair of tests
-below is that opening and its containment: the declaring param parses the
-literal to a core ``Tuple`` of rank-0 scalars, and any other tensor input keeps
-rejecting one.
-
-The typical op-call shapes (``relu(x)`` / ``add(a, b)`` / ``matmul(a, b)`` and
-the ``tf.<op>`` namespace form) are exercised by the real-model corpus, which
-prints, re-imports and evaluates them. Error diagnostics for the wider DSL
-surface live in ``test_parse_errors.py``.
+Most op inputs are single values; ``insert_slice.offsets`` declares a per-axis
+tuple literal. These tests pin its parsing to a core ``Tuple`` of rank-0 scalars
+and rejection for other tensor inputs. The model corpus covers ordinary and
+``tf.<op>`` calls through print, re-import, and evaluation. Wider diagnostics
+live in ``test_parse_errors.py``.
 """
 
 from __future__ import annotations
@@ -85,7 +80,7 @@ _NK, _KD = 16, 128
 @func
 def _compile_time_operands(x: Tensor[(1, 2048), "bf16"]) -> Tensor[(1, 16, 128), "bf16"]:
     key_dim = _NK * _KD
-    scaled = mul(x, _CFG.head_dim ** -0.5)  # noqa: F405
+    scaled = mul(x, _CFG.head_dim**-0.5)  # noqa: F405
     shifted = add(scaled, _CFG.rms_eps)  # noqa: F405
     return reshape(shifted, new_shape=(1, key_dim // _KD, _KD))  # noqa: F405
 
@@ -100,7 +95,7 @@ def test_compile_time_values_reach_an_op_as_constants() -> None:
     scaled, eps = _compile_time_operands.body.args[0].args
     operand, scale = scaled.args
 
-    assert isinstance(scale, Constant) and scale.value == pytest.approx(128 ** -0.5)
+    assert isinstance(scale, Constant) and scale.value == pytest.approx(128**-0.5)
     assert isinstance(eps, Constant) and eps.value == pytest.approx(1e-6)
     assert scale.type.dtype == DType.bf16 and eps.type.dtype == DType.bf16
     assert operand.name == "x"

@@ -3,6 +3,7 @@
 HIR matrix-multiply-accumulate ops typeinfer: the (M, N) accumulator
 fragment in the accumulator dtype.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -46,16 +47,18 @@ def test_mma_typeinfer(case):
 
 def test_mma_layout_describes_the_accumulator_result():
     a = make_tensor_type(
-        (16, 16), _BF, storage=_RMEM,
+        (16, 16),
+        _BF,
+        storage=_RMEM,
         layout=Layout(shape=(16, 16), strides=(16, 1)),
     )
     b = make_tensor_type(
-        (16, 8), _BF, storage=_RMEM,
+        (16, 8),
+        _BF,
+        storage=_RMEM,
         layout=Layout(shape=(16, 8), strides=(8, 1)),
     )
 
-    result = infer_call(
-        Mma_SM80_16x8x16(dtype_a=_BF, dtype_b=_BF, dtype_acc=DType.f32), a, b
-    )
+    result = infer_call(Mma_SM80_16x8x16(dtype_a=_BF, dtype_b=_BF, dtype_acc=DType.f32), a, b)
 
     assert result.layout == Layout(shape=(16, 8), strides=(8, 1))

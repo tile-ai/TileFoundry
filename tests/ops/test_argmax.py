@@ -1,4 +1,5 @@
 """ArgMax typeinfer: the reduced axis is dropped and the result is i64."""
+
 from __future__ import annotations
 
 import pytest
@@ -21,9 +22,12 @@ from tilefoundry.ir.types.shard.shard_layout import (
 _I64 = DType.i64
 
 CASES = [
-    # No corpus model uses argmax, so one positive stays here: the reduced axis
-    # is dropped and the result is i64.
-    TypeInferCase("default_axis_last", ArgMax(), (make_tensor_type((1, 151936), DType.f32),), make_tensor_type((1,), _I64)),
+    TypeInferCase(
+        "default_axis_last",
+        ArgMax(),
+        (make_tensor_type((1, 151936), DType.f32),),
+        make_tensor_type((1,), _I64),
+    ),
     TypeInferCase(
         "axis_out_of_range",
         ArgMax(axis=3),
@@ -45,16 +49,10 @@ def test_argmax_typeinfer(case):
 
 
 def test_argmax_layout_describes_result_and_preserves_surviving_split():
-    plain = make_tensor_type(
-        (4, 256), DType.f32, layout=Layout(shape=(4, 256), strides=(256, 1))
-    )
-    assert infer_call(ArgMax(axis=-1), plain).layout == Layout(
-        shape=(4,), strides=(1,)
-    )
+    plain = make_tensor_type((4, 256), DType.f32, layout=Layout(shape=(4, 256), strides=(256, 1)))
+    assert infer_call(ArgMax(axis=-1), plain).layout == Layout(shape=(4,), strides=(1,))
 
-    sharded = make_shard_tensor_type(
-        (4, 256), mesh=make_mesh((4,)), attrs=(Split(0),)
-    )
+    sharded = make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(0),))
     result = infer_call(ArgMax(axis=-1), sharded)
     assert isinstance(result.layout, ShardLayout)
     assert result.layout.attrs == (Split(0),)

@@ -29,17 +29,12 @@ def lint():
     return _lint()
 
 
-# The sample paths are assembled from fragments rather than written out, so this
-# file states no machine path itself. The checker reads source text, so a literal
-# here would make the guard report its own test data -- and marking those lines
-# exempt would instead stop the checker being exercised on them at all. Assembling
-# keeps both: the source is clean, the values fed in are the real thing.
 _HOME = "/" + "home"
 _USERS = "/" + "Users"
 _SCRATCH = "/" + "data3" + "/shared"
 _CONDA = "/miniconda3/envs/top/bin/python"
 
-#: Shapes that have really been committed by mistake, one per kind.
+
 CAUGHT = [
     f'CKPT_DIR = "{_SCRATCH}/someone/Qwen3.5-35B-A3B"',
     f'_PREPARED_DIR_CACHE = "{_SCRATCH}/someone/tf-prepared"',
@@ -47,16 +42,12 @@ CAUGHT = [
     f"PY={_HOME}/someone{_CONDA}",
     f"  `{_HOME}/someone{_CONDA}`",
     f'BASE = "{_USERS}/someone/envs/dev"',
-    # The fallback form: configurable-looking, hardcoded for everyone else.
     f'os.environ.get("TF_CKPT", "{_SCRATCH}/someone/prepared")',
-    # The same fallback in shell, which reached a shipped example unreported: the
-    # `-` of `:-` sat where a token character would, so the whole default was
-    # invisible to the guard that keeps this off the middle of a URL.
     f"CKPT=${{CKPT:-{_SCRATCH}/someone/Qwen3-1.7B}}",
     f"python run.py --ckpt={_HOME}/someone/models",
 ]
 
-#: Shapes that resemble the above and are not machine-specific.
+
 ALLOWED = [
     'url = "https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/main/config.json"',
     'path = Path(__file__).parent / "model" / "decoder_layer.py"',
@@ -120,12 +111,13 @@ def test_this_repository_is_clean(lint) -> None:
     root = _SCRIPT.parent.parent
     tracked = subprocess.run(
         ["git", "ls-files", "-z"],
-        cwd=root, capture_output=True, text=True, check=True,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split("\0")
 
     offenders = {
-        name: lint.findings(root / name)
-        for name in tracked
-        if name and (root / name).is_file()
+        name: lint.findings(root / name) for name in tracked if name and (root / name).is_file()
     }
     assert not {k: v for k, v in offenders.items() if v}

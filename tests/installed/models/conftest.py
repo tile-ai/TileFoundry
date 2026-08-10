@@ -1,14 +1,9 @@
 """The model source the installation ships, copied out and asked about.
 
-The directory comes from ``tilefoundry models <name> --source`` and is copied whole
-before anything is asked of it, which is the use ``--source`` promises. Nothing here
-joins an installation path together, so a file the packaging manifest forgot to ship
-is missing here too instead of being reached in the checkout.
-
-The test process imports ``tests.models.<name>.case`` for the case list. That is the
-test side's own glue -- which selectors to ask about, and at what extents -- and it
-never reaches the source under test: that arrives only as a directory the command
-named, and every question about it is asked by running the command.
+The ``models <name> --source`` directory is copied whole before use. No test joins
+installation paths, so omitted package files cannot leak in from the checkout.
+The local case list supplies selectors and extents only; every question about
+model source runs against the copied directory named by the installed command.
 """
 
 from __future__ import annotations

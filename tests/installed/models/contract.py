@@ -24,15 +24,9 @@ from tests.models.corpus import FunctionCase, ModelCase
 from tests.models.decode_oracle import one_ulp_at
 from tests.models.registry import cases_of
 
-#: The analyses the CLI offers as public flags, asked one at a time so each
-#: family is its own verdict rather than one pass or fail for four questions.
 FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
 
-#: The solver budget the in-process schedule witnesses used, stated to the command
-#: rather than left to the library default: the default worker count sizes itself
-#: to the machine, and several of these at once oversubscribes it so that none
-#: returns an incumbent -- which reads as a model that cannot be scheduled.
-#: ``--first-plan`` because what is asked is whether a plan exists at all.
+
 SOLVER = ("--solver-timeout=60", "--solver-workers=4", "--first-plan")
 
 
@@ -141,7 +135,6 @@ def _timeline_evidence(report: dict) -> str | None:
     return None
 
 
-#: The field each family has to have filled in, one entry per family in FAMILIES.
 _EVIDENCE = {
     "compute-cost": _compute_cost_evidence,
     "memory": _memory_evidence,
@@ -167,9 +160,8 @@ def analysed_every_family(
         for family, evidence in _EVIDENCE.items()
         if (complaint := evidence(report)) is not None
     }
-    assert not failed, (
-        f"{selector} at {dict(dims or {})}: "
-        + "; ".join(f"{family} {complaint}" for family, complaint in sorted(failed.items()))
+    assert not failed, f"{selector} at {dict(dims or {})}: " + "; ".join(
+        f"{family} {complaint}" for family, complaint in sorted(failed.items())
     )
     return report
 
@@ -195,14 +187,11 @@ def lifetimes(
     """What the memory analysis says each binding of one function costs."""
     report = reported(tf, source, case, selector, ("memory",), dims)
     return {
-        item["binding"]: item["bytes"]
-        for item in report["function_records"]["memory"]["lifetimes"]
+        item["binding"]: item["bytes"] for item in report["function_records"]["memory"]["lifetimes"]
     }
 
 
-def traffic_read(
-    tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int]
-) -> int:
+def traffic_read(tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int]) -> int:
     """How many bytes the memory analysis says one function reads from gmem."""
     report = reported(tf, source, case, selector, ("memory",), dims)
     return report["function_records"]["memory"]["traffic"]["gmem"]["read"]
@@ -300,12 +289,13 @@ def compared(
         path = room / f"in{position}.pt"
         torch.save(tensor, path)
         argv += ["--input", str(path)]
-    # A function that declares no ConstTensor needs no checkpoint, and an empty one
-    # is not a thing to write: every parameter it has arrived as an activation.
+
     if weights:
         save_file(
-            {f"{_reached_through(case, selector)}{name}": value.contiguous()
-             for name, value in weights.items()},
+            {
+                f"{_reached_through(case, selector)}{name}": value.contiguous()
+                for name, value in weights.items()
+            },
             str(room / "model.safetensors"),
         )
         argv += ["--ckpt", str(room)]
@@ -329,15 +319,10 @@ def compared(
 def disagreed(tf, work: Path, source: Path, case: ModelCase, selector: str, **asked):
     """The same command, held to reporting FAIL.
 
-    A parity comparison is only worth its tolerance if a wrong input breaks it, so
-    the perturbed runs assert the command refuses rather than that it agrees.
-
-    The bound a caller passes must be the one its parity run passes, not a tighter
-    one. A tighter bound is met by an *unperturbed* run too, so the command refuses
-    either way and the test passes without perturbing anything. That is not a
-    hypothetical: migrating these runs with a fixed 1e-3 did exactly that to five of
-    them, against parity bounds of 0.00586 and 0.0234 -- one of which passed while
-    permuting a cache by the identity.
+    Perturbed runs must make parity refuse. They use the same bound as the passing
+    run: a tighter bound can reject unperturbed output and falsely validate the
+    perturbation. This previously hid five cases, including an identity cache
+    permutation.
     """
     done = compared(tf, work, source, case, selector, _refuse=True, **asked)
     assert done.returncode == 1, done.stdout + done.stderr

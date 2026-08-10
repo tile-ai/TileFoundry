@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
-"""Reject a path that only exists on the machine it was written on.
+"""Reject committed absolute paths tied to one machine.
 
-An absolute path into somebody's home directory, a shared scratch mount, or a
-named conda prefix is a fact about one checkout, not about this project. Committed,
-it does three things: it tells every other reader to look somewhere that is not
-there, it publishes an account name and a directory layout, and -- when it sits
-under `src/` -- it ships.
-
-A default is the usual way this arrives: reading a location from the environment
-and falling back to the author's own directory looks configurable and behaves like
-a hardcoded path for everyone else. So the fallback is refused too. Somewhere the
-caller must supply is stated by failing without it, which is the difference between
-a setting and a guess.
-
-Run over the files a commit touches (the pre-commit hook passes them); a path is
-reported with the line it is on, and the exit status is non-zero if any was found.
+Named home, scratch, and conda paths fail, including environment fallbacks.
+Touched files come from pre-commit; findings report their line and produce a
+nonzero exit status.
 """
 
 from __future__ import annotations
@@ -23,11 +12,6 @@ import re
 import sys
 from pathlib import Path
 
-#: Absolute locations that belong to one machine or one account.
-#:
-#: Each names a *root* whose contents are outside this project: a user's home, a
-#: site-local mount, an installed environment prefix. A relative path is never
-#: matched -- pointing inside the repository is what paths here are for.
 _MACHINE_PATHS = re.compile(
     r"""
     (?:^|(?<=[^\w./])|(?<=-)(?=/))  # not mid-token, so a URL or a longer word is
@@ -44,11 +28,10 @@ _MACHINE_PATHS = re.compile(
     re.VERBOSE,
 )
 
-#: Lines that legitimately mention such a shape without depending on it: this
-#: checker's own patterns, and a line explicitly marked as an example.
+
 _ALLOW = re.compile(r"no-machine-path:\s*allow")
 
-#: This file states the patterns, so its own source is not scanned for them.
+
 _SELF = Path(__file__).resolve()
 
 
@@ -59,7 +42,7 @@ def findings(path: Path) -> list[tuple[int, str, str]]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return []  # unreadable or binary: nothing to claim about it
+        return []
     found = []
     for number, line in enumerate(text.splitlines(), start=1):
         if _ALLOW.search(line):

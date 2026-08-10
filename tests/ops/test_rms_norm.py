@@ -39,7 +39,6 @@ CASES = [
         (make_tensor_type((4, 2048), DType.bf16), make_tensor_type((1024,), DType.f32)),
         ExpectedError(match="last dim"),
     ),
-    # x stands for weight too: one Partial check, reported by operand name.
     TypeInferCase(
         "partial_input_rejected",
         _RMS,

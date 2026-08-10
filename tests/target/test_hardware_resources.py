@@ -1,13 +1,9 @@
-"""Installed hardware resources: independent documents, exact schemas, and
-the identity a compiled artifact can name them by.
+"""Pin schemas and identities for independent installed hardware documents.
 
-A hardware number that is wrong is not a crash, it is a plan priced against a
-machine nobody has, so what is checked here is the boundary that lets a wrong
-number in: whether a malformed document loads, whether a fact nobody modelled is
-accepted as a fact, whether an absent measurement can pass as a present one, and
-whether a number can be written anywhere other than the document. Each failure
-keeps its own diagnostic because the reader of one is somebody editing a TOML
-file by hand.
+A wrong hardware number silently prices a plan for a nonexistent machine. These
+tests reject malformed documents, unmodelled facts, counterfeit measurements,
+and numbers outside documents. Each failure retains a diagnostic useful to the
+TOML author.
 """
 
 from __future__ import annotations
@@ -80,17 +76,12 @@ def _external_hardware_text(resource: str) -> str:
 
 
 def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
-    """AC-1-1 and AC-1-3. Each side is a complete document in its own right, and
-    a target is the pair composed through a declared compatibility rather than one
-    combined record -- neither document carries the other's facts.
+    """A target retains each resolved document's identity and digest.
 
-    The ID and content digest of each travel with the composed value, and editing
-    a document's content changes its digest, which is what lets a compiled
-    artifact name the hardware it was built against. Identity stays out of fact
-    equality, though: two targets carrying identical facts are equal however each
-    was obtained, because codegen groups CUDA functions by comparing their
-    targets, and letting the resolved ID into equality would report identical
-    hardware as "differing Target facts".
+    A target composes two complete documents through declared compatibility.
+    Their IDs and content digests travel with the value so artifacts can name
+    their hardware. Identity stays out of fact equality, allowing equivalent
+    supplied and registry-resolved targets to group during codegen.
     """
     architecture = CudaTarget.hardware.documents()[_SM90]
     device = CudaTarget.hardware.documents()[_H200]
@@ -107,9 +98,7 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     assert target.device.sm_count == 132
 
     original = parse_document(_MINIMAL_DEVICE, origin_label="test")
-    edited = parse_document(
-        _MINIMAL_DEVICE.replace("value = 4", "value = 5"), origin_label="test"
-    )
+    edited = parse_document(_MINIMAL_DEVICE.replace("value = 4", "value = 5"), origin_label="test")
     assert original.digest != edited.digest
 
     with pytest.raises(TypeError):
@@ -122,7 +111,7 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
     assert supplied.architecture_digest is None
     assert target == supplied
     assert hash(target) == hash(supplied)
-    # Differing facts still separate them.
+
     assert target != CudaTarget(
         "nvidia.h200_sxm",
         architecture=replace(target.architecture, name="other"),
@@ -130,15 +119,11 @@ def test_a_target_retains_the_identity_and_digest_of_what_it_resolved() -> None:
 
 
 def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
-    """A CUDA product is a pair of documents and nothing else, so naming one
-    device is enough to compose a target for hardware the compiler has never been
-    pointed at before.
+    """A CUDA product is a pair of documents and nothing else.
 
-    Both products go through one document format per kind and build one value
-    type per kind: every CUDA architecture document states the same fact paths
-    and so does every device document, which is what lets one schema validate
-    them all. What separates the two products is what their documents record, so
-    a Blackwell target needs no type of its own to be a distinct value.
+    Naming a device composes its compatible target. Products share one document
+    format and value type per kind; their recorded facts distinguish them, so a
+    new architecture needs no new Python target type.
     """
     architecture = CudaTarget.hardware.documents()[_SM100]
     device = CudaTarget.hardware.documents()[_B200]
@@ -157,9 +142,6 @@ def test_a_second_cuda_product_composes_from_its_own_documents() -> None:
     assert type(target.device) is type(hopper.device) is CudaDevice
     assert target != hopper
 
-    # A rate a product's tensor cores can reach, and the recorded absence of one
-    # they cannot: the second is a statement about the hardware, so asking for it
-    # fails rather than reading as an unpublished number.
     assert target.device.peak_for(DType.f4e2m1) == 9_000_000_000_000_000
     assert CudaTarget.hardware.documents()[_H200].fact("throughput.f4e2m1").status == (
         "unavailable"
@@ -270,8 +252,6 @@ def test_external_cuda_documents_reject_incompatibility_and_a_missing_leaf(
             id="value-and-status",
         ),
         pytest.param(
-            # A bare string is iterable, so an unchecked tuple() would silently
-            # turn one ID into a tuple of its characters.
             'architectures = ["test.arch"]',
             'architectures = "test.arch"',
             DocumentFormatError,
@@ -283,18 +263,19 @@ def test_external_cuda_documents_reject_incompatibility_and_a_missing_leaf(
 def test_a_malformed_document_names_exactly_what_is_wrong(
     old: str, new: str, error: type[Exception], message: str
 ) -> None:
-    """AC-1-2. One case per class of malformed shape -- the envelope, one fact's
-    evidence, and the compatibility list -- each with its own diagnostic rather
-    than a generic parse failure."""
+    """Give each malformed shape its own diagnostic.
+
+    Cases cover the envelope, fact evidence, and compatibility list rather than
+    collapsing them into a generic parse failure.
+    """
     with pytest.raises(error, match=message):
         parse_document(_document(old, new), origin_label="test")
 
 
 def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
-    """AC-1-2. An unknown key under ``facts`` is a spelling mistake, not an
-    unused fact, so a document carrying one does not load."""
+    """Reject unknown fact keys as spelling mistakes, not unused facts."""
     stray = _hardware_text("nvidia_sm90.toml") + (
-        '\n[facts.compute.max_threads_per_cluster]\n'
+        "\n[facts.compute.max_threads_per_cluster]\n"
         'value = 8\nunit = "count"\norigin = "vendor"\n'
         'source = "test"\nconditions = "test"\n'
     )
@@ -303,9 +284,7 @@ def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
 
 
 def test_a_memory_owner_must_use_the_target_vocabulary() -> None:
-    document = _hardware_text("nvidia_h200_sxm.toml").replace(
-        'value = "target"', 'value = "warp"'
-    )
+    document = _hardware_text("nvidia_h200_sxm.toml").replace('value = "target"', 'value = "warp"')
 
     with pytest.raises(SchemaValidationError, match=r"memory owner 'warp'.*target.*cta.*thread"):
         cuda_spec.build_cuda_device(parse_document(document, origin_label="bad-owner"))
@@ -313,16 +292,13 @@ def test_a_memory_owner_must_use_the_target_vocabulary() -> None:
 
 def test_resolution_failures_are_each_distinguishable() -> None:
     """Unknown IDs, schemas, duplicate IDs, and incompatible pairs differ."""
-    with pytest.raises(
-        UnknownDocumentError, match="no hardware document 'nvidia.sm70'"
-    ):
+    with pytest.raises(UnknownDocumentError, match="no hardware document 'nvidia.sm70'"):
         CudaTarget("nvidia.sm70")
 
     with pytest.raises(UnknownDocumentError) as cross_backend:
         CudaTarget("apple.m2_pro")
     assert str(cross_backend.value) == (
-        "CudaTarget.device 'apple.m2_pro' is a hardware document owned by "
-        "AmxTarget, not CudaTarget"
+        "CudaTarget.device 'apple.m2_pro' is a hardware document owned by AmxTarget, not CudaTarget"
     )
 
     with pytest.raises(UnknownDocumentError) as wrong_kind:
@@ -381,18 +357,18 @@ class _BareDevice(Device):
         ),
     ],
 )
-def test_document_backends_reject_bare_projection_value_markers(
-    construct, message: str
-) -> None:
+def test_document_backends_reject_bare_projection_value_markers(construct, message: str) -> None:
     with pytest.raises(TypeError) as rejected:
         construct()
     assert str(rejected.value) == message
 
 
 def test_no_installed_number_is_repeated_as_a_python_default() -> None:
-    """AC-1-4. The documents are the only place a hardware number is written:
-    the value classes declare shape, not content, so none of them can be
-    constructed without one."""
+    """Keep hardware numbers exclusively in documents.
+
+    Value classes declare shape, not content, and cannot be constructed without
+    document values.
+    """
     for value_type in (
         cuda_spec.SM90_ID,
         cuda_spec.H200_SXM_ID,
@@ -404,15 +380,12 @@ def test_no_installed_number_is_repeated_as_a_python_default() -> None:
         with pytest.raises(TypeError, match="required positional argument"):
             type(built)()
 
-    # The one figure that had no installed record is now recorded, so the
-    # public peak stays available without a Python literal behind it.
     assert CudaTarget("nvidia.h200_sxm").device.peak_for(DType.f32) == 67_000_000_000_000
     assert CudaTarget.hardware.documents()[_H200].fact("throughput.f32").origin == "vendor"
 
 
 def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
-    """AC-1-5. An unavailable fact is recorded as such rather than carrying a
-    placeholder string, and hardware documents hold no compiler policy."""
+    """Record unavailable facts without placeholders or compiler policy."""
     architecture = CudaTarget.hardware.documents()[_SM90]
     unavailable = architecture.fact("memory.shared.bandwidth")
 
@@ -442,8 +415,6 @@ def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
         document = hardware.documents()[spec_id]
         assert not any("policy" in path for path in document.facts)
         assert not any("topology" in path for path in document.facts)
-        assert {
-            path: document.fact(path).value for path in expected_owners
-        } == expected_owners
+        assert {path: document.fact(path).value for path in expected_owners} == expected_owners
         for fact in document.facts.values():
             assert (fact.value is None) == (not fact.available)

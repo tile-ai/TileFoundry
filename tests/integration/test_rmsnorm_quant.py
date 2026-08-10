@@ -5,79 +5,69 @@ with ``eps = 1e-6``. Full GPU compile + run + numerical compare
 against ``torch.nn.functional.rms_norm``.
 """
 
-
 import pytest
 import torch
 
 import tilefoundry
 from tilefoundry import module
-from tilefoundry.dsl import *  # Tensor, tf, T, func, Mesh, Topology, ReduceKind, B, ...
+from tilefoundry.dsl import *
 from tilefoundry.target import CudaTarget
 
 
 @module(entry="rmsnorm", topologies=(Topology("thread", 6 * 32),))
 class RmsnormModule:
-
     @func
-    def rmsnorm(a: Tensor[(1, 1536), 'bf16']):
-        with Mesh(("thread",), (6, 32), ('w', 't')) as m:
-            a_reg = tf.reshard(a, (1, 1536 @ (m.w, m.t)), 'rmem')
-            a_f32 = tf.cast(a_reg, 'f32')
+    def rmsnorm(a: Tensor[(1, 1536), "bf16"]):
+        with Mesh(("thread",), (6, 32), ("w", "t")) as m:
+            a_reg = tf.reshard(a, (1, 1536 @ (m.w, m.t)), "rmem")
+            a_f32 = tf.cast(a_reg, "f32")
             a_sq = tf.square(a_f32)
             a_mean = tf.reduce(a_sq, (-1,), True, ReduceKind.MEAN)
             a_inv = tf.rsqrt(a_mean + 1e-6)
             a_norm_f32 = a_f32 * a_inv
-            a_norm = tf.cast(a_norm_f32, 'bf16')
-            # storage change MUST come with an explicit layout=. Sugar
-            # here materializes to shared-engine C-order on the gmem dest.
-            return tf.reshard(a_norm, (1, 1536 @ (m.w, m.t)), 'gmem')
+            a_norm = tf.cast(a_norm_f32, "bf16")
+
+            return tf.reshard(a_norm, (1, 1536 @ (m.w, m.t)), "gmem")
 
 
 @module(entry="rmsnorm_seq_2", topologies=(Topology("thread", 2 * 4 * 32),))
 class RmsnormSeq2Module:
-
     @func
-    def rmsnorm_seq_2(a: Tensor[(2, 1536), 'bf16']):
-        with Mesh(("thread",), (2, 4, 32), ('x', 'y', 't')) as m:
-            a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'rmem')
-            a_f32 = tf.cast(a_reg, 'f32')
+    def rmsnorm_seq_2(a: Tensor[(2, 1536), "bf16"]):
+        with Mesh(("thread",), (2, 4, 32), ("x", "y", "t")) as m:
+            a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), "rmem")
+            a_f32 = tf.cast(a_reg, "f32")
             a_sq = tf.square(a_f32)
             a_mean = tf.reduce(a_sq, (-1,), True, ReduceKind.MEAN)
             a_inv = tf.rsqrt(a_mean + 1e-6)
             a_norm_f32 = a_f32 * a_inv
-            a_norm = tf.cast(a_norm_f32, 'bf16')
-            return tf.reshard(a_norm, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'gmem')
+            a_norm = tf.cast(a_norm_f32, "bf16")
+            return tf.reshard(a_norm, (2 @ m.x, 12 @ m.y, 128 @ m.t), "gmem")
 
 
 @module(entry="rmsnorm_quant_seq_2", topologies=(Topology("thread", 2 * 4 * 32),))
 class RmsnormQuantSeq2Module:
-
     @func
-    def rmsnorm_quant_seq_2(a: Tensor[(2, 1536), 'bf16']):
-        with Mesh(("thread",), (2, 4, 32), ('x', 'y', 't')) as m:
-            a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'rmem')
-            a_f32 = tf.cast(a_reg, 'f32')
+    def rmsnorm_quant_seq_2(a: Tensor[(2, 1536), "bf16"]):
+        with Mesh(("thread",), (2, 4, 32), ("x", "y", "t")) as m:
+            a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), "rmem")
+            a_f32 = tf.cast(a_reg, "f32")
             a_sq = tf.square(a_f32)
             a_mean = tf.reduce(a_sq, (-1,), True, ReduceKind.MEAN)
             a_inv = tf.rsqrt(a_mean + 1e-6)
             a_norm_f32 = a_f32 * a_inv
-            a_norm = tf.cast(a_norm_f32, 'bf16')
-            a_norm_f32_for_quant = tf.cast(a_norm, 'f32')
+            a_norm = tf.cast(a_norm_f32, "bf16")
+            a_norm_f32_for_quant = tf.cast(a_norm, "f32")
             a_reshaped = tf.reshape(a_norm_f32_for_quant, (2, 12, 128))
             a_amax = tf.reduce(a_reshaped, (-1,), True, ReduceKind.ABS_MAX)
-            a_scale = a_amax * (0.002232142857142857)  # 1/448
-            a_quant = tf.cast(tf.clamp(a_reshaped / a_scale, -448.0, 448.0), 'fp8e4m3')
+            a_scale = a_amax * (0.002232142857142857)
+            a_quant = tf.cast(tf.clamp(a_reshaped / a_scale, -448.0, 448.0), "fp8e4m3")
             return (
-                tf.reshard(a_quant, (2 @ m.x, 12 @ m.y, 128 @ m.t), 'gmem'),
-                tf.reshard(a_scale, (2 @ m.x, 12 @ m.y), 'gmem'),
+                tf.reshard(a_quant, (2 @ m.x, 12 @ m.y, 128 @ m.t), "gmem"),
+                tf.reshard(a_scale, (2 @ m.x, 12 @ m.y), "gmem"),
             )
 
-#: Each plain rmsnorm module, and the batch it is compiled for. The single-axis one
-#: is a ``thread`` topology of mesh layout shape ``(6, 32)``: one CTA of 192 threads,
-#: each holding 8 contiguous bf16 lanes of the 1536-element input, reducing through
-#: intra-warp shfl + a cross-warp shmem workspace. ``seq_2`` is a 3-axis mesh with a
-#: multi-axis Split -- ``x`` is non-reduced (2 groups) while ``y`` and ``t`` share the
-#: reduced logical axis.
+
 NORMALISED = [
     pytest.param(RmsnormModule, 1, id="one_reduced_axis"),
     pytest.param(RmsnormSeq2Module, 2, id="seq_2_multi_axis_split"),
@@ -101,9 +91,9 @@ def test_a_compiled_rmsnorm_matches_torch(normaliser, batch) -> None:
     rm(a, out)
     torch.cuda.synchronize()
 
-    expected = torch.nn.functional.rms_norm(
-        a.float(), normalized_shape=(1536,), eps=1e-6
-    ).to(torch.bfloat16)
+    expected = torch.nn.functional.rms_norm(a.float(), normalized_shape=(1536,), eps=1e-6).to(
+        torch.bfloat16
+    )
 
     assert torch.allclose(out, expected, rtol=5e-2, atol=2e-1), (
         f"tilefoundry rmsnorm output does not match torch reference; "
@@ -116,44 +106,26 @@ def _rmsnorm_quant_seq_2_reference(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Reference fp32 RMSNorm → bf16 round-trip → reshape → absmax-quant.
 
-    Mirrors the DSL pipeline of ``rmsnorm_quant_seq_2`` exactly:
-    rms_norm in f32, cast to bf16, back to f32 (the
-    ``a_norm_f32_for_quant`` step), reshape ``(2,1536) → (2,12,128)``,
-    absmax along axis=-1, scale = absmax × (1/448), then
-    ``clamp(x / scale, ±448).to(fp8e4m3)``.
-
-    Returns ``(q_out, scale)`` with shapes ``(2,12,128) / (2,12)`` —
-    callers can flatten ``q_out`` to ``(2,1536)`` to match the kernel
-    output layout.
+    Mirrors the DSL pipeline exactly: f32 RMSNorm, bf16 round-trip, reshape to
+    ``(2,12,128)``, last-axis absmax, scale by ``1/448``, clamp, and fp8 cast.
+    Returns ``q_out`` and scale with shapes ``(2,12,128)`` and ``(2,12)``;
+    callers flatten ``q_out`` to match the kernel layout.
     """
-    a_norm = torch.nn.functional.rms_norm(
-        a.float(), normalized_shape=(1536,), eps=1e-6
-    )
+    a_norm = torch.nn.functional.rms_norm(a.float(), normalized_shape=(1536,), eps=1e-6)
     a_norm_bf16_f32 = a_norm.to(torch.bfloat16).float()
     a_reshaped = a_norm_bf16_f32.reshape(2, 12, 128)
-    amax = a_reshaped.abs().amax(dim=-1)  # (2, 12)
+    amax = a_reshaped.abs().amax(dim=-1)
     scale = amax * (1.0 / 448.0)
-    q = (a_reshaped / scale.unsqueeze(-1)).clamp(-448.0, 448.0).to(
-        torch.float8_e4m3fn
-    )
+    q = (a_reshaped / scale.unsqueeze(-1)).clamp(-448.0, 448.0).to(torch.float8_e4m3fn)
     return q, scale
 
 
 def test_rmsnorm_quant_seq_2_e2e_gpu_precision() -> None:
     """fp8 quant precision (DOUBLE CRITERION).
 
-    1. ``scale`` (f32 ``(2,12)``) MUST equal the reference
-       ``absmax × 1/448`` exactly.
-    2. ``q_out`` (fp8 ``(2,1536)``) MUST equal the reference quantized
-       values exactly.
-
-    Tolerance: ``atol=0`` for both criteria. The DSL pipeline and the
-    reference Python pipeline perform the same op sequence at the
-    same precision (f32 rmsnorm → bf16 cast → f32 reshape → absmax
-    reduce → mul → div → clamp → fp8 cast), and the runtime
-    ``reduce_intra_cta`` template is deterministic for this layout
-    (one thread per reduced cell + warp-shuffle / shmem workspace),
-    so the kernel output matches the reference bitwise.
+    Both f32 scale ``absmax / 448`` and fp8 output must equal the reference
+    exactly. DSL and Python execute the same precision sequence, and this
+    ``reduce_intra_cta`` layout is deterministic, so tolerance remains zero.
     """
     rm = tilefoundry.compile(RmsnormQuantSeq2Module, target=CudaTarget("nvidia.h200_sxm"))
 
@@ -166,32 +138,18 @@ def test_rmsnorm_quant_seq_2_e2e_gpu_precision() -> None:
 
     ref_q, ref_scale = _rmsnorm_quant_seq_2_reference(a)
 
-    # Criterion 1: scale — bitwise match.
     assert torch.allclose(out1, ref_scale, atol=0.0), (
-        f"scale mismatch: max abs diff "
-        f"{(out1 - ref_scale).abs().max().item():.4g}"
+        f"scale mismatch: max abs diff {(out1 - ref_scale).abs().max().item():.4g}"
     )
 
-    # Criterion 2: quant — bitwise match (cast through f32 since
-    # ``torch.allclose`` does not accept fp8 inputs directly).
     out0_f = out0.float().reshape(2, 12, 128)
     ref_f = ref_q.float()
     assert torch.allclose(out0_f, ref_f, atol=0.0), (
-        f"quant mismatch: max abs diff "
-        f"{(out0_f - ref_f).abs().max().item():.4g}"
+        f"quant mismatch: max abs diff {(out0_f - ref_f).abs().max().item():.4g}"
     )
 
 
 if __name__ == "__main__":
-    # Convenience entry: launch the HIR viewer for one of the fixture
-    # functions defined above. Default target is ``rmsnorm_quant_seq_2``
-    # (the function under test in ``*_e2e_gpu_precision``); pass a
-    # different name as the first CLI argument to switch.
-    #
-    # Usage:
-    #   python tests/e2e/test_rmsnorm_quant.py
-    #   python tests/e2e/test_rmsnorm_quant.py rmsnorm
-    #   python tests/e2e/test_rmsnorm_quant.py rmsnorm_seq_2
     import sys
 
     from tilefoundry.inspection.viewer import Viewer

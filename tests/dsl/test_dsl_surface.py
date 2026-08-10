@@ -53,14 +53,6 @@ def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:
         _ = tf.this_op_does_not_exist
 
 
-# ── `.specialize` parse surface --------------------------------------------
-#
-# A ``pass``-bodied ``@func`` base declares a dispatch prototype; each
-# ``@base.specialize(DimVarRangePat(...))`` registers a variant in source
-# order on ``base.variants``. This is the public DSL surface contract for
-# dynamic-shape specialization; compile / codegen / execute lives in
-# ``tests/e2e/``.
-
 _S = DimVar("S", 1, 7)
 
 
@@ -80,7 +72,7 @@ def wide_s(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
 
 
 def test_func_specializations_parse_to_variants() -> None:
-    # The base is a dispatch prototype (no body) carrying both variants.
+
     assert sub.body is None
     variants = sub.variants
     assert len(variants) == 2
@@ -88,18 +80,13 @@ def test_func_specializations_parse_to_variants() -> None:
     assert variants[0].specializations == (DimVarRangePat("S", 1, 3),)
     assert variants[1].specializations == (DimVarRangePat("S", 4, 7),)
 
-    # The decorated identifier is a display label and nothing else: both variants
-    # are still named for the base, and `def _` labels nothing at all.
     assert display_name(variants[0]) is None
     assert display_name(variants[1]) == "wide_s"
 
-    # Printing back to source keeps the label, which is the only thing telling
-    # two implementations of one name apart.
     printed = as_script(sub)
     assert "def wide_s(" in printed
     assert "def _(" in printed
 
-    # Param shape on each variant carries the DimVar from the annotation.
     for v in variants:
         (param,) = v.params
         (dim,) = param.type.shape

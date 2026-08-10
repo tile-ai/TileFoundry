@@ -8,6 +8,7 @@ The pre-commit hook passes the staged ``src/**`` Python files; this is a
 per-file gate, not a whole-tree one (legacy debt is a separate sweep), so it
 takes explicit paths. Usage: ``spec_entropy_lint.py <path> ...``.
 """
+
 from __future__ import annotations
 
 import ast
@@ -16,17 +17,10 @@ import sys
 import tokenize
 from pathlib import Path
 
-# A block must reach this many lines before its prose is treated as "long".
-# Below the gate, a comment is assumed to be local mechanics and is left alone.
-# The gate is set high enough that a short local-mechanics note that happens to
-# say "must" in passing is never flagged; only a sustained block of normative
-# prose trips it.
 _COMMENT_BLOCK_MIN_LINES = 6
 _DOCSTRING_MIN_LINES = 8
 
-# RFC-2119 normative keywords are matched case-sensitively (their uppercase form
-# is the tell of a contract); the design-vocabulary phrases are matched
-# case-insensitively.
+
 _RFC2119 = ("MUST NOT", "MUST", "SHOULD NOT", "SHOULD", "MAY")
 _PHRASES = ("contract", "invariant", "dispatch principle", "single source")
 
@@ -46,7 +40,7 @@ def _comment_violations(src: str) -> list[tuple[int, str]]:
         toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
     except (tokenize.TokenError, IndentationError, SyntaxError):
         return out
-    block: list[tuple[int, str]] = []  # (lineno, comment text)
+    block: list[tuple[int, str]] = []
     prev_line = None
 
     def flush() -> None:
@@ -54,9 +48,11 @@ def _comment_violations(src: str) -> list[tuple[int, str]]:
             joined = "\n".join(t for _, t in block)
             if _has_contract_vocab(joined):
                 out.append(
-                    (block[0][0],
-                     "suspected contract in a code comment block "
-                     f"({len(block)} lines) — move it to docs/spec/")
+                    (
+                        block[0][0],
+                        "suspected contract in a code comment block "
+                        f"({len(block)} lines) — move it to docs/spec/",
+                    )
                 )
         block.clear()
 
@@ -70,8 +66,12 @@ def _comment_violations(src: str) -> list[tuple[int, str]]:
         elif tok.type in (tokenize.NL, tokenize.COMMENT):
             continue
         else:
-            if tok.type not in (tokenize.NEWLINE, tokenize.INDENT,
-                                tokenize.DEDENT, tokenize.ENCODING):
+            if tok.type not in (
+                tokenize.NEWLINE,
+                tokenize.INDENT,
+                tokenize.DEDENT,
+                tokenize.ENCODING,
+            ):
                 flush()
                 prev_line = None
     flush()
@@ -86,8 +86,7 @@ def _docstring_violations(src: str) -> list[tuple[int, str]]:
     except SyntaxError:
         return out
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
-                                 ast.AsyncFunctionDef)):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         doc = ast.get_docstring(node, clean=False)
         if not doc:
@@ -97,12 +96,17 @@ def _docstring_violations(src: str) -> list[tuple[int, str]]:
             continue
         if not _has_contract_vocab(doc):
             continue
-        lineno = getattr(node, "body", [node])[0].lineno if getattr(
-            node, "body", None) else getattr(node, "lineno", 1)
+        lineno = (
+            getattr(node, "body", [node])[0].lineno
+            if getattr(node, "body", None)
+            else getattr(node, "lineno", 1)
+        )
         out.append(
-            (lineno,
-             "suspected contract in a docstring "
-             f"({len(nonblank)} lines) — move it to docs/spec/")
+            (
+                lineno,
+                "suspected contract in a docstring "
+                f"({len(nonblank)} lines) — move it to docs/spec/",
+            )
         )
     return out
 
@@ -114,9 +118,12 @@ def lint_file(path: Path) -> list[tuple[int, str]]:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        print("usage: spec_entropy_lint.py <path> ...  "
-              "(pass the files to check; the pre-commit hook passes the "
-              "staged src/**.py files)", file=sys.stderr)
+        print(
+            "usage: spec_entropy_lint.py <path> ...  "
+            "(pass the files to check; the pre-commit hook passes the "
+            "staged src/**.py files)",
+            file=sys.stderr,
+        )
         return 2
     roots = [Path(a) for a in argv]
     files: list[Path] = []

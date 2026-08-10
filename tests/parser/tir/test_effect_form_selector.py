@@ -1,16 +1,11 @@
-"""Define test effect form selector behavior.
+"""Pin the trailing-underscore effect selector on the real ``@prim_func`` path.
 
-Trailing-underscore effect-form selector ([parser §1.3](docs/spec/parser.md#13-op-call)/[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution)) on the real
-``@prim_func`` path.
-
-``dispatch.resolve_callable`` implements the ``foo_`` convention, but the actual
-parser never routed a callee through it, so the convention had no witness on the
-real parser path before this test. This locks the selector
-against the real ``_TirBodyVisitor`` entry point: a bare ``copy_(...)`` call,
-unresolved through the closure, strips the trailing underscore and resolves
-`Copy` through the T-dialect registry directly, producing the same
-``Evaluate``-wrapped Stmt as the namespaced ``T.copy(...)`` form.
+A bare ``copy_(...)`` unresolved through the closure strips its suffix and
+resolves ``Copy`` from the T dialect, producing the same ``Evaluate`` statement
+as ``T.copy(...)``. See [parser §1.3](docs/spec/parser.md#13-op-call) and
+[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution).
 """
+
 from __future__ import annotations
 
 from tilefoundry import prim_func

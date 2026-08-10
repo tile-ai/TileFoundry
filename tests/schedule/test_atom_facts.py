@@ -9,6 +9,7 @@ Builds a bf16 gemm HIR function -- bf16 being the sole dtype the one registered
 SM80 atom accepts -- and checks the listed ``AtomFact`` against that atom's
 real, known numbers, not just non-empty/non-zero placeholders.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -85,12 +86,10 @@ def test_bf16_gemm_lists_the_sm80_atom_with_real_numbers():
     assert isinstance(fact.atom, MmaAtom)
     assert fact.atom.op is SM80_16x8x16_F32BF16BF16F32_TN
 
-    # storage: per-thread fragment register bytes -- 8/4/4 elements per
-    # thread for A/B/C, per mma.py's own fragment-derivation comments.
     assert fact.storage == {
-        "a_reg_bytes": 16,  # 8 bf16 elements * 2 bytes
-        "b_reg_bytes": 8,   # 4 bf16 elements * 2 bytes
-        "c_reg_bytes": 16,  # 4 f32 elements * 4 bytes
+        "a_reg_bytes": 16,
+        "b_reg_bytes": 8,
+        "c_reg_bytes": 16,
         "reg_bytes": 40,
     }
     assert fact.resource == {"lane": 32}

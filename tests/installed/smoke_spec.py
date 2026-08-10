@@ -20,7 +20,7 @@ def test_spec_outlines_a_document_rather_than_printing_it(tf, shipped) -> None:
     done = tf("spec", "dsl")
     assert done.returncode == 0, done.stderr
     outline = done.stdout
-    # `dsl` is an alias for hir.md, so this is the document being outlined.
+
     whole = (Path(shipped["spec"]) / "hir.md").read_text(encoding="utf-8")
 
     assert "Silu" in outline and "silu" in outline
@@ -86,9 +86,7 @@ def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
         ("cli", "check", "A FAIL with `--inputs random`"),
     ),
 )
-def test_spec_answers_askable_rules(
-    tf, topic, section, expected
-) -> None:
+def test_spec_answers_askable_rules(tf, topic, section, expected) -> None:
     done = tf("spec", topic, section)
     assert done.returncode == 0, done.stderr
     assert expected in done.stdout

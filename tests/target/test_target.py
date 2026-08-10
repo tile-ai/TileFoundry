@@ -103,8 +103,7 @@ class RefusingCudaTarget(CustomSchedulerCudaTarget):
     def get_scheduler(self, topology: str) -> Scheduler:
         if topology == "thread":
             raise UnsupportedCapabilityError(
-                f"{type(self).__name__} ({type(self).name}): no scheduler for "
-                f"{topology!r}"
+                f"{type(self).__name__} ({type(self).name}): no scheduler for {topology!r}"
             )
         return super().get_scheduler(topology)
 
@@ -206,9 +205,7 @@ def test_registration_rejects_ambiguous_or_invalid_provider_classes() -> None:
     with pytest.raises(TypeError, match="Target subclass"):
         register_target("tests.target.argument")
 
-    owner = _provider_target(
-        "tests.providers.owner", "OwnedTarget", "tests.target.conflict"
-    )
+    owner = _provider_target("tests.providers.owner", "OwnedTarget", "tests.target.conflict")
     claimant = _provider_target(
         "tests.providers.claimant", "ClaimantTarget", "tests.target.conflict"
     )
@@ -256,9 +253,7 @@ def test_lowering_and_codegen_keep_the_external_target_instance() -> None:
 
     assert lowered.target is target
     assert all(fn.target is target for fn in lowered.functions)
-    assert target.get_code_generator() is CudaTarget(
-        "nvidia.h200_sxm"
-    ).get_code_generator()
+    assert target.get_code_generator() is CudaTarget("nvidia.h200_sxm").get_code_generator()
 
 
 @pytest.mark.parametrize(
@@ -319,8 +314,7 @@ def test_public_schedule_overrides_refuses_and_rejects_unknown_topologies(
     with pytest.raises(ScheduleError) as refusal:
         schedule(refused, scheduling_gemm, topology="thread")
     assert str(refusal.value) == (
-        "schedule: RefusingCudaTarget (tests.target.refusing_cuda): "
-        "no scheduler for 'thread'"
+        "schedule: RefusingCudaTarget (tests.target.refusing_cuda): no scheduler for 'thread'"
     )
     assert solver_calls == []
 
@@ -347,16 +341,13 @@ def test_static_topologies_use_target_resource_facts() -> None:
     target.validate_program_topology(Topology("cta", 310_000))
     target.validate_program_topology(Topology("thread", 1024))
     target.validate_program_topology(Topology("cta", None))
-    ExternalCudaTarget("nvidia.h200_sxm").validate_program_topology(
-        Topology("thread", 1024)
-    )
+    ExternalCudaTarget("nvidia.h200_sxm").validate_program_topology(Topology("thread", 1024))
     with pytest.raises(ValueError, match="must be positive"):
         target.validate_program_topology(Topology("cta", 0))
     with pytest.raises(ValueError, match="1 <= extent <= 1024") as error:
         target.validate_program_topology(Topology("thread", 1025))
     assert str(error.value) == (
-        "CudaTarget (cuda): topology 'thread' extent 1025 must satisfy "
-        "1 <= extent <= 1024"
+        "CudaTarget (cuda): topology 'thread' extent 1025 must satisfy 1 <= extent <= 1024"
     )
     assert len(str(error.value)) < 120
 
@@ -379,18 +370,14 @@ def test_group_functions_by_target_fact_matching() -> None:
         ),
     )
     with pytest.raises(ValueError, match="mixes unequal device Targets") as error:
-        group_functions_by_target(
-            Module(name="mixed", functions=(first, second), entry="first")
-        )
+        group_functions_by_target(Module(name="mixed", functions=(first, second), entry="first"))
     assert "CudaTarget (cuda)" in str(error.value)
     assert "architecture=" not in str(error.value)
     assert "device=" not in str(error.value)
     assert len(str(error.value)) < 300
 
     host = PrimFunction(name="host", params=(), body=body, target=CpuTarget())
-    groups = group_functions_by_target(
-        Module(name="mixed", functions=(first, host), entry="host")
-    )
+    groups = group_functions_by_target(Module(name="mixed", functions=(first, host), entry="host"))
     assert tuple(fn.name for fn in groups[first.target]) == ("first",)
     assert tuple(fn.name for fn in groups[host.target]) == ("host",)
 

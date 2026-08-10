@@ -115,13 +115,8 @@ def test_a_derived_extent_follows_the_dimension_it_derives_from() -> None:
     shapes = {tuple(param.type.shape) for param in concrete.params}
 
     assert (1, SMALL_CONTEXT_T, 4, 128) in shapes
-    assert all(
-        isinstance(extent, int)
-        for param in concrete.params
-        for extent in param.type.shape
-    )
-    # Nothing states the block length, so if it were wrong the reshape inside
-    # the callee would have rejected the rebuild rather than reach here.
+    assert all(isinstance(extent, int) for param in concrete.params for extent in param.type.shape)
+
     assert SMALL_CONTEXT_T % NUM_SPLITS == 0
 
 
@@ -198,9 +193,9 @@ def test_a_derived_extent_reaches_the_operation_that_states_it() -> None:
     assert any(block in shape for shape in targets), (
         f"no reshape states the derived block length {block}: {targets}"
     )
-    assert all(
-        isinstance(extent, int) for shape in targets for extent in shape
-    ), f"a reshape still states a range: {targets}"
+    assert all(isinstance(extent, int) for shape in targets for extent in shape), (
+        f"a reshape still states a range: {targets}"
+    )
 
 
 def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
@@ -224,20 +219,12 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     k_new = torch.randn(1, 1, 4, 128, dtype=torch.bfloat16)
     v_new = torch.randn(1, 1, 4, 128, dtype=torch.bfloat16)
 
-    # What the evaluator would pick, decided the way it decides: the one
-    # pattern that admits the context length the arguments actually carry.
-    admitted = [
-        variant
-        for variant in ENTRY.variants
-        if variant.specializations[0].match(context)
-    ]
+    admitted = [variant for variant in ENTRY.variants if variant.specializations[0].match(context)]
     assert len(admitted) == 1
     assert variant_for(ENTRY, dims) is admitted[0]
 
     expected = evaluate(ENTRY, q, k, v, k_new, v_new, device="cpu")
-    got = evaluate(
-        specialize_function(ENTRY, dims), q, k, v, k_new, v_new, device="cpu"
-    )
+    got = evaluate(specialize_function(ENTRY, dims), q, k, v, k_new, v_new, device="cpu")
 
     assert got.shape == expected.shape
     assert got.dtype == expected.dtype
@@ -251,7 +238,6 @@ class _LoopOnly:
     The loop scans it. Nothing about the parameters or the return says how long
     it is, which is what makes this the case a signature-driven rebuild misses.
     """
-
 
     @func
     def main(x: Tensor[(8,), "f32"]):
@@ -271,9 +257,7 @@ def test_a_dimension_only_the_body_uses_is_still_substituted() -> None:
     authored = _LoopOnly.entry_function()
     assert residual_dims(authored) == ("loop_ctx",)
     assert all(
-        isinstance(extent, int)
-        for param in authored.params
-        for extent in param.type.shape
+        isinstance(extent, int) for param in authored.params for extent in param.type.shape
     ), "the signature is already concrete, which is the point"
 
     concrete = specialize_function(authored, {"loop_ctx": 512})
@@ -301,10 +285,8 @@ def test_two_sizes_of_a_body_only_dimension_are_told_apart() -> None:
 
     assert origin_of(small) is authored
     assert origin_of(large) is authored
-    # The premise: nothing in either signature distinguishes them.
-    assert [param.type for param in small.params] == [
-        param.type for param in large.params
-    ]
+
+    assert [param.type for param in small.params] == [param.type for param in large.params]
     assert small.return_type == large.return_type
 
     assert bound_dims_of(small) == (("loop_ctx", 8),)
@@ -329,5 +311,5 @@ def test_the_report_refuses_two_sizes_of_a_body_only_dimension() -> None:
     assert not _same_program(small, large)
     assert _same_program(small, again)
     assert _same_program(small, small)
-    # An undecorated function has no recorded extents, so it is only ever itself.
+
     assert not _same_program(authored, small)

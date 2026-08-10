@@ -6,6 +6,7 @@ where the folded result must arrive as a plain ``int`` rather than a ``Constant`
 or a nested ``Call`` — two shapes that print and compare differently and produced
 a real broadcast failure.
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import TypeInferContext
@@ -114,25 +115,27 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
     """
     ty = TensorType(
         shape=(_i64(1), _i64(4), _i64(32), _i64(128)),
-        dtype=DType.bf16, layout=None, storage="gmem",
+        dtype=DType.bf16,
+        layout=None,
+        storage="gmem",
     )
     assert ty.shape == (1, 4, 32, 128)
     assert all(isinstance(d, int) and not isinstance(d, bool) for d in ty.shape)
 
     s = DimVar(name="S_ti", lo=1, hi=8)
     mixed = TensorType(shape=(s, _i64(128)), dtype=DType.f32, layout=None, storage="gmem")
-    assert mixed.shape[0] is s          # symbolic dim untouched
+    assert mixed.shape[0] is s
     assert mixed.shape[1] == 128 and isinstance(mixed.shape[1], int)
 
-    # The Slice typeinfer builds its output shape via ``simplify_dim``, collapsing
-    # the nested ``DimFloorDiv(DimAdd(DimSub(...)))`` chain to a single value.
     param = TensorType(shape=(1, 4, 32, 128), dtype=DType.bf16, layout=None, storage="gmem")
     x = Constant(type=param, value=None)
-    sliced = TypeInferContext().type_of(Call(
-        type=TensorType.scalar(DType.bf16),  # ignored: typeinfer fills in
-        target=Slice(begin=(0, 0, 0, 0), end=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
-        args=(x,),
-    ))
+    sliced = TypeInferContext().type_of(
+        Call(
+            type=TensorType.scalar(DType.bf16),
+            target=Slice(begin=(0, 0, 0, 0), end=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
+            args=(x,),
+        )
+    )
     for dim in sliced.shape:
         assert isinstance(dim, int) and not isinstance(dim, bool), (
             f"expected canonical int static dim, got {type(dim).__name__}: {dim}"
@@ -154,6 +157,6 @@ def test_unary_propagates_dim_var_in_shape() -> None:
     call = Call(type=in_ty, target=Unary(kind=UnaryKind.NEG), args=(x,))
     out_ty = TypeInferContext().type_of(call)
     assert out_ty.shape == (s, 8)
-    # Same (name, lo, hi) DimVar identity (cached).
+
     assert out_ty.shape[0] is s
     assert (out_ty.shape[0].lo, out_ty.shape[0].hi) == (1, 8)

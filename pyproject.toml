@@ -76,8 +76,9 @@ markers = [
 ]
 
 [tool.ruff]
-# Snapshot examples are evidence; reformatting them to satisfy lint would change that evidence.
-extend-exclude = ["examples"]
+# Snapshot examples and shipped model sources are evidence; formatting them changes that evidence.
+extend-exclude = ["examples", "tests/models"]
+force-exclude = true
 line-length = 100
 target-version = "py312"
 
@@ -110,7 +111,5 @@ ignore = ["E501", "F821", "E741"]
 # authoring-surface ergonomics. Internal implementation code in
 # `src/` must NOT use star imports (no exception here).
 "tests/**/*.py" = ["F403", "F405"]
-"tests/models/**/*.py" = ["D2", "D3", "D4"]
-
 [tool.ruff.lint.pydocstyle]
 convention = "google"

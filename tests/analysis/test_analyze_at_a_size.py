@@ -27,21 +27,19 @@ from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget
 
-#: Small enough to solve and to analyse on a CPU gate.
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
-#: What is asked here is that a plan exists for the stated size and verifies against
-#: the program of that size. The solver cannot prove this makespan optimal, so left
-#: to run it spends the whole budget improving a plan whose verdict does not change.
-SOLVER = ScheduleOptions(
-    timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True
-)
+
+
+SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True)
 
 
 def _aimed():
     """The decode example, aimed at one machine."""
-    return replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),))
+    return replace(
+        GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
+    )
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -86,12 +84,10 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
     module = _aimed()
     authored = module.entry_function()
 
-    data = report([
-        analyze(module, authored, analysis=family, dims=DIMS) for family in FAMILIES
-    ])
+    data = report([analyze(module, authored, analysis=family, dims=DIMS) for family in FAMILIES])
 
     assert data["executed"] == list(FAMILIES)
-    # compute-cost keeps no whole-function record; the other three each keep one.
+
     assert set(data["function_records"]) == {"memory", "roofline", "timeline"}
     assert data["totals"]["flops"], "the work totals summed to nothing"
     text = render_text(data)
@@ -113,10 +109,12 @@ def test_a_report_at_a_size_carries_the_per_call_records_of_every_family() -> No
     module = _aimed()
     authored = module.entry_function()
 
-    data = report([
-        analyze(module, authored, analysis=family, dims=DIMS)
-        for family in ("compute-cost", "timeline")
-    ])
+    data = report(
+        [
+            analyze(module, authored, analysis=family, dims=DIMS)
+            for family in ("compute-cost", "timeline")
+        ]
+    )
 
     families = {name for row in data["calls"] for name in row if name != "value"}
     assert families == {"compute-cost", "timeline"}, families
@@ -142,9 +140,7 @@ def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length(
     module = QWEN3_1_7B.build()
     function = module.lookup("decoder_layer")
 
-    result = analyze(
-        module, function, analysis="timeline", dims={"ctx_len": ctx_len}
-    )
+    result = analyze(module, function, analysis="timeline", dims={"ctx_len": ctx_len})
 
     record = get_metadata(result.function, TimelineMetadata)
     assert record is not None
@@ -157,9 +153,7 @@ def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:
     module = QWEN3_1_7B.build()
     function = module.lookup("decoder_layer")
 
-    result = analyze(
-        module, function, analysis="memory", dims={"ctx_len": 1024}
-    )
+    result = analyze(module, function, analysis="memory", dims={"ctx_len": 1024})
 
     record = get_metadata(result.function, MemoryMetadata)
     assert record is not None
@@ -203,7 +197,9 @@ def test_a_dimension_left_unbound_is_refused() -> None:
 
     with pytest.raises(AnalysisError, match="was not given a size"):
         analyze(
-            module, module.entry_function(), analysis="compute-cost",
+            module,
+            module.entry_function(),
+            analysis="compute-cost",
             dims={"batch": 4},
         )
 
@@ -241,9 +237,7 @@ def test_scheduling_at_a_stated_size_plans_and_verifies() -> None:
     module = _aimed()
     authored = module.entry_function()
 
-    result = schedule(
-        module, authored, topology="cta", options=SOLVER, dims=DIMS
-    )
+    result = schedule(module, authored, topology="cta", options=SOLVER, dims=DIMS)
 
     assert result.module is module
     assert result.function is not authored

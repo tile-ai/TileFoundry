@@ -1,22 +1,11 @@
-"""Async ``cp.async`` staging ops: ``copy_async`` / ``cp_async_commit`` / ``cp_async_wait``.
+"""Cover CUDA async-copy validation, emission, and execution.
 
-Async ``cp.async`` staging ops: ``copy_async`` / ``cp_async_commit`` /
-``cp_async_wait``.
+The family requires gmem-to-smem matching dtypes and nonnegative wait groups.
+GPU staging through copy, commit, and wait must reproduce synchronous output.
 
-No corpus model stages through ``cp.async``, so this file is the whole witness
-for the op family. It keeps the parts a passing program cannot show:
-
-- ``CopyAsync`` verify requires an smem destination, a gmem source, and a
-  matching dtype; ``CpAsyncWait.n`` must be a non-negative int;
-- codegen forwards ``CopyAsync`` to the runtime ``ops::copy_async`` entry and
-  emits the group fences for commit / wait;
-- on GPU, a ``copy_async -> commit -> wait`` staging of a Split gmem source
-  into a full shared tile reproduces the input (matches a synchronous copy).
-
-The three ops' ``UnitType`` results and the accepted verify are not asserted
-separately: the module below parses the ``T`` surface, types it and verifies it
-on the way to being lowered and run, so an unsound one fails there.
+See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -37,8 +26,6 @@ from tilefoundry.ir.types.shard.shard_layout import Broadcast
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
-# ── verify ───────────────────────────────────────────────────────────────────
-
 
 def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:
     src = Var(type=src_ty, name="src")
@@ -46,9 +33,7 @@ def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:
     return PrimFunction(
         name="fn",
         params=(src, dst),
-        body=Sequential(
-            body=(Evaluate(callable=CopyAsync(), args=(src, dst)), Return())
-        ),
+        body=Sequential(body=(Evaluate(callable=CopyAsync(), args=(src, dst)), Return())),
     )
 
 
@@ -60,8 +45,6 @@ def _wait_pf(n: int) -> PrimFunction:
     )
 
 
-#: Every way an async copy can be stated wrong: the hardware instruction moves gmem
-#: into smem, in one dtype, and waits on a count of outstanding groups.
 REJECTED = [
     pytest.param(
         _copy_async_pf(
@@ -97,9 +80,6 @@ def test_verify_rejects_what_the_instruction_cannot_do(stated, refusal) -> None:
         verify_prim_function(stated)
 
 
-# ── module for emit + GPU staging ────────────────────────────────────────────
-
-
 @module(entry="async_stage_host")
 class AsyncStage:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
@@ -113,9 +93,7 @@ class AsyncStage:
                     mesh=m,
                 ),
             )
-            # A flat CTA-shared staging tile: the whole block sees all 512
-            # elements. ``copy_async`` places each thread's row at its flat
-            # ``local_offset`` within it.
+
             s = T.alloc_tensor(
                 TensorType(
                     shape=(512,),
@@ -128,12 +106,11 @@ class AsyncStage:
                     storage=StorageKind.SMEM,
                 )
             )
-            T.copy_async(a_view, s)      # each thread stages its row at its offset
+            T.copy_async(a_view, s)
             T.cp_async_commit()
-            T.cp_async_wait(n=0)         # drain: the full tile has landed
+            T.cp_async_wait(n=0)
             T.sync(m)
-            # The full staged tile is now visible to every thread; write it back
-            # to the plain output (the sync-copy reference result).
+
             T.copy(s, b)
 
     @prim_func(target=CpuTarget())

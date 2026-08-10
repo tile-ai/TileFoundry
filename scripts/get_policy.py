@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
-"""Selector for `docs/policies/project-policy.json`.
+"""Select entries from ``docs/policies/project-policy.json``.
 
-Two-layer disclosure: returns indices (id, name, description, refs)
-for rules / knowledge; never inlines the referenced section content.
-For acceptance criteria the AC text itself is the contract, so it is
-returned in full.
-
-Usage:
-  get_policy.py --type ac
-  get_policy.py --type rules --role implementer [--paths PATH ...]
-  get_policy.py --type knowledge --role reviewer --paths src/foo.py
-
-Optional `--policy <file>` overrides the default
-`docs/policies/project-policy.json` (resolved relative to the repo
-root).
+Rules and knowledge return metadata plus references; acceptance criteria return
+their contract text. Role and path filters narrow results, and ``--policy``
+overrides the repository-relative source file.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -85,9 +76,7 @@ def load_policies(policy_path: Path) -> list[dict[str, Any]]:
     return list(raw.get("policies", []))
 
 
-def filter_policies(
-    policies: list[dict[str, Any]], paths: list[str]
-) -> list[dict[str, Any]]:
+def filter_policies(policies: list[dict[str, Any]], paths: list[str]) -> list[dict[str, Any]]:
     return [p for p in policies if policy_matches_paths(p, paths)]
 
 
@@ -101,9 +90,7 @@ def select_ac(policies: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def select_refs(
-    policies: list[dict[str, Any]], kind: str, role: str
-) -> list[dict[str, Any]]:
+def select_refs(policies: list[dict[str, Any]], kind: str, role: str) -> list[dict[str, Any]]:
     """Return index entries for ``kind in {"rules", "knowledge"}``.
 
     Each entry is ``{id, name, description, refs}`` where ``refs`` is the
@@ -130,9 +117,7 @@ def select_refs(
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument(
-        "--type", required=True, choices=("ac", "rules", "knowledge")
-    )
+    p.add_argument("--type", required=True, choices=("ac", "rules", "knowledge"))
     p.add_argument(
         "--role",
         choices=("implementer", "reviewer"),

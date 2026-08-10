@@ -39,12 +39,9 @@ def test_inspection_types_are_opt_in_same_line_comments():
 
     assert canonical != annotated
     assert "# Tensor[" in annotated
-    # Same line as the statement it types, never a line of its own: a comment the
-    # reader has to look up is a comment about a different program.
+
     assert all(
-        line.split("# Tensor[")[0].strip()
-        for line in annotated.splitlines()
-        if "# Tensor[" in line
+        line.split("# Tensor[")[0].strip() for line in annotated.splitlines() if "# Tensor[" in line
     )
 
 
@@ -66,8 +63,6 @@ def test_binding_metadata_names_the_emitted_binding():
 
     canonical = as_script(function)
 
-    # The label is the emitted name, and the emitted name is the whole record of
-    # it: importing the emitted file reads it back off the left-hand side.
     assert "result = add(source, source)" in canonical
 
     unbound = Call(
@@ -81,7 +76,7 @@ def test_binding_metadata_names_the_emitted_binding():
         body=unbound,
         return_type=tensor_type,
     )
-    # Nothing to name it after, so the printer numbers it.
+
     assert "v0 = add(source, source)" in as_script(unbound_function)
 
 
@@ -161,4 +156,4 @@ def test_printer_emits_provider_expression_without_interpreting_it():
     )
 
     assert "from nobody import unknown" in canonical
-    assert "@module(entry=\"demo\", target=unknown !!!)" in canonical
+    assert '@module(entry="demo", target=unknown !!!)' in canonical

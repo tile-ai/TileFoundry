@@ -41,7 +41,6 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
 class _CudaAdd:
-
     @func
     def main(source: Tensor[(256,), "f32"]):
         return tf.add(source, source)
@@ -49,7 +48,6 @@ class _CudaAdd:
 
 @module(entry="main", target=AmxTarget(), topologies=(Topology("core", 4),))
 class _AmxAdd:
-
     @func
     def main(source: Tensor[(256,), "f32"]):
         return tf.add(source, source)
@@ -57,7 +55,6 @@ class _AmxAdd:
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _MixedPrecision:
-
     @func
     def main(source: Tensor[(64,), "f32"]):
         scaled = tf.mul(source, source)
@@ -67,7 +64,6 @@ class _MixedPrecision:
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _WeightedAdd:
-
     @func
     def main(
         source: Tensor[(64,), "f32"],
@@ -79,7 +75,6 @@ class _WeightedAdd:
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _Rotated:
-
     @func
     def main(
         q: Tensor[(1, 4, 2, 8), "f32"],
@@ -94,7 +89,6 @@ class _Rotated:
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _Allocated:
-
     @func
     def main(source: Tensor[(64,), "f32"]):
         return tf.add(source, tf.zeros(shape=(64,), dtype="f32"))
@@ -102,7 +96,6 @@ class _Allocated:
 
 @module(entry="row", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _MovementCosts:
-
     @func
     def row(source: Tensor[(1024, 2048), "f32"]):
         return source[0:256, :]
@@ -124,7 +117,6 @@ class _MovementCosts:
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _BatchedOnTheRight:
-
     @func
     def main(
         token: Tensor[(1, 1, 4), "f32"],
@@ -135,7 +127,6 @@ class _BatchedOnTheRight:
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _Gathered:
-
     @func
     def main(
         table: ConstTensor[(1024, 64), "f32"],
@@ -146,7 +137,6 @@ class _Gathered:
 
 @module(entry="plain", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 class _MatmulLayouts:
-
     @func
     def plain(
         lhs: Tensor[(1056, 2048), "bf16"],
@@ -177,7 +167,6 @@ class _MatmulLayouts:
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
 class _NestedSplitAdd:
-
     @func
     def block(source: Tensor[(256,), "f32"]):
         with Mesh(("cta",), layout=(4,), names=("tile",)) as cta:
@@ -228,7 +217,6 @@ def _multi_topology_mesh(source: Tensor[(4,), "f32"]):
 
 @module(entry="split", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 class _SharedTile:
-
     @func
     def split(source: Tensor[(1056, 6600), "f32"]):
         with Mesh(("cta",), layout=(132,), names=("tile",)) as cta:
@@ -270,9 +258,7 @@ def _calls(function) -> tuple[Call, ...]:
 
 
 def _cost_of(function) -> ComputeCostMetadata:
-    (record,) = [
-        get_metadata(call, ComputeCostMetadata) for call in _calls(function)[-1:]
-    ]
+    (record,) = [get_metadata(call, ComputeCostMetadata) for call in _calls(function)[-1:]]
     assert record is not None
     return record
 
@@ -323,9 +309,13 @@ def test_matmul_layout_changes_only_the_per_unit_work() -> None:
         assert cost is not None and bound is not None
         records.append((cost, bound))
 
-    (plain_cost, plain_bound), (split_cost, split_bound), (
-        broadcast_cost,
-        broadcast_bound,
+    (
+        (plain_cost, plain_bound),
+        (split_cost, split_bound),
+        (
+            broadcast_cost,
+            broadcast_bound,
+        ),
     ) = records
     assert [record.flops for record, _bound in records] == [
         (("bf16", 28_547_481_600),),
@@ -385,7 +375,7 @@ def test_a_matmul_takes_its_batch_from_what_it_produced() -> None:
 
     record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
     assert record is not None
-    # 5 batches of [1, 4] @ [4, 3]; the left operand states one batch.
+
     assert record.flops == (("f32", 2 * 5 * 1 * 4 * 3),)
 
 
@@ -406,7 +396,7 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
         ComputeCostMetadata,
     )
     assert rotation is not None
-    # 1 * 4 * 2 * 8 elements in each of q and k, at three flops apiece.
+
     assert rotation.flops == (("f32", 3 * 2 * 64),)
 
     allocated = _Allocated.entry_function()
@@ -450,9 +440,7 @@ def test_an_evaluator_that_misses_an_operand_is_refused(monkeypatch) -> None:
         cost_evaluator_registry, "lookup", lambda cls: lambda call, ctx: Cost({}, ())
     )
 
-    with pytest.raises(
-        AnalysisError, match="op=Binary: cost reports 0 operands, the call has 3"
-    ):
+    with pytest.raises(AnalysisError, match="op=Binary: cost reports 0 operands, the call has 3"):
         _run(_wide_grid, "compute-cost")
 
 
@@ -468,8 +456,7 @@ def test_memory_holds_parameters_resident_past_their_last_reader() -> None:
     assert [item.binding for item in held] == ["source", "weight"]
     assert ordinary, "body allocations are still measured by their live ranges"
     assert all(
-        item.last_used_at == max(row.last_used_at for row in record.lifetimes)
-        for item in held
+        item.last_used_at == max(row.last_used_at for row in record.lifetimes) for item in held
     )
 
 
@@ -492,9 +479,7 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     reshape_cost = get_metadata(reshape, ComputeCostMetadata)
     assert transpose_cost is not None
     moved = 1024 * 2048 * 4
-    assert transpose_cost.traffic_at("gmem") == TrafficBytes(
-        read=moved, write=moved
-    )
+    assert transpose_cost.traffic_at("gmem") == TrafficBytes(read=moved, write=moved)
     assert reshape_cost is not None
     assert reshape_cost.traffic_at("gmem").total_bytes == 0
     footprint = get_metadata(materialized, MemoryMetadata)
@@ -524,9 +509,7 @@ def test_runtime_slice_costs_the_selected_region() -> None:
     output = make_tensor_type((256, 2048))
     call = Call(
         type=output,
-        target=Slice(
-            begin=(0, 0), end=(runtime_end, 2048), strides=(1, 1)
-        ),
+        target=Slice(begin=(0, 0), end=(runtime_end, 2048), strides=(1, 1)),
         args=(source,),
     )
 
@@ -549,13 +532,9 @@ def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
     smem = next(item for item in record.footprint if item.level == "smem")
     assert smem.capacity_bytes == 232_448
     assert smem.peak_bytes == 422_400
-    assert max(
-        item.bytes for item in record.lifetimes if item.level == "smem"
-    ) == 211_200
+    assert max(item.bytes for item in record.lifetimes if item.level == "smem") == 211_200
     assert any(
-        "smem peak is 422400 B" in note
-        and "order-dependent" in note
-        and "not a bound" in note
+        "smem peak is 422400 B" in note and "order-dependent" in note and "not a bound" in note
         for note in record.advisories
     )
 
@@ -568,40 +547,47 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     analyze(_MatmulLayouts, matmul, analysis="memory")
     gmem = get_metadata(matmul, MemoryMetadata)
     assert gmem is not None
-    gmem_lifetimes = {
-        item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"
-    }
+    gmem_lifetimes = {item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"}
     assert gmem_lifetimes["local_lhs"] == gmem_lifetimes["lhs"] == 4_325_376
 
     shared = next(fn for fn in _SharedTile.functions if fn.name == "split")
     analyze(_SharedTile, shared, analysis="memory")
     cta_owned = get_metadata(shared, MemoryMetadata)
     assert cta_owned is not None
-    assert next(
-        item.bytes
-        for item in cta_owned.lifetimes
-        if item.binding == "local" and item.level == "smem"
-    ) == 211_200
+    assert (
+        next(
+            item.bytes
+            for item in cta_owned.lifetimes
+            if item.binding == "local" and item.level == "smem"
+        )
+        == 211_200
+    )
 
     thread_shared = _entry(_modest_shared)
     analyze(_modest_shared, thread_shared, analysis="memory")
     still_cta_owned = get_metadata(thread_shared, MemoryMetadata)
     assert still_cta_owned is not None
-    assert next(
-        item.bytes
-        for item in still_cta_owned.lifetimes
-        if item.binding == "local" and item.level == "smem"
-    ) == 4_096
+    assert (
+        next(
+            item.bytes
+            for item in still_cta_owned.lifetimes
+            if item.binding == "local" and item.level == "smem"
+        )
+        == 4_096
+    )
 
     registers = _entry(_thread_sharded)
     analyze(_thread_sharded, registers, analysis="memory")
     thread_owned = get_metadata(registers, MemoryMetadata)
     assert thread_owned is not None
-    assert next(
-        item.bytes
-        for item in thread_owned.lifetimes
-        if item.binding == "local" and item.level == "rmem"
-    ) == 8
+    assert (
+        next(
+            item.bytes
+            for item in thread_owned.lifetimes
+            if item.binding == "local" and item.level == "rmem"
+        )
+        == 8
+    )
 
 
 def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None:
@@ -736,9 +722,7 @@ def test_the_gpu_memory_graph_is_not_a_tree() -> None:
     assert flat.cached_level("l1d") == "l2"
     assert flat.backing_level("l1d") == "gmem"
     assert flat.capacity_sharers("l1d") == ()
-    assert all(
-        relation.kind is MemoryRelationKind.CACHES for relation in flat.relations
-    )
+    assert all(relation.kind is MemoryRelationKind.CACHES for relation in flat.relations)
 
 
 def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -> None:

@@ -1,16 +1,10 @@
-"""The AMX target's own facts.
+"""Pin the AMX target's facts, atom candidates, and evidence origins.
 
-The AMX target's own facts: its topology levels, its atom candidate
-enumeration and the recorded origin of every fact it stands on.
-
-The device facts are the ones actually measured on the host this target
-describes, so the assertions below name the exact values rather than a range --
-in particular the performance-core cache sizes, which the unqualified
-``hw.l1dcachesize`` / ``hw.l2cachesize`` sysctls under-report by naming the
-efficiency core instead. A duration derived from a rate nobody measured is the
-failure this file exists to prevent, and it is silent: the plan still comes out,
-priced against a machine that does not exist.
+Assertions use exact measured device values, including performance-core cache
+sizes that unqualified sysctls under-report. They prevent silent schedules priced
+from unmeasured rates or facts belonging to another hardware level.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -127,18 +121,10 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
 def test_both_catalogue_atoms_are_priced_at_their_own_measured_rates():
     """Price both core units using their own measured rates.
 
-    A gemm whose M=16, N=16 divide the AMX atom's 16x16 shape, whose K divides its
-    own extent of one, and whose three operands fit the X/Y/Z register files gets
-    both candidates. The AMX one is a 16x16 f32 outer product: a 16-element A
-    operand in X, a 16-element B operand in Y, and the accumulator tile it lands
-    in, in Z. The NEON one is a 4x4 f32 outer product on the core's SIMD pipes,
-    its operands streamed through cache rather than held in registers.
-
-    Every field is checked against the atom's own numbers, and both durations
-    against the measured rate of the unit that runs them -- 2*M*N*K flops over the
-    unit's own throughput, operand bytes over the unified-memory bandwidth. At this
-    granularity both are memory-bound, which is the arithmetic saying so rather
-    than a claim about the hardware.
+    A 16x16 gemm fitting X/Y/Z registers admits both AMX 16x16 and NEON 4x4
+    outer-product atoms. Each field and duration uses that atom's own geometry,
+    throughput, and operand-byte cost. Both are arithmetically memory-bound at
+    this granularity.
     """
     facts = candidate_atoms(
         register_sized_f32_gemm.entry_function().body,
@@ -181,18 +167,10 @@ def test_both_catalogue_atoms_are_priced_at_their_own_measured_rates():
 def test_the_hard_filter_is_per_atom_and_covers_storage_shape_and_dtype():
     """Reject atoms independently for storage, shape, and dtype mismatches.
 
-    Storage is what separates the two units, and it is the recorded X/Y/Z geometry
-    that decides it: an untiled 64x128 f32 A operand is 32 KiB against 512 B of X,
-    so only the cache-streaming NEON atom survives -- which is why a whole-tensor
-    statement lands on SIMD. The cache level budgets no operand at all, so its
-    filter is vacuous by construction rather than by omission.
-
-    Shape is decided per atom, not per catalogue: M=8 fits the register files
-    whole, so nothing about storage rules the AMX atom out -- its own 16-row
-    granularity does, while NEON's 4 divides 8. An extent of 18 is a whole
-    multiple of neither, and a bf16 gemm matches neither atom's dtype. Each is an
-    empty list rather than an error, so "no atom applies" stays distinguishable
-    from "this cannot be asked".
+    X/Y/Z geometry rejects a whole 64x128 operand from AMX while cache-streaming
+    NEON survives. Shape is evaluated per atom: M=8 fits storage but not AMX's
+    16-row granularity, while NEON's 4 divides it. Indivisible extents and bf16
+    match neither atom and return an empty list rather than an unsupported query.
     """
     architecture = AmxTarget().architecture
     assert AMX_REGISTERS.budget == (
@@ -203,54 +181,41 @@ def test_the_hard_filter_is_per_atom_and_covers_storage_shape_and_dtype():
     assert CORE_CACHE.budget == ()
     assert CORE_CACHE.holds({}) and CORE_CACHE.holds({"a_bytes": 10**12})
 
-    whole_tensor = candidate_atoms(
-        f32_gemm.entry_function().body, f32_gemm.resolve_target()
-    )
+    whole_tensor = candidate_atoms(f32_gemm.entry_function().body, f32_gemm.resolve_target())
     assert [fact.atom.op.name for fact in whole_tensor] == ["NEON_FMLA_4x4x1_F32"]
-    assert not AMX_REGISTERS.holds(
-        {"a_bytes": 64 * 128 * 4, "b_bytes": 512, "c_bytes": 512}
-    )
+    assert not AMX_REGISTERS.holds({"a_bytes": 64 * 128 * 4, "b_bytes": 512, "c_bytes": 512})
     assert CORE_CACHE.holds({"a_bytes": 64 * 128 * 4, "b_bytes": 10**9, "c_bytes": 10**9})
 
     coarse = candidate_atoms(
         coarse_m_f32_gemm.entry_function().body, coarse_m_f32_gemm.resolve_target()
     )
     assert [fact.atom.op.name for fact in coarse] == ["NEON_FMLA_4x4x1_F32"]
-    assert AMX_REGISTERS.holds(
-        {"a_bytes": 8 * 8 * 4, "b_bytes": 8 * 16 * 4, "c_bytes": 8 * 16 * 4}
-    )
+    assert AMX_REGISTERS.holds({"a_bytes": 8 * 8 * 4, "b_bytes": 8 * 16 * 4, "c_bytes": 8 * 16 * 4})
 
     for indivisible in (odd_m_f32_gemm, odd_n_f32_gemm):
-        assert candidate_atoms(
-            indivisible.entry_function().body, indivisible.resolve_target()
-        ) == []
+        assert (
+            candidate_atoms(indivisible.entry_function().body, indivisible.resolve_target()) == []
+        )
     assert candidate_atoms(bf16_gemm.entry_function().body, bf16_gemm.resolve_target()) == []
 
 
 def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got():
     """Test amx values stand on the installed documents and say how they were got.
 
-    The architecture carries the ISA geometry, the device the per-part
-    resources, each built from its own installed document -- so a number moved to
-    the other side would be claimed of the wrong thing.
-
-    And each fact records how it was obtained. The vendor's bandwidth was never
-    measured here and the unit count is a reading of a scaling curve, so neither
-    may pass as measured; the absent instruction peak is recorded as absent rather
-    than guessed. Every fact states its conditions, because a throughput without
-    them is a number without a meaning.
+    Architecture owns ISA geometry; device owns per-part resources. Every fact
+    records provenance and conditions. Vendor bandwidth and a unit count inferred
+    from scaling cannot claim measurement, and an absent peak remains absent.
     """
     target = AmxTarget()
     architecture, device = target.architecture, target.device
 
     assert (target.architecture_id, target.device_id) == ("apple.amx", "apple.m2_pro")
-    # ISA geometry belongs to the coprocessor, not to the package carrying it.
+
     assert architecture.staging_bytes == 512
     assert architecture.accumulator_bytes == 4096
     for moved in ("amx_staging_bytes", "amx_accumulator_bytes"):
         assert not hasattr(device, moved)
 
-    # The performance core's caches, not the efficiency core's 64 KiB / 4 MiB.
     assert device.l1d_bytes_per_performance_core == 128 * 1024
     assert device.l1d_bytes_per_efficiency_core == 64 * 1024
     assert device.l2_bytes_per_performance_cluster == 16 * 1024 * 1024
@@ -281,14 +246,10 @@ def test_a_core_tile_is_bounded_by_the_l1d_not_by_the_register_files():
     storage filter enforces rather than a per-tile capacity.
     """
     target = AmxTarget()
-    facts = target.get_facts(
-        PipelineFacts, PipelineFactsQuery(topology="core", statements=())
-    )
+    facts = target.get_facts(PipelineFacts, PipelineFactsQuery(topology="core", statements=()))
     assert facts.tile_capacity_bytes == target.device.l1d_bytes_per_performance_core
     assert facts.tile_capacity_scope == "core"
-    assert target.architecture.accumulator_bytes < (
-        target.device.l1d_bytes_per_performance_core
-    )
+    assert target.architecture.accumulator_bytes < (target.device.l1d_bytes_per_performance_core)
 
 
 def test_unmeasured_units_and_dtypes_have_no_throughput_entry():

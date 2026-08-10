@@ -1,4 +1,5 @@
 """Tanh typeinfer + Partial(R) commutation, and what it evaluates to."""
+
 from __future__ import annotations
 
 import pytest
@@ -21,12 +22,8 @@ _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 
 CASES = [
-    # tanh is monotone increasing: commutes with max/min, not sum. The passing
-    # case is also this op's shape/dtype/layout passthrough witness.
     TypeInferCase("partial_max_passes", _OP, (_PMAX,), _PMAX),
-    TypeInferCase(
-        "partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="Tanh")
-    ),
+    TypeInferCase("partial_sum_errors", _OP, (_PSUM,), ExpectedError(match="Tanh")),
 ]
 
 
@@ -35,8 +32,6 @@ def test_tanh_typeinfer(case):
     run_typeinfer_case(case)
 
 
-#: Small magnitudes around zero and the saturating tail, so the evaluation is
-#: checked where tanh is steep and where it flattens to 1.
 _VALUES = torch.tensor(
     [-8.0, -1.0, -0.25, -0.03125, -0.0078125, 0.0, 0.0078125, 0.03125, 1.0, 8.0],
     dtype=torch.bfloat16,

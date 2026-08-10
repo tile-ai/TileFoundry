@@ -34,9 +34,7 @@ def test_builtin_targets_own_their_facts_projections() -> None:
 
     assert throughput.memory_bandwidth_bytes_per_second == 4_800_000_000_000
     assert memory.explicit("gmem").capacity_bytes == cuda.device.hbm_capacity_bytes
-    assert {
-        level.name: level.owner for level in memory.explicit_levels
-    } == {
+    assert {level.name: level.owner for level in memory.explicit_levels} == {
         "gmem": "target",
         "smem": "cta",
         "rmem": "thread",
@@ -71,9 +69,7 @@ def test_two_cuda_products_project_the_hardware_each_one_is() -> None:
     peaks = dict(throughput.peak_flops_per_second)
     assert throughput.memory_bandwidth_bytes_per_second == 7_672_320_000_000
     assert peaks[DType.f4e2m1] == 9_000_000_000_000_000
-    assert DType.f4e2m1 not in dict(
-        hopper.get_facts(ThroughputFacts).peak_flops_per_second
-    )
+    assert DType.f4e2m1 not in dict(hopper.get_facts(ThroughputFacts).peak_flops_per_second)
     assert blackwell.get_facts(ParallelCapacityFacts).parallel_units == 148
 
 

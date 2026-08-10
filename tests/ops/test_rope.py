@@ -6,6 +6,7 @@ What those models never build is an odd or mismatched head_dim, or a
 ``Partial``-carrying operand -- ``sum`` commutes with the rotation because it is
 linear in q and k, ``max`` does not.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -48,13 +49,12 @@ CASES = [
         _rope_inputs((1, 32, 128), (1, 4, 64)),
         ExpectedError(match="!= k head_dim"),
     ),
-    # q and k are checked the same way, so q stands for both: a Partial(sum)
-    # carries onto its own output field and leaves the other field plain, ...
     TypeInferCase(
         "partial_sum_q_passes",
         RoPE(),
         _rope_inputs(
-            (1, 32, 128), (1, 4, 128),
+            (1, 32, 128),
+            (1, 4, 128),
             q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
         ),
         TupleType(
@@ -64,12 +64,12 @@ CASES = [
             )
         ),
     ),
-    # ... and a Partial(max) does not commute with the rotation at all.
     TypeInferCase(
         "partial_max_q_errors",
         RoPE(),
         _rope_inputs(
-            (1, 32, 128), (1, 4, 128),
+            (1, 32, 128),
+            (1, 4, 128),
             q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("max"),), dtype=_BF),
         ),
         ExpectedError(match="RoPE"),

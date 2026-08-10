@@ -4,6 +4,7 @@ Cast's sharded layout and its low-precision boundary: a sharded input keeps
 its ShardLayout (Cast's relation is the identity), fp8 round-trips through the
 evaluator, and a sub-byte destination dtype is refused there.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -34,10 +35,8 @@ def test_cast_carries_sharded_layout():
     out = infer_call(Cast(dtype=DType.bf16), x)
     assert out.dtype == DType.bf16
     assert out.shape == (16, 8)
-    assert out.layout == sl  # identity relation -> same ShardLayout
+    assert out.layout == sl
 
-
-# ── low-precision Cast boundary (fp8e4m3 / f8e8m0 evaluator; f4e2m1 declared) ──
 
 _PRELUDE = (
     "from __future__ import annotations\n"
@@ -57,8 +56,6 @@ def _double_cast_fn(n: int, io_dtype: str, mid_dtype: str):
     return import_dsl(src)
 
 
-#: The low-precision dtypes the evaluator does support, each against torch's own.
-#: fp8e4m3's values include its finite-range boundary, max normal 448.0.
 ROUNDTRIPS = [
     pytest.param(
         "bf16",

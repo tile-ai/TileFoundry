@@ -5,6 +5,7 @@ for the same op is the decode step in ``test_insert_slice.py``. The bounds are
 runtime, not static: ``cur_pos`` and ``s`` arrive as scalar tensors, so typeinfer
 cannot see them and the guard has to be in the evaluator.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -57,9 +58,6 @@ def test_cache_update_evaluate():
 
 
 TYPEINFER_CASES = [
-    # A Partial cache may only be written by an equally-Partial update: the
-    # cache's per-device value is a summand, so writing a complete value into it
-    # would make the reduction over the mesh count that region twice.
     TypeInferCase(
         "partial_cache_plain_new_rejected",
         CacheUpdate(),
@@ -113,13 +111,12 @@ def _run(cur_pos, s):
     "cur_pos,s,match",
     [
         (-1, 1, "must be >= 0"),
-        (5, 5, "1 <= s"),  # s exceeds S_CAP=4
-        (14, 4, "exceeds cache capacity"),  # cur_pos + s > 16
+        (5, 5, "1 <= s"),
+        (14, 4, "exceeds cache capacity"),
     ],
     ids=["neg_cur_pos", "s_over_cap", "cur_pos_plus_s_over_capacity"],
 )
 def test_cache_update_evaluate_rejects_bad_runtime(cur_pos, s, match):
-    # ``pytest.raises`` as a context manager asserts the body raises: the test
-    # FAILS if ``_run`` does not raise an ``EvalError`` matching ``match``.
+
     with pytest.raises(EvalError, match=match):
         _run(cur_pos, s)

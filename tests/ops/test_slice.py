@@ -4,6 +4,7 @@ Slice's sharded-layout boundary: the sliced shape can no longer be described
 by the input's layout, so a genuinely-sharded input drops to an unsharded output
 rather than carrying a fake layout forward.
 """
+
 from __future__ import annotations
 
 from tests.ops.typeinfer_utils import (
@@ -39,12 +40,8 @@ def test_plain_row_and_column_slices_derive_subbox_layouts():
         layout=Layout(shape=(1024, 2048), strides=(2048, 1)),
     )
 
-    row = infer_call(
-        Slice(begin=(0, 0), end=(256, 2048), strides=(1, 1)), source
-    )
-    column = infer_call(
-        Slice(begin=(0, 0), end=(1024, 512), strides=(1, 1)), source
-    )
+    row = infer_call(Slice(begin=(0, 0), end=(256, 2048), strides=(1, 1)), source)
+    column = infer_call(Slice(begin=(0, 0), end=(1024, 512), strides=(1, 1)), source)
 
     assert row.layout == ComposedLayout(
         inner=None,
@@ -71,7 +68,10 @@ def test_runtime_bound_slice_does_not_claim_a_static_layout():
     )
 
     assert sliced.layout is None
-    assert infer_call(
-        Slice(begin=(0, 0), end=(256, 2048), strides=(1, 1)),
-        make_tensor_type((1024, 2048), _F),
-    ).layout is None
+    assert (
+        infer_call(
+            Slice(begin=(0, 0), end=(256, 2048), strides=(1, 1)),
+            make_tensor_type((1024, 2048), _F),
+        ).layout
+        is None
+    )

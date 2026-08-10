@@ -21,12 +21,6 @@ from tilefoundry.ir.types.shard.shard_layout import (
     shard_layout_local_shape,
 )
 
-#: Global ``(128,)`` under two mesh axes (y=4, t=32) that both split axis 0 becomes
-#: per-thread ``(1,)``: the divisors compose rather than the last one winning. The
-#: other two rows are the axes that divide nothing -- ``Broadcast`` replicates and
-#: ``Partial`` is a mesh-axis value state, so neither owns a layout axis, and each
-#: shard keeps the full local extent for them. In the Broadcast row only t (mesh
-#: axis 1, extent 4) divides layout dim 0.
 DIVIDED = [
     pytest.param(
         ShardLayout(

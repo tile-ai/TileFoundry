@@ -3,14 +3,13 @@
 Typeinfer diagnostic discipline (hir.md: constraints enforced via
 ``ctx.error(...)``, never a bare ``raise TypeError``).
 """
+
 from __future__ import annotations
 
 import ast
 import pathlib
 
-_HIR_ROOT = (
-    pathlib.Path(__file__).resolve().parents[3] / "src" / "tilefoundry" / "ir" / "hir"
-)
+_HIR_ROOT = pathlib.Path(__file__).resolve().parents[3] / "src" / "tilefoundry" / "ir" / "hir"
 
 
 def _is_register_typeinfer_decorator(node: ast.expr) -> bool:
