@@ -1,20 +1,9 @@
-"""Minimal HTTP server for the HIR viewer.
+"""Serve the browser-rendered HIR viewer and its read-only APIs.
 
-No server-side ``dot`` — graphs are laid out and rendered in the browser
-by ``@hpcc-js/wasm`` (``d3`` handles pan/zoom only, no data-join). This
-server only:
-
-* ``GET /``                      → the first-party ``static/index.html``
-* ``GET /static/<name>``         → a first-party static file, else a
-                                   vendored (cache-root) JS asset
-* ``GET /api/dot?collapsed=<csv>`` → fresh ``ViewerBuilder(root, collapsed)
-                                   .build().source`` as ``text/plain`` DOT
-* ``GET /api/expr/<visual_id>``    → detail-panel JSON formatted on demand
-                                   from the last build's ``DetailIndex``
-* ``GET /api/palette``             → palette pools (so the panel re-colours
-                                   DimVar / storage the same as the graph)
-
-Everything else is 404. No server-side ``dot``.
+Routes provide the viewer shell and assets, fresh DOT for collapse state,
+expression details from the last build, and palette data. Graphviz WASM performs
+layout in the browser; the server never invokes ``dot``. All other routes return
+404.
 """
 from __future__ import annotations
 
@@ -59,12 +48,12 @@ class ViewerHTTPServer(ThreadingHTTPServer):
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
-    server: ViewerHTTPServer  # narrow the type for callers
+    server: ViewerHTTPServer
 
     def log_message(self, *args) -> None:  # noqa: D401 — silence default stderr spam
         pass
 
-    # -- routing ---------------------------------------------------------
+
     def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
         parts = urlsplit(self.path)
         path = parts.path
@@ -81,10 +70,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"error": "not found", "path": path})
 
-    # -- handlers --------------------------------------------------------
+
     def _send_static(self, name: str) -> None:
-        # Basename only — no path traversal. First-party repo files win;
-        # vendored JS lives only in the cache root.
+
+
         name = Path(name).name
         candidates = (_STATIC_DIR / name, self.server.cache_root / name)
         for path in candidates:
@@ -103,8 +92,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def _send_expr(self, visual_id: str) -> None:
         visual_id = unquote(visual_id)
         if self.server.last_build is None:
-            # No /api/dot yet — populate the index from a default build so a
-            # direct detail request still resolves.
+
+
             builder = ViewerBuilder(self.server.viewer_root)
             graph = builder.build()
             self.server.last_build = (graph.source, builder.index)
@@ -120,7 +109,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         raw = query.get("collapsed", [""])[0]
         return {tok for tok in raw.split(",") if tok}
 
-    # -- low-level wire --------------------------------------------------
+
     def _send_bytes(self, code: int, content_type: str, body: bytes) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)

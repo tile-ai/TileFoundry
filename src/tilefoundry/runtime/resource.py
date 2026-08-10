@@ -39,7 +39,7 @@ class Preprocessed:
             )
 
 
-# One raw name, or (one-to-many, e.g. per-expert) a tuple in declared order.
+
 AliasValue = Union[str, "tuple[str, ...]", Absolute, Preprocessed]
 AliasMap = Mapping[str, AliasValue]
 
@@ -234,7 +234,7 @@ class SafetensorsResource:
 
         from safetensors import safe_open  # noqa: PLC0415
 
-        shard = self._index()[raw_key]  # KeyError propagates the raw key
+        shard = self._index()[raw_key]
         handle = self._handles.get(shard)
         if handle is None:
             handle = safe_open(

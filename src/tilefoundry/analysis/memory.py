@@ -1,14 +1,9 @@
-"""What a function needs from the memory hierarchy, and whether it fits.
+"""Measure function residency against the target memory hierarchy.
 
-Lifetime order is read from the authored program, while residency bytes are
-projected to the owner of each explicit memory level. Whether they fit is asked
-against the target's levels. These remain separate in the record so a caller can
-see the measured footprint and the capacity finding independently.
-
-Overflow is not one verdict. One value larger than an explicit level cannot be
-placed by any schedule, so it fails the analysis. A peak depends on the order in
-which values are held and a cache working set affects speed rather than program
-validity, so both are advisories.
+Lifetime order comes from authored IR and residency is projected to each
+explicit level's owner. A single value exceeding a level is an error because no
+schedule can place it. Peak overflow and cache working-set overflow are
+advisories because ordering can change the former and the latter affects speed.
 """
 
 from __future__ import annotations
@@ -89,22 +84,13 @@ def _label(expr: Expr, position: int) -> str:
 
 
 def _unique_labels(order: list[Expr]) -> dict[int, str]:
-    """One unambiguous label per value, in the function's own value order.
+    """Assign one unambiguous label per value in definition order.
 
-    An authored name does not identify one value: the parser attaches the
-    assignment's name to every nested expression of its right-hand side, so a
-    statement built from four operations produces four values all answering to the
-    same name. A row keyed by that name says less than it appears to -- a reader,
-    or a caller indexing the records, cannot tell which of the four it has.
-
-    So a repeated name takes the numeric suffix the printed form of the same
-    program already uses, first occurrence keeping the bare name. Assigned over the
-    whole value order rather than over the rows that get emitted, so which levels a
-    value occupies cannot renumber anything.
-
-    Temporary: the labels collide because of where the parser attaches the name, and
-    that is the thing to fix. Scoped value identity is tracked as follow-up work;
-    until then this keeps the report readable without touching the parser.
+    The parser stamps one authored binding on nested right-hand-side values, so
+    repeated names receive the printer's numeric suffix while the first remains
+    bare. Assign across the complete order so emitted memory levels cannot
+    renumber values. This is temporary until scoped value identity replaces the
+    parser's shared binding labels.
     """
     taken: set[str] = set()
     labels: dict[int, str] = {}

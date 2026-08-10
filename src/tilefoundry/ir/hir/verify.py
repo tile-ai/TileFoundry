@@ -12,7 +12,7 @@ from .function import Function, canonical_specialization_signature
 
 
 def verify_function(fn: Function) -> None:
-    """Verify one hir ``Function``: params, signature ``DimVar``s, and its shape-specific rules (normal body / dispatch prototype / variant)."""
+    """Verify HIR parameters, symbolic dimensions, body, and variants."""
     for p in fn.params:
         if not isinstance(p, Var):
             raise VerifyError(f"hir Function {fn.name!r}: params must be Vars")
@@ -26,16 +26,13 @@ def verify_function(fn: Function) -> None:
         _verify_variants(fn)
         return
     if fn.body is None:
-        # Unsealed authoring transient: a `pass` prototype before its first
-        # `.specialize`. verify_module rejects this at sealed Module scope.
         return
     if not isinstance(fn.body, Expr):
         raise VerifyError(
-            f"hir Function {fn.name!r}: body must be an Expr or None, got "
-            f"{type(fn.body).__name__}"
+            f"hir Function {fn.name!r}: body must be an Expr or None, got {type(fn.body).__name__}"
         )
     _reject_stmt_nodes(fn.body)
-    # Drive typeinfer on the whole body (cache populates as side effect).
+
     TypeInferContext().type_of(fn.body)
 
 
@@ -51,30 +48,24 @@ def _verify_variants(base: Function) -> None:
             )
         if not v.specializations:
             raise VerifyError(
-                f"hir Function {base.name!r}: a variant must carry a "
-                f"specialization pattern"
+                f"hir Function {base.name!r}: a variant must carry a specialization pattern"
             )
         if v.body is None:
             raise VerifyError(
-                f"hir Function {base.name!r}: a variant must have a real body, "
-                f"not `pass`"
+                f"hir Function {base.name!r}: a variant must have a real body, not `pass`"
             )
         if v.name != base.name:
-            raise VerifyError(
-                f"variant name {v.name!r} does not match base {base.name!r}"
-            )
+            raise VerifyError(f"variant name {v.name!r} does not match base {base.name!r}")
         if tuple(p.type for p in v.params) != base_param_types or (
             v.return_type != base.return_type
         ):
             raise VerifyError(
-                f"hir Function {base.name!r}: variant signature must match the "
-                f"base signature"
+                f"hir Function {base.name!r}: variant signature must match the base signature"
             )
         sig = canonical_specialization_signature(v.specializations)
         if sig in sigs:
             raise VerifyError(
-                f"hir Function {base.name!r}: duplicate variant canonical "
-                f"signature {sig!r}"
+                f"hir Function {base.name!r}: duplicate variant canonical signature {sig!r}"
             )
         sigs[sig] = v
         verify_function(v)
@@ -110,8 +101,7 @@ def _verify_partition(base: Function) -> None:
             f"{next(iter(dim_vars))!r} is not reachable from an input parameter"
         )
     lo, hi = envelope
-    # Half-open intervals: an adjacent pair is ``[.., c)`` then ``[c, ..)`` —
-    # the next range starts at the previous range's exclusive end.
+
     cursor = lo
     for rlo, rhi in sorted(ranges):
         if rlo != cursor:
@@ -129,20 +119,12 @@ def _verify_partition(base: Function) -> None:
 
 
 def _ingest_dim_vars(ty: object, bounds: dict[str, tuple[int, int]]) -> None:
-    """Recurse into ``TensorType`` / ``TupleType`` collecting ``DimVar`` bounds.
+    """Collect consistent ``DimVar`` bounds recursively from a signature type.
 
-    Recurse into ``TensorType`` / ``TupleType`` collecting ``DimVar``
-    bounds. Raises ``VerifyError`` if two same-name ``DimVar``s disagree
-    on ``(lo, hi)``.
+    Tensor tuples and dimension-expression calls are traversed. Reusing a name
+    with different bounds raises ``VerifyError``.
 
-    Shape entries may be direct ``DimVar`` instances, ``int`` literals,
-    ``Constant`` scalars, or dim-arithmetic ``Call`` trees built from
-    ``DimAdd`` / ``DimSub`` / ``DimMul`` / ``DimFloorDiv`` / ``DimMod`` /
-    ``DimMin`` / ``DimMax`` (see ``tilefoundry.ir.types.shape_dim``). The
-    walker recurses into ``Call.args`` to collect every ``DimVar``
-    reachable through dim expressions, so a shape like
-    ``[1, 2, DimAdd(CTX_LEN, 1), 256]`` still anchors the signature's
-    ``CTX_LEN`` bound for envelope / consistency checks.
+    See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
     """
     if isinstance(ty, TensorType):
         for entry in ty.shape:
@@ -196,9 +178,7 @@ def _check_signature_dim_var_consistency(fn: Function) -> None:
 
 
 def _verify_signature_dim_vars(fn: Function) -> None:
-    # Order: consistency first (raises on any same-name disagreement
-    # across params + return), then envelope-against-params (envelope
-    # anchor restricted to input params).
+
     _check_signature_dim_var_consistency(fn)
     param_bounds = _collect_param_dim_vars(fn)
     for pat in fn.specializations:
@@ -225,7 +205,6 @@ def _reject_stmt_nodes(expr: Expr) -> None:
     if isinstance(expr, Call):
         for arg in expr.args:
             _reject_stmt_nodes(arg)
-    # Var / Constant have no sub-Expr children.
 
 
 __all__ = ["verify_function"]

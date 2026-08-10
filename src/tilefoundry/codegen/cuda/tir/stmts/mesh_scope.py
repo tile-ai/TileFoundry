@@ -57,10 +57,10 @@ def _emit(node: MeshScope, ctx: CodegenContext) -> None:
     _validate_topology(node.mesh, ctx.target)
     name = ctx.name_for(node.binding)
     ctx.emit(f"// mesh scope: {node.mesh.topologies[0].name}")
-    # A dynamic mesh has no compile-time type: its extent comes from the launch
-    # grid, so no constexpr ``using`` alias is emitted. Shard layouts on a
-    # dynamic mesh are built as runtime values at their use sites (reshard /
-    # make_shard_tensor) rather than referencing the alias.
+
+
+
+
     if not _is_dynamic_mesh(node.mesh):
         alias = f"{name}_mesh_t"
         mesh_type_str = _mesh_type(node.mesh)

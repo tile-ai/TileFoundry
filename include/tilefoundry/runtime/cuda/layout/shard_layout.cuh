@@ -1,21 +1,21 @@
-// CUDA shard layout surface. Included in-context from runtime.cuh inside
-// namespace tilefoundry.
+/// CUDA shard layout surface. Included in-context from runtime.cuh inside
+/// namespace tilefoundry.
 #pragma once
 
-// Topology is parameterised by its scope + total size at compile time.
+/// Topology is parameterised by its scope + total size at compile time.
 template <TopologyScope Scope, int Size> struct Topology {
     static constexpr TopologyScope scope = Scope;
     static constexpr int size = Size;
 };
 
-// Mesh<topology, cute_layout>: binds a topology to a MeshLayout.
+/// Mesh<topology, cute_layout>: binds a topology to a MeshLayout.
 template <class TTopo, class TMeshLayout> struct Mesh {
     using topology = TTopo;
     using layout = TMeshLayout;
     TMeshLayout layout_value;
 };
 
-// ShardLayout<layout, attrs_tuple, mesh>: spec 003 shard layout surface.
+/// ShardLayout<layout, attrs_tuple, mesh>: spec 003 shard layout surface.
 template <class TLayout, class TAttrs, class TMesh> struct ShardLayout {
     using layout = TLayout;
     using attrs = TAttrs;
@@ -24,7 +24,7 @@ template <class TLayout, class TAttrs, class TMesh> struct ShardLayout {
     TMesh mesh_value;
 };
 
-// Per-axis shard attributes.
+/// Per-axis shard attributes.
 namespace shard {
 template <int Axis> struct S {
     static constexpr int axis = Axis;
@@ -34,4 +34,4 @@ template <class Reduction> struct P {
     using reduction = Reduction;
 };
 struct Dynamic {};
-} // namespace shard
+}

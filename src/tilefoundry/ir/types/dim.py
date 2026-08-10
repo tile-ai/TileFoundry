@@ -11,7 +11,7 @@ class DimConst(Op):
 
 class _DimVarMeta(type(Op)):
     def __call__(cls, name=None, lo=None, hi=None, **attrs):
-        # Accept both positional and keyword forms.
+
         if name is None:
             name = attrs.pop("name", None)
         if lo is None:
@@ -33,10 +33,7 @@ class _DimVarMeta(type(Op)):
         if cache is None:
             cache = {}
             setattr(cls, "_var_cache", cache)
-        # Canonical identity is per ``(name, lo, hi)``. Same-name with
-        # different bounds simply produces a distinct canonical object;
-        # signature-scoped conflict detection lives in HIR
-        # ``verify_function``.
+
         key = (name, lo, hi)
         inst = cache.get(key)
         if inst is None:
@@ -50,13 +47,6 @@ class DimVar(Op, metaclass=_DimVarMeta):
     lo = ParamDef(kind="attribute", annotation=int)
     hi = ParamDef(kind="attribute", annotation=int)
 
-    # Dim arithmetic sugar, so a DSL annotation can write ``CTX_LEN + 1``.
-    #
-    # The whole set is here rather than the two that happened to be needed
-    # first. A dimension the source can only add to and divide is a dimension
-    # whose other derivations have to be given their own names, and a derived
-    # extent with its own name is a second thing the caller must know how to
-    # compute.
     def __add__(self, other):
         return _dim_binop(DimAdd, self, other)
 
@@ -94,8 +84,9 @@ def _dim_binop(op_cls, a, b):
     Build a dim-arithmetic Call, or ``NotImplemented`` for operands outside
     ``ShapeDim = int | DimVar | Expr``.
     """
+
     def _ok(v):
-        # bool subclasses int; reject it so ``CTX_LEN + True`` is not ``+ 1``.
+
         if isinstance(v, bool):
             return False
         return isinstance(v, (int, DimVar, Expr))
@@ -144,46 +135,26 @@ _DIM_FOLDERS: dict[type[Op], object] = {
     DimAdd: lambda a, b: a + b,
     DimSub: lambda a, b: a - b,
     DimMul: lambda a, b: a * b,
-    DimFloorDiv: lambda a, b: a // b,   # b == 0 guarded below
-    DimMod: lambda a, b: a % b,         # b == 0 guarded below
+    DimFloorDiv: lambda a, b: a // b,
+    DimMod: lambda a, b: a % b,
     DimMin: min,
     DimMax: max,
 }
 
 
 def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
-    """Construction-time folding for dim arithmetic ``Call``s.
+    """Fold dimension arithmetic when every operand is an integer constant.
 
-    Returns a folded ``Constant`` when *op_cls* admits folding and
-    every entry of *args* is an ``int``-valued ``Constant`` (or a
-    raw ``int`` literal — both forms are accepted; raw ``int``
-    entries are canonicalised to ``Constant(i64, value)`` so the
-    produced ``Call`` always carries ``Expr`` args).
-    Otherwise returns ``Call(target=op_cls(), args=<canonicalised>,
-    type=<i64 scalar>)``.
+    Raw integers canonicalize to i64 constants. Unsupported operations and
+    division or modulo by zero remain calls for later verification; algebraic
+    identities are not folded.
 
-    Division / modulo by zero is **not** folded — the original
-    ``Call`` is preserved so a later verify pass can flag the
-    error. No algebraic identity folding (``x + 0`` etc.).
+    See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
     """
-    from .tensor_type import TensorType  # avoid import cycle  # noqa: PLC0415
+    from .tensor_type import TensorType  # noqa: PLC0415
 
     ti64 = TensorType.meta_scalar()
 
-    # Canonicalise raw ``int`` entries (common in ``TensorType.shape``
-    # static dims) to ``Constant(i64, value)`` so the produced ``Call``
-    # always carries ``Expr`` args. This keeps downstream consumers
-    # (typeinfer, verifier, formatter, structural type equality)
-    # walking a single canonical form regardless of whether the dim
-    # expression was authored via ``DimVar.__add__`` (already wrapped)
-    # or derived from a shape with raw-``int`` entries (e.g. Concat
-    # axis-2 with a ``1`` static dim).
-    #
-    # ``bool`` is a subclass of ``int`` — explicitly reject it so a
-    # stray ``True``/``False`` in a ShapeDim entry can never produce
-    # malformed IR like ``Call(DimAdd, args=(True, DimVar))``. The
-    # DSL surface (``DimVar.__add__``) also rejects bool; this
-    # closes the same gap on the IR-construction side.
     def _wrap(v):
         if isinstance(v, bool):
             raise TypeError(
@@ -201,16 +172,13 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
         fold is not None
         and len(canon_args) == 2
         and all(
-            isinstance(a, Constant)
-            and isinstance(a.value, int)
-            and not isinstance(a.value, bool)
+            isinstance(a, Constant) and isinstance(a.value, int) and not isinstance(a.value, bool)
             for a in canon_args
         )
     ):
         a_val = int(canon_args[0].value)
         b_val = int(canon_args[1].value)
         if op_cls in (DimFloorDiv, DimMod) and b_val == 0:
-            # Preserve original Call so verify can flag div/mod by zero.
             pass
         else:
             return Constant(type=ti64, value=fold(a_val, b_val))
@@ -239,9 +207,7 @@ def is_dim_expr(value) -> bool:
     if isinstance(value, Constant):
         return isinstance(value.value, int) and not isinstance(value.value, bool)
     if isinstance(value, Call):
-        return isinstance(value.target, _DIM_OP_TYPES) and all(
-            is_dim_expr(a) for a in value.args
-        )
+        return isinstance(value.target, _DIM_OP_TYPES) and all(is_dim_expr(a) for a in value.args)
     return False
 
 

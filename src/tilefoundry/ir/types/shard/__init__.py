@@ -21,15 +21,26 @@ from .shard_layout import (
 from .utils import make_mesh
 
 __all__ = [
-    # int tuple
-    "IntTuple", "flatten", "product",
-    # stride algebra
-    "c_order_strides", "try_c_order_strides", "prefix_product",
-    # layout
-    "LayoutBase", "Layout", "ComposedLayout",
-    # mesh
-    "Topology", "Mesh", "make_mesh",
-    # shard
-    "ShardAttr", "Split", "Partial", "Broadcast", "Dynamic", "ShardLayout",
-    "S", "P", "B", "canonical_shard_layout",
+    "IntTuple",
+    "flatten",
+    "product",
+    "c_order_strides",
+    "try_c_order_strides",
+    "prefix_product",
+    "LayoutBase",
+    "Layout",
+    "ComposedLayout",
+    "Topology",
+    "Mesh",
+    "make_mesh",
+    "ShardAttr",
+    "Split",
+    "Partial",
+    "Broadcast",
+    "Dynamic",
+    "ShardLayout",
+    "S",
+    "P",
+    "B",
+    "canonical_shard_layout",
 ]

@@ -28,11 +28,9 @@ class Slice(Op):
     begin = ParamDef(kind="attribute", annotation=tuple)
     end = ParamDef(kind="attribute", annotation=tuple)
     strides = ParamDef(kind="attribute", annotation=tuple)
+
     def __init__(self, **attrs):
-        # Lift Python ints in begin/end/strides to i64 Constants so DSL
-        # callers can pass plain int tuples (e.g. ``slice(x, begin=(0, 0),
-        # end=(1, 4096), strides=(1, 1))``) without manually wrapping each
-        # bound. Symbolic Expr / Constant values pass through unchanged.
+
         for key in ("begin", "end", "strides"):
             if key in attrs and isinstance(attrs[key], tuple):
                 attrs[key] = tuple(
@@ -42,46 +40,34 @@ class Slice(Op):
         super().__init__(**attrs)
 
 
-# GLOBAL-level: identity (each output element corresponds to a single input
-# element via a deterministic remap encoded in begin/end/strides, not
-# duplicated in the relation at this level).
 register_access_relation(Slice)(identity_relations(1))
 
 
 def _i64(value: int) -> Constant:
     return i64_const(value)
 
+
 def _slice_dim(begin: Expr, end: Expr, stride: Expr) -> Expr:
-    """` // stride` — ceil-div — to correctly handle the final partial window when ` % stride != 0`.
+    """Return ``max(0, ceil((end - begin) / stride))`` as a dimension Expr.
 
-    `(end - begin + stride - 1) // stride` — ceil-div — to correctly handle
-    the final partial window when `(end - begin) % stride != 0`.
-
-    Construction-time folding via ``simplify_dim`` collapses
-    all-Constant chains to a single ``Constant`` bottom-up. The
-    explicit non-positive-stride guard remains because stride <= 0
-    is a domain-level edge case (not algebraic folding) — without
-    the guard ``simplify_dim`` would either preserve the Call
-    (stride == 0) or floor-div with a negative stride, neither of
-    which matches the slice semantics ``max(0, ceil((e - b) / s))``.
+    Constant chains fold through ``simplify_dim``. A non-positive constant
+    stride returns zero explicitly because generic arithmetic folding does not
+    encode slice-domain semantics.
     """
-    if (
-        isinstance(begin, Constant)
-        and isinstance(end, Constant)
-        and isinstance(stride, Constant)
-    ):
+    if isinstance(begin, Constant) and isinstance(end, Constant) and isinstance(stride, Constant):
         b, e, s = int(begin.value), int(end.value), int(stride.value)
         if s <= 0:
             return _i64(0)
         n = max(0, (e - b + s - 1) // s)
         return _i64(n)
     diff = simplify_dim(DimSub, (end, begin))
-    # (diff + stride - 1) // stride
+
     bump = simplify_dim(
         DimAdd,
         (diff, simplify_dim(DimSub, (stride, _i64(1)))),
     )
     return simplify_dim(DimFloorDiv, (bump, stride))
+
 
 @register_typeinfer(Slice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -96,9 +82,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         e_e = e if isinstance(e, Expr) else _i64(int(e))
         s_e = s if isinstance(s, Expr) else _i64(int(s))
         shape.append(_slice_dim(b_e, e_e, s_e))
-    layout_shape = tuple(
-        int(dim.value) if isinstance(dim, Constant) else dim for dim in shape
-    )
+    layout_shape = tuple(int(dim.value) if isinstance(dim, Constant) else dim for dim in shape)
     source = x_ty.layout
     inherited_offset = 0
     if isinstance(source, ShardLayout):
@@ -134,14 +118,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 + sum(start * stride for start, stride in zip(starts, source.strides)),
                 outer=Layout(
                     shape=layout_shape,
-                    strides=tuple(
-                        stride * step for stride, step in zip(source.strides, steps)
-                    ),
+                    strides=tuple(stride * step for stride, step in zip(source.strides, steps)),
                 ),
             )
-    return TensorType(
-        shape=tuple(shape), dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
-    )
+    return TensorType(shape=tuple(shape), dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 
 @register_eval(Slice)

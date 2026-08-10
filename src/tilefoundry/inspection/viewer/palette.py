@@ -17,41 +17,41 @@ def _hsv_hex(h: float, s: float, v: float) -> str:
     return "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255))
 
 
-# Fixed forest-paper theme chrome (the approved look — not a data palette).
+
 INK = "#151a16"
 MUTED = "#3a4640"
 PAPER = "#fdfaf2"
 BG = "#eef4ec"
 HAIR = "#c8d2c6"
 
-# DimVar is a single token-*class* colour: it marks "this is a dynamic
-# dim", not which symbol (the detail panel carries the symbol identity).
-DIMVAR_COLOR: str = _hsv_hex(0.77, 0.47, 0.43)  # plum
 
-# Region nesting depth — an independent visual channel. Rotate the hue at
-# low saturation for the cluster fill; the border reuses the same hue,
-# darker / more saturated. Cycles for depth >= len(pool).
-_DEPTH_HUES: tuple[float, ...] = (0.30, 0.555, 0.785, 0.125)  # green, blue, purple, amber
+
+DIMVAR_COLOR: str = _hsv_hex(0.77, 0.47, 0.43)
+
+
+
+
+_DEPTH_HUES: tuple[float, ...] = (0.30, 0.555, 0.785, 0.125)
 DEPTH_FILLS: tuple[str, ...] = tuple(_hsv_hex(h, 0.05, 0.95) for h in _DEPTH_HUES)
 DEPTH_BORDERS: tuple[str, ...] = tuple(_hsv_hex(h, 0.18, 0.82) for h in _DEPTH_HUES)
 
-# Storage classes — an ORDERED pool bound by class order (a list, not a
-# name→hex map). The first 3 slots are pinned to the canonical classes
-# (aliases fold onto them); the extra slots give an *unknown* storage
-# level a stable, distinct colour (hashed into the pool) instead of muted.
+
+
+
+
 STORAGE_CLASSES: tuple[str, ...] = ("gmem", "smem", "rmem")
 _STORAGE_ALIASES: dict[str, str] = {"global": "gmem", "shared": "smem", "register": "rmem"}
 _STORAGE_HSV: tuple[tuple[float, float, float], ...] = (
-    (0.45, 0.66, 0.44),  # gmem — teal-green
-    (0.39, 0.61, 0.31),  # smem — dark green
-    (0.11, 0.95, 0.60),  # rmem — amber
-    (0.58, 0.55, 0.50),  # spare — cyan
-    (0.83, 0.45, 0.50),  # spare — magenta
-    (0.20, 0.60, 0.45),  # spare — olive
+    (0.45, 0.66, 0.44),
+    (0.39, 0.61, 0.31),
+    (0.11, 0.95, 0.60),
+    (0.58, 0.55, 0.50),
+    (0.83, 0.45, 0.50),
+    (0.20, 0.60, 0.45),
 )
 STORAGE_POOL: tuple[str, ...] = tuple(_hsv_hex(*hsv) for hsv in _STORAGE_HSV)
 
-# ExprKind / op-category title-cell fills (semantic, fixed).
+
 EXPRKIND_COLORS: dict[str, str] = {
     "Function": "#2f6f63",
     "Call": "#3a5a6a",
@@ -116,8 +116,8 @@ def palette_pools() -> dict:
         "dimvar": DIMVAR_COLOR,
         "depth_fills": list(DEPTH_FILLS),
         "depth_borders": list(DEPTH_BORDERS),
-        # Structured storage palette so the client can colour ANY storage
-        # token (known or unknown) with the same rule as the graph.
+
+
         "storage_classes": list(STORAGE_CLASSES),
         "storage_aliases": dict(_STORAGE_ALIASES),
         "storage_pool": list(STORAGE_POOL),

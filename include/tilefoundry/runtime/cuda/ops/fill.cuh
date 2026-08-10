@@ -1,5 +1,5 @@
-// CUDA fill op public entry. Included in-context from runtime.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA fill op public entry. Included in-context from runtime.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 #include "fill/fill_impl.h"

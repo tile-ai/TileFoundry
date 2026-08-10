@@ -1,16 +1,8 @@
-"""Fused RMSNorm HIR Op — Qwen3 extension op.
+"""Define fused last-axis RMS normalization.
 
-Semantics: ``x * rsqrt(mean(x**2, axis=-1, keepdim=True) + eps) * weight``.
-Compute in f32, cast back to input dtype.
-
-Typeinfer is rank-agnostic: ``x`` may have any rank ≥ 1 and
-``weight`` must be rank-1 with the same length as ``x.shape[-1]``;
-all batch dimensions ``x.shape[:-1]`` (including symbolic ``DimVar``
-/ dim-arithmetic ``DimExpr`` entries) flow through verbatim. The
-``weight`` dtype is permitted to differ from ``x.dtype`` (typical
-Qwen / LLaMA-family pattern: ``bf16`` activations with ``f32`` scale
-vector); the op semantics keep the f32 internal accumulate and cast
-back to ``x.dtype`` on output.
+The rank-one weight matches the final input extent; preceding dimensions pass
+through, including symbolic expressions. Computation accumulates in f32 and
+casts back to the input dtype, while the weight may use another dtype.
 """
 
 from __future__ import annotations
@@ -48,6 +40,8 @@ class RMSNorm(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     weight = ParamDef(kind="input", pattern=Tensor)
     eps = ParamDef(kind="attribute", annotation=float, default=1e-6)
+
+
 @register_typeinfer(RMSNorm)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
@@ -59,15 +53,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"weight must be rank-1, got shape {w_ty.shape}")
     if x_ty.shape[-1] != w_ty.shape[0]:
         ctx.error(call, f"x last dim {x_ty.shape[-1]} != weight dim {w_ty.shape[0]}")
-    # rms_norm normalizes across an axis (non-monotonic); no reduction commutes.
+
     for arg, ty in (("x", x_ty), ("weight", w_ty)):
         reject_partials(ctx, call, arg, ty.layout)
 
-    # Output preserves x's full shape (batch dims flow verbatim,
-    # including DimVar / dim-arithmetic entries) and x's dtype. The
-    # weight may carry a different dtype (typically f32 scale on a
-    # bf16 input); the internal f32 accumulate cast-back is op
-    # semantics, not a type constraint.
     return x_ty
 
 
@@ -89,17 +78,10 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
 
 @register_type_relation(RMSNorm)
 def _rms_norm_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for ``rms_norm(x, weight, eps)``.
+    """Model fused row-wise RMSNorm with batch axes as the domain.
 
-    Modelled on ``SoftMax``'s: the reduction stays fused inside one
-    statement (op semantics, not a tiling choice), so the domain is
-    ``x``'s batch axes only (``x.shape[:-1]``) and the reduced axis is an
-    existential range dim on the read/write maps rather than a domain
-    dim. ``weight`` fills that same range; the output map reuses the
-    input map's formula (RMSNorm is elementwise-shaped like its input).
-    Sharding is the caller's concern (``analysis.poly``'s
-    ``_local_type`` narrows a sharded input before it ever reaches here),
-    not this relation's.
+    The reduced axis remains a range dimension shared by input, weight, and
+    output maps. Local projection handles sharding before this relation.
     """
     x, weight = input_types
     x_shape, w_shape = x.shape, weight.shape
@@ -110,8 +92,7 @@ def _rms_norm_type_relation(call: "Call", input_types, ctx) -> AccessRelationRes
         )
     if x_shape[-1] != w_shape[0]:
         raise NotImplementedError(
-            f"RMSNorm type_relation: x last dim {x_shape[-1]} != weight "
-            f"dim {w_shape[0]}"
+            f"RMSNorm type_relation: x last dim {x_shape[-1]} != weight dim {w_shape[0]}"
         )
     reduce_extent = x_shape[-1]
     if not isinstance(reduce_extent, int) or isinstance(reduce_extent, bool):
@@ -136,11 +117,8 @@ def _rms_norm_type_relation(call: "Call", input_types, ctx) -> AccessRelationRes
 @register_eval(RMSNorm)
 def _eval_rms_norm(ctx):
 
-
     xf = ctx.args[0].data.float()
     wf = ctx.args[1].data.float()
     ms = xf.pow(2).mean(dim=-1, keepdim=True)
     out = xf * torch.rsqrt(ms + ctx.op.eps) * wf
-    return TensorValue(
-        data=out.to(to_torch_dtype(ctx.result_type.dtype)), type=ctx.result_type
-    )
+    return TensorValue(data=out.to(to_torch_dtype(ctx.result_type.dtype)), type=ctx.result_type)

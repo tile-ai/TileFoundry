@@ -4,6 +4,7 @@ Tensor-level pointwise ReLU — writes element-wise ``max(src, 0)``
 into ``dst`` (in-place memory write). Wrapped by
 ``Evaluate(ReLU, ...)`` in Stmt position.
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
@@ -17,12 +18,15 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 @register_op
 class ReLU(Op):
     """Tensor-level pointwise ReLU writing into ``dst``."""
+
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
+
 
 @register_typeinfer(ReLU)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
 
 @register_verify_stmt(ReLU)
 def _(call: "Call", ctx: "VerifyContext") -> None:

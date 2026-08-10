@@ -2,6 +2,7 @@
 
 Contract and constraints: `spec hir § CacheUpdate`.
 """
+
 from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_eval
@@ -18,6 +19,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op(name="cache_update")
 class CacheUpdate(Op):
     """Cache-update HIR operation; see `spec hir § CacheUpdate`."""
+
     cache = ParamDef(kind="input", pattern=Tensor)
     cur_pos = ParamDef(kind="input", pattern=Tensor)
     s = ParamDef(kind="input", pattern=Tensor)
@@ -27,8 +29,7 @@ class CacheUpdate(Op):
 def _is_scalar(shape) -> bool:
     """A scalar tensor: rank 0, or every dim is the literal 1."""
     return all(
-        (isinstance(d, int) and d == 1) or (isinstance(d, Constant) and d.value == 1)
-        for d in shape
+        (isinstance(d, int) and d == 1) or (isinstance(d, Constant) and d.value == 1) for d in shape
     )
 
 

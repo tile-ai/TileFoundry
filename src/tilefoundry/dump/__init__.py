@@ -1,22 +1,9 @@
-"""nncase-style scoped filesystem dump.
+"""Route scoped dumps through context-local backends.
 
-Public surface:
-
-- ``DumpScope``: context manager. Enter to nest a sub-scope (or replace
-  the current dumper); exit to restore the prior scope. Backed by a
-  ``contextvars.ContextVar`` so threads and asyncio Tasks see their own
-  active scope.
-- ``DumpFlags``: ``IntFlag`` selecting which categories actually emit.
-  A child scope's flags are restricted by the parent's
-  (``child &= parent``).
-- ``IDumpper`` / ``FileDumper`` / ``MemoryDumper`` / ``NullDumper``: backend
-  variants. ``FileDumper`` is the default for production runs;
-  ``MemoryDumper`` is meant for in-test capture; ``NullDumper`` is a
-  singleton no-op used when no scope is active or when all flags are off.
-- ``dump(name, content, flag)``: top-level helper that routes to the
-  current scope's dumper if ``flag`` is enabled.
-- ``current_scope()``: read-only accessor for the active scope (``None``
-  outside any scope).
+``DumpScope`` nests paths and intersects child flags with parent flags; passing
+a dumper replaces the current scope. A ``ContextVar`` isolates threads while
+asyncio tasks inherit context at creation. Backends write files, retain memory,
+or discard output.
 """
 from __future__ import annotations
 

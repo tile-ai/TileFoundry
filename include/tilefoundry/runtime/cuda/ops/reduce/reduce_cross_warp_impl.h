@@ -1,17 +1,18 @@
-// reduce tier-2b: cross-warp ONLY (lanes independent).
-//
-// Included in-context from ``ops/reduce.cuh`` (see reduce_common_impl.h for the
-// in-context include contract). Op tags and reduce_impl helpers are in scope.
+/// reduce tier-2b: cross-warp ONLY (lanes independent).
+///
+/// Included in-context from ``ops/reduce.cuh`` (see reduce_common_impl.h for
+/// the in-context include contract). Op tags and reduce_impl helpers are in
+/// scope.
 #pragma once
 
 namespace reduce_impl {
 
-// ── Reduce tier-2b: cross-warp ONLY (lanes independent) ───────────
-// Stages one slot per (warp, lane, cell): each thread folds its local cells
-// via the shared rank-aware ``local_fold`` and writes them, and after one
-// ``__syncthreads`` folds its group's warps for its own lane via
-// ``reduce_traits<Op>::combine``; ``finalize`` divides by the total reduced
-// count for MEAN.
+/// ── Reduce tier-2b: cross-warp ONLY (lanes independent) ───────────
+/// Stages one slot per (warp, lane, cell): each thread folds its local cells
+/// via the shared rank-aware ``local_fold`` and writes them, and after one
+/// ``__syncthreads`` folds its group's warps for its own lane via
+/// ``reduce_traits<Op>::combine``; ``finalize`` divides by the total reduced
+/// count for MEAN.
 template <class Op, class Axes> struct CrossWarp {
     template <class SrcT, class DstT, class WorkspaceT>
     __device__ void operator()(SrcT const &src, DstT &dst,
@@ -48,4 +49,4 @@ template <class Op, class Axes> struct CrossWarp {
     }
 };
 
-} // namespace reduce_impl
+}

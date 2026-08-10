@@ -22,9 +22,12 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op
 class Split(Op):
     """Multi-output op. `Call.type` is `TupleType` ([types §5](docs/spec/types.md#5-tupletype))."""
+
     x = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
     num_splits = ParamDef(kind="attribute", annotation=int)
+
+
 @register_typeinfer(Split)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
@@ -37,16 +40,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             ctx.error(call, f"axis {axis} extent {v} not divisible by {n}")
         part_len = v // n
     else:
-        # Symbolic: keep the original dim Expr (coarse; tighter dim.* division
-        # op can be added later).
         part_len = orig
     part_shape = list(x_ty.shape)
     part_shape[axis] = part_len
     part_shape = tuple(part_shape)
     if isinstance(x_ty.layout, ShardLayout):
-        layout_to_tensor = layout_axis_to_tensor_axis(
-            x_ty.layout.layout.shape, x_ty.shape
-        )
+        layout_to_tensor = layout_axis_to_tensor_axis(x_ty.layout.layout.shape, x_ty.shape)
         attrs = tuple(
             SplitAttr(layout_to_tensor[attr.axis])
             if isinstance(attr, SplitAttr)
@@ -59,9 +58,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     elif x_ty.layout is None:
         part_layout = None
     else:
-        part_layout = Layout(
-            shape=part_shape, strides=try_c_order_strides(part_shape)
-        )
+        part_layout = Layout(shape=part_shape, strides=try_c_order_strides(part_shape))
     part_ty = TensorType(
         shape=part_shape, dtype=x_ty.dtype, layout=part_layout, storage=x_ty.storage
     )

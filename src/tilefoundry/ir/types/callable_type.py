@@ -15,6 +15,7 @@ class CallableType:
     they live on ``tilefoundry.runtime.module.CallableType`` /
     ``ParamABI``, which is a separate layer.
     """
+
     return_type: Type
     parameters: tuple[Type, ...]
 

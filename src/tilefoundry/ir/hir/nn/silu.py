@@ -24,6 +24,7 @@ from tilefoundry.visitor_registry.isl_utility import to_domain
 @register_op
 class Silu(Op):
     """Pointwise ``x * sigmoid(x)``, as one fused op."""
+
     x = ParamDef(kind="input", pattern=Tensor)
 
 
@@ -41,16 +42,14 @@ def _silu_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 @register_typeinfer(Silu)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    # Not monotone (a minimum near x=-1.278), so no reduction commutes with it.
+
     reject_partials(ctx, call, "x", x_ty.layout)
     return x_ty
 
 
 @register_eval(Silu)
 def _eval_silu(ctx):
-    return TensorValue(
-        data=torch.nn.functional.silu(ctx.args[0].data), type=ctx.result_type
-    )
+    return TensorValue(data=torch.nn.functional.silu(ctx.args[0].data), type=ctx.result_type)
 
 
 __all__ = ["Silu"]

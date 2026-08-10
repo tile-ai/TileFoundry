@@ -1,5 +1,5 @@
-// ops::detail tensor-view projection helpers. Included in-context from
-// runtime.cuh inside namespace tilefoundry::ops.
+/// ops::detail tensor-view projection helpers. Included in-context from
+/// runtime.cuh inside namespace tilefoundry::ops.
 #pragma once
 
 namespace detail {
@@ -16,4 +16,4 @@ template <class T> CUTE_HOST_DEVICE decltype(auto) to_local(T &&t) {
     }
 }
 
-} // namespace detail
+}

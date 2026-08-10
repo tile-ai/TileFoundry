@@ -65,7 +65,7 @@ def directory(kind: str) -> Path:
     if source.is_dir():
         return source
 
-    # setuptools data-files are placed below Python's installation data prefix.
+
     from sysconfig import get_path  # noqa: PLC0415
 
     installed = Path(get_path("data")) / "share" / "tilefoundry" / known.installed

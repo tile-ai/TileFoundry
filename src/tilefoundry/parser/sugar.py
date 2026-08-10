@@ -34,7 +34,6 @@ from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .static_eval import eval_static
 
-#: The section stating the per-mesh-axis `attrs` rule the refusal below quotes.
 _SHARD_ATTR = "[shard §6](docs/spec/shard.md#6-shardattr)"
 
 
@@ -51,7 +50,7 @@ class LayoutSugarError(VerifyError):
     """
 
 
-# ── AST helpers ─────────────────────────────────────────────────────────────
+
 
 
 def _is_constant(node: ast.AST) -> bool:
@@ -115,17 +114,11 @@ _EVAL_AST_NODES_WITH_CLOSURE = (*_EVAL_AST_NODES_NO_CLOSURE, ast.Name, ast.Attri
 
 
 def _eval_ast(node: ast.AST, closure: dict[str, Any] | None = None) -> Any:
-    """Evaluate a Python literal AST node (int, str, tuple of literals).
+    """Evaluate layout literals, inline dimensions, and closure dimensions.
 
-    Also accepts ``DimVar("S", lo, hi)`` inline ``Call`` nodes and
-    closure-resolved ``Name`` references to ``DimVar`` instances.
-
-    Thin policy wrapper over :func:`eval_static`: layout-sugar callers
-    expect ``ValueError`` (the shared evaluator's ``VerifyError`` is
-    translated here), and ``Name`` / ``Attribute`` resolution only applies
-    when a *closure* is supplied at all. The inline ``DimVar(...)``
-    constructor is a bespoke case — it is recognized by name rather than
-    resolved as a general closure callee.
+    Translate the shared static evaluator's ``VerifyError`` to ``ValueError``.
+    Names and attributes resolve only when a closure is supplied; inline
+    ``DimVar`` calls are recognized directly rather than as general callees.
     """
     if (
         closure is not None
@@ -184,7 +177,7 @@ def _resolve_dtype_ast(node: ast.AST, closure: dict[str, Any]) -> DType | None:
     return None
 
 
-# ── mesh axis resolution ───────────────────────────────────────────────────
+
 
 
 def _resolve_mesh(name: str, mesh_by_name: dict[str, Mesh]) -> Mesh:
@@ -218,37 +211,26 @@ def _resolve_mesh_axis(mesh: Mesh, axis_name: str) -> int:
     )
 
 
-# ── layout literal parser (shared bottom layer) ────────────────────────────
+
 
 
 def _parse_layout_literal(
     node: ast.AST, *, closure: dict[str, Any] | None = None
 ) -> tuple[tuple[int, ...], tuple[int, ...] | None]:
-    """Parse a tuple AST node into (shape, strides_or_none).
+    """Parse layout shape and optional strides without choosing a final type.
 
-    This is the shared bottom layer.  It does NOT choose a final type.
-
-    Forms::
-
-        (d0, d1, ...)              → (shape, None)       auto strides
-        ((d0, d1,...), (s0,s1,...)) → (shape, strides)    explicit strides
-        N                           → ((N,), None)        single-element 1D
-
-    When dim elements contain ``@`` sugar operators, only the left-hand
-    int constant is extracted for the shape; axis binding is handled by
-    the target-specific lowering (e.g. ``parse_shard_layout_sugar``).
-
-    ``closure`` lets a dim that is a closure/global ``Name`` (e.g. ``WARPS``)
-    resolve to its static int value.
+    Accept flat dimensions, explicit ``(dimensions, strides)``, or a scalar 1-D
+    form. For placement sugar, extract the left-hand dimension while a target
+    parser handles axis binding. A closure may resolve named static dimensions.
     """
     if isinstance(node, ast.Tuple):
         if len(node.elts) == 2 and isinstance(node.elts[0], ast.Tuple) and isinstance(node.elts[1], ast.Tuple):
-            # Full form: ((dims), (strides))
+
             dim_nodes = list(node.elts[0].elts)
             strides = _eval_ast(node.elts[1], closure)
             shape = tuple(_extract_dim_int(dn, closure=closure) for dn in dim_nodes)
         else:
-            # Short form: (dims)
+
             dim_nodes = list(node.elts)
             strides = None
             shape = tuple(_extract_dim_int(dn, closure=closure) for dn in dim_nodes)
@@ -294,7 +276,7 @@ def _extract_dim_int(node: ast.AST, *, closure: dict[str, Any] | None = None) ->
     return val
 
 
-# ── target-specific sugar parsers ──────────────────────────────────────────
+
 
 
 def parse_layout_sugar(node: ast.AST) -> Layout:
@@ -326,7 +308,7 @@ def parse_mesh_layout_sugar(
     return Layout(shape=shape, strides=strides)
 
 
-# Type alias for the mesh resolver callback used by ShardLayout sugar.
+
 MeshResolver = Callable[[str], Mesh]
 
 
@@ -337,36 +319,27 @@ def parse_shard_layout_sugar(
     default_mesh: Mesh | None = None,
     closure: dict[str, Any] | None = None,
 ) -> ShardLayout:
-    """Parse a tuple sugar as a ``ShardLayout``.
+    """Parse placement and value-state sugar into a shard layout.
 
-    *mesh_resolver* is called with a mesh variable name (e.g. ``"gpu"`` or
-    ``"thread_mesh"``) and must return the corresponding ``Mesh`` object.
-
-    *default_mesh* is used when no ``@ mesh.axis`` bindings are present
-    (all-Broadcast layout).  If both bindings and *default_mesh* are
-    absent, parsing fails.
-
-    Surface syntax (axis-tuple carries placement; an optional final ``{...}``
-    set carries mesh-axis ``Partial`` value states):
-    - bare int → physical layout dim, not split (Broadcast on the mesh axes)
-    - ``dim @ mesh.axis`` → physical layout dim split on that mesh axis
-    - ``{mesh.axis @ P("reduction"), ...}`` → mesh-axis Partial value states
-    A mesh axis named in no Split and no Partial is Broadcast (the default).
-
-    Returns a ``ShardLayout`` with mesh-rank ``attrs`` ([shard §6](docs/spec/shard.md#6-shardattr)).
+    Resolve named meshes, using *default_mesh* only for all-broadcast layouts.
+    Bare dimensions broadcast, ``dim @ mesh.axis`` splits, and a final set maps
+    mesh axes to partial reductions. Unmentioned mesh axes broadcast. Missing
+    both explicit and default mesh information is an error.
+    See [parser §1.5](docs/spec/parser.md#15-layout-sugar) and
+    [shard §6](docs/spec/shard.md#6-shardattr).
     """
     axis_node, strides, value_set_node = _split_layout_outer(node)
 
     dim_nodes = _get_dim_nodes(axis_node)
-    # Verbose ``((dims), (strides))`` form (user-supplied strides) MUST NOT
-    # be canonicalized; see [parser §1.5](docs/spec/parser.md#15-layout-sugar).
+
+
     canonicalize = strides is None
     parsed: list[_LayoutItem] = []
     for dn in dim_nodes:
         parsed.extend(
             _parse_layout_item(dn, mesh_resolver, canonicalize=canonicalize, closure=closure)
         )
-    # ``{mesh.axis @ P("reduction")}`` value-state set (mesh-axis Partials).
+
     value_states = (
         _parse_value_state(value_set_node, mesh_resolver)
         if value_set_node is not None
@@ -374,7 +347,7 @@ def parse_shard_layout_sugar(
     )
 
     shape: list[int] = []
-    # Collect the unique mesh from any bindings (layout splits + value states).
+
     resolved_mesh: Mesh | None = None
     for _d, mesh, _mi, _k, _r in parsed:
         if mesh is None:
@@ -422,10 +395,10 @@ def parse_shard_layout_sugar(
             raise VerifyError(f"mesh axis {m_axis} already bound")
         attrs_list[m_axis] = Partial(reduction or "sum")
 
-    # Sugar (`strides is None`) leaves the layout strides un-materialized;
-    # `Reshard` typeinfer / `Function` signature binding discharges them
-    # per [parser §1.5](docs/spec/parser.md#15-layout-sugar). Verbose `((shape),(strides))`
-    # carries explicit strides verbatim.
+
+
+
+
     return ShardLayout(
         layout=Layout(shape=tuple(shape), strides=strides),
         attrs=tuple(attrs_list),
@@ -450,15 +423,15 @@ def _split_layout_outer(
         return node, None, None
     if not isinstance(node, ast.Tuple):
         raise VerifyError(f"expected tuple layout, got {ast.dump(node)}")
-    # Outer form: the first element is itself the axis-tuple. (A bare axis-spec
-    # is a Constant / BinOp, never a Tuple, so this is unambiguous.)
+
+
     if node.elts and isinstance(node.elts[0], ast.Tuple):
         axis_node = node.elts[0]
         strides = None
         value_set: ast.Set | None = None
         for elt in node.elts[1:]:
             if value_set is not None:
-                # The value-state set MUST be the final outer item.
+
                 raise VerifyError(
                     "layout sugar: the value-state set must be the last outer item"
                 )
@@ -474,7 +447,7 @@ def _split_layout_outer(
                     f"set, got {ast.dump(elt)}"
                 )
         return axis_node, strides, value_set
-    # Flat axis-tuple.
+
     return node, None, None
 
 
@@ -530,7 +503,7 @@ def _get_dim_nodes(node: ast.AST) -> list[ast.AST]:
     raise VerifyError(f"expected tuple layout, got {ast.dump(node)}")
 
 
-# Type alias for a single parsed layout item.
+
 _LayoutItem = tuple[int | None, Mesh | None, int | None, str, str | None]
 
 
@@ -552,11 +525,10 @@ def _parse_layout_item(
         dim @ mesh.axis                  → [(dim, mesh, axis_idx, "split", None)]
         dim @ (mesh.axis, ...)           → [split items…, bare remainder item]
     """
-    # Case 1: bare dim (literal int)
     if _is_constant(node):
         return [(node.value, None, None, "broadcast", None)]
 
-    # Case 2+3: dim @ ...
+
     if _is_matmul(node):
         rhs = node.right
         dim = None if _is_placeholder(node.left) else _eval_ast(node.left, closure)
@@ -566,19 +538,19 @@ def _parse_layout_item(
                 'value states go in the `{mesh.axis @ P("reduction")}` set'
             )
         if not isinstance(dim, int) or isinstance(dim, bool):
-            # A split axis (``dim @ mesh.axis``) participates in
-            # canonicalisation (factorisation against the mesh extent), so it
-            # must resolve to a static int. A dynamic (DimVar) split axis is
-            # not expressible in v1 sugar — only bare axes may be dynamic.
+
+
+
+
             raise LayoutSugarError(
                 f"split layout dim `dim @ mesh.axis` must be a static int, got {dim!r}"
             )
 
-        # Case 2: dim @ (mesh.axis, ...) — sequential decomposition sugar
+
         if isinstance(rhs, ast.Tuple):
             return _expand_multi_axis_sugar(dim, rhs.elts, mesh_resolver)
 
-        # Case 3: dim @ mesh.axis
+
         if isinstance(rhs, ast.Attribute):
             mesh_name, axis_name = _parse_axis_ref(rhs)
             mesh = mesh_resolver(mesh_name)
@@ -589,10 +561,10 @@ def _parse_layout_item(
                 return [(dim, mesh, axis, "split", None)]
             return _canonicalize_single_axis(dim, mesh, axis)
 
-        # Case 3-bis (``int @ mesh`` shorthand for single-axis mesh):
-        # ``8192 @ cta`` resolves to ``8192 @ cta.<only-axis>`` when the
-        # named mesh has exactly one axis. Multi-axis meshes still
-        # require an explicit ``mesh.axis`` reference.
+
+
+
+
         if isinstance(rhs, ast.Name):
             mesh = mesh_resolver(rhs.id)
             if mesh is None:
@@ -607,10 +579,10 @@ def _parse_layout_item(
                 return [(dim, mesh, 0, "split", None)]
             return _canonicalize_single_axis(dim, mesh, 0)
 
-    # Case 4: bare dynamic / closure-resolved axis (a DimVar like ``S`` or a
-    # closure Name bound to an int / DimVar). A bare axis is Broadcast — it
-    # carries no mesh binding — so a dynamic extent is fine (unlike a split
-    # axis); strides stay deferred to Reshard typeinfer.
+
+
+
+
     if closure is not None:
         try:
             dim = _eval_ast(node, closure)
@@ -627,13 +599,12 @@ def _canonicalize_single_axis(
     mesh: Mesh,
     axis: int,
 ) -> list[_LayoutItem]:
-    """Canonicalize ``N @ m.a`` into the factorised pair when ``N > mesh_extent(a)``.
+    """Factor an oversized single-axis split by its mesh extent.
 
-    Per [parser §1.5](docs/spec/parser.md#15-layout-sugar) / [shard §7.1.1](docs/spec/shard.md#711-layoutshape): surface sugar ``N @ m.a`` where
-    ``N > mesh_extent(a)`` MUST be expanded into
-    ``(mesh_extent(a) @ m.a, N // mesh_extent(a))`` so every Split-bound
-    layout dim has ``local_shape == 1``. ``N % mesh_extent(a) == 0`` is
-    required; otherwise ``ValueError``.
+    Expand ``N @ m.a`` so the split-bound dimension has local size one. ``N``
+    must divide evenly by the mesh extent or parsing raises ``ValueError``.
+    See [parser §1.5](docs/spec/parser.md#15-layout-sugar) and
+    [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     extent = mesh.layout.shape[axis]
     if dim % extent != 0:
@@ -729,25 +700,19 @@ def _parse_axis_ref(node: ast.AST) -> tuple[str, str]:
     raise VerifyError(f"expected mesh.axis (e.g. gpu.cluster), got {ast.dump(node)}")
 
 
-# ── top-level Tensor annotation parser ─────────────────────────────────────
+
 
 
 def try_parse_sugar_tensor_type(
     node: ast.AST,
     closure: dict[str, Any],
 ) -> TensorType | None:
-    """Parse a ``Tensor[...]`` or ``ConstTensor[...]`` annotation with sugar layout.
+    """Parse a tensor annotation containing layout sugar.
 
-    Parse a ``Tensor[...]`` or ``ConstTensor[...]`` annotation with sugar
-    layout.
-
-    ``ConstTensor[...]`` resolves to the same ``TensorType`` as
-    ``Tensor[...]``; the caller reads the annotation head name separately to
-    set ``Var.is_const``.
-
-    Returns the parsed ``TensorType`` on success, or ``None`` if the
-    annotation is not in sugar form (caller falls through to ``eval()``
-    for the verbose ``ShardLayout(...)`` path).
+    Constant and mutable annotations produce the same tensor type; callers set
+    constness from the head name. Return ``None`` for non-sugar annotations so
+    callers can evaluate the verbose shard-layout form.
+    See [parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations).
     """
     if not isinstance(node, ast.Subscript):
         return None
@@ -761,16 +726,16 @@ def try_parse_sugar_tensor_type(
     if len(elts) < 2:
         return None
 
-    # Check for sugar markers
+
     has_sugar = any(_has_sugar(elt) for elt in elts[2:])
 
-    # Build mesh-by-name table from closure
+
     mesh_by_name: dict[str, Mesh] = {}
     for key, val in closure.items():
         if isinstance(val, Mesh):
             mesh_by_name[key] = val
 
-    # Also treat bare-tuple/bare-constant as sugar when meshes are available
+
     if not has_sugar and len(elts) >= 3:
         third = elts[2]
         if mesh_by_name and (isinstance(third, ast.Tuple) or _is_constant(third)):
@@ -793,18 +758,18 @@ def try_parse_sugar_tensor_type(
     layout = None
     storage = StorageKind.GMEM
     if len(elts) >= 3:
-        # Use the single mesh as default for all-Broadcast layouts
+
         default_mesh = next(iter(mesh_by_name.values())) if len(mesh_by_name) == 1 else None
         sl = parse_shard_layout_sugar(elts[2], mesh_by_name.get, default_mesh=default_mesh)
-        # Function signature binding: the
-        # ``Tensor[..., (sugar)]`` annotation sits at the kernel
-        # boundary where the underlying engine is a shared FFI
-        # buffer. Materialize any ``Layout.strides=None`` from the
-        # sugar path into shared-engine C-order over the canonical
-        # global shape before the resulting TensorType enters the
-        # body. Verbose ``((shape), (strides))`` annotations are
-        # preserved verbatim because ``parse_shard_layout_sugar``
-        # already produces a concrete strides tuple in that case.
+
+
+
+
+
+
+
+
+
         if sl.layout.strides is None:
             sl = ShardLayout(
                 layout=Layout(

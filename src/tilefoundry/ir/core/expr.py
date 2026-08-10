@@ -17,6 +17,7 @@ class Expr:
     for multi-output). It is kw-only so subclasses can declare positional
     fields without default-order clashes.
     """
+
     type: Type = field(kw_only=True)
     metadata: tuple[IRMetadata, ...] = field(
         default_factory=tuple,
@@ -41,8 +42,7 @@ class Expr:
                 location = diagnostic_location(self)
                 where = f"\n  at {location}" if location else ""
                 raise VerifyError(
-                    f"{type(self).__name__} has duplicate {value_cls.__name__} "
-                    f"metadata{where}"
+                    f"{type(self).__name__} has duplicate {value_cls.__name__} metadata{where}"
                 )
             seen.add(value_cls)
 
@@ -61,6 +61,7 @@ class Constant(Expr):
 @dataclass(frozen=True)
 class Call(Expr):
     """Call to an Op. Produces a value. Cannot be top-level Stmt in tir."""
+
     target: Op
     args: tuple[Expr, ...]
 
@@ -74,4 +75,5 @@ class Tuple(Expr):
     ``return (a, b)`` bodies and per-axis scalar tuples (e.g. ``insert_slice``
     offsets).
     """
+
     elements: tuple[Expr, ...]

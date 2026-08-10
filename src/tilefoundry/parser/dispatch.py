@@ -1,23 +1,10 @@
-"""DSL-name → Op / Stmt dispatch.
+"""Resolve DSL names and Python operators through dialect registries.
 
-This module is a thin facade over ``tilefoundry.ir.core.op_registry``:
-
-- ``resolve_op(name)`` / ``resolve_stmt(name)`` — flat-name lookup into
-  the dialect-specific registry.
-- ``resolve_callable(name, token)`` — dialect-strict dispatch:
-  HIR body resolves only HIR Ops; TIR body resolves only TIR Stmts +
-  user-registered intrinsics. **No cross-dialect fallback** (TIR body
-  must use the future ``tf.<category>.<name>`` namespace if it really
-  wants to embed an HIR Op as a value).
-- ``_binary_kind_for_ast_op(ast_op)`` / ``_unary_kind_for_ast_op(ast_op)``
-  — Python AST binop / unaryop → ``BinaryKind`` / ``UnaryKind``. Parser
-  uses these to construct ``Binary`` / ``Unary`` directly without
-  routing through a per-name HIR Op class (the 19 legacy sugar Op
-  classes collapse into alias schemas + tag-dispatch IR).
-Every callable Op self-registers via the ``@register_op``
-decorator; ``resolve_op`` / ``resolve_stmt`` look the class up through
-the OpSchema list-per-name registry. The legacy ``_hir_*`` / ``_tir_*``
-static dictionaries and the metaclass-driven auto-register are gone.
+HIR resolves only HIR operations; TIR resolves only TIR statements and user
+intrinsics, with no cross-dialect fallback. Binary and unary AST operators map
+directly to kinded IR. Registered schemas provide flat-name operation and
+statement lookup.
+See [parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution).
 """
 from __future__ import annotations
 
@@ -36,10 +23,10 @@ from tilefoundry.ir.tir.intrinsic import _intrinsic_dispatch
 Token = Literal["hir", "tir"]
 
 
-# AST-level Python operators map directly to Binary / Unary
-# kinds without going through a per-name Op class. The parser
-# constructs ``Binary(kind=...)`` / ``Unary(kind=...)`` directly
-# instead of resolving a callable name and re-binding.
+
+
+
+
 
 def _binary_kind_for_ast_op(ast_op_name: str):
     _MAP = {
@@ -94,24 +81,17 @@ def resolve_stmt(name: str) -> type | None:
 
 
 def resolve_callable(name: str, token: Token) -> tuple[str, type]:
-    """Dispatch *name* in the given DSL *token* dialect.
+    """Dispatch *name* within one strict DSL dialect.
 
-    Returns ``("op" | "stmt", cls)`` or raises ``VerifyError``.
-
-    Trailing-underscore convention ([parser §1.3](docs/spec/parser.md#13-op-call)): ``foo_`` is an
-    explicit effect-form selector.
-
-    Strict dialect routing (no cross-dialect fallback):
-    - ``hir`` body resolves only HIR Ops.
-    - ``tir`` body resolves only TIR Stmts (plus user intrinsics).
-      An HIR Op embedded in a TIR body must use the future
-      ``tf.<category>.<name>`` namespace surface (authoring-namespace
-      plan). Bare-name HIR Op fallback in TIR is intentionally removed.
+    Return an operation or statement kind and class, or raise ``VerifyError``.
+    A trailing underscore explicitly selects effect form in TIR. HIR names never
+    fall back to TIR, and TIR names never fall back to HIR.
+    See [parser §1.3](docs/spec/parser.md#13-op-call).
     """
     if token == "tir":
-        # Trailing-underscore effect-form selector is TIR-only: leaving it
-        # unconditional was an HIR escape hatch into the TIR Stmt registry,
-        # violating strict dialect routing.
+
+
+
         if name.endswith("_") and not name.startswith("_"):
             base = name[:-1]
             stmt = resolve_stmt(base)
@@ -131,12 +111,12 @@ def resolve_callable(name: str, token: Token) -> tuple[str, type]:
     raise VerifyError(f"unknown HIR callable {name!r} in @tilefoundry.func body")
 
 
-# Legacy ``binop_to_op_cls`` removed — AST-level Python
-# operator dispatch now uses :func:`_binary_kind_for_ast_op` /
-# :func:`_unary_kind_for_ast_op` and constructs ``Binary`` / ``Unary``
-# directly. ``rebind_to_kinded`` is gone for the same reason: the 19
-# legacy sugar Op classes that it routed are deleted, and surface
-# names route through ``@register_alias`` schemas.
+
+
+
+
+
+
 
 
 __all__ = [

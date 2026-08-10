@@ -1,15 +1,8 @@
-"""What a solved partition decided, in terms an agent can act on.
+"""Represent a solved spatial partition without rewriting its program.
 
-The plan names values and operations by identities derived from the authored
-program, not by the indexes the problem happened to allocate, and states the
-ordinary IR type each value was placed in. Nothing is rewritten: the Module the
-caller passed in is the Module it gets back, and a placement is a decision
-recorded beside the program rather than applied to it.
-
-Verification re-checks the structure of that decision without rebuilding
-candidates or re-solving: references resolve, edges connect placements that can
-legally connect, positions stay inside the level, and operations that overlap in
-time do not overlap in position.
+Values and operations use authored identities and retain their IR types.
+Verification resolves references, checks placement edges and level bounds, and
+rejects overlapping operations without rebuilding candidates or re-solving.
 """
 
 from __future__ import annotations

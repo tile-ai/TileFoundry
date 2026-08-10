@@ -17,12 +17,14 @@ def _resolve_platform(name: str):
 
     Platform sub-namespaces (``T.cuda``, later other targets) are
     compile-time instruction descriptors rather than callable Ops, so they
-    are resolved before the OpSchema registry ([parser §2.6](docs/spec/parser.md#26-platform-sub-namespaces)). Deferred
-    import: importing ``_platforms`` pulls in the CUDA MMA IR modules, which
+    are resolved before the OpSchema registry
+    ([parser §2.6](docs/spec/parser.md#26-platform-sub-namespaces)). Importing
+    ``_platforms`` pulls in the CUDA MMA IR modules, which
     should only happen on first actual ``T.<name>`` access, not on
     ``import tilefoundry.dsl.T``.
     """
     from tilefoundry.dsl.T._platforms import PLATFORM_NAMESPACES  # noqa: PLC0415
+
     return PLATFORM_NAMESPACES.get(name)
 
 

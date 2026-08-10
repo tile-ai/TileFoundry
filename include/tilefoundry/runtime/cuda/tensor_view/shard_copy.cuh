@@ -1,5 +1,5 @@
-// ShardTensor-aware tilefoundry::copy helpers. Included in-context from
-// runtime.cuh inside namespace tilefoundry.
+/// ShardTensor-aware tilefoundry::copy helpers. Included in-context from
+/// runtime.cuh inside namespace tilefoundry.
 #pragma once
 
 namespace detail {
@@ -51,7 +51,7 @@ CUTE_HOST_DEVICE void copy_fragment(SView const &sv, DView &dv) {
         dv(i) = static_cast<d_val_t>(sv(i));
 }
 
-} // namespace detail
+}
 
 template <class T, class GL, class SL, class DT>
 CUTE_HOST_DEVICE void copy(ShardTensor<T, GL, SL> const &src, DT &dst) {

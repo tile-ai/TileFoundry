@@ -5,6 +5,7 @@ and their indices. We model just the selection step here; the upstream Softmax
 remains a separate node.
 
 """
+
 from __future__ import annotations
 
 import isl
@@ -61,6 +62,7 @@ class TopK(Op):
     typeinfer as a symbolic output-axis length and resolved to a concrete
     ``int`` at evaluation time — not a pad+mask workaround.
     """
+
     x = ParamDef(kind="input", pattern=Tensor)
     k = ParamDef(kind="attribute", annotation=ShapeDim)
     axis = ParamDef(kind="attribute", annotation=int, default=-1)
@@ -85,18 +87,13 @@ def _static_dim_value(d) -> "int | None":
 
 
 def _dim_upper_bound(d) -> "int | None":
-    """Best-effort static upper bound for a ``ShapeDim``; ``None`` when not statically derivable.
+    """Return a best-effort inclusive static upper bound.
 
-    Best-effort static upper bound (inclusive) for a ``ShapeDim``; ``None``
-    when not statically derivable (fails open — the caller only flags an
-    oversized ``k`` when this resolves AND the axis length is static).
+    Constants are exact and ``DimVar`` uses ``hi - 1``. Supported arithmetic
+    recurses when its operands permit a sound bound; subtraction and negative
+    multiplication fail open as ``None``.
 
-    Covers ``int``/``Constant`` (exact), ``DimVar`` (``hi - 1``), ``DimMin``/
-    ``DimMax``/``DimAdd``/``DimMul`` (recurse both operands; ``DimMul`` gives
-    up on a negative operand bound), and ``DimFloorDiv``/``DimMod`` (recurse
-    the dividend; the divisor must itself be a static positive int).
-    ``DimSub`` is not covered — bounding ``a - b`` needs ``b``'s lower bound,
-    which this helper has no counterpart for.
+    See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
     """
     if isinstance(d, bool):
         return None
@@ -120,7 +117,7 @@ def _dim_upper_bound(d) -> "int | None":
                 return max(a_hi, b_hi)
             if isinstance(target, DimAdd):
                 return a_hi + b_hi
-            return None if a_hi < 0 or b_hi < 0 else a_hi * b_hi  # DimMul
+            return None if a_hi < 0 or b_hi < 0 else a_hi * b_hi
         if isinstance(target, (DimFloorDiv, DimMod)):
             a_hi = _dim_upper_bound(d.args[0])
             b_val = _static_dim_value(d.args[1])
@@ -159,9 +156,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
     k = call.target.k
     if not is_dim_expr(k):
-        ctx.error(
-            call, f"k must be an int, DimVar, or dim expression, got {type(k).__name__}"
-        )
+        ctx.error(call, f"k must be an int, DimVar, or dim expression, got {type(k).__name__}")
     k_static = _static_dim_value(k)
     if k_static is not None and k_static < 0:
         ctx.error(call, f"k must be non-negative, got {k_static}")
@@ -170,10 +165,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         if isinstance(axis_len, int) and k_static > axis_len:
             ctx.error(call, f"k={k_static} exceeds axis {axis} length {axis_len}")
     elif isinstance(axis_len, int):
-        # Symbolic k: only a static axis length lets us check anything, and
-        # even then only when k's upper bound is itself statically derivable
-        # (see ``_dim_upper_bound``) — an unresolved bound fails open rather
-        # than block a legitimate dynamic k.
         k_hi = _dim_upper_bound(k)
         if k_hi is not None and k_hi > axis_len:
             ctx.error(
@@ -183,20 +174,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             )
     if isinstance(x_ty.layout, ShardLayout):
         la2ta = layout_axis_to_tensor_axis(x_ty.layout.layout.shape, x_ty.shape)
-        if any(
-            isinstance(a, Split) and la2ta[a.axis] == axis
-            for a in x_ty.layout.attrs
-        ):
+        if any(isinstance(a, Split) and la2ta[a.axis] == axis for a in x_ty.layout.attrs):
             ctx.error(call, f"selected axis {axis} must not be Split-sharded")
-    # The selected index is not recoverable from a partial (per-shard)
-    # reduction.
+
     reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = list(x_ty.shape)
     out_shape[axis] = k
     out_shape = tuple(out_shape)
-    # A sharded input keeps its non-selected splits; the selected axis shrinks
-    # to k. Derive the output layout instead of passing it through, so the
-    # shard invariant size(layout) == size(shape) holds.
+
     new_layout = (
         None
         if x_ty.layout is None
@@ -204,15 +189,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     )
     if isinstance(x_ty.layout, ShardLayout):
         relation = build_relation(call, (x_ty,), ctx)
-        derived = derive_output_shard_layout(
-            (x_ty,), relation, out_shape, fresh_strides=True
-        )
-        # A replicated input has no Split/Partial for the propagator to carry
-        # (derive returns None); still shrink the selected axis so the layout
-        # keeps size parity with the output shape.
-        new_layout = (
-            derived if derived is not None else _canonical_shard(x_ty.layout, out_shape)
-        )
+        derived = derive_output_shard_layout((x_ty,), relation, out_shape, fresh_strides=True)
+
+        new_layout = derived if derived is not None else _canonical_shard(x_ty.layout, out_shape)
     values_ty = TensorType(
         shape=out_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
     )
@@ -242,6 +221,7 @@ def _topk_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     out_map = isl.map(f"{{ [{in_dims}] -> [{out_dims}] }}")
     return AccessRelationResult(domain=build_domain(x.shape), maps=(in_map, out_map))
 
+
 @register_access_relation(TopK)
 def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
     """GLOBAL level.
@@ -258,33 +238,22 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         axis += rank
     in_dims = ", ".join(f"i{i}" for i in range(rank))
     out_dims = ", ".join(f"i{i}" if i != axis else "j" for i in range(rank))
-    # Input relation: every output position [.., j, ..] depends on the entire
-    # axis range of the input. Express as map dropping the axis dim.
+
     leading = ", ".join(f"i{i}" for i in range(rank) if i != axis)
     if leading:
         in_rel = isl.map(f"{{ [{out_dims}] -> [{in_dims}] }}")
     else:
         in_rel = isl.map(f"{{ [j] -> [i{axis}] }}")
-    # Output identity: trivial map from output to itself.
+
     out_id = isl.multi_aff(f"{{ [{out_dims}] -> [{out_dims}] }}")
     return AccessRelations(inputs=(in_rel,), outputs=(out_id, out_id))
 
 
 def _local_dim_bindings(x: "TensorValue") -> dict:
-    """``DimVar`` name → concrete size bindings recoverable from ``x`` alone.
+    """Recover bare ``DimVar`` bindings by pairing ``x``'s type and data shapes.
 
-    ``DimVar`` name → concrete size bindings recoverable from ``x`` alone:
-    ``x.type.shape`` is the (possibly symbolic) type-level shape and
-    ``x.data.shape`` its concrete runtime counterpart, so zipping the two
-    binds every axis where the type carries a bare ``DimVar``. Mirrors
-    ``evaluator.interpreter._bind_dim_vars`` but scoped to this one Call's
-    sole tensor operand — ``k`` has no other operand to bind against, and in
-    every context-length-derived-k case the same ``DimVar`` that sizes ``k``
-    also sizes the axis being selected on, so it is reachable this way. A
-    ``DimVar`` inside ``k`` that appears only in some *other* argument of the
-    enclosing Function (not ``x``) is out of reach here: fixing that would
-    need the interpreter's full ``dim_env`` threaded into ``EvalContext``,
-    which this Call-local handler does not have access to.
+    This call-local evaluator cannot recover dimensions that occur only in
+    another enclosing function argument.
     """
     bindings: dict = {}
     for axis, dim in enumerate(x.type.shape):
@@ -298,8 +267,11 @@ def _eval_topk(ctx):
     x = ctx.args[0]
     k = resolve_dim(ctx.op.k, _local_dim_bindings(x))
     vals, idx = torch.topk(
-        x.data, k, dim=ctx.op.axis,
-        largest=ctx.op.largest, sorted=ctx.op.sorted,
+        x.data,
+        k,
+        dim=ctx.op.axis,
+        largest=ctx.op.largest,
+        sorted=ctx.op.sorted,
     )
     return TupleValue(
         elements=(

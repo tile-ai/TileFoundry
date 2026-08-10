@@ -54,8 +54,8 @@ def format_dispatch_call(stmt: DispatchCall, indent: str = "") -> str:
     for pats, call in zip(stmt.case_patterns, stmt.case_calls):
         pat_str = ", ".join(format_pattern(p) for p in pats)
         lines.append(f"{indent}  case {pat_str}: {format_symbol_call(call)}")
-    # Fallback: v0 guaranteed to be Sequential((Abort(),)) but render
-    # generically so future relaxations don't break the printer.
+
+
     fb_body = stmt.fallback.body
     if len(fb_body) == 1 and isinstance(fb_body[0], Abort):
         lines.append(f"{indent}  fallback: {format_abort(fb_body[0])}")

@@ -16,8 +16,8 @@ from tilefoundry.runtime.resource import RuntimeResource
 
 _RUNTIME_FUNC_MARK = "_tilefoundry_runtime_func"
 
-#: Names a twin answers itself, so an authored Module may not also use them:
-#: functions and children become instance attributes and would shadow these.
+
+
 _RESERVED = ("module",)
 
 
@@ -113,14 +113,14 @@ class _Twin(RuntimeModule):
         method = self._ir.methods.get("forward")
         if method is not None:
             return method(self, *acts)
-        # The generated class is named after the authored one, but its base
-        # `_Twin` is an implementation detail no message should show.
+
+
         _refuse_bare_call(self._ir, "RuntimeModule")
         return getattr(self, self._ir.entry)(*acts)
 
     def __getattr__(self, name: str):
-        # Kernels and children are instance attributes, so anything reaching
-        # here is an orchestration method or a typo.
+
+
         if name.startswith("_"):
             raise AttributeError(name)
         method = self._ir.methods.get(name)

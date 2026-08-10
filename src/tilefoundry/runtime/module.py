@@ -1,7 +1,7 @@
-"""``RuntimeModule`` — the runtime twin of an ir ``Module``.
+"""Provide runtime twins of IR modules.
 
-``RuntimeModule`` — the runtime twin of an ir ``Module``; ``CompiledModule``
-is the compiled-path variant the loader binds. See [runtime §1.1](docs/spec/runtime.md#11-runtimemodule).
+``CompiledModule`` is the compiled-path variant bound by the loader. See
+[runtime §1.1](docs/spec/runtime.md#11-runtimemodule).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class RuntimeModule:
     def __init__(
         self, name: str, entry: str | None = None, modules: tuple["RuntimeModule", ...] = ()
     ) -> None:
-        # ``entry`` is metadata; ``forward`` runs the step.
+
         self.name = name
         self.entry = entry
         self.modules = tuple(modules)

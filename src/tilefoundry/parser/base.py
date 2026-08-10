@@ -60,7 +60,7 @@ from .symtab import LexicalEnv
 
 logger = logging.getLogger(__name__)
 
-# IR object types that should be in DSL source, not closure
+
 _IR_OBJECT_TYPES = {
     "Topology": None,
     "Mesh": None,
@@ -90,8 +90,8 @@ def extract_ast(fn) -> ast.FunctionDef:
     src = textwrap.dedent("".join(source_lines))
     mod = ast.parse(src)
     ast.increment_lineno(mod, start_line - 1)
-    # decorator may wrap but we parse the source including decorator; pick
-    # the first FunctionDef found.
+
+
     for node in ast.walk(mod):
         if isinstance(node, ast.FunctionDef):
             return node
@@ -146,18 +146,12 @@ def _is_const_tensor_annotation(node: ast.AST) -> bool:
 
 
 def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
-    """Resolve a tensor type annotation.
+    """Resolve tensor annotations identically for HIR and TIR functions.
 
-    Resolve a tensor type annotation. Shared by ``@func`` and
-    ``@prim_func`` param / return annotations ([parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations)) so a layout-
-    sugar ``Tensor[...]`` annotation resolves identically in both dialects.
-
-    Supports two forms:
-
-    1. **Sugar**: ``Tensor[(M,K), bf16, ((32 @ gpu.cluster, K), {gpu.warp @ P("sum")}), "smem"]``
-       — compact layout sugar, parsed directly from the AST without ``eval()``.
-    2. **Verbose**: ``Tensor[(M,K), bf16, ShardLayout(...), "smem"]``
-       — evaluated via ``eval()`` in *closure*.
+    Parse compact layout sugar directly from AST or evaluate the verbose shard
+    layout form in *closure*. See
+    [parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations) and
+    [parser §1.5](docs/spec/parser.md#15-layout-sugar).
     """
     result = try_parse_sugar_tensor_type(node, closure)
     if result is not None:
@@ -201,8 +195,8 @@ def _i64(value: int) -> Constant:
 
 
 def _constant_from_py(value: Any) -> Constant:
-    # A source value literal is unmaterialized (storage=umat): it carries no
-    # committed memory residency until a use site or lowering fixes it.
+
+
     if isinstance(value, bool):
         return Constant(type=TensorType.scalar(DType.bool, storage=StorageKind.UMAT), value=value)
     if isinstance(value, int):
@@ -212,8 +206,8 @@ def _constant_from_py(value: Any) -> Constant:
     raise VerifyError(f"unsupported literal type {type(value).__name__}")
 
 
-#: What a speculative static probe may evaluate. Without ``Call`` / ``Subscript``:
-#: a probe must not invoke anything.
+
+
 _STATIC_ARITH_NODES: tuple[type, ...] = (
     ast.Constant, ast.Name, ast.Attribute, ast.UnaryOp, ast.BinOp,
 )
@@ -265,19 +259,19 @@ class BaseExprVisitor:
 
     def __init__(self, env: LexicalEnv, closure: dict[str, Any]):
         self.env = env
-        self.closure = closure  # function's captured globals + nonlocals
-        # Shared TypeInferContext so each Call's .type is filled eagerly at
-        # parse time (callers need accurate types for subsequent Assign Var
-        # construction / tir verify / etc.).
+        self.closure = closure
+
+
+
         self._ctx = TypeInferContext()
-        # Track which Call nodes were assigned a binding explicitly via
-        # a user-supplied ``loc=...`` kwarg. The Assign handler suppresses
-        # LHS-name auto-fill for those Calls (explicit value wins).
+
+
+
         self._explicit_binding_call_ids: set[int] = set()
-        # DSL callable name used to instantiate each Call. Provides a
-        # readable default binding for tuple-unpack parents (`rope` → "rope") when
-        # the user did not supply ``loc=...`` and there is no single LHS name
-        # to fall back on.
+
+
+
+
         self._call_dsl_names: dict[int, str] = {}
         self._active_source_node: ast.AST | None = None
         self._active_binding_hint: str | None = None
@@ -308,7 +302,7 @@ class BaseExprVisitor:
         """
         return self.env.innermost_mesh()
 
-    # ---- Expr-returning dispatch ----------------------------------------------------
+
 
     def expr(self, node: ast.AST) -> Expr:
         method = getattr(self, f"visit_{type(node).__name__}", None)
@@ -337,7 +331,7 @@ class BaseExprVisitor:
         return SourceSpanMetadata(
             file=self.source_filename,
             line=node.lineno,
-            # Python AST columns are zero-based; diagnostics are one-based.
+
             column=node.col_offset + 1,
             end_line=getattr(node, "end_lineno", None),
             end_column=(
@@ -360,7 +354,7 @@ class BaseExprVisitor:
     def _with_binding(expr: Expr, name: str) -> Expr:
         return replace_metadata(expr, BindingMetadata(name))
 
-    # Constants ----------------------------------------------------------------------
+
 
     def visit_Constant(self, node: ast.Constant) -> Expr:
         return self._constant_expr(node.value)
@@ -453,7 +447,7 @@ class BaseExprVisitor:
             self.env.pop_frame()
         return items
 
-    # Names --------------------------------------------------------------------------
+
 
     def visit_Name(self, node: ast.Name) -> Expr:
         val = self.env.lookup(node.id)
@@ -467,23 +461,23 @@ class BaseExprVisitor:
             return val
         if isinstance(val, (int, float, bool)):
             return _constant_from_py(val)
-        # Check for IR objects resolved from closure (not lexical env):
-        # these are not canonical — they should be in DSL source
+
+
         if from_closure and type(val).__name__ in _IR_OBJECT_TYPES:
             _warn_if_ir_object(val, node.id)
         raise VerifyError(f"name {node.id!r} resolved to non-Expr Python value {type(val).__name__}")
 
-    # Attribute access (cta.x etc.) --------------------------------------------------
+
 
     def visit_Attribute(self, node: ast.Attribute) -> Expr:
-        # `config.rms_eps` — a number reachable statically becomes a Constant.
+
         value = self._static_number(node)
         if value is not None:
             return self._constant_expr(value)
-        # Mesh-axis references are parsed by layout sugar, not as Expr values.
+
         raise VerifyError(f"attribute access {ast.unparse(node)!r} not valid as Expr")
 
-    # Subscript: only TupleType, integer-constant index — emits TupleGetItem -------
+
 
     def visit_Subscript(self, node: ast.Subscript) -> Expr:
         """Resolve ``expr[idx]`` to a ``TupleGetItem`` or ``Slice`` Call.
@@ -527,7 +521,6 @@ class BaseExprVisitor:
         Other forms (constants, computed Expr indices, ellipsis, lists)
         are deferred to gather/scatter ops and raise here.
         """
-        # Normalize to a list of dim slicers.
         if isinstance(slc, ast.Tuple):
             elts = list(slc.elts)
         else:
@@ -618,7 +611,7 @@ class BaseExprVisitor:
         (used as the default upper bound for ``:``).
         """
         if isinstance(el, ast.Slice):
-            # full slice ``:`` or partial ``a:b[:c]``
+
             if el.lower is None:
                 begin = 0
             else:
@@ -641,15 +634,15 @@ class BaseExprVisitor:
             f"{ast.dump(el)} (expected `:`, `a:b`, or a tile RangeSlice)"
         )
 
-    # Binary ops ---------------------------------------------------------------------
+
 
     def visit_BinOp(self, node: ast.BinOp) -> Expr:
-        # Arithmetic with no tensor operand folds to its value.
+
         value = self._static_number(node)
         if value is not None:
             return self._constant_expr(value)
         opname = type(node.op).__name__
-        # MatMult (``@``) routes to the dedicated MatMul Op (not kinded).
+
         if opname == "MatMult":
             matmul_cls = resolve_op("matmul")
             if matmul_cls is None:
@@ -664,7 +657,7 @@ class BaseExprVisitor:
         right = self.expr(node.right)
         return self._build_call(self._make_binary(kind), (left, right))
 
-    # Compare: Python allows `a < b < c` but V1 only supports pairwise --------------
+
 
     def visit_Compare(self, node: ast.Compare) -> Expr:
         if len(node.ops) != 1:
@@ -696,7 +689,7 @@ class BaseExprVisitor:
     def _make_unary(kind):
         return Unary(kind=kind)
 
-    # UnaryOp (Neg / Not) -------------------------------------------------------------
+
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> Expr:
         opname = type(node.op).__name__
@@ -709,31 +702,16 @@ class BaseExprVisitor:
     def visit_Call(self, node: ast.Call) -> Expr:
         return self.call_to_op_call(node)
 
-    # Generic call -------------------------------------------------------------------
+
 
     def _resolve_call_target(self, func: ast.AST):
-        """Resolve the callee AST node to an ``OpSchema``, or ``None``.
+        """Resolve a bare or namespaced callee to an operation schema.
 
-        This returns ``OpSchema`` instances rather than bare ``Op``
-        classes so surface aliases (``schema.op_class is None``) flow
-        through the same parser path as real Ops via ``schema.builder``.
-
-        Two callee forms are accepted:
-
-        - ``ast.Name``: bare ``add(...)`` — looked up against the
-          parser's lexical environment + the function's closure first. The
-          bound value must carry an ``_op_schema`` attribute (set by
-          ``@register_op`` on Op classes and by ``@register_alias``
-          on alias builder functions, both of which
-          ``tilefoundry.dsl.tf.<name>`` returns). When the closure path
-          misses, ``dispatch.resolve_callable`` is consulted ([parser §3.2](docs/spec/parser.md#32-class-diagram)/[parser §3.3](docs/spec/parser.md#33-description)) — dialect-strict registry dispatch honouring the
-          TIR-only trailing-underscore effect-form selector ([parser §1.3](docs/spec/parser.md#13-op-call)/[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution)).
-        - ``ast.Attribute(value=ast.Name(<ns>))``: ``tf.add(...)``
-          / ``T.copy(...)``. The leading Name resolves to the
-          ``tilefoundry.dsl.tf`` / ``T`` namespace module (matched by
-          identity); the attribute name is then dispatched against
-          the matching dialect's OpSchema registry via
-          ``dispatch.resolve_schema``, alias-aware.
+        Lexical and closure bindings precede dialect-strict registry lookup.
+        Return schemas so aliases and operation classes share one builder path;
+        match namespace modules by identity. See
+        [parser §4.2](docs/spec/parser.md#42-closure-then-registry-callee-resolution)
+        and [parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution).
         """
         if isinstance(func, ast.Name):
             val = self.env.lookup(func.id)
@@ -756,10 +734,10 @@ class BaseExprVisitor:
                 ns = self.closure.get(func.value.id)
             if ns is None:
                 return None
-            # Match by module identity to avoid catching arbitrary
-            # objects that happen to expose the op name.
+
+
             # noqa cycle: tilefoundry.dsl pulls tilefoundry.parser.overload, which
-            # would re-enter this module at import time.
+
             import tilefoundry.dsl as _dsl  # noqa: PLC0415
             if ns is _dsl.tf:
                 return resolve_schema(func.attr, "tf")
@@ -780,9 +758,9 @@ class BaseExprVisitor:
             val = self.env.lookup(func.id)
             if val is None:
                 val = self.closure.get(func.id)
-        # Attribute-style HIR Function calls (``mod.fn(...)``) are out
-        # of scope for v0; require a bare name binding so the closure
-        # lookup is unambiguous.
+
+
+
         if isinstance(val, HirFunction):
             return val
         return None
@@ -790,18 +768,12 @@ class BaseExprVisitor:
     def _build_function_call(
         self, callee: Any, node: ast.Call, name: str
     ) -> Expr:
-        """Build a ``Call`` for a nested ``@func`` → ``@func`` call site.
+        """Build a nested HIR function call with an elaborated target.
 
-        Build a ``Call(target=<hir.Function>, args=...)`` for a nested
-        ``@func`` → ``@func`` call site. Arg-count enforcement lives in
-        the parser; argument *types* are bound by elaboration
-        (``tilefoundry.ir.hir.function.elaborate``, [hir §1.1](docs/spec/hir.md#11-function)) before the
-        ``Call`` is built, so ``Call.target`` is the actual per-call-site
-        instance (needed for the viewer/printer to read correctly-propagated
-        types off ``call.target.body``), not just ``Call.type``.
-        ``loc=`` is accepted as explicit binding-label syntax.
-        every other keyword is rejected because hir Function calls are
-        positional-only at the IR level.
+        Enforce arity before binding argument types so the call targets its
+        per-site function instance. Accept only positional IR arguments plus the
+        explicit ``loc=`` binding label. See
+        [hir §1.1](docs/spec/hir.md#11-function).
         """
         explicit_loc: str | None = None
         explicit_loc_given = False
@@ -841,7 +813,7 @@ class BaseExprVisitor:
         if explicit_loc_given:
             call = replace_metadata(call, BindingMetadata(explicit_loc))
             self._explicit_binding_call_ids.add(id(call))
-        # Default binding fallback uses the surface name.
+
         self._call_dsl_names[id(call)] = name
         return call
 
@@ -872,7 +844,6 @@ class BaseExprVisitor:
         schema's input / attribute ParamDefs. Raises when the callee is a tir
         Stmt op (the caller handles Stmt position) or is unresolved.
         """
-        # Surface display name for error messages and effect-stmt detection.
         if isinstance(node.func, ast.Name):
             name = node.func.id
         elif isinstance(node.func, ast.Attribute):
@@ -880,39 +851,39 @@ class BaseExprVisitor:
         else:
             raise VerifyError("only Name / Attribute callees supported in V1")
 
-        # ---- nested @func → @func call --------------------------------
-        # Look the callee up before schema dispatch. A name bound to an
-        # ``hir.Function`` (``@func`` evaluates to one) is the target of the
-        # resulting ``Call``.
+
+
+
+
         callee_func = self._resolve_function_target(node.func)
         if callee_func is not None:
             return self._build_function_call(callee_func, node, name)
 
         schema = self._resolve_call_target(node.func)
         if schema is None:
-            # Effect stmt disguised as value call → error at Expr position.
+
             if isinstance(node.func, ast.Name) and resolve_stmt(name) is not None:
                 raise VerifyError(
                     f"{name!r} is an effect Stmt op; cannot appear in Expr position "
                     f"(wrap in Assign or use as top-level Stmt)"
                 )
             raise VerifyError(f"unknown Op name {name!r}")
-        # Build parameter info for positional attr binding from schema signature
-        # (works uniformly for real-Op schemas and surface aliases).
+
+
         param_infos = schema.signature
         input_params = [p for p in param_infos if p.kind == "input"]
         attr_params = [p for p in param_infos if p.kind == "attribute"]
 
-        # Variadic-input ops (``Concat`` / ``Stack`` / ``ShapeCompose``):
-        # the schema declares a single ``input`` ParamDef but the op
-        # accepts any number of tensor operands. All positional args
-        # bind to that single input list; attributes must be passed
-        # as keyword. Detected by ``is_variadic`` on the Op class
-        # carried by the schema (real-Op schemas) or by the alias
-        # builder's wrapped Op class.
+
+
+
+
+
+
+
         is_variadic = bool(getattr(getattr(schema, "op_class", None), "is_variadic", False))
 
-        # Positional args: first N bind to input params, remaining to attr params
+
         pos_args = list(node.args)
         input_args = []
         attr_kwargs: dict[str, Any] = {}
@@ -933,10 +904,10 @@ class BaseExprVisitor:
                         and schema.name == "insert_slice"
                         and input_params[i].name == "offsets"
                     ):
-                        # Narrow route: only ``insert_slice``'s per-axis offset
-                        # tuple is lifted to an explicit core Tuple of
-                        # scalar Exprs. Any other input keeps the default path,
-                        # so a tuple literal there is rejected.
+
+
+
+
                         input_args.append(self._tuple_expr_expr(arg))
                     else:
                         input_args.append(self.expr(arg))
@@ -956,11 +927,11 @@ class BaseExprVisitor:
                         attr_name, arg, schema=schema
                     )
 
-        # Extract user-supplied ``loc=`` binding label (not an Op attr).
+
         explicit_loc: str | None = None
         explicit_loc_given = False
 
-        # Keyword args: check for duplicates with positional attrs
+
         for k in node.keywords:
             if k.arg == "loc":
                 explicit_loc = self._eval_static(k.value)
@@ -973,8 +944,8 @@ class BaseExprVisitor:
                 )
             attr_kwargs[k.arg] = self._eval_static_or_sugar(k.arg, k.value, schema=schema)
 
-        # Normalise a ``storage`` attribute to StorageKind | None at this
-        # surface boundary so legacy string aliases never enter the IR.
+
+
         if "storage" in attr_kwargs:
             attr_kwargs["storage"] = resolve_storage(attr_kwargs["storage"])
 
@@ -983,10 +954,10 @@ class BaseExprVisitor:
         if explicit_loc_given:
             call = replace_metadata(call, BindingMetadata(explicit_loc))
             self._explicit_binding_call_ids.add(id(call))
-        # Stash the DSL callable name as a default binding fallback for
-        # tuple-unpack parents. Use
-        # the schema's canonical name so loc tags stay terse regardless
-        # of Name vs Attribute callee form.
+
+
+
+
         self._call_dsl_names[id(call)] = schema.name
         return call
 
@@ -1000,7 +971,7 @@ class BaseExprVisitor:
         """
         return schema.builder(**attr_kwargs)
 
-    # Binding metadata auto-fill helpers --------------------------
+
 
     def _maybe_autofill_binding(self, expr: Expr, name: str) -> Expr:
         """Set a Call binding label to *name* unless ``loc=`` was explicit.
@@ -1036,8 +1007,8 @@ class BaseExprVisitor:
     def _build_call(self, op_inst, args: tuple[Expr, ...]) -> Call:
         """Build a Call with type eagerly populated via the typeinfer registry."""
         args = _with_python_float_dtypes(args)
-        # Construct with a placeholder; the registry reads (call.target, args)
-        # and doesn't need call.type, so we can fix it post-hoc via dataclasses.replace.
+
+
         placeholder = Call(
             type=TensorType.scalar(DType.f32), target=op_inst, args=args,
             metadata=self._source_metadata(),
@@ -1056,22 +1027,12 @@ class BaseExprVisitor:
         schema=None,
         op_cls: type | None = None,
     ):
-        """Evaluate a static attribute value, with layout sugar detection.
+        """Evaluate an attribute with annotation-driven layout-sugar parsing.
 
-        Sugar dispatch is annotation-driven: when the resolved schema
-        has a ParamDef whose ``annotation`` is in the Layout family
-        (``ShardLayout`` / ``Layout``), tuple-sugar
-        literals are parsed via the corresponding sugar parser. Falls
-        back to ``_eval_static()`` when no annotation hint applies or
-        sugar parsing fails.
-
-        ``schema`` is the alias-aware OpSchema (preferred). ``op_cls``
-        remains accepted for legacy callers.
-
-        Legacy heuristic: if no annotation hint is found and
-        *attr_name* is literally ``"layout"`` with a tuple-sugar node,
-        the ShardLayout sugar parser is still tried — this preserves
-        compatibility with ops not yet migrated to ParamDef.
+        Prefer alias-aware schema annotations and retain operation classes for
+        legacy callers. Without an annotation, a ``layout`` attribute still
+        attempts shard-layout sugar before static evaluation. See
+        [parser §4.4](docs/spec/parser.md#44-annotation-driven-sugar-dispatch).
         """
         annotation = self._lookup_param_annotation(
             schema=schema, op_cls=op_cls, attr_name=attr_name
@@ -1082,13 +1043,13 @@ class BaseExprVisitor:
                 try:
                     return sugar(node)
                 except LayoutSugarError:
-                    # Node is recognized layout sugar but malformed — surface the
-                    # real diagnostic instead of masking it with _eval_static.
+
+
                     raise
                 except ValueError:
                     pass
         elif annotation is None and attr_name == "layout" and _is_tuple_sugar(node):
-            # Legacy fallback: pre-ParamDef ops use attr name ``layout``.
+
             try:
                 return parse_shard_layout_sugar(
                     node, self._resolve_body_mesh,
@@ -1100,7 +1061,7 @@ class BaseExprVisitor:
             except ValueError:
                 pass
         value = self._eval_static(node)
-        # String-enum sugar: promote plain strings to the receiving enum member.
+
         if (
             isinstance(value, str)
             and isinstance(annotation, type)

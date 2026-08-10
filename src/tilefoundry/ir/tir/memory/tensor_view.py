@@ -29,9 +29,11 @@ class TensorView(Op):
     ``shape`` overrides the logical shape (reshape). ``memory`` MAY be a
     ``PtrOf`` result (ptr + offset).
     """
+
     memory = ParamDef(kind="input", pattern=Tensor)
     layout = ParamDef(kind="attribute", annotation=object)
     shape = ParamDef(kind="attribute", annotation=tuple, default=None)
+
 
 @register_typeinfer(TensorView)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -39,7 +41,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     op = call.target
     new_layout = op.layout
     new_shape = op.shape if op.shape is not None else src_ty.shape
-    # Slice: second arg is the index Var, shape from call.type
+
     if len(call.args) > 1:
         new_shape = call.type.shape
     return TensorType(
@@ -48,6 +50,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         layout=new_layout,
         storage=src_ty.storage,
     )
+
 
 def _c_order_strides(src_shape: tuple) -> list:
     """C-order contiguous strides of the source buffer a slice view reads."""
@@ -60,6 +63,7 @@ def layout_for_slice(src_shape: tuple, axis: int, sliced_shape: tuple) -> Layout
     view_strides.pop(axis)
     return Layout(shape=sliced_shape, strides=tuple(view_strides))
 
+
 TensorView.layout_for_slice = staticmethod(layout_for_slice)
 
 
@@ -71,5 +75,6 @@ def layout_for_slice_nd(src_shape: tuple, sliced_shape: tuple) -> Layout:
     each shrunk to the window extent).
     """
     return Layout(shape=sliced_shape, strides=tuple(_c_order_strides(src_shape)))
+
 
 TensorView.layout_for_slice_nd = staticmethod(layout_for_slice_nd)

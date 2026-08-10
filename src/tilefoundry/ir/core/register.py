@@ -1,42 +1,10 @@
-"""``@register_op`` decorator.
+"""Register operation classes and surface aliases as ``OpSchema`` entries.
 
-Usage:
+Builtin module paths derive dialect and category; external operations provide
+them explicitly. Names default to the lowercase class name. Registration is
+the only route into the callable schema registry.
 
-.. code-block:: python
-
-    # Builtin op — auto-derive dialect / category from module path,
-    # name from class name (lowercased).
-    @register_op
-    class ReLU(Op):
-        x = ParamDef(kind="input", pattern=Tensor)
-
-    # External / custom op — must give explicit dialect + category.
-    @register_op(dialect="tf", category="custom")
-    class MyOp(Op):
-        ...
-
-    # Override name (for overload disambiguation):
-    @register_op(name="relu_v2")
-    class ReLUVariant(Op):
-        ...
-
-Auto-derivation rules:
-
-- ``cls.__module__`` matches ``tilefoundry.ir.<hir|tir>.<category>.*`` →
-  ``dialect="tf"`` (hir) / ``"T"`` (tir); ``category`` = 4th segment.
-- ``name`` defaults to ``cls.__name__.lower()`` (simple lowercase, no
-  snake_case conversion).
-- Outside the builtin path, ``dialect`` and ``category`` are required.
-
-Validation:
-
-- ``dialect`` must be ``"tf"`` or ``"T"``.
-- ``category`` must be a non-empty string.
-- ``name`` must be a non-empty string.
-
-This decorator is the **only** way an Op enters the schema
-registry; the legacy metaclass auto-register and textual annotation
-parser have been removed.
+See [parser §2.1](docs/spec/parser.md#21-model).
 """
 
 from __future__ import annotations
@@ -57,7 +25,7 @@ def _derive_dialect_and_category(module: str) -> tuple[str | None, str | None]:
     if not module:
         return None, None
     parts = module.split(".")
-    # Need at least: tilefoundry . ir . hir|tir . <category> . <file>
+
     if len(parts) < 5:
         return None, None
     if parts[0] != "tilefoundry" or parts[1] != "ir":
@@ -78,9 +46,7 @@ def _validate_args(
     Auto-derives missing pieces from the module path; raises if the
     builtin path doesn't apply and explicit args weren't supplied.
     """
-    derived_dialect, derived_category = _derive_dialect_and_category(
-        getattr(cls, "__module__", "")
-    )
+    derived_dialect, derived_category = _derive_dialect_and_category(getattr(cls, "__module__", ""))
 
     final_dialect = dialect if dialect is not None else derived_dialect
     final_category = category if category is not None else derived_category
@@ -94,8 +60,7 @@ def _validate_args(
         )
     if final_dialect not in _VALID_DIALECTS:
         raise ValueError(
-            f"@register_op: dialect must be one of {_VALID_DIALECTS!r}, "
-            f"got {final_dialect!r}"
+            f"@register_op: dialect must be one of {_VALID_DIALECTS!r}, got {final_dialect!r}"
         )
 
     if not final_category or not isinstance(final_category, str):
@@ -121,21 +86,16 @@ def _build_schema(
     name: str | None = None,
 ) -> OpSchema:
     """Build an OpSchema for ``cls`` (no registration side-effect)."""
-    final_dialect, final_category, final_name = _validate_args(
-        cls, dialect, category, name
-    )
+    final_dialect, final_category, final_name = _validate_args(cls, dialect, category, name)
     signature = collect_param_defs(cls)
     return OpSchema(
         name=final_name,
         dialect=final_dialect,
         category=final_category,
         signature=signature,
-        builder=cls,  # A1.b lock: v1 default builder = cls
+        builder=cls,
         op_class=cls,
     )
-
-
-# --- Decorator surface ---------------------------------------------------
 
 
 @overload
@@ -166,23 +126,16 @@ def register_op(
     """
 
     def _apply(target_cls: type) -> type:
-        schema = _build_schema(
-            target_cls, dialect=dialect, category=category, name=name
-        )
-        # Attach schema to class for later reflection (parser dispatch,
-        # Op.params()). Underscore prefix = internal.
+        schema = _build_schema(target_cls, dialect=dialect, category=category, name=name)
+
         setattr(target_cls, "_op_schema", schema)
         _register_schema(schema)
         return target_cls
 
     if cls is not None:
-        # Bare-call form: @register_op
         return _apply(cls)
-    # With-args form: @register_op(dialect="tf", ...)
+
     return _apply
-
-
-# --- Surface alias decorator --------------------------------------------
 
 
 def register_alias(
@@ -192,50 +145,22 @@ def register_alias(
     name: str,
     params: "list[ParamDef] | tuple[ParamDef, ...]",
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Register a **surface alias** schema.
+    """Register a surface name routed to a builder without its own IR class.
 
-    Register a **surface alias** schema — a callable name routed to a
-    custom builder, without an IR Op class of its own.
+    ``params`` reuses static ``ParamDef`` descriptors from the target operation.
+    The builder accepts attributes and returns the concrete operation. Aliases
+    prepend to their bucket and therefore win first-match resolution.
 
-    HIR math sugar names like ``add`` / ``cmp_eq`` previously each had a
-    dedicated ``Op`` subclass that the parser then ``rebind_to_kinded``
-    into ``Binary(kind=ADD)``. Aliases collapse that into a single
-    schema-level routing entry: the surface name lives in the OpSchema
-    main index, but its ``builder`` constructs the kinded target Op
-    directly. The IR core ends up with just ``Binary`` / ``Unary``.
-
-    The decorated function is the **builder**: it takes attribute
-    kwargs only (input args go into ``Call.args`` separately, parser-
-    side) and returns the concrete IR ``Op`` instance — e.g. for
-    ``add``::
-
-        @register_alias(dialect="tf", category="math", name="add",
-                        params=[Binary.lhs, Binary.rhs])
-        def _add() -> Op:
-            return Binary(kind=BinaryKind.ADD)
-
-    ``params`` is a list of *static* ``ParamDef`` references taken from
-    the target Op (e.g. ``Binary.lhs``, ``Binary.rhs``). They define
-    the alias' surface signature (used for ``.pyi`` stubs and parser
-    overload matching) without re-declaring fresh ParamDef instances.
-
-    Aliases prepend (not append) to the registry bucket so that
-    schema-aware first-match resolution picks the alias over a
-    legacy-named real-Op schema during the transition.
+    See [core-ir §2.3](docs/spec/core-ir.md#23-op).
     """
     if not dialect or dialect not in _VALID_DIALECTS:
         raise ValueError(
-            f"register_alias: dialect must be one of {_VALID_DIALECTS!r}, "
-            f"got {dialect!r}"
+            f"register_alias: dialect must be one of {_VALID_DIALECTS!r}, got {dialect!r}"
         )
     if not category or not isinstance(category, str):
-        raise ValueError(
-            f"register_alias({name!r}): category must be a non-empty string"
-        )
+        raise ValueError(f"register_alias({name!r}): category must be a non-empty string")
     if not name or not isinstance(name, str):
-        raise ValueError(
-            f"register_alias: name must be a non-empty string, got {name!r}"
-        )
+        raise ValueError(f"register_alias: name must be a non-empty string, got {name!r}")
     sig = tuple(params)
     for pd in sig:
         if not isinstance(pd, ParamDef):
@@ -256,10 +181,10 @@ def register_alias(
             category=category,
             signature=sig,
             builder=builder_fn,
-            op_class=None,  # alias has no IR class of its own
+            op_class=None,
         )
         _register_schema(schema, prepend=True)
-        # Stash the schema on the builder for tests / introspection.
+
         setattr(builder_fn, "_op_schema", schema)
         return builder_fn
 

@@ -1,15 +1,12 @@
-"""TIR Stmt subclasses (P2).
+"""Define structural TIR statements.
 
-Core TIR has no ``Assign`` — that node is parser-only surface sugar and
-is lowered directly to ``LetStmt`` during parse. Likewise stmt-form
-``AllocTensor`` has been replaced by ``tir.memory.AllocTensor`` Expr Op
-anchored via ``LetStmt.value``.
+Parser assignment sugar lowers to ``LetStmt``; allocations are expression Ops
+anchored as its value. ``Sequential`` packs a tuple into one Stmt so every body
+uses a uniform statement slot while remaining iterable.
 
-``Sequential(Stmt)`` packs ``tuple[Stmt, ...]`` into a single Stmt so the
-visitor interface uniformly dispatches on "body is one Stmt"; ``__iter__``
-/ ``__len__`` are provided for callers that still want to iterate
-positions.
+See [tir §1.2](docs/spec/tir.md#12-structural-stmts-tirstmts).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,6 +19,7 @@ from tilefoundry.ir.types.shard.mesh import Mesh
 @dataclass(frozen=True)
 class Sequential(Stmt):
     """Wrap a ``tuple[Stmt, ...]`` as one TIR statement."""
+
     body: tuple[Stmt, ...]
 
     def __iter__(self):
@@ -37,6 +35,7 @@ class Sequential(Stmt):
 @dataclass(frozen=True)
 class LetStmt(Stmt):
     """TIR's single value-binding node."""
+
     var: Var
     value: Expr
     body: Sequential
@@ -85,12 +84,14 @@ class Abort(Stmt):
     produces ``__trap();`` (or equivalent abort) so failures are
     loud rather than silent.
     """
+
     message: str = ""
 
 
 @dataclass(frozen=True)
 class Evaluate(Stmt):
-    """Stmt-position wrapper for a callable invocation (effect ``Op`` or ``SymbolRef``) that yields no value."""
+    """Place a value-less effect Op or symbol invocation in statement position."""
+
     callable: "Op | SymbolRef"  # noqa: A003 -- spec field name
     args: tuple[Expr, ...]
 

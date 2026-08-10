@@ -1,36 +1,31 @@
-// reduce common impl — shared per-tag traits, per-thread fold, cell
-// decomposition, and the sharded-reduce dispatch trait / layout detector.
-//
-// Included in-context from ``ops/reduce.cuh`` (which is itself included inside
-// ``namespace tilefoundry::ops`` from runtime.cuh). This header therefore does
-// NOT open ``namespace tilefoundry`` / ``ops`` and does NOT pull in system
-// headers — cute/std and the surrounding names (``detail::to_local``,
-// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope.
+/// reduce common impl — shared per-tag traits, per-thread fold, cell
+/// decomposition, and the sharded-reduce dispatch trait / layout detector.
+///
+/// Included in-context from ``ops/reduce.cuh`` (which is itself included inside
+/// ``namespace tilefoundry::ops`` from runtime.cuh). This header therefore does
+/// NOT open ``namespace tilefoundry`` / ``ops`` and does NOT pull in system
+/// headers — cute/std and the surrounding names (``detail::to_local``,
+/// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope.
 #pragma once
 
 namespace reduce_impl {
 
-// Workspace tag used when no shared-memory staging is needed (every
-// reduce mesh axis lives inside a single warp).
+/// Workspace tag used when no shared-memory staging is needed (every
+/// reduce mesh axis lives inside a single warp).
 struct no_workspace_t {};
 inline constexpr no_workspace_t no_workspace{};
 
-// ── Per-tag combine semantics ──────────────────────────────────────
-// One trait per Op tag, shared by every reduce tier (plain, intra-warp,
-// intra-cta, cross-warp). ``init`` seeds the fold; ``elem(x)`` maps a raw
-// source element into the fold domain (identity for sum/mean, ``|x|`` for
-// absmax); ``combine(a, b)`` merges two fold-domain values (``+`` for
-// sum/mean, ``fmaxf`` for absmax — both have ``init`` as their identity
-// element over this domain, since absmax's domain is always non-negative);
-// ``finalize(acc, count)`` produces the per-cell result (mean divides by the
-// reduced element count; sum/absmax pass the accumulator through unchanged).
+/// Combine semantics shared by every reduction tier.
+/// ``init`` seeds the fold, ``elem`` enters the fold domain, and ``combine``
+/// merges values. ``finalize`` divides means by the element count while sum
+/// and absmax preserve their accumulator.
 template <class Op> struct reduce_traits;
 
 template <> struct reduce_traits<sum_op> {
     static constexpr float init = 0.f;
     __device__ static float elem(float x) { return x; }
     __device__ static float combine(float a, float b) { return a + b; }
-    __device__ static float finalize(float acc, float /*count*/) { return acc; }
+    __device__ static float finalize(float acc, float) { return acc; }
 };
 
 template <> struct reduce_traits<mean_op> {
@@ -46,7 +41,7 @@ template <> struct reduce_traits<absmax_op> {
     static constexpr float init = 0.f;
     __device__ static float elem(float x) { return fabsf(x); }
     __device__ static float combine(float a, float b) { return fmaxf(a, b); }
-    __device__ static float finalize(float acc, float /*count*/) { return acc; }
+    __device__ static float finalize(float acc, float) { return acc; }
 };
 
 template <class Op>
@@ -54,11 +49,11 @@ inline constexpr bool is_supported_reduce_op_v =
     std::is_same_v<Op, sum_op> || std::is_same_v<Op, mean_op> ||
     std::is_same_v<Op, absmax_op>;
 
-// Per-thread cell decomposition, shared by every reduce tier: the per-thread
-// cute tensor has ``size(s)`` source elements feeding ``size(d)`` destination
-// cells; the source is treated as ``n_cells`` contiguous chunks of ``step``
-// elements, each chunk reducing to one output cell (``n_cells == 1`` when
-// ``d`` is a single scalar cell, e.g. dst rank 0/1).
+/// Per-thread cell decomposition, shared by every reduce tier: the per-thread
+/// cute tensor has ``size(s)`` source elements feeding ``size(d)`` destination
+/// cells; the source is treated as ``n_cells`` contiguous chunks of ``step``
+/// elements, each chunk reducing to one output cell (``n_cells == 1`` when
+/// ``d`` is a single scalar cell, e.g. dst rank 0/1).
 struct cell_decomp_t {
     int n_src;
     int n_dst;
@@ -75,28 +70,12 @@ __device__ cell_decomp_t cell_decomp(SrcT const &s, DstT const &d) {
     return {n_src, n_dst, n_cells, step};
 }
 
-// Rank-aware per-thread local fold: folds the ``step`` source elements of
-// logical cell ``j`` (out of ``cell_decomp``'s ``n_cells``) into a single
-// scalar accumulator via ``reduce_traits<Op>``.
-//
-// ``step == cute::size(s)`` is the single-cell / whole-tensor contract (Plain
-// with a scalar dst, and IntraCta — whose per-thread tensor has no dedicated
-// cell axis at all): it flattens across cute's *entire* multi-mode domain via
-// single-index addressing (``s(k)``), which stays correct however many cute
-// axes the per-thread layout carries — including residual axes introduced by
-// single-axis sugar factorisation ([shard
-// §7.1.2](docs/spec/shard.md#712-layoutstrides)) — because ``s(k)`` always
-// visits every coordinate of ``s`` exactly once regardless of its mode
-// structure.
-//
-// Otherwise (``n_cells > 1``, e.g. IntraWarp / CrossWarp, where each thread
-// owns several distinct output cells), cell-aligned 2-D access (``s(j, k)``)
-// keeps cell ``j`` on its own row of the per-thread cute layout, regardless
-// of cute's col-major linearisation: a linear ``s(j*step+k)`` over the full
-// tensor mis-aligns here because it reinterprets the (cells, step) mode pair
-// as one flat dimension in the wrong order. The single-axis path (rank-1
-// ``s``) uses ``s(j*step+k)`` directly in both cases — unambiguous, since
-// there is only one mode to address.
+/// Fold one logical cell's ``step`` source elements through ``reduce_traits``.
+/// Whole-tensor folds use flat ``s(k)`` addressing across every mode.
+/// Multi-cell folds use ``s(j, k)`` so CuTe column-major linearization cannot
+/// mix rows; rank-one tensors use the unambiguous flat ``s(j*step+k)`` form.
+///
+/// See [shard §7.1.2](docs/spec/shard.md#712-layoutstrides).
 template <class Op, class SrcT>
 __device__ float local_fold(SrcT const &s, int j, int step) {
     using traits = reduce_traits<Op>;
@@ -124,8 +103,8 @@ __device__ float local_fold(SrcT const &s, int j, int step) {
     return acc;
 }
 
-// Intra-warp butterfly reduction (32 lanes → broadcast combine), using
-// ``Op``'s combine (``+`` for sum/mean, ``fmaxf`` for absmax).
+/// Intra-warp butterfly reduction (32 lanes → broadcast combine), using
+/// ``Op``'s combine (``+`` for sum/mean, ``fmaxf`` for absmax).
 template <class Op> __device__ float warp_butterfly(float val) {
     for (int delta = 16; delta > 0; delta >>= 1) {
         val = reduce_traits<Op>::combine(
@@ -134,14 +113,14 @@ template <class Op> __device__ float warp_butterfly(float val) {
     return val;
 }
 
-// Cross-warp SUM aggregation via a shared-memory workspace.
-//
-// ``workspace`` is sized to ``total_warps`` (all non-thread mesh
-// positions).  ``warps_per_group`` (≤ total_warps) controls grouping:
-// warps are partitioned into contiguous groups of ``warps_per_group``
-// slots, and each thread only aggregates across its own group.
-// When ``warps_per_group == total_warps`` (single group), this is
-// equivalent to the original flat cross-warp reduce.
+/// Cross-warp SUM aggregation via a shared-memory workspace.
+///
+/// ``workspace`` is sized to ``total_warps`` (all non-thread mesh
+/// positions).  ``warps_per_group`` (≤ total_warps) controls grouping:
+/// warps are partitioned into contiguous groups of ``warps_per_group``
+/// slots, and each thread only aggregates across its own group.
+/// When ``warps_per_group == total_warps`` (single group), this is
+/// equivalent to the original flat cross-warp reduce.
 template <class WorkspaceT>
 __device__ float cta_sum_via_workspace(float warp_partial,
                                        WorkspaceT &workspace,
@@ -161,9 +140,9 @@ __device__ float cta_sum_via_workspace(float warp_partial,
     return acc;
 }
 
-// ── Layered sharded-reduce dispatch ───────────────────────────────
-// Compile-time derivation of the reduction level and ``warps_per_group`` from
-// the operand shard layouts, consumed by the public ``reduce`` entry.
+/// ── Layered sharded-reduce dispatch ───────────────────────────────
+/// Compile-time derivation of the reduction level and ``warps_per_group`` from
+/// the operand shard layouts, consumed by the public ``reduce`` entry.
 template <class T> struct is_split_attr : std::false_type {};
 template <int A> struct is_split_attr<shard::S<A>> : std::true_type {};
 
@@ -172,12 +151,12 @@ struct reduce_dispatch_info {
     int warps_per_group;
 };
 
-// Derive, from the (src, dst) operand ShardLayouts, the active reduction level
-// and its ``warps_per_group``. Pure compile-time so the caller can select the
-// tier with ``if constexpr`` — otherwise the untaken tier still instantiates
-// and, e.g., ``CrossWarp<mean_op>`` would trip its supported-op guard.
-// Requires a static mesh layout (the reduce mesh is a thread-scoped static
-// mesh); a reduced axis on a non-thread mesh scope yields the cross-warp tier.
+/// Derive, from the (src, dst) operand ShardLayouts, the active reduction level
+/// and its ``warps_per_group``. Pure compile-time so the caller can select the
+/// tier with ``if constexpr`` — otherwise the untaken tier still instantiates
+/// and, e.g., ``CrossWarp<mean_op>`` would trip its supported-op guard.
+/// Requires a static mesh layout (the reduce mesh is a thread-scoped static
+/// mesh); a reduced axis on a non-thread mesh scope yields the cross-warp tier.
 template <class SrcSL, class DstSL>
 CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     using src_attrs = typename SrcSL::attrs;
@@ -201,7 +180,6 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
          ...);
     }(std::make_index_sequence<m_rank>{});
 
-    // Lane axes: rightmost warp-sized suffix of a thread-scoped mesh.
     int thread_axes = 0;
     if (scope == TopologyScope::thread) {
         int prod = 1;
@@ -228,8 +206,8 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     return {lane_reduced, warps_per_group};
 }
 
-// Detector for a nested ``typename T::shard_layout_type``. Selects the sharded
-// tiers vs. the plain (non-sharded) path in the public ``reduce`` entry.
+/// Detector for a nested ``typename T::shard_layout_type``. Selects the sharded
+/// tiers vs. the plain (non-sharded) path in the public ``reduce`` entry.
 template <class T, class = void> struct has_shard_layout : std::false_type {};
 template <class T>
 struct has_shard_layout<T, std::void_t<typename T::shard_layout_type>>
@@ -237,4 +215,4 @@ struct has_shard_layout<T, std::void_t<typename T::shard_layout_type>>
 template <class T>
 inline constexpr bool has_shard_layout_v = has_shard_layout<T>::value;
 
-} // namespace reduce_impl
+}

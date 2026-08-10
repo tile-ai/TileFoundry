@@ -43,16 +43,16 @@ def insert_default_host_entry(module: Module) -> Module:
     entry_fn = module.entry_function()
     if isinstance(entry_fn.target, CpuTarget):
         return module
-    # The entry is not CPU-target. A CPU function that is not the entry leaves
-    # the module without a host-callable entry; v1 does not guess which one to
-    # promote.
+
+
+
     if any(isinstance(fn.target, CpuTarget) for fn in module.functions):
         raise ValueError(
             "insert_default_host_entry: module has a CPU function that is not "
             "the entry; refusing to guess the host entry"
         )
-    # Dispatch entry: it is host-only (no device kernel), so retarget it to CPU.
-    # The launched variants remain CUDA device functions.
+
+
     if _is_dispatch_entry_shape(entry_fn):
         cpu_entry = replace(entry_fn, target=CpuTarget())
         new_functions = tuple(
@@ -71,8 +71,8 @@ def insert_default_host_entry(module: Module) -> Module:
             f"{len(device_fns)} device functions"
         )
     device_fn = device_fns[0]
-    # Mirror the device parameters with fresh Var identities; pre-allocated
-    # outputs stay as tensor parameters (no auto-alloc).
+
+
     entry_params = tuple(Var(type=p.type, name=p.name) for p in device_fn.params)
     grid, block = _derive_launch_config(device_fn.body)
     if grid[0] is None:

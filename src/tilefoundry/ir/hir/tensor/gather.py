@@ -74,25 +74,17 @@ def _check_batch_dims(
     if tuple(x_shape[:b]) != tuple(idx_shape[:b]):
         ctx.error(
             call,
-            f"batch dims {tuple(x_shape[:b])} of x must match index "
-            f"{tuple(idx_shape[:b])}",
+            f"batch dims {tuple(x_shape[:b])} of x must match index {tuple(idx_shape[:b])}",
         )
     return b
 
 
 def _gather_shard_layout(call, ctx, x_ty, axis: int, idx_shape: tuple, out_shape: tuple):
-    """Derive the output ``ShardLayout`` for a non-batched gather.
+    """Derive a natural contiguous shard layout for a non-batched gather.
 
-    Gather produces a new tensor: the internal ``Layout`` is always
-    natural contiguous over ``out_shape``, never the input's. Only the shard
-    ``attrs`` migrate, per mesh axis: ``Broadcast``/``Partial`` carry through
-    unchanged (gather is a linear row selection); a ``Split`` targeting the
-    gathered axis becomes ``Partial(sum)`` (each device holds a zero-filled
-    partial of the gathered rows, so summing the partials reconstructs the
-    true gather); a ``Split`` targeting another axis carries through with its
-    logical axis renumbered for the removed/inserted axes. A composed layout,
-    or multiple ``Split``s where one targets the gathered axis, has no
-    derivable output and fails closed via ``ctx.error``.
+    Broadcast and Partial states carry through. A Split on the gathered axis
+    becomes ``Partial(sum)``; other Splits are renumbered. Composed or ambiguous
+    multi-Split layouts fail closed.
     """
     sl = x_ty.layout
     if not isinstance(sl, ShardLayout):
@@ -100,8 +92,7 @@ def _gather_shard_layout(call, ctx, x_ty, axis: int, idx_shape: tuple, out_shape
     if not isinstance(sl.layout, Layout):
         ctx.error(
             call,
-            f"axis {axis} has a composed shard layout; cannot derive an "
-            f"output layout",
+            f"axis {axis} has a composed shard layout; cannot derive an output layout",
         )
     targets = split_target_axes(sl, tuple(x_ty.shape))
     splits = [(i, t) for i, t in enumerate(targets) if t is not None]
@@ -116,13 +107,10 @@ def _gather_shard_layout(call, ctx, x_ty, axis: int, idx_shape: tuple, out_shape
     if on_axis:
         mesh_idx = on_axis[0]
         new_attrs = tuple(
-            Partial(reduction="sum") if i == mesh_idx else a
-            for i, a in enumerate(sl.attrs)
+            Partial(reduction="sum") if i == mesh_idx else a for i, a in enumerate(sl.attrs)
         )
         return ShardLayout(layout=natural, attrs=new_attrs, mesh=sl.mesh)
-    # No Split targets the gathered axis: every attr carries through, a Split
-    # elsewhere renumbered for the axis removed at `axis` and the `idx_shape`
-    # axes inserted in its place.
+
     shift = len(idx_shape) - 1
     new_attrs = tuple(
         Split(axis=t + shift if t > axis else t) if isinstance(a, Split) else a
@@ -146,15 +134,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         and not all(isinstance(attr, Broadcast) for attr in layout.attrs)
         for layout in (x_ty.layout, idx_ty.layout)
     ):
-        # batch_dims stays a stable interface for a future sharded/collective
-        # implementation; the batched path over a sharded operand is not landed.
         raise NotImplementedError(
             "Gather: batched gather (batch_dims>0) over a sharded operand "
             "(ShardLayout) is not yet supported"
         )
-    # The gathered axis is replaced by the index's non-batch dims; leading axes
-    # and trailing axes of x pass through (batch_dims=0 => full index inserted).
-    new_shape = list(x_ty.shape[:axis]) + list(idx_ty.shape[b:]) + list(x_ty.shape[axis + 1:])
+
+    new_shape = list(x_ty.shape[:axis]) + list(idx_ty.shape[b:]) + list(x_ty.shape[axis + 1 :])
     new_layout = _gather_shard_layout(call, ctx, x_ty, axis, tuple(idx_ty.shape), tuple(new_shape))
     return TensorType(
         shape=tuple(new_shape), dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
@@ -185,10 +170,7 @@ def _eval_gather(ctx):
     b = ctx.op.batch_dims
     idx = indices.long()
     if b > 0:
-        # Batched: out[c.., i.., t..] = x[c.., index[b.., i..], t..]. Flatten to
-        # (batch, mid, gathered, trailing) and gather the shared per-batch index
-        # across the mid axes, then restore the logical shape.
-        batch, mid, trail = x.shape[:b], x.shape[b:axis], x.shape[axis + 1:]
+        batch, mid, trail = x.shape[:b], x.shape[b:axis], x.shape[axis + 1 :]
         rem = indices.shape[b:]
         A = x.shape[axis]
         B, M, T, I = math.prod(batch), math.prod(mid), math.prod(trail), math.prod(rem)
@@ -198,5 +180,5 @@ def _eval_gather(ctx):
         out = out.reshape(*x.shape[:axis], *rem, *trail)
         return TensorValue(data=out, type=ctx.result_type)
     out = torch.index_select(x, axis, idx.reshape(-1))
-    new_shape = x.shape[:axis] + tuple(indices.shape) + x.shape[axis + 1:]
+    new_shape = x.shape[:axis] + tuple(indices.shape) + x.shape[axis + 1 :]
     return TensorValue(data=out.reshape(new_shape), type=ctx.result_type)

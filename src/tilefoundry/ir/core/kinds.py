@@ -17,7 +17,7 @@ class BinaryKind(enum.Enum):
     names (``add``/``mul``/``cmp_eq``/``logical_and``/...) lift to a
     single ``Binary(kind, lhs, rhs)`` form at parse time.
     """
-    # Arithmetic
+
     ADD = "add"
     SUB = "sub"
     MUL = "mul"
@@ -26,20 +26,21 @@ class BinaryKind(enum.Enum):
     MOD = "mod"
     MIN = "min"
     MAX = "max"
-    # Comparison (result dtype = bool)
+
     EQ = "eq"
     NE = "ne"
     LT = "lt"
     LE = "le"
     GT = "gt"
     GE = "ge"
-    # Logical (operands + result must be bool)
+
     AND = "and"
     OR = "or"
 
 
 class UnaryKind(enum.Enum):
     """Pointwise unary operation kind, shared across IRs."""
+
     NEG = "neg"
     ABS = "abs"
     RSQRT = "rsqrt"
@@ -57,6 +58,7 @@ class UnaryKind(enum.Enum):
 
 class ReduceKind(enum.Enum):
     """Reduction operation kind, shared across IRs."""
+
     MEAN = "mean"
     SUM = "sum"
     ABS_MAX = "abs_max"

@@ -30,7 +30,7 @@ def shim_symbol(kernel_name: str) -> str:
     return "tilefoundry_" + kernel_name.replace("$", "__") + "_launch"
 
 
-# Launch-config ABI appended to every shim signature, in call order.
+
 _LAUNCH_ABI_PARAMS = (
     "int grid_x, int grid_y, int grid_z, "
     "int block_x, int block_y, int block_z, "
@@ -80,14 +80,14 @@ def emit_cuda_module(
     kernel_texts = []
     all_fields = []
     for fn in cuda_fns:
-        # A dispatch entry is host-only (its dispatch lowers in the host
-        # module) and carries no device kernel — skip it here.
+
+
         if _is_dispatch_entry_shape(fn):
             continue
         fields = _compute_kernel_fields(fn, ctx)
         if fields.entry_host_only:
-            # Contains a DispatchCall but not the recognized host-only dispatch
-            # shape — not a device kernel and not a dispatch entry we can lower.
+
+
             raise NotImplementedError(
                 f"emit_cuda_module: cuda function {fn.name!r} has a DispatchCall "
                 f"but is not a recognized dispatch entry; cannot emit a device "
@@ -97,9 +97,9 @@ def emit_cuda_module(
         all_fields.append(fields)
     if not all_fields:
         raise ValueError("emit_cuda_module: no CUDA device kernels")
-    # The file-level program_shape specializations are shared by every kernel
-    # in the module, so all kernels must agree on the (grid, block) topology
-    # shape — otherwise the spec for one kernel would be silently wrong.
+
+
+
     base = all_fields[0]
     for f in all_fields[1:]:
         if (f.grid, f.block) != (base.grid, base.block):
@@ -109,8 +109,8 @@ def emit_cuda_module(
                 f"but {f.kernel_name!r} has (grid={f.grid}, block={f.block})"
             )
     specs = _topology_shape_specializations(base.grid, base.block)
-    # A module that emits a grid barrier defines its own counter pair (internal
-    # linkage) in this source.
+
+
     uses_grid_barrier = any("tf_grid_bar_state" in text for text in kernel_texts)
     source = render(
         "cuda_module.cu.j2",

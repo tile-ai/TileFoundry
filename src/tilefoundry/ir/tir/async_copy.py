@@ -1,4 +1,5 @@
 """Effect-form TIR Ops for asynchronous (``cp.async``) gmem→smem staging."""
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
@@ -13,6 +14,7 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 @register_op(dialect="T", category="async", name="copy_async")
 class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
+
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
 
@@ -51,7 +53,8 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 
 @register_op(dialect="T", category="async", name="cp_async_wait")
 class CpAsyncWait(Op):
-    """Block until all but the ``n`` newest committed groups have arrived (``cp.async.wait_group n``)."""
+    """Wait until all but the ``n`` newest committed async groups arrive."""
+
     n = ParamDef(kind="attribute", annotation=int, default=0)
 
 

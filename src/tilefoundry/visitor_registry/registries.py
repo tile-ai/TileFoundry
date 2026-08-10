@@ -40,16 +40,16 @@ class AnalysisRegistry[Key]:
         return register_for
 
 
-# Canonical per-analysis registries. Every instance is module-level so the
-# @register_* decorators attach at import time.
+
+
 typeinfer_registry: AnalysisRegistry = AnalysisRegistry("typeinfer")
 verify_stmt_registry: AnalysisRegistry = AnalysisRegistry("verify_stmt")
 codegen_cuda_registry: AnalysisRegistry = AnalysisRegistry("codegen_cuda")
 codegen_cpu_registry: AnalysisRegistry = AnalysisRegistry("codegen_cpu")
 cost_evaluator_registry: AnalysisRegistry = AnalysisRegistry("cost_evaluator")
-# HIR op class → its HIR→TIR lowering handler. The HirToTir pass dispatches on
-# ``type(call.target)`` through this registry instead of an isinstance chain, so
-# a target-owned op (e.g. the CUDA MMA op) registers its own lowering.
+
+
+
 hir_lowering_registry: AnalysisRegistry = AnalysisRegistry("hir_lowering")
 
 

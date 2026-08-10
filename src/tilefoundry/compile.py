@@ -17,7 +17,6 @@ from tilefoundry.passes.transforms import BufferizePass, HirToTirPass
 from tilefoundry.target import Target, default_target
 from tilefoundry.target.base import _target_summary, target_instance
 
-# ── Compiler Options ─────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class CompilerOptions:
@@ -36,7 +35,7 @@ class CompilerOptions:
         parts = [f"target={self.target!r}"]
         return "\0".join(parts)
 
-# ── Module Normalisation ─────────────────────────────────────────────────────
+
 
 def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
     """Normalise a ``Function`` or ``Module`` into a compile-ready ``Module``.
@@ -55,8 +54,8 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
             entry=fn_or_mod.name,
         )
     if isinstance(fn_or_mod, Module):
-        # Validate entry exists
-        fn_or_mod.entry_function()  # raises ValueError if missing
+
+        fn_or_mod.entry_function()
         return fn_or_mod
     raise TypeError(
         f"normalize_to_module: expected Function or Module, "
@@ -89,10 +88,10 @@ def lower(
     if target is not None:
         target = target_instance(target)
 
-    # Validate the module's declared program topology levels against its
-    # target before lowering — a module may declare an unsupported level (e.g.
-    # ``gpu``) without ever emitting a MeshScope, so the codegen-side check is
-    # not enough.
+
+
+
+
     try:
         module_target = mod.resolve_target()
     except ValueError:
@@ -148,8 +147,8 @@ def build(
             f"conflicts with the Module Target {_target_summary(module_target)}"
         )
 
-    # Keyed by pid so concurrent processes (e.g. pytest-xdist workers) building
-    # same-named entries never share a cmake/nvcc build directory.
+
+
     workdir = os.path.join(
         tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
     )
@@ -166,7 +165,7 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     normalization / codegen — there is no fallback to a single-source path.
     """
     # noqa lazy: keep these heavy codegen/runtime imports off the module load
-    # path and out of any import cycle with this top-level module.
+
     from tilefoundry.codegen.cuda.emit import _output_count_from_fn  # noqa: PLC0415
     from tilefoundry.codegen.cuda.tir.prim_function import (  # noqa: PLC0415
         _is_hidden_shape_scalar,
@@ -209,8 +208,8 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
         linked, (cpu_entry,), cpu_entry.target
     )
 
-    # Host-visible ABI: filter the hidden shape scalars the host derives from
-    # tensor shapes; keep the CPU entry's parameter order and output count.
+
+
     entry_buffer_params = tuple(
         p for p in cpu_entry.params if not _is_hidden_shape_scalar(p, cpu_entry.params)
     )
@@ -252,7 +251,7 @@ def _canonical_module_text(mod: Module) -> str:
     owner instead of declaring it.
     """
     fn_text = _as_script(mod.entry_function())
-    # Append topology declarations in sorted-by-name stable form
+
     topologies = mod.effective_topologies()
     if topologies:
         topo_lines = []
@@ -276,7 +275,6 @@ def jit(
     The cache key is canonical module text, Target text, and options text -- no
     Python object identity participates.
     """
-    # Reject all unexpected kwargs
     if kwargs:
         bad = ", ".join(kwargs.keys())
         raise TypeError(
@@ -284,17 +282,17 @@ def jit(
             f"Accepted parameters are: fn_or_mod, target, options."
         )
 
-    # Reject raw Python functions
+
     if not isinstance(fn_or_mod, (HirFunction, Module)):
         raise TypeError(
             f"tilefoundry.jit: expected Function or Module, "
             f"got {type(fn_or_mod).__name__}"
         )
 
-    # Normalise
+
     mod = normalize_to_module(fn_or_mod)
 
-    # Options
+
     if target is None:
         try:
             target = mod.resolve_target()
@@ -310,7 +308,7 @@ def jit(
             f"conflicts with the resolved Target {_target_summary(target)}"
         )
 
-    # Cache key: sha256 over canonical module text + target + options
+
     canonical_text = _canonical_module_text(mod)
     payload = canonical_text + "\0" + repr(target) + "\0" + options.canonical_text()
     key = hashlib.sha256(payload.encode("utf-8")).hexdigest()

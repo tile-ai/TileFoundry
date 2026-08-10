@@ -14,13 +14,16 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op
 class Local(Op):
     """The current device's local view of a ``ShardLayout`` tensor."""
+
     x = ParamDef(kind="input", pattern=Tensor)
+
+
 @register_typeinfer(Local)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     if not isinstance(x_ty.layout, ShardLayout):
         ctx.error(call, "Local() input must have ShardLayout")
-    # Shrink shape along Split-sharded axes by mesh-axis size.
+
     sl = x_ty.layout
     new_shape = list(x_ty.shape)
     for mesh_axis, attr in enumerate(sl.attrs):
@@ -30,16 +33,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             v = static_dim_value(dim)
             if v is not None:
                 new_shape[attr.axis] = v // mesh_extent
-            # Symbolic: leave as-is (dim.* simplification later).
+
     return TensorType(
         shape=tuple(new_shape),
         dtype=x_ty.dtype,
-        layout=sl.layout,  # strip the shard wrapper, leaving base Layout
+        layout=sl.layout,
         storage=x_ty.storage,
     )
 
 
 @register_eval(Local)
 def _eval_local(ctx):
-    # Single modelled participant: the local view is the operand itself.
+
     return ctx.args[0]

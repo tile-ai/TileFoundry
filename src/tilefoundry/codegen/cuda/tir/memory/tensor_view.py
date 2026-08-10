@@ -43,11 +43,11 @@ def _render_layout(shape, strides) -> str:
 def _render_mesh_type(mesh, ctx=None) -> str:
     """tilefoundry::Mesh<...> — uses scope alias if registered in ctx."""
     if ctx and hasattr(ctx, '_mesh_aliases'):
-        # try exact id match
+
         entry = ctx._mesh_aliases.get(id(mesh))
         if entry:
-            return entry[0]  # alias name
-        # try structural fallback: compare inline type string
+            return entry[0]
+
         topo = mesh.topologies[0]
         scope = topology_scope_str(topo.name)
         ml = mesh.layout
@@ -102,22 +102,12 @@ def _render_shard_layout_type(sl: SL, ctx=None) -> str:
 
 
 def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
-    """Render shard layout value.
+    """Render a shard layout as runtime C++ preamble and value expression.
 
-    Build the per-axis layout and mesh as runtime C++ *values* and return
-    ``(preamble_lines, value_expr)`` for constructing a ``ShardLayout`` value.
-
-    For an all-static layout the constructed value's ``decltype`` is the type
-    ``_render_shard_layout_type`` would emit, so a ShardTensor built from it
-    carries its layout as a stored value (read back by ``local``) without
-    changing the type. Static dims emit ``cute::Int<N>{}``.
-
-    With *dim_var_runtime* (a ``DimVar`` name → kernel shape-scalar map) a
-    dynamic global dim emits its runtime scalar, and a launch-provided
-    (``None``) CTA mesh extent emits ``program_dim<cta>()``. Without the map
-    any dynamic extent raises, so a static call site can never silently take
-    the dynamic path; an unmapped dynamic dim also raises rather than falling
-    back to an envelope bound.
+    Static values retain the type produced by the type renderer. Runtime
+    dimension mappings supply dynamic globals and ``program_dim<cta>()``
+    supplies a launch-provided mesh extent. Missing or unmapped dynamic values
+    raise instead of falling back to an envelope bound.
     """
     sll, ml, topo = sl.layout, sl.mesh.layout, sl.mesh.topologies[0]
 
@@ -149,9 +139,9 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
             f"render_shard_layout_value: unsupported layout dim {d!r}"
         )
 
-    # A single ``None`` mesh axis is the launch-provided (dynamic) CTA extent →
-    # ``program_dim<cta>()``; only a 'cta' topology may carry it and at most
-    # one axis may be dynamic.
+
+
+
     n_dynamic = sum(1 for d in ml.shape if d is None)
     if n_dynamic > 1:
         raise NotImplementedError(
@@ -184,8 +174,8 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
     ml_stride = ", ".join(_static_dim(s, "mesh layout stride") for s in ml.strides)
 
     scope = topology_scope_str(topo.name)
-    # A launch-provided CTA extent has no compile-time size; the value carries
-    # the real extent, so the Topology type parameter is an inert placeholder.
+
+
     topo_size = topo.size if isinstance(topo.size, int) else 0
     attrs = ", ".join(_render_attr(a) for a in sl.attrs)
     preamble = [
@@ -204,16 +194,11 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
 
 
 def _coord_ref(index_var, ctx: CodegenContext) -> str:
-    """Render a ``local_tile`` coordinate.
+    """Render a compile-time, scalar, or one-element tile coordinate.
 
-    Render a ``local_tile`` coordinate. A compile-time integer literal is
-    emitted directly (``make_coord(1)``). A rank-0 scalar is a native integer (a
-    kernel-param scalar lowers to an ``int`` argument, a loop induction variable
-    is already native), so it is used by name. A one-element ``(1,)`` offset
-    tensor (a ``cache_update`` ``cur_pos`` / gather index) is a cute tensor whose
-    single element is read out (``off_tensor(0)`` for a kernel param, ``off(0)``
-    otherwise). Any other rank fails closed — there is no general
-    tensor→coordinate mechanism.
+    Integer literals become static coordinates; rank-zero scalars use their
+    native names; one-element offset tensors read element zero. Other ranks fail
+    closed because no general tensor-to-coordinate conversion exists.
     """
     if isinstance(index_var, Constant):
         return str(int(index_var.value))
@@ -237,17 +222,17 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
     var_name = ctx.name_for(let.var)
     layout = call.target.layout
 
-    # Slice view: one coordinate per axis after the memory source. A single
-    # coordinate selects a flat window over the coalesced per-thread view
-    # (cache_update / 1-D insert_slice); multiple coordinates select a per-axis
-    # N-D window (rank-N insert_slice). The coordinate count is validated below
-    # against the layout-derived rank — a sharded axis adds a per-thread cute
-    # axis, so it is not the logical rank.
+
+
+
+
+
+
     if len(call.args) > 1:
         mem_name = ctx.name_for(memory_var)
-        # rank-N window (an offset per axis): a true N-D ``local_tile`` over the
-        # per-axis view, so every coordinate and the per-axis window shape reach
-        # codegen (no flat collapse). A single coordinate keeps the flat path.
+
+
+
         if len(call.args) > 2:
             logical_coords = call.args[1:]
             dst_layout = getattr(memory_var.type, "layout", None)
@@ -261,12 +246,12 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
                     "rank-N insert_slice window is only supported over a "
                     "locally allocated sharded (ShardTensor) destination"
                 )
-            # A reshard adds a per-thread cute axis for each sharded (``Split``)
-            # axis, and the local buffer alloc drops every extent-1 axis. Tile
-            # over ``local(...)`` (the per-thread buffer) in that same reduced
-            # space: the logical offsets bind to the non-split axes in order,
-            # and only the retained (extent > 1) axes reach the tile — a dropped
-            # axis is degenerate (single position), so its offset is 0.
+
+
+
+
+
+
             dst_local = shard_layout_local_shape(dst_layout)
             win_local = shard_layout_local_shape(win_layout)
             split_axes = {a.axis for a in dst_layout.attrs if isinstance(a, Split)}
@@ -296,12 +281,12 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
             return
         index_var = call.args[1]
         if isinstance(getattr(memory_var.type, "layout", None), SL):
-            # A sharded intermediate buffer is a ShardTensor; project to the
-            # per-thread cute tensor before ``local_tile`` (an in-place
-            # ``insert_slice`` / ``cache_update`` window over a carried buffer).
-            # ``local()`` coalesces the per-shard layout to a flat 1-D view, so
-            # the tile size is the window's *total per-shard element count* and
-            # the coord indexes that flat view in whole-window blocks.
+
+
+
+
+
+
             tensor_ref = f"tilefoundry::local({mem_name})"
             win_layout = getattr(let.var.type, "layout", None)
             if isinstance(win_layout, SL):
@@ -314,9 +299,9 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
                 tensor_ref = f"{mem_name}_tensor"
             else:
                 tensor_ref = mem_name
-            # The tensor is a flat rank-1 cute view (a kernel param is wrapped as
-            # a 1-D ``Shape<total>`` tensor), so the tile is the window's total
-            # element count and the coord indexes it in whole-window blocks.
+
+
+
             K = reduce(
                 mul, (int(upper_bound(s)) for s in let.var.type.shape), 1
             )
@@ -332,7 +317,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
         mem_name = ctx.name_for(memory_var)
 
         if ctx.is_kernel_param(memory_var):
-            # Kernel param: memory is a Cute gmem tensor, wrap directly.
+
             tensor_ref = f"{mem_name}_tensor"
             global_total = shape_numel_upper_bound(memory_var.type.shape)
             global_layout = (
@@ -348,8 +333,8 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
                 f"{tensor_ref}, {global_layout}, {shard_value});"
             )
         else:
-            # PtrOf result: memory is a raw pointer.  Construct a
-            # per-thread cute tensor then wrap as ShardTensor.
+
+
             local_shape = shard_layout_local_shape(layout)
             local_shape = tuple(s for s in local_shape if s != 1) or (1,)
             if len(local_shape) > 1:

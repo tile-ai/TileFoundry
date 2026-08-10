@@ -18,11 +18,11 @@ DOCUMENT_KINDS = ("architecture", "device")
 
 FACT_EVIDENCE_KEYS = ("unit", "origin", "source", "conditions")
 
-# How a value was obtained. ``vendor`` is a figure the vendor publishes,
-# ``measured`` one taken on the described host, ``reference`` one cited from a
-# third party, ``derived`` one computed from other facts, and ``estimated`` a
-# reading that no source states outright. The last two state how in
-# ``conditions``, so an inference is never mistaken for a published number.
+
+
+
+
+
 FACT_ORIGINS = ("vendor", "measured", "reference", "derived", "estimated")
 
 _ENVELOPE_KEYS = ("schema", "kind", "id")
@@ -238,8 +238,8 @@ def parse_document(text: str, *, origin_label: str) -> HardwareDocument:
             f"{peer_key!r}, got unknown {sorted(unknown_compat)}"
         )
     declared_peers = compatibility_table.get(peer_key, [])
-    # A bare string is iterable, so an unchecked tuple() would silently turn one
-    # ID into a tuple of its characters.
+
+
     if not isinstance(declared_peers, list) or not all(
         isinstance(peer, str) and peer for peer in declared_peers
     ):

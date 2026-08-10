@@ -4,6 +4,7 @@ User-facing short names for :class:`tilefoundry.ir.types.storage.StorageKind`,
 imported directly (``from tilefoundry.dsl.storage import gmem, smem, ...``) rather
 than hung under the auto-generated ``T`` op namespace.
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.types.storage import StorageKind

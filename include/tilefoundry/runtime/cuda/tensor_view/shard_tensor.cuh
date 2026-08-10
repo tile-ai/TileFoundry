@@ -1,5 +1,5 @@
-// CUDA ShardTensor tensor-view helpers. Included in-context from runtime.cuh
-// inside namespace tilefoundry.
+/// CUDA ShardTensor tensor-view helpers. Included in-context from runtime.cuh
+/// inside namespace tilefoundry.
 #pragma once
 
 template <class TEngine, class TGlobalLayout, class TShardLayout>
@@ -15,8 +15,7 @@ struct ShardTensor {
 };
 
 template <class T, class GL, class SL>
-CUTE_HOST_DEVICE auto make_shard_tensor(T const &tensor, GL /*global_layout*/,
-                                        SL shard_layout) {
+CUTE_HOST_DEVICE auto make_shard_tensor(T const &tensor, GL, SL shard_layout) {
     using engine_t = cute::remove_cvref_t<T>;
     static_assert(
         !std::is_pointer_v<engine_t>,
@@ -24,13 +23,13 @@ CUTE_HOST_DEVICE auto make_shard_tensor(T const &tensor, GL /*global_layout*/,
     return ShardTensor<T, GL, SL>{tensor, shard_layout};
 }
 
-// Shared shard-projection state: mesh coordinate + per-axis global extents /
-// strides + the mesh-axis-to-tensor-axis mapping, derived once from a
-// ShardTensor's ``ShardLayout``. Consumed by both ``local_impl`` (the
-// pointer-offset projection behind ``local()``) and ``local_offset`` (a
-// distinct, narrower index computation — see the comment there) so the
-// ~45-line preamble (type extraction, ``program_id``/``get_hier_coord``,
-// shape/stride unpack, attr-to-axis fold) exists exactly once.
+/// Shared shard-projection state: mesh coordinate + per-axis global extents /
+/// strides + the mesh-axis-to-tensor-axis mapping, derived once from a
+/// ShardTensor's ``ShardLayout``. Consumed by both ``local_impl`` (the
+/// pointer-offset projection behind ``local()``) and ``local_offset`` (a
+/// distinct, narrower index computation — see the comment there) so the
+/// ~45-line preamble (type extraction, ``program_id``/``get_hier_coord``,
+/// shape/stride unpack, attr-to-axis fold) exists exactly once.
 template <int TRank, int MRank> struct shard_axis_projection_t {
     static constexpr int t_rank = TRank;
     static constexpr int m_rank = MRank;
@@ -38,7 +37,7 @@ template <int TRank, int MRank> struct shard_axis_projection_t {
     int g_stride[TRank];
     int m_ext[MRank];
     int m_crd[MRank];
-    int axis_to_mesh[TRank]; // -1 when tensor axis i is not a Split position
+    int axis_to_mesh[TRank];
 };
 
 template <class T, class GL, class SL>
@@ -95,9 +94,9 @@ CUTE_HOST_DEVICE auto shard_axis_projection(ShardTensor<T, GL, SL> const &st) {
     return proj;
 }
 
-// Full-broadcast predicate shared by ``local()`` and ``local_offset()``: a
-// ShardLayout with no attrs, or with fewer attrs than mesh axes, carries no
-// per-axis Split contribution at all.
+/// Full-broadcast predicate shared by ``local()`` and ``local_offset()``: a
+/// ShardLayout with no attrs, or with fewer attrs than mesh axes, carries no
+/// per-axis Split contribution at all.
 template <class SL>
 CUTE_HOST_DEVICE constexpr bool shard_layout_is_full_broadcast() {
     using attrs_t = typename SL::attrs;
@@ -111,22 +110,16 @@ CUTE_HOST_DEVICE constexpr bool shard_layout_is_full_broadcast() {
 
 template <class T, class GL, class SL>
 CUTE_HOST_DEVICE auto local_impl(ShardTensor<T, GL, SL> const &st,
-                                 std::true_type /*full_broadcast*/) {
+                                 std::true_type) {
     return st.engine;
 }
 
 template <class T, class GL, class SL>
 CUTE_HOST_DEVICE auto local_impl(ShardTensor<T, GL, SL> const &st,
-                                 std::false_type /*full_broadcast*/) {
+                                 std::false_type) {
     auto const proj = shard_axis_projection(st);
     constexpr int t_rank = decltype(proj)::t_rank;
 
-    // [runtime §2.10.2](docs/spec/runtime.md#2102-computation):
-    // offset = Σ_{m : A[m]=Split(k)} coord[m]·S[k].
-    // Valid under the [shard §7.1.1](docs/spec/shard.md#711-layoutshape)
-    // canonical-layout precondition (every Split position's own extent already
-    // equals its mesh axis's extent); see
-    // ``local_offset`` below for a distinct, loc-scaled quantity.
     int loc_shape[t_rank];
     int loc_stride[t_rank];
     int offset = 0;
@@ -165,27 +158,14 @@ CUTE_HOST_DEVICE decltype(auto) local(ShardTensor<T, GL, SL> const &st) {
     }
 }
 
-// Local INDEX offset (not a global memory-pointer offset) into an
-// already-projected destination view — consumed only by
-// ``ops::copy_async``'s partial-broadcast destination indexing
-// (ops/copy/copy_impl.h), where the destination's local view spans more
-// elements than the source's and each thread's slice must land at its own
-// sub-range.
-//
-// Unlike ``local_impl``'s pointer offset above ([runtime
-// §2.10.2](docs/spec/runtime.md#2102-computation)'s Σ coord[m]·S[k]), this
-// additionally scales by
-// ``loc = g_dim[i]/m_ext[m]`` (clamped to ``g_dim[i]`` when smaller) before
-// multiplying by the stride. Under the [shard
-// §7.1.1](docs/spec/shard.md#711-layoutshape) canonical-layout precondition
-// every Split position's extent already equals its mesh axis's extent, so
-// ``loc`` is always 1 there and the two formulas coincide; the extra factor
-// only has effect for a Split position whose own extent exceeds its mesh
-// axis's extent (a shape the [shard
-// §7.1.1](docs/spec/shard.md#711-layoutshape)-canonical form should not produce
-// — see repo-dedup-and-test-trim.findings.md F28/F43). This divergence predates
-// this refactor and is intentionally left as-is here (documented, not
-// resolved) rather than risk a silent behavior change.
+/// Compute an index offset inside an already-projected destination view.
+/// Partial-broadcast async copies use it to place each thread's source range.
+/// Unlike the pointer offset, this multiplies each coordinate by the clamped
+/// local extent before applying the global stride. Canonical Split positions
+/// have local extent one, so both formulas coincide.
+///
+/// See [runtime §2.10.2](docs/spec/runtime.md#2102-computation) and
+/// [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
 template <class T, class GL, class SL>
 CUTE_HOST_DEVICE int local_offset(ShardTensor<T, GL, SL> const &st) {
     if constexpr (shard_layout_is_full_broadcast<SL>()) {

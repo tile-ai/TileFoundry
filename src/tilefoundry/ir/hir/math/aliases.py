@@ -1,15 +1,9 @@
-"""HIR math surface aliases.
+"""Register HIR math names as aliases for kinded ``Binary`` and ``Unary`` Ops.
 
-User-callable HIR math sugar names (``add`` / ``sub`` / ``cmp_eq`` /
-``logical_and`` /
-``neg`` / ...) collapse from per-name ``Op`` subclasses into a single
-``Binary`` / ``Unary`` IR class with a tag-dispatched ``kind``
-attribute. Each surface name registers as an **alias schema** whose
-``builder`` constructs the kinded target Op directly — there is no
-dedicated IR class per name.
+Each schema builder constructs the shared operation class with a fixed kind;
+surface names do not introduce dedicated IR classes.
 
-The IR core has just ``Binary`` / ``Unary`` for kinded math, and
-the surface is purely a schema-routing concern.
+See [core-ir §2.3](docs/spec/core-ir.md#23-op).
 """
 
 from __future__ import annotations
@@ -20,9 +14,6 @@ from tilefoundry.ir.core.register import register_alias
 
 from .binary import Binary
 from .unary import Unary
-
-# ── Binary surface aliases ───────────────────────────────────────────────
-
 
 _BINARY_ALIASES: tuple[tuple[str, BinaryKind], ...] = (
     ("add", BinaryKind.ADD),
@@ -64,9 +55,6 @@ for _n, _k in _BINARY_ALIASES:
     _make_binary_alias(_n, _k)
 
 
-# ── Unary surface aliases ────────────────────────────────────────────────
-
-
 _UNARY_ALIASES: tuple[tuple[str, UnaryKind], ...] = (
     ("neg", UnaryKind.NEG),
     ("abs", UnaryKind.ABS),
@@ -74,9 +62,6 @@ _UNARY_ALIASES: tuple[tuple[str, UnaryKind], ...] = (
     ("rsqrt", UnaryKind.RSQRT),
     ("exp", UnaryKind.EXP),
     ("log", UnaryKind.LOG),
-    # SQUARE is a first-class UnaryKind, not a parser-level expansion
-    # to mul(x, x), so codegen / lowering can see the "this is a
-    # square" intent explicitly.
     ("square", UnaryKind.SQUARE),
     ("ceil", UnaryKind.CEIL),
     ("round", UnaryKind.ROUND),

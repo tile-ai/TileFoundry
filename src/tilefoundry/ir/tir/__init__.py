@@ -28,16 +28,28 @@ def _auto_import(pkg_name: str) -> None:
         importlib.import_module(modname)
 
 
-# Recursive walk so every submodule (including root-level arith / clamp /
-# reduce) is imported for its registration side effects, per
-# docs/spec/visitor-registry.md.
 _auto_import("tilefoundry.ir.tir")
 
 __all__ = [
     "PrimFunction",
-    "For", "While", "If", "MeshScope", "Return",
-    "Sequential", "LetStmt",
-    "Abort", "DispatchCall", "Launch", "ShapeOf", "shape_var_name",
-    "SymbolRef", "Sync", "SyncBarrier", "classify", "participation",
-    "CopyAsync", "CpAsyncCommit", "CpAsyncWait",
+    "For",
+    "While",
+    "If",
+    "MeshScope",
+    "Return",
+    "Sequential",
+    "LetStmt",
+    "Abort",
+    "DispatchCall",
+    "Launch",
+    "ShapeOf",
+    "shape_var_name",
+    "SymbolRef",
+    "Sync",
+    "SyncBarrier",
+    "classify",
+    "participation",
+    "CopyAsync",
+    "CpAsyncCommit",
+    "CpAsyncWait",
 ]

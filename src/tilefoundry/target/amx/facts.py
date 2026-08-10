@@ -24,11 +24,9 @@ from tilefoundry.schedule.facts import AtomFact
 from .atoms import candidate_atoms
 from .target import AmxTarget
 
-# The execution unit whose measured rate the roofline uses. NEON's rate belongs
-# to a different unit and would describe a different atom choice.
 _ROOFLINE_UNIT = "amx"
 
-# The one topology level AMX scheduling decides at.
+
 _PIPELINE_TOPOLOGY = "core"
 
 
@@ -50,8 +48,8 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
                 scope="device",
                 owner=device.unified_memory_owner,
             ),
-            # Unified memory is one pool, so the level a kernel names as global
-            # and the level the host allocates from are the same bytes.
+
+
             ExplicitMemoryLevelFacts(
                 name="gmem",
                 capacity_bytes=device.unified_memory_capacity_bytes,

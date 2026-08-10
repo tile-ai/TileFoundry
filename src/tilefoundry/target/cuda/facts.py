@@ -26,15 +26,13 @@ from tilefoundry.schedule.plan import TargetSpecRef
 from .atoms import candidate_atoms
 from .target import CudaTarget
 
-# The level a CUDA pipeline is asked about: how the threads of one CTA overlap
-# their work.
 _PIPELINE_TOPOLOGY = "thread"
 
-# The level whose store those threads cooperate in. Shared memory is a CTA-scoped
-# resource, so the capacity bounding a pipeline is not a per-thread number.
+
+
 _TILE_CAPACITY_SCOPE = "cta"
 
-# The level a CUDA partition decides about: work spread across the device.
+
 _PARTITION_TOPOLOGY = "cta"
 
 
@@ -64,17 +62,17 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
             ),
             ExplicitMemoryLevelFacts(
                 name="rmem",
-                # The register file is stated per SM in 32-bit slots, and every
-                # slot is four bytes wide.
+
+
                 capacity_bytes=architecture.registers_per_sm_32bit * 4,
                 scope="sm",
                 owner=architecture.rmem_owner,
             ),
-            # Tensor memory is the store the tensor cores accumulate in where the
-            # architecture has one. It is allocated in columns spanning every
-            # lane, and one CTA can hold all of them, so the whole store is the
-            # capacity a CTA is bounded by. An architecture without one states no
-            # capacity, and the level then says it has none.
+
+
+
+
+
             ExplicitMemoryLevelFacts(
                 name="tmem",
                 capacity_bytes=architecture.tensor_memory_per_cta_bytes,

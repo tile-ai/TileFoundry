@@ -49,8 +49,8 @@ def _range_expr(dim, params: dict) -> str:
         op = type(dim.target)
         a, b = dim.args
         if op is DimMul and not (_is_const(a) or _is_const(b)):
-            # a * b for two non-constant terms is not affine -- isl cannot
-            # represent it; bind it to a synthetic parameter instead.
+
+
             name = f"_t{len(params)}"
             params[name] = dim_range(dim)
             return name

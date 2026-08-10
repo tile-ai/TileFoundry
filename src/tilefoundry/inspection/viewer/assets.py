@@ -1,19 +1,10 @@
-"""First-run vendoring of the viewer's browser-side JS assets.
+"""Vendor pinned browser-side viewer assets into a user cache.
 
-The viewer renders graphs client-side via ``@hpcc-js/wasm`` (full
-Graphviz WASM layout) + ``d3`` (pan/zoom only, no data-join); there is
-**no** server-side ``dot``. Those JS files are large and must never live in
-the repo. Instead they are downloaded once to a user cache directory, pinned
-to exact versions and verified against a baked-in SHA256 manifest.
-
-Supply-chain pinning: every hash below was computed
-by downloading the exact pinned URL once and running ``sha256sum``. The
-runtime only ever *verifies* — it never *learns* a hash. A present cache
-file whose hash does not match the manifest is treated as tampering and
-raises, rather than being silently re-fetched.
-
-``scripts/fetch_viewer_assets.py`` is a thin CLI around :func:`ensure_assets`
-for pre-populating an offline machine's cache.
+Graphviz WASM and D3 remain outside the repository and are downloaded once.
+Every file is checked against a baked-in SHA256 manifest; runtime verification
+never learns hashes, and a mismatched cached file raises instead of being
+silently replaced. ``scripts/fetch_viewer_assets.py`` pre-populates offline
+caches through :func:`ensure_assets`.
 """
 from __future__ import annotations
 
@@ -28,17 +19,17 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class AssetEntry:
-    name: str       # local filename in the cache
-    url: str        # exact pinned URL (no @<major> shorthand)
-    sha256: str     # 64-char hex of the bytes the URL serves
-    license: str    # SPDX id
-    source: str     # human-readable upstream project / version / commit
+    name: str
+    url: str
+    sha256: str
+    license: str
+    source: str
 
 
-# Exact-pinned manifest. Hashes computed locally on 2026-05-29.
-# @hpcc-js/wasm `graphviz.umd.js` embeds the WASM binary (base64) — it is
-# self-contained, so no separate `.wasm` entry is needed (verified: the
-# M0b spike rendered with only these scripts).
+
+
+
+
 _ASSET_MANIFEST: tuple[AssetEntry, ...] = (
     AssetEntry(
         name="graphviz.umd.js",
@@ -56,7 +47,7 @@ _ASSET_MANIFEST: tuple[AssetEntry, ...] = (
     ),
 )
 
-_DOWNLOAD_TIMEOUT = 30  # seconds per attempt
+_DOWNLOAD_TIMEOUT = 30
 _ENV_OVERRIDE = "TILEFOUNDRY_VIEWER_ASSET_DIR"
 
 
@@ -120,7 +111,9 @@ def _download(entry: AssetEntry, target: Path) -> None:
     last_err: Exception | None = None
     for _attempt in range(2):
         try:
-            with urllib.request.urlopen(entry.url, timeout=_DOWNLOAD_TIMEOUT) as resp:  # noqa: S310 — pinned https URL
+            with urllib.request.urlopen(  # noqa: S310 -- pinned HTTPS URL
+                entry.url, timeout=_DOWNLOAD_TIMEOUT
+            ) as resp:
                 data = resp.read()
             tmp = target.with_suffix(target.suffix + ".tmp")
             tmp.write_bytes(data)

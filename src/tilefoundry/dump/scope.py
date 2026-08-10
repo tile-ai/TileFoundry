@@ -1,30 +1,9 @@
-"""``DumpScope`` context manager + ``ContextVar`` machinery.
+"""Manage nested and replacement dump scopes with a ``ContextVar``.
 
-Two ctor forms (mirroring nncase):
-
-- ``DumpScope(subdir, flags=None)`` — nest under the current scope. The
-  effective dumper is ``parent_dumper.subdir(name)``; effective flags are
-  ``flags & parent_flags`` (a child cannot widen what the parent allowed).
-  If no scope is active the parent dumper is ``NullDumper`` and the
-  effective dumper stays ``NullDumper`` regardless of flags.
-- ``DumpScope(dumper=…, flags=DumpFlags.ALL)`` — replace the current
-  scope entirely. This is the form tests use when they want a clean
-  ``MemoryDumper`` view, or when the top-level entry point sets up a
-  fresh ``FileDumper`` rooted at e.g. ``test_results/<nodeid>``.
-
-Concurrency is via ``contextvars.ContextVar``:
-
-- **Threads are isolated.** Plain child threads do *not* inherit the
-  parent's active scope; each starts in the default ``None`` scope and
-  must install its own. Code that needs propagation can wrap the target
-  with ``contextvars.copy_context().run(target, ...)`` explicitly.
-- **Asyncio Tasks copy the context** at creation time, so an awaited
-  task sees the spawning coroutine's scope but its own writes don't
-  leak back to the parent.
-
-``__enter__`` / ``__exit__`` use the ``set`` / ``reset`` token pattern so
-nested entries unwind cleanly even if ``__exit__`` runs in a different
-async task.
+Subdirectory scopes compose a parent path and may only restrict parent flags.
+Replacement scopes install a fresh backend. Threads start without the parent's
+scope; asyncio tasks copy it at creation. Context tokens unwind nested entries
+even when exceptions leave a scope.
 """
 from __future__ import annotations
 
@@ -83,12 +62,12 @@ class DumpScope:
         parent = _current.get()
         if not self._replace:
             if parent is None:
-                # No outer scope — subdir form is a no-op view onto NullDumper.
+
                 self._dumper = None
-                # Flags are still restricted to NONE so no writes happen.
+
                 self._flags = DumpFlags.NONE
             else:
-                # Compose with parent's dumper + restrict flags.
+
                 name = self._subdir or ""
                 self._dumper = (
                     parent.dumper.subdir(name) if name else parent.dumper

@@ -1,5 +1,5 @@
-// CUDA sync op implementation. Included in-context from ops/sync.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA sync op implementation. Included in-context from ops/sync.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 namespace sync_impl {
@@ -46,4 +46,4 @@ struct Sync {
     }
 };
 
-} // namespace sync_impl
+}

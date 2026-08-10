@@ -12,20 +12,22 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 
 __all__ = ["ReduceKind", "Reduce"]
 
+
 @register_op(dialect="T", category="tensor")
 class Reduce(Op):
     """Generic axis reduction; dispatched by the ``kind`` tag."""
+
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
-    workspace = ParamDef(
-        kind="input", pattern=Tensor, optional=True, default=None
-    )
+    workspace = ParamDef(kind="input", pattern=Tensor, optional=True, default=None)
     axes = ParamDef(kind="attribute", annotation=tuple)
     kind = ParamDef(kind="attribute", annotation=ReduceKind)
+
 
 @register_typeinfer(Reduce)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
 
 @register_verify_stmt(Reduce)
 def _(call: "Call", ctx: "VerifyContext") -> None:
@@ -34,8 +36,3 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
         ctx.error(call, f"Reduce: kind must be ReduceKind enum, got {type(op.kind)}")
     src_ty = ctx.type_of(call.args[0])  # noqa: F841
     dst_ty = ctx.type_of(call.args[1])  # noqa: F841
-    # Per-shard reshard lowering may produce rank-N (e.g.
-    # ``(1, 1, 1, 8)``) src tensors. The runtime template
-    # (``tilefoundry::ops::reduce<Op, Axes>``) iterates via
-    # ``cute::size(src)`` so rank is no longer relevant at the verifier level —
-    # the old rank<=2 guard predates the sharded reduce path.

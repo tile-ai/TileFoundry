@@ -1,5 +1,5 @@
-// CUDA copy op implementation. Included in-context from ops/copy.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA copy op implementation. Included in-context from ops/copy.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 namespace copy_impl {
@@ -27,4 +27,4 @@ struct CopyAsync {
     }
 };
 
-} // namespace copy_impl
+}

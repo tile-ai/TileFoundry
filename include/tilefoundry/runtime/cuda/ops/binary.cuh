@@ -1,5 +1,5 @@
-// CUDA binary op public entries and tags. Included in-context from runtime.cuh
-// inside namespace tilefoundry::ops.
+/// CUDA binary op public entries and tags. Included in-context from runtime.cuh
+/// inside namespace tilefoundry::ops.
 #pragma once
 
 struct mul_op {

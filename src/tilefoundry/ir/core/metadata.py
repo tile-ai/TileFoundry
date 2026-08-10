@@ -55,9 +55,7 @@ def diagnostic_location(expr: "Expr") -> str | None:
 def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]:
     """Copy only authored binding/span metadata from ``expr``."""
     return tuple(
-        value
-        for value in expr.metadata
-        if type(value) in {BindingMetadata, SourceSpanMetadata}
+        value for value in expr.metadata if type(value) in {BindingMetadata, SourceSpanMetadata}
     )
 
 

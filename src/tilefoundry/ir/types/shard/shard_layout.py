@@ -57,37 +57,13 @@ class ShardLayout(LayoutBase):
 
 
 def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
-    """Canonical shard layout.
+    """Bind logical axes to mesh axes in the canonical factored layout.
 
-    Build the canonical ``ShardLayout`` (``docs/spec/shard.md`` [shard §7.1.1](docs/spec/shard.md#711-layoutshape))
-    binding ``attrs`` (one entry per mesh axis; each ``Split`` names a
-    ``logical_shape`` axis) to ``mesh``.
+    Static splits produce mesh-sized positions plus a residual; dynamic or
+    launch-provided single-axis splits remain whole. Attributes are remapped to
+    factored positions and strides are rebuilt in C order when static.
 
-    Every logical axis split by one or more mesh axes is factored, in
-    mesh-axis order, into one position per splitting mesh axis (sized to
-    that axis's extent) plus a residual position
-    (``logical_size // Π(extents)``, omitted when 1, an error when the
-    division is not exact) — every ``Split``-bound position in the
-    resulting ``Layout`` ends up sized exactly to its mesh extent
-    (``G[k] == mesh.shape[a]``), the [shard §7.1.1](docs/spec/shard.md#711-layoutshape) canonical form, *even when a
-    single mesh axis splits the axis*. A single mesh-axis split is instead
-    kept whole (one Split-bound position, no residual) when it cannot be
-    factored into a static extent + residual: either the mesh extent is
-    launch-provided (``mesh.shape[a] is None``, only a ``cta`` topology, its
-    runtime count unknown at compile time) or the logical axis size is itself
-    dynamic (the residual ``size // extent`` would be symbolic) — each shard
-    then owns one runtime-determined 1/extent slice. (A dynamic logical axis
-    split by *several* mesh axes cannot be represented and is an error.)
-    ``Split`` attrs are remapped from the logical axis to that
-    position; ``Broadcast`` / ``Partial`` / ``Dynamic`` pass through
-    unchanged. Strides are freshly built C-order (``None`` when the
-    resulting shape is dynamic).
-
-    This is the single canonicalizer for a [shard §7.1.1](docs/spec/shard.md#711-layoutshape) layout: both
-    ``make_shard_tensor_type`` (a from-scratch sharding) and
-    ``derive_output_shard_layout``'s synthesis fallback (a propagated one)
-    call it, so a layout built by either for the same logical sharding
-    always compares structurally equal.
+    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     mesh_shape = mesh.layout.shape
     bindings: dict[int, list[int]] = {}
@@ -102,14 +78,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
         if not splitting_mesh_axes:
             layout_shape.append(axis_size)
             continue
-        # A single mesh-axis split keeps the whole logical axis as one
-        # Split-bound position when it cannot be factored into a static extent
-        # + residual: either the mesh extent is launch-provided (dynamic,
-        # ``None``) or the logical axis size is itself dynamic (the residual
-        # ``size // extent`` would be symbolic). Each shard then owns a
-        # runtime-determined 1/extent slice. This matches the pre-canonicalizer
-        # single-split synthesis in ``derive_output_shard_layout`` (a dynamic
-        # axis split by *several* mesh axes still errors, below).
+
         axis_static = isinstance(axis_size, int) and not isinstance(axis_size, bool)
         if len(splitting_mesh_axes) == 1 and (
             mesh_shape[splitting_mesh_axes[0]] is None or not axis_static
@@ -158,23 +127,13 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
 
 
 def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
-    """Derive the per-thread local layout shape from a global ``ShardLayout``.
+    """Derive one thread's local shape from a global ``ShardLayout``.
 
-    Derive the per-thread local layout shape from a global
-    ``ShardLayout``.
+    Each ``Split`` divides its bound layout position by the mesh extent;
+    repeated splits multiply their divisors. Other attributes do not consume a
+    layout position.
 
-    . ``sl.layout.shape`` is the global / unsharded
-    layout shape; this helper divides each layout dim by its bound
-    ``Split`` mesh extent to produce the per-thread local layout shape.
-
-    - ``Split(k)`` on mesh axis ``i`` divides ``layout.shape[k]`` by
-      ``mesh.layout.shape[i]``.
-    - ``Partial`` / ``Broadcast`` / ``Dynamic`` attrs do not consume any
-      layout dim. A ``Partial`` mesh axis holds an un-reduced partial of the
-      full value, so each shard keeps the full local layout shape.
-
-    Multiple ``Split`` attrs on the same layout dim multiply their
-    divisors together.
+    See [shard §7](docs/spec/shard.md#7-shardlayout).
     """
     mesh_shape = sl.mesh.layout.shape
     local = list(sl.layout.shape)
@@ -187,16 +146,11 @@ def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
                 continue
             mesh_ext = mesh_shape[mesh_axis_idx]
             if mesh_ext is None:
-                # Launch-provided (dynamic) CTA extent: each CTA owns one
-                # slice, so the per-shard extent on this axis is a static 1.
                 local[k] = 1
             elif isinstance(mesh_ext, int) and isinstance(local[k], int):
                 if mesh_ext != 0:
                     local[k] //= mesh_ext
-    # The per-shard shape sizes a static (register / shared) buffer, so every
-    # entry must be a static int once the splits are applied. A dim left
-    # dynamic — a non-split dynamic axis, or a dynamic mesh extent other than
-    # the launch-provided CTA count — cannot size such a buffer.
+
     for i, d in enumerate(local):
         if not isinstance(d, int):
             raise ValueError(
@@ -207,26 +161,14 @@ def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
     return tuple(local)
 
 
-def layout_axis_to_tensor_axis(
-    layout_shape: tuple, tensor_shape: tuple
-) -> list[int]:
-    """Map each ``Layout`` position to the logical tensor axis it lives within.
+def layout_axis_to_tensor_axis(layout_shape: tuple, tensor_shape: tuple) -> list[int]:
+    """Map factored layout positions to their logical tensor axes.
 
-    Map each ``Layout`` position to the logical tensor axis it lives
-    within.
+    Positions are consumed left-to-right until their product reaches each
+    tensor extent. Singleton tensor axes claim one singleton position; trailing
+    positions attach to the final tensor axis.
 
-    Convention: layout positions are consumed left-to-right; each tensor
-    axis ``k`` claims as many layout positions as needed to accumulate to
-    ``tensor_shape[k]``. Trailing layout positions (if any) attach to the last
-    tensor axis. Singleton tensor axes (``tensor_shape[k] == 1``) claim exactly
-    one layout position (which must also be size 1 by construction).
-
-    Example — ``tensor_shape=(1, 1536)`` + ``layout_shape=(1, 6, 32, 8)``::
-
-        layout pos 0 (size 1)  -> tensor axis 0
-        layout pos 1 (size 6)  -> tensor axis 1 (running 6)
-        layout pos 2 (size 32) -> tensor axis 1 (running 192)
-        layout pos 3 (size 8)  -> tensor axis 1 (running 1536)
+    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     from ..shape_helpers import static_dim_value  # noqa: PLC0415 - cycle guard
 
@@ -235,7 +177,6 @@ def layout_axis_to_tensor_axis(
     for t_axis, t_dim in enumerate(tensor_shape):
         t_dim_int = static_dim_value(t_dim)
         if t_dim_int is None:
-            # Symbolic dim — attach all remaining layout positions here and stop.
             while layout_idx < len(layout_shape):
                 result.append(t_axis)
                 layout_idx += 1

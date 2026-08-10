@@ -1,18 +1,8 @@
-"""``Stmt`` base class.
+"""Shared ``Stmt`` base without an ``ir.tir`` dependency.
 
-Lives in ``tilefoundry.ir.core`` because it is referenced by
-``tilefoundry.visitor_registry.contexts.VerifyContext`` (mesh scope
-stack lookups, etc.). Hosting it under ``ir/core/`` keeps
-``visitor_registry`` from depending on ``tilefoundry.ir.tir``, which
-would close the historical ``ir.tir`` ↔ ``visitor_registry`` import
-cycle.
-
-Concrete TIR ``Stmt`` subclasses (``LetStmt`` / ``Evaluate`` /
-``Sequential`` / ``MeshScope`` / ``For`` / ``While`` / ``If`` /
-``Return`` / ``PrimFunction``) remain in
-``tilefoundry.ir.tir.stmts``. ``tilefoundry.ir.tir.stmt`` is a thin
-re-export shim that keeps ``from tilefoundry.ir.tir.stmt import Stmt``
-working for back-compat.
+Concrete statements live in ``ir.tir.stmts``. Keeping the base in core avoids
+an import cycle with visitor contexts; ``ir.tir.stmt`` re-exports it for
+compatibility.
 """
 
 from __future__ import annotations

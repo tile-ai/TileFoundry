@@ -17,26 +17,13 @@ from tilefoundry.ir.core.param_def import ParamDef
 
 @dataclass(frozen=True)
 class OpSchema:
-    """Per-op metadata captured at ``@register_op`` time.
+    """Store the normalized callable metadata captured at registration.
 
-    Fields:
+    ``signature`` preserves declaration order. ``builder`` constructs the IR
+    node; aliases have no ``op_class`` and may build another operation type.
+    ``category`` organizes documentation but is not part of the surface path.
 
-    - ``name``: lowercase callable name. Auto-derived from ``cls.__name__``
-      unless overridden via ``@register_op(name=...)``.
-    - ``dialect``: ``"tf"`` (HIR) or ``"T"`` (TIR).
-    - ``category``: organizational grouping (``"nn"`` / ``"tensor"`` /
-      ``"sharding"`` / etc.). Used for docs and IDE grouping; not in surface
-      path (A2.4 flatten lock).
-    - ``signature``: ordered tuple of :class:`ParamDef` in class-body
-      definition order (A1.a lock).
-    - ``builder``: callable producing an IR node from bound args. v1 default
-      is the Op class itself (`cls`), so calling ``builder(**bound_args)``
-      yields an instance.
-    - ``op_class``: the original Op class, kept for repr and Path-B base
-      class introspection. ``None`` for surface-alias schemas registered
-      via ``@register_alias`` — those schemas have no IR class of their
-      own; their ``builder`` constructs a *target* Op (e.g. ``Binary``
-      with a fixed ``kind``) instead.
+    See [parser §2.1](docs/spec/parser.md#21-model).
     """
 
     name: str

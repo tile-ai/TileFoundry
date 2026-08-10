@@ -1,14 +1,8 @@
-"""When the modeled work runs, given a fixed number of parallel units.
+"""Plan modeled work on a fixed number of parallel units.
 
-Calls are first grouped into execution units: consecutive work that stays in the
-same local storage at the same parallel extent is one launch, because nothing
-between those calls forces a round trip. Each unit is then issued in waves of at
-most the parallel capacity, and the waves are placed subject to the dependencies
-between units.
-
-The result is a plan. It says what the model believes about ordering and
-occupancy, and it must not be read as a statement about lowering or about
-measured performance.
+Consecutive work at the same local storage and parallel extent forms one launch.
+Launches run in capacity-limited waves subject to dependencies. The result
+models ordering and occupancy, not lowering or measured performance.
 """
 
 from __future__ import annotations
@@ -204,9 +198,9 @@ def _solve(
     would otherwise collapse into one.
     """
     model = cp_model.CpModel()
-    # Every wave is explicitly ordered inside its own unit, so the sum of the
-    # unit durations is a valid finite upper bound even though independent units
-    # will overlap once the cumulative resource constraint admits it.
+
+
+
     horizon = max(1, sum(max(1, unit.duration_ns) for unit in units.values()))
     waves_by_unit: dict[int, list[tuple[cp_model.IntVar, cp_model.IntVar]]] = {}
     intervals = []

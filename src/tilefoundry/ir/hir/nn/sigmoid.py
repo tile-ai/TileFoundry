@@ -18,7 +18,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 
-# Monotone non-decreasing: commutes with max/min, not sum.
 _COMMUTES_WITH = frozenset({"max", "min"})
 
 

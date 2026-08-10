@@ -1,20 +1,12 @@
-"""Define op behavior.
+"""Define callable IR operations from ``ParamDef`` descriptors.
 
-Op base class — every callable IR Op inherits from ``Op`` and declares
-its parameters as ``ParamDef`` class-body descriptors.
+``Op.params()`` reflects descriptors in MRO order; construction accepts only
+attribute parameters. Registration is explicit through ``@register_op`` and
+the ordered ``OpSchema`` registry.
 
-Post-M1c the legacy ``Param[T, "kind"]`` annotation form, the
-metaclass auto-register, and the textual annotation parser have been
-removed. ``Op.params()`` reflects ``ParamDef`` descriptors
-in MRO order; ``Op.__init__`` accepts attribute kwargs only and honors
-``ParamDef.default`` for omitted attributes.
-
-Registration is opt-in via ``@register_op`` (see
-``tilefoundry.ir.core.register``). The metaclass-driven flat ``name`` /
-``category`` indices have been folded into the OpSchema list-per-name
-registry — ``resolve_op`` / ``resolve_stmt`` derive their lookups from
-``_schemas_by_dialect_name`` directly.
+See [core-ir §2.3](docs/spec/core-ir.md#23-op).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -51,6 +43,7 @@ def _normalize_attr(name: str, value: Any) -> Any:
 @dataclass(frozen=True)
 class ParameterInfo:
     """Lightweight reflection record for a declared Op parameter."""
+
     name: str
     kind: _ParamKind
     type: Any
@@ -62,10 +55,7 @@ class Op:
     _params_cache: ClassVar[dict[type, list[ParameterInfo]]] = {}
 
     def __new__(cls, **attrs: Any):
-        # Singleton cache for no-attribute Ops (spec 001). Multiple
-        # ``Foo()`` calls with no kwargs return the same instance so
-        # downstream code can use ``is`` for op identity. Replaces the
-        # pre-M1c metaclass ``__call__`` singleton path.
+
         if not attrs:
             attr_params = [p for p in cls.params() if p.kind == "attribute"]
             if not attr_params:
@@ -84,7 +74,7 @@ class Op:
             if k not in attr_defs:
                 raise TypeError(f"{type(self).__name__}: unknown attribute {k!r}")
             object.__setattr__(self, k, _normalize_attr(k, v))
-        # Apply ParamDef-level defaults for missing attribute params.
+
         missing = set(attr_defs) - set(attrs)
         for m in list(missing):
             pd = attr_defs[m]
@@ -92,16 +82,12 @@ class Op:
                 object.__setattr__(self, m, _normalize_attr(m, pd.default))
                 missing.discard(m)
         if missing:
-            raise TypeError(
-                f"{type(self).__name__}: missing attribute(s) {sorted(missing)}"
-            )
+            raise TypeError(f"{type(self).__name__}: missing attribute(s) {sorted(missing)}")
 
     def __repr__(self) -> str:
         infos = type(self).params()
         attr_bits = [
-            f"{p.name}={getattr(self, p.name, '?')!r}"
-            for p in infos
-            if p.kind == "attribute"
+            f"{p.name}={getattr(self, p.name, '?')!r}" for p in infos if p.kind == "attribute"
         ]
         return f"{type(self).__name__}({', '.join(attr_bits)})"
 
@@ -118,8 +104,7 @@ class Op:
         if cached is not None:
             return cached
         infos = [
-            ParameterInfo(name=pd.name, kind=pd.kind, type=pd.annotation)
-            for pd in _signature(cls)
+            ParameterInfo(name=pd.name, kind=pd.kind, type=pd.annotation) for pd in _signature(cls)
         ]
         Op._params_cache[cls] = infos
         return infos

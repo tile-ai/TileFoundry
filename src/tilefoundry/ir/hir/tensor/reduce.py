@@ -31,13 +31,16 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 
 __all__ = ["ReduceKind", "Reduce"]
 
+
 @register_op
 class Reduce(Op):
     """Axis reduction over ``x`` (``mean`` / ``sum`` / ``abs_max`` / ``max``)."""
+
     x = ParamDef(kind="input", pattern=Tensor)
     axes = ParamDef(kind="attribute", annotation=tuple)
     keepdim = ParamDef(kind="attribute", annotation=bool, default=True)
     kind = ParamDef(kind="attribute", annotation=ReduceKind, default=ReduceKind.MEAN)
+
 
 def _reduced_axes(call: "Call", rank: int) -> tuple:
     return tuple(a % rank if a < 0 else a for a in call.target.axes)
@@ -58,9 +61,7 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     dims = [f"d{i}" for i in range(rank)]
     src = "[" + ", ".join(dims) + "]"
     in_map = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
-    out_dims = (
-        dims if call.target.keepdim else [dims[i] for i in range(rank) if i not in reduced]
-    )
+    out_dims = dims if call.target.keepdim else [dims[i] for i in range(rank) if i not in reduced]
     out_map = isl.map(f"{{ {src} -> [{', '.join(out_dims)}] }}")
     return AccessRelationResult(domain=build_domain(x.shape), maps=(in_map, out_map))
 
@@ -69,8 +70,7 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     kind = call.target.kind
-    # x's Partial state is a pending cross-device combine on a mesh axis,
-    # independent of the tensor axes reduced by this operation.
+
     commutes_with = (
         frozenset({"sum"})
         if kind in (ReduceKind.SUM, ReduceKind.MEAN)
@@ -108,9 +108,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else canonical_shard_layout(
-                out_shape, x_ty.layout.mesh, x_ty.layout.attrs
-            )
+            else canonical_shard_layout(out_shape, x_ty.layout.mesh, x_ty.layout.attrs)
         )
 
     return TensorType(
@@ -121,7 +119,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
-#: The kinds whose reduction over no elements has an identity (hir.md Reduce).
 _EMPTY_IDENTITY = (ReduceKind.MAX, ReduceKind.ABS_MAX)
 
 

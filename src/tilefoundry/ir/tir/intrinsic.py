@@ -1,3 +1,8 @@
+"""Generate and register effect-statement classes for TIR intrinsics.
+
+See [tir §1.8](docs/spec/tir.md#18-intrinsic--user-defined-effect-stmts).
+"""
+
 from __future__ import annotations
 
 import inspect
@@ -7,8 +12,6 @@ from tilefoundry.ir.core import Expr, VerifyError
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.visitor_registry import register_verify_stmt
 
-# DSL-surface name → Stmt subclass. Parser reads this to dispatch user
-# intrinsic calls inside @prim_func bodies.
 _intrinsic_dispatch: dict[str, type[Stmt]] = {}
 
 
@@ -17,19 +20,17 @@ def _snake_to_camel(name: str) -> str:
 
 
 def intrinsic(fn):
-    """Per [tir §1.8](docs/spec/tir.md#18-intrinsic--user-defined-effect-stmts).
-
-    Per [tir §1.8](docs/spec/tir.md#18-intrinsic--user-defined-effect-stmts). Generate a Stmt subclass, register verify_stmt from the original
-    function body, and wire parser dispatch.
-    """
+    """Generate a Stmt class and register its verifier and parser dispatch."""
     sig = inspect.signature(fn)
     param_names: list[str] = []
     for p in sig.parameters.values():
         if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             raise TypeError(f"@intrinsic {fn.__name__}: *args/**kwargs not supported")
         if p.annotation is inspect.Parameter.empty:
-            raise TypeError(f"@intrinsic {fn.__name__}: parameter {p.name!r} must be annotated Expr")
-        # Accept both live `Expr` and string "Expr" annotations.
+            raise TypeError(
+                f"@intrinsic {fn.__name__}: parameter {p.name!r} must be annotated Expr"
+            )
+
         ann = p.annotation
         if ann is not Expr and ann != "Expr":
             raise TypeError(
@@ -51,7 +52,7 @@ def intrinsic(fn):
             fn(**bound)
         except VerifyError:
             raise
-        except Exception as exc:  # AssertionError + anything else
+        except Exception as exc:
             ctx.error(stmt, str(exc) or type(exc).__name__)
 
     register_verify_stmt(stmt_cls)(_verify)

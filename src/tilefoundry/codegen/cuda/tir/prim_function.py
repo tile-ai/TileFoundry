@@ -1,25 +1,10 @@
-"""Emitter for ``tir.PrimFunction``.
+"""Emit a TIR primitive function's CUDA kernel and host wrapper.
 
-Emitter for ``tir.PrimFunction`` — produces the `__global__` kernel plus
-a ``tvm::ffi::Tensor``-parameterised host wrapper.
-
-Host entry signature and launch config follow
-[codegen §1](docs/spec/codegen.md#1-pipeline):
-- Wrapper parameters are ``tvm::ffi::Tensor``; raw pointers are extracted
-  via ``.data_ptr<float>()`` before the kernel launch.
-- Grid / block dims are derived from the outermost ``MeshScope`` topologies
-  (``cta`` → grid, ``thread`` → block).
-
-Shape-scalar params (rank-0 ``i32`` tensors named ``<src>_shape_<axis>``)
-are passed-by-value ``int`` kernel scalars. They are NOT user-facing — the
-host wrapper extracts them from the corresponding tensor argument's shape
-before the kernel launch.
-
-If the PrimFunction body is a single ``DispatchCall`` (the entry of a
-specialization group), no ``__global__`` kernel is emitted; the host
-wrapper alone holds the dispatch if-chain that forwards to mangled
-host wrappers. CUDA forbids calling host code from ``__global__`` —
-host-side dispatch is the simplest legal lowering.
+The wrapper accepts TVM tensors, extracts pointers and hidden integer shape
+scalars, and derives launch dimensions from mesh scopes. A specialization entry
+containing only dispatch emits no global kernel; its host wrapper selects and
+calls variant wrappers because CUDA kernels cannot call host code.
+See [codegen §1](docs/spec/codegen.md#1-pipeline).
 """
 from __future__ import annotations
 
@@ -72,7 +57,7 @@ def _param_cpp_types(params: tuple, ctx: CodegenContext) -> dict[str, str]:
         if isinstance(ty, TensorType):
             result[p.name] = ctx.dtype_to_cpp(ty.dtype.name)
         else:
-            result[p.name] = "float"  # fallback
+            result[p.name] = "float"
     return result
 
 
@@ -101,12 +86,12 @@ def _collect_mesh_dims(body: Sequential) -> tuple[tuple[int, int, int], tuple[in
     duplicated here.
     """
     # noqa cycle: emit.py auto-discovers this module via importlib, so
-    # importing emit at top-level would be a real circular import.
+
     from tilefoundry.codegen.cuda.emit import _derive_launch_config  # noqa: PLC0415
-    # Device-fragment codegen accepts a launch-provided (dynamic) CTA extent:
-    # the grid comes from the host launch, so a dynamic cta is reported as
-    # ``grid=(None, 1, 1)``. Static-grid callers (auto-entry, single-source,
-    # dispatch host) check for ``None`` and error at their own site.
+
+
+
+
     return _derive_launch_config(body)
 
 
@@ -174,7 +159,7 @@ class _KernelFields:
     internal_wrapper_name: str
     params: tuple
     param_cpp_types: dict
-    param_kinds: dict  # name -> "tensor" | "hidden_scalar" | "user_scalar"
+    param_kinds: dict
     kernel_params_sig: str
     wrapper_params_sig: str
     user_params: tuple
@@ -191,11 +176,11 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
     for p in node.params:
         ctx.register_kernel_param(p)
 
-    # Register DimVar -> runtime kernel-scalar expression for every
-    # DimVar that appears in a tensor param's shape. Downstream emitters
-    # (arith / fill / copy / alloc) use this mapping to size runtime
-    # iteration counts from the live shape scalars instead of the
-    # compile-time envelope upper bound.
+
+
+
+
+
     ctx._dim_var_runtime = {}
     for p in node.params:
         ty = p.type
@@ -205,22 +190,22 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
             if isinstance(dim, DimVar) and dim.name not in ctx._dim_var_runtime:
                 ctx._dim_var_runtime[dim.name] = shape_var_name(p.name, axis)
 
-    # Named-barrier ids are per-kernel: reset before walking this body.
+
     ctx.reset_barrier_ids()
 
     entry_host_only = _is_dispatch_entry(node)
     if not entry_host_only and _has_nested_dispatch(node):
-        # v0 restriction: a DispatchCall inside a non-entry PrimFunction
-        # body would have to dispatch from a ``__global__`` kernel into
-        # host wrappers — which CUDA forbids. Only dispatch at the entry
-        # is supported until device-callable variant dispatch lands.
+
+
+
+
         raise NotImplementedError(
             f"PrimFunction emitter: v0 nested dispatch inside a specialized "
             f"kernel is not yet supported (function {node.name!r})."
         )
 
-    # Capture stmt-body emission into a fresh buffer — Python walker still
-    # drives per-stmt emission; the resulting string becomes a template var.
+
+
     def _emit_body(inner: CodegenContext) -> None:
         inner.emit_node(node.body)
 
@@ -233,9 +218,9 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
     hidden_names = {p.name for p in hidden_shape}
     user_params = tuple(p for p in node.params if p.name not in hidden_names)
 
-    # Kernel signature: hidden shape scalars are pass-by-value ``int``;
-    # rank-0 i32 user params are also pass-by-value ``int``;
-    # other params are typed raw pointers.
+
+
+
     def _is_user_scalar(p) -> bool:
         return (
             p.name not in hidden_names
@@ -259,9 +244,9 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
 
     kernel_params_sig = ", ".join(_kernel_sig_token(p) for p in node.params)
 
-    # Host wrapper: every user-facing param surfaces here. Rank-0 i32
-    # user params come in as ``int`` (pass-by-value, matching the
-    # shape-scalar convention). Tensor params come in as ``tvm::ffi::Tensor``.
+
+
+
     def _wrapper_param_token(p) -> str:
         if param_kinds[p.name] == "user_scalar":
             return f"int {p.name}"
@@ -271,15 +256,15 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
     wrapper_locals = []
     for p in hidden_shape:
         parsed = _parse_shape_param_name(p.name)
-        # _is_hidden_shape_scalar guarantees this parses; assert for safety.
+
         assert parsed is not None
         base, axis = parsed
         wrapper_locals.append(
             f"int {p.name} = static_cast<int>({base}.shape()[{axis}]);"
         )
 
-    # Launch args: tensor params extract a raw pointer; scalar params
-    # (hidden or user-declared) are forwarded by name as plain ``int``.
+
+
     def _launch_arg(p) -> str:
         if param_kinds[p.name] != "tensor":
             return p.name
@@ -287,8 +272,8 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
 
     launch_args = ", ".join(_launch_arg(p) for p in node.params)
 
-    # cute tensor wrappers are only meaningful for tensor params; scalar
-    # params are plain ``int`` and stay as-is in the kernel body.
+
+
     buffer_params = tuple(
         p for p in user_params if param_kinds[p.name] == "tensor"
     )
@@ -324,5 +309,3 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
         block=block,
         entry_host_only=entry_host_only,
     )
-
-

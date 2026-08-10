@@ -31,6 +31,7 @@ def _dim_mul(a, b):
         return a * b
     return simplify_dim(DimMul, (a, b))
 
+
 def _c_order_strides(shape: tuple) -> tuple:
     """C-order contiguous strides for *shape*.
 
@@ -40,6 +41,7 @@ def _c_order_strides(shape: tuple) -> tuple:
     """
     return c_order_strides(shape, mul=_dim_mul)
 
+
 def _shared_engine_strides(sl: ShardLayout) -> tuple:
     """Shared-engine strides for *sl*.
 
@@ -48,6 +50,7 @@ def _shared_engine_strides(sl: ShardLayout) -> tuple:
     underlying engine at disjoint offsets ``i · S[k]``.
     """
     return _c_order_strides(tuple(sl.layout.shape))
+
 
 def _per_instance_strides(sl: ShardLayout) -> tuple[int, ...]:
     """Per-instance strides for *sl*.
@@ -80,19 +83,20 @@ def _per_instance_strides(sl: ShardLayout) -> tuple[int, ...]:
             out.append(base[k])
     return tuple(out)
 
-# Storage hierarchy. Physical addressability
-# ordering; not a free design choice.
+
 _STORAGE_LEVEL: dict[StorageKind, int] = {
     StorageKind.RMEM: 0,
     StorageKind.SMEM: 1,
     StorageKind.GMEM: 2,
 }
 
+
 def _storage_level(storage: StorageKind) -> int:
     try:
         return _STORAGE_LEVEL[storage]
     except KeyError as exc:  # pragma: no cover - guard
         raise ValueError(f"unknown storage tier: {storage!r}") from exc
+
 
 def _src_form_is_per_instance(sl_src: "ShardLayout | None") -> bool:
     """True iff *sl_src* carries the per-instance stride form (every Split axis has stride 0).
@@ -112,6 +116,7 @@ def _src_form_is_per_instance(sl_src: "ShardLayout | None") -> bool:
     strides = tuple(int(s) for s in sl_src.layout.strides)
     return all(strides[k] == 0 for k in split_axes if k < len(strides))
 
+
 def _materialize_reshard_strides(
     layout: ShardLayout,
     src_ty: TensorType,
@@ -125,9 +130,6 @@ def _materialize_reshard_strides(
     src_storage = src_ty.storage
     src_layout = src_ty.layout if isinstance(src_ty.layout, ShardLayout) else None
     if src_storage == new_storage:
-        # Same-storage sugar — match the form already present on
-        # ``src``. Fall back to shared-engine C-order when ``src``
-        # has no ShardLayout (plain kernel-param surface).
         if _src_form_is_per_instance(src_layout):
             new_strides = _per_instance_strides(layout)
         else:
@@ -136,10 +138,8 @@ def _materialize_reshard_strides(
         src_lvl = _storage_level(src_storage)
         dst_lvl = _storage_level(new_storage)
         if dst_lvl > src_lvl:
-            # low → high: shared-engine C-order over canonical shape.
             new_strides = _shared_engine_strides(layout)
         else:
-            # high → low: per-instance form.
             new_strides = _per_instance_strides(layout)
     return ShardLayout(
         layout=Layout(shape=layout.layout.shape, strides=new_strides),
@@ -147,12 +147,15 @@ def _materialize_reshard_strides(
         mesh=layout.mesh,
     )
 
+
 @register_op
 class Reshard(Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
+
     x = ParamDef(kind="input", pattern=Tensor)
     layout = ParamDef(kind="attribute", annotation=ShardLayout, default=None)
     storage = ParamDef(kind="attribute", default=None)
+
 
 @register_typeinfer(Reshard)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -173,25 +176,27 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if storage_changed:
             ctx.error(
                 call,
-                "Reshard: storage change requires an explicit `layout=` "
-                "argument.",
+                "Reshard: storage change requires an explicit `layout=` argument.",
             )
         return TensorType(
-            shape=x_ty.shape, dtype=x_ty.dtype,
-            layout=x_ty.layout, storage=x_ty.storage,
+            shape=x_ty.shape,
+            dtype=x_ty.dtype,
+            layout=x_ty.layout,
+            storage=x_ty.storage,
         )
     new_storage = op.storage if op.storage is not None else x_ty.storage
     new_layout = op.layout
     if isinstance(new_layout, ShardLayout) and new_layout.layout.strides is None:
         new_layout = _materialize_reshard_strides(new_layout, x_ty, new_storage)
     return TensorType(
-        shape=x_ty.shape, dtype=x_ty.dtype,
-        layout=new_layout, storage=new_storage,
+        shape=x_ty.shape,
+        dtype=x_ty.dtype,
+        layout=new_layout,
+        storage=new_storage,
     )
 
 
 @register_eval(Reshard)
 def _eval_reshard(ctx):
-    # Value-preserving: the logical value is unchanged; only the type's
-    # layout / storage are updated (sharding distribution is not executed).
+
     return TensorValue(data=ctx.args[0].data, type=ctx.result_type)

@@ -15,19 +15,19 @@ from tilefoundry.visitor_registry.access_relation import (
 
 @register_op(name="tuple_get_item")
 class TupleGetItem(Op):
-    """Extracts a field of a tuple-typed Expr by static index.
+    """Extract a field of a tuple-typed expression by static index.
 
-    Replaces the former `core_ir.expr.TupleGetItem` Expr subclass. Using Call
-    + Op here unifies the shape of multi-output op consumers ([hir §1](docs/spec/hir.md#1-hir-expr-constructs), hir = SSA
-    DAG; only Call and leaves).
+    Representing extraction as a Call keeps multi-output consumers in the HIR
+    SSA expression model. See [hir §1](docs/spec/hir.md#1-hir-expr-constructs).
     """
+
     tuple_value = ParamDef(kind="input", pattern=Tensor)
     index = ParamDef(kind="attribute", annotation=int)
 
 
-# GLOBAL-level: structural extractor, identity over the extracted field's
-# own rank (`tuple_value` is a TupleType with no shape of its own).
 register_access_relation(TupleGetItem)(identity_relations(1))
+
+
 @register_typeinfer(TupleGetItem)
 def _(call: "Call", ctx: "TypeInferContext"):
     tup_ty = ctx.type_of(call.args[0])

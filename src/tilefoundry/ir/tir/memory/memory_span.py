@@ -3,6 +3,7 @@
 Describes a contiguous memory span over a pointer.
 Placeholder — demo does not use it; typeinfer mirrors input type.
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
@@ -16,7 +17,10 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op(name="memory_span")
 class MemorySpan(Op):
     """Re-interpret a memory region as a typed tensor (value form)."""
+
     x = ParamDef(kind="input", pattern=Tensor)
+
+
 @register_typeinfer(MemorySpan)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     return ctx.type_of(call.args[0])

@@ -1,20 +1,9 @@
-"""Replacing a symbolic dimension with the extent it was chosen to have.
+"""Replace selected symbolic dimensions with concrete extents.
 
-A model authored for decode states its context length as a `DimVar` spanning
-every length it will ever see. Analysis and scheduling need one length: they
-count elements, compare footprints to capacities and lay work out over a mesh,
-and none of that has an answer for a dimension that is still a range. So the
-choice of length is made here, and what comes out states extents instead of
-ranges.
+Substitution is partial: unbound dimensions remain symbolic. This module lives
+beside tensor types to avoid making the dimension vocabulary depend on them.
 
-Substitution is deliberately partial. Binding one dimension must leave the
-others symbolic, because the choice is made one dimension at a time -- a
-context length is picked while the sequence length stays open -- and an
-implementation that demanded every variable at once could not express that.
-
-This lives beside the types rather than beside `DimVar` itself: the dimension
-vocabulary is what tensor types are built from, so a substituter that knows
-about `TensorType` cannot live in the module `TensorType` imports.
+See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
 """
 
 from __future__ import annotations
@@ -66,9 +55,7 @@ def _collect(value: object, found: dict[str, "DimVar"]) -> None:
     if isinstance(value, TensorType):
         for entry in value.shape:
             _collect(entry, found)
-        # A layout restates the shape it describes, and a sharded one restates
-        # it per position. A scan that read only the shape would call a type
-        # concrete while its layout still held the range.
+
         _collect_layout(value.layout, found)
         return
     if isinstance(value, TupleType):
@@ -92,8 +79,6 @@ def _collect_layout(layout: object, found: dict[str, "DimVar"]) -> None:
         return
     Layout, ComposedLayout, ShardLayout = _layout_types()
     if isinstance(layout, ShardLayout):
-        # The mesh states machine positions, which are not derived from the
-        # program's sizes, so it holds no dimension of the program.
         _collect_layout(layout.layout, found)
         return
     if isinstance(layout, ComposedLayout):
@@ -155,20 +140,12 @@ def substitute_layout_dims(layout: object, bindings: Mapping[str, int]) -> objec
         outer = substitute_layout_dims(layout.outer, bindings)
         inner = substitute_layout_dims(layout.inner, bindings)
         offset = substitute_shape_dim(layout.offset, bindings)
-        if (
-            outer is layout.outer
-            and inner is layout.inner
-            and offset == layout.offset
-        ):
+        if outer is layout.outer and inner is layout.inner and offset == layout.offset:
             return layout
         return ComposedLayout(inner=inner, offset=offset, outer=outer)
     if isinstance(layout, Layout):
         shape = _substitute_nested(layout.shape, bindings)
-        strides = (
-            None
-            if layout.strides is None
-            else _substitute_nested(layout.strides, bindings)
-        )
+        strides = None if layout.strides is None else _substitute_nested(layout.strides, bindings)
         if shape == layout.shape and strides == layout.strides:
             return layout
         return Layout(shape=shape, strides=strides)
@@ -211,10 +188,7 @@ def substitute_shape_dim(entry: object, bindings: Mapping[str, int]) -> object:
         if args == tuple(entry.args):
             return entry
         folded = simplify_dim(type(entry.target), args)
-        # Folding yields a wrapped integer. A tensor type canonicalises those
-        # back to plain integers in its shape, but an operation's shape-valued
-        # attribute is not a type and would keep the wrapper -- leaving one
-        # entry of a shape a different kind of thing from its neighbours.
+
         if isinstance(folded, Constant) and isinstance(folded.value, int):
             return int(folded.value)
         return folded

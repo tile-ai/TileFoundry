@@ -67,8 +67,8 @@ def _call_movement(
             reads[level] = reads.get(level, 0) + moved.read
             writes[level] = writes.get(level, 0) + moved.write
             continue
-        # A Type spanning several levels states no split, so the aggregate
-        # charges the whole Type at each, in the directions the op reported.
+
+
         for level, value in by_level.items():
             if moved.read:
                 reads[level] = reads.get(level, 0) + value

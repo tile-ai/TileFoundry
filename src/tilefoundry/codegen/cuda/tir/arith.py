@@ -36,10 +36,11 @@ def _materialised_shape(ty) -> tuple:
     ``TensorType.shape``. Elementwise helpers must iterate by the
     local count or they walk past the per-thread / per-CTA
     allocation.
+    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     layout = getattr(ty, "layout", None)
     if isinstance(layout, ShardLayout):
-        # [shard §7.1.1](docs/spec/shard.md#711-layoutshape): ``layout.shape`` is global; derive per-thread local.
+
         return shard_layout_local_shape(layout)
     return shape_upper_bound(ty.shape)
 
@@ -49,6 +50,7 @@ def _materialised_shape_dyn(ty) -> tuple:
 
     Like ``_materialised_shape`` but preserves ``DimVar`` entries so
     the caller can ask for a runtime (string) iteration count.
+    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     layout = getattr(ty, "layout", None)
     if isinstance(layout, ShardLayout):
@@ -85,9 +87,9 @@ def _emit_binary(call, ctx: CodegenContext) -> None:
     rhs_n = _tensor_expr(rhs, ctx)
     dst_n = _tensor_expr(dst, ctx)
     op_tag = _BINARY_TAG[op.kind]
-    # Iterate over the materialised per-thread shape, not the
-    # logical ``TensorType.shape`` — reg+ShardLayout operands hold
-    # only the local view in registers.
+
+
+
     l_shape = _materialised_shape(lhs.type)
     r_shape = _materialised_shape(rhs.type)
 
@@ -104,9 +106,9 @@ def _emit_binary(call, ctx: CodegenContext) -> None:
         shape_numel_upper_bound(l_shape) % shape_numel_upper_bound(r_shape) == 0
         and shape_numel_upper_bound(l_shape) > shape_numel_upper_bound(r_shape)
     ):
-        # Multi-cell broadcast: lhs is ``n_dst`` cells of ``step`` lanes,
-        # rhs is a per-cell scalar (e.g. ``(1,3,4) op (1,3,1)`` after the
-        # reduce keepdim path).
+
+
+
         n_dst = shape_numel_upper_bound(r_shape)
         step = shape_numel_upper_bound(l_shape) // n_dst
         ctx.emit(
@@ -124,7 +126,7 @@ def _emit_unary(call, ctx: CodegenContext) -> None:
     op = call.target
     src_n = _tensor_expr(src, ctx)
     dst_n = _tensor_expr(dst, ctx)
-    # Iterate over local view length — runtime when a DimVar is in play.
+
     N = _runtime_total(dst.type, ctx)
 
     if op.kind == UnaryKind.CAST:

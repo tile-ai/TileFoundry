@@ -12,8 +12,6 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 
-# Non-monotonic (x*Phi(x) dips below 0 before rising back through 0 near
-# x=0), unlike sigmoid/softplus/tanh: does not commute with max/min/sum.
 _COMMUTES_WITH = frozenset()
 
 
@@ -24,8 +22,11 @@ class Gelu(Op):
     Gaussian Error Linear Unit. ``approximate="tanh"`` is the tanh-based
     approximation (HF ``gelu_pytorch_tanh`` / Gemma-2 MLP activation).
     """
+
     x = ParamDef(kind="input", pattern=Tensor)
     approximate = ParamDef(kind="attribute", annotation=str, default="tanh")
+
+
 @register_typeinfer(Gelu)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])

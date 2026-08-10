@@ -24,24 +24,13 @@ class Layout(LayoutBase):
 
 @dataclass(frozen=True)
 class ComposedLayout(LayoutBase):
-    """CuTe composed layout: ``image(c) = inner(offset + outer(c))``.
+    """Represent ``image(c) = inner(offset + outer(c))``.
 
-    Field order + names mirror CuTeDSL ``make_composed_layout(inner, offset,
-    outer)`` (``third_party/cutlass/python/CuTeDSL/cutlass/cute/core.py``):
+    ``outer`` defines the domain shape and axis numbering; ``None`` means an
+    identity component. Either component may retain a nested ``ShardLayout``.
+    Inversion applies the component inverses in reverse order.
 
-    - ``outer`` — applied **first** (domain / input side); the domain shape and
-      axis numbering of the composition come from ``outer``, so a binding
-      ``ShardLayout``'s ``Split(k)`` references ``outer``'s domain axis.
-    - ``offset`` — intermediate scalar offset added before ``inner``.
-    - ``inner`` — applied **last** (codomain / output side); ``None`` is
-      identity.
-
-    Either component may be a ``ShardLayout`` so a later placement stage can
-    preserve an earlier stage's distribution as a nested layout.
-
-    The left inverse reverses the composition (see CuTe
-    ``layout_composed.hpp`` ``left_inverse``):
-    ``image⁻¹(t) = outer⁻¹(inner⁻¹(t) − offset)``.
+    See [shard §4](docs/spec/shard.md#4-composedlayout).
     """
 
     inner: LayoutBase | None

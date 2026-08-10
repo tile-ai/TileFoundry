@@ -12,10 +12,6 @@ from tilefoundry.target.hardware.envelope import (
 )
 from tilefoundry.target.hardware.schema import SchemaReader
 
-# One document format per kind: every CUDA architecture document states the same
-# fact paths and so does every device document, which is what lets one schema
-# validate them all, and what makes a product's capability a recorded value
-# rather than a case in code.
 ARCHITECTURE_SCHEMA = "tilefoundry.cuda.architecture/v3"
 DEVICE_SCHEMA = "tilefoundry.cuda.device/v3"
 
@@ -24,9 +20,6 @@ SM100_ID = "nvidia.sm100"
 H200_SXM_ID = "nvidia.h200_sxm"
 B200_SXM_ID = "nvidia.b200_sxm"
 
-# The compute DTypes a CUDA device document states a dense peak rate for. A
-# product whose tensor cores have no mode for one of them records it
-# unavailable, so the absence is a statement rather than a missing key.
 _THROUGHPUT_DTYPE_NAMES = ("f32", "f16", "bf16", "fp8e4m3", "f4e2m1")
 
 

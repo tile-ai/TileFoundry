@@ -17,21 +17,10 @@ from tilefoundry.ir.types import DType
 class AtomFact:
     """One atom's facts, for later CP-SAT atom selection.
 
-    ``shape``/``dtype`` mirror the atom's own MNK shape and
-    ``(a, b, c)`` dtypes for a quick look without unpacking ``atom``.
-    ``duration`` is a nominal roofline estimate in ns -- a placeholder to
-    rank against until a measured number backfills it;
-    ``compute_duration`` is its compute-side half alone, for a consumer
-    that models the surrounding traffic itself and would otherwise charge
-    memory twice. ``storage`` is per-thread fragment occupancy in bytes;
-    ``resource`` is the required thread-scope footprint, e.g.
-    ``{"lane": 32}`` for one warp. ``is_async`` marks an asynchronous
-    instruction. ``atom`` is the target's own realized descriptor, carried
-    through so a later fill/codegen stage need not re-resolve it from
-    ``shape``/``dtype``.
-
-    The descriptor stays opaque on purpose, so a target package can enumerate
-    its own catalogue without this type knowing that catalogue's classes.
+    Shape and dtype describe MNK and A/B/C. Durations are nominal nanoseconds;
+    ``compute_duration`` excludes traffic. Storage is per-thread bytes and
+    resource is thread-scope occupancy. ``atom`` remains target-owned and
+    opaque so later stages can use the realized descriptor directly.
     """
 
     shape: tuple[int, int, int]

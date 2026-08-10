@@ -1,5 +1,5 @@
-// CUDA unary op implementation. Included in-context from ops/unary.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA unary op implementation. Included in-context from ops/unary.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 namespace unary_impl {
@@ -17,4 +17,4 @@ template <class Op> struct Unary {
     }
 };
 
-} // namespace unary_impl
+}

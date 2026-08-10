@@ -16,6 +16,8 @@ class LayerNorm(Op):
     bias = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
     eps = ParamDef(kind="attribute", annotation=float)
+
+
 @register_typeinfer(LayerNorm)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])

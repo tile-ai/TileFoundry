@@ -32,9 +32,7 @@ class DType:
         members = cls._members()
         member = members.get(name)
         if member is None:
-            raise ValueError(
-                f"DType: unknown value {name!r}; valid: {sorted(members)}"
-            )
+            raise ValueError(f"DType: unknown value {name!r}; valid: {sorted(members)}")
         return member
 
     def to_python(self) -> PythonExpr:

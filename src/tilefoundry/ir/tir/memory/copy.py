@@ -5,6 +5,7 @@ Copies ``src`` to ``dst``. Memory direction (gmem / smem
 Load / Store too. The Op is placed in Stmt position as
 ``Evaluate(Copy, ...)``; the invocation is unit-typed (no result value).
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
@@ -19,25 +20,26 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 @register_op
 class Copy(Op):
     """Copies ``src`` into ``dst`` (in-place memory write)."""
+
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
+
 
 @register_typeinfer(Copy)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
 
 @register_verify_stmt(Copy)
 def _(call: "Call", ctx: "VerifyContext") -> None:
     src = ctx.type_of(call.args[0])
     dst = ctx.type_of(call.args[1])
     if src.storage == dst.storage and src.shape != dst.shape:
-        # Allow shape mismatch when both sides carry the same ShardLayout
-        # (reshape / broadcast↔split — logical shape changes, per-thread
-        # buffer is the same copyable extent).
         if not _is_copyable_shard(src, dst):
             ctx.error(call, f"Copy shape mismatch: {src.shape} vs {dst.shape}")
     if src.dtype != dst.dtype:
         ctx.error(call, f"Copy dtype mismatch: {src.dtype} vs {dst.dtype}")
+
 
 def _is_copyable_shard(src_ty, dst_ty) -> bool:
     """Both sides carry a ShardLayout describing the same per-thread buffer."""

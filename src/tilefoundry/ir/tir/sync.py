@@ -1,4 +1,5 @@
 """Effect-form TIR Op ``tir.Sync`` — a mesh-scoped barrier emitted by ``T.sync(m)``."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,13 +16,13 @@ from tilefoundry.ir.types.shard.layout_algebra import size as _size
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
-# A warp is 32 lanes — the granularity of ``__syncwarp`` / ``bar.sync`` counts.
 _WARP_SIZE = 32
 
 
 @register_op(dialect="T", category="sync")
 class Sync(Op):
     """Mesh-scoped barrier — emitted by ``T.sync(m)``."""
+
     mesh = ParamDef(kind="attribute", annotation=Mesh)
 
 
@@ -31,17 +32,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
-    """Is ``m`` a legal constant slice of the enclosing full mesh ``e``?.
+    """Return whether *m* reconstructs as a constant slice of full mesh *e*.
 
-    Is ``m`` (a sliced mesh, ``m.layout`` a ``ComposedLayout``) a legal
-    constant slice of the enclosing full mesh ``e``?
-
-    Mechanically checkable, not inferred from a few equal fields: ``e`` must be
-    un-sliced, share ``m``'s full topology tuple and axis names, and ``m``'s
-    slice must reconstruct as ``e[start_i : start_i+sub_i]`` — same strides,
-    per-axis sub-extents bounded by ``e``'s shape, and an offset that decomposes
-    into in-range per-axis starts. The proof ends by rebuilding ``e[key]`` and
-    comparing it to ``m`` (so a forged slice cannot pass).
+    Topology, names, strides, bounds, and decomposed offset must agree. The
+    final proof rebuilds the slice and compares it structurally.
     """
     if isinstance(e.layout, ComposedLayout):
         return False
@@ -61,7 +55,7 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
         return False
     if not isinstance(region.offset, int) or any(s > ps for s, ps in zip(sub, pshape)):
         return False
-    # Recover per-axis starts from the offset over the parent strides.
+
     rem = region.offset
     starts = [0] * len(sub)
     for i in sorted(range(len(sub)), key=lambda k: -p.strides[k]):
@@ -70,7 +64,9 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
             return False
         starts[i] = rem // st
         rem -= starts[i] * st
-    if rem != 0 or any(not (0 <= starts[i] and starts[i] + sub[i] <= pshape[i]) for i in range(len(sub))):
+    if rem != 0 or any(
+        not (0 <= starts[i] and starts[i] + sub[i] <= pshape[i]) for i in range(len(sub))
+    ):
         return False
     key = tuple(slice(starts[i], starts[i] + sub[i]) for i in range(len(sub)))
     try:
@@ -81,24 +77,17 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
 
 @register_verify_stmt(Sync)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    """A ``Sync`` must reference an enclosing ``with Mesh(...) as m``.
+    """Verify a Sync references an enclosing mesh or its legal constant slice.
 
-    A ``Sync`` must reference an enclosing ``with Mesh(...) as m`` — either
-    ``m`` itself (full mesh) or a legal constant slice ``m[...]`` — and its
-    participant set must lower to a supported barrier.
+    The participant set must classify to a supported barrier; dynamic,
+    non-contiguous, and cross-warp-unaligned subsets are rejected.
 
-    A full mesh (plain-``Layout`` ``layout``) is accepted only by equality with
-    an enclosing mesh; a sliced mesh (``ComposedLayout`` ``layout``) only through
-    the slice-derived-from-enclosing proof (:func:`_legal_slice_of`). The
-    enclosing ``MeshScope`` stack arrives on ``ctx.mesh_scope``. ``classify``
-    then rejects a dynamic / non-contiguous / cross-warp-unaligned participant
-    set.
+    See [tir §1.5](docs/spec/tir.md#15-sync).
     """
     m = call.target.mesh
     if not isinstance(m, Mesh):
         raise VerifyError(
-            f"T.sync expects a Mesh argument (m or a slice m[...]), got "
-            f"{type(m).__name__}"
+            f"T.sync expects a Mesh argument (m or a slice m[...]), got {type(m).__name__}"
         )
     scope = ctx.mesh_scope
     if not isinstance(m.layout, ComposedLayout):
@@ -111,27 +100,29 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
             "must reference an enclosing `with Mesh(...) as m` (m or a legal "
             "m[slice])"
         )
-    # Feasibility: raises for a dynamic / non-contiguous / unaligned slice.
+
     classify(m)
 
 
 class SyncBarrier(Enum):
-    """The hardware barrier a sync lowers to."""
-    SYNCTHREADS = "syncthreads"  # whole block, more than one warp
-    SYNCWARP = "syncwarp"        # whole block of one warp, or a single-warp subset
-    BAR_SYNC = "bar_sync"        # named barrier — a warp-aligned multi-warp subset
-    GRID = "grid"                # grid-wide software barrier (cta-scope mesh)
+    """Hardware barrier selected for whole-block, warp, subset, or grid sync."""
+
+    SYNCTHREADS = "syncthreads"
+    SYNCWARP = "syncwarp"
+    BAR_SYNC = "bar_sync"
+    GRID = "grid"
 
 
 @dataclass(frozen=True)
 class Participation:
-    """The participating thread set of a (possibly sliced) sync mesh."""
-    base: int           # linear CTA thread index of the first participant
-    count: int          # number of participating threads
-    block_domain: int   # total threads in the block (topology product)
-    single_warp: bool   # the participants live inside one warp
-    full_cta: bool       # the participants are the whole block
-    lane_mask: int      # __syncwarp mask (only meaningful when single_warp)
+    """Describe a contiguous participant interval and its barrier properties."""
+
+    base: int
+    count: int
+    block_domain: int
+    single_warp: bool
+    full_cta: bool
+    lane_mask: int
 
 
 def _participant_layout(mesh: Mesh) -> "tuple[Layout, int]":
@@ -174,7 +165,7 @@ def participation(mesh: Mesh) -> Participation:
         raise VerifyError("T.sync: a mesh with a dynamic layout cannot be classified")
 
     count = _size(outer)
-    # Linear thread index of each participant: offset + outer(coord).
+
     lins = {offset + _apply(outer, c) for c in range(count)}
     if len(lins) != count:
         raise VerifyError("T.sync: mesh layout maps several coords to one thread (overlap)")
@@ -189,12 +180,8 @@ def participation(mesh: Mesh) -> Participation:
         raise VerifyError("T.sync: participant range exceeds the block thread domain")
 
     full_cta = base == 0 and count == domain
-    single_warp = count <= _WARP_SIZE and (
-        base // _WARP_SIZE == (base + count - 1) // _WARP_SIZE
-    )
-    lane_mask = (
-        (((1 << count) - 1) << (base % _WARP_SIZE)) & 0xFFFFFFFF if single_warp else 0
-    )
+    single_warp = count <= _WARP_SIZE and (base // _WARP_SIZE == (base + count - 1) // _WARP_SIZE)
+    lane_mask = (((1 << count) - 1) << (base % _WARP_SIZE)) & 0xFFFFFFFF if single_warp else 0
     return Participation(
         base=base,
         count=count,
@@ -213,12 +200,8 @@ def classify(mesh: Mesh) -> SyncBarrier:
     """
     topos = mesh.topologies
     if all(t.name == "cta" for t in topos):
-        # A cta-scope mesh maps to the grid-wide barrier; only the full mesh
-        # (no cta slice) has a supported barrier.
         if isinstance(mesh.layout, ComposedLayout):
-            raise VerifyError(
-                "T.sync: a partial grid sync (cta mesh slice) is unsupported"
-            )
+            raise VerifyError("T.sync: a partial grid sync (cta mesh slice) is unsupported")
         return SyncBarrier.GRID
     p = participation(mesh)
     if p.full_cta:

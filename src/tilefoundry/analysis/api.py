@@ -27,19 +27,12 @@ from tilefoundry.target import Target, UnsupportedCapabilityError
 
 @dataclass(frozen=True)
 class AnalysisResult:
-    """What one public Analyze call computed.
+    """Describe what one public analysis call computed.
 
-    ``executed`` is the closure in the order it ran, so a caller can see that a
-    shared dependency ran once. ``metadata_types`` is what the call actually
-    wrote onto the IR, in execution order, rather than what the closure declares
-    it can produce: an analysis that matched nothing contributes no type, so a
-    renderer is not sent looking for records that are not there.
-
-    ``module`` is the Module the call was made against. ``function`` is the
-    function the records were written onto, which is the one passed in unless an
-    extent was chosen for it -- then it is the concrete function derived from
-    that input, because that is what was measured and what carries the results.
-    A reader looking for the records has to be given the function that has them.
+    ``executed`` records dependency order and ``metadata_types`` lists records
+    actually written, excluding analyses that matched nothing. ``function`` is
+    the record-bearing input function unless dimension substitution produced a
+    concrete function; ``module`` remains the call's execution domain.
     """
 
     module: Module
@@ -100,22 +93,13 @@ def analyze(
     options: object | None = None,
     dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult:
-    """Run *analysis* and everything it depends on over *function*.
+    """Run *analysis* and its dependency closure over *function*.
 
-    The Module is the execution domain: it carries the Target the cost model
-    measures against and the topology hierarchy. *level* names the unit for
-    per-unit quantities and defaults to the coarsest declared level.
-
-    *dims* states an extent for each dimension the function declares as a
-    range. An analysis counts elements and compares them against a machine, and
-    neither has an answer for a range, so a function authored for many context
-    lengths is analysed at one of them: the variant covering that length is
-    resolved and its ranges substituted. What is analysed is then that concrete
-    function, and the result says so.
-
-    The function passed in must still be one this Module owns -- a prototype or
-    one of its variants. Substitution happens after that, so nothing loosens
-    which programs a Module will answer for.
+    The module supplies target and topology; *level* defaults to its coarsest
+    level. *dims* selects a specialization and substitutes concrete extents
+    before measurement. The original function must be a prototype or variant
+    owned by the module, and the result identifies the concrete function that
+    received records.
     """
     if not isinstance(module, Module):
         raise TypeError(
@@ -154,10 +138,10 @@ def analyze(
             raise AnalysisError(f"analyze: {error}") from None
     closure = _closure(target, analysis)
 
-    # Both preflights run once for the whole call, before any algorithm: an
-    # analysis reads inferred types and assumes a verified function, so running
-    # one over unchecked IR would report facts about a program that does not
-    # hold together.
+
+
+
+
     functions = _preflight(module, function)
 
     order: list[type[IRMetadata]] = []
@@ -175,8 +159,8 @@ def analyze(
             if metadata_type not in order:
                 order.append(metadata_type)
 
-    # A later member of the same closure may delete what an earlier one wrote,
-    # so what the call produced is only settled once every member has run.
+
+
     final = _metadata_snapshot(functions)
     surviving = {metadata_type for key in written_records & final.keys()
                  for _expr_id, metadata_type in (key,)}

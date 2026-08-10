@@ -1,17 +1,9 @@
-"""Emitter for ``tir.DispatchCall`` — nested ``if`` chain over case patterns.
+"""Emit a dispatch call as an ordered host-side conditional chain.
 
-v0 strategy: emit one ``if`` / ``else if`` clause per case in source order
-(using the half-open ``lo <= S && S < hi`` predicate built from each
-case's ``DimVarRangePat`` against the ``ShapeOf`` subject), then a
-trailing ``else { fallback }``. The fallback is ``Sequential((Abort(),))``
-per the v0 verifier rule and lowers to ``assert(false);`` (works in
-both host wrapper context — where the dispatch entry lives — and
-device context).
-
-Arguments inside each case call are rendered positionally; ``Var``
-args use the codegen context's bound name, and ``ShapeOf(param, axis)``
-args use the canonical shape kernel param name
-``<param.name>_shape_<axis>`` matching the host-wrapper plumbing.
+Range cases use half-open predicates and the verified abort fallback becomes
+``assert(false)``. Calls pass visible arguments positionally; variables use
+bound names and shape expressions use canonical hidden-scalar names matching
+host-wrapper plumbing.
 """
 
 from __future__ import annotations
@@ -66,30 +58,30 @@ def _render_case_predicate(pat: DimVarRangePat, subject_text: str) -> str:
 
 def _emit_symbol_call(call: Evaluate, ctx: CodegenContext) -> None:
     callee_name = call.callable.name
-    # The dispatch op emits from a host-wrapper context. The callee's
-    # C++ wrapper is published under an internal sanitized symbol (see
-    # ``prim_function._internal_wrapper_symbol``) — call that, not the
-    # user-facing name (which is only a TVM FFI export key and may even
-    # collide with ``::main`` for entries literally named ``main``).
+
+
+
+
+
     from tilefoundry.codegen.cuda.tir.prim_function import (  # noqa: PLC0415
         _internal_wrapper_symbol,
     )
-    # The callee is the variant's host wrapper. Its signature only
-    # carries user-visible params (tvm::ffi::Tensor + non-hidden scalar
-    # params); hidden ``<param>_shape_<axis>`` scalars are extracted
-    # locally inside the wrapper from each tensor arg's runtime
-    # ``shape()``. Forwarding them again from the dispatch entry would
-    # mismatch the wrapper signature, so we drop ``ShapeOf`` args here.
+
+
+
+
+
+
     visible_args = tuple(a for a in call.args if not isinstance(a, ShapeOf))
     args_text = ", ".join(_render_arg(a, ctx) for a in visible_args)
     ctx.emit(f"{_internal_wrapper_symbol(callee_name)}({args_text});")
 
 
 def _emit_fallback(fallback: Sequential, ctx: CodegenContext) -> None:
-    # v0 verifier guarantees Sequential((Abort(),)). The dispatch op is
-    # emitted from the entry's host wrapper, where ``__trap()`` (a
-    # ``__device__``-only intrinsic) does not compile. ``assert(false)``
-    # works in both host and device contexts and aborts loudly.
+
+
+
+
     for stmt in fallback.body:
         if isinstance(stmt, Abort):
             ctx.emit("assert(false);")

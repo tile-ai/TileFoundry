@@ -1,5 +1,5 @@
-// CUDA unary op public entries and tags. Included in-context from runtime.cuh
-// inside namespace tilefoundry::ops.
+/// CUDA unary op public entries and tags. Included in-context from runtime.cuh
+/// inside namespace tilefoundry::ops.
 #pragma once
 
 struct rsqrt_op {
@@ -18,10 +18,10 @@ struct relu_op {
 struct square_op {
     template <class T> __device__ T operator()(T x) const { return x * x; }
 };
-// Identity tag: forwards its argument unchanged. ``Unary<identity_op>`` is
-// therefore a plain per-element map — the shared skeleton ``ops::cast`` and
-// ``ops::copy_n`` route through (cast.cuh, copy.cuh); the output-side
-// ``static_cast`` in ``unary_impl::Unary`` performs the actual conversion.
+/// Identity tag: forwards its argument unchanged. ``Unary<identity_op>`` is
+/// therefore a plain per-element map — the shared skeleton ``ops::cast`` and
+/// ``ops::copy_n`` route through (cast.cuh, copy.cuh); the output-side
+/// ``static_cast`` in ``unary_impl::Unary`` performs the actual conversion.
 struct identity_op {
     template <class T> __device__ T operator()(T x) const { return x; }
 };

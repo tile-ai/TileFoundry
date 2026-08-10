@@ -1,5 +1,5 @@
-// CUDA MMA op implementation. Included in-context from ops/mma.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA MMA op implementation. Included in-context from ops/mma.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 namespace mma_detail {
@@ -14,7 +14,7 @@ template <class T> __device__ uint16_t as_u16(T const &x) {
     return out;
 }
 
-} // namespace mma_detail
+}
 
 namespace mma_impl {
 
@@ -51,4 +51,4 @@ struct MmaSm80_16x8x16Bf16 {
     }
 };
 
-} // namespace mma_impl
+}

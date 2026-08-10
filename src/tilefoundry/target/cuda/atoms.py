@@ -21,11 +21,6 @@ from tilefoundry.target import Target, default_target
 from tilefoundry.target.base import target_instance
 from tilefoundry.target.cuda.target import CudaTarget
 
-# The MMA atom catalogue this bridge searches. V1 has exactly the one op
-# registered in ir.tir.cuda.nn.mma._ATOM_TABLE; add its MmaOpSpec here too
-# whenever that table gains an entry -- this is the single extension
-# point (this module cannot, and does not try to, discover
-# _ATOM_TABLE's private keys on its own).
 _MMA_OP_CATALOG: tuple[MmaOpSpec, ...] = (SM80_16x8x16_F32BF16BF16F32_TN,)
 
 
@@ -71,23 +66,13 @@ def _fragment_reg_bytes(fragment: ShardLayout, dtype: DType) -> int:
 
 
 def _roofline_duration_ns(op: MmaOpSpec, target: CudaTarget) -> tuple[float, float]:
-    """Nominal roofline estimate (ns) for *one* atom instance, as ``(duration, compute_only)``.
+    """Estimate nominal compute and traffic time for one CUDA MMA atom.
 
-    Nominal roofline estimate (ns) for *one* atom instance, as
-    ``(duration, compute_only)``.
-
-    Mirrors ``target.cuda.planner._Planner._target_facts`` (:774): compute
-    = flops*1e9*sm_count/(peak_for(dtype)*count), memory =
-    bytes*1e9/hbm_bandwidth, duration = max(compute, memory, 1) -- simplified
-    to a single atom instance (``count=1``, one compute dtype key, no CTA
-    mesh/wave bookkeeping -- that machinery belongs to the CTA planner's P2
-    problem, not to ranking one atom). ``flops`` uses the atom's own MNK
-    (2*m*n*k, mirroring ``target.cuda.cost``'s ``MatMul`` evaluator's
-    ``2*batch*m*k*n`` with batch=1); ``moved_bytes`` is the atom's dense
-    A+B+C tile traffic. The compute-only half is returned separately for a
-    consumer that accounts the surrounding traffic itself. This is a
-    *nominal* estimate -- ``AtomFact.duration`` is an explicit placeholder
-    for a real measured number, not a claim of accuracy.
+    Compute uses the atom's MNK flops, device peak throughput, and SM count;
+    memory uses dense A+B+C bytes and HBM bandwidth. Return the maximum with a
+    one-nanosecond floor and the compute-only time so callers that account for
+    traffic do not charge it twice. This ranks candidates rather than
+    predicting measured performance.
     """
     m, n, k = op.shape_mnk
     flops = 2 * m * n * k

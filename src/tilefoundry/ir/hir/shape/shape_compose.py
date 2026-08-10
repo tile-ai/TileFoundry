@@ -13,9 +13,12 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op(name="shape_compose")
 class ShapeCompose(Op):
     """Assemble a shape from per-axis dims: N rank-0 i64 Exprs → rank-1 shape."""
+
     is_variadic: ClassVar[bool] = True
 
     dims = ParamDef(kind="input", pattern=Tensor)
+
+
 @register_typeinfer(ShapeCompose)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     n = len(call.args)

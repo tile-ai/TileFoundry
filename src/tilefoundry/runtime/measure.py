@@ -26,15 +26,15 @@ _SIGNED_BITS = {
 class Predicate:
     """One comparison, carrying the bound it holds the outputs to."""
 
-    #: how the command line and the report name it
+
     name: ClassVar[str] = ""
-    #: this predicate's own bound fields, in the order they are stated
+
     bounds: ClassVar[tuple[str, ...]] = ()
-    #: false for a predicate that judges the candidate alone
+
     needs_reference: ClassVar[bool] = True
-    #: true when it is meaningful on an integer or boolean output
+
     discrete: ClassVar[bool] = True
-    #: one line, for `check --help`
+
     guidance: ClassVar[str] = ""
 
     def measure(
@@ -90,8 +90,8 @@ class RelL2(Predicate):
         distance = (current - expected).norm().item()
         reference_norm = expected.norm().item()
         if reference_norm <= _NEAR_ZERO:
-            # Dividing by nothing produced a number with no scale to read it
-            # against, so the bound applies to the distance itself.
+
+
             return self._result(
                 {"absolute_l2": distance},
                 distance <= self.max,
@@ -180,8 +180,8 @@ class MaxRel(Predicate):
         current, expected = candidate.float(), reference.float()
         difference = (current - expected).abs()
         magnitude = expected.abs()
-        # An element whose reference is zero has no relative error to state: it
-        # either agrees exactly or it is unbounded.
+
+
         relative = torch.where(
             magnitude > 0,
             difference / magnitude.clamp_min(_NEAR_ZERO),
@@ -208,8 +208,8 @@ class NanInf(Predicate):
         )
 
 
-#: Every predicate a caller may state, by the name it is stated under. `check
-#: --help` lists these, so a predicate added here cannot be missing from it.
+
+
 PREDICATES: Mapping[str, type[Predicate]] = {
     predicate.name: predicate
     for predicate in (AllClose, RelL2, Cosine, Equal, Ulp, MaxAbs, MaxRel, NanInf)
@@ -230,8 +230,8 @@ def _ordered_bits(tensor: torch.Tensor) -> torch.Tensor:
         ) from None
     bits = as_integer.to(torch.int64)
     sign = 1 << (tensor.element_size() * 8 - 1)
-    # A negative float's magnitude grows as its signed bit pattern falls, so the
-    # negative half is reflected rather than used as it stands.
+
+
     return torch.where(bits >= 0, bits, -(bits + sign))
 
 

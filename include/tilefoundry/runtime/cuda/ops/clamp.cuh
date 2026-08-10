@@ -1,5 +1,5 @@
-// CUDA clamp op public entry and tag. Included in-context from runtime.cuh
-// inside namespace tilefoundry::ops.
+/// CUDA clamp op public entry and tag. Included in-context from runtime.cuh
+/// inside namespace tilefoundry::ops.
 #pragma once
 
 struct clamp_op {
@@ -12,10 +12,10 @@ struct clamp_op {
     }
 };
 
-// Routed through the shared ``unary_impl::Unary`` skeleton (unary.cuh):
-// ``clamp_op`` carries its ``(min_val, max_val)`` bounds as functor state,
-// which ``Unary``'s existing single-argument functor call (``op(s(i))``)
-// already supports — no generalisation of ``Unary`` was needed.
+/// Routed through the shared ``unary_impl::Unary`` skeleton (unary.cuh):
+/// ``clamp_op`` carries its ``(min_val, max_val)`` bounds as functor state,
+/// which ``Unary``'s existing single-argument functor call (``op(s(i))``)
+/// already supports — no generalisation of ``Unary`` was needed.
 template <class TIn, class TOut>
 __device__ void clamp(TIn const &src, TOut &dst, int N, float min_val,
                       float max_val) {

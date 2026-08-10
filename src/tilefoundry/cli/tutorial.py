@@ -76,11 +76,11 @@ def _block(reference: str, identity: str) -> str:
         [node.lineno] + [decorator.lineno for decorator in getattr(node, "decorator_list", [])]
     )
     whole = text.splitlines()
-    # Comments are not AST nodes.
+
     while first > 1 and whole[first - 2].lstrip().startswith("#"):
         first -= 1
     lines = whole[first - 1 : node.end_lineno]
-    # Methods are shown as standalone blocks.
+
     margin = min(
         (len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0
     )

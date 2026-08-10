@@ -17,8 +17,6 @@ from tilefoundry.inspection.analysis_report import (
 )
 from tilefoundry.ir.hir.specialize import dim_vars_reached
 
-#: What each root analysis reports. One table, so the flag that asks for an
-#: analysis and the help that explains it cannot name different evidence.
 EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
     "memory": "where that traffic lands, and the footprint it holds live against the capacity",
@@ -26,7 +24,7 @@ EVIDENCE: dict[str, str] = {
     "timeline": "when each value runs under those limits, and over how many units",
 }
 
-# The root analyses `analyze` can be asked for, in the order they are reported.
+
 ANALYSES: tuple[str, ...] = tuple(EVIDENCE)
 
 
@@ -116,9 +114,9 @@ def run_authored_analysis(
     if as_json:
         sys.stdout.write(f"{render_json(data)}\n")
         return 0
-    # The annotated IR and the report are two views of one run, so they choose
-    # what to show the same way: a dependency that ran unrequested is not
-    # commented into the source either.
+
+
+
     annotated = as_script(
         module,
         options=PythonPrintOptions(

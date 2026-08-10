@@ -11,6 +11,8 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op
 class Rank(Op):
     x = ParamDef(kind="input", pattern=Tensor)
+
+
 @register_typeinfer(Rank)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     return TensorType.meta_scalar()

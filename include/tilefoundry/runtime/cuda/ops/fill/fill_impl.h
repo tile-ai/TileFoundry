@@ -1,5 +1,5 @@
-// CUDA fill op implementation. Included in-context from ops/fill.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA fill op implementation. Included in-context from ops/fill.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 namespace fill_impl {
@@ -15,4 +15,4 @@ struct Fill {
     }
 };
 
-} // namespace fill_impl
+}

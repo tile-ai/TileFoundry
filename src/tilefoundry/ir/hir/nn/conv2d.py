@@ -26,10 +26,12 @@ class Conv2D(Op):
 def _i64(value: int) -> Constant:
     return i64_const(value)
 
+
 def _as_expr(v):
     if isinstance(v, Expr):
         return v
     return _i64(int(v))
+
 
 def _out_spatial(in_dim: Expr, k: int, s: int, p: int, d: int) -> Expr:
     """Compute (in + 2*p - d*(k-1) - 1) // s + 1, keeping symbolic dims alive.
@@ -37,17 +39,14 @@ def _out_spatial(in_dim: Expr, k: int, s: int, p: int, d: int) -> Expr:
     If `in_dim` is a Constant the result is also a Constant; otherwise we
     build a `dim.*` Expr tree so downstream passes can simplify.
     """
-    # effective_kernel = d * (k - 1) + 1
     eff_k = d * (k - 1) + 1
-    # ``simplify_dim`` collapses all-Constant chains to a single
-    # Constant at construction time. The explicit
-    # Constant short-circuit above is no longer needed — the
-    # bottom-up fold handles it.
+
     add_pad = simplify_dim(DimAdd, (in_dim, _i64(2 * p)))
     sub_k = simplify_dim(DimSub, (add_pad, _i64(eff_k)))
     div_s = simplify_dim(DimFloorDiv, (sub_k, _i64(s)))
     plus_1 = simplify_dim(DimAdd, (div_s, _i64(1)))
     return plus_1
+
 
 @register_typeinfer(Conv2D)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -64,15 +63,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     sH, sW = op.stride
     pH, pW = op.padding
     dH, dW = op.dilation
-    # weight layout: (O, I/groups, kH, kW). kH / kW must be concrete ints.
+
     kH, kW = static_dim_value(w.shape[2]), static_dim_value(w.shape[3])
     if kH is None or kW is None:
         ctx.error(call, "Conv2D kernel spatial dims (H, W) must be static")
-    # Conv2D is linear in the input for weight/bias held fixed: the output
-    # layout follows only `input`, so a Partial on weight or bias cannot be
-    # preserved.
+
     check_multilinear_partials(
-        ctx, call, (("input", x), ("weight", w), ("bias", bias)), anchor="input",
+        ctx,
+        call,
+        (("input", x), ("weight", w), ("bias", bias)),
+        anchor="input",
     )
     N = x.shape[0]
     C_out = w.shape[0]

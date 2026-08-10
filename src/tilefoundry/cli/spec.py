@@ -9,13 +9,12 @@ from pathlib import Path
 from tilefoundry.cli import data
 from tilefoundry.utils.markdown import headings
 
-#: Topic names that differ from their document's filename.
 _SPEC_TOPICS = {
     "cli": "cli",
     "dsl": "hir",
 }
 
-#: The document title is not a section anybody asks for by name.
+
 _ADDRESSABLE = 2
 
 
@@ -61,8 +60,8 @@ def _slug(text: str) -> str:
 def _key_and_title(heading) -> tuple[str, str]:
     if heading.number is not None:
         return heading.number, heading.title
-    # An unnumbered heading still has to be addressable: most of the op catalogue
-    # is unnumbered, and a section nobody can name is a section nobody can read.
+
+
     return _slug(heading.title), heading.title
 
 
@@ -87,8 +86,8 @@ def _disambiguate(bases: list[str], ancestries: list[tuple[str, ...]]) -> list[s
             index for index in clashing if depths[index] < len(ancestries[index])
         ]
         if not deepened:
-            # Two headings with the same name and the same ancestry are only
-            # distinguishable by which came first.
+
+
             seen: Counter[str] = Counter()
             for index in clashing:
                 seen[keys[index]] += 1
@@ -121,7 +120,7 @@ def sections(text: str) -> tuple[Section, ...]:
         Section(key=key, title=title, level=level, start=start, end=len(lines))
         for key, (level, _, title, start) in zip(keys, scanned)
     ]
-    # A section ends where the next one at its level or above begins.
+
     for index, section in enumerate(found):
         for later in found[index + 1 :]:
             if later.level <= section.level:
@@ -155,7 +154,7 @@ def render_outline(topic: str) -> str:
     found = sections(read_spec(topic))
     if not found:
         return f"{topic}: no sections\n"
-    # Capped: one long key would otherwise push every title across the screen.
+
     width = min(24, max(len(section.key) for section in found))
     lines = [f"{topic} ({spec_path(topic).name}):", ""]
     for section in found:

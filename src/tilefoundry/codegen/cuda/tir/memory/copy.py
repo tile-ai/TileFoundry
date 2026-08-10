@@ -33,9 +33,9 @@ def _emit(call, ctx: CodegenContext) -> None:
     dst = _tensor_expr(destination, ctx)
     src_shard = _is_shard(source)
     dst_shard = _is_shard(destination)
-    # Runtime-N path: any DimVar in either operand's shape means the
-    # static cute extents would over-iterate the user's buffer. Emit a
-    # runtime-bounded ``tilefoundry::ops::copy_n`` instead.
+
+
+
     if not src_shard and not dst_shard and (
         _has_dyn_shape(source) or _has_dyn_shape(destination)
     ):

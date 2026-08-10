@@ -32,9 +32,7 @@ def numel(type: Type) -> int:
                 from .substitute import dim_vars_by_name  # noqa: PLC0415
 
                 names = dim_vars_by_name(dim)
-                hint = (
-                    f"; bind it with --dim {next(iter(names))}=EXTENT" if names else ""
-                )
+                hint = f"; bind it with --dim {next(iter(names))}=EXTENT" if names else ""
                 raise ValueError(f"numel: tensor extent {dim!r} is not concrete{hint}")
             if dim < 0:
                 raise ValueError(f"numel: tensor extent {dim} is negative")
@@ -69,8 +67,6 @@ def make_tensor_type(
     return TensorType(shape=tuple(shape), dtype=dtype, layout=layout, storage=storage)
 
 
-
-
 def make_shard_tensor_type(
     shape: tuple,
     dtype: DType = DType.f32,
@@ -78,16 +74,13 @@ def make_shard_tensor_type(
     mesh: Optional[Mesh] = None,
     attrs: tuple = (),
 ) -> "TensorType":
-    """Create shard tensor type.
+    """Build a canonical sharded ``TensorType`` from its logical description.
 
-    Build the canonical sharded ``TensorType`` (``docs/spec/shard.md``
-    [shard §7.1.1](docs/spec/shard.md#711-layoutshape)) from a logical description: ``shape`` is the logical tensor
-    shape, ``attrs`` is one entry per mesh axis (``Split(logical_axis)`` /
-    ``Broadcast()`` / ``Partial(reduction)``). ``mesh=None`` / ``attrs=()``
-    yields a plain (unsharded) ``TensorType``; otherwise the layout is built
-    by the shared :func:`canonical_shard_layout` (also used by
-    ``derive_output_shard_layout``'s synthesis fallback, so the two
-    producers of a [shard §7.1.1](docs/spec/shard.md#711-layoutshape) layout always agree).
+    ``attrs`` contains one entry per mesh axis. With no mesh or attributes the
+    result is unsharded; otherwise :func:`canonical_shard_layout` supplies the
+    shared canonical representation.
+
+    See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     shape = tuple(shape)
     if mesh is None or not attrs:
@@ -96,9 +89,7 @@ def make_shard_tensor_type(
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 
-def local_type_of(
-    type: Type, *, level: str, topologies: tuple[Topology, ...]
-) -> Type:
+def local_type_of(type: Type, *, level: str, topologies: tuple[Topology, ...]) -> Type:
     """Project every tensor leaf to what one unit of *level* holds.
 
     A ``Split`` at *level* or a coarser declared level divides. Finer splits do
@@ -116,10 +107,11 @@ def local_type_of(
     if len(levels) != len(topologies):
         raise ValueError("local_type_of: topology level names must be unique")
     if isinstance(type, TupleType):
-        return TupleType(fields=tuple(
-            local_type_of(field, level=level, topologies=topologies)
-            for field in type.fields
-        ))
+        return TupleType(
+            fields=tuple(
+                local_type_of(field, level=level, topologies=topologies) for field in type.fields
+            )
+        )
     if not isinstance(type, TensorType):
         return type
     layout = type.layout
@@ -129,9 +121,7 @@ def local_type_of(
         return type
     if isinstance(layout, ShardLayout):
         return TensorType(
-            shape=_local_layout_shape(
-                layout, selected_level=levels[level], topologies=topologies
-            ),
+            shape=_local_layout_shape(layout, selected_level=levels[level], topologies=topologies),
             dtype=type.dtype,
             layout=layout,
             storage=type.storage,
@@ -153,27 +143,21 @@ def _nested_layout_shape(
     layout: object, *, selected_level: int, topologies: tuple[Topology, ...]
 ) -> tuple:
     if isinstance(layout, ShardLayout):
-        return _local_layout_shape(
-            layout, selected_level=selected_level, topologies=topologies
-        )
+        return _local_layout_shape(layout, selected_level=selected_level, topologies=topologies)
     if isinstance(layout, (Layout, ComposedLayout)):
         return tuple(layout.shape)
     raise ValueError(
-        f"local_type_of: unresolved layout {layout!r}; local projection requires "
-        "a resolved Layout"
+        f"local_type_of: unresolved layout {layout!r}; local projection requires a resolved Layout"
     )
 
 
 def _local_layout_shape(
     layout: ShardLayout, *, selected_level: int, topologies: tuple[Topology, ...]
 ) -> tuple[int, ...]:
-    shape = list(_nested_layout_shape(
-        layout.layout, selected_level=selected_level, topologies=topologies
-    ))
-    declared = {
-        topology.name: (index, topology.size)
-        for index, topology in enumerate(topologies)
-    }
+    shape = list(
+        _nested_layout_shape(layout.layout, selected_level=selected_level, topologies=topologies)
+    )
+    declared = {topology.name: (index, topology.size) for index, topology in enumerate(topologies)}
     if len(layout.mesh.topologies) > 1:
         raise ValueError(
             "local_type_of: one mesh names multiple topology levels; "
@@ -182,17 +166,13 @@ def _local_layout_shape(
     (topology,) = layout.mesh.topologies
     resolved = declared.get(topology.name)
     if resolved is None:
-        raise ValueError(
-            f"local_type_of: shard uses undeclared topology level {topology.name!r}"
-        )
+        raise ValueError(f"local_type_of: shard uses undeclared topology level {topology.name!r}")
     topology_level, resolved_extent = resolved
     mesh_shape = layout.mesh.layout.shape
     launch_split_axes = tuple(
         mesh_axis
         for mesh_axis, attr in enumerate(layout.attrs)
-        if isinstance(attr, Split)
-        and mesh_axis < len(mesh_shape)
-        and mesh_shape[mesh_axis] is None
+        if isinstance(attr, Split) and mesh_axis < len(mesh_shape) and mesh_shape[mesh_axis] is None
     )
     if topology_level <= selected_level and len(launch_split_axes) > 1:
         raise ValueError(

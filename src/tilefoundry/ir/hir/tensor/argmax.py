@@ -4,6 +4,7 @@ SGLang baseline kernel H3 (greedy sampling). Returns int64 indices along the
 reduction axis; ``keepdim=False``.
 
 """
+
 from __future__ import annotations
 
 import isl
@@ -36,6 +37,8 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class ArgMax(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int, default=-1)
+
+
 @register_typeinfer(ArgMax)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
@@ -47,7 +50,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         axis += rank
     if axis < 0 or axis >= rank:
         ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
-    # The winning index is not recoverable from a partial (per-shard) reduction.
+
     reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
     new_layout = (
@@ -67,9 +70,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else canonical_shard_layout(
-                out_shape, x_ty.layout.mesh, x_ty.layout.attrs
-            )
+            else canonical_shard_layout(out_shape, x_ty.layout.mesh, x_ty.layout.attrs)
         )
     return TensorType(
         shape=out_shape,
@@ -95,6 +96,7 @@ def _argmax_type_relation(call: "Call", input_types, ctx) -> AccessRelationResul
         ),
     )
 
+
 @register_access_relation(ArgMax)
 def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
     """GLOBAL: input scanned over the reduction axis (isl.map).
@@ -114,10 +116,9 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRela
         in_rel = isl.map(f"{{ [{out_dims}] -> [{in_dims}] }}")
         out_id = isl.multi_aff(f"{{ [{out_dims}] -> [{out_dims}] }}")
     else:
-        # rank-1 input → scalar output (rank-0 not constructible; ArgMax of
-        # a rank-1 vector returns a scalar i64; degenerate ISL form).
         in_rel = isl.map(f"{{ [] -> [{in_dims}] }}")
         out_id = isl.multi_aff("{ [] -> [] }")
     return AccessRelations(inputs=(in_rel,), outputs=(out_id,))
+
 
 __all__ = ["ArgMax"]

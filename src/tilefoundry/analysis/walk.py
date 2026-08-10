@@ -1,11 +1,7 @@
-"""How every analysis reads the authored program.
+"""Provide target-independent readings of authored IR for every analysis.
 
-An analysis family decides what a number means; none of them should decide what
-"the values of this function" or "the bytes of this type" means. Those readings
-live here once, so two families cannot disagree about the program they measured.
-
-Nothing here consults a Target. The traversal order, the tensor leaves of a
-type, and a type's byte size are properties of the authored IR alone.
+Traversal order, function values, tensor leaves, and type byte sizes live here
+so analysis families measure the same program consistently.
 """
 
 from __future__ import annotations
@@ -44,30 +40,12 @@ def children(expr: Expr) -> tuple[Expr, ...]:
 
 
 def enclosing_trips(root: Expr | None) -> dict[int, int]:
-    """How many times each value under *root* is produced, by loop nesting.
+    """Return production counts for values repeated by enclosing loops.
 
-    A `GridRegionExpr` is one Expr standing for a loop, so a walk of the body visits
-    each of its calls once while the program runs them once per trip. Charging them
-    once is charging a tiled kernel for one tile: a K-loop over twenty-four blocks
-    and a column loop over a hundred and forty come back as a kernel doing a
-    two-thousandth of its arithmetic, which is not a small error in a compiler whose
-    subject is tiling.
-
-    Which values a loop repeats is not "everything the body reaches". The body reads
-    values defined before the loop -- a blocked weight, a normalised input -- and
-    those are computed once however many trips run. What repeats is what changes
-    between trips, and the IR says which those are: a value repeats exactly when it
-    depends on the loop's induction variable or on one of its carried arguments.
-
-    Getting that wrong is not a small overcount. Two loops in sequence are nested by
-    data dependence -- the second body reads the first loop's result -- so charging
-    everything the body reaches would multiply the first loop's arithmetic by the
-    second loop's trips as well, and a tiled MLP comes back thirty-four times its own
-    cost instead of a thousandth of it.
-
-    Keyed by `id`, like the rest of this module, because the body is an SSA DAG and a
-    value is the object that defines it. A value no loop repeats maps to one; the map
-    holds only what repeats, so a caller uses `.get(id(expr), 1)`.
+    A value repeats only when it depends on a loop induction variable or carried
+    argument; invariant values reached by a body remain single computations.
+    Counts multiply through true nesting and are keyed by object identity for
+    the SSA DAG. Values absent from the returned map have a count of one.
     """
     if root is None:
         return {}
@@ -84,17 +62,12 @@ def enclosing_trips(root: Expr | None) -> dict[int, int]:
 
 
 def _repeated_by(loop: GridRegionExpr) -> set[int]:
-    """The ids of the values *loop* recomputes on every trip.
+    """Return ids of values *loop* recomputes on every trip.
 
-    A value depending on the induction variable or on a carried argument is a
-    different value each trip; one depending on neither is the same value every
-    trip, whatever else it is an operand of. Walked in definition order so a
-    dependence is known before its consumer is asked about.
-
-    Every yielded value is walked as well as the body, because a loop carrying two
-    accumulators keeps one chain under `body` and the other under `yield_values` --
-    walking only the body finds one of the two matmuls a tiled MLP performs and
-    charges the other once.
+    Values depending on the induction variable or a carried argument change each
+    trip; all others remain invariant. Walk the body and every yielded value in
+    definition order so dependencies are known before consumers and every carried
+    chain contributes its repeated work.
     """
     seeds = {id(loop.induction_var), *(id(carried) for carried in loop.carried_args)}
     repeated: set[int] = set()

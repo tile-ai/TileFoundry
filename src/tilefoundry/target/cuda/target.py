@@ -46,10 +46,10 @@ class CudaTarget(Target):
     )
     architecture: Architecture = field(init=False)
     device: Device = field(init=False)
-    # Identity and digest record where a value came from, not what it says, so
-    # they stay out of equality: two targets carrying identical facts must group
-    # together for codegen even when one was selected by ID and one supplied
-    # directly.
+
+
+
+
     architecture_id: str | None = field(default=None, init=False, compare=False)
     device_id: str | None = field(default=None, init=False, compare=False)
     architecture_digest: str | None = field(default=None, init=False, compare=False)

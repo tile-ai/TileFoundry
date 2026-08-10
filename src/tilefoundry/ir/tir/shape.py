@@ -6,6 +6,7 @@ parameter ``<param.name>_shape_<axis>`` introduced for the enclosing
 ``PrimFunction``; the host wrapper extracts that scalar from the
 runtime tensor's shape.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from tilefoundry.ir.types.tensor_type import DType, TensorType
 @dataclass(frozen=True)
 class ShapeOf(Expr):
     """Runtime shape value of a parameter's tensor at a given axis."""
+
     param: Var
     axis: int
 
@@ -41,7 +43,7 @@ def parse_shape_var_name(name: str) -> tuple[str, int] | None:
     if not base:
         return None
     try:
-        axis = int(name[idx + len(marker):])
+        axis = int(name[idx + len(marker) :])
     except ValueError:
         return None
     return base, axis

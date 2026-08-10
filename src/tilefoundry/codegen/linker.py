@@ -32,7 +32,7 @@ class LinkedModule:
 def _render_cmakelists(*, name: str, includes: list[str], device_options: str, cuda_arch: str) -> str:
     """Render the split-pipeline CMake project from its Jinja template."""
     # noqa lazy: jinja2 is already a codegen dep; import here keeps the linker
-    # load path light and avoids a hard import at module load.
+
     from jinja2 import (  # noqa: PLC0415
         Environment,
         FileSystemLoader,
@@ -51,7 +51,7 @@ def _render_cmakelists(*, name: str, includes: list[str], device_options: str, c
 
 def _tvm_ffi_include() -> Path:
     # noqa lazy: tvm_ffi is an optional runtime dep; only required when
-    # actually launching kernels, so avoid an import-time hard dep.
+
     import tvm_ffi  # noqa: PLC0415
     return Path(tvm_ffi.__file__).resolve().parent / "include"
 
@@ -96,11 +96,11 @@ def link_modules(
     (workdir / "device.cu").write_text(cu[0].source)
     (workdir / "host.cpp").write_text(cpp[0].source)
 
-    # Device include set + nvcc flags. The arch is parameterized: the CMake
-    # target's ``CUDA_ARCHITECTURES {cuda_arch}`` emits both ``compute_<arch>``
-    # PTX and ``sm_<arch>`` SASS; ``-fPIC`` by ``POSITION_INDEPENDENT_CODE``;
-    # ``-static-libstdc++`` by the template's link options. The host compiler
-    # reuses the same include set.
+
+
+
+
+
     tvm_inc = _tvm_ffi_include()
     includes = [_DEFAULT_INCLUDE, _DEFAULT_CUTLASS_INCLUDE, tvm_inc, *include_dirs]
     device_options = ";".join(("-Wno-deprecated-gpu-targets", *extra_nvcc_flags))
@@ -113,9 +113,9 @@ def link_modules(
     (workdir / "CMakeLists.txt").write_text(cmake_text)
 
     build_dir = workdir / "build"
-    # No CMAKE_BUILD_TYPE: keep the prior compile semantics (no -O3 / -DNDEBUG
-    # injected) — nvcc still optimizes device code by default, the host wrapper
-    # keeps its asserts.
+
+
+
     configure_cmd = [
         "cmake", "-G", "Ninja", "-S", str(workdir), "-B", str(build_dir),
         f"-DCMAKE_CUDA_COMPILER={nvcc}", f"-DCMAKE_CXX_COMPILER={host_cxx}",

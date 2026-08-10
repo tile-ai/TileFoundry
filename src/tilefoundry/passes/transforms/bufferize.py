@@ -48,18 +48,11 @@ class Placement:
 
 
 class LifetimeCollector(StmtVisitor):
-    """Represent LifetimeCollector.
+    """Collect allocation bindings and lifetimes from a primitive function.
 
-    Walk a ``PrimFunction`` body and collect every ``LetStmt`` that binds
-    a ``Call(AllocTensor, ...)`` together with its lifetime range.
-
-    Traversal completeness (``For`` / ``While`` / ``If`` / ``MeshScope`` /
-    ``DispatchCall`` descent, including its ``case_calls`` / ``fallback``
-    arms) is owned by ``StmtVisitor``'s ``_stmt_children`` table, not by
-    this class. MVP impl emits a flat list in pre-order. Subclasses can
-    override ``collect`` to do real liveness analysis (use-def dataflow).
-    The hook boundary is intentionally narrow so swapping it does not
-    ripple into the pass.
+    Statement traversal owns control-flow completeness. The default emits a flat
+    preorder list; subclasses may replace ``collect`` with use-def liveness
+    analysis without changing the bufferization pass.
     """
 
     def collect(self, fn: PrimFunction) -> tuple[BufferEntry, ...]:
@@ -127,8 +120,8 @@ class BufferizePass(PrimFuncPass):
     ) -> PrimFunction:
         entries = self.collector.collect(fn)
         self.scheduler.schedule(entries)
-        # MVP trivial policy: independent physical allocation per logical
-        # buffer == the IR we already have. Return identity.
+
+
         return fn
 
 

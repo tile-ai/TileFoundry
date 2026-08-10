@@ -8,6 +8,7 @@ along the last (head_dim) axis, using precomputed cos/sin caches indexed by
 Multi-output op: returns a tuple ``(q_rope, k_rope)``. Both share input shape /
 dtype / layout / storage with their respective Q / K input.
 """
+
 from __future__ import annotations
 
 import isl
@@ -35,6 +36,7 @@ from tilefoundry.visitor_registry.isl_utility import to_domain
 @register_op
 class RoPE(Op):
     """Rotary position embedding on Q and K. ``head_dim`` must be even."""
+
     q = ParamDef(kind="input", pattern=Tensor)
     k = ParamDef(kind="input", pattern=Tensor)
     cos_cache = ParamDef(kind="input", pattern=Tensor)
@@ -57,24 +59,25 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         ctx.error(call, f"q head_dim {head_dim_q} must be even")
     if isinstance(head_dim_k, int) and head_dim_k % 2 != 0:
         ctx.error(call, f"k head_dim {head_dim_k} must be even")
-    if (
-        isinstance(head_dim_q, int)
-        and isinstance(head_dim_k, int)
-        and head_dim_q != head_dim_k
-    ):
+    if isinstance(head_dim_q, int) and isinstance(head_dim_k, int) and head_dim_q != head_dim_k:
         ctx.error(call, f"q head_dim {head_dim_q} != k head_dim {head_dim_k}")
-    # q*cos + rotate_half(q)*sin is multilinear in each value input. Each
-    # output branch therefore allows one sum Partial (on q or k, the anchor
-    # the output tuple preserves) only when the caches are replicated.
+
     check_multilinear_partials(
-        ctx, call, (("q", q_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)), anchor="q",
+        ctx,
+        call,
+        (("q", q_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+        anchor="q",
     )
     check_multilinear_partials(
-        ctx, call, (("k", k_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)), anchor="k",
+        ctx,
+        call,
+        (("k", k_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+        anchor="k",
     )
-    # Indexed cache access does not commute with a partial (per-shard) pos_ids.
+
     reject_partials(ctx, call, "pos_ids", pos_ty.layout)
     return TupleType(fields=(q_ty, k_ty))
+
 
 @register_access_relation(RoPE)
 def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
@@ -103,21 +106,14 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         outputs=(q_id, k_id),
     )
 
+
 @register_type_relation(RoPE)
 def _rope_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for one RoPE branch.
+    """Build the forward relation for one independently modeled RoPE branch.
 
-    Forward relation for one RoPE branch: the value input paired with
-    itself (``x, x, cos, sin, pos``) -- GQA's Hq != Hkv means q_rope and
-    k_rope cannot share one domain, so ``analysis.poly``'s
-    ``_rope_access`` calls this once per branch (q or k) and keeps only
-    that branch's maps.
-
-    cos_cache/sin_cache access is seq+head_dim identity, batch/head
-    broadcast: V1 assumes prefill ``pos_ids == arange(seq)``, so
-    ``cos_cache[pos_ids[s]] == cos_cache[s]`` -- the data-dependent gather
-    degenerates to a plain seq-axis identity. pos_ids itself gets the same
-    seq-identity access (decode's arbitrary pos_ids is a backlog item).
+    The value input is paired with itself so Q and K may have different head
+    counts. Cache access is identity on sequence and head dimension with batch
+    and head broadcast; this models prefill positions as ``arange(seq)``.
     """
     x_ty, x2_ty, cos_ty, sin_ty, pos_ty = input_types
     if x_ty.shape != x2_ty.shape:
@@ -142,16 +138,14 @@ def _rope_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     x_map = isl.map("{ [d0,d1,d2,d3] -> [d0,d1,d2,d3] }")
     cache_map = isl.map("{ [d0,d1,d2,d3] -> [d1,d3] }")
     pos_map = isl.map("{ [d0,d1,d2,d3] -> [d1] }")
-    # boundary order: q, k, cos_cache, sin_cache, pos_ids, q_rope, k_rope --
-    # q/k slots and both outputs share x_map since x is paired with itself.
+
     maps = (x_map, x_map, cache_map, cache_map, pos_map, x_map, x_map)
     return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
+
 @register_eval(RoPE)
 def _eval_rope(ctx):
-    # Layout is [batch, seq, head, head_dim]: cos/sin are gathered per token
-    # from the caches by ``pos_ids`` and broadcast over the batch and head axes.
-    # The rotation is the rotate-half form q*cos + rotate_half(q)*sin.
+
     q = ctx.args[0].data.float()
     k = ctx.args[1].data.float()
     pos = ctx.args[4].data.reshape(-1).long()

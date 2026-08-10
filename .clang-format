@@ -10,3 +10,4 @@ ConstructorInitializerAllOnOneLineOrOnePerLine: true
 # CuTe / CUTLASS headers are include-order-sensitive (cute/tensor.hpp must come
 # first); never reorder includes.
 SortIncludes: false
+FixNamespaceComments: false

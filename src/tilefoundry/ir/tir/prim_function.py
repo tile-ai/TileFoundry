@@ -17,14 +17,14 @@ def _default_target():
 
 @dataclass(frozen=True)
 class PrimFunction(Stmt):
-    """tir function container. No return value (@prim_func is effect-only).
+    """Contain an effect-only TIR function as a statement.
 
-    Inherits ``Stmt`` per [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs) — PrimFunction sits inside the tir
-    stmt tree rather than outside it. Body is a ``Sequential`` wrapper.
+    The body is ``Sequential``. ``output_count`` records trailing output
+    parameters for callable type construction.
 
-    ``output_count`` records the number of trailing output parameters (set
-    by the lowering pass, consumed by codegen → CallableType).
+    See [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs).
     """
+
     name: str
     params: tuple[Var, ...]
     body: Sequential

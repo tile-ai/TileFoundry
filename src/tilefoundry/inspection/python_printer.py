@@ -66,7 +66,6 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import _expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
-# ``Op class → infix symbol`` for dim-arithmetic shape entry rendering.
 _DIM_INFIX_OPS: dict[type, str] = {
     DimAdd: "+",
     DimSub: "-",
@@ -75,7 +74,7 @@ _DIM_INFIX_OPS: dict[type, str] = {
     DimMod: "%",
 }
 
-# Dim ops without a natural infix form get function-style rendering.
+
 _DIM_FUNC_OPS: dict[type, str] = {
     DimMin: "min",
     DimMax: "max",
@@ -101,18 +100,11 @@ def _compact_type(ty: object) -> str:
 
 
 def _comments(expr: Expr, options: PythonPrintOptions) -> str:
-    """The same-line annotations for one printed statement.
+    """Return same-line annotations for one printed statement.
 
-    The binding label is not among them. It is the name on the left of the very
-    line these comments sit on -- printing it again as ``loc="x"`` said ``x``
-    twice, and said the *emitted* name at that, so the one thing a second copy
-    could have carried (that two printed values share one authored label) was
-    what it dropped. Importing the emitted file recovers the label from the
-    left-hand side.
-
-    The type carries no key either. The fragment is a type, which is what a type
-    annotation looks like, so ``type=`` in front of it was a word saying what the
-    reader can already see.
+    Omit the binding because the left-hand side already carries its emitted name
+    and importing recovers it there. Emit types as annotation fragments without
+    a redundant ``type=`` key.
     """
     comments: list[str] = []
     if options.show_types:
@@ -128,19 +120,13 @@ def _comments(expr: Expr, options: PythonPrintOptions) -> str:
 
 
 def shape_entry_str(entry: object) -> str:
-    """Render one ``TensorType.shape`` entry as a human-readable string.
+    """Render one tensor shape entry in canonical human-readable form.
 
-    A ``ShapeDim`` entry is one of:
-    - a static ``int``;
-    - a ``DimVar`` (Op instance) — rendered as its ``name``;
-    - a dim-arithmetic ``Expr`` tree built from ``DimAdd`` / ``DimSub``
-      / ``DimMul`` / ``DimFloorDiv`` / ``DimMod`` / ``DimMin`` /
-      ``DimMax`` ops — rendered as ``"<lhs> + <rhs>"`` (etc.) or
-      ``"min(<a>, <b>)"`` for function-style ops.
-
-    Used by ``_shape_tuple`` and the viewer label path so that a shape
-    like ``(1, 2, DimAdd(CTX_LEN, 1), 256)`` prints as
-    ``(1, 2, CTX_LEN + 1, 256)`` rather than the dataclass repr.
+    Static integers remain literals, dimension variables use their names, and
+    arithmetic expression trees use infix or function syntax. The printer and
+    viewer share this rendering instead of exposing dataclass representations.
+    See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions) and
+    [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
     """
     if isinstance(entry, bool):
         return repr(entry)
@@ -171,21 +157,12 @@ def shape_entry_str(entry: object) -> str:
 def _classify_shard_attrs(
     sl: ShardLayout, mesh_name: str
 ) -> tuple[dict[int, list[str]], list[str]] | None:
-    """Classify ``sl.attrs`` into ``(splits, partials)``.
+    """Classify shard attributes into layout-axis splits and partials.
 
-    ``splits`` maps each ``Split``'s **layout** axis to the ordered
-    ``mesh.axis`` refs bound there (more than one entry when nested mesh axes
-    split the same layout axis); ``partials`` is the ordered ``mesh.axis @
-    P("reduction")`` suffix for every ``Partial``. ``Broadcast`` is omitted.
-
-    Returns ``None`` — caller falls back to the verbose ``ShardLayout(...)``
-    form — when the attr count doesn't match the mesh rank, a ``Split``
-    targets an out-of-range layout axis, or an attr is none of ``Split`` /
-    ``Partial`` / ``Broadcast``.
-
-    Shared by ``_shard_layout_surface_str`` (keeps the layout-axis keying)
-    and ``shard_compact_inline`` (remaps onto tensor axis via
-    ``layout_axis_to_tensor_axis``).
+    Preserve mesh-axis order, allow nested axes to split one layout axis, and
+    omit broadcasts. Return ``None`` for rank mismatch, invalid axes, or unknown
+    attributes so callers use verbose fallback. Surface and compact renderers
+    share the result, with the latter remapping splits onto tensor axes.
     """
     layout = sl.layout
     if not isinstance(layout, Layout) or len(sl.attrs) != len(sl.mesh.layout.shape):
@@ -214,17 +191,11 @@ def _shard_layout_surface_str(
     *,
     mesh_unique: bool = False,
 ) -> str | None:
-    """Canonical shard-layout sugar (parser layout-sugar outer-tuple form).
+    """Render canonical parser sugar for a shard layout.
 
-    Canonical shard-layout sugar (parser layout-sugar outer-tuple form):
-    - ``(dims)``                          implicit strides, no value-state
-    - ``((dims), (strides))``             explicit strides
-    - ``((dims), {mesh.axis @ P(...)})``  value-state (Partial) set
-    - ``((dims), (strides), {...})``      explicit strides + value-state
-
-    ``Split`` is inlined on its layout dim; ``Partial`` is a mesh-axis value
-    state rendered in the ``{...}`` set; ``Broadcast`` is omitted. Returns
-    ``None`` when the layout cannot be expressed in sugar (verbose fallback).
+    Inline splits on layout dimensions, emit partial value states as a set, and
+    omit broadcasts. Include explicit strides only when present. Return ``None``
+    when sugar cannot express the layout so callers use verbose fallback.
     """
     layout = sl.layout
     if not isinstance(layout, Layout):
@@ -234,7 +205,7 @@ def _shard_layout_surface_str(
         return None
     splits, partials = classified
 
-    # All-Broadcast in a multi-mesh context is ambiguous → verbose fallback.
+
     if not splits and not partials and not mesh_unique:
         return None
 
@@ -265,20 +236,12 @@ def _shard_layout_surface_str(
 def shard_compact_inline(
     sl: ShardLayout, mesh_name: str, tensor_shape: tuple
 ) -> tuple[dict[int, str], list[str]] | None:
-    """Decompose a ``ShardLayout`` for the compact display form.
+    """Decompose a shard layout for compact tensor-axis display.
 
-    Maps each ``Split`` onto the tensor axis it lives in (so the shape can carry
-    an inline ``size @ mesh.axis``) and collects ``Partial`` value states as
-    ``mesh.axis @ P("reduction")``; ``Broadcast`` is omitted.
-
-    Returns ``(split_ref_by_tensor_axis, partials)`` — a dict from tensor axis to
-    the ``mesh.axis`` reference plus the ordered partial-suffix entries — or
-    ``None`` when the layout cannot be inlined onto the tensor shape (a tensor
-    axis split across more than one layout position, an out-of-range or unknown
-    attr, or a rank mismatch), in which case the caller falls back to canonical.
-
-    Shares the ``Split`` / ``Partial`` / ``Broadcast`` classification with the
-    canonical ``_shard_layout_surface_str`` via ``_classify_shard_attrs``.
+    Map splits to tensor axes, collect ordered partial states, and omit
+    broadcasts. Return ``None`` for ambiguous split positions, invalid axes,
+    unknown attributes, or rank mismatch so callers fall back to canonical
+    rendering. Attribute classification is shared with surface rendering.
     """
     layout = sl.layout
     if not isinstance(layout, Layout):
@@ -291,10 +254,10 @@ def shard_compact_inline(
     split_ref: dict[int, str] = {}
     for layout_axis, refs in splits.items():
         if len(refs) != 1:
-            return None  # same layout axis split by more than one mesh axis
+            return None
         t_axis = la2ta[layout_axis]
         if t_axis in split_ref:
-            return None  # tensor axis split across multiple layout positions
+            return None
         split_ref[t_axis] = refs[0]
     return split_ref, partials
 
@@ -456,18 +419,11 @@ def _tensor_annotation(
 
 
 def _op_name(target) -> str:
-    """Python DSL function name for an Op.
+    """Return the Python DSL function name for an operation.
 
-    Resolution order:
-
-    1. Kinded ``Binary`` / ``Unary`` instances render as
-       their surface alias (``add`` / ``cmp_eq`` / ``neg`` / ...) —
-       not as ``binary(..., kind=BinaryKind.ADD)`` which would fail on import
-       without ``BinaryKind`` in scope.
-    2. ``target._op_schema.name`` — set by ``@register_op``; this is
-       the canonical DSL name and works for ops with non-trivial class
-       names (e.g. ``Mma_SM80_16x8x16`` → ``mma_sm80_16x8x16``).
-    3. CamelCase → snake_case fallback.
+    Prefer surface aliases for kinded binary and unary operations, then the
+    registered operation schema name, then a snake-case class-name fallback.
+    Surface aliases keep emitted source importable without enum names in scope.
     """
     if isinstance(target, HirFunction):
         return target.name
@@ -712,26 +668,26 @@ def _emit_def(
     """
     lines: list[str] = []
 
-    # Collect all SSA values and assign names.
+
     _counter = [0]
     _names: dict[int, str] = {}
 
-    # Topological sort: post-order from body, via the shared iter_exprs
-    # generator (one _seen set shared across body + params).
+
+
     _seen: set[int] = set()
     _order: list[Expr] = list(iter_exprs(fn.body, _seen))
     for p in fn.params:
         _order.extend(iter_exprs(p, _seen))
 
-    # Collect op names first (must be before _assign_name references them)
+
     _op_names_set: set[str] = set()
     for expr in _order:
         if isinstance(expr, Call):
             _op_names_set.add(_op_name(expr.target))
 
     _forced_names: dict[int, str] = {}
-    # Reuse iter_exprs' dedup-set parameter as the "reachable ids" accumulator
-    # for each grid region's internal / init subtrees.
+
+
     _grid_internal_ids: set[int] = set()
     _grid_init_ids: set[int] = set()
 
@@ -770,7 +726,7 @@ def _emit_def(
         if key in _forced_names and name in _names.values():
             _names[key] = name
             return name
-        # Avoid shadowing op names when assigning a call result.
+
         if name in _op_names_set:
             name = f"{name}_out"
         base = name
@@ -781,7 +737,7 @@ def _emit_def(
         _names[key] = name
         return name
 
-    # Assign names
+
     for expr in _order:
         _assign_name(expr)
     for expr in _order:
@@ -805,9 +761,9 @@ def _emit_def(
             grid = expr.args[0]
             return _names[id(grid.carried_args[expr.target.index])]
         if isinstance(expr, GridRegionExpr):
-            # A loop is emitted as a `for` statement, so it binds no name of
-            # its own: what it leaves behind is its carried values, under the
-            # names the carries already have.
+
+
+
             carried = tuple(_names[id(carry)] for carry in expr.carried_args)
             if len(carried) == 1:
                 return carried[0]
@@ -815,13 +771,13 @@ def _emit_def(
         return _names[id(expr)]
 
     def _arg_ref(a) -> str:
-        # A tuple-valued input (e.g. insert_slice's per-axis offsets) renders
-        # inline as a literal so importing the file lifts it back to a core
-        # Tuple through the authoring parser.
+
+
+
         return _tuple_literal(a.elements) if isinstance(a, Tuple) else _expr_ref(a)
 
-    # Function signature. A ``TupleType`` return has no surface annotation; the
-    # authoring parser re-infers it from the literal tuple ``return`` body.
+
+
     return_ty = fn.return_type
     arrow = ""
     if isinstance(return_ty, TensorType):
@@ -842,8 +798,8 @@ def _emit_def(
             param_strs.append(f"{indent}{name}: {ann}")
         else:
             param_strs.append(f"{indent}{name}")
-    # One list element per physical line: a nesting caller indents per element,
-    # and `textwrap.dedent` needs every signature line to carry the same prefix.
+
+
     for index, text in enumerate(param_strs):
         suffix = "," if index < len(param_strs) - 1 else ""
         lines.extend((text + suffix).split("\n"))
@@ -854,7 +810,7 @@ def _emit_def(
         if line is not None:
             lines.append(line)
 
-    # A dispatch prototype has no body — declare signature only.
+
     if fn.body is None:
         lines.append(f"{indent}pass")
         return lines
@@ -911,9 +867,9 @@ def _emit_def(
                 attr_strs.append(f"{param.name}={_attr_tuple_str(value)}")
             else:
                 attr_strs.append(f"{param.name}={value}")
-        # Positional operands and attributes are one argument list. An op with
-        # attributes and no operands -- zeros(shape=..., dtype=...) -- would
-        # otherwise be printed with a leading comma and fail on import.
+
+
+
         arguments = [_arg_ref(arg) for arg in expr.args] + attr_strs
         return f"{_op_name(target)}({', '.join(arguments)})"
 
@@ -983,7 +939,7 @@ def _emit_def(
 
     for expr in _order:
         if isinstance(expr, Var) or id(expr) in _grid_internal_ids:
-            continue  # params already in signature
+            continue
         if isinstance(expr, GridRegionExpr):
             _emit_grid(expr, indent)
             continue
@@ -1004,10 +960,10 @@ def _emit_def(
             printed.add(id(expr))
             continue
         if isinstance(expr, Tuple):
-            # A tuple is rendered inline at its use site: as a literal argument
-            # (op input) or by the ``return`` statement (function body). The
-            # authoring parser lifts an inline offset tuple back to a core Tuple,
-            # whereas a hoisted ``name = (...)`` binding would not rebuild it.
+
+
+
+
             continue
         if isinstance(expr, Call):
             name = _names[id(expr)]
@@ -1020,8 +976,8 @@ def _emit_def(
                 lines.append(line)
             printed.add(id(expr))
 
-    # Return statement. A literal tuple body renders its elements inline
-    # (``return (e0, e1)``) rather than a name for the un-emitted Tuple node.
+
+
     if isinstance(fn.body, Tuple):
         lines.append(f"{indent}return {_tuple_literal(fn.body.elements)}")
     elif isinstance(fn.body, GridRegionExpr):
@@ -1091,16 +1047,16 @@ def _emit_header(
         lines.append("from tilefoundry.ir.types.dim import DimVar")
     lines.append("")
 
-    # Every dimension the program leaves open, declared with the bounds it was
-    # declared with. Shapes print a dimension as its name, so without these the
-    # printed source names something nothing defines -- and the bounds are not
-    # recoverable from the name, so they have to be restated rather than guessed.
+
+
+
+
     if dim_vars:
         for name, var in dim_vars.items():
             lines.append(f'{name} = DimVar("{var.name}", {var.lo}, {var.hi})')
         lines.append("")
 
-    # Mesh definitions, emitted only when sugar is viable (mesh has named axes).
+
     if any(m.names for m in meshes.values()):
         for mid, mesh in meshes.items():
             name = mesh_map[mid]
@@ -1122,15 +1078,15 @@ def _emit_decorated_defs(
 ) -> list[str]:
     """Emit decorated defs.
 
-    Base ``@func`` decorator + ``def`` block, followed by one
-    ``@<name>.specialize(pattern)`` block per variant ([inspection §2.6](docs/spec/inspection.md#26-specialization-printing)). Shared by
-    standalone and module-wrapped output so a dispatch prototype prints
-    identically in both.
+    Emit a base ``@func`` definition followed by one specialization block per
+    variant. Standalone and module output share this path so dispatch prototypes
+    render identically.
+    See [inspection §2.6](docs/spec/inspection.md#26-specialization-printing).
     """
     lines: list[str] = ["@func"]
     lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options))
 
-    # Variant defs: `@<base>.specialize(pattern)` over the label, or `_`.
+
     for variant in fn.variants:
         lines.append("")
         lines.append(
@@ -1167,22 +1123,11 @@ def as_script(
     fn: HirFunction | Module, *, module: str | None = None,
     options: PythonPrintOptions | None = None,
 ) -> str:
-    """Convert a HIR Function or Module to Python DSL source.
+    """Convert an HIR function or module to Python DSL source.
 
-    Without *module*: standalone ``@func`` output.
-
-    With *module* (e.g. ``module="M"``): ``@module(entry="<fn>") class M:``
-    wrapper with module-level mesh definitions (the class body stays a pure
-    function container) and sugar annotations.
-
-    Args:
-        fn: The HIR function or module.
-        module: Optional module class name.  When set, the output is
-            wrapped in ``@module(entry="<fn>") class <name>:``.
-        options: Optional canonical-source rendering settings.
-
-    Returns:
-        Python source string.
+    Without *module*, emit a standalone decorated function. With *module*, emit
+    a named module-class wrapper with entry and mesh definitions. *options*
+    controls canonical-source rendering.
     """
     if isinstance(fn, Module):
         return _module_to_python(fn, module, options=options)
@@ -1190,7 +1135,7 @@ def as_script(
         return _module_to_python(fn, module, options=options)
     return hir_function_to_python(fn, options=options)
 
-# backward-compat alias
+
 def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
     """Backward-compat alias for ``as_script(fn, module=module_name)``."""
     return as_script(fn, module=module_name)
@@ -1271,8 +1216,8 @@ def _module_to_python(
     entry = root.entry_function() if root.entry is not None else None
     if entry is not None and not isinstance(entry, HirFunction):
         raise TypeError("HIR Module printer requires a HIR entry Function")
-    # The header describes the tree, not its default step: a root composing
-    # child Modules need not nominate one of its own.
+
+
     header_of = entry if entry is not None else functions[0]
     indent4 = "    "
     meshes: dict[int, Mesh] = {}
@@ -1280,8 +1225,8 @@ def _module_to_python(
         meshes.update(_collect_all_meshes(fn))
     mesh_map = _mesh_name_map(meshes)
 
-    # Every function's dimensions, not just the entry's: a leaf can be the only
-    # one that names a dimension, and the header is emitted once for all of them.
+
+
     dim_vars: dict[str, object] = {}
     for fn in functions:
         dim_vars.update(dim_vars_reached(fn))

@@ -1,19 +1,9 @@
-"""Render ``tg``'s schedule tree into a holed C-like skeleton, a Mermaid swimlane.
+"""Render a schedule as a holed C-like skeleton and Mermaid swimlane.
 
-Render ``tg``'s schedule tree into a holed C-like skeleton, a Mermaid
-swimlane, and one hole per statement, via ``isl.ast_build`` codegen.
-
-``BufferAccess`` is local rather than the TIR ``TensorView`` Op: this needs
-a buffer's polyhedral footprint at one statement (an ``isl.map``), not a
-memory ``Expr`` plus ``Layout``.
-
-A statement is printed as its hole through ``ast_print_options``'
-``set_print_user``, so isl owns the loop nest and the indentation and nothing
-is spliced into finished text. Two notes on the binding: an ``ast_node``
-annotation does not survive a walk (its Python ``user`` payload comes back
-overwritten), so the statement name and coordinates are read from the call
-expression natively; and ``isl.printer`` writes only to a file and buffers
-until ``flush``, so ``_print_to_str`` goes through a temporary one.
+isl owns loop construction and indentation; user nodes become statement holes.
+``BufferAccess`` carries a statement-local polyhedral footprint rather than a
+TIR memory expression. Statement names and coordinates come from call
+expressions because AST annotations do not survive traversal.
 """
 from __future__ import annotations
 
@@ -48,9 +38,9 @@ class _RenderProgram:
         return getattr(self.graph, name)
 
 
-# ---------------------------------------------------------------------------
-# Output data structures
-# ---------------------------------------------------------------------------
+
+
+
 
 
 @dataclass(frozen=True)
@@ -116,26 +106,17 @@ class HoleContract:
     coords: tuple[str, ...]
 
 
-# ---------------------------------------------------------------------------
-# Shared: buffer name -> dtype / per-statement access maps
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _dtype_table(units: tuple[TileUnit, ...]) -> dict[str, object]:
-    """Dtype table.
+    """Recover HIR dtypes for named statement inputs and outputs.
 
-    Buffer name -> HIR dtype, reconstructed by re-applying poly.py's
-    own naming rule (``Var.name`` / ``binding_name``) to every HIR value any
-    statement touches: each ``op.args[i]`` and each statement's own output
-    (``binding_name(op)``). ``TileGraph`` does not expose
-    ``poly._buffer_namer``'s ``id(expr) -> name`` table, so this is a
-    best-effort re-derivation of the common (no rename-collision) case, not
-    a byte-for-byte reuse. Two documented V1 gaps: (1) a real
-    ``poly.py`` naming collision (its numeric-suffix fallback) is not
-    reproduced here -- last-write-wins on the colliding key; (2) an
-    unbound intermediate (no source-level name, ``binding_name`` is
-    ``None``) is skipped, so its buffer keeps ``dtype=None`` downstream.
-    Neither gap is hit by today's MM/RN extraction.
+    This reapplies the common ``Var.name`` / ``binding_name`` rule because the
+    graph does not expose its identity-name table. Collisions are last-write
+    wins and unnamed intermediates retain ``dtype=None``.
     """
     table: dict[str, object] = {}
     for unit in units:
@@ -171,14 +152,9 @@ def _ordered_inputs(
 ) -> tuple[BufferAccess, ...]:
     """Order buffer reads to match the operation arguments.
 
-    Reads of ``unit``, as ``BufferAccess``es ordered to match
-    ``unit.op.args`` (the natural, human-readable source-call order) --
-    e.g. MM's ``(x, w)`` before its own read-modify-write self-read on
-    ``h``. Any read not reachable from ``op.args`` (that self-read: the
-    output buffer, read again because its write map is not injective --
-    see ``poly._registered_access``) is appended after, sorted by
-    buffer name for determinism, since ``foreach_map``'s own union-map
-    iteration order is not guaranteed stable.
+    Argument reads retain source-call order. Other reads, including an output
+    buffer's read-modify-write access, follow in buffer-name order because isl
+    union-map iteration is not stable.
     """
     ordered: list[str] = []
     used: set[str] = set()
@@ -211,22 +187,17 @@ def _output_view(
     return BufferAccess(tensor_name=name, index_map=m, dtype=dtype_table.get(name))
 
 
-# ---------------------------------------------------------------------------
-# ① Skeleton
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _call_coords(expr: "isl.ast_expr") -> tuple[str, tuple[str, ...]]:
     """Decode an isl ``ast_expr_op_call``.
 
-    Decode an isl ``ast_expr_op_call`` (e.g. ``MM(c0, c1, c2)``, from a
-    domain leaf's ``node.get_expr()``) into ``(stmt_name, coord_texts)``.
-    ``op_arg(0)`` is always the statement-name id; every following
-    ``op_arg`` (there are ``op_n_arg() - 1`` of them) is a coordinate,
-    rendered via its own ``to_C_str()`` -- not hand-parsed from text --
-    so a non-trivial affine coordinate (e.g. a future strip-mined
-    schedule) would still print correctly, not just the bare
-    iterator-id case this V1 schedule always produces.
+    Argument zero is the statement id; remaining arguments are coordinates.
+    Each coordinate renders through isl rather than parsing text, preserving
+    nontrivial affine expressions.
     """
     name = expr.op_arg(0).id().name()
     coords = tuple(expr.op_arg(i).to_C_str() for i in range(1, expr.op_n_arg()))
@@ -243,8 +214,8 @@ def _ring_ref(buf_name: str, coords: tuple[str, ...], ring: dict) -> str:
     n = ring.get(buf_name)
     if not n or n <= 1:
         return buf_name
-    # A tiled schedule's innermost coordinate is a sum (``c0 + c3``), and C
-    # binds ``%`` tighter than ``+``; the parentheses are load-bearing.
+
+
     return f"{buf_name}[({coords[-1]}) % {n}]"
 
 
@@ -347,9 +318,9 @@ def _build_skeleton(
     return Skeleton(text=text, holes=holes), contracts
 
 
-# ---------------------------------------------------------------------------
-# ② Swimlane
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def _statement_extents(tg: TileGraph, stmt_name: str) -> tuple[int, ...]:
@@ -376,16 +347,9 @@ def _illustrative_instances(
 ) -> tuple[list[tuple[int, ...]], int]:
     """Minimal loop unrolling for the swimlane.
 
-    Minimal loop unrolling for the swimlane: the first instance
-    (prologue) + up to ``depth + 1`` following instances (steady-state) +
-    the last instance (epilogue) -- never the full ``K``-instance unroll.
-    Returns ``(shown, n_collapsed)``; ``n_collapsed == 0`` when the whole
-    domain already fits in prologue+steady+epilogue (nothing to elide).
-
-    A real kernel's domain runs to hundreds of millions of points, so the
-    head is taken off ``product``'s lazy stream and the last coordinate --
-    which its lexicographic order puts at ``extent - 1`` on every axis -- is
-    read off the extents rather than by exhausting it.
+    Show the prologue, up to ``depth + 1`` steady-state instances, and the
+    epilogue. The Cartesian product stays lazy; the last coordinate is derived
+    directly from extents. Returns shown coordinates and the omitted count.
     """
     depth = len(extents)
     total = math.prod(extents)
@@ -434,9 +398,9 @@ def _build_swimlane(tg: TileGraph, contracts: dict[str, HoleContract]) -> Swimla
     return Swimlane(text="\n".join(_swimlane_lines(tg, contracts)))
 
 
-# ---------------------------------------------------------------------------
-# emit_scaffold
-# ---------------------------------------------------------------------------
+
+
+
 
 
 def emit_scaffold(

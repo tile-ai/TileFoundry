@@ -1,19 +1,20 @@
-// reduce tier-2: cross-warp within a CTA (smem workspace).
-//
-// Included in-context from ``ops/reduce.cuh`` (see reduce_common_impl.h for the
-// in-context include contract). Op tags and reduce_impl helpers are in scope.
+/// reduce tier-2: cross-warp within a CTA (smem workspace).
+///
+/// Included in-context from ``ops/reduce.cuh`` (see reduce_common_impl.h for
+/// the in-context include contract). Op tags and reduce_impl helpers are in
+/// scope.
 #pragma once
 
 namespace reduce_impl {
 
-// ── Reduce tier-2: cross-warp within a CTA (smem workspace) ───────
-// This tier's contract has a single group output per thread (``cell_decomp``'s
-// ``n_cells == 1``): each thread folds its *entire* per-thread tensor via
-// ``local_fold`` (its ``step == cute::size(s)`` whole-tensor path — correct
-// however many cute axes the per-thread layout carries, see
-// reduce_common_impl.h), then a warp butterfly + ``cta_sum_via_workspace``
-// combine across warps; ``reduce_traits<Op>`` finalises. MEAN divides by
-// ``step × 32 × warps_per_group``.
+/// ── Reduce tier-2: cross-warp within a CTA (smem workspace) ───────
+/// This tier's contract has a single group output per thread (``cell_decomp``'s
+/// ``n_cells == 1``): each thread folds its *entire* per-thread tensor via
+/// ``local_fold`` (its ``step == cute::size(s)`` whole-tensor path — correct
+/// however many cute axes the per-thread layout carries, see
+/// reduce_common_impl.h), then a warp butterfly + ``cta_sum_via_workspace``
+/// combine across warps; ``reduce_traits<Op>`` finalises. MEAN divides by
+/// ``step × 32 × warps_per_group``.
 template <class Op, class Axes> struct IntraCta {
     template <class SrcT, class DstT, class WorkspaceT>
     __device__ void operator()(SrcT const &src, DstT &dst,
@@ -40,4 +41,4 @@ template <class Op, class Axes> struct IntraCta {
     }
 };
 
-} // namespace reduce_impl
+}

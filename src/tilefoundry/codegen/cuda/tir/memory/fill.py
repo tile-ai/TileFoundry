@@ -6,11 +6,6 @@ from tilefoundry.ir.tir.memory import Fill
 from tilefoundry.ir.types.shape_helpers import shape_runtime_total
 
 
-# Element-count semantics: static dims contribute their literal extent;
-# ``DimVar`` axes resolve through ``shape_runtime_total`` to the
-# dispatch-emitted ``<param>_shape_<axis>`` scalar so the runtime fill
-# count tracks the actual tensor extent. Static allocations elsewhere
-# still size to the envelope ``hi`` (see ``shape_helpers.upper_bound``).
 @register_codegen_cuda(Fill)
 def _emit(call, ctx: CodegenContext) -> None:
     tensor, value = call.args[0], call.args[1]

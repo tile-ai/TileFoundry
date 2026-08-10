@@ -25,12 +25,9 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.runtime import PREDICATES, RuntimeModule, SafetensorsResource, check
 from tilefoundry.runtime.measure import Predicate
 
-#: One draw, reported with every run. A seed nobody chose is a run nobody can
-#: repeat, and a seed the caller chooses is one more thing to state before a
-#: comparison can be made at all.
 SEED = 0
 
-#: Every bound any predicate takes, each named after the field it fills.
+
 BOUNDS: tuple[str, ...] = tuple(
     dict.fromkeys(bound for predicate in PREDICATES.values() for bound in predicate.bounds)
 )
@@ -229,7 +226,7 @@ def _walk_ir(top: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...],
                 f"selector {'.'.join(path)!r}: Module {reached.name!r} has no child "
                 f"module {name!r}"
             )
-        reached.lookup(name)  # refuses a name this Module does not define
+        reached.lookup(name)
         return reached, tuple(children), name
     if reached.methods.get("forward") is not None:
         return reached, tuple(children), None
@@ -518,8 +515,8 @@ def _sides(target: Target, resource, expected: Sequence[str] | None, device: str
         return candidate, (lambda *_: one), ", ".join(expected), loaded.constants
 
     if target.twin is None:
-        # Nothing else states what this Module should produce, so only the
-        # predicates that judge it on its own are available.
+
+
         return candidate, None, None, loaded.constants
     authored = target.module.name if name is None else f"{target.module.name}.{name}"
     return candidate, evaluator, f"evaluator on {authored}", loaded.constants

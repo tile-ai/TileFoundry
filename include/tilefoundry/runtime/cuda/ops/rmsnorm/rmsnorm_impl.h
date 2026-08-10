@@ -1,5 +1,5 @@
-// CUDA RMSNorm op implementation. Included in-context from ops/rmsnorm.cuh
-// inside namespace tilefoundry::ops.
+/// CUDA RMSNorm op implementation. Included in-context from ops/rmsnorm.cuh
+/// inside namespace tilefoundry::ops.
 #pragma once
 
 namespace rmsnorm_impl {
@@ -25,4 +25,4 @@ struct RmsNorm {
     }
 };
 
-} // namespace rmsnorm_impl
+}

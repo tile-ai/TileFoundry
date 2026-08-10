@@ -70,9 +70,9 @@ class TypeInferVisitor(ExprVisitor[Type]):
     def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Type:
         """Carry/body: a no-carry loop's value is its body.
 
-        Carry/body: a no-carry loop's value is its body; a carrying loop's
-        value is its ``carried_args`` phi Vars' own declared type(s) — the
-        same rule the parser applies when constructing the node ([hir §1.2](docs/spec/hir.md#12-gridregionexpr)).
+        A carrying loop's value is its ``carried_args`` phi variables' declared
+        types, matching the parser's node-construction rule.
+        See [hir §1.2](docs/spec/hir.md#12-gridregionexpr).
         """
         self.ctx.type_of(grid.body)
         for y in grid.yield_values:
@@ -110,18 +110,18 @@ class VerifyVisitor(StmtVisitor[None]):
         ctx: VerifyContext,
         registry: AnalysisRegistry = verify_stmt_registry,
     ) -> None:
-        # Default path: no registry argument, use the module-level
-        # verify_stmt_registry. Passing an explicit registry is an advanced
-        # extension point (e.g. sandbox tests, grouped dispatch); the everyday
-        # verify pass never needs it.
+
+
+
+
         self.ctx = ctx
         self.registry = registry
 
     def generic_visit(self, stmt: Stmt) -> None:
         if isinstance(stmt, Evaluate):
-            # Effect-ful Op invocation in Stmt position: dispatch verify on the
-            # Op class. The handler ABI is Call-based, so feed it a Call built
-            # from the Op and its args.
+
+
+
             op = stmt.callable
             fn = self.registry.lookup(type(op))
             if fn is not None:
@@ -137,8 +137,8 @@ class VerifyVisitor(StmtVisitor[None]):
     def visit_MeshScope(self, stmt: MeshScope) -> None:
         self.ctx.mesh_stack.append(stmt.mesh)
         try:
-            # Fire any custom verify handler for MeshScope (none by default),
-            # then recurse into body with the scope active.
+
+
             fn = self.registry.lookup(MeshScope)
             if fn is not None:
                 fn(stmt, self.ctx)
@@ -159,7 +159,7 @@ class CodegenVisitor:
 
     def __init__(
         self,
-        ctx,  # CodegenContext; concrete per-target type lives with the target
+        ctx,
         registry: AnalysisRegistry,
         *,
         backend: str,
@@ -186,9 +186,9 @@ class CodegenVisitor:
                     f"{type(expr.target).__name__}"
                 )
             return fn(expr, self.ctx)
-        # Leaf Expr nodes (Var / Constant) are emitted by the target's
-        # CodegenContext helpers (e.g. ctx.name_for / ctx.literal). Callers
-        # that want a generic fallback should override emit_expr.
+
+
+
         raise RuntimeError(
             f"CodegenVisitor.emit_expr: leaf Expr {type(expr).__name__} "
             "has no default emission; handle via target ctx helpers."

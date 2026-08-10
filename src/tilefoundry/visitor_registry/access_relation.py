@@ -1,22 +1,8 @@
-"""Access relation analysis registry.
+"""Register per-operation affine access relations.
 
-``AccessRelation = isl.multi_aff``. This module adds a per-op handler
-registry so each HIR op can report the
-input/output access relations at its current memory level (currently only
-the GMEM (global) black-box level is implemented).
-
-
-Usage::
-
-    from tilefoundry.visitor_registry.access_relation import (
-        register_access_relation,
-        AccessRelations,
-        OPAQUE,
-    )
-
-    @register_access_relation(MyOp)
-    def _(call, ctx):
-        return AccessRelations(inputs=(...,), outputs=(...,))
+Handlers return input and output isl relations from call types and attributes.
+``OPAQUE`` marks boundaries that cannot be expressed at the queried memory
+level. The GMEM black-box level is currently supported.
 """
 from __future__ import annotations
 
@@ -26,10 +12,6 @@ from typing import Callable, Union
 import isl
 
 from .registries import AnalysisRegistry
-
-# ─────────────────────────────────────────────────────────────────────
-# OpaqueRelation — marker for "not affine-expressible at this level"
-# ─────────────────────────────────────────────────────────────────────
 
 
 class OpaqueRelation:
@@ -64,14 +46,14 @@ class OpaqueRelation:
 OPAQUE = OpaqueRelation()
 
 
-# The canonical carrier is ``isl.multi_aff``; ``isl.map`` is allowed when the
-# relation is reduction-like or otherwise many-to-one.
+
+
 AccessRelation = Union["isl.multi_aff", "isl.map", OpaqueRelation]
 
 
-# ─────────────────────────────────────────────────────────────────────
-# AccessRelations — per-call result
-# ─────────────────────────────────────────────────────────────────────
+
+
+
 
 
 @dataclass(frozen=True)
@@ -89,9 +71,9 @@ class AccessRelations:
     outputs: tuple[AccessRelation, ...]
 
 
-# ─────────────────────────────────────────────────────────────────────
-# AccessRelationResult — forward relation carrier (input-type driven)
-# ─────────────────────────────────────────────────────────────────────
+
+
+
 
 
 @dataclass(frozen=True)
@@ -112,16 +94,16 @@ class AccessRelationResult:
     param_map: dict = field(default_factory=dict)
 
 
-# ─────────────────────────────────────────────────────────────────────
-# Registry
-# ─────────────────────────────────────────────────────────────────────
+
+
+
 
 
 access_relation_registry: AnalysisRegistry = AnalysisRegistry("access_relation")
 
-# Forward relation registry: handlers build the relation from input types +
-# op attributes only, so typeinfer can consume the relation without depending
-# on the (not-yet-computed) output type.
+
+
+
 type_relation_registry: AnalysisRegistry = AnalysisRegistry("type_relation")
 
 

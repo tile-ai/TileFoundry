@@ -27,6 +27,7 @@ class RepeatInterleave(Op):
     interleaved (GQA head expansion). The named axis grows by ``repeats``;
     all other dims are unchanged.
     """
+
     x = ParamDef(kind="input", pattern=Tensor)
     repeats = ParamDef(kind="attribute", annotation=int)
     axis = ParamDef(kind="attribute", annotation=int)
@@ -75,11 +76,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"RepeatInterleave: axis {op.axis} out of range for rank {len(shape)}")
     shape[ax] = shape[ax] * op.repeats
 
-    # The named axis grows, so the input layout no longer describes the
-    # output; do not carry a stale sharded layout. An unsharded or fully
-    # replicated input produces an unsharded output; a genuine sharding fails
-    # closed (re-expressing a repeat across a Split would need an explicit
-    # relation).
     new_layout = None
     if isinstance(x_ty.layout, ShardLayout) and any(
         not isinstance(a, Broadcast) for a in x_ty.layout.attrs

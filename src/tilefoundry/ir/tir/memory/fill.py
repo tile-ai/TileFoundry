@@ -3,6 +3,7 @@
 Fills ``tensor`` with the rank-0 scalar ``value`` (in-place memory
 write). Wrapped by ``Evaluate(Fill, ...)`` in Stmt position.
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
@@ -16,12 +17,15 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 @register_op
 class Fill(Op):
     """Fills ``tensor`` element-wise with ``value`` (rank-0 scalar)."""
+
     tensor = ParamDef(kind="input", pattern=Tensor)
     value = ParamDef(kind="input", pattern=Tensor)
+
 
 @register_typeinfer(Fill)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
 
 @register_verify_stmt(Fill)
 def _(call: "Call", ctx: "VerifyContext") -> None:

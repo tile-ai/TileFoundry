@@ -7,6 +7,7 @@ merge distinct allocations).
 The single attribute is the resulting ``TensorType`` (shape, dtype, layout,
 storage). ``typeinfer`` returns it verbatim.
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
@@ -22,7 +23,10 @@ class AllocTensor(Op):
 
     Value form — the result ``Var`` MUST be anchored by ``LetStmt.value``.
     """
+
     tensor_type = ParamDef(kind="attribute", annotation=TensorType)
+
+
 @register_typeinfer(AllocTensor)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     return call.target.tensor_type

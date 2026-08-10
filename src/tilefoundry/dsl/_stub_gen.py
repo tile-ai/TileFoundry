@@ -1,27 +1,10 @@
-"""Generate ``.pyi`` stubs for ``tilefoundry.dsl.{tf,T}``.
+"""Generate self-contained DSL namespace stubs from registered schemas.
 
-For each ``OpSchema`` registered in the global registry, emit one
-function-shaped stub::
-
-    def <name>(<param>: <annotation>[, ...]) -> Expr: ...
-
-Conventions:
-
-- ``kind == "input"`` ParamDefs default to the ``Expr`` type
-  (operands are always Exprs at the DSL surface) regardless of
-  ``ParamDef.annotation`` being left as the ``object`` default.
-- ``kind == "attribute"`` ParamDefs render whatever ``annotation``
-  declares (``int`` / ``str`` / ``DType`` / ``ShardLayout`` / ...).
-  Type names referenced by the rendered stubs are auto-imported in
-  the generated header so the ``.pyi`` is self-contained for IDEs.
-
-Overloads (multiple schemas under the same ``(dialect, name)``) emit
-``@typing.overload``-decorated stubs in registration order, followed
-by a final non-overload signature for runtime fallback.
-
-Stubs land at ``src/tilefoundry/dsl/tf/__init__.pyi`` and
-``src/tilefoundry/dsl/T/__init__.pyi``. They are gitignored — regenerate
-via ``python -m tilefoundry.dsl regen``.
+Inputs use ``Expr`` while attributes retain declared types and required imports.
+Overloads preserve registration order and include a runtime fallback signature.
+Generated files are gitignored and rebuilt through the DSL CLI. See
+[parser §2.4](docs/spec/parser.md#24-pyi-stub-regeneration) and
+[parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only).
 """
 
 from __future__ import annotations
@@ -38,14 +21,23 @@ from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import MISSING, ParamDef
 from tilefoundry.ir.types import DType
 
-# Builtin type names that don't need an explicit ``import`` in the .pyi.
-_BUILTIN_TYPE_NAMES: frozenset[str] = frozenset({
-    "Any", "Expr", "object", "int", "float", "str", "bool",
-    "tuple", "list", "dict", "bytes", "None", "type",
-})
-
-
-# ── Helpers --------------------------------------------------------------
+_BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
+    {
+        "Any",
+        "Expr",
+        "object",
+        "int",
+        "float",
+        "str",
+        "bool",
+        "tuple",
+        "list",
+        "dict",
+        "bytes",
+        "None",
+        "type",
+    }
+)
 
 
 def _expr_type_for_input(pd: ParamDef) -> str:
@@ -68,9 +60,7 @@ def _annotation_type(pd: ParamDef) -> tuple[str, str]:
     if ann is object:
         return "Any", ""
     if ann is DType:
-        members = ", ".join(
-            repr(name) for name in DType._members()
-        )
+        members = ", ".join(repr(name) for name in DType._members())
         name = ann.__name__
         base = f"Literal[{members}] | {name}"
         if pd.optional:
@@ -113,7 +103,10 @@ def _param_signature(pd: ParamDef) -> tuple[str, str]:
 
 
 def _function_stub(
-    schema: OpSchema, types_seen: set[str], *, decorator: str | None = None,
+    schema: OpSchema,
+    types_seen: set[str],
+    *,
+    decorator: str | None = None,
 ) -> str:
     """Render a single ``def <name>(...) -> Expr: ...`` line block.
 
@@ -135,9 +128,7 @@ def _function_stub(
     return head
 
 
-def _resolve_type_modules(
-    dialect: str, type_names: Iterable[str]
-) -> list[tuple[str, str]]:
+def _resolve_type_modules(dialect: str, type_names: Iterable[str]) -> list[tuple[str, str]]:
     """Map *dialect*-scoped annotation type names to ``(module, name)``.
 
     Different dialects can share a type *name* that refers to a
@@ -148,7 +139,7 @@ def _resolve_type_modules(
     correct module for its own type names.
     """
     wanted = set(type_names)
-    found: dict[str, str] = {}  # type_name → module_path
+    found: dict[str, str] = {}
     for (d, _), bucket in _schemas_by_dialect_name.items():
         if d != dialect:
             continue
@@ -183,10 +174,9 @@ def _module_header(dialect: str, types_seen: set[str]) -> str:
         f"from typing import {typing_names}",
         "from tilefoundry.ir.core.expr import Expr",
     ]
-    # Group by module → ``from m import a, b, c``.
+
     by_mod: dict[str, list[str]] = {}
     for name, mod in imports:
-        # ``Expr`` already has a dedicated import line above.
         if name == "Expr" and mod == "tilefoundry.ir.core.expr":
             continue
         by_mod.setdefault(mod, []).append(name)
@@ -196,16 +186,8 @@ def _module_header(dialect: str, types_seen: set[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Parser intrinsics that are NOT OpSchema-backed (handled directly by the
-# parser, e.g. the loop-domain builtin ``for i in tile(...)`` — see
-# [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only)). They are accessed through the same ``from tilefoundry.dsl.tf
-# import *`` surface as ops, so the stub declares them for editor/type
-# completion. ``range`` is intentionally absent — the HIR loop form reuses
-# Python's builtin ``range``.
 _DIALECT_INTRINSICS: dict[str, tuple[str, ...]] = {
-    "tf": (
-        "def tile(extent: Any, step: Any = ...) -> Any: ...",
-    ),
+    "tf": ("def tile(extent: Any, step: Any = ...) -> Any: ...",),
 }
 
 
@@ -222,9 +204,7 @@ def _platform_namespace_stub(dialect: str) -> str | None:
     from tilefoundry.dsl.T._platforms import cuda  # noqa: PLC0415
     from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaOpSpec  # noqa: PLC0415
 
-    op_names = sorted(
-        n for n, v in vars(type(cuda.mma)).items() if isinstance(v, MmaOpSpec)
-    )
+    op_names = sorted(n for n, v in vars(type(cuda.mma)).items() if isinstance(v, MmaOpSpec))
     lines = [
         "# Platform sub-namespaces (not OpSchema-backed).",
         "from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom as MmaAtom, MmaOpSpec as MmaOpSpec",
@@ -268,7 +248,7 @@ def _render_dialect(dialect: str) -> str:
         else:
             for s in bucket:
                 body_lines.append(_function_stub(s, types_seen, decorator="@overload"))
-            # Runtime fallback — same shape as the first overload.
+
             body_lines.append(_function_stub(bucket[0], types_seen))
         body_lines.append("")
 
@@ -277,9 +257,6 @@ def _render_dialect(dialect: str) -> str:
     if not body:
         return header
     return header + "\n" + body + "\n"
-
-
-# ── Public API -----------------------------------------------------------
 
 
 def regen_stubs(root: Path | None = None) -> dict[str, Path]:
@@ -296,17 +273,12 @@ def regen_stubs(root: Path | None = None) -> dict[str, Path]:
     return written
 
 
-# ── CLI entry ------------------------------------------------------------
-
-
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tilefoundry.dsl", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("regen", help="regenerate .pyi stubs")
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.cmd == "regen":
-        # ``tilefoundry.ir`` is imported at module load (see top) to populate
-        # the schema registry as a side effect.
         written = regen_stubs()
         for dialect, path in written.items():
             print(f"wrote {dialect} stub: {path}")

@@ -17,20 +17,21 @@ from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 @dataclass(frozen=True)
 class Function(Expr):
-    """HIR function container: a pure-SSA ``Expr`` whose value type is its callable signature.
+    """Contain a pure-SSA HIR body with its callable value type.
 
-    A Function carries no execution context. The Module that owns it declares
-    the Target and the ordered Topology hierarchy its body maps onto.
+    ``body=None`` marks a dispatch prototype. Variants and weight converters
+    use tuples so frozen function equality and hashing remain stable. Execution
+    context belongs to the owning Module.
+
+    See [hir §1.1](docs/spec/hir.md#11-function).
     """
+
     name: str
     params: tuple[Var, ...]
-    body: Expr | None                       # None for a dispatch prototype (DSL ``pass``)
+    body: Expr | None
     return_type: Type
     specializations: tuple[Pattern, ...] = field(default_factory=tuple)
     variants: tuple["Function", ...] = field(default_factory=tuple)
-    # (weight_name, converter) pairs — a tuple-of-pairs (not a dict) for the
-    # same reason as ``variants``: it must stay hashable/comparable so
-    # ``Function``'s dataclass eq/hash keep working.
     converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple)
 
     @classmethod
@@ -104,11 +105,6 @@ class Function(Expr):
             conv.seal()
 
 
-# ir.visitor imports Function from this module at module level; this
-# module-level import is positioned after Function is defined, so
-# whichever of the two modules loads first, the other's back-reference
-# finds an already-bound name instead of hitting a partially-initialized
-# module.
 from tilefoundry.ir.visitor import ExprMutator  # noqa: E402
 
 
@@ -126,24 +122,25 @@ def canonical_specialization_signature(
         if isinstance(pat, DimVarRangePat):
             parts.append(f"{pat.dim_var}${pat.lo}_{pat.hi}")
         else:
-            # Fall back to repr for forward-compat; v0 verifier rejects
-            # non-DimVarRangePat patterns elsewhere.
             parts.append(repr(pat))
     return ";".join(parts)
 
 
 def _bind_param_type(
-    ctx, callee: "Function", i: int, param: Var, arg_ty: Type,
+    ctx,
+    callee: "Function",
+    i: int,
+    param: Var,
+    arg_ty: Type,
     call: Call | None = None,
 ) -> Type:
     """Bind one parameter's elaborated type from the caller's argument type.
 
-    A ``layout is None`` ``TensorType`` parameter is a template wildcard —
-    the bound type is the argument's own full type (including any
-    ``ShardLayout``), once its logical shape/dtype match. Any other
-    parameter type is an explicit contract: the argument MUST match it
-    exactly ([hir §1.1](docs/spec/hir.md#11-function)). ``call``, when given, anchors a bind error at the
-    call site's binding/span metadata instead of the callee declaration.
+    A ``layout is None`` tensor parameter accepts the argument's full layout
+    after shape and dtype match. Other parameter types must match exactly.
+    ``call`` anchors errors at the call site when provided.
+
+    See [hir §1.1](docs/spec/hir.md#11-function).
     """
     error_node = call if call is not None else callee
     p = param.type
@@ -166,23 +163,18 @@ def _bind_param_type(
 
 
 def elaborate(
-    callee: "Function", arg_types: tuple[Type, ...], ctx: TypeInferContext | None = None,
+    callee: "Function",
+    arg_types: tuple[Type, ...],
+    ctx: TypeInferContext | None = None,
     call: Call | None = None,
 ) -> "Function":
-    """Construct a concrete callee instance for one call site's argument types.
+    """Construct a concrete callee for one call site's argument types.
 
-    Construct the concrete callee instance for one call site's argument
-    types ([hir §1.1](docs/spec/hir.md#11-function)). The template lives at the Python-source level;
-    every differently-typed call gets its own IR construction here.
+    Dispatch prototypes and already-equal bindings return unchanged. Other
+    templates rebuild per distinct type tuple and reuse the construction
+    session's elaboration cache. ``call`` anchors binding errors when present.
 
-    Returns ``callee`` unchanged for a dispatch prototype (``variants !=
-    ()``/``body is None`` — no body to elaborate; shape dispatch stays
-    envelope-matched, untouched by this function) and whenever every bound
-    parameter type already equals the callee's current parameter type
-    (dedup — an allowed optimization, not a semantic). ``call``, when
-    given, anchors an arity/bind error's location. Within one construction
-    session (``ctx.elaboration_cache``), repeated (callee, arg_types) call
-    sites reuse the same rebuilt instance.
+    See [hir §1.1](docs/spec/hir.md#11-function).
     """
     if ctx is None:
         ctx = TypeInferContext()
@@ -220,26 +212,17 @@ def _elaborate_from_bound_types(
     *,
     dims: "Mapping[str, int] | None" = None,
 ) -> "Function":
-    """Rebuild ``callee``'s body with its parameters at *bound_types*.
+    """Rebuild ``callee`` with parameters at *bound_types*.
 
-    Shared by the two things that produce a concrete instance of a template:
-    a call site, which learns the parameter types from its arguments, and a
-    specialisation, which is told an extent for a dimension the source left as
-    a range. Both rebuild the same way, and duplicating that is how the two
-    would drift.
-
-    *dims*, when given, is also applied to the places a dimension appears that
-    are not reachable from any expression's type: a loop's own extent, step and
-    start, and the shape-valued attributes an operation carries. Rewriting only
-    the types would leave a loop still running over a symbol.
+    Calls and specializations share this path. Optional *dims* also substitute
+    loop bounds and shape-valued operation attributes that are not reachable
+    through expression types.
     """
     new_params = tuple(
-        Var(type=bt, name=p.name, is_const=p.is_const)
-        for bt, p in zip(bound_types, callee.params)
+        Var(type=bt, name=p.name, is_const=p.is_const) for bt, p in zip(bound_types, callee.params)
     )
     subst = {id(old): new for old, new in zip(callee.params, new_params)}
-    # Identities handed to the type cache below, kept alive for as long as that
-    # cache is. See `_retyped`.
+
     pinned: list[object] = []
 
     class _Elaborator(ExprMutator):
@@ -269,13 +252,12 @@ def _elaborate_from_bound_types(
             return c
 
         def visit_Call(self, call_expr: Call) -> Expr:
-            """Rebuild args as usual.
+            """Rebuild arguments and re-elaborate nested HIR callees.
 
-            Rebuild args as usual; additionally, a Call whose target is
-            a hir Function is re-elaborated against the rewritten arg
-            types so ``.target`` (not just ``.type``) reflects the fresh
-            instance — required per [hir §1.1](docs/spec/hir.md#11-function) for a viewer/printer read
-            of ``call.target.body`` under a wildcard chain.
+            Updating the target as well as the call type exposes the concrete
+            body to viewers and printers.
+
+            See [hir §1.1](docs/spec/hir.md#11-function).
             """
             new_args = tuple(self.visit(a) for a in call_expr.args)
             args_changed = any(na is not oa for na, oa in zip(new_args, call_expr.args))
@@ -283,24 +265,16 @@ def _elaborate_from_bound_types(
             if isinstance(call_expr.target, Function):
                 if dims is None:
                     new_target = elaborate(
-                        call_expr.target, tuple(a.type for a in new_args),
-                        self.body_ctx, call=call_expr,
+                        call_expr.target,
+                        tuple(a.type for a in new_args),
+                        self.body_ctx,
+                        call=call_expr,
                     )
                 else:
-                    # The callee's parameters are still ranges, and binding
-                    # concrete arguments against a range is a type mismatch.
-                    # It is the same choice of extent, so make it there too
-                    # rather than asking the ordinary call path to accept a
-                    # mixture it is right to reject.
                     new_target = _specialize_callee(
                         call_expr.target, dims, self.body_ctx, call_expr
                     )
-                    # Typeinfer will key its elaboration cache on this
-                    # function's identity, and that cache outlives the rebuild
-                    # while nothing else keeps a short-lived callee alive: the
-                    # Call that referenced it is itself replaced a line later.
-                    # A freed address handed to the next callee is then a cache
-                    # hit for a function that no longer exists.
+
                     pinned.append(new_target)
             if dims is not None:
                 new_target = _substitute_op_dims(new_target, dims)
@@ -312,15 +286,15 @@ def _elaborate_from_bound_types(
         def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
             """Visit GridRegionExpr.
 
-            Re-stamp the loop-phi ``carried_args`` from the rewritten
-            ``init_args`` ([hir §1.2](docs/spec/hir.md#12-gridregionexpr): "the first-iteration value of each
-            carried_args phi is its init_args entry"), the same rule the
-            parser applies when constructing the node, then substitute the
-            fresh phi into the body/yield_values before rebuilding them.
+            Rebuild loop phis from rewritten ``init_args``, then substitute the
+            fresh values through the body and yields.
+
+            See [hir §1.2](docs/spec/hir.md#12-gridregionexpr).
             """
             new_init_args = tuple(self.visit(a) for a in grid.init_args)
             new_phis = tuple(
-                old_phi if new_init.type == old_phi.type
+                old_phi
+                if new_init.type == old_phi.type
                 else Var(type=new_init.type, name=old_phi.name)
                 for old_phi, new_init in zip(grid.carried_args, new_init_args)
             )
@@ -329,9 +303,7 @@ def _elaborate_from_bound_types(
                     subst[id(old_phi)] = new_phi
             new_body = self.visit(grid.body)
             new_yields = tuple(self.visit(y) for y in grid.yield_values)
-            # A loop states its own extent, step and start as shape entries.
-            # They hang off no expression, so the generic child walk never
-            # reaches them and a bound dimension would survive here.
+
             bounds = (grid.extent, grid.step, grid.start)
             if dims is None:
                 new_bounds = bounds
@@ -347,9 +319,14 @@ def _elaborate_from_bound_types(
             if unchanged:
                 return grid
             rebuilt = dataclasses.replace(
-                grid, carried_args=new_phis, init_args=new_init_args,
-                body=new_body, yield_values=new_yields,
-                extent=new_bounds[0], step=new_bounds[1], start=new_bounds[2],
+                grid,
+                carried_args=new_phis,
+                init_args=new_init_args,
+                body=new_body,
+                yield_values=new_yields,
+                extent=new_bounds[0],
+                step=new_bounds[1],
+                start=new_bounds[2],
             )
             return self._retyped(rebuilt)
 
@@ -374,14 +351,8 @@ def _elaborate_from_bound_types(
             return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
 
     if dims is None:
-        body_ctx = TypeInferContext(
-            module=ctx.module, elaboration_cache=ctx.elaboration_cache
-        )
+        body_ctx = TypeInferContext(module=ctx.module, elaboration_cache=ctx.elaboration_cache)
     else:
-        # The shared cache is keyed on the callee's identity, and specialising
-        # builds a fresh callee for every nested call it rewrites. Those are
-        # short-lived, so an address freed by one can be handed to the next and
-        # the cache answers for a function that no longer exists.
         body_ctx = TypeInferContext(module=ctx.module)
     new_body = _Elaborator(body_ctx).visit(callee.body)
     return Function.build(
@@ -441,9 +412,7 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
         if param.kind != "attribute":
             continue
         value = getattr(target, param.name, None)
-        # A layout states the shape it describes, so an authored one -- the
-        # target of a reshard -- holds the dimension too, and it is not a tuple
-        # of extents this loop would otherwise recognise.
+
         if isinstance(value, LayoutBase):
             rebuilt_layout = substitute_layout_dims(value, dims)
             if rebuilt_layout is not value:
@@ -471,11 +440,10 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
 def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
     """Derive a function call's type by elaborating its callee.
 
-    Typeinfer handler for ``Call(target=hir.Function, args=...)``:
-    derive the type by elaboration ([hir §1.1](docs/spec/hir.md#11-function)). The Call's type is always
-    the freshly re-derived type of the (possibly deduped) instance's body —
-    never a possibly-stale ``Function.return_type`` field — except for a
-    dispatch prototype, whose ``None`` body is never inspected.
+    The type is re-derived from the elaborated body's type rather than a stale
+    ``return_type`` field. Dispatch prototypes retain their declared type.
+
+    See [hir §1.1](docs/spec/hir.md#11-function).
     """
     callee: Function = call.target  # type: ignore[assignment]
     arg_types = tuple(ctx.type_of(a) for a in call.args)

@@ -5,6 +5,7 @@ Fused RMS normalization. Writes element-wise normalised output into
 and multiplying by ``weight``. Wrapped by ``Evaluate(RMSNorm, ...)``
 in Stmt position.
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
@@ -18,14 +19,17 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 @register_op(name="rms_norm")
 class RMSNorm(Op):
     """RMS normalization writing into ``dst``."""
+
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
     weight = ParamDef(kind="input", pattern=Tensor)
     eps = ParamDef(kind="attribute", annotation=float)
 
+
 @register_typeinfer(RMSNorm)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
 
 @register_verify_stmt(RMSNorm)
 def _(call: "Call", ctx: "VerifyContext") -> None:

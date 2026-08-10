@@ -51,9 +51,8 @@ def module(
 ):
     """Collect a class body into a ``Module``.
 
-    Collect a class body into a ``Module``: DSL functions, child ``Module``s
-    (or a tuple/list of them), and plain orchestration methods. See the module
-    authoring surface in docs/spec/parser.md.
+    Members may be DSL functions, child modules, or orchestration methods. See
+    [parser §2.7](docs/spec/parser.md#27-module-authoring-surface).
 
     ``entry`` optionally names which collected function is the default step.
 
@@ -84,8 +83,8 @@ def module(
         methods = {}
         for name, value in vars(cls_inner).items():
             if name == "__call__":
-                # Dropping it silently is the trap: a dunder is looked up on the
-                # type, so one attached to a Module instance never runs anyway.
+
+
                 raise TypeError(
                     f"@module {cls_inner.__name__!r}: a class-body __call__ has no "
                     f"effect -- Python resolves it on the type, not on the Module "
@@ -95,14 +94,14 @@ def module(
             if name.startswith("__") and name.endswith("__"):
                 continue
             if isinstance(value, Module):
-                # torch / HF semantics: a child is named by its attribute, not
-                # by its class.
+
+
                 child_modules.append(value.renamed(name) if value.name != name else value)
                 continue
             if isinstance(value, (tuple, list)) and value and all(
                 isinstance(m, Module) for m in value
             ):
-                # N siblings the factory already named; one attribute cannot.
+
                 child_modules.extend(value)
                 continue
             if isinstance(value, (HirFunction, PrimFunction)):
@@ -117,7 +116,7 @@ def module(
                 f"Module (or tuple/list of Modules), or a plain function; a "
                 f"@module class body may contain only these three member kinds"
             )
-        # Variants and converters live on their base, not as standalone entries.
+
         converter_fns = {
             conv for fn in functions for _, conv in getattr(fn, "converters", ())
         }

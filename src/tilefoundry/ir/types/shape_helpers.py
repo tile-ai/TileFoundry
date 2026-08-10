@@ -1,24 +1,11 @@
-"""Small helpers for handling mixed static / dynamic shape entries.
+"""Handle static and symbolic entries in tensor shapes.
 
-A tensor's ``shape`` tuple may contain static ``int`` entries or symbolic
-``DimVar(name, lo, hi)`` entries (half-open envelope: ``lo <= S < hi``).
-Two helper modes:
+Upper-bound helpers produce compile-time allocation sizes. Runtime-total
+helpers combine static factors with expressions for actual symbolic extents.
 
-- ``upper_bound(dim)`` returns a concrete ``int`` — the maximum runtime
-  value of the dim (``hi - 1`` for a ``DimVar``, since ``hi`` is exclusive),
-  which is the natural allocation count for static buffer sizing.
-  Used to size **compile-time** cute layouts and per-thread register
-  buffers so a single binary covers every runtime shape that flows
-  through the dispatch.
-
-- ``shape_runtime_total(shape, dim_var_expr)`` returns either an
-  ``int`` (all-static) or a C++ expression string that multiplies the
-  static dims by the runtime kernel scalars given in ``dim_var_expr``
-  (a mapping ``DimVar.name -> "<param>_shape_<axis>"``). Used at codegen
-  call sites where the *actual* element count must drive the kernel
-  loop (``tilefoundry::ops::binary`` / ``unary`` / ``fill`` / ``copy``),
-  not the static envelope.
+See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
 """
+
 from __future__ import annotations
 
 from .dim import DimVar
@@ -50,14 +37,13 @@ def i64_const(value: int) -> "Constant":
     from tilefoundry.ir.core.expr import Constant  # noqa: PLC0415 - cycle guard
 
     from .tensor_type import TensorType  # noqa: PLC0415 - cycle guard
+
     return Constant(type=TensorType.meta_scalar(), value=int(value))
 
 
 def upper_bound(dim) -> int:
     """Return a concrete int upper-bound element count for ``dim``."""
     if isinstance(dim, DimVar):
-        # Half-open envelope ``[lo, hi)``: ``hi`` is exclusive, so the maximum
-        # runtime value (the element count a static buffer must hold) is hi-1.
         return int(dim.hi) - 1
     static = static_dim_value(dim)
     if static is not None:
@@ -105,9 +91,6 @@ def shape_runtime_total(shape, dim_var_expr: dict[str, str]) -> object:
         if isinstance(s, DimVar):
             expr = dim_var_expr.get(s.name)
             if expr is None:
-                # Fall back to envelope upper bound when the codegen
-                # context has no runtime scalar registered for this
-                # DimVar (e.g. legacy code paths without dispatch).
                 static_prod *= upper_bound(s)
             else:
                 dyn_terms.append(expr)

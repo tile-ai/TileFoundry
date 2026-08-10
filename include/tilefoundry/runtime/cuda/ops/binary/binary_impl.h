@@ -1,5 +1,5 @@
-// CUDA binary op implementation. Included in-context from ops/binary.cuh
-// inside namespace tilefoundry::ops.
+/// CUDA binary op implementation. Included in-context from ops/binary.cuh
+/// inside namespace tilefoundry::ops.
 #pragma once
 
 namespace binary_impl {
@@ -93,4 +93,4 @@ template <class Op> struct BinaryBcastScalar {
     }
 };
 
-} // namespace binary_impl
+}

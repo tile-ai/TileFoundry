@@ -1,9 +1,9 @@
-// tilefoundry runtime — thin wrapper around CuTe.
-//
-// Provides our own `tilefoundry::Mesh` / `tilefoundry::TopologyScope` /
-// `tilefoundry::ShardLayout` / `tilefoundry::ShardTensor` template surface.
-// Re-exports CuTe primitives (`cute::copy`, `cute::make_tensor`, etc.)
-// so codegen can emit real CuTe calls.
+/// tilefoundry runtime — thin wrapper around CuTe.
+///
+/// Provides our own `tilefoundry::Mesh` / `tilefoundry::TopologyScope` /
+/// `tilefoundry::ShardLayout` / `tilefoundry::ShardTensor` template surface.
+/// Re-exports CuTe primitives (`cute::copy`, `cute::make_tensor`, etc.)
+/// so codegen can emit real CuTe calls.
 
 #pragma once
 
@@ -15,7 +15,7 @@
 #include <cute/arch/mma_sm80.hpp>
 #include <cstdint>
 #include <cuda_fp8.h>
-#include <cuda_pipeline.h> // cp.async (__pipeline_memcpy_async)
+#include <cuda_pipeline.h>
 #include <type_traits>
 #include <utility>
 
@@ -25,11 +25,11 @@ enum class TopologyScope {
     cta,
     warp,
     thread,
-    scope_count, // sentinel; not a real topology level
+    scope_count,
 };
 
-// program_id<T>(): backend-tag-dispatched runtime query for the linearized
-// scalar id of the current execution instance within topology `T`.
+/// program_id<T>(): backend-tag-dispatched runtime query for the linearized
+/// scalar id of the current execution instance within topology `T`.
 template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept;
 
 template <> CUTE_HOST_DEVICE size_t program_id<TopologyScope::cta>() noexcept {
@@ -51,13 +51,13 @@ CUTE_HOST_DEVICE size_t program_id<TopologyScope::thread>() noexcept {
 #endif
 }
 
-// No program_id<TopologyScope::warp> specialization: codegen only admits
-// ("cta", "thread") program topology levels (target/cuda/target.py
-// topology_levels()), so this is never instantiated. The TopologyScope::warp
-// enumerator itself stays ([runtime
-// §2.1](docs/spec/runtime.md#21-topologyscope)'s fixed enumeration); a real
-// warp-scoped program_id (thread id >> 5) belongs with whichever milestone
-// wires warp-scoped meshes, together with a test.
+/// No program_id<TopologyScope::warp> specialization: codegen only admits
+/// ("cta", "thread") program topology levels (target/cuda/target.py
+/// topology_levels()), so this is never instantiated. The TopologyScope::warp
+/// enumerator itself stays ([runtime
+/// §2.1](docs/spec/runtime.md#21-topologyscope)'s fixed enumeration); a real
+/// warp-scoped program_id (thread id >> 5) belongs with whichever milestone
+/// wires warp-scoped meshes, together with a test.
 
 template <TopologyScope T> constexpr auto program_shape() noexcept;
 
@@ -83,6 +83,6 @@ namespace ops {
 #include "ops/rmsnorm.cuh"
 #include "ops/mma.cuh"
 
-} // namespace ops
+}
 
-} // namespace tilefoundry
+}

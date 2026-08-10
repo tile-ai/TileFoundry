@@ -1,16 +1,8 @@
-"""HIR matrix-multiply-accumulate ops (per-shape op classes).
+"""Define shape-specific HIR matrix-multiply-accumulate value Ops.
 
-- ``Mma`` is an abstract marker base class only — ``isinstance``
-  dispatch entry point for cost model / lowering.
-- Concrete classes encode arch + shape in the class name
-  (``Mma_SM80_16x8x16``, ``Wgmma_SM90_64x128x16``); dtype / layout /
-  transpose ride as ParamDef attributes.
-- All classes are **SSA value ops** — they take ``a`` / ``b`` and
-  return a fragment tensor. Accumulation is expressed at HIR via
-  outer ``add(acc, Mma_*(a=, b=))``; the in-place accumulator
-  operand only appears at TIR / codegen lowering time.
-- ``mma`` is warp-level (32 threads collaborate per call);
-  ``wgmma`` is cluster-level (4 warps in a CTA cluster collaborate).
+``Mma`` is a dispatch marker. Concrete class names encode architecture and
+shape while attributes encode dtype and layout. HIR returns a fragment value;
+lowering introduces the in-place accumulator operand.
 """
 
 from __future__ import annotations
@@ -34,7 +26,6 @@ class Mma(Op):
     ``isinstance(call.target, Mma)`` regardless of fragment shape.
     """
 
-# ── PTX SM80 mma family ─────────────────────────────────────────────────
 
 @register_op(category="nn")
 class Mma_SM80_16x8x16(Mma):
@@ -43,6 +34,7 @@ class Mma_SM80_16x8x16(Mma):
     Warp-level (32 threads). ``a`` is M=16 × K=16; ``b`` is K=16 ×
     N=8; the returned fragment is M=16 × N=8 in ``dtype_acc``.
     """
+
     a = ParamDef(kind="input", pattern=Tensor)
     b = ParamDef(kind="input", pattern=Tensor)
     dtype_a = ParamDef(kind="attribute", annotation=DType)
@@ -50,6 +42,7 @@ class Mma_SM80_16x8x16(Mma):
     dtype_acc = ParamDef(kind="attribute", annotation=DType)
     a_layout = ParamDef(kind="attribute", annotation=str, default="T")
     b_layout = ParamDef(kind="attribute", annotation=str, default="N")
+
 
 @register_typeinfer(Mma_SM80_16x8x16)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -68,7 +61,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         storage=resolve_anchor_storage(ctx, call, a_ty.storage, b_ty.storage),
     )
 
-# ── PTX SM90 wgmma family ───────────────────────────────────────────────
 
 @register_op(category="nn")
 class Wgmma_SM90_64x128x16(Mma):
@@ -77,6 +69,7 @@ class Wgmma_SM90_64x128x16(Mma):
     Cluster-level (4 warps in a CTA cluster). Returned fragment is
     M=64 × N=128 in ``dtype_acc``.
     """
+
     a = ParamDef(kind="input", pattern=Tensor)
     b = ParamDef(kind="input", pattern=Tensor)
     dtype_a = ParamDef(kind="attribute", annotation=DType)
@@ -84,6 +77,7 @@ class Wgmma_SM90_64x128x16(Mma):
     dtype_acc = ParamDef(kind="attribute", annotation=DType)
     a_layout = ParamDef(kind="attribute", annotation=str, default="T")
     b_layout = ParamDef(kind="attribute", annotation=str, default="N")
+
 
 @register_typeinfer(Wgmma_SM90_64x128x16)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -101,5 +95,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ),
         storage=resolve_anchor_storage(ctx, call, a_ty.storage, b_ty.storage),
     )
+
 
 __all__ = ["Mma", "Mma_SM80_16x8x16", "Wgmma_SM90_64x128x16"]

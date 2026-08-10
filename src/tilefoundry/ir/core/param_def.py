@@ -1,35 +1,11 @@
-"""ParamDef descriptor for Op callable signature.
+"""Describe one input or attribute in an ``OpSchema`` signature.
 
-is a class-body descriptor that declares a single parameter (input or
-attribute) of an Op. Together with `OpSchema`, it replaces the older
-`Param[Expr, "input"]` annotation form (still present in `op.py` until
-M1c removes it).
+Annotations drive surface typing, sugar, and coarse overload selection;
+patterns further filter IR values. ``optional`` permits ``None`` while a
+non-``MISSING`` default permits omission. ``__set_name__`` supplies the
+canonical parameter name.
 
-Field semantics:
-
-- ``kind``: ``"input"`` or ``"attribute"``.
-- ``annotation``: Python type annotation that constrains the
-  *family* of values this param accepts (``Expr`` / ``Layout`` /
-  ``ShardLayout`` / ``int`` / ``str`` / ...). It drives:
-  (a) parser sugar dispatch — e.g. ``annotation`` being a Layout-like
-      type triggers layout sugar parsing at the corresponding
-      call-arg position;
-  (b) ``.pyi`` rendering for IDE / pyright;
-  (c) coarse overload candidate split — schemas of the same op name
-      whose annotations disagree don't compete on the same arg.
-  It does NOT carry rank / shape / dtype constraints.
-- ``pattern``: optional ``Pattern`` for IR-Expr subset filtering
-  within the ``Expr`` annotation family (e.g. ``Tensor`` vs
-  ``Scalar``, rank/shape/dtype). Non-overlapping with ``annotation``.
-- ``optional``: nullable flag. ``True`` means the value may be ``None``
-  (i.e. ``annotation | None`` in `.pyi`); orthogonal to omission.
-- ``default``: call-site default. ``MISSING`` sentinel means required;
-  any other value means the argument may be omitted at the call site
-  (auto-treats as optional in the surface signature).
-
-The class attribute name (``src``, ``dst``, ...) is captured via
-``__set_name__`` and stored on the descriptor as ``_attr_name``; it is
-the canonical parameter name and is not duplicated in a ``name`` field.
+See [parser §2.1](docs/spec/parser.md#21-model).
 """
 
 from __future__ import annotations
@@ -37,7 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-# --- Sentinel for "required" defaults ------------------------------------
 
 class _MissingType:
     """Sentinel marker for required parameters (no default).
@@ -56,12 +31,14 @@ class _MissingType:
     def __repr__(self) -> str:
         return "<MISSING>"
 
-    def __bool__(self) -> bool:  # treat as falsy for convenience
+    def __bool__(self) -> bool:
         return False
+
 
 MISSING: _MissingType = _MissingType()
 
 _ParamKind = Literal["input", "attribute"]
+
 
 @dataclass
 class ParamDef:
@@ -74,31 +51,20 @@ class ParamDef:
     """
 
     kind: _ParamKind
-    annotation: type = field(default=object)  # filled in lazily; default Expr in op_schema layer
+    annotation: type = field(default=object)
     pattern: "Pattern | None" = None
     optional: bool = False
     default: Any = MISSING
 
-    # Filled by __set_name__; not in __init__ args.
     _attr_name: str = field(default="", init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # Validate kind.
+
         if self.kind not in ("input", "attribute"):
-            raise ValueError(
-                f"ParamDef.kind must be 'input' or 'attribute', got {self.kind!r}"
-            )
-        # `default != MISSING` auto-treats as optional in the surface
-        # signature: it implies the param may be omitted at the call
-        # site. We preserve `optional`'s original (nullable) semantics
-        # but allow the convenience that writing `default=v` is enough
-        # to mark "omittable". `optional=True` independently controls
-        # whether the value type is `T | None`.
-        # No mutation here — call sites that interpret the descriptor
-        # (parser, stub gen) should consult both fields.
+            raise ValueError(f"ParamDef.kind must be 'input' or 'attribute', got {self.kind!r}")
 
     def __set_name__(self, owner: type, name: str) -> None:
-        # Record canonical attribute name; do not overwrite if explicitly set.
+
         if not self._attr_name:
             self._attr_name = name
 

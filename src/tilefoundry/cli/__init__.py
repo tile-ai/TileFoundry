@@ -29,16 +29,16 @@ from tilefoundry.schedule import ScheduleError
 
 _ANALYSES = ANALYSES
 
-#: Every command and its one-line description, in the order an agent meets them
-#: rather than alphabetically -- the order itself is meant to read as the workflow.
-#: One table, so the parser and the overview cannot describe different surfaces.
+
+
+
 _COMMANDS = {
     "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
     "tutorial": "learn the two-step workflow: its pages, or one of them",
     "check": "compare an implementation against its reference, output by output",
-    # Named by their evidence, not shared authored HIR input, so a reader who finished
-    # HIR does not mistake Analyze or Schedule for a command belonging to that step.
+
+
     "analyze": "report what a program costs: flops, traffic, bounds, timing",
     "schedule": "propose a plan for one topology level: placement and timing",
     "target": "list, show, add, or remove compilation targets",
@@ -127,7 +127,6 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="override this installation's target registry",
     )
-    # Not required: naming no command is how the overview is asked for.
     commands = parser.add_subparsers(dest="command", parser_class=_Parser)
 
     models = commands.add_parser("models", help=_COMMANDS["models"])

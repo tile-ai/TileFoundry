@@ -22,17 +22,21 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 
 __all__ = ["BinaryKind", "Binary", "UnaryKind", "Unary"]
 
+
 @register_op(dialect="T", category="arith")
 class Binary(Op):
     """Effect-form pointwise binary operation: ``dst = lhs <kind> rhs``."""
+
     lhs = ParamDef(kind="input", pattern=Tensor)
     rhs = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
+
 @register_typeinfer(Binary)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
 
 @register_verify_stmt(Binary)
 def _(call: "Call", ctx: "VerifyContext") -> None:
@@ -44,16 +48,20 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     if lty.shape != dty.shape:
         ctx.error(call, f"Binary shape mismatch: lhs {lty.shape} vs dst {dty.shape}")
 
+
 @register_op(dialect="T", category="arith")
 class Unary(Op):
     """Effect-form pointwise unary operation: ``dst = <kind>(src)``."""
+
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
 
+
 @register_typeinfer(Unary)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
 
 @register_verify_stmt(Unary)
 def _(call: "Call", ctx: "VerifyContext") -> None:

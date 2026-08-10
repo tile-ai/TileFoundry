@@ -12,13 +12,14 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 
-# Monotone non-decreasing: commutes with max/min, not sum.
 _COMMUTES_WITH = frozenset({"max", "min"})
 
 
 @register_op
 class ReLU(Op):
     x = ParamDef(kind="input", pattern=Tensor)
+
+
 @register_typeinfer(ReLU)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])

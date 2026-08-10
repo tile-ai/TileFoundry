@@ -13,10 +13,13 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op
 class Stack(Op):
     """Variadic input op. See Concat for encoding rationale."""
+
     is_variadic: ClassVar[bool] = True
 
     inputs = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
+
+
 @register_typeinfer(Stack)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
@@ -33,6 +36,4 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = list(base.shape)
     new_shape.insert(axis, new_len)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
-    return TensorType(
-        shape=tuple(new_shape), dtype=base.dtype, layout=base.layout, storage=storage
-    )
+    return TensorType(shape=tuple(new_shape), dtype=base.dtype, layout=base.layout, storage=storage)

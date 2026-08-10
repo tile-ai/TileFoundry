@@ -37,16 +37,21 @@ from tilefoundry.visitor_registry.relation_build import shape_from_relation
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 _COMPARE_KINDS = {
-    BinaryKind.EQ, BinaryKind.NE,
-    BinaryKind.LT, BinaryKind.LE,
-    BinaryKind.GT, BinaryKind.GE,
+    BinaryKind.EQ,
+    BinaryKind.NE,
+    BinaryKind.LT,
+    BinaryKind.LE,
+    BinaryKind.GT,
+    BinaryKind.GE,
 }
 _LOGICAL_KINDS = {BinaryKind.AND, BinaryKind.OR}
 _INT_ONLY_KINDS = {BinaryKind.FLOOR_DIV, BinaryKind.MOD}
 
+
 @register_op
 class Binary(Op):
     """Value-form pointwise binary operation."""
+
     lhs = ParamDef(kind="input", pattern=Tensor)
     rhs = ParamDef(kind="input", pattern=Tensor)
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
@@ -71,17 +76,13 @@ def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     def access(in_shape):
         pad = r - len(in_shape)
         return [
-            "0"
-            if (is_one(in_shape[i]) and not is_one(out_shape[pad + i]))
-            else f"d{pad + i}"
+            "0" if (is_one(in_shape[i]) and not is_one(out_shape[pad + i])) else f"d{pad + i}"
             for i in range(len(in_shape))
         ]
 
     src = "[" + ", ".join(in_dims) + "]"
     dsts = (access(lhs.shape), access(rhs.shape), in_dims)
-    maps = tuple(
-        isl.map(f"{{ {src} -> [{', '.join(dst)}] }}") for dst in dsts
-    )
+    maps = tuple(isl.map(f"{{ {src} -> [{', '.join(dst)}] }}") for dst in dsts)
     return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
@@ -121,8 +122,7 @@ def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
         and all(isinstance(attr, Broadcast) for attr in layout.attrs)
     ]
     if replicated and all(
-        not isinstance(layout, ShardLayout) or layout in replicated
-        for layout in (a, b)
+        not isinstance(layout, ShardLayout) or layout in replicated for layout in (a, b)
     ):
         first = replicated[0]
         return canonical_shard_layout(out_shape, first.mesh, first.attrs)
@@ -146,28 +146,24 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     lhs_ty = ctx.type_of(call.args[0])
     rhs_ty = ctx.type_of(call.args[1])
     if lhs_ty.dtype != rhs_ty.dtype:
-        ctx.error(call, f"Binary {op.kind.name}: dtype mismatch "
-                        f"({lhs_ty.dtype.name} vs {rhs_ty.dtype.name}); tensor "
-                        f"operands are never promoted for you. A number you wrote is "
-                        f"f32 -- tf.full_like(x, value=...) gives it x's dtype; "
-                        f"otherwise tf.cast one side explicitly. "
-                        f"See `tilefoundry spec dsl binary`")
+        ctx.error(
+            call,
+            f"Binary {op.kind.name}: dtype mismatch "
+            f"({lhs_ty.dtype.name} vs {rhs_ty.dtype.name}); tensor "
+            f"operands are never promoted for you. A number you wrote is "
+            f"f32 -- tf.full_like(x, value=...) gives it x's dtype; "
+            f"otherwise tf.cast one side explicitly. "
+            f"See `tilefoundry spec dsl binary`",
+        )
     if op.kind in _LOGICAL_KINDS and lhs_ty.dtype != DType.bool:
         ctx.error(call, f"Binary {op.kind.name}: operands must be bool")
     if op.kind in _INT_ONLY_KINDS and lhs_ty.dtype not in (DType.i32, DType.i64):
-        ctx.error(call, f"Binary {op.kind.name}: requires integer dtype, "
-                        f"got {lhs_ty.dtype}")
+        ctx.error(call, f"Binary {op.kind.name}: requires integer dtype, got {lhs_ty.dtype}")
     out_dtype = (
-        DType.bool
-        if op.kind in _COMPARE_KINDS or op.kind in _LOGICAL_KINDS
-        else lhs_ty.dtype
+        DType.bool if op.kind in _COMPARE_KINDS or op.kind in _LOGICAL_KINDS else lhs_ty.dtype
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
-    # ADD is additive in both operands at once (two Partial(sum) operands
-    # combine to a valid Partial(sum) of the sum) and commutes with a single
-    # monotone Partial(max/min) when the other operand is replicated; MUL
-    # commutes with a single Partial(sum) when the other operand is
-    # replicated (distributive). Any other kind commutes with neither.
+
     if op.kind is BinaryKind.ADD:
         allowed_reduction, commutes_jointly = frozenset({"max", "min"}), frozenset({"sum"})
     elif op.kind is BinaryKind.MUL:
@@ -175,17 +171,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     else:
         allowed_reduction, commutes_jointly = frozenset(), frozenset()
     check_multilinear_partials(
-        ctx, call, (("lhs", lhs_ty), ("rhs", rhs_ty)),
-        allowed_reduction=allowed_reduction, commutes_jointly=commutes_jointly,
+        ctx,
+        call,
+        (("lhs", lhs_ty), ("rhs", rhs_ty)),
+        allowed_reduction=allowed_reduction,
+        commutes_jointly=commutes_jointly,
     )
     try:
-        # Shape and shard share the relation as the single source: the forward
-        # relation builds the broadcast domain, the output shape is read back
-        # from it, and the shard engine consumes the same maps.
         relation = build_relation(call, (lhs_ty, rhs_ty), ctx)
-        out_shape = shape_from_relation(
-            relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape)
-        )
+        out_shape = shape_from_relation(relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape))
         shard = None
         if isinstance(la, ShardLayout) or isinstance(lb, ShardLayout):
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)

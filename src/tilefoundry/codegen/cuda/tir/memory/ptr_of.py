@@ -17,7 +17,7 @@ def _emit(let_stmt, ctx: CodegenContext) -> None:
     src = call.args[0]
     src_name = ctx.name_for(src)
     var_name = ctx.name_for(let_stmt.var)
-    # Emit the engine's data pointer.  For ShardTensor sources this
-    # is the backing cute tensor/gmem pointer; for plain cute tensors
-    # it's the tensor's own data iterator.
+
+
+
     ctx.emit(f"auto {var_name} = {src_name}.engine.data();")

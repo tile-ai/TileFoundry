@@ -8,7 +8,6 @@ ABI derivation lives in ``runtime.function.param_abi_of`` (shared with
 """
 from __future__ import annotations
 
-# Trigger emitter registration via autodiscovery.
 import importlib
 import logging
 import os
@@ -31,7 +30,7 @@ def _discover(subdir: str, prefix: str) -> None:
         except Exception:
             _log.debug("codegen autodiscovery: skip %s", _name, exc_info=True)
 
-# Order matters for stmts/ subpackage — import parent first.
+
 _discover("tir/stmts", "tilefoundry.codegen.cuda.tir.stmts.")
 _discover("tir/memory", "tilefoundry.codegen.cuda.tir.memory.")
 _discover("tir/nn", "tilefoundry.codegen.cuda.tir.nn.")
@@ -44,13 +43,13 @@ def _topology_shape_specializations(
     def _shape_args(dims: tuple[int, int, int]) -> str:
         return ", ".join(f"cute::Int<{d}>{{}}" for d in dims)
 
-    # Emit a ``program_shape`` specialization per static program topology level
-    # (cta, thread). ``warp`` is not a program topology level — it is expressed
-    # inside a mesh layout, so no ``program_shape<warp>`` is emitted.
+
+
+
     specializations = []
-    # A dynamic (launch-provided) CTA extent has no compile-time program_shape;
-    # the device reads its count via the codegen-emitted ``program_dim<cta>()``
-    # specialization. Emit no constexpr cta program_shape in that case.
+
+
+
     if grid[0] is not None:
         specializations.append(
             {
@@ -79,23 +78,12 @@ def _output_count_from_fn(fn) -> int:
 def _derive_launch_config(
     body: Sequential,
 ) -> tuple[tuple[int | None, int, int], tuple[int, int, int]]:
-    """Derive grid and block dimensions from the body's mesh topologies.
+    """Derive grid and block dimensions from body mesh topologies.
 
-    Derive ``(grid, block)`` dims from the mesh topologies the kernel
-    body opens via ``MeshScope``.
-
-    Walk every ``MeshScope`` reached from *body* and accumulate:
-
-    - ``grid.x`` = product of sizes for all ``Topology(name='cta', ...)``
-      entries (every cta topology axis lives at the CTA / grid level)
-    - ``block.x`` = product of sizes for the ``thread`` topology — the
-      per-thread launch grain inside each CTA. (``warp`` is a mesh layout
-      axis, not a program topology level, so it is not a launch contributor.)
-
-    A launch-provided (dynamic) cta extent is reported as ``grid.x = None``;
-    callers that need a static grid check for it. ``block.y`` / ``block.z`` /
-    ``grid.y`` / ``grid.z`` stay at 1 — there is no user-visible convention for
-    them yet.
+    CTA topology sizes multiply into ``grid.x`` and thread sizes into
+    ``block.x``; warp axes do not contribute. A launch-provided CTA extent
+    yields ``grid.x = None`` for static callers to reject. Other dimensions
+    remain one until a public convention exists.
     """
     grid_x = 1
     block_x = 1
@@ -115,11 +103,11 @@ def _derive_launch_config(
             size = t.size
             if not isinstance(size, int):
                 if tname == "cta":
-                    # Launch-provided (dynamic) CTA extent: the grid is supplied
-                    # by the host launch and read on device via
-                    # ``program_dim<cta>()``. Report it as a dynamic grid
-                    # (``grid.x = None``); a caller that needs a static grid
-                    # checks for ``None`` and errors at its own site.
+
+
+
+
+
                     cta_dynamic = True
                     continue
                 raise ValueError(
@@ -155,8 +143,8 @@ def _derive_launch_config(
         match stmt:
             case MeshScope():
                 g, b = _topo_dims(stmt.mesh)
-                # Use max so nested MeshScopes (e.g. cta + thread sequence)
-                # land at the union footprint rather than overwriting.
+
+
                 grid_x = max(grid_x, g)
                 block_x = max(block_x, b)
                 walk(stmt.body)
@@ -164,9 +152,9 @@ def _derive_launch_config(
                 for s in stmt.body:
                     walk(s)
             case LetStmt():
-                # Inspect the bound value's type — Reshard / sharded ops
-                # carry ``ShardLayout`` here even when no MeshScope is
-                # present (rmsnorm path).
+
+
+
                 if hasattr(stmt, "value"):
                     _walk_expr(stmt.value)
                 if hasattr(stmt, "var") and getattr(stmt.var, "type", None) is not None:

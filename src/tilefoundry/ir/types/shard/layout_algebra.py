@@ -1,21 +1,12 @@
-"""Flat CuTe layout algebra for mesh execution scopes.
+"""Provide flat CuTe layout algebra for mesh execution scopes.
 
-Ported from the pure-Python CuTe reference
-(``third_party/cutlass/python/pycute/{int_tuple,layout}.py``), restricted to
-the **flat** (non-hierarchical) ``Layout`` / ``ComposedLayout`` the shard IR
-uses. The ported pieces are exactly what the mesh model needs:
+The restricted port supports coordinate application, inverses, containment,
+and projection for ``Layout`` and ``ComposedLayout``. Execution scopes must be
+injective and inverse-projectable.
 
-- ``apply`` — ``crd2idx`` of a 1-D domain coord (the layout as a function);
-- ``left_inverse`` / ``right_inverse`` — the CuTe inverses, used to recover a
-  coordinate from a thread index;
-- ``contains`` / ``project`` over a ``ComposedLayout`` execution scope:
-  ``project`` is ``left_inverse`` applied to the thread index, ``contains`` adds
-  the domain-bounds and round-trip check.
-
-``image(c) = inner(offset + outer(c))`` matches CuTeDSL ``make_composed_layout``.
-Only inverse-projectable (injective, compact-image) layouts are admissible
-execution scopes; a non-injective layout raises ``NotProjectable``.
+See [shard §9](docs/spec/shard.md#9-layout-construction-and-mesh-scope-projection).
 """
+
 from __future__ import annotations
 
 from typing import Optional, Union
@@ -135,7 +126,7 @@ def complement(layout: Layout, max_idx: int = 1) -> Layout:
         result_shape.append(stride // current_idx)
         result_stride.append(current_idx)
         current_idx = shape * stride
-    result_shape.append((max_idx + current_idx - 1) // current_idx)  # ceil_div
+    result_shape.append((max_idx + current_idx - 1) // current_idx)
     result_stride.append(current_idx)
     return coalesce(Layout(shape=tuple(result_shape), strides=tuple(result_stride)))
 
@@ -159,9 +150,7 @@ def is_inverse_projectable(layout: Layout) -> bool:
     """
     current = 1
     modes = sorted(
-        (stride, shape)
-        for shape, stride in zip(_shape(layout), _stride(layout))
-        if shape != 1
+        (stride, shape) for shape, stride in zip(_shape(layout), _stride(layout)) if shape != 1
     )
     for stride, shape in modes:
         if stride == 0 or stride % current != 0:
@@ -192,9 +181,6 @@ def _right_inverse_layout(layout: Layout) -> Layout:
 def _left_inverse_layout(layout: Layout) -> Layout:
     """CuTe ``left_inverse``: ``left_inverse(layout)(layout(i)) == i`` (injective)."""
     return _right_inverse_layout(_make_flat(layout, complement(layout)))
-
-
-# --- ComposedLayout: identity-inner admissibility + recursive inverse --------
 
 
 def _is_identity_inner(inner: object) -> bool:
@@ -293,11 +279,10 @@ def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
     coord_1d = _apply_any(left_inverse(scope), t)
     if not (0 <= coord_1d < size(outer)):
         return None
-    # round-trip: reject thread indices not in outer's image (stride remainder)
+
     if image(scope, coord_1d) != t:
         return None
-    # coord_1d is the 1-D domain linearization; split it over the domain's
-    # natural (prefix-product) strides, NOT outer's image strides.
+
     shape = _shape(outer)
     return idx2crd(coord_1d, shape, prefix_product(shape))
 

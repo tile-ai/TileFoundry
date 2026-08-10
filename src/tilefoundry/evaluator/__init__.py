@@ -29,9 +29,9 @@ __all__ = [
     "from_layout_view",
 ]
 
-# `evaluate` lives in `interpreter.py`, which pulls in the IR visitor stack.
-# Import lazily so op modules can `from tilefoundry.evaluator.registry import
-# register_eval` while the IR package is still loading.
+
+
+
 
 
 def __getattr__(name: str) -> Any:

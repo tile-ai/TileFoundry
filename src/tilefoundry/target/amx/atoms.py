@@ -38,12 +38,10 @@ class StorageLevel:
         return all(operand_bytes[role] <= limit for role, limit in self.budget)
 
 
-# The X/Y/Z register files are AMX ISA geometry, not a per-part figure, so the
-# level they form is read once off the installed architecture.
 _ISA = AmxTarget.hardware.resolve(APPLE_AMX_ID).value
 
-# An AMX operand is addressed as a register: A in X, B in Y, C in the Z
-# accumulator file, and one instance never reaches outside them.
+
+
 AMX_REGISTERS = StorageLevel(
     name="amx_xyz_registers",
     budget=(
@@ -53,9 +51,9 @@ AMX_REGISTERS = StorageLevel(
     ),
 )
 
-# NEON loads and stores its operands through the core's caches, which unified
-# memory backs: an operand too big to stay resident streams instead of being
-# rejected, so this level budgets nothing.
+
+
+
 CORE_CACHE = StorageLevel(name="core_cache")
 
 
@@ -86,8 +84,8 @@ class AmxAtom:
     c_bytes: int
 
 
-# One FMA32 multiplies a 64-byte X operand by a 64-byte Y operand, so its shape
-# is a 16x16 f32 rank-one outer product: K is the atom's own extent, 1.
+
+
 AMX_FMA32_16x16x1_F32 = AmxOpSpec(
     name="AMX_FMA32_16x16x1_F32",
     unit="amx",
@@ -98,9 +96,9 @@ AMX_FMA32_16x16x1_F32 = AmxOpSpec(
     dtype_c=DType.f32,
 )
 
-# `FMLA vD.4s, vN.4s, vM.s[i]` accumulates a 4-lane f32 vector times one
-# broadcast lane of another; four of them over four accumulator registers are
-# the smallest whole f32 outer product NEON issues, so K is 1 as for FMA32.
+
+
+
 NEON_FMLA_4x4x1_F32 = AmxOpSpec(
     name="NEON_FMLA_4x4x1_F32",
     unit="neon",
@@ -111,8 +109,8 @@ NEON_FMLA_4x4x1_F32 = AmxOpSpec(
     dtype_c=DType.f32,
 )
 
-# The catalogue this bridge searches; add an AmxOpSpec here to extend it. AMX
-# FMA16 and FMA64 exist in the instruction set and are not modelled.
+
+
 _AMX_OP_CATALOG: tuple[AmxOpSpec, ...] = (AMX_FMA32_16x16x1_F32, NEON_FMLA_4x4x1_F32)
 
 
@@ -147,18 +145,13 @@ def make_atom(op: AmxOpSpec) -> AmxAtom:
 
 
 def _roofline_duration_ns(atom: AmxAtom, target: AmxTarget) -> tuple[float, float]:
-    """Nominal roofline estimate (ns) for *one* atom instance, as ``(duration, compute_only)``.
+    """Estimate nominal compute and traffic time for one AMX atom.
 
-    Nominal roofline estimate (ns) for *one* atom instance, as
-    ``(duration, compute_only)``.
-
-    Compute is the atom's own MNK flops over the measured f32 throughput of
-    the unit that issues it; memory is its three operands' bytes over
-    unified-memory bandwidth. The compute-only half is returned separately for
-    a consumer that accounts the surrounding traffic itself and would otherwise
-    charge memory twice. A nominal estimate to rank against, not a claim of
-    accuracy. Both halves are positive, so neither needs a floor -- one that
-    rounded up to a nanosecond would swallow a sub-ns SIMD atom whole.
+    Compute uses MNK flops and measured unit throughput; memory uses operand
+    bytes and unified bandwidth. Return the maximum and compute-only time in
+    nanoseconds so callers that account for traffic do not charge it twice.
+    This ranks candidates rather than predicting measured performance. Values
+    remain sub-nanosecond instead of applying a one-nanosecond floor.
     """
     m, n, k = atom.op.shape_mnk
     flops = 2 * m * n * k
@@ -237,7 +230,7 @@ def candidate_atoms(op: Call, target: Target | None = None) -> list[AtomFact]:
                     "c_bytes": atom.c_bytes,
                     "operand_bytes": atom.a_bytes + atom.b_bytes + atom.c_bytes,
                 },
-                # Both units issue their atoms in order; neither has an async form.
+
                 resource={amx_op.unit: 1},
                 is_async=False,
                 atom=atom,

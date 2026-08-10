@@ -1,19 +1,9 @@
-"""Parser-side ``RangeSlice`` for chunked tile iteration.
+"""Represent chunked tile iteration only while parsing.
 
-A ``RangeSlice`` represents the per-iteration sub-range yielded by a
-two-arg ``tile(extent, step)`` form. It exists only at parse time —
-it does **not** appear in the IR. The IR-level induction variable
-(``Var(i64)``) is still emitted as ``GridRegionExpr.induction_var``;
-the RangeSlice merely lets ``x[:, ok]`` lift to a ``Slice`` Op call
-whose bounds are ``[iv * step, iv * step + step)``.
-
-Example::
-
-    for ok in tile(2048, 512):
-        x_smem = reshard(x[:, ok], ...)   # x[:, ok*512 : ok*512+512]
-
-For single-arg ``tile(extent)`` the loop iv is bound directly to the
-``Var(i64)`` (legacy scalar form); ``RangeSlice`` is not used.
+Two-argument ``tile(extent, step)`` binds a range whose indexed use lowers to
+``[iv * step, iv * step + step)`` while the IR retains its scalar induction
+variable. Single-argument tile loops bind that scalar directly and never create
+a range slice.
 """
 
 from __future__ import annotations
@@ -40,17 +30,10 @@ def _to_i64_expr(value: Any) -> Expr:
 
 @dataclass(frozen=True)
 class RangeSlice:
-    """Parser-side iter binding for ``for ok in tile(extent, step)``.
+    """Bind a chunked tile loop's induction variable, extent, and step.
 
-    Attributes:
-    ----------
-    induction_var : Var
-        The IR i64 scalar Var emitted as the GridRegionExpr induction
-        variable. Shared with ``GridRegionExpr.induction_var``.
-    extent : Expr | int
-        Total range covered across all iterations.
-    step : Expr | int
-        Per-iteration chunk size.
+    ``induction_var`` is shared with the resulting grid region. ``extent`` is
+    the complete range and ``step`` is the per-iteration chunk size.
     """
 
     induction_var: Var

@@ -56,7 +56,7 @@ def test_tool_directives_and_the_first_line_shebang_are_allowed(lint, tmp_path, 
 
 
 def test_docstring_prose_budget_is_eight_lines(lint, tmp_path) -> None:
-    eight = '\n'.join(f"line {number}" for number in range(8))
+    eight = "\n".join(f"line {number}" for number in range(8))
     assert _find(lint, tmp_path, f'"""{eight}\n"""\n') == []
     assert _find(lint, tmp_path, f'"""{eight}\nline 8\n"""\n')
 
@@ -69,7 +69,7 @@ def test_google_sections_do_not_spend_prose_lines(lint, tmp_path) -> None:
 
 def test_docstring_and_directive_width_is_limited(lint, tmp_path) -> None:
     assert _find(lint, tmp_path, f'"""{"x" * 95}"""\n')
-    assert _find(lint, tmp_path, f'value = 1  # noqa: {"x" * 90}\n')
+    assert _find(lint, tmp_path, f"value = 1  # noqa: {'x' * 90}\n")
 
 
 def test_hygiene_only_excuses_narration(lint, tmp_path) -> None:
@@ -86,6 +86,7 @@ def test_narration_is_checked_in_comments_and_docstrings(lint, tmp_path) -> None
 
 def test_transition_exemption_only_skips_placement_and_size(lint, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(lint, "ROOT", tmp_path)
+    monkeypatch.setattr(lint, "EXEMPT_PREFIXES", ("src/legacy.py",))
     target = tmp_path / "src" / "legacy.py"
     target.parent.mkdir()
     target.write_text("# milestone M2\n", encoding="utf-8")
@@ -119,6 +120,25 @@ def test_c_family_comment_forms(lint, tmp_path, text, allowed) -> None:
 def test_doxygen_prose_budget_is_eight_lines(lint, tmp_path) -> None:
     lines = "\n".join(f" * line {number}" for number in range(9))
     assert _find(lint, tmp_path, f"/**\n{lines}\n */\nint f();\n", ".hpp")
+    line_docs = "\n".join(f"/// line {number}" for number in range(9))
+    assert _find(lint, tmp_path, f"{line_docs}\nint f();\n", ".hpp")
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        '"https://example.test/path"',
+        '"not /* a comment */"',
+        "'/'",
+        'R"tag(// not a comment\n/* still a string */)tag"',
+    ],
+)
+def test_c_family_comment_markers_inside_literals_are_ignored(lint, tmp_path, literal) -> None:
+    assert _find(lint, tmp_path, f"auto value = {literal};\n", ".hpp") == []
+
+
+def test_inline_doxygen_block_is_not_a_declaration_comment(lint, tmp_path) -> None:
+    assert _find(lint, tmp_path, "int value; /** misplaced */\n", ".hpp")
 
 
 def test_exit_status_names_the_file_and_line(lint, tmp_path, capsys) -> None:

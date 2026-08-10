@@ -115,8 +115,8 @@ class Evaluator(ExprVisitor):
                 f"{len(callee.params)} args, got {len(arg_exprs)}"
             )
         args = [self.visit(a) for a in arg_exprs]
-        # A dispatch prototype (body is None) selects a variant by the runtime
-        # argument shapes; its own None body is never evaluated.
+
+
         target = _select_variant(callee, args) if callee.variants else callee
         sub_env = {id(param): arg for param, arg in zip(target.params, args)}
         sub_dim_env = _bind_dim_vars(target.params, args)
@@ -170,7 +170,7 @@ class Evaluator(ExprVisitor):
             return env
 
         if not region.carried_args:
-            # No-carry loop: the value is the final body evaluation.
+
             last = None
             for i in indices:
                 last = Evaluator(
@@ -249,8 +249,8 @@ def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = N
             )
             for param, arg in zip(fn.params, inputs)
         ]
-        # A dispatch prototype selects a variant by the input shapes; its own
-        # None body is never evaluated.
+
+
         target = _select_variant(fn, values) if fn.variants else fn
         env = {id(param): value for param, value in zip(target.params, values)}
         dim_env = _bind_dim_vars(target.params, values)

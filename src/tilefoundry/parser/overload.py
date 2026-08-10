@@ -1,18 +1,8 @@
-"""Pattern-based overload resolution for OpSchema candidates.
+"""Resolve operation-schema overloads by ordered parameter patterns.
 
-Given a list of :class:`~tilefoundry.ir.core.op_schema.OpSchema` candidates
-sharing the same ``(dialect, name)`` and the runtime arg types of a
-call site, this module:
-
-1. Filters out candidates whose arity is incompatible with the call.
-2. For each remaining candidate, walks ``signature`` in order and runs
-   each ParamDef's ``pattern`` against the corresponding arg type.
-3. Returns the **first** candidate whose every input ParamDef pattern
-   matches (F3 first-match lock).
-
-It is intentionally minimal — it ships only what dispatch / parser
-need to dispatch the new OpSchema-based Ops.
-typeinfer / sugar / call-arg lifting stay in their original modules.
+Candidates first filter by arity, then each input pattern matches its runtime
+argument type in signature order. The first complete match wins. Type inference,
+sugar parsing, and call-argument lifting remain outside this module.
 """
 
 from __future__ import annotations
@@ -21,8 +11,6 @@ from typing import Any, Iterable, Sequence
 
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.param_def import ParamDef
-
-# --- Helpers ------------------------------------------------------------
 
 
 def _input_params(schema: OpSchema) -> list[ParamDef]:
@@ -55,7 +43,7 @@ def _pattern_matches(pd: ParamDef, arg_type: Any) -> bool:
     return pd.pattern.match(arg_type)
 
 
-# --- Public API ---------------------------------------------------------
+
 
 
 class OverloadError(LookupError):

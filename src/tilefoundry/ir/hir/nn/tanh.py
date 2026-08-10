@@ -18,7 +18,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 
-# Monotone non-decreasing: commutes with max/min, not sum.
 _COMMUTES_WITH = frozenset({"max", "min"})
 
 
@@ -52,10 +51,5 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Tanh)
 def _eval_tanh(ctx):
-    # `torch.tanh`, not the `2 * sigmoid(2z) - 1` identity a caller would
-    # otherwise have to write for itself. The identity is exact in real
-    # arithmetic and badly conditioned in floating point: near z = 0 the two
-    # terms agree to their leading bits and cancel, and at bf16's eight mantissa
-    # bits there is almost nothing left underneath. This rounds once; the
-    # identity rounds at every step of itself.
+
     return TensorValue(data=torch.tanh(ctx.args[0].data), type=ctx.result_type)

@@ -1,5 +1,5 @@
-// CUDA sync op public entry. Included in-context from runtime.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA sync op public entry. Included in-context from runtime.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 enum class SyncKind {

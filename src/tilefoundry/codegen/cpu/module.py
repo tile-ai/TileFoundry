@@ -1,19 +1,9 @@
-"""Host linkable-module emitter (split pipeline).
+"""Emit the host module for the split code-generation pipeline.
 
-Emits the host ``.cpp`` module for a CPU-target entry. Two entry-body shapes
-are supported:
-
-- ``Sequential((Launch,))`` — a tvm-ffi entry that binds runtime tensors to a
-  device kernel's parameters, checks device placement, and calls that kernel's
-  launch shim by symbol.
-- ``Sequential((DispatchCall, [Return]))`` — the dispatch entry lowers to a
-  host-side first-match ``if/else`` over a shape predicate; each case calls the
-  matching variant's launch shim, and the fallback throws.
-
-The host module compiles with a plain host compiler — it includes only
-tvm-ffi / DLPack / std headers and never references CUDA, CuTe, ``<<<>>>``,
-``dim3`` or ``cudaStream_t``; those live exclusively in the device module and
-its shims.
+Launch entries validate and bind runtime tensors before calling a device shim.
+Dispatch entries use a first-match shape predicate and throw on fallback. Output
+uses only TVM FFI, DLPack, and standard C++; CUDA syntax and types remain in the
+device module and shims.
 """
 from __future__ import annotations
 
@@ -49,13 +39,12 @@ from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 
-# Memory-space → required DLPack device type for a host ABI tensor argument.
 _STORAGE_DEVICE_TYPE = {
     StorageKind.GMEM: "kDLCUDA",
     StorageKind.HOST: "kDLCPU",
 }
 
-# Launch-config ABI tail shared by every shim signature / forward declaration.
+
 _LAUNCH_ABI_DECL = ["int", "int", "int", "int", "int", "int", "int", "void*"]
 
 
@@ -76,8 +65,8 @@ def _static_smem(value) -> int:
     )
 
 
-# Dim-arithmetic op -> infix C++ operator. Integer shape extents are
-# non-negative, so C++ ``/`` matches floor division.
+
+
 _DIM_BINOP_CXX = {
     DimAdd: "+",
     DimSub: "-",
@@ -211,15 +200,15 @@ CPU_CODE_GENERATOR = CodeGenerator(emit_host_module)
 
 
 def _lower_launch(entry: PrimFunction, evaluate, module):
-    launch_op = evaluate.callable  # Launch Op
+    launch_op = evaluate.callable
     device_fn = module.lookup(evaluate.args[0].name)
     dev_params = device_fn.params
     _reject_unsupported_config(launch_op)
 
-    # The forwarded args (after the callee + six grid/block extents) bind the
-    # host-visible device params (lowered params minus hidden shape scalars).
-    # Hidden scalars are appended by lowering and filled host-side from a tensor
-    # arg's shape — the user never passes them.
+
+
+
+
     grid_exprs = evaluate.args[1:4]
     block_exprs = evaluate.args[4:7]
     hidden = _hidden_names(dev_params)
@@ -250,8 +239,8 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
             )
         return ep
 
-    # Visible device param -> bound entry param (positional). A hidden scalar
-    # keeps its own name as a host local, declared below from the runtime shape.
+
+
     bound = [_resolve(a) for a in args]
     host_name_of: dict[str, str] = {}
     dev_index_of_entry: dict[int, int] = {}
@@ -269,7 +258,7 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
     host_names = [host_name_of[p.name] for p in dev_params]
     dev_to_host = host_name_of
 
-    # Wrapper signature in entry.params order; every entry param must be used.
+
     wrapper_tokens = []
     for ep in entry.params:
         k = dev_index_of_entry.get(id(ep))
@@ -311,11 +300,11 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
             return hn
         return f"static_cast<long long>({hn})"
 
-    # Grid / block extents are already canonical Exprs (a static ``Constant``,
-    # a ``ShapeOf`` of a forwarded tensor for a launch-provided dim, or a
-    # dim-arithmetic ``Call`` over those — built when the launch was
-    # constructed). A ``ShapeOf`` lowers to the forwarded tensor's runtime
-    # ``shape()`` access; the wrapper parameter carries that tensor's name.
+
+
+
+
+
     def _extent(c) -> str:
         cv = static_dim_value(c)
         if cv is not None:
@@ -327,7 +316,7 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
     dynamic_smem = _static_smem(launch_op.dynamic_smem)
     call_args = [_call_arg(i, p) for i, p in enumerate(dev_params)]
     call_args += [*grid, *block, str(dynamic_smem)]
-    call_args.append("nullptr")  # stream
+    call_args.append("nullptr")
     body_lines.append(f"{shim_symbol(device_fn.name)}({', '.join(call_args)});")
     return [_shim_decl(device_fn)], body_lines, ", ".join(wrapper_tokens)
 
@@ -366,7 +355,7 @@ def _lower_dispatch(entry: PrimFunction, dispatch: DispatchCall, module):
             )
         return nm
 
-    # Host wrapper signature + placement, from the entry's user-facing params.
+
     wrapper_tokens, body_lines = [], []
     for p in entry_params:
         if p.name in hidden:
@@ -421,8 +410,8 @@ def _lower_dispatch(entry: PrimFunction, dispatch: DispatchCall, module):
                 f"requires a static grid"
             )
         shim_args += [str(d) for d in (*grid, *block, 0)]
-        shim_args.append("nullptr")  # dynamic_smem handled above; stream
-        pred = f"(({pat.lo} <= {s}) && ({s} < {pat.hi}))"  # half-open [lo, hi)
+        shim_args.append("nullptr")
+        pred = f"(({pat.lo} <= {s}) && ({s} < {pat.hi}))"
         prefix = "if" if idx == 0 else "} else if"
         body_lines.append(f"{prefix} ({pred}) {{")
         body_lines.append(

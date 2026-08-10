@@ -50,16 +50,11 @@ def run_schedule(
     solver_workers: int | None = None,
     first_plan: bool = False,
 ) -> int:
-    """Schedule one authored Module through the public Schedule operation.
+    """Schedule one authored module through the public operation.
 
-    The solver's budget is stated here rather than left to the library default
-    because two things about it are the caller's to decide and neither is visible
-    from inside. The worker count: the default lets the solver size itself to the
-    machine, and several solvers each doing that on one machine oversubscribe it
-    until none returns an answer, which looks like the model being unschedulable and
-    is not. And whether the best plan is wanted at all: the search keeps improving
-    until its limit, so a caller who needs a plan rather than the best one otherwise
-    waits out the whole budget for an answer it had early.
+    Explicit worker and timeout settings prevent concurrent solvers from each
+    claiming the whole machine. ``first_plan`` returns the first feasible answer
+    instead of spending the full budget improving it.
     """
     ir = load_authored_ir(source)
     function = entry_function(ir)

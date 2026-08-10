@@ -1,20 +1,9 @@
-"""What each analysis family leaves on the IR.
+"""Define the records each analysis family attaches to IR.
 
-The record types are split by what the number depends on rather than by
-convenience: compute cost is a property of the authored program alone, while the
-memory and roofline records only mean anything against a specific target.
-Keeping them apart is what lets a caller see which of its numbers would change
-on other hardware.
-
-A record's attachment point says what it is about, so the same type serves both
-granularities where the quantity is the same quantity: a roofline bound on a
-Call is that call's, and one on a Function is that whole function's. What a
-record must never do is describe a different quantity depending on where it
-hangs.
-
-A Function-attached record is not data the Function inherently has. It is
-written only when a call actually analysed that function, and says what this
-analysis found; nothing is cached across calls.
+Compute cost depends only on authored IR; memory and roofline records depend on
+a target. Attachment identifies granularity without changing a record's
+meaning. Function records describe one analysis call and are never cached
+across calls.
 """
 
 from __future__ import annotations
@@ -27,24 +16,12 @@ from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 @dataclass(frozen=True)
 class ComputeCostMetadata(IRMetadata):
-    """One Call's logical work, as the authored program states it.
+    """Record one call's logical work as authored.
 
-    Flops are grouped by compute DType name rather than summed, because an op
-    that mixes precisions does not have one flop count -- and which of those
-    counts dominates is a question about hardware, asked later.
-
-    ``flops`` is the operation's global arithmetic from the types as written.
-    ``flops_per_unit`` is the arithmetic one unit of the analysed topology level
-    performs after shard projection.
-
-    ``operands`` breaks ``traffic`` down the other way: per operand rather than
-    per level, positional against ``(*call.args, call)``. It is present only for
-    a direct call on a primitive op; a call into another Function carries that
-    callee's aggregate traffic, which no breakdown of this call's operands
-    describes.
-
-    Traffic is global and counted once. A launch-provided topology may make the
-    per-unit column target-dependent because the target supplies its extent.
+    ``flops`` groups global work by dtype; ``flops_per_unit`` applies shard
+    projection at the requested topology level. Global traffic is counted once.
+    ``operands`` is positional against ``(*call.args, call)`` and exists only
+    for direct primitive calls, not aggregate calls into another function.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
@@ -115,17 +92,12 @@ class ValueLifetime:
 
 @dataclass(frozen=True)
 class MemoryMetadata(IRMetadata):
-    """One function's memory behaviour against one target's hierarchy.
+    """Record one function's memory behavior against a target hierarchy.
 
-    The record is attached to the Function rather than to a value: a peak is a
-    property of the whole function's live ranges, and there is no single
-    expression it belongs to.
-
-    ``advisories`` carries the capacity findings that are not errors. A cache
-    too small for the working set it fronts costs performance, so it is worth
-    reporting; an explicit-level peak is likewise order-dependent. Neither
-    makes the program invalid. Only one value too large for an addressable
-    level fails the call, because no schedule can place it.
+    Function attachment reflects that peaks span all live ranges. Advisories
+    report cache working-set and order-dependent peak overflow; only a single
+    value exceeding an addressable level is an error because no schedule can
+    place it.
     """
 
     footprint: tuple[LevelFootprint, ...] = ()

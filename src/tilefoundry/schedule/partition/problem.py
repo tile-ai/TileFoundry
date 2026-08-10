@@ -303,7 +303,10 @@ class _Closer:
                 result.append(
                     replace(
                         replicated,
-                        layout=replace(replicated.layout, attrs=(Partial("sum"),)),  # type: ignore[arg-type]
+                        layout=replace(
+                            replicated.layout,
+                            attrs=(Partial("sum"),),  # type: ignore[arg-type]
+                        ),
                     )
                 )
                 for axis, dim in enumerate(base.shape):

@@ -1,39 +1,39 @@
-// tilefoundry reduce op — single public ``reduce`` entry.
-//
-// This file is included IN-CONTEXT from runtime.cuh, at the point inside
-// ``namespace tilefoundry::ops`` where the reduce surface used to live. It
-// therefore does NOT open ``namespace tilefoundry`` / ``ops`` and pulls in no
-// system headers — cute/std and the surrounding names (``detail::to_local``,
-// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope. The op
-// tags below must precede the impl-header includes because
-// ``reduce_impl::reduce_traits<Op>`` specializes on them.
+/// tilefoundry reduce op — single public ``reduce`` entry.
+///
+/// This file is included IN-CONTEXT from runtime.cuh, at the point inside
+/// ``namespace tilefoundry::ops`` where the reduce surface used to live. It
+/// therefore does NOT open ``namespace tilefoundry`` / ``ops`` and pulls in no
+/// system headers — cute/std and the surrounding names (``detail::to_local``,
+/// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope. The op
+/// tags below must precede the impl-header includes because
+/// ``reduce_impl::reduce_traits<Op>`` specializes on them.
 #pragma once
 
-// Reduce combine-kind tags — pure compile-time markers. Semantics (init
-// value, elem/combine/finalize) live in one place per tag,
-// ``reduce_impl::reduce_traits<Op>`` (reduce/reduce_common_impl.h), consumed
-// uniformly by all four reduce tiers below.
+/// Reduce combine-kind tags — pure compile-time markers. Semantics (init
+/// value, elem/combine/finalize) live in one place per tag,
+/// ``reduce_impl::reduce_traits<Op>`` (reduce/reduce_common_impl.h), consumed
+/// uniformly by all four reduce tiers below.
 struct mean_op {};
 struct sum_op {};
 struct absmax_op {};
 
-// ── Sharded reduce ───────────────────────────────
-// Per-tier reduce building blocks; the public ``reduce`` entry below selects a
-// tier from the operand shard layouts. MEAN folds as SUM plus a final divide by
-// the total reduced extent.
+/// ── Sharded reduce ───────────────────────────────
+/// Per-tier reduce building blocks; the public ``reduce`` entry below selects a
+/// tier from the operand shard layouts. MEAN folds as SUM plus a final divide
+/// by the total reduced extent.
 #include "reduce/reduce_common_impl.h"
 #include "reduce/reduce_intra_warp_impl.h"
 #include "reduce/reduce_intra_cta_impl.h"
 #include "reduce/reduce_cross_warp_impl.h"
 #include "reduce/reduce_plain_impl.h"
 
-// Single public reduce entry: ``dst = reduce_kind(src)`` over ``Axes``.
-//
-// Sharded operands (a nested ``shard_layout_type``) select an intra-warp,
-// intra-CTA, or cross-warp tier: with no workspace the reduce mesh lives inside
-// a single warp (intra-warp); otherwise the (src, dst) shard layouts pick the
-// intra-CTA (lane-reduced) vs. cross-warp tier and its ``warps_per_group``.
-// Non-sharded operands take the plain rank-aware fold.
+/// Single public reduce entry: ``dst = reduce_kind(src)`` over ``Axes``.
+///
+/// Sharded operands (a nested ``shard_layout_type``) select an intra-warp,
+/// intra-CTA, or cross-warp tier: with no workspace the reduce mesh lives
+/// inside a single warp (intra-warp); otherwise the (src, dst) shard layouts
+/// pick the intra-CTA (lane-reduced) vs. cross-warp tier and its
+/// ``warps_per_group``. Non-sharded operands take the plain rank-aware fold.
 template <class Op, class Axes, class Src, class Dst,
           class Ws = reduce_impl::no_workspace_t>
 __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {}) {

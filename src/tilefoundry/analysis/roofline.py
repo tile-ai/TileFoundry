@@ -23,8 +23,8 @@ from .walk import attach, describe, postorder, reachable_functions
 
 SELECTOR = "roofline"
 
-# No published rate means no bound from that side, which is reported as zero
-# rather than as a guess.
+
+
 _NO_BOUND = 0
 
 
@@ -75,16 +75,16 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
     if not ideal:
         bound_by = "none"
     elif compute_ns and compute_ns == memory_ns:
-        # Calling an exact tie one side's win would hide that relieving that
-        # side alone buys nothing.
+
+
         bound_by = "balanced"
     elif memory_ns > compute_ns:
         bound_by = "memory"
     elif compute_ns:
         bound_by = "compute"
     else:
-        # Work whose rate the target does not publish still takes time, and
-        # saying which side that time came from would be an invention.
+
+
         bound_by = "unrated"
     return RooflineMetadata(
         compute_ns=compute_ns,
@@ -130,9 +130,9 @@ def analyze_roofline(
                 total_traffic.read + traffic.read,
                 total_traffic.write + traffic.write,
             )
-        # The function's bound sums each side first and compares once. Taking the
-        # per-Call bounds and adding them would charge the machine twice for work
-        # its two halves do at the same time.
+
+
+
         attach(
             fn,
             _bound(

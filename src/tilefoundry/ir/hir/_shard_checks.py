@@ -1,17 +1,11 @@
-"""Shared shard-soundness typeinfer checks, used across HIR op categories.
+"""Enforce shared HIR shard-soundness rules during type inference.
 
-Three recurring Partial-commutation rules, factored out of the per-op
-typeinfer bodies that enforce them (each op keeps only its own commute-set
-constants):
+Checks cover elementwise commutation, multilinear combinations, and matching
+Partial state for in-place-style operations.
 
-- ``reject_partials``: the elementwise rule — a Partial reduction on a single
-  operand commutes only when it is in ``commutes_with``.
-- ``check_multilinear_partials``: the multilinear/bilinear rule — at most one
-  operand may carry a Partial per mesh axis (in ``allowed_reduction``), and
-  every other operand must be Broadcast/replicated on that axis.
-- ``require_matching_partial_state``: the dst/update rule — an in-place-style
-  op's two same-shape operands must carry identical per-mesh-axis states.
+See [shard §8](docs/spec/shard.md#8-layout-propagation).
 """
+
 from __future__ import annotations
 
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
@@ -50,21 +44,13 @@ def check_multilinear_partials(
     anchor=None,
     commutes_jointly=frozenset(),
 ):
-    """Multilinear-combine Partial-commutation check over several operands.
+    """Check Partial commutation across multilinear operands per mesh axis.
 
-    On each mesh axis, at most one of *named_operands* (``(name, TensorType)``
-    pairs) may carry a Partial state: its reduction must be in
-    *allowed_reduction* (a single reduction name or a set of names), and every
-    other operand must be Broadcast/replicated on that axis. Several operands
-    may carry a Partial together when they all share one of
-    *commutes_jointly*'s reductions (e.g. elementwise ADD of two
-    ``Partial("sum")`` operands). *anchor*, when given, is the only operand
-    whose Partial the output can preserve — a Partial on any other operand is
-    rejected outright, regardless of its reduction.
+    Normally one permitted Partial may combine with replicated peers. Multiple
+    operands may participate only for a shared ``commutes_jointly`` reduction;
+    ``anchor`` restricts which operand's state the output preserves.
     """
-    allowed = (
-        {allowed_reduction} if isinstance(allowed_reduction, str) else set(allowed_reduction)
-    )
+    allowed = {allowed_reduction} if isinstance(allowed_reduction, str) else set(allowed_reduction)
     states = {name: partial_reductions_by_axis(ty.layout) for name, ty in named_operands}
     axis_count = max((len(s) for s in states.values()), default=0)
     for axis in range(axis_count):
@@ -117,12 +103,7 @@ def check_multilinear_partials(
 
 
 def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name):
-    """Require *dst* and *update* to carry the identical per-mesh-axis Partial state.
-
-    Require *dst* and *update* to carry the identical per-mesh-axis Partial
-    state (an in-place-style write can only merge two operands whose shard
-    states already agree).
-    """
+    """Require identical per-mesh-axis Partial state for an in-place-style write."""
     dst_partials = [
         (axis, reduction)
         for axis, reduction in enumerate(partial_reductions_by_axis(dst.layout))

@@ -32,9 +32,9 @@ def _emit(call, ctx: CodegenContext) -> None:
     op_tag = _REDUCE_TAG[call.target.kind]
     axes_t = _axes_pack_typename(call.target.axes)
 
-    # Single public entry for every case. The runtime ``reduce`` derives the
-    # tier (sharded) or the extents (plain, non-sharded) from the operands;
-    # a workspace arg is passed only when the lowering sized one.
+
+
+
     if len(call.args) >= 3:
         ws_n = ctx.name_for(call.args[2])
         ctx.emit(

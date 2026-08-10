@@ -94,16 +94,10 @@ def _matmul_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     in_dims = [f"d{i}" for i in range(b + 3)]
 
     def batch_access(in_batch):
-        # The operand's map ranges over its own batch dims, right-aligned to the
-        # output's: batch dim ``j`` reads iteration dim ``pad + j``, or a
-        # constant 0 when that owned dim is size-1 broadcasting to a larger
-        # output batch dim. Dims the operand lacks are simply absent from its
-        # range (its range rank equals its own tensor rank).
+
         pad = b - len(in_batch)
         return [
-            "0"
-            if (is_one(in_batch[j]) and not is_one(out_batch[pad + j]))
-            else f"d{pad + j}"
+            "0" if (is_one(in_batch[j]) and not is_one(out_batch[pad + j])) else f"d{pad + j}"
             for j in range(len(in_batch))
         ]
 
@@ -112,8 +106,7 @@ def _matmul_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     out_out = [f"d{j}" for j in range(b)] + [f"d{m_d}", f"d{n_d}"]
     src = "[" + ", ".join(in_dims) + "]"
     maps = tuple(
-        isl.map(f"{{ {src} -> [{', '.join(dst)}] }}")
-        for dst in (lhs_out, rhs_out, out_out)
+        isl.map(f"{{ {src} -> [{', '.join(dst)}] }}") for dst in (lhs_out, rhs_out, out_out)
     )
     return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
@@ -134,25 +127,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"MatMul contraction-dim mismatch: lhs K={lhs.shape[-1]} vs rhs K={rhs.shape[-2]}",
         )
 
-    # The contraction dim K must be split on the same mesh axes for both
-    # operands: a shard of lhs's K contracts against the matching shard of
-    # rhs's K. Splitting K on one operand but not the other is inconsistent.
     if _k_split_axes(lhs, len(lhs.shape) - 1) != _k_split_axes(rhs, len(rhs.shape) - 2):
         ctx.error(
             call,
-            "MatMul contraction dim K must be split on the same mesh axes for "
-            "both operands",
+            "MatMul contraction dim K must be split on the same mesh axes for both operands",
         )
 
-    # MatMul is linear in one value input only when the other is
-    # Broadcast/replicated (a Partial(sum) on lhs or rhs); it does not
-    # commute with two simultaneous value-carrying Partials.
     check_multilinear_partials(ctx, call, (("lhs", lhs), ("rhs", rhs)))
 
     relation = build_relation(call, (lhs, rhs), ctx)
-    # Output shape comes from the relation (domain + output map), not a separate
-    # hand-written rule: output axes are [batch.., M, N] (K reduced); the K
-    # domain dim and N output axis fall out of the output shape's rank.
+
     out_batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
     out_shape = shape_from_relation(
         relation, (*out_batch, lhs.shape[-2], rhs.shape[-1], lhs.shape[-1])

@@ -1,4 +1,11 @@
-"""IR traversal / rewrite base classes (visitor + identity-preserving mutator)."""
+"""Traverse and identity-preservingly rewrite expression and statement IR.
+
+Generic expression traversal excludes binding-site Vars. Statement traversal
+keeps embedded expression rewriting explicit; function helpers enter through
+the body while ``PrimFunction`` itself remains a Stmt.
+
+See [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs).
+"""
 
 from __future__ import annotations
 
@@ -34,11 +41,6 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Expr children / rebuild tables
-# ---------------------------------------------------------------------------
-
-
 def _expr_children(expr: Expr) -> tuple[Expr, ...]:
     """Enumerate direct child Expr nodes of `expr`.
 
@@ -55,14 +57,8 @@ def _expr_children(expr: Expr) -> tuple[Expr, ...]:
         case Call(args=args):
             return args
         case GridRegionExpr(init_args=init_args, body=body, yield_values=yield_values):
-            # ``init_args`` are value Exprs (the loop's initial carried values) and
-            # are traversed / rewritten; ``induction_var`` / ``carried_args`` are
-            # binding-site Vars and stay excluded.
             return (*init_args, body, *yield_values)
         case HirFunction(body=body):
-            # ``Function.params`` are binding-site Vars (excluded from rewrite,
-            # same rationale as GridRegionExpr.induction_var); ``return_type`` /
-            # ``topologies`` are metadata, not Exprs. Only ``body`` is a child Expr.
             return (body,)
         case Tuple(elements=elements):
             return elements
@@ -95,11 +91,6 @@ def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
             raise AssertionError(f"_rebuild_expr: unknown Expr subclass {type(expr).__name__}")
 
 
-# ---------------------------------------------------------------------------
-# Stmt children / Expr-field enumeration tables
-# ---------------------------------------------------------------------------
-
-
 def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
     """Direct child Stmt nodes.
 
@@ -110,8 +101,9 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
     scope / binding Stmts report their body as a single child Sequential.
     ``Sequential`` itself reports its packed ``body`` tuple as children.
 
-    Per [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs) ``PrimFunction`` is itself a Stmt — its single child is
-    the body Sequential.
+    ``PrimFunction`` is itself a Stmt whose child is the body Sequential.
+
+    See [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs).
     """
     match stmt:
         case Sequential(body=body):
@@ -127,9 +119,8 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
         case If(then_body=then_body, else_body=else_body):
             return (then_body, else_body)
         case DispatchCall(case_calls=case_calls, fallback=fallback):
-            # case_calls are Evaluate(SymbolRef) (leaf Stmts); fallback is a Sequential.
             return (*case_calls, fallback)
-        # Leaf-in-stmt-tree: no nested Stmt.
+
         case Return() | Evaluate() | Abort():
             return ()
         case _:
@@ -184,19 +175,12 @@ def _stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
         case While() | If():
             return ("cond",)
         case Evaluate(callable=SymbolRef()):
-            # Evaluate's embedded Exprs are its args; the callable is an Op (not
-            # an Expr) unless it is a SymbolRef, which is then exposed too.
             return ("callable", "args")
         case Evaluate():
             return ("args",)
-        # Sequential / Return / MeshScope: no embedded Expr to rewrite.
+
         case _:
             return ()
-
-
-# ---------------------------------------------------------------------------
-# Expr visitor / mutator
-# ---------------------------------------------------------------------------
 
 
 class ExprVisitor[T]:
@@ -261,16 +245,7 @@ class ExprMutator:
         return _generic_expr_rewrite(expr, self.visit)
 
 
-# ir.hir.function imports ExprMutator (for its elaboration mutator) at
-# module level, so this module-level import is positioned after
-# ExprMutator is defined: whichever of the two modules loads first, the
-# other's back-reference finds an already-bound name instead of hitting a
-# partially-initialized module.
 from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Stmt visitor / mutator
-# ---------------------------------------------------------------------------
 
 
 class StmtVisitor[T]:
@@ -314,18 +289,10 @@ class StmtMutator:
 
 
 class StmtExprMutator(StmtMutator):
-    """Rewrites both the Stmt tree structure AND the Expr subtrees embedded inside Stmts.
+    """Rewrite statement structure and its embedded expression subtrees.
 
-    Rewrites both the Stmt tree structure AND the Expr subtrees embedded
-    inside Stmts.
-
-    Stmt path: `visit(stmt)` → `visit_<StmtClass>` override or `generic_visit`.
-    Expr path: `visit_expr(expr)` → `visit_<ExprClass>` override or internal
-    Expr generic visit.
-
-    Both paths share the `visit_<ClassName>` convention on `self`, but are
-    routed through different entry methods so Stmt-shaped and Expr-shaped
-    nodes don't collide through shared `visit` dispatch.
+    Statements enter through ``visit`` and expressions through ``visit_expr``.
+    Both use ``visit_<ClassName>`` overrides without mixing node categories.
     """
 
     def visit_stmt(self, stmt: Stmt) -> Stmt:
@@ -338,9 +305,9 @@ class StmtExprMutator(StmtMutator):
         return _generic_expr_rewrite(expr, self.visit_expr)
 
     def generic_visit(self, stmt: Stmt) -> Stmt:  # type: ignore[override]
-        # First rewrite child Stmts (StmtMutator identity rule).
+
         stmt_after_kids = StmtMutator.generic_visit(self, stmt)
-        # Then rewrite embedded Expr fields on the (possibly new) Stmt.
+
         return _rewrite_stmt_exprs(stmt_after_kids, self.visit_expr)
 
 
@@ -372,26 +339,13 @@ def _rewrite_stmt_exprs(stmt: Stmt, fn) -> Stmt:
     return replace(stmt, **updates)
 
 
-# ---------------------------------------------------------------------------
-# Function-level helpers
-#
-# PrimFunction is itself a Stmt ([tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs)); these helpers remain as the
-# canonical entry points for per-function traversal so pass code doesn't
-# have to distinguish "call visit(pf) vs walk inside body".
-# ---------------------------------------------------------------------------
-
-
 def walk_prim_function(visitor: StmtVisitor, pf: PrimFunction) -> None:
-    """Apply `visitor` to ``pf.body`` (a ``Sequential``). Read-only."""
+    """Apply *visitor* read-only to a ``PrimFunction`` body."""
     visitor.visit(pf.body)
 
 
 def rewrite_prim_function(mutator: StmtMutator, pf: PrimFunction) -> PrimFunction:
-    """Rewrite ``pf.body`` through ``mutator``.
-
-    Rewrite ``pf.body`` through ``mutator``. Returns the original ``pf``
-    when the rewritten Sequential is identity-equal to the original.
-    """
+    """Rewrite a ``PrimFunction`` body, preserving identity when unchanged."""
     new_body = mutator.visit(pf.body)
     if new_body is pf.body:
         return pf

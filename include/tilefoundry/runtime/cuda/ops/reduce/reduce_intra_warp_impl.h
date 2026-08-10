@@ -1,16 +1,17 @@
-// reduce tier-1: intra-warp only, no smem workspace.
-//
-// Included in-context from ``ops/reduce.cuh`` (see reduce_common_impl.h for the
-// in-context include contract). Op tags and reduce_impl helpers are in scope.
+/// reduce tier-1: intra-warp only, no smem workspace.
+///
+/// Included in-context from ``ops/reduce.cuh`` (see reduce_common_impl.h for
+/// the in-context include contract). Op tags and reduce_impl helpers are in
+/// scope.
 #pragma once
 
 namespace reduce_impl {
 
-// ── Reduce tier-1: intra-warp only, no smem workspace ─────────────
-// Each thread folds its per-cell slice locally via ``local_fold`` (rank-aware
-// cell decomposition — see reduce_common_impl.h), then a 32-lane
-// ``warp_butterfly`` broadcasts the combined partial; ``reduce_traits<Op>``
-// finalises (mean divides by the total reduced count).
+/// ── Reduce tier-1: intra-warp only, no smem workspace ─────────────
+/// Each thread folds its per-cell slice locally via ``local_fold`` (rank-aware
+/// cell decomposition — see reduce_common_impl.h), then a 32-lane
+/// ``warp_butterfly`` broadcasts the combined partial; ``reduce_traits<Op>``
+/// finalises (mean divides by the total reduced count).
 template <class Op, class Axes> struct IntraWarp {
     template <class SrcT, class DstT>
     __device__ void operator()(SrcT const &src, DstT &dst) const {
@@ -31,4 +32,4 @@ template <class Op, class Axes> struct IntraWarp {
     }
 };
 
-} // namespace reduce_impl
+}

@@ -1,5 +1,5 @@
-// CUDA MMA op public entry. Included in-context from runtime.cuh inside
-// namespace tilefoundry::ops.
+/// CUDA MMA op public entry. Included in-context from runtime.cuh inside
+/// namespace tilefoundry::ops.
 #pragma once
 
 #include "mma/mma_impl.h"

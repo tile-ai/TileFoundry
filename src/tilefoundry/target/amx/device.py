@@ -18,8 +18,8 @@ class AppleM2Pro(Device):
     """One Apple M2 Pro package: its cores, caches, memory, and unit rates."""
 
     name: str
-    # The parallel-unit count a makespan divides work over: the AMX units, not
-    # the cores -- eight performance cores share two units.
+
+
     sm_count: int
     performance_core_count: int
     efficiency_core_count: int
@@ -31,8 +31,8 @@ class AppleM2Pro(Device):
     unified_memory_capacity_bytes: int
     unified_memory_owner: str
     unified_memory_bandwidth_bytes_per_second: int
-    # Measured throughput per execution unit, not a published peak: Apple
-    # states neither an AMX nor a NEON instruction rate.
+
+
     _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
 
     def _python_import_module(self) -> str:

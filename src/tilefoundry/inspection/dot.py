@@ -1,15 +1,9 @@
-"""DOT graph serializer for SSA HIR Functions.
+"""Serialize SSA HIR functions as Graphviz DOT.
 
-Walks a ``hir.Function`` expression tree and produces a Graphviz DOT
-string. Each ``Var`` / ``Call`` / ``Constant`` gets a numbered node.
-Type / shard-layout labels reuse the canonical [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms) renderers from
-``python_printer`` (the same core the viewer uses) so a DOT label agrees
-with the printer / viewer instead of drifting on its own.
-
-Example label::
-
-    q_proj
-    Tensor[(1, 4096), "bf16"]
+Variables, calls, and constants receive numbered nodes. Type and shard-layout
+labels reuse canonical printer renderers so DOT, Python output, and the viewer
+remain consistent.
+See [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
 """
 
 from __future__ import annotations
@@ -24,11 +18,10 @@ from .python_printer import _collect_meshes, _mesh_name_map, _op_display_name, _
 
 
 def _type_lines(ty, mesh_name_map: dict[int, str]) -> list[str]:
-    """Type-annotation lines for a node label.
+    """Return canonical type-annotation lines for a node label.
 
-    Type-annotation lines for a node label: the shared canonical
-    ``Tensor[...]`` text ([inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms)), split on newline for the verbose multi-line
-    ``ShardLayout(...)`` fallback.
+    Split multiline shard-layout fallback text into separate label lines.
+    See [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
     """
     text = _tensor_annotation(ty, mesh_name_map=mesh_name_map) if isinstance(ty, TensorType) else str(ty)
     return text.split("\n")
@@ -138,7 +131,7 @@ def hir_function_to_dot(fn: HirFunction) -> str:
     for p in fn.params:
         walk(p)
 
-    # Legend
+
     lines.append("")
     lines.append('  subgraph cluster_legend {')
     lines.append('    label="Legend";')

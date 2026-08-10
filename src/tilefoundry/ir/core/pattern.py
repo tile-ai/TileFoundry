@@ -1,21 +1,10 @@
-"""Pattern: declarative predicate over IR types and shape values.
+"""Declarative predicates for overload and specialization dispatch.
 
-Pattern instances are reusable predicates. They serve two consumers:
+``ParamDef.pattern`` filters parser overloads; ``DimVarRangePat`` selects HIR
+specializations. Patterns do not participate in static type checking.
 
-1. Parser dispatch / overload resolution: ``ParamDef.pattern`` is
-   matched against a ``Type`` (typically ``TensorType`` /
-   ``TupleType``). Subclasses used here: ``ScalarPat`` /
-   ``TensorPat`` / ``AndPat``.
-
-2. Specialization dispatch: patterns appearing in
-   ``Function.specializations`` describe which runtime shape range a
-   specialized function body covers. Subclass: ``DimVarRangePat``.
-   HIR→TIR lowering dispatches on the pattern subclass internally to
-   emit a runtime predicate.
-
-Patterns do not participate in pyright type checking.
-
-``OrPat`` / named patterns / operator sugar are deferred.
+See [core-ir §3](docs/spec/core-ir.md#3-pattern) and
+[hir §2](docs/spec/hir.md#2-function-specialization-api).
 """
 
 from __future__ import annotations
@@ -56,7 +45,7 @@ class TensorPat(Pattern):
     """
 
     rank: int | None = None
-    dtype: Any = None  # DType | None — kept Any to avoid hard import cycle
+    dtype: Any = None
 
     def match(self, subject: Any) -> bool:
         shape = getattr(subject, "shape", None)
@@ -85,19 +74,12 @@ class AndPat(Pattern):
 
 @dataclass(frozen=True)
 class DimVarRangePat(Pattern):
-    """Half-open range predicate over a named ``DimVar``.
+    """Match ``lo <= value < hi`` for a named specialization dimension.
 
-    ``DimVarRangePat("S", lo, hi)`` matches an integer ``value`` iff
-    ``lo <= value < hi`` (``lo`` inclusive, ``hi`` exclusive). A
-    single-point range is ``[k, k+1)`` (matches exactly ``k``).
+    ``dim_var`` identifies the runtime shape source but is not inspected by
+    :meth:`match`, which receives only the scalar value.
 
-    Used in ``Function.specializations`` to declare which runtime
-    range of ``DimVar`` a specialization covers. The ``dim_var`` field
-    carries the name of the ``DimVar`` the range applies to — it does
-    not participate in :meth:`match`, which only takes a scalar value.
-    The HIR→TIR lowering resolves the named ``DimVar`` to a runtime
-    shape source (``ShapeOf(param, axis)``) by walking the enclosing
-    function's signature.
+    See [core-ir §3.1](docs/spec/core-ir.md#31-dimvarrangepat).
     """
 
     dim_var: str = ""
@@ -107,17 +89,12 @@ class DimVarRangePat(Pattern):
     def __post_init__(self) -> None:
         if not isinstance(self.dim_var, str) or not self.dim_var:
             raise ValueError(
-                f"DimVarRangePat: dim_var must be a non-empty str, got "
-                f"{self.dim_var!r}"
+                f"DimVarRangePat: dim_var must be a non-empty str, got {self.dim_var!r}"
             )
         if not isinstance(self.lo, int) or isinstance(self.lo, bool):
-            raise TypeError(
-                f"DimVarRangePat: lo must be int, got {type(self.lo).__name__}"
-            )
+            raise TypeError(f"DimVarRangePat: lo must be int, got {type(self.lo).__name__}")
         if not isinstance(self.hi, int) or isinstance(self.hi, bool):
-            raise TypeError(
-                f"DimVarRangePat: hi must be int, got {type(self.hi).__name__}"
-            )
+            raise TypeError(f"DimVarRangePat: hi must be int, got {type(self.hi).__name__}")
         if self.lo >= self.hi:
             raise ValueError(
                 f"DimVarRangePat({self.dim_var!r}, {self.lo}, {self.hi}): "
@@ -150,12 +127,9 @@ def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:
     return None
 
 
-# --- Convenience singletons / aliases ------------------------------------
-
-#: Singleton matching any rank-0 (scalar) tensor.
 Scalar: ScalarPat = ScalarPat()
 
-#: Singleton matching any non-scalar tensor (rank >= 1).
+
 Tensor: TensorPat = TensorPat()
 
 

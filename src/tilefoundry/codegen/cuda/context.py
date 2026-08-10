@@ -57,16 +57,16 @@ class CodegenContext:
         self._var_names: dict[int, str] = {}
         self._counter = 0
         self._kernel_param_ids: set[int] = set()
-        self._mesh_aliases: dict[int, str] = {}  # id(mesh) → alias + type_string
-        # DimVar name → C++ runtime expression (typically a
-        # ``<param>_shape_<axis>`` kernel scalar identifier). Populated
-        # by the PrimFunction emitter before the body is walked so
-        # downstream emitters (binary / unary / fill / copy) can size
-        # their iteration counts at runtime when a DimVar appears.
+        self._mesh_aliases: dict[int, str] = {}
+
+
+
+
+
         self._dim_var_runtime: dict[str, str] = {}
-        # Named-barrier ids for sub-CTA ``T.sync``. Allocated implicitly per
-        # kernel (reset at each PrimFunction body); id 0 is reserved for the
-        # implicit whole-CTA barrier, so sub-CTA syncs draw from 1..15.
+
+
+
         self._next_barrier_id = 1
 
     def reset_barrier_ids(self) -> None:
@@ -153,9 +153,9 @@ class CodegenContext:
             self._lines = saved_lines
 
     def emit_node(self, node) -> None:
-        # Effect-ful Op invocation in Stmt position: Evaluate(op, args).
-        # Dispatch on the Op class; the codegen handler ABI is Call-based, so
-        # feed it a Call built from the Op and its args.
+
+
+
         if isinstance(node, Evaluate):
             op = node.callable
             op_cls = type(op)

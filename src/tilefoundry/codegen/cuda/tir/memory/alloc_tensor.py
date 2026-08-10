@@ -53,8 +53,8 @@ def _emit_plain_alloc(
         layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
     cpp_type = ctx.dtype_to_cpp(var.type.dtype.name)
     if storage == StorageKind.SMEM:
-        # 16B-align the shared tile so a 128-bit vectorized / ``cp.async``
-        # access into it has an aligned base (alignment only ever increases).
+
+
         ctx.emit(f"__shared__ __align__(16) {cpp_type} {name}_buf[{total}];")
         ctx.emit(
             f"auto {name} = cute::make_tensor("
@@ -67,29 +67,34 @@ def _emit_plain_alloc(
 
 @register_codegen_cuda(AllocTensor)
 def _emit(let: LetStmt, ctx: CodegenContext) -> None:
+    """Materialize plain or sharded storage for one allocation.
+
+    Shard layout shapes are global and backing storage uses their derived local
+    shape. See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
+    """
     var = let.var
     name = ctx.name_for(var)
     storage = var.type.storage
     layout_obj = getattr(var.type, "layout", None)
 
     if isinstance(layout_obj, ShardLayout):
-        # ShardTensor materialisation: per-thread backing tensor sized
-        # to the *derived* per-thread local shape (size-1 dims dropped
-        # so the cute rank matches ``local()``'s coalesced view), then
-        # wrapped as a ``tilefoundry::ShardTensor`` with the full
-        # ShardLayout type.  ``layout.layout.shape`` itself is the
-        # **global / unsharded** shape ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
+
+
+
+
+
+
         local_shape = shard_layout_local_shape(layout_obj)
         local_shape = tuple(s for s in local_shape if s != 1) or (1,)
-        # Emit the per-thread cute tensor under a ``_buf`` name —
-        # the visible identifier is the ShardTensor wrap.
+
+
         buf_name = f"{name}_buf_t"
         _emit_plain_alloc(ctx, var, buf_name, storage, local_shape)
-        # Global-view cute layout: a flat 1-D ``cute::Shape<Int<N>>``
-        # whose product equals the logical extent. ``local_impl``
-        # reads this only to derive the per-thread offset; the actual
-        # element access goes through the engine + ShardLayout
-        # strides.
+
+
+
+
+
         global_total = shape_numel_upper_bound(shape_upper_bound(var.type.shape))
         global_layout = (
             f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
@@ -104,8 +109,8 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
             f"{buf_name}, {global_layout}, {shard_value});"
         )
     else:
-        # Dynamic dims (``DimVar``) lower to their envelope upper bound
-        # for the static cute layout; the runtime shape is plumbed via
-        # ``<param>_shape_<axis>`` scalar kernel params separately.
+
+
+
         local_shape = shape_upper_bound(var.type.shape)
         _emit_plain_alloc(ctx, var, name, storage, local_shape)

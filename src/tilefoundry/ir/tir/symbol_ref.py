@@ -1,4 +1,5 @@
 """SymbolRef — a module-symbol reference to a callee PrimFunction."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

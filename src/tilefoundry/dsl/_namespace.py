@@ -1,7 +1,6 @@
 """Define namespace behavior.
 
-Shared ``__getattr__`` / ``__dir__`` factory for the ``tf`` / ``T`` DSL
-namespace modules ([parser §2.1](docs/spec/parser.md#21-model)-[parser §2.3](docs/spec/parser.md#23-resolution-algorithm)).
+Shared ``__getattr__`` / ``__dir__`` factory for the ``tf`` and ``T`` modules.
 
 Both dialect namespaces resolve names on demand against the OpSchema
 registry with the same algorithm; this module ships that algorithm once so
@@ -16,30 +15,20 @@ from typing import Any, Callable, Iterable
 from tilefoundry.ir.core.op_registry import get_schemas, iter_schema_names
 from tilefoundry.parser.overload import resolve
 
-# Tried in order, before the OpSchema registry lookup; returns the resolved
-# value or ``None`` to fall through (e.g. T's platform sub-namespaces, [parser §2.6](docs/spec/parser.md#26-platform-sub-namespaces)).
 PreResolver = Callable[[str], Any]
 
 
 def make_dialect_namespace(
-    dialect: str, pre_resolvers: Iterable[PreResolver] = (),
+    dialect: str,
+    pre_resolvers: Iterable[PreResolver] = (),
 ) -> tuple[Callable[[str], Any], Callable[[], list[str]]]:
-    """Build the ``(__getattr__, __dir__)`` pair for a dialect namespace module.
+    """Build dynamic attribute and directory hooks for one dialect namespace.
 
-    For single-schema names the real-Op **class** is returned directly, so
-    ``add = tf.add`` / ``from tilefoundry.dsl.tf import add`` binds the actual
-    Op subclass. Surface-alias schemas (``schemas[0].op_class is None``)
-    return the alias builder function instead — it still carries
-    ``_op_schema`` (set by ``@register_alias``), so the parser's
-    ``_schema_from_value`` recognises it the same way. Multi-schema
-    overloads return a best-effort runtime resolver (real parser-time
-    dispatch goes through :mod:`tilefoundry.parser.overload` directly).
-    Unknown names raise :class:`AttributeError`.
+    Single schemas expose the Op class or alias builder; overloads expose a
+    runtime resolver. ``__all__`` is computed on demand so later registrations
+    remain visible.
 
-    ``__all__`` is resolved on demand (not a frozen module attribute) so
-    ``from tilefoundry.dsl.<dialect> import *`` sees Ops registered after
-    the namespace module was first imported (test-fixture custom ops,
-    lazy-loaded modules, etc.).
+    See [parser §2.3](docs/spec/parser.md#23-resolution-algorithm).
     """
 
     def __getattr__(name: str) -> Any:
@@ -56,10 +45,6 @@ def make_dialect_namespace(
                 f"(did you forget to import the module that defines it?)"
             )
 
-        # Surface aliases (``schema.op_class is None``) prepend to the
-        # bucket so they win first-match; return the alias builder so an
-        # alias schema wins over a legacy real-Op schema of the same name
-        # even when both are registered (a transitional state).
         first = schemas[0]
         if first.op_class is None:
             return first.builder

@@ -1,14 +1,8 @@
-"""Dumper backends.
+"""Provide filesystem, memory, and null dump backends.
 
-``IDumpper`` is the abstract write surface. ``FileDumper`` writes to a
-filesystem root; ``MemoryDumper`` keeps an in-memory mapping for tests;
-``NullDumper`` is a singleton no-op used when no scope is active or when
-the active scope's flags are zero.
-
-A subdir-form ``DumpScope`` nests by composing the parent dumper with a
-relative path prefix — ``FileDumper.subdir(name)`` returns a new
-``FileDumper`` rooted at ``parent_root/name``; ``MemoryDumper.subdir``
-prefixes keys; ``NullDumper.subdir`` returns itself.
+Subdirectory scopes compose the parent backend with a relative prefix. File
+backends change their root, memory backends prefix shared keys, and the null
+backend returns itself.
 """
 from __future__ import annotations
 
@@ -80,8 +74,8 @@ class MemoryDumper:
         child = MemoryDumper(
             prefix=f"{self._prefix}{name}/" if self._prefix else f"{name}/"
         )
-        # Share the same backing dict so nested writes are observable from
-        # the root MemoryDumper that tests usually hold.
+
+
         child.entries = self.entries
         return child
 

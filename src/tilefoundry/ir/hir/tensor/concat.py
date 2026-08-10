@@ -23,14 +23,17 @@ class Concat(Op):
     plain `tuple[Expr, ...]` of rank-equal TensorType Exprs (NOT a TupleType
     Expr). The lone Param entry documents element type.
     """
+
     is_variadic: ClassVar[bool] = True
 
     inputs = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
+
+
 def _sum_dim(a: Expr, b: Expr) -> Expr:
-    # simplify_dim handles both the all-Constant fold and the
-    # symbolic Call construction in one call.
+
     return simplify_dim(DimAdd, (a, b))
+
 
 @register_typeinfer(Concat)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
@@ -47,14 +50,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = list(base.shape)
     for t in types[1:]:
         new_shape[axis] = _sum_dim(new_shape[axis], t.shape[axis])
-    # Concatenation combines operands along an axis; a genuine sharding cannot
-    # in general be re-expressed on the concatenated shape, so drop to an
-    # unsharded output rather than carry one operand's layout. Re-expressing a
-    # concat of sharded inputs is left to a follow-up.
+
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
-    return TensorType(
-        shape=tuple(new_shape), dtype=base.dtype, layout=None, storage=storage
-    )
+    return TensorType(shape=tuple(new_shape), dtype=base.dtype, layout=None, storage=storage)
 
 
 @register_eval(Concat)

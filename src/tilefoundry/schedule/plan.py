@@ -1,15 +1,8 @@
-"""What a scheduling algorithm hands back.
+"""Define the common behavior of algorithm-owned schedule plans.
 
-A Plan is the semantic result of one solve: the decisions an agent needs, in the
-vocabulary of the algorithm that made them. The base names only what every plan
-must be able to do, and deliberately not a shared shape -- two algorithms
-scheduling different hardware at different levels do not decide the same things,
-and a common schema would either describe none of them or force both to pretend.
-
-There is no version field, no deserializer, and no renderer registry. A plan is
-produced by the algorithm that solved for it, in the process that solved; reading
-one back from text would mean trusting a document to describe decisions nobody
-made in this run.
+A plan is the typed result of one solve. Each subtype owns its decisions, JSON,
+and human rendering because algorithms at different levels have no shared
+decision schema. Plans are produced and consumed in the solving process.
 """
 
 from __future__ import annotations

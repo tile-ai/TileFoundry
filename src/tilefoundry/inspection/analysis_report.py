@@ -132,8 +132,8 @@ def _memory(record: MemoryMetadata, expr: object) -> dict[str, object]:
     }
 
 
-# One renderer per record type, so adding a family adds an entry rather than a
-# branch in every format.
+
+
 _RECORDS: tuple[tuple[str, type[IRMetadata], object], ...] = (
     ("compute-cost", ComputeCostMetadata, _compute_cost),
     ("memory", MemoryMetadata, _memory),
@@ -182,17 +182,11 @@ def selected_types(
 
 
 def _same_program(candidate: object, function: object) -> bool:
-    """Whether *candidate* and *function* are the same program at the same size.
+    """Test whether two functions represent one program at one size.
 
-    The same object, or two rebuilds of one function at one size: the same
-    recorded origin and the same recorded extents. A rebuild is settled by those
-    two, so they are what is compared.
-
-    The extents are compared because the resulting signature does not imply them.
-    A dimension can occur only in a loop bound or a body operation's attribute,
-    and then two different sizes rebuild into two different programs whose
-    parameters and return type are identical -- so a comparison that read the
-    signature would report measurements of two sizes as one.
+    Accept object identity or matching specialization origin and recorded
+    extents. Extents must be explicit because dimensions used only in a loop or
+    body attribute do not alter the resulting signature.
     """
     if candidate is function:
         return True
@@ -204,23 +198,12 @@ def _same_program(candidate: object, function: object) -> bool:
 
 
 def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
-    """One report over every analysis run against one program.
+    """Build one report from analysis runs against the same program and size.
 
-    Only the record types the calls actually wrote are read, so a renderer is
-    never sent looking for records that are not there.
-
-    The results have to describe the same program. Usually that is one object,
-    but an analysis asked about a size builds the program at that size, so
-    several analyses at one size hold several rebuilds and share no object.
-    Those are accepted when they were rebuilt from the same function at the same
-    recorded extents. Both are stamped only by the specialiser, so neither can be
-    claimed by something that was not derived, and the extents are compared
-    directly rather than read off the resulting signature -- a dimension occurring
-    only inside the body leaves the signature unchanged at every size.
-
-    Structural equality would be the obvious test and is not available: an
-    operation carries no equality, so two rebuilds of one program are never
-    equal however identical they are.
+    Read only record types actually written. Results may share one function
+    object or independently rebuilt specializations with matching origin and
+    extents. Structural equality is unavailable because operations have no
+    equality contract.
     """
     if not results:
         raise ValueError("an analysis report needs at least one result")
@@ -396,8 +379,8 @@ def render_text(data: dict[str, object]) -> str:
     if "timeline" in records:
         lines.append(f"theoretical-makespan={records['timeline']['end_ns']}ns")
     for call in data["calls"]:
-        # Report only the per-operand split absent from annotations; value flops,
-        # bound, and placement stay there to avoid ambiguous duplicate labels.
+
+
         operands = call.get("compute-cost", {}).get("operands")
         if operands is None:
             continue

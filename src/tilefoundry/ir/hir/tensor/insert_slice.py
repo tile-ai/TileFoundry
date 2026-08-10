@@ -1,4 +1,5 @@
 """HIR insert_slice op (dynamic-update-slice)."""
+
 from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_eval
@@ -15,11 +16,11 @@ from tilefoundry.visitor_registry import register_typeinfer
 
 @register_op(name="insert_slice")
 class InsertSlice(Op):
-    """Dynamic-update-slice: return ``dst`` with ``update`` written into the window at ``offsets``."""
+    """Return ``dst`` with ``update`` written into the window at ``offsets``."""
+
     dst = ParamDef(kind="input", pattern=Tensor)
     update = ParamDef(kind="input", pattern=Tensor)
-    # A rank-0 scalar start (rank-1 dst) or a tuple of per-axis rank-0 scalars
-    # (rank-N); the parser lifts the tuple literal to a core ``Tuple``.
+
     offsets = ParamDef(kind="input", pattern=Scalar)
 
 
@@ -67,7 +68,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}")
     require_matching_partial_state(ctx, call, dst_ty, upd_ty, "dst", "update")
     if isinstance(off_expr, Tuple):
-        # rank-N: one rank-0 scalar offset per axis.
         if len(off_expr.elements) != rank:
             ctx.error(
                 call,
@@ -76,7 +76,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         for ax, off_el in enumerate(off_expr.elements):
             _check_axis(ax, dst_ty.shape[ax], upd_ty.shape[ax], off_el, ctx, call)
     else:
-        # 1-D compatibility: a bare rank-0 scalar start applies only to rank-1.
         off_ty = ctx.type_of(off_expr)
         if len(off_ty.shape) != 0:
             ctx.error(

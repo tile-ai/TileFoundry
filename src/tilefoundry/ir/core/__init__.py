@@ -28,20 +28,29 @@ from tilefoundry.visitor_registry.registries import (
 from .context import TypeInferContext
 
 __all__ = [
-    # exprs
-    "Expr", "Var", "Constant", "Call", "Tuple",
-    # metadata
-    "IRMetadata", "BindingMetadata", "SourceSpanMetadata",
-    "binding_name", "diagnostic_location", "source_metadata",
-    "get_metadata", "replace_metadata", "remove_metadata",
-    # op
-    "Op", "ParameterInfo",
-    # registry
+    "Expr",
+    "Var",
+    "Constant",
+    "Call",
+    "Tuple",
+    "IRMetadata",
+    "BindingMetadata",
+    "SourceSpanMetadata",
+    "binding_name",
+    "diagnostic_location",
+    "source_metadata",
+    "get_metadata",
+    "replace_metadata",
+    "remove_metadata",
+    "Op",
+    "ParameterInfo",
     "AnalysisRegistry",
-    "typeinfer_registry", "verify_stmt_registry", "cost_evaluator_registry",
-    "register_typeinfer", "register_verify_stmt", "register_cost_evaluator",
-    # context
+    "typeinfer_registry",
+    "verify_stmt_registry",
+    "cost_evaluator_registry",
+    "register_typeinfer",
+    "register_verify_stmt",
+    "register_cost_evaluator",
     "TypeInferContext",
-    # error
     "VerifyError",
 ]

@@ -1,15 +1,8 @@
-"""The public Schedule operation.
+"""Expose the public Schedule operation.
 
-One call names one Module, one Function, and one level of the parallel
-hierarchy, and gets back the plan one algorithm produced for exactly that
-combination. Everything the caller has to decide is in the call; everything the
-algorithm decided is in the plan.
-
-The Module is the execution domain: it declares the hardware and the ordered
-topology hierarchy, so a level is resolved against the program that declares it
-rather than against a name the caller invents. Resolution and dispatch both
-finish before any algorithm runs, so a request that cannot be served fails
-without a partial solve to explain.
+A call names a module, one of its functions, and a declared topology level. The
+module owns hardware and topology resolution. Resolution and scheduler dispatch
+finish before solving, and the returned plan records every algorithm decision.
 """
 
 from __future__ import annotations
@@ -85,8 +78,6 @@ def _algorithm(target: Target, topology: str) -> Scheduler:
 
 def _options(options: object | None) -> object:
     """The common options every registered algorithm receives."""
-    # Importing through the package is safe at call time and keeps the public
-    # value type in its existing package boundary without an import cycle.
     from . import ScheduleOptions  # noqa: PLC0415
 
     if options is None:
@@ -109,15 +100,9 @@ def schedule(
 ) -> ScheduleResult:
     """Solve *function* at the *topology* level of *module*'s hierarchy.
 
-    *dims* states an extent for each dimension the function declares as a
-    range. A solver lays work across a level by counting it and holds a tile
-    against a capacity in bytes, so a function authored for many context lengths
-    is solved at one of them: the variant covering that length is resolved and
-    its ranges substituted, and the plan is a plan for that size.
-
-    The function passed in must still be one this Module owns -- a prototype or
-    one of its variants. Substitution happens after that, so nothing loosens
-    which programs a Module will answer for.
+    *dims* selects concrete extents and the matching specialization before the
+    solver counts work or capacity. The input must be a prototype or variant
+    owned by *module*; substitution does not widen that ownership boundary.
     """
     if not isinstance(module, Module):
         raise TypeError(

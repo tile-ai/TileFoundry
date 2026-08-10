@@ -4,6 +4,7 @@
 ``Launch``. CUDA lowering interprets their selector/value pairs; launch geometry
 is emitted into the generated host entry and is not carried past codegen.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -56,17 +57,13 @@ def launch_call(
     stream=None,
     attrs=None,
 ):
-    """Build ``Evaluate(Launch(...), args)`` for a host launch of *callee*.
+    """Build a host ``Evaluate(Launch(...), args)`` for *callee*.
 
-    *grid* / *block* are 3-tuples of launch extents (``int`` / ``Constant`` /
-    ``DimVar`` / dim-arithmetic ``Call``); each is canonicalised to an Expr:
-    an integer extent becomes a rank-0 i64 ``Constant``, a bare ``DimVar``
-    becomes a ``ShapeOf`` of the forwarded tensor argument whose callee tensor
-    parameter carries that exact ``DimVar`` identity at that axis, and a
-    dim-arithmetic ``Call`` keeps its op with recursively canonicalised
-    operands. A ``DimVar`` not found on any forwarded tensor input, or bound to
-    more than one forwarded ``(tensor, axis)`` source, is rejected — the host
-    cannot pick a runtime extent source silently.
+    Launch extents canonicalize to scalar expressions. Bare ``DimVar`` values
+    become ``ShapeOf`` calls only when exactly one forwarded tensor axis
+    provides their identity; missing or ambiguous runtime sources are rejected.
+
+    See [tir §2.3](docs/spec/tir.md#23-tir-ops).
     """
     from dataclasses import replace  # noqa: PLC0415
 
@@ -96,9 +93,6 @@ def launch_call(
     i64 = TensorType.scalar(DType.i64)
     i32 = TensorType.scalar(DType.i32)
 
-    # DimVar identity -> (forwarded tensor arg, axis), from each callee tensor
-    # parameter zipped positionally with its forwarded argument. Bare-variable
-    # axes only; a variable bound to two different sources is rejected.
     dimvar_src: dict[int, tuple] = {}
     for param, arg in zip(callee.params, forwarded_args):
         pty = getattr(param, "type", None)
@@ -136,9 +130,7 @@ def launch_call(
             return ShapeOf(type=i32, param=arg, axis=axis)
         if isinstance(dim, Call) and isinstance(dim.target, _DIM_OPS):
             return replace(dim, args=tuple(_canon(a) for a in dim.args))
-        raise ValueError(
-            f"launch_call: unsupported launch extent {type(dim).__name__}"
-        )
+        raise ValueError(f"launch_call: unsupported launch extent {type(dim).__name__}")
 
     grid_e = tuple(_canon(d) for d in grid)
     block_e = tuple(_canon(d) for d in block)

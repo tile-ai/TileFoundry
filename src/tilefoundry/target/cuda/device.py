@@ -23,15 +23,15 @@ class CudaDevice(Device):
     hbm_capacity_bytes: int
     gmem_owner: str
     hbm_bandwidth_bytes_per_second: int
-    # None when the product specification states no L2 capacity: an advisory
-    # about a cache whose size is unknown is worth less than no advisory.
+
+
     l2_capacity_bytes: int | None
     _dense_flops: tuple[tuple[DType, int], ...]
 
     def _python_import_module(self) -> str:
-        # The package re-exports this type, so a rendered constructor imports it
-        # from there. A provider's own subclass lives elsewhere and keeps its own
-        # module.
+
+
+
         if type(self) is CudaDevice:
             return "tilefoundry.target.cuda"
         return super()._python_import_module()

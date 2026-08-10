@@ -3,6 +3,7 @@
 ``Module`` — top-level compilation unit: functions, child modules, and plain
 orchestration methods. See [core-ir §1](docs/spec/core-ir.md#1-module).
 """
+
 from __future__ import annotations
 
 import copy
@@ -21,7 +22,9 @@ from tilefoundry.utils.spec_ref import spec_ref_render
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
-_MISSING_PREPARED_WEIGHT = "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
+_MISSING_PREPARED_WEIGHT = (
+    "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
+)
 
 
 def _validate_declared(module_name, source, value, decl_type) -> None:
@@ -53,8 +56,7 @@ def _refuse_bare_call(module: "Module", kind: str) -> None:
     named = sorted({fn.name for fn in module.functions} | set(module.methods))
     raise TypeError(
         f"{kind} {module.name!r} has no forward method and no entry, so a bare "
-        f"call has nothing to run; call one by name"
-        + (f" -- {', '.join(named)}" if named else "")
+        f"call has nothing to run; call one by name" + (f" -- {', '.join(named)}" if named else "")
     )
 
 
@@ -72,9 +74,7 @@ def _owned_by(child: "Module", parent: "Module") -> "Module":
         object.__setattr__(child, "_parent", parent)
         return child
     clone = copy.copy(child)
-    object.__setattr__(
-        clone, "modules", tuple(_owned_by(node, clone) for node in child.modules)
-    )
+    object.__setattr__(clone, "modules", tuple(_owned_by(node, clone) for node in child.modules))
     object.__setattr__(clone, "_parent", parent)
     return clone
 
@@ -91,7 +91,7 @@ class Module:
 
     name: str
     functions: tuple[ModuleFunction, ...]
-    #: Which function is the default step, or ``None`` for a Module without one.
+
     entry: str | None = None
     modules: tuple["Module", ...] = field(default_factory=tuple)
     target: Target | None = None
@@ -143,13 +143,8 @@ class Module:
                     "declares a target and children inherit it. The rule: "
                     "tilefoundry spec core-ir target-inheritance"
                 )
-        # Own the subtree rather than sharing it. A child links back to its
-        # owner to resolve inherited context, so one child value placed under
-        # two owners could otherwise resolve against whichever constructed
-        # last -- including a copy made by ``dataclasses.replace``.
-        object.__setattr__(
-            self, "modules", tuple(_owned_by(child, self) for child in self.modules)
-        )
+
+        object.__setattr__(self, "modules", tuple(_owned_by(child, self) for child in self.modules))
 
     def _owner_path(self) -> str:
         """This Module's dotted path from the outermost declared owner."""
@@ -286,31 +281,13 @@ class Module:
         return matches[0]
 
     def owns(self, function: object, *, derived: bool = False) -> bool:
-        """Whether *function* belongs to this Module's execution domain.
+        """Return whether this module owns *function* by object identity.
 
-        A specialisation variant counts: it is one of the module's own
-        functions, reached through the prototype that dispatches to it rather
-        than listed alongside it, and it is what anything working at one chosen
-        size has in its hands.
+        Declared functions and their variants count. Structural equality and
+        matching names do not. With ``derived=True``, a recorded
+        ``_specialized_from`` chain may lead back to an owned function.
 
-        A function rebuilt from one of these -- the same program with a size
-        chosen for it -- does not, by default. The public boundary asks the
-        strict question before it rebuilds anything, so nothing that reaches an
-        algorithm through it needs a weaker one.
-
-        `derived=True` also accepts a function that records one of these as the
-        function it was specialised from, for a precondition inside an algorithm
-        that a caller may also reach directly. It follows that recorded origin
-        rather than matching a name: a name is shared by anything anybody chose
-        to call the same, so answering by name would admit a function from
-        another module, which is what asking about ownership exists to prevent.
-
-        The strict question is identity, never equality. A Function compares by
-        structure, so a copy of one of these is equal to it and is not one of
-        them -- and admitting a copy would mean this Module answering for a
-        program it does not contain, which is what these two answers exist to
-        keep apart. A function that really is a specialisation says so through
-        the record above rather than by resembling its origin.
+        See [core-ir §1](docs/spec/core-ir.md#1-module).
         """
         for owned in self.functions:
             if function is owned:
@@ -334,9 +311,7 @@ class Module:
             )
         matches = self.function_named(self.entry)
         if not matches:
-            raise ValueError(
-                f"Module {self.name!r}: entry {self.entry!r} not in functions"
-            )
+            raise ValueError(f"Module {self.name!r}: entry {self.entry!r} not in functions")
         if len(matches) > 1:
             raise ValueError(
                 f"Module {self.name!r}: entry {self.entry!r} resolves to "
@@ -347,8 +322,9 @@ class Module:
     def load(self, resource) -> "LoadedModule":
         """This Module's constants read from *resource*, as a ``LoadedModule``.
 
-        Returns rather than mutates: the Module is IR and may be read any number
-        of times. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+        Returns rather than mutates: the Module is IR and may be read repeatedly.
+
+        [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
         """
         constants: dict[str, object] = {}
         for name, decl_type in self.weights.items():
@@ -364,9 +340,7 @@ class Module:
         return LoadedModule(
             module=self,
             constants=constants,
-            modules=tuple(
-                child.load(resource.subtree(child.name)) for child in self.modules
-            ),
+            modules=tuple(child.load(resource.subtree(child.name)) for child in self.modules),
         )
 
     def _run_authored(self, fn: ModuleFunction, *args):
@@ -446,7 +420,7 @@ class Module:
                 converter_map[weight_name] = conv
 
         def _fetch(name):
-            # A one-to-many alias is stacked here — prepare's only reshaping.
+
             parts = raw.load_group(name)
             return torch.stack(parts) if parts is not None else raw.load(name)
 
@@ -473,7 +447,6 @@ class Module:
         """
         memo: dict[int, object] = {}
         for kept in (getattr(self, "_parent", None), self.target, *(self.topologies or ())):
-            # Kept out of the copy: following the owner would clone upwards.
             if kept is not None:
                 memo[id(kept)] = kept
         return copy.deepcopy(self, memo)
@@ -489,10 +462,11 @@ class Module:
 class LoadedModule:
     """An IR ``Module`` together with the constants read for *this* loading.
 
-    Two may stand over one Module and neither sees what the other bound. Attribute
-    access mirrors ``Module``'s, except that a function resolves to a runner
-    filling ``ConstTensor`` parameters from these constants, so the caller passes
-    activations alone. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+    Two may stand over one Module without sharing bindings. Attribute access
+    mirrors ``Module`` except that functions resolve to runners which fill
+    ``ConstTensor`` parameters.
+
+    [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
     """
 
     module: Module
@@ -530,12 +504,9 @@ class LoadedModule:
             )
         method = module.methods.get(name)
         if method is not None:
-            # Bound to this LoadedModule, so the method's own `self.<fn>(...)`
-            # reaches the bound runner.
             return types.MethodType(method, self)
         raise AttributeError(
-            f"LoadedModule {self.name!r} has no function, child module, or "
-            f"method {name!r}"
+            f"LoadedModule {self.name!r} has no function, child module, or method {name!r}"
         )
 
     def _run_bound(self, fn: ModuleFunction, *acts):
@@ -544,8 +515,10 @@ class LoadedModule:
         Evaluate *fn* over *acts*, its ``ConstTensor`` parameters filled by
         name from these bindings.
 
-        Weights and activations must already agree on one device, which is where
-        this runs; nothing is moved implicitly. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+        Weights and activations must already agree on one device; nothing moves
+        implicitly.
+
+        [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
         """
         from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
@@ -574,8 +547,10 @@ class LoadedModule:
     def _placement(self, fn: ModuleFunction, acts: tuple) -> str | None:
         """Placement.
 
-        The one device every bound constant and tensor activation agrees on,
-        or ``None`` when none names one. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+        The one device all bound constants and tensor activations agree on, or
+        ``None`` when none names one.
+
+        [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
         """
         where: dict[str, list[str]] = {}
         for name, value in self.constants.items():
@@ -655,19 +630,15 @@ def select(module: Module, path: str) -> Module:
             continue
         if index != len(segments) - 1:
             raise ValueError(
-                f"selector {path!r}: Module {selected.name!r} has no child "
-                f"module {name!r}"
+                f"selector {path!r}: Module {selected.name!r} has no child module {name!r}"
             )
-        # `lookup` refuses a name this Module does not define, so reaching here
-        # means the last segment named one of its functions.
+
         selected.lookup(name)
         return _reentered(selected, name)
     return selected
 
 
-def function_selectors(
-    module: Module, prefix: str = ""
-) -> tuple[tuple[str, HirFunction], ...]:
+def function_selectors(module: Module, prefix: str = "") -> tuple[tuple[str, HirFunction], ...]:
     """Every HIR function in *module*'s tree, each with the selector naming it.
 
     Root-relative and dotted, the same paths :func:`select` resolves, so a leaf's

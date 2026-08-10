@@ -1,14 +1,9 @@
-"""PassManager — linear pipeline scheduler with post-pass auto-recheck.
+"""Run a linear pass pipeline with automatic dirty-function rechecks.
 
-whose object identity changed is re-typechecked (HIR) / re-verified (TIR)
-using whole-function fallback (no change-set tracking yet). There is no
-standalone `TypeInferPass` / `VerifyModulePass`.
-
-Per-pass IR dumps go through ``tilefoundry.dump``: the active
-``DumpScope`` receives one ``{NN}_{pass_name}/before.txt`` and one
-``after.txt`` per pass under the ``PASS_IR`` flag. Outside any scope —
-or with ``PASS_IR`` masked off — the calls fall through to ``NullDumper``
-and incur no I/O.
+Identity changes trigger HIR type inference or TIR verification with whole-
+function fallback. Active dump scopes receive before and after IR snapshots;
+disabled or absent scopes perform no I/O. See
+[passes §5](docs/spec/passes.md#5-passmanager).
 """
 from __future__ import annotations
 
@@ -54,7 +49,7 @@ class PassManager:
         prim_fns = [f for f in curr.functions if isinstance(f, PrimFunction)]
         for fn in curr.functions:
             if prev_by_name.get(fn.name) is fn:
-                continue  # unchanged identity — skip recheck
+                continue
             if isinstance(fn, HirFunction):
                 verify_hir_function(fn)
             elif isinstance(fn, PrimFunction):

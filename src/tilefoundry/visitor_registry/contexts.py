@@ -42,22 +42,13 @@ def _constant_type(value: object) -> TensorType:
 
 @dataclass
 class TypeInferContext:
-    """Walk-local type-of cache + error helper. Spec [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
+    """Cache walk-local types and format type-inference errors.
 
-    The actual per-``Expr``-kind derivation rules live on
-    ``TypeInferVisitor`` (visitor_registry.visitors); this context is only
-    the memo dict and the shared ``error()`` formatter — it does not
-    dispatch on ``type(expr)`` itself.
-
-    ``mesh_scope`` carries the enclosing ``MeshScope`` stack into a registered
-    ``verify_stmt`` handler (the stmt walk sets it before dispatch), so a
-    mesh-scoped op (``Mma`` atom-scope, ``Sync``) can verify against its
-    enclosing meshes without the generic verify importing those op classes.
-
-    ``elaboration_cache`` is ``ir.hir.function.elaborate``'s
-    (template id, arg types) -> instance memo, shared by reference across
-    one elaboration walk (and by the parser across one parse session) so
-    repeated call sites collapse onto the same instance.
+    Derivation lives in ``TypeInferVisitor``. ``mesh_scope`` carries enclosing
+    scopes to statement verifiers without generic verification importing
+    operation classes. ``elaboration_cache`` memoizes function instances by
+    template identity and argument types for one parse or elaboration walk.
+    See [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
     """
 
     module: Any = None
@@ -70,8 +61,8 @@ class TypeInferContext:
         cached = self.cache.get(key)
         if cached is not None:
             return cached
-        # Local import: visitors.py imports TypeInferContext from this module,
-        # so the reverse import is deferred to call time to avoid a cycle.
+
+
         from .visitors import TypeInferVisitor  # noqa: PLC0415
 
         computed = TypeInferVisitor(self).visit(expr)

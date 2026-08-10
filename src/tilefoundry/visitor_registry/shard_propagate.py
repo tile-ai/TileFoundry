@@ -101,19 +101,15 @@ def _carrier_layout(
     complete_reduction_dims,
     fresh_strides,
 ):
-    """Carrier layout.
+    """Transform a covering input shard layout into the output layout.
 
-    Transform one input's ``ShardLayout`` into the output layout when
-    that input's relation covers every output axis.
-
-    Each input layout position is routed to an output axis via its domain dim
-    (input map projection → output map projection); positions are emitted in
-    output-axis order (preserving identity, applying a permutation, or
-    collapsing a completely-reduced axis to size 1). Strides are carried from
-    the input (a view, e.g. transpose) or rebuilt C-order (a fresh buffer, e.g.
-    reduce). Returns ``None`` when the input does not project cleanly, does not
-    cover all output axes, or does not realise the full propagated sharding —
-    so a partial contributor never wins over the synthesis path.
+    Route positions through domain projections and emit them in output-axis
+    order, including permutations and fully reduced axes. Preserve strides for
+    views or rebuild C-order strides for fresh buffers. Return ``None`` when
+    projection, output coverage, or propagated sharding is incomplete so a
+    partial contributor cannot replace layout synthesis.
+    See [shard §6](docs/spec/shard.md#6-shardattr) and
+    [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     sl = input_type.layout
     layout = sl.layout
@@ -137,21 +133,21 @@ def _carrier_layout(
         if ddim in dom_to_out:
             per_axis[dom_to_out[ddim]].append(p)
         elif ddim in complete_reduction_dims:
-            # Reduced dim with no kept output axis (keepdim=False): the position
-            # is retained as a collapsed size-1 layout axis, trailing onto the
-            # last surviving output axis (dropped only for a scalar output).
+
+
+
             if out_rank:
                 per_axis[out_rank - 1].append(p)
         else:
-            return None  # position has nowhere to go and is not reduced
+            return None
 
     new_shape: list = []
     new_pos_of: dict[int, int] = {}
-    src_pos: list = []  # the input layout position each new position came from, or None
+    src_pos: list = []
     for o in range(out_rank):
         positions = per_axis[o]
         if not positions:
-            new_shape.append(1)  # kept size-1 axis with no carried position
+            new_shape.append(1)
             src_pos.append(None)
             continue
         for p in positions:
@@ -160,18 +156,18 @@ def _carrier_layout(
             new_shape.append(1 if reduced else layout.shape[p])
             src_pos.append(None if reduced else p)
     if fresh_strides:
-        # Fresh output buffer (e.g. Reduce): C-order strides over the new shape,
-        # size-1 positions zeroed; never reads the input strides.
+
+
         c = try_c_order_strides(tuple(new_shape)) or tuple(1 for _ in new_shape)
         new_strides = [
             0 if (isinstance(sz, int) and sz == 1) else cc
             for sz, cc in zip(new_shape, c)
         ]
     elif layout.strides is None:
-        new_strides = None  # input is an implicit-stride layout: stay implicit
+        new_strides = None
     else:
-        # View transform (e.g. Transpose): carry each position's input stride;
-        # collapsed / placeholder positions get stride 0.
+
+
         new_strides = [
             0 if p is None else layout.strides[p] for p in src_pos
         ]
@@ -185,12 +181,12 @@ def _carrier_layout(
         ):
             out_attrs[p_mesh] = Split(new_pos_of[attr.axis])
         elif isinstance(attr, Partial):
-            # A Partial is a mesh-axis value state with no layout axis; it carries
-            # through on the same mesh axis unchanged.
+
+
             out_attrs[p_mesh] = Partial(attr.reduction)
 
-    # The carrier must realise exactly the full propagated sharding: map its
-    # output layout attrs back to output tensor axes and compare.
+
+
     la2ta_out = layout_axis_to_tensor_axis(tuple(new_shape), tuple(output_shape))
     mapped: list = [Broadcast() for _ in range(mesh_rank)]
     for p_mesh, attr in enumerate(out_attrs):
@@ -248,9 +244,9 @@ def derive_output_shard_layout(
         in_access = _result_access(input_maps[i])
         for p, attr in enumerate(sl.attrs):
             if isinstance(attr, Partial):
-                # A Partial is a mesh-axis value state (no layout axis); an ordinary
-                # op carries it through on the same mesh axis (no silent loss).
-                # It is discharged only by an explicit reduction/allreduce.
+
+
+
                 new_attr: object = Partial(attr.reduction)
                 if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
                     raise ValueError(
@@ -259,30 +255,30 @@ def derive_output_shard_layout(
                 attrs[p] = new_attr
                 continue
             if not isinstance(attr, Split):
-                continue  # Broadcast input — output stays Broadcast here
+                continue
             kind, ddim = in_access[la2ta[attr.axis]]
             if kind == "const":
-                continue  # Split on a size-1 broadcast input — no contribution
+                continue
             if kind == "complex":
                 raise ValueError(
                     f"input {i} mesh axis {p}: Split on a non-projection access "
                     "is not supported for shard propagation"
                 )
             if ddim in complete_reduction_dims:
-                # A completely-reduced dim (e.g. Reduce) collapses its split to
-                # Broadcast, even when the dim is kept as a size-1 output axis.
+
+
                 new_attr = Broadcast()
             elif ddim in domain_to_out_axis:
                 new_attr = Split(domain_to_out_axis[ddim])
             elif ddim in out_all_dims:
-                # Survives in the output but only via a non-projection access —
-                # the output layout axis cannot be derived; fail closed.
+
+
                 raise ValueError(
                     f"input {i} mesh axis {p}: domain dim survives only via a "
                     "non-projection output access; cannot derive output layout axis"
                 )
             elif ddim in partial_reduction_dims:
-                # A Split of a contraction dim becomes a mesh-axis Partial.
+
                 new_attr = Partial("sum")
             else:
                 new_attr = Broadcast()
@@ -292,16 +288,16 @@ def derive_output_shard_layout(
                 )
             attrs[p] = new_attr
 
-    # If a single input's relation covers every output axis, transform that
-    # input's layout into the output (identity / permutation / reduction
-    # collapse) and carry it verbatim. The layout can be tiled / padded
-    # (its position sizes need not be a clean factorisation of the tensor
-    # shape), so synthesising it from mesh extents would be lossy or wrong; an
-    # elementwise / transpose / reduce op preserves that operand's layout. Only
-    # carry when the candidates agree — if two covering operands realise the
-    # same logical sharding with different layout factorisations the result is
-    # ambiguous, so fall through to the order-independent synthesis rather than
-    # arbitrarily picking the first operand.
+
+
+
+
+
+
+
+
+
+
     carriers = [
         layout
         for i, sl in sharded
@@ -323,16 +319,16 @@ def derive_output_shard_layout(
     if carriers and all(c == carriers[0] for c in carriers):
         return carriers[0]
 
-    # Otherwise synthesise the output layout from the per-mesh-axis bindings
-    # (combining partial shards from several inputs) via the same
-    # canonicalizer make_shard_tensor_type uses ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)):
-    # an output axis split by one mesh axis is factored into an extent-sized
-    # position (+ residual) exactly like a from-scratch sharding, and one
-    # split by several mesh axes factorizes into one sub-position per mesh
-    # extent (per [shard §6](docs/spec/shard.md#6-shardattr)) plus a remainder — so a carried-through layout
-    # and a synthesised one for the same logical sharding always compare
-    # equal. `Split.axis` in `attrs` still names an *output tensor* axis here
-    # (canonical_shard_layout's expected input), not yet a layout position.
+
+
+
+
+
+
+
+
+
+
     return canonical_shard_layout(output_shape, mesh, tuple(attrs))
 
 

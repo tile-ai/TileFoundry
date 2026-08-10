@@ -64,13 +64,13 @@ class Cell:
     spans: tuple[Span, ...] = ()
     port: str | None = None
     bgcolor: str | None = None
-    color: str | None = None         # foreground (text) color, applied to plain ``text``
+    color: str | None = None
     font_face: str | None = None
     font_size: int | None = None
     bold: bool = False
     href: str | None = None
     title: str | None = None
-    align: str = "LEFT"              # LEFT / CENTER / RIGHT
+    align: str = "LEFT"
     colspan: int | None = None
     rowspan: int | None = None
     width: int | None = None

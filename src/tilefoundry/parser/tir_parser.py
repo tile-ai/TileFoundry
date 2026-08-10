@@ -44,7 +44,6 @@ from .base import (
 from .dispatch import resolve_callable
 from .symtab import LexicalEnv
 
-#: The section stating the PrimFunction rules the refusal below quotes.
 _TIR_PRIM = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
@@ -174,10 +173,10 @@ def parse_prim_func(fn, *, target=None, extra_closure=None) -> PrimFunction:
         env.define(p.name, p)
     visitor = _TirBodyVisitor(env, closure)
     body = _fold_items(visitor.visit_body(node.body))
-    # A device kernel that reads a dynamic tensor dim (a DimVar axis) needs the
-    # runtime extent plumbed as a hidden ``<param>_shape_<axis>`` i32 scalar —
-    # the same ABI the HIR→TIR lowering appends. Host entries read shapes from
-    # their tensor args, so they get no hidden scalars.
+
+
+
+
     if _is_device_target(target):
         collector = _DimVarRefCollector()
         collector.visit(body)
@@ -191,7 +190,7 @@ def _is_none(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
 
 
-# Accepted keyword arguments of the ``launch(...)`` surface.
+
 _LAUNCH_CONFIG_KEYS = frozenset(
     {"grid", "block", "cluster", "dynamic_smem", "stream", "attrs"}
 )
@@ -213,18 +212,18 @@ class _TirBodyVisitor(BaseExprVisitor):
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
                 raise VerifyError("tir: only single-target Name assignments supported in V1")
             tgt = node.targets[0].id
-            # Compile-time static binding: a platform-namespace descriptor
-            # (`op = T.cuda.mma.<NAME>` / `atom = T.cuda.mma.atom(op=...)`).
-            # Bound in the parser env as a Python object, NOT a runtime
-            # LetStmt — subsequent `atom.A/B/C` resolve statically.
+
+
+
+
             if self._is_platform_rooted(node.value):
                 self.env.define(tgt, self._eval_static(node.value))
                 return None
             rhs = self.expr(node.value)
             var = Var(type=rhs.type, name=tgt)
             self.env.define(tgt, var)
-            # Parser surface `x = rhs` lowers to LetStmt via fold; yield a
-            # bind marker.
+
+
             return _Bind(var=var, value=rhs)
 
         if isinstance(node, ast.Expr):
@@ -261,19 +260,24 @@ class _TirBodyVisitor(BaseExprVisitor):
         raise VerifyError(f"tir: unsupported statement {type(node).__name__}")
 
     def _call_as_top_level_stmt(self, node: ast.Call) -> Stmt:
-        # Name-only special forms: launch, Stmt intrinsics, and sibling
-        # ``@prim_func`` callees.
+        """Resolve a TIR top-level call as a special form, statement, or effect.
+
+        Name-only forms include launch, registered statements, and sibling
+        primitive functions. Other calls must produce unit type to become
+        ``Evaluate``. See [parser §1.3](docs/spec/parser.md#13-op-call) and
+        [parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution).
+        """
         if isinstance(node.func, ast.Name):
             name = node.func.id
             if name == "launch":
                 return self._launch_as_stmt(node)
-            # A genuine (non-schema) Stmt intrinsic — dispatch.resolve_callable
-            # resolves it by name (honouring the trailing-underscore
-            # effect-form selector, [parser §1.3](docs/spec/parser.md#13-op-call)/[parser §4.6](docs/spec/parser.md#46-per-dialect-strict-resolution)), and it is built by
-            # binding its dataclass fields directly (no OpSchema/ParamDef).
-            # A schema-based effect Op (``copy`` / ``mma`` / ...) shares the
-            # same resolver but has no dataclass fields of its own — it falls
-            # through to ``call_to_op_call`` below instead.
+
+
+
+
+
+
+
             try:
                 _kind, stmt_cls = resolve_callable(name, "tir")
             except VerifyError:
@@ -287,18 +291,18 @@ class _TirBodyVisitor(BaseExprVisitor):
                 bound = dict(zip(field_names, pos))
                 bound.update(kwargs)
                 return stmt_cls(**bound)
-            # ``@prim_func`` evaluates to the PrimFunction directly, so a sibling
-            # callee binding *is* that IR function.
+
+
             callee_ir = self.closure.get(name)
             if isinstance(callee_ir, PrimFunction):
                 if node.keywords:
                     raise VerifyError(f"tir: call to {name!r} does not support kwargs")
                 args = tuple(self.expr(a) for a in node.args)
                 return symbol_call(callee_ir, args)
-        # Effect-form op statement — bare ``copy(...)`` / ``copy_(...)`` or
-        # namespaced ``T.copy(...)`` / ``T.mma(...)``. The op call is
-        # unit-typed; wrap it in ``Evaluate``. A value op (non-unit) at Stmt
-        # position is an error.
+
+
+
+
         expr = self.call_to_op_call(node)
         if isinstance(expr, Call) and isinstance(expr.type, UnitType):
             return Evaluate(callable=expr.target, args=expr.args)
@@ -337,17 +341,17 @@ class _TirBodyVisitor(BaseExprVisitor):
         return first_attr_on_root in PLATFORM_NAMESPACES
 
     def _launch_as_stmt(self, node: ast.Call) -> Evaluate:
-        # launch(device_fn, *tensor_args, grid=, block=, cluster=None,
-        #        dynamic_smem=0, stream=None, attrs=...)
+
+
         if not node.args:
             raise VerifyError("tir: launch(...) needs a device function first argument")
         callee_node = node.args[0]
         if not isinstance(callee_node, ast.Name):
             raise VerifyError("tir: launch(...) first argument must be a function name")
         callee_ir = self.closure.get(callee_node.id)
-        # The callee may be an already-lowered cuda PrimFunction, an HIR @func
-        # device function (lowered later — HirToTir rewrites the callee), or the
-        # Module that owns such a function and declares the Target it runs on.
+
+
+
         callee_target = None
         if isinstance(callee_ir, Module):
             callee_target = _module_target(callee_ir)
@@ -366,7 +370,7 @@ class _TirBodyVisitor(BaseExprVisitor):
             raise VerifyError(
                 f"tir: launch(...) callee {callee_node.id!r} must target a CUDA device"
             )
-        # Tensor args only; launch config lives in the keyword arguments.
+
         args = tuple(self.expr(a) for a in node.args[1:])
         kw: dict[str, ast.AST] = {}
         for k in node.keywords:

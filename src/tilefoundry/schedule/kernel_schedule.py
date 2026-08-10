@@ -1,21 +1,8 @@
-"""``build_schedule_tree(tg) -> TileGraph``.
+"""Build and transform an isl schedule tree for a ``TileGraph``.
 
-``build_schedule_tree(tg) -> TileGraph`` -- construct an isl schedule
-tree over a ``TileGraph`` directly from its topological statement order,
-plus the band operations the resource solve needs: enumerate the bands to
-decide over (:func:`schedule_bands`, :func:`band_statement`) and split one
-into a tile/point band pair (:func:`tile_band`).
-
-Nothing here solves. ``tg.units`` is already a dependence-respecting order
-(``extract`` walks the SSA DAG in postorder), so sequencing the statements
-in that order is legal by construction -- no affine solve to converge, and
-no objective smuggled in from ``isl.schedule_constraints``, whose
-dependence-distance goal is not the one this layer optimises for.
-isl is left doing what it is unrivalled at: representing the tree,
-transforming bands and generating code from them.
-
-``coincident`` is written onto each band from ``tg.parallel_dims``, the
-fact ``analysis.poly`` measures off ``domain`` + ``deps``.
+The dependence-respecting unit order becomes a sequence of identity bands;
+nothing here solves an objective. Band helpers enumerate, identify, and tile
+those bands. Parallel dimensions set each member's ``coincident`` flag.
 """
 from __future__ import annotations
 

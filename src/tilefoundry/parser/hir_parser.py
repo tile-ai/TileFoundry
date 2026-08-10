@@ -44,13 +44,11 @@ from .range_slice import RangeSlice
 from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar
 from .symtab import LexicalEnv
 
-#: Sections whose rules the refusals below quote, held whole so they are
-#: checked, rendered short into the message a user reads.
 _HIR_FUNCTION = "[hir §1.1](docs/spec/hir.md#11-function)"
 _PARSER_MESH = "[parser §1.6](docs/spec/parser.md#16-with-mesh-as-m)"
 
-# Python AST binary ops → dim ops, for resolving loop bounds (tile/range
-# extent / step / start) that mix DimVars with ints, e.g. ``C // NUM_SPLITS``.
+
+
 _AST_DIM_OPS = {
     ast.Add: DimAdd,
     ast.Sub: DimSub,
@@ -78,8 +76,8 @@ def parse_func(fn, *, topologies=(), specializations=(), extra_closure=None) -> 
         source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
     )
 
-#: A body-local binding is compile-time or it is not; ``None`` and ``0`` are both
-#: legitimate compile-time values, so the miss needs its own marker.
+
+
 _NOT_STATIC = object()
 
 def _parse_func_node(
@@ -96,7 +94,7 @@ def _parse_func_node(
     )
     for p in params:
         env.define(p.name, p)
-    # Build topology namespace: {name → Topology} for string-name resolution
+
     topo_ns: dict[str, "Topology"] = {}
     for t in topologies:
         if t.name in topo_ns:
@@ -106,8 +104,8 @@ def _parse_func_node(
         env, closure, topo_ns=topo_ns, source_filename=source_filename
     )
     if _is_pass_body(node.body):
-        # A `pass` body declares a dispatch prototype: signature + envelope
-        # only, no implementation (hir [parser §5](docs/spec/parser.md#5-hir-parser)). Its variants carry the bodies.
+
+
         body_expr = None
     else:
         body_expr = visitor.visit_body(node.body)
@@ -266,7 +264,7 @@ def _resolve_return_type(node: ast.FunctionDef, closure, body_expr) -> TensorTyp
         raise VerifyError(
             "@tilefoundry.func: a `pass` prototype must annotate its return type"
         )
-    # fallback: try body_expr.type (set by Op construction — coarse).
+
     t = getattr(body_expr, "type", None)
     if t is None:
         raise VerifyError("@tilefoundry.func: cannot determine return_type")
@@ -281,15 +279,17 @@ class _HirBodyVisitor(BaseExprVisitor):
         self.source_filename = source_filename
         self.pending_constraints: dict[int, ScheduleConstraintMetadata] = {}
 
-    # Function body: assignment statements only update the symtab; hir is
-    # SSA-as-DAG ([hir §1](docs/spec/hir.md#1-hir-expr-constructs)), so variable sharing is expressed by the tail Expr
-    # referencing the same Expr object via env lookup. The body returns the
-    # tail `return` expression directly — no LetExpr node emitted.
+
+
+
+
     def visit_body(self, stmts: list[ast.stmt]) -> Expr:
-        # A nested function definition (a `@func` helper or a plain `def`) is
-        # not allowed anywhere in an @func body — including inside a
-        # `with Mesh(...)` suite and after a `return`. The check is syntactic
-        # (over the whole AST subtree), so it does not depend on reachability.
+        """Fold an HIR function body into its tail expression DAG.
+
+        Nested function definitions are rejected syntactically across the whole
+        body. See [hir §1](docs/spec/hir.md#1-hir-expr-constructs) and
+        [parser §5](docs/spec/parser.md#5-hir-parser).
+        """
         for stmt in stmts:
             for sub in ast.walk(stmt):
                 if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -332,24 +332,24 @@ class _HirBodyVisitor(BaseExprVisitor):
                 tgt = target.id
                 bound = self._static_body_value(node.value)
                 if bound is not _NOT_STATIC:
-                    # Bind the value itself, so a later use can be a shape as well
-                    # as an operand.
+
+
                     self.env.define(tgt, bound)
                     return self._visit_chain(stmts, idx + 1, require_return)
                 rhs = self.expr_with_binding(node.value, tgt)
-                # Attach the authored binding name when the
-                # user did not supply ``loc=`` explicitly. Applies to any
-                # Call (op call, TupleGetItem from Subscript, etc.).
+
+
+
                 rhs = self._maybe_autofill_binding(rhs, tgt)
-                # Bind name → Expr directly; DAG sharing replaces LetExpr binding.
+
                 self.env.define(tgt, rhs)
                 return self._visit_chain(stmts, idx + 1, require_return)
             if isinstance(target, ast.Tuple):
-                # tuple unpack: `a, b = call(...)` — requires RHS type
-                # TupleType, synthesizes a TupleGetItem(rhs, index=i)
-                # binding per name (see `_visit_tuple_assign`, shared with
-                # the tile-body Assign path). `nv, kd = _NV, _KD` binds two
-                # compile-time values instead.
+
+
+
+
+
                 if not self._static_tuple_assign(target, node.value):
                     self._visit_tuple_assign(target, node.value)
                 return self._visit_chain(stmts, idx + 1, require_return)
@@ -359,9 +359,9 @@ class _HirBodyVisitor(BaseExprVisitor):
         if isinstance(node, ast.With):
             return self._visit_with(node, stmts, idx, require_return)
         if isinstance(node, ast.Expr):
-            # bare expression statement: allowed only if it produces a Call
-            # whose value is not used — but hir has no ExprStmt, so this is
-            # invalid unless it's the final return-like form.
+
+
+
             raise VerifyError("hir: bare expression statement not allowed; use assign or return")
         if isinstance(node, ast.For):
             return self._visit_loop_for(node, stmts, idx, require_return)
@@ -552,8 +552,8 @@ class _HirBodyVisitor(BaseExprVisitor):
                 )
             left = self._resolve_loop_bound(node.left)
             right = self._resolve_loop_bound(node.right)
-            # All-numeric folds to a Python int (keeps the static path simple);
-            # any DimVar operand produces a dim Expr.
+
+
             if isinstance(left, int) and not isinstance(left, bool) and \
                     isinstance(right, int) and not isinstance(right, bool):
                 return self._eval_static(node)
@@ -561,41 +561,30 @@ class _HirBodyVisitor(BaseExprVisitor):
         return self._eval_static(node)
 
     def _visit_loop_for(self, node: ast.For, stmts, idx, require_return: bool = True):
-        """Visit loop for.
+        """Lower tile or range loops to a grid region and continue the chain.
 
-        [parser §3.3](docs/spec/parser.md#33-description) / [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only): `for i in tile(...)` / `for i in range(...)` →
-        GridRegionExpr, then continue the statement chain.
-
-        ``tile`` and ``range`` share the same loop domain ``(start, extent,
-        step)`` and lower to the same node; they differ only in the loop-var
-        binding (``tile`` 2-arg → a RangeSlice usable as ``x[:, t]``; ``range``
-        and 1-arg ``tile`` → a scalar induction var). Neither is unrolled.
+        Both forms share start, extent, and step. Two-argument tile loops bind a
+        range slice for indexed use; range and single-argument tile loops bind a
+        scalar induction variable. Neither form is unrolled.
+        See [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only).
         """
         grid = self._build_grid_for(node)
         if idx + 1 < len(stmts):
             return self._visit_chain(stmts, idx + 1, require_return)
-        # Loop is the last statement in this chain. As a function body tail it
-        # is the result value; inside a setup-only `with Mesh(...)` suite
-        # (require_return=False) it is a carry-out loop that falls through to
-        # the post-`with` tail in the outer frame.
+
+
+
+
         return grid if require_return else None
 
     def _build_grid_for(self, node: ast.For) -> Expr:
-        """Build a ``GridRegionExpr`` from a for loop.
+        """Build a grid region and rebind loop-carried names in this frame.
 
-        Build a ``GridRegionExpr`` from a ``for ... in tile/range(...)`` node,
-        rebinding its carry names in the *current* frame, and return the grid.
-
-        Carry-out lifting: any ``ast.Assign`` in the body whose single Name
-        target is already bound in *outer* scope is a loop-carried rebinding —
-        a fresh phi ``Var`` is bound inside the loop, the final RHS is its
-        ``yield_value``, and after the loop the name rebinds to the post-loop
-        value (single carry → the grid; multi-carry → TupleGetItem projections).
-
-        Sibling statements are NOT processed here (the caller continues the
-        chain), so a nested ``for`` inside a grid body composes by calling this.
-        Body must not contain ``return``; v1 accepts ``=`` assigns and nested
-        ``for`` loops (nested GridRegions).
+        Assigning an outer name creates a phi and yield; one carry maps to the
+        grid and multiple carries to tuple projections after the loop. Nested
+        loops compose recursively. The body accepts assignments and nested loops
+        but no return; the caller processes sibling statements.
+        See [parser §5.1](docs/spec/parser.md#51-gridregionexpr-carry-out-lifting).
         """
         if not isinstance(node.iter, ast.Call) or not isinstance(node.iter.func, ast.Name):
             raise VerifyError("hir For: iter must be a `tile(...)` or `range(...)` call")
@@ -612,8 +601,8 @@ class _HirBodyVisitor(BaseExprVisitor):
         loop_args = node.iter.args
         iv_binding: Expr | RangeSlice
         if loop_kind == "range":
-            # range(stop) | range(start, stop) | range(start, stop, step) —
-            # Python semantics; the loop var is a scalar.
+
+
             if len(loop_args) == 1:
                 start, extent, step = 0, self._resolve_loop_bound(loop_args[0]), 1
             elif len(loop_args) == 2:
@@ -630,7 +619,7 @@ class _HirBodyVisitor(BaseExprVisitor):
                     f"got {len(loop_args)}"
                 )
             iv_binding = iv
-        else:  # tile — `tile(extent)` scalar iv; `tile(extent, step)` RangeSlice
+        else:
             start = 0
             if len(loop_args) == 1:
                 extent = self._resolve_loop_bound(loop_args[0])
@@ -651,10 +640,10 @@ class _HirBodyVisitor(BaseExprVisitor):
                 f"extent={extent!r}, step={step!r}"
             )
 
-        # Pre-scan body for outer-scope rebindings → carry candidates, in
-        # first-occurrence order. Recurse into nested ``for`` loops: a name
-        # bound in outer scope but rebound only inside a nested loop is still
-        # carried across THIS loop (the nested loop carries it too, chaining).
+
+
+
+
         carry_names: list[str] = []
         carry_seen: set[str] = set()
 
@@ -672,8 +661,8 @@ class _HirBodyVisitor(BaseExprVisitor):
 
         _scan_carries(node.body)
 
-        # Build phi vars (typed from the outer Expr) for each carry; the outer
-        # binding is that carry's initial value, stored as the loop's init_arg.
+
+
         phi_vars: list[Var] = []
         init_exprs: list[Expr] = []
         for name in carry_names:
@@ -681,15 +670,15 @@ class _HirBodyVisitor(BaseExprVisitor):
             phi_vars.append(Var(type=outer_expr.type, name=name))
             init_exprs.append(outer_expr)
 
-        # Visit body in a pushed frame with iv + phi vars defined.
+
         self.env.push_frame()
         try:
             self.env.define(node.target.id, iv_binding)
             for cname, phi in zip(carry_names, phi_vars):
                 self.env.define(cname, phi)
             body_expr = self._visit_grid_body(node.body)
-            # Snapshot final binding for each carry name — this is the
-            # iteration's yield_value for that carry slot.
+
+
             yield_exprs: list[Expr] = []
             for cname in carry_names:
                 v = self.env.lookup(cname)
@@ -715,8 +704,8 @@ class _HirBodyVisitor(BaseExprVisitor):
                 step=step,
             )
 
-        # Carry-out path: single yield → GridRegionExpr.type = phi.type
-        # (matches outer var); multi-yield → TupleType.
+
+
         if len(carry_names) == 1:
             grid_type = phi_vars[0].type
         else:
@@ -732,11 +721,11 @@ class _HirBodyVisitor(BaseExprVisitor):
             extent=extent,
             step=step,
         )
-        # Rebind carry names in the current frame to the post-loop value.
+
         if len(carry_names) == 1:
             self.env.define(carry_names[0], grid)
         else:
-            # Multi-carry: project each via TupleGetItem.
+
             for i, cname in enumerate(carry_names):
                 proj = self._build_call(TupleGetItem(index=i), (grid,))
                 self.env.define(cname, proj)
@@ -766,10 +755,10 @@ class _HirBodyVisitor(BaseExprVisitor):
                     "hir tile-for body: nested With not supported in v1"
                 )
             if isinstance(stmt, ast.For):
-                # Nested loop → nested GridRegion. Build it (rebinding its own
-                # carries in the current frame); its grid value is this stmt's
-                # value. The outer carry-lifting already saw any outer-scope
-                # names this inner loop rebinds via the outer body pre-scan.
+
+
+
+
                 last_expr = self._build_grid_for(stmt)
                 continue
             if isinstance(stmt, ast.AugAssign):
@@ -791,9 +780,9 @@ class _HirBodyVisitor(BaseExprVisitor):
                     last_expr = rhs
                     continue
                 if isinstance(target, ast.Tuple):
-                    # Reuse the chain-style tuple unpack via a one-off helper:
-                    # synthesize an inline mini-chain so the existing logic
-                    # in `_visit_chain` can run for tuple targets.
+
+
+
                     rhs = self._visit_tuple_assign(target, stmt.value)
                     last_expr = rhs
                     continue
@@ -864,13 +853,18 @@ class _HirBodyVisitor(BaseExprVisitor):
         return last_item
 
     def _visit_with(self, node: ast.With, stmts, idx, require_return: bool = True):
+        """Parse an active mesh context with suite-local mesh binding.
+
+        Ordinary suite bindings escape to the function frame, while the mesh
+        alias does not. See [parser §1.6](docs/spec/parser.md#16-with-mesh-as-m).
+        """
         if len(node.items) != 1:
             raise VerifyError("hir: only single-item `with` supported")
         item = node.items[0]
         if item.optional_vars is None or not isinstance(item.optional_vars, ast.Name):
             raise VerifyError("hir: `with Mesh(...) as name` requires a single Name binding")
 
-        # Resolve Mesh's tuple of topology names through topo_ns.
+
         mesh = self._resolve_mesh_context(item.context_expr)
         if not isinstance(mesh, Mesh):
             raise VerifyError(
@@ -878,17 +872,17 @@ class _HirBodyVisitor(BaseExprVisitor):
                 f"({spec_ref_render(_PARSER_MESH)}), got {type(mesh).__name__}"
             )
         name = item.optional_vars.id
-        # hir `with Mesh(...) as m` is an active mesh context ([parser §1.6](docs/spec/parser.md#16-with-mesh-as-m)):
-        # a parser-lexical alias, not a tensor-binding scope and no IR node.
-        #
-        # The mesh binding name `m` is suite-local: it lives in a frame pushed
-        # for the suite and is dropped at the end of the block, so a reference
-        # to it after the `with` is `undefined name`. Ordinary values assigned
-        # in the suite keep normal function-body visibility: they are hoisted
-        # out of the suite frame into the parent before the post-`with` tail is
-        # folded. A `return` inside the suite is the function result (a trailing
-        # unreachable Python guard is ignored); a setup-only suite falls through
-        # to the tail.
+
+
+
+
+
+
+
+
+
+
+
         self.env.push_frame()
         try:
             self.env.define(name, mesh)
@@ -907,10 +901,10 @@ class _HirBodyVisitor(BaseExprVisitor):
         if not isinstance(node, ast.Call):
             return self._eval_static(node)
 
-        # Helper: evaluate a single arg, detecting tuple layout sugar.
-        # Sugar parsing only applies to the ``layout=`` slot (or the
-        # positional layout slot, handled separately) — other tuple
-        # kwargs like ``names=("x", "y")`` are plain static tuples.
+
+
+
+
         def _eval_mesh_arg(arg_node: ast.AST, *, is_layout_slot: bool = True):
             if is_layout_slot and _is_tuple_sugar(arg_node):
                 return parse_mesh_layout_sugar(arg_node, closure=self.closure)

@@ -5,6 +5,7 @@ filled with a constant scalar ``value``. Shape is taken from ``x`` so a dynamic
 (``DimVar``) extent needs no shape literal — this is how the DSL seeds loop-carry
 initial values (e.g. ``-inf`` for an online-softmax running max).
 """
+
 from __future__ import annotations
 
 import torch
@@ -22,6 +23,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 @register_op(name="full_like")
 class FullLike(Op):
     """Allocate a tensor shaped/typed like ``x``, filled with constant ``value``."""
+
     x = ParamDef(kind="input", pattern=Tensor)
     value = ParamDef(kind="attribute", annotation=float)
 

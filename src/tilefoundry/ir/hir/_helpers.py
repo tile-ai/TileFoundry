@@ -1,4 +1,5 @@
 """Shared HIR-wide helpers (cross-category), not tied to any one op family."""
+
 from __future__ import annotations
 
 from tilefoundry.ir.core import Constant

@@ -43,7 +43,7 @@ class Viewer:
             block = open_browser
         if block:
             try:
-                while True:  # daemon thread serves; keep the process alive
+                while True:
                     time.sleep(0.5)
             except KeyboardInterrupt:
                 print("\nviewer stopped.")

@@ -1,17 +1,9 @@
-"""Emitter for ``tir.If`` — C-style if/else with scalar predicate condition.
+"""Emit TIR conditionals with scalar C-style predicates.
 
-The scalar predicate path handles a narrow set of ``Expr`` shapes:
-
-- ``Constant`` carrying an ``int`` / ``bool`` literal.
-- ``Var`` (rendered by its name).
-- ``Call`` whose target is the value-form HIR ``math.Binary`` op with
-  a comparison or logical kind (``EQ`` / ``NE`` / ``LT`` / ``LE`` /
-  ``GT`` / ``GE`` / ``AND``).
-
-Tensor-form ``Binary`` (effect-form, takes a ``dst``) is intentionally
-out of scope here — it is rendered elsewhere as an entire op call.
-Anything unsupported raises ``NotImplementedError`` so we never
-silently render a wrong predicate.
+Supported predicates are integer or boolean constants, variables, and
+value-form comparison or logical binary calls. Tensor-form binary operations
+are emitted elsewhere. Unsupported expressions raise ``NotImplementedError``
+instead of producing an incorrect predicate.
 """
 
 from __future__ import annotations
@@ -21,8 +13,6 @@ from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.tir.stmts import If
 
-# C operator string per BinaryKind. Only the kinds that can legitimately
-# appear in a scalar ``tir.If`` predicate are listed here.
 _SCALAR_BINARY_OP: dict[BinaryKind, str] = {
     BinaryKind.EQ: "==",
     BinaryKind.NE: "!=",
@@ -84,9 +74,9 @@ def _emit(node: If, ctx: CodegenContext) -> None:
     ctx.indent()
     ctx.emit_node(node.then_body)
     ctx.dedent()
-    # ``If.else_body`` is always present (``Sequential``); skip the
-    # ``else { ... }`` block entirely when the else arm is empty so the
-    # generated source stays compact for the common single-arm case.
+
+
+
     if getattr(node.else_body, "body", None):
         ctx.emit("} else {")
         ctx.indent()

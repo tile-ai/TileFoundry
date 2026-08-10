@@ -1,15 +1,10 @@
-"""HirToTirPass — demo-path hir → tir lowering wrapped as a ModulePass.
+"""Lower HIR functions to explicit-output TIR primitive functions.
 
-Emits P2-shape TIR: resource introduction goes through
-``LetStmt(var, value=Call(AllocTensor,
-tensor_type=...), body=Sequential(...))``; tensor-pointwise HIR ops lower
-to TIR effect Stmt forms (``tir.nn.ReLU(src, dst)``) anchored by
-``LetStmt`` for the destination buffer.
-
-The lowerer collects a flat sequence of "items" — either a let-binding
-or an effect stmt — and folds it into a nested ``LetStmt`` chain at the
-end. This keeps the collection code linear while the emitted IR is the
-deep nesting the P2 spec requires.
+Resources become allocation let-bindings and value operations become effect
+statements writing destination buffers. Lowering collects a flat item sequence
+then folds it into nested TIR. Per-operation handlers dispatch through a registry
+and target-owned handlers use only the public lowering context. See
+[passes §7.1](docs/spec/passes.md#71-hirtotirpass).
 """
 from __future__ import annotations
 
@@ -126,14 +121,14 @@ def _is_full_layout(layout) -> bool:
             size *= d
         cosize = 1 + sum((shape[i] - 1) * strides[i] for i in range(len(shape)))
         return cosize == size
-    # A dynamic extent has no numeric cosize. A layout is full iff its strides
-    # are the row-major (C-order) strides of its shape — equivalent to
-    # ``cosize == size`` for a contiguous embedding. A dynamic dim only appears
-    # as the outermost axis, so it never enters a stride product; the inner
-    # extents that build the strides must be static for the check to hold.
+
+
+
+
+
     if not all(isinstance(d, int) and not isinstance(d, bool) for d in shape[1:]):
         return False
-    expected = c_order_strides(tuple(shape))  # never reads shape[0]
+    expected = c_order_strides(tuple(shape))
     return all(
         isinstance(strides[i], int) and strides[i] == expected[i]
         for i in range(len(shape))
@@ -141,27 +136,20 @@ def _is_full_layout(layout) -> bool:
 
 
 def _analyze_cross_warp_workspace(input_ty, reduce_axes):
-    """Compute the cross-warp staging workspace requirement for a sharded ``Reduce``.
+    """Compute staging requirements for a sharded cross-warp reduction.
 
-    Compute the cross-warp staging workspace requirement for a
-    sharded ``Reduce``.
-
-    Returns ``(workspace_size, dtype, lane_reduced)`` — the values the lowering
-    needs to size the staging buffer. ``workspace_size`` = total non-thread mesh
-    positions; ``0`` means no workspace needed. ``lane_reduced`` = whether a
-    reduced Split sits on an intra-warp (lane) mesh axis: when a workspace is
-    needed and ``lane_reduced`` is false, the reduction crosses warps ONLY (each
-    lane keeps its own cells) and the staging buffer holds one slot per
-    (warp, lane, cell). The runtime — not the lowering — derives the reduction
-    tier and its ``warps_per_group`` from the operand layouts.
+    Return workspace size, dtype, and whether a reduced split is intra-warp.
+    Zero size means no staging. A cross-warp-only reduction stages each warp,
+    lane, and cell separately. Runtime derives the reduction tier and group size
+    from operand layouts.
     """
     layout = getattr(input_ty, "layout", None)
     if not isinstance(layout, ShardLayout):
         return 0, input_ty.dtype, True
 
-    # ``layout.layout.shape`` is the **global** layout shape
-    # (= filled layout shape under the old convention),
-    # so it can be fed straight into ``_layout_axis_to_tensor_axis``.
+
+
+
     layout_shape = tuple(int(s) for s in layout.layout.shape)
     pos_to_axis = _layout_axis_to_tensor_axis(layout_shape, input_ty.shape)
     rank = len(input_ty.shape)
@@ -171,15 +159,15 @@ def _analyze_cross_warp_workspace(input_ty, reduce_axes):
     mesh_shape = tuple(mesh.layout.shape)
     topologies = list(mesh.topologies)
 
-    # ── intra-warp mesh-axis range ──────────────────────────────────
-    # Thread topology occupies the rightmost mesh axes (C-order
-    # convention: thread is the innermost topology). Lanes within one
-    # hardware warp reduce via shuffle, so only the rightmost thread
-    # axes whose product stays within a single warp are intra-warp.
-    # Mesh axes beyond that warp-sized suffix span multiple warps — a
-    # reduced Split there needs the cross-warp workspace path, not an
-    # intra-warp shuffle. (Assumes the thread topology's innermost
-    # factor aligns with the warp, as the factorised meshes here do.)
+
+
+
+
+
+
+
+
+
     warp_size = 32
     thread_axes = 0
     if topologies:
@@ -194,10 +182,10 @@ def _analyze_cross_warp_workspace(input_ty, reduce_axes):
                 prod *= ext
                 thread_axes += 1
 
-    # Reject cross-CTA reduce explicitly so the runtime dispatch does not fall
-    # back to a within-CTA tier. A "cta" topology in ``mesh.topologies`` that
-    # contributes a reduced Split axis means the reduction spans CTAs and
-    # requires the tier-3 ``reduce_cross_cta`` path (not yet implemented).
+
+
+
+
     cta_topo_axes: set[int] = set()
     if topologies:
         idx = 0
@@ -212,8 +200,8 @@ def _analyze_cross_warp_workspace(input_ty, reduce_axes):
                 idx += 1
 
     cross_warp = 1
-    group_count = 1  # non-reduced Split mesh extent product
-    lane_reduced = False  # a reduced Split on an intra-warp (lane) axis
+    group_count = 1
+    lane_reduced = False
     for mesh_axis_idx, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
@@ -221,7 +209,7 @@ def _analyze_cross_warp_workspace(input_ty, reduce_axes):
         if not (0 <= L < len(pos_to_axis)):
             continue
         on_reduced = pos_to_axis[L] in normalized
-        # Thread axis? (rightmost thread_axes in mesh)
+
         is_thread = mesh_axis_idx >= len(mesh_shape) - thread_axes
         if is_thread:
             if on_reduced:
@@ -239,17 +227,17 @@ def _analyze_cross_warp_workspace(input_ty, reduce_axes):
         else:
             group_count *= mesh_ext
 
-    # Total workspace slots: one per warp (all non-thread mesh positions).
+
     total_warps = cross_warp * group_count
-    # When ``cross_warp <= 1`` no actual cross-warp summing happens —
-    # each "group" is one warp — so skip the smem workspace and emit
-    # the intra-warp tier-1 path (``reduce(src, dst)`` overload).
+
+
+
     if total_warps <= 1 or cross_warp <= 1:
         return 0, input_ty.dtype, True
-    # ``lane_reduced=False`` means the reduction crosses warps ONLY — every lane
-    # keeps its own independent cells. The runtime then selects the cross-warp
-    # tier, whose staging buffer holds one slot per (warp, lane, cell): x32 slots
-    # (sized below by the lowering).
+
+
+
+
     return total_warps, input_ty.dtype, lane_reduced
 
 
@@ -264,6 +252,13 @@ _Item = Union[_Bind, Stmt]
 
 
 class _Lowerer:
+    """Collect TIR items and expose the per-operation lowering-handler ABI.
+
+    Target-owned handlers use ``lower``, ``fresh``, ``alloc``, ``emit``, and
+    ``emit_bind`` only. Core handlers may use private cooperation for dispatch,
+    reshard synchronization, and tuple carries. See
+    [passes §7.1](docs/spec/passes.md#71-hirtotirpass).
+    """
     def __init__(
         self,
         *,
@@ -275,24 +270,24 @@ class _Lowerer:
         self._cache: dict[int, Var] = {}
         self._items: list[_Item] = []
         self._name_counter = 0
-        # Per-field Vars of a tuple-typed producer (a multi-carry
-        # ``GridRegionExpr``); ``TupleGetItem`` selects a field from here.
+
+
         self._tuple_parts: dict[int, list[Var]] = {}
-        # Loop-carry phi Var (id) -> its HIR init Expr, so a chain can be
-        # traced back to its param-rooted gmem alias (``_param_alias_root``).
+
+
         self._carry_init: dict[int, Expr] = {}
-        # Dispatch lowering context. ``dispatch_groups`` maps callee
-        # name -> the overload-group tuple of HIR variants (only entries
-        # with non-empty specializations). ``mangled_registry`` maps
-        # ``mangled_symbol`` -> the already-lowered mangled PrimFunction
-        # (filled before any caller body is lowered, so sub-call sites
-        # can reference it by symbol via Evaluate(SymbolRef, args)).
-        # ``caller_fn`` is the HIR function currently being lowered (used
-        # to resolve caller-side ranges from its own ``specializations``).
-        # ``shape_param_names`` collects ``(param_name, axis)`` pairs the
-        # body references via ``ShapeOf`` so the enclosing PrimFunction
-        # can add the corresponding ``<param>_shape_<axis>`` scalar
-        # kernel params.
+
+
+
+
+
+
+
+
+
+
+
+
         self._dispatch_groups = dispatch_groups or {}
         self._mangled_registry = mangled_registry or {}
         self._caller_fn = caller_fn
@@ -316,17 +311,11 @@ class _Lowerer:
         return r
 
     def _fork(self, *, bind: "dict[int, Var]") -> "_Lowerer":
-        """Create a sub-lowerer for a nested lexical scope (a GridRegion body).
+        """Fork lowering state for a nested grid-region body.
 
-        Create a sub-lowerer for a nested lexical scope (a GridRegion
-        body): shares the read-only dispatch context by reference
-        (``_dispatch_groups`` / ``_mangled_registry`` / ``_caller_fn`` /
-        ``_shape_param_names`` — mutations to ``_shape_param_names`` inside
-        the sub-lowerer must be visible to the enclosing function) and takes
-        a snapshot copy of the accumulated walk state (``_cache`` /
-        ``_tuple_parts`` / ``_carry_init`` / ``_name_counter``). ``bind``
-        seeds extra ``id(expr) -> Var`` cache entries (e.g. the loop
-        induction Var) beyond the inherited snapshot.
+        Share dispatch context and shape-parameter collection by reference while
+        copying accumulated caches, tuple parts, carry roots, and name counter.
+        *bind* seeds additional expression-to-variable entries.
         """
         sub = _Lowerer(
             dispatch_groups=self._dispatch_groups,
@@ -350,10 +339,10 @@ class _Lowerer:
         self._name_counter = sub._name_counter
         return _fold_items_to_sequential(sub._items)
 
-    # ── public per-op lowering-handler ABI ──────────────────────────────
-    # docs/spec/passes.md "Per-op lowering dispatch": a ``@register_hir_lowering``
-    # handler is a module-level free function ``(ctx, target, expr)`` using only
-    # these five methods — it never reaches into ``_Lowerer`` privates.
+
+
+
+
 
     def lower(self, expr: Expr) -> Var:
         """Recursively lower a nested HIR sub-expression to its TIR Var."""
@@ -383,9 +372,9 @@ class _Lowerer:
             self._cache[key] = expr
             return expr
         if isinstance(expr, Constant):
-            # Lower scalar constant to a filled buffer. An unmaterialized literal
-            # (storage=umat) is materialized here to register memory — the
-            # backing buffer needs a concrete residency before codegen.
+
+
+
             const_type = expr.type
             if const_type.storage is StorageKind.UMAT:
                 const_type = TensorType(
@@ -399,19 +388,19 @@ class _Lowerer:
             self._cache[key] = r
             return r
         if isinstance(expr, GridRegionExpr):
-            # A loop-carried region (accumulator loop) materialises its phis as
-            # mutable buffers and copies the yields back each iteration; a
-            # plain map region writes each body result into ``out[m, :]``.
+
+
+
             if expr.carried_args:
                 return self._lower_grid_region_carry(expr)
 
             iv = expr.induction_var
-            grid_ty = expr.type  # full (M, K) output type
+            grid_ty = expr.type
 
-            # Determine loop bound from GridRegion's output type
+
             M = grid_ty.shape[0] if grid_ty.shape else 1
 
-            # Allocate full output tensor
+
             out_type = TensorType(
                 shape=grid_ty.shape,
                 dtype=grid_ty.dtype,
@@ -420,13 +409,13 @@ class _Lowerer:
             )
             out_var = self._alloc(out_type, hint="grid_out")
 
-            # Create a sub-lowerer for the body, with the induction var bound.
+
             sub = self._fork(bind={id(iv): iv})
 
-            # Lower the body (per-row computation)
+
             body_result = sub.lower_expr(expr.body)
 
-            # Create TensorView of output[m, :] and Copy body result into it
+
             view_shape = body_result.type.shape
             out_view_layout = TensorView.layout_for_slice(
                 src_shape=tuple(out_var.type.shape),
@@ -447,7 +436,7 @@ class _Lowerer:
 
             body_seq = self._close(sub)
 
-            # Wrap in For loop
+
             i32_scalar = TensorType.scalar(dtype=DType.i32)
             start_val = Constant(value=0, type=i32_scalar)
             stop_val = Constant(value=M, type=i32_scalar)
@@ -470,9 +459,9 @@ class _Lowerer:
                 f"hir_to_tir: no lowering registered for Op "
                 f"{type(target).__name__}"
             )
-        # The handler ABI (docs/spec/passes.md "Per-op lowering dispatch")
-        # returns the Var for `expr`; caching it here (rather than in each
-        # handler) keeps `_cache` a `lower_expr`-owned concern.
+
+
+
         result = handler(self, target, expr)
         self._cache[key] = result
         return result
@@ -498,36 +487,36 @@ class _Lowerer:
             )
         iv = expr.induction_var
 
-        # Materialise one accumulator per carry from its (lowered) initial
-        # value. A fresh buffer keeps each phi mutable without aliasing the
-        # init value's binding (which may be shared or a kernel param).
+
+
+
         acc_vars: list[Var] = []
         for init_arg in expr.init_args:
             init_var = self.lower_expr(init_arg)
             if init_var.type.storage == StorageKind.GMEM:
-                # In-place carry over a gmem buffer / view: gmem is not
-                # allocatable inside the kernel — bind the phi to the initial
-                # binding itself. In-place ops return their dst, so the yield
-                # resolves back to the same var.
+
+
+
+
                 acc_vars.append(init_var)
                 continue
             acc_var = self._alloc(init_var.type, hint="acc")
             self._items.append(_eval_call(Copy(), (init_var, acc_var)))
             acc_vars.append(acc_var)
 
-        # Lower the body with every phi bound to its accumulator buffer.
+
         sub = self._fork(bind={id(iv): iv})
-        # Carry-init continuity across the sub-lowerer boundary: a chain rooted
-        # in a carried var inside the body must trace to the SAME gmem alias
-        # root as the carry's init (used by the reshard-owned sync).
+
+
+
         for phi, init_arg in zip(expr.carried_args, expr.init_args):
             self._carry_init[id(phi)] = init_arg
             sub._carry_init[id(phi)] = init_arg
         for phi, acc_var in zip(expr.carried_args, acc_vars):
             sub._cache[id(phi)] = acc_var
         sub.lower_expr(expr.body)
-        # All yield values are computed (SSA) before any copy-back, so a later
-        # copy cannot clobber an earlier yield's inputs.
+
+
         yield_vars = [sub.lower_expr(y) for y in expr.yield_values]
         for yield_var, acc_var in zip(yield_vars, acc_vars):
             if yield_var is not acc_var:
@@ -544,26 +533,19 @@ class _Lowerer:
             body=body_seq,
         )
         self._items.append(for_loop)
-        # Multi-carry loops are tuple-typed; a consumer selects a field via
-        # TupleGetItem, which reads ``_tuple_parts``.
+
+
         self._tuple_parts[key] = acc_vars
         self._cache[key] = acc_vars[0]
         return acc_vars[0]
 
     def _reshard_cross_cta_sync(self, expr) -> "Var | None":
-        """The reshard-owned grid fence.
+        """Fence a param-rooted global buffer before cross-CTA reownership.
 
-        The reshard-owned grid fence. A reshard whose SOURCE chain is a
-        param-rooted gmem cta-shard view and whose DEST is a *different* gmem
-        cta-ShardLayout re-views the ROOT buffer under new ownership — a
-        cross-CTA read. The sync is intrinsic to the reshard lowering: the naive
-        path lowers the producing chain, fences the grid (so every CTA's shard
-        writes are visible), and returns the ROOT to reshard from; otherwise it
-        returns ``None``. This is the single scenario-dispatch point (a future
-        async path could skip the fence); it owns only the fence — cross-CTA data
-        redistribution is not implemented here. Both the intermediate reshard
-        path and the output-sink reshard path route through this helper so the
-        fence is never bypassed.
+        Lower the producing chain, fence the grid, and return its root only when
+        source and destination use different CTA shard ownership. Return ``None``
+        otherwise. This owns synchronization, not data redistribution, and is
+        shared by intermediate and output-sink reshard paths.
         """
         dst_sl = expr.type.layout
         src_expr = expr.args[0]
@@ -574,15 +556,15 @@ class _Lowerer:
             and getattr(getattr(src_expr, "type", None), "storage", None)
             == StorageKind.GMEM
             and isinstance(getattr(src_expr.type, "layout", None), ShardLayout)
-            # only an actual OWNERSHIP CHANGE is a transition — an identical
-            # re-view keeps the local path and never fences.
+
+
             and src_expr.type.layout != dst_sl
             and all(t.name == "cta" for t in dst_sl.mesh.topologies)
         ):
             root = self._param_alias_root(src_expr)
             if root is not None:
-                # Lower the producing chain first (its shard writes precede the
-                # fence), fence the grid, then reshard the root param.
+
+
                 self.lower_expr(src_expr)
                 self._items.append(_eval_call(TirSync(mesh=dst_sl.mesh), ()))
                 return root
@@ -613,7 +595,7 @@ class _Lowerer:
             return self._param_alias_root(expr.args[0], _depth + 1)
         return None
 
-    # ── sub-call dispatch ────────────────────────────────────────────────
+
     def _lower_hir_call(self, call: Call, callee_hir: HirFunction) -> Var:
         """Lower ``Call(target=HirFunction)`` into a ``tir.DispatchCall``.
 
@@ -629,16 +611,16 @@ class _Lowerer:
                 f"HIR Call to {callee_hir.name!r}: callee has no "
                 f"specializations and is not in a dispatch group"
             )
-        # Lower the call args first so they have TIR Vars.
+
         arg_vars: list[Var] = [self.lower_expr(a) for a in call.args]
-        # Allocate output buffer matching call.type.
+
         out_type = call.type
         out_var = self._alloc(out_type, hint="cr")
-        # Resolve the dispatch DimVar from the callee group (per the
-        # canonical first-occurrence rule). All variants in a v0 group
-        # share the same dispatch DimVar by construction (the validator
-        # in script.py mandates one DimVarRangePat per variant; the
-        # group's overload is over the same name).
+
+
+
+
+
         first_variant = group[0]
         first_pat = first_variant.specializations[0]
         if not isinstance(first_pat, DimVarRangePat):
@@ -654,8 +636,8 @@ class _Lowerer:
                 f"{dim_name!r} not found in callee signature"
             )
         param_index, axis = loc
-        # Caller-side range from the call argument's shape entry at the
-        # callee's canonical (param_index, axis).
+
+
         if param_index >= len(call.args):
             raise TypeError(
                 f"HIR Call to {callee_hir.name!r}: arg index {param_index} "
@@ -670,13 +652,13 @@ class _Lowerer:
         dim_entry = arg_ty.shape[axis]
         caller_range = self._resolve_caller_range(dim_entry, callee_hir.name)
         c_lo, c_hi = caller_range
-        # Reachable variants in source order.
+
         reachable: list[tuple[HirFunction, DimVarRangePat]] = []
         for variant in group:
             pat = variant.specializations[0]
             if not isinstance(pat, DimVarRangePat):
                 continue
-            # Half-open intersection: [pat.lo, pat.hi) ∩ [c_lo, c_hi) != empty.
+
             if pat.lo < c_hi and c_lo < pat.hi:
                 reachable.append((variant, pat))
         if not reachable:
@@ -685,16 +667,16 @@ class _Lowerer:
                 f"specialization set; caller range [{c_lo}, {c_hi}) "
                 f"does not intersect any callee specialization range"
             )
-        # The subject ShapeOf reads the caller's positional argument Var.
-        # For a non-Var arg the lowering already produced a Var via
-        # ``arg_vars`` above; the argument's Var is the right subject
-        # because the runtime shape is the dispatch axis on that Var.
+
+
+
+
         subject_param = arg_vars[param_index]
-        # ShapeOf.param must be a param of the enclosing PrimFunction
-        # (verifier rule). If the resolved Var is one of the caller's
-        # params, use it directly; otherwise the body produced a fresh
-        # Var and there is no kernel scalar — this is rejected by the
-        # verifier downstream, so surface a clearer error here.
+
+
+
+
+
         if (
             self._caller_fn is None
             or not any(subject_param is p for p in self._caller_fn.params)
@@ -717,16 +699,16 @@ class _Lowerer:
                     f"HIR Call to {callee_hir.name!r}: mangled callee "
                     f"{mangled_name!r} not pre-lowered"
                 )
-            # call args = caller-arg TIR vars + out_var, then
-            # forward any trailing <param>_shape_<axis> kernel scalars
-            # the mangled callee declared (it grew them itself because
-            # its own body lowers nested ShapeOf / DispatchCall sites).
-            # Map each trailing scalar back to the caller-arg position
-            # by matching <base_name> against the callee's user-param
-            # names, then emit ShapeOf(<caller-arg Var>, axis) and
-            # record the corresponding <caller-arg name>_shape_<axis>
-            # on the enclosing PrimFunction so it grows the matching
-            # trailing kernel param.
+
+
+
+
+
+
+
+
+
+
             call_args: list = [*arg_vars, out_var]
             head_count = len(variant.params) + mangled_pf.output_count
             trailing = mangled_pf.params[head_count:]
@@ -801,48 +783,54 @@ class _Lowerer:
         )
 
 
-# ── per-op lowering handlers ─────────────────────────────────────────────
-# docs/spec/passes.md "Per-op lowering dispatch": each ``@register_hir_lowering``
-# handler is a module-level free function ``(ctx, target, expr)`` — ``ctx`` is
-# the ``_Lowerer`` and the handler uses only its public ABI (``ctx.lower`` /
-# ``ctx.fresh`` / ``ctx.alloc`` / ``ctx.emit`` / ``ctx.emit_bind``).
+
+
+
+
+
 
 @register_hir_lowering(Reshard)
 def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
+    """Lower a reshard using the post-inference destination layout.
+
+    Reuse a materialized source layout or derive shared-engine strides for a
+    plain boundary input. See [passes §7.1](docs/spec/passes.md#71-hirtotirpass)
+    and [hir §1.1](docs/spec/hir.md#11-function).
+    """
     src_override = ctx._reshard_cross_cta_sync(expr)
     src = src_override if src_override is not None else ctx.lower(expr.args[0])
     src_ty = src.type
-    # [hir §1.1](docs/spec/hir.md#11-function): the dest view layout is the
-    # post-typeinfer materialized form on ``expr.type``. The
-    # source-side ``TensorView`` reads ``src`` using whichever
-    # stride form already materialized for ``src``:
-    # - ``src.type.layout`` is a ShardLayout → reuse it
-    #   verbatim (the upstream Reshard materialized it);
-    # - ``src.type.layout`` is ``None`` (plain kernel-param
-    #   surface) → fall back to shared-engine C-order over
-    #   the dest layout's canonical shape, matching the
-    #   "plain inputs are kernel-boundary shared engines"
-    #   rule in [hir §1.1](docs/spec/hir.md#11-function) / function-signature binding.
+
+
+
+
+
+
+
+
+
+
+
     sl = expr.type.layout
     dst_shape = expr.type.shape
     view_src = src
     if isinstance(src_ty.layout, ShardLayout):
         src_sl = src_ty.layout
-        # Intermediate sharded source: a ShardTensor is bound for
-        # ``src``. A ``TensorView``'s memory must be a pointer (cute
-        # ``make_tensor`` needs an iterator, not a ShardTensor), so
-        # take ``PtrOf(src)`` first — same shape as the Reshape
-        # lowering below.
+
+
+
+
+
         ptr_call = Call(type=src_ty, target=PtrOf(), args=(src,))
         view_src = ctx.fresh(src_ty, hint="ptr")
         ctx.emit_bind(view_src, ptr_call)
     elif isinstance(sl, ShardLayout):
-        # A full (bijective) fragment layout encodes its own
-        # global gather permutation in the strides (e.g. mma A/B
-        # fragments whose lane → (m, k) mapping is non-C-order);
-        # read the source through those strides. A collapsed /
-        # per-instance layout has lost the global embedding, so
-        # fall back to the C-order shared engine.
+
+
+
+
+
+
         if _is_full_layout(sl.layout):
             src_strides = tuple(int(s) for s in sl.layout.strides)
         else:
@@ -858,7 +846,7 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
     else:
         src_sl = sl
 
-    # TensorView(memory, shard_layout) — shard view of src
+
     tv = TensorView(layout=src_sl)
     tv_type = TensorType(
         shape=dst_shape,
@@ -871,11 +859,11 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
     ctx.emit_bind(sv, tv_call)
 
     if target.storage is None:
-        # without storage — pure shard view, no alloc / copy
+
         return sv
 
-    # with storage — allocate plain dst, copy from shard view
-    # Compute per-shard physical shape: global multi-D / mesh extents at S<> axes
+
+
     per_shard_shape = list(sl.layout.shape)
     mesh_shape = sl.mesh.layout.shape
     attr_idx = 0
@@ -883,26 +871,26 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
         if isinstance(a, Split) and attr_idx < len(mesh_shape):
             mext = mesh_shape[attr_idx]
             if mext is None:
-                # Launch-provided (dynamic) CTA extent: this axis is the
-                # dynamic outer tile count; each CTA owns exactly one
-                # slice, so its per-shard extent is a static 1. The
-                # fixed inner tile lives on the non-split axes.
+
+
+
+
                 per_shard_shape[a.axis] = 1
             else:
-                # Post-reshard typeinfer may have rewritten the
-                # ShardLayout to reg-view local form already (Split
-                # positions size 1). Use ``max(1, ...)`` so the
-                # resulting per-shard extent is at least 1 instead
-                # of collapsing to 0 via integer division.
+
+
+
+
+
                 per_shard_shape[a.axis] = max(
                     1, per_shard_shape[a.axis] // mext
                 )
         attr_idx += 1
     per_shard_shape = tuple(per_shard_shape)
-    # ``ShardLayout.layout`` carries the global / unsharded
-    # layout shape with storage-physical strides. The TIR
-    # ``var.type.shape`` remains per-shard local — that's how
-    # downstream alloc / arith size their iteration.
+
+
+
+
     dst_type = TensorType(
         shape=per_shard_shape,
         dtype=src_ty.dtype,
@@ -914,22 +902,22 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
     return dst
 
 
-# HIR ``Mma_SM80_*`` / ``Wgmma_SM90_*`` are SSA value ops returning a fragment
-# tensor. Lower into ``Evaluate(tir.cuda.nn.Mma, (a, b, result))`` plus an
-# upfront ``AllocTensor`` for the accumulator (matches ``HirReLU`` / ``HirMul``
-# lowering shape).
+
+
+
+
 @register_hir_lowering(HirMmaSM80_16x8x16)
 @register_hir_lowering(HirWgmma_SM90)
 def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
     a = ctx.lower(expr.args[0])
     b = ctx.lower(expr.args[1])
-    # Per-thread C fragment shape: for SM80 16x8x16 each lane
-    # owns 4 f32 (the SM80_16x8_Row CLayout value layout (2, 2)
-    # at row-major strides (1, 64)). The per-shard buffer
-    # therefore stays at 4 elements in cute terms — match by
-    # allocating ``shape = (2, 2)`` so the fragment has the
-    # same multi-axis layout as the A/B operands after their
-    # own per-shard sizing.
+
+
+
+
+
+
+
     if isinstance(target, HirMmaSM80_16x8x16):
         out_shape = (2, 2)
     else:
@@ -941,17 +929,17 @@ def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
         storage=a.type.storage,
     )
     r = ctx.alloc(out_type, hint="r")
-    # SSA mma is value-form: ``c = a @ b``. Zero-init the
-    # accumulator buffer so the underlying ``a*b + c`` PTX mma
-    # produces ``a @ b`` exactly. Outer-level accumulation
-    # patterns like ``add(acc, mma(a, b))`` are emitted as a
-    # separate Binary stmt later in the pipeline.
+
+
+
+
+
     zero_const = Constant(
         value=0.0, type=TensorType.meta_scalar(target.dtype_acc),
     )
     ctx.emit(_eval_call(Fill(), (r, zero_const)))
-    # TirMma operand order is (acc, lhs, rhs); the lowered path leaves
-    # ``atom`` implicit (None) — the SM80 codegen handler is unchanged.
+
+
     ctx.emit(_eval_call(TirMma(), (r, a, b)))
     return r
 
@@ -959,28 +947,28 @@ def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
 @register_hir_lowering(HirReLU)
 def _lower_relu(ctx: "_Lowerer", target, expr) -> Var:
     x = ctx.lower(expr.args[0])
-    # stmt-form pointwise: allocate output, then run ReLU as an
-    # effect stmt that reads x and writes r.
+
+
     r = ctx.alloc(x.type, hint="r")
     ctx.emit(_eval_call(TirReLU(), (x, r)))
     return r
 
 
-# ── pointwise binary / unary (kinded tag dispatch) ──
+
 @register_hir_lowering(HirBinary)
 def _lower_binary(ctx: "_Lowerer", target, expr) -> Var:
     lhs = ctx.lower(expr.args[0])
     rhs = ctx.lower(expr.args[1])
-    # Build the result type from the **lowered TIR** shapes
-    # (which may already be the
-    # per-shard form after a reg-storage reshard), not the
-    # HIR-side ``expr.type`` (logical). Otherwise the TIR
-    # verifier sees Binary(src=(1,1,1,8), dst=(1,1536)).
+
+
+
+
+
     out_shape = lhs.type.shape if len(lhs.type.shape) >= len(rhs.type.shape) else rhs.type.shape
-    # Destination storage follows the HIR-resolved output residency
-    # (order-independent), not the lowered operands — a materialized
-    # constant operand must not pull the result into its register
-    # buffer. An unmaterialized output is materialized at this boundary.
+
+
+
+
     out_storage = (
         expr.type.storage
         if expr.type.storage is not StorageKind.UMAT
@@ -1000,8 +988,8 @@ def _lower_binary(ctx: "_Lowerer", target, expr) -> Var:
 @register_hir_lowering(HirUnary)
 def _lower_unary(ctx: "_Lowerer", target, expr) -> Var:
     x = ctx.lower(expr.args[0])
-    # See HirBinary above — TIR result mirrors the lowered
-    # input shape, not the HIR logical shape.
+
+
     out_type = TensorType(
         shape=x.type.shape,
         dtype=expr.type.dtype,
@@ -1015,17 +1003,17 @@ def _lower_unary(ctx: "_Lowerer", target, expr) -> Var:
 
 @register_hir_lowering(HirReshape)
 def _lower_reshape(ctx: "_Lowerer", target, expr) -> Var:
-    # Reshape: PtrOf(src) + TensorView with same layout,
-    # new logical shape.  PtrOf gives a device pointer to
-    # the per-thread buffer (no offset for reshape).
+
+
+
     x = ctx.lower(expr.args[0])
-    # Step 1: PtrOf(x) — take the pointer
+
     ptr_op = PtrOf()
-    ptr_ty = x.type  # PtrOf typeinfer returns same type
+    ptr_ty = x.type
     ptr_call = Call(type=ptr_ty, target=ptr_op, args=(x,))
     ptr_var = ctx.fresh(ptr_ty, hint="ptr")
     ctx.emit_bind(ptr_var, ptr_call)
-    # Step 2: TensorView over the ptr, with new shape
+
     out_ty = TensorType(
         shape=target.new_shape,
         dtype=x.type.dtype,
@@ -1064,9 +1052,9 @@ def _lower_cast(ctx: "_Lowerer", target, expr) -> Var:
 
 @register_hir_lowering(HirTupleGetItem)
 def _lower_tuple_get_item(ctx: "_Lowerer", target, expr) -> Var:
-    # Structural select over a tuple-typed producer (a multi-carry
-    # GridRegion): lowering the producer materialises its per-field Vars in
-    # ``_tuple_parts``; this just picks one.
+
+
+
     src = expr.args[0]
     ctx.lower(src)
     parts = ctx._tuple_parts.get(id(src))
@@ -1080,11 +1068,11 @@ def _lower_tuple_get_item(ctx: "_Lowerer", target, expr) -> Var:
 
 @register_hir_lowering(HirFullLike)
 def _lower_full_like(ctx: "_Lowerer", target, expr) -> Var:
-    # Pure type-driven alloc + fill: the input expr only donates its type
-    # (shape / dtype / layout / storage). Its LOWERED form is mirrored so
-    # that inside a mesh scope the accumulator carries the per-shard local
-    # shape (not the HIR-global one) — a global-shaped accumulator would
-    # poison downstream broadcast-shape decisions.
+
+
+
+
+
     ty = expr.type
     storage = (
         ty.storage if ty.storage is not StorageKind.UMAT else StorageKind.RMEM
@@ -1105,8 +1093,8 @@ def _lower_full_like(ctx: "_Lowerer", target, expr) -> Var:
             ),
         )
     else:
-        # TIR var shapes are per-shard local (see the Reshard lowering); a
-        # sharded type sizes its buffer / fill count from the layout.
+
+
         local_shape = (
             shard_layout_local_shape(ty.layout)
             if isinstance(ty.layout, ShardLayout)
@@ -1132,9 +1120,9 @@ def _lower_full_like(ctx: "_Lowerer", target, expr) -> Var:
 @register_hir_lowering(HirCacheUpdate)
 def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
     cache = ctx.lower(expr.args[0])
-    cur = ctx.lower(expr.args[1])  # ``cur`` position (runtime row index)
-    # expr.args[2] (``s``) is not consulted: v0 supports the decode-step
-    # shape S_CAP == 1 (exactly one row), where s must be 1.
+    cur = ctx.lower(expr.args[1])
+
+
     new = ctx.lower(expr.args[3])
     cache_shape = tuple(cache.type.shape)
     new_shape = tuple(expr.args[3].type.shape)
@@ -1144,8 +1132,8 @@ def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
             f"(single-row decode write); got cache {cache_shape}, "
             f"new {new_shape}"
         )
-    # Row-slice view of the cache at runtime ``cur`` along axis 1; keep rank
-    # 4 (axis-1 extent 1) so the Copy shape check matches ``new``.
+
+
     view_shape = (new_shape[0], 1, *cache_shape[2:])
     cstr = c_order_strides(tuple(int(d) for d in cache_shape))
     view_layout = _Layout(shape=view_shape, strides=cstr)
@@ -1158,8 +1146,8 @@ def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
     tv_call = Call(type=tv_type, target=TensorView(layout=view_layout), args=(cache, cur))
     sv = ctx.fresh(tv_type, hint="sv")
     ctx.emit_bind(sv, tv_call)
-    # In-place per the op contract (anchored on the cache buffer): write the
-    # new row into the cache and return the cache var itself.
+
+
     ctx.emit(_eval_call(Copy(), (new, sv)))
     return cache
 
@@ -1179,8 +1167,8 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
         val = off_expr.value
         elem = int(val[0]) if isinstance(val, (list, tuple)) else int(val)
         return Constant(value=elem, type=i32)
-    # A runtime offset lowers to its scalar Var (a native scalar index, e.g.
-    # the loop induction variable).
+
+
     return ctx.lower(off_expr)
 
 
@@ -1188,21 +1176,21 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
 def _lower_insert_slice(ctx: "_Lowerer", target, expr) -> Var:
     dst = ctx.lower(expr.args[0])
     upd = ctx.lower(expr.args[1])
-    # Per-axis window: an offset tuple (rank N) or a single scalar (1-D).
-    # Each window is a tile of the update's own extent starting at the
-    # offset, so each offset is that axis's tile coord. Write ``update`` into
-    # the window IN PLACE and return ``dst`` — a loop-carried
-    # ``ov = insert_slice(ov, …)`` therefore reuses the single carried buffer
-    # with no replacement allocation, and the yield aliases the carry buffer.
+
+
+
+
+
+
     off_expr = expr.args[2]
     upd_shape = tuple(upd.type.shape)
     if isinstance(off_expr, Tuple):
         coords = tuple(_insert_slice_coord(ctx, el) for el in off_expr.elements)
     else:
         coords = (_insert_slice_coord(ctx, off_expr),)
-    # The window carries the update's layout: for a sharded update this is a
-    # ShardLayout, so the Copy verifier sees matching ShardLayouts and the
-    # emitter derives the per-shard tile size.
+
+
+
     if isinstance(upd.type.layout, ShardLayout):
         win_layout = upd.type.layout
     elif isinstance(off_expr, Tuple):
@@ -1228,18 +1216,18 @@ def _lower_insert_slice(ctx: "_Lowerer", target, expr) -> Var:
     return dst
 
 
-# ── reduce / gather (generic tag dispatch) ──
+
 @register_hir_lowering(HirGather)
 def _lower_gather(ctx: "_Lowerer", target, expr) -> Var:
     if target.batch_dims != 0:
-        # The batched contract is evaluator/typeinfer-only for now; refuse to
-        # fall through to the single-coordinate slice-view lowering below.
+
+
         raise NotImplementedError(
             "Gather: batched gather lowering (batch_dims>0) is not yet supported"
         )
     x = ctx.lower(expr.args[0])
     idx = ctx.lower(expr.args[1])
-    # Compute view layout from sliced shape
+
     view_shape = expr.type.shape
     view_layout = TensorView.layout_for_slice(
         src_shape=tuple(x.type.shape),
@@ -1263,13 +1251,13 @@ def _lower_gather(ctx: "_Lowerer", target, expr) -> Var:
 def _lower_reduce(ctx: "_Lowerer", target, expr) -> Var:
     x = ctx.lower(expr.args[0])
     axes = target.axes
-    # The HIR Reduce typeinfer already computed the reduced
-    # ``ShardLayout`` (layout dims on reduced axes collapsed to
-    # size 1 / stride 0; corresponding Split attrs rewritten to
-    # Broadcast).  Reuse that layout instead of copying the
-    # input layout — otherwise the TIR output type carries an
-    # un-reduced layout shape and downstream codegen iterates
-    # the wrong per-thread count.
+
+
+
+
+
+
+
     keepdim = target.keepdim
     new_shape = list(x.type.shape)
     for a in sorted(axes, reverse=True):
@@ -1285,35 +1273,35 @@ def _lower_reduce(ctx: "_Lowerer", target, expr) -> Var:
     )
     r = ctx.alloc(out_type, hint="r")
 
-    # Analyse the input ShardLayout for cross-warp staging.
-    # A reduce axis covered by a Split
-    # on a non-``thread`` topology (i.e. ``warp`` / ``cta`` /
-    # ``cluster`` / ...) cannot be folded by ``__shfl_xor_sync``
-    # alone; the runtime needs a small staging buffer the
-    # warps cooperatively write into and read back. The buffer
-    # size is the product of the cross-warp mesh axis extents.
+
+
+
+
+
+
+
     tir_args: tuple = (x, r)
-    # The cross-warp analysis must run on the *HIR* input
-    # type — its ``shape`` matches
-    # the user-facing axes the HIR Reduce was authored against
-    # (logical ``(1, 1536)``). After lowering, ``x.type.shape``
-    # may be the per-shard local form ``(1, 1, 1, 8)``; using
-    # that would silently mis-map ``axes=(-1,)`` to a non-Split
-    # layout position and skip the workspace alloc.
+
+
+
+
+
+
+
     ws_size, ws_dtype, lane_reduced = _analyze_cross_warp_workspace(
         expr.args[0].type, axes
     )
     if ws_size > 0:
-        # The runtime stages one warp-partial PER OUTPUT CELL: scale the
-        # workspace by the output's per-thread cell count (1 for scalar
-        # reduces — the historical size).
+
+
+
         n_cells = 1
         for dim in r.type.shape:
             if isinstance(dim, int):
                 n_cells *= dim
         ws_size *= max(1, n_cells)
         if not lane_reduced:
-            # cross-warp-only: per (warp, lane, cell) staging slots.
+
             ws_size *= 32
         ws_type = TensorType(
             shape=(ws_size,),
@@ -1387,25 +1375,25 @@ def _lower_single_output(
         isinstance(body_expr, Call)
         and isinstance(body_expr.target, Reshard)
     ):
-        # A cross-CTA ownership-change reshard fences the grid before the copy —
-        # the same reshard-owned sync as the intermediate path, so an output-sink
-        # reshard never bypasses the fence. The output still copies directly into
-        # ``out`` (no extra sharded temporary), reading the synced root.
+
+
+
+
         override = lo._reshard_cross_cta_sync(body_expr)
         inner = override if override is not None else lo.lower_expr(body_expr.args[0])
         inner_ty = inner.type
-        # Use the post-typeinfer materialized layout from ``body_expr.type``
-        # — ``body_expr.target.layout``
-        # may still carry the sugar ``strides=None`` form that typeinfer
-        # discharges later.
+
+
+
+
         sl = getattr(body_expr.type, "layout", None)
         if sl is None:
             sl = body_expr.target.layout
         if sl is None:
             sl = getattr(inner_ty, "layout", None)
-        # ``sl`` already carries the global layout shape from the
-        # reshard / parser layer; no re-expansion from local needed
-        # any more.
+
+
+
         tv = TensorView(layout=sl)
         tv_type = TensorType(
             shape=out_var.type.shape,
@@ -1443,14 +1431,6 @@ def _lower_function(
     ``Copy(<reg/shared result>, out)`` into the new ``out`` parameter
     instead of allocating a fresh global tensor.
     """
-    # The TIR-level output Var carries a plain (non-Shard)
-    # ``TensorType`` because the kernel param is a
-    # raw global pointer; any shard wrap is added explicitly by the
-    # body via a ``TensorView`` LetStmt. Inheriting a ShardLayout
-    # from ``fn.return_type`` would cause the kernel-param wrapper
-    # to ``make_shard_tensor(...)`` automatically, double-wrapping
-    # the subsequent body-side ``sv*`` view.
-
     is_tuple_return = isinstance(fn.return_type, TupleType)
     if is_tuple_return:
         _field_types = fn.return_type.fields
@@ -1469,12 +1449,12 @@ def _lower_function(
         out_vars.append(Var(type=_flat_ret_ty, name=_name))
 
     shape_param_names: set[tuple[str, int]] = set()
-    # Seed the shape-scalar plumbing with every (param, axis) whose
-    # type entry is a ``DimVar``. The kernel body needs the runtime
-    # extent to size loop counts (binary / fill / copy) when the buffer
-    # shape is dynamic; the dispatch entry forwards these scalars to
-    # the matching variant via the trailing-shape mechanism in
-    # ``_build_dispatch_entry``.
+
+
+
+
+
+
     from tilefoundry.ir.types.dim import DimVar  # noqa: PLC0415 — avoid cycle
     for p in fn.params:
         ty = getattr(p, "type", None)
@@ -1507,10 +1487,10 @@ def _lower_function(
         _lower_single_output(lo, _elem, _out_var)
 
     inner_seq = _fold_items_to_sequential(lo._items)
-    # wrap each present mesh as a MeshScope; skip ones that aren't
-    # used. ``_lower_function`` no longer fabricates mesh structure beyond
-    # what ``ShardLayout`` types in the body actually reference. A function
-    # with no mesh information at all lowers to a bare body sequence.
+
+
+
+
     scoped: Stmt = inner_seq
     if thread_mesh is not None:
         thread_binding = Var(type=fn.body.type, name=thread_var_name)
@@ -1525,16 +1505,16 @@ def _lower_function(
         )
         body = Sequential(body=(scoped, Return()))
     elif thread_mesh is not None:
-        # CTA absent but thread present — keep the thread MeshScope as
-        # the outermost wrapper.
+
+
         body = Sequential(body=(scoped, Return()))
     else:
-        # No mesh at all — body is just the lowered sequential plus return.
+
         body = Sequential(body=(*inner_seq.body, Return()))
 
-    # Append <param>_shape_<axis>: i32 kernel scalar params for any
-    # ShapeOf referenced by the body. Place them after the buffer params
-    # (between input + output buffer params and any future scalars).
+
+
+
     shape_params: list[Var] = []
     scalar_i32_ty = TensorType.scalar(dtype=DType.i32)
     for pname, axis in sorted(shape_param_names):
@@ -1542,9 +1522,9 @@ def _lower_function(
             Var(type=scalar_i32_ty, name=shape_var_name(pname, axis))
         )
 
-    # An unmaterialized value must be materialized to a concrete residency
-    # before it reaches TIR; a kernel param / output carrying umat would have
-    # no memory space for the launch ABI, placement, or copies.
+
+
+
     final_params = (*fn.params, *out_vars, *shape_params)
     for p in final_params:
         pty = getattr(p, "type", None)
@@ -1592,7 +1572,7 @@ def _build_dispatch_entry(
             f"{dim_name!r} not found in template signature"
         )
     param_index, axis = loc
-    # Fresh entry params + output buffer params with template shapes.
+
     entry_params = tuple(
         Var(type=p.type, name=p.name) for p in template.params
     )
@@ -1619,15 +1599,15 @@ def _build_dispatch_entry(
         pat = variant.specializations[0]
         assert isinstance(pat, DimVarRangePat)
         case_patterns.append((pat,))
-        # Forward exactly the params the mangled callee expects: the
-        # mangled callee's leading params are (input buffers, output
-        # buffers) by construction; any trailing shape-scalar params
-        # the callee declared must be matched by re-emitting the same
-        # ShapeOf expressions here.
+
+
+
+
+
         call_args: list = list(forwarded_args)
         extra = pf.params[len(forwarded_args):]
         for extra_p in extra:
-            # Match "<base>_shape_<axis>" name back to (param, axis).
+
             parsed = parse_shape_var_name(extra_p.name)
             entry_p = next(
                 (p for p in entry_params if parsed and p.name == parsed[0]), None
@@ -1648,8 +1628,8 @@ def _build_dispatch_entry(
         case_calls=tuple(case_calls),
         fallback=Sequential(body=(Abort(),)),
     )
-    # Entry's <param>_shape_<axis>: i32 kernel param for the dispatch
-    # axis. (Only one needed in v0 — the single canonical subject.)
+
+
     shape_param = Var(
         type=scalar_i32,
         name=shape_var_name(subject_param.name, axis),
@@ -1677,8 +1657,8 @@ class _MeshDeriver(ExprVisitor[None]):
         self.thread_mesh: Mesh | None = None
 
     def visit(self, expr):
-        # Short-circuit once both meshes are found — no need to keep
-        # descending into the rest of the tree.
+
+
         if self.cta_mesh is not None and self.thread_mesh is not None:
             return
         super().visit(expr)
@@ -1693,11 +1673,11 @@ class _MeshDeriver(ExprVisitor[None]):
                 if self.cta_mesh is None:
                     self.cta_mesh = m
             elif self.thread_mesh is None:
-                # Any non-cta primary (``thread`` / ``warp`` / ``lane`` /
-                # ...) lives inside one CTA — wrap as the inner
-                # ``thread_mesh`` so the verifier's MeshScope check passes
-                # and codegen still threads the right Topology<scope> all
-                # the way through.
+
+
+
+
+
                 self.thread_mesh = m
         self.generic_visit(call)
 
@@ -1756,7 +1736,7 @@ def _topo_order_dispatch_groups(
         deps[name] = d
     order: list[str] = []
     placed: set[str] = set()
-    # Iterative Kahn-style walk in source order.
+
     remaining = list(names)
     while remaining:
         progressed = False
@@ -1767,8 +1747,8 @@ def _topo_order_dispatch_groups(
                 remaining.remove(n)
                 progressed = True
         if not progressed:
-            # Cycle among dispatch groups — give up topo and fall back
-            # to source order so we still produce a deterministic result.
+
+
             order.extend(remaining)
             break
     return order
@@ -1795,15 +1775,15 @@ class HirToTirPass(ModulePass):
     requires: tuple[str, ...] = ()
 
     def run(self, module: Module) -> Module:
-        # A dispatch prototype (an HIR Function carrying ``variants``) lowers
-        # through the dispatch path: ``dispatch_view`` maps its name to its
-        # variant tuple. A normal function (no variants, real body) lowers on
-        # the single-body path; non-HIR functions pass through unchanged.
+
+
+
+
         try:
             target = module.resolve_target()
         except ValueError:
-            # Direct pass use is a compiler-owned omitted-target boundary; materialize the
-            # same built-in as ``tilefoundry.lower`` so functions and Module share it.
+
+
             target = default_target()
             module = replace(module, target=target)
         dispatch_view: dict[str, tuple[HirFunction, ...]] = {}
@@ -1814,16 +1794,16 @@ class HirToTirPass(ModulePass):
         mangled_registry: dict[str, PrimFunction] = {}
         mangled_by_group: dict[str, list[PrimFunction]] = {}
 
-        # ── pre-lower every variant body to its mangled PrimFunction.
-        #
-        # A variant body may call into another dispatch group whose
-        # mangled callees must already be in ``mangled_registry`` at the
-        # time the caller body is lowered. To make the pass independent
-        # of ``Module.functions`` ordering, lower groups in a topological
-        # order driven by the inter-group HIR-call graph (callee group
-        # before caller group). Static (non-dispatch) functions are
-        # deferred — their bodies may also reference dispatch
-        # groups, but by then the registry is complete.
+
+
+
+
+
+
+
+
+
+
         order = _topo_order_dispatch_groups(dispatch_view)
         for group_name in order:
             group = dispatch_view[group_name]
@@ -1850,14 +1830,14 @@ class HirToTirPass(ModulePass):
                 lowered.append(pf)
             mangled_by_group[group_name] = lowered
 
-        # ── emit final function list in source order.
-        #
-        # For each HIR function in ``module.functions``:
-        #   - dispatch group: emit its mangled variants (already lowered)
-        #     then its unmangled entry PrimFunction;
-        #   - static function: lower its body now (registry is complete,
-        #     so any sub-call into a dispatch group resolves cleanly);
-        #   - non-HIR function: pass through.
+
+
+
+
+
+
+
+
         new_fns: list = []
         changed = False
         emitted_groups: set[str] = set()
@@ -1879,7 +1859,7 @@ class HirToTirPass(ModulePass):
                     )
                 )
                 continue
-            # Static single-body path.
+
             cta_mesh, thread_mesh = _derive_meshes_from_body(fn.body)
             if cta_mesh is None:
                 cta_mesh = self._cta
@@ -1917,8 +1897,8 @@ def _retarget_launch_callees(fns: list) -> list:
     )
     from tilefoundry.ir.visitor import StmtMutator  # noqa: PLC0415
 
-    # Only single-body device kernels are retarget targets; a dispatch entry is
-    # host-only (no device kernel) so it must not be matched.
+
+
     lowered_by_name: dict[str, list] = {}
     for f in fns:
         if (

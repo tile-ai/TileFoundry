@@ -28,7 +28,6 @@ class Cast(Op):
     dtype = ParamDef(kind="attribute", annotation=DType)
 
 
-# GLOBAL-level: only the dtype changes; input/output are elementwise identity.
 register_access_relation(Cast)(identity_relations(1))
 
 

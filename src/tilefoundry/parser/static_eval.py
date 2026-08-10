@@ -15,9 +15,9 @@ from tilefoundry.ir.types.dim import is_dim_expr
 
 DivMode = Literal["true", "floor"]
 
-# The full node set ``eval_static`` understands. A caller passes a subset to
-# reject forms it does not support (e.g. topology sizes accept only
-# Constant/BinOp/UnaryOp; decorator arguments accept no arithmetic at all).
+
+
+
 ALL_NODES: tuple[type, ...] = (
     ast.Constant, ast.Tuple, ast.List, ast.Name, ast.Attribute,
     ast.Subscript, ast.Call, ast.UnaryOp, ast.BinOp,
@@ -81,21 +81,10 @@ def eval_static(
 ) -> Any:
     """Evaluate a restricted static-AST subset.
 
-    ``lookup(name)`` resolves an ``ast.Name`` through parser-lexical state
-    (e.g. ``LexicalEnv.lookup``) before falling back to ``closure``; omit it
-    to resolve directly against ``closure`` (the decorator / topology
-    entry points run before any lexical env exists). ``attr_resolver``
-    customizes ``owner.attr`` access (default: ``getattr`` translating
-    ``AttributeError`` to ``VerifyError``). ``on_closure_name(value, name)``
-    is called whenever a ``Name`` resolves via the ``closure`` fallback
-    (used to warn on closure-captured IR objects). ``div`` selects true or
-    floor semantics for ``ast.Div`` (``ast.FloorDiv`` is always floor);
-    this is the one load-bearing policy knob — topology sizes use
-    ``"floor"``, every other static attribute position uses the default
-    ``"true"``.
-
-    A node type outside *allowed_nodes*, an unresolved name, or an
-    unsupported operator all raise :class:`VerifyError`.
+    *lookup* precedes closure fallback; *attr_resolver* customizes attribute
+    access and *on_closure_name* observes closure resolutions. *div* selects
+    true or floor division while ``FloorDiv`` always floors. Disallowed nodes,
+    unresolved names, and unsupported operators raise ``VerifyError``.
     """
 
     def ev(n: ast.AST) -> Any:
@@ -147,11 +136,11 @@ def eval_static(
             left = ev(left_node)
             right = ev(right_node)
             numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
-            # Arithmetic over a dimension is not static, and refusing it here is
-            # what forces a derived extent to be given its own name: a block
-            # length that is simply `ctx_len // splits` cannot be written, so it
-            # becomes a second dynamic dimension and the caller has to know how
-            # to compute it. The operators build the dimension expression.
+
+
+
+
+
             if not numeric and not (is_dim_expr(left) and is_dim_expr(right)):
                 raise VerifyError(
                     f"static BinOp requires numeric or dimension operands, got "
