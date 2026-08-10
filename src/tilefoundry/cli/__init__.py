@@ -203,6 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument(
         "--json", action="store_true", help="print the report as JSON instead of text"
     )
+    analyze.set_defaults(_command_parser=analyze)
 
     schedule = commands.add_parser(
         "schedule",
@@ -270,6 +271,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         sys.stdout.write(overview())
         return 0
+    analyses: tuple[str, ...] = ()
+    if args.command == "analyze":
+        analyses = tuple(
+            name for name in _ANALYSES if getattr(args, name.replace("-", "_"))
+        )
+        if args.json and not analyses:
+            args._command_parser.error(
+                "--json requires at least one analysis flag: "
+                + ", ".join(f"--{name}" for name in _ANALYSES)
+            )
     try:
         registrations = load_registrations(registry_path(args.registry))
     except (OSError, TypeError, ValueError) as error:
@@ -339,9 +350,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1
 
-    analyses = tuple(name for name in _ANALYSES if getattr(args, name.replace("-", "_")))
-    if not analyses:
-        analyses = _ANALYSES
     try:
         return run_authored_analysis(
             args.source,

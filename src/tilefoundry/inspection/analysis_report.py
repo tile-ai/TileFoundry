@@ -220,6 +220,11 @@ def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
             if selector not in executed:
                 executed.append(selector)
     target = first.module.resolve_target()
+    function_records = _merged_function_records(results, selected)
+    if "roofline" in {item.analysis for item in results} and "memory" not in function_records:
+        support = _roofline_memory_support(results)
+        if support is not None:
+            function_records["memory"] = support
     data = {
         "target": target.identity,
         "module": first.module.name,
@@ -227,12 +232,38 @@ def report(results: Sequence[AnalysisResult]) -> dict[str, object]:
         "topology": first.level,
         "requested": [item.analysis for item in results],
         "executed": executed,
-        "function_records": _merged_function_records(results, selected),
+        "function_records": function_records,
         "calls": _merged_call_records(results, selected),
     }
-    if ComputeCostMetadata in selected:
+    available = {
+        metadata_type
+        for item in results
+        for metadata_type in item.metadata_types
+    }
+    if ComputeCostMetadata in selected or (
+        "roofline" in data["requested"] and ComputeCostMetadata in available
+    ):
         data["totals"] = _work_totals(_costed_function(results))
     return data
+
+
+def _roofline_memory_support(
+    results: Sequence[AnalysisResult],
+) -> dict[str, object] | None:
+    """The bounded memory fact that explains a requested roofline verdict."""
+    for item in results:
+        if item.analysis != "roofline":
+            continue
+        record = get_metadata(item.function, MemoryMetadata)
+        if record is None:
+            continue
+        return {
+            "footprint": [
+                {"level": value.level, "peak_bytes": value.peak_bytes}
+                for value in record.footprint
+            ]
+        }
+    return None
 
 
 def _merged_function_records(
@@ -335,13 +366,6 @@ def _traffic_text(traffic: dict[str, dict[str, int]]) -> str:
     )
 
 
-def _operand_text(operand: dict[str, object]) -> str:
-    return (
-        f"{operand['arg']}:{operand['name']}="
-        f"r{operand['read']}/w{operand['write']}"
-    )
-
-
 def render_text(data: dict[str, object]) -> str:
     """The report as one stable line per conclusion, each prefixed with ``#``.
 
@@ -370,7 +394,7 @@ def render_text(data: dict[str, object]) -> str:
                 or "0"
             )
         )
-        lines.extend(f"advisory {note}" for note in memory["advisories"])
+        lines.extend(f"advisory {note}" for note in memory.get("advisories", ()))
     if "roofline" in records:
         bound = records["roofline"]
         lines.append(
@@ -378,16 +402,6 @@ def render_text(data: dict[str, object]) -> str:
         )
     if "timeline" in records:
         lines.append(f"theoretical-makespan={records['timeline']['end_ns']}ns")
-    for call in data["calls"]:
-
-
-        operands = call.get("compute-cost", {}).get("operands")
-        if operands is None:
-            continue
-        lines.append(
-            f"value={call['value']} operands "
-            + ", ".join(_operand_text(operand) for operand in operands)
-        )
     return "\n".join(f"# {line}" for line in lines)
 
 

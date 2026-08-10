@@ -62,6 +62,26 @@ class Function(Expr):
     that owns it declares the `Target` and the ordered `Topology` hierarchy its
     body runs against ([core-ir §1](./core-ir.md#1-module)).
 
+**Kernel invocation.** Entering an HIR `Function` from Python begins one kernel
+invocation. A `Call` from one HIR `Function` to another is a device call inside
+the current kernel invocation and never begins another one, regardless of which
+`Module` owns the callee. A `Module` is a static container and an invocation is
+a dynamic event: Python entering one root twice is two invocations, and a Python
+loop entering it N times is N. Module ownership, topology equality, call-graph
+depth, and source nesting take no part in this rule.
+
+| Caller | Callee | Meaning |
+|---|---|---|
+| Python | HIR `Function`, directly or through a `Module` entry | Begin one kernel invocation |
+| HIR `Function` | HIR `Function` with the same owner | Same-kernel device call |
+| HIR `Function` | HIR `Function` with a different owner | Same-kernel device call |
+| Python | Plain Python `Module` method | Ordinary host orchestration |
+| HIR `Function` | Plain Python method | Invalid |
+
+A plain Python `Module` method stays on the host. Each HIR `Function` it enters
+therefore begins its own invocation; the method itself is not interpreted,
+traced, or dummy-run as HIR.
+
 `Function.body` is a **single Expr** (usually a Call DAG, possibly
 nested inside a `GridRegionExpr`). HIR has no Stmt sequence; name
 reuse lives in the parser's lexical environment, not the IR. The one

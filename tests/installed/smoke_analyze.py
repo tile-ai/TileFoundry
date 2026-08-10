@@ -17,6 +17,20 @@ class Bad:
         return wrong
 """
 
+_OPEN_MODULE = '''
+from tilefoundry import module
+from tilefoundry.dsl import DimVar, Tensor, Topology, func, tf
+from tilefoundry.target import CudaTarget
+
+N = DimVar("N", 1, 9)
+
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+class Open:
+    @func
+    def main(x: Tensor[(N,), "f32"]):
+        return tf.add(x, x)
+'''
+
 
 def test_every_analysis_the_command_offers_runs(tf, cmine) -> None:
     done = tf(
@@ -45,13 +59,51 @@ def test_usage_errors_include_the_command_help(tf) -> None:
     assert "model.py[:Module[.child_module...][.function]]" in done.stderr
 
 
+def test_a_bare_analyze_typechecks_and_prints_only_typed_hir(tf, cmine) -> None:
+    done = tf("analyze", f"{cmine}:CMine.root", "--topology", "not-a-level")
+    assert done.returncode == 0, done.stderr
+    assert done.stderr == ""
+    assert "# Tensor[" in done.stdout
+    assert "# analysis " not in done.stdout
+    assert "compute-cost " not in done.stdout
+    assert "memory peak=" not in done.stdout
+    assert "roofline bound=" not in done.stdout
+    assert "timeline units=" not in done.stdout
+
+
+def test_analyze_json_needs_an_explicit_analysis(tf, cmine) -> None:
+    done = tf("analyze", f"{cmine}:CMine.root", "--json")
+    assert done.returncode == 2
+    assert done.stdout == ""
+    assert done.stderr.startswith(
+        "tilefoundry analyze: error: --json requires at least one analysis flag:"
+    )
+    assert "usage: tilefoundry analyze" in done.stderr
+
+
+def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:
+    source = tmp_path / "open.py"
+    source.write_text(_OPEN_MODULE, encoding="utf-8")
+
+    unbound = tf("analyze", f"{source}:Open")
+    assert unbound.returncode == 1
+    assert unbound.stdout == ""
+    assert "N is declared as [1, 9)" in unbound.stderr
+
+    bound = tf("analyze", f"{source}:Open", "--dim", "N=4")
+    assert bound.returncode == 0, bound.stderr
+    assert "# analysis " not in bound.stdout
+
+
 def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> None:
     done = tf("analyze", f"{cwide}:Model", "--roofline")
     assert done.returncode == 0, done.stderr
 
     assert "# analyses=roofline executed=compute-cost,memory,roofline" in done.stdout
+    assert "# flops " in done.stdout
+    assert "# traffic " in done.stdout
     assert "# ideal-bound=" in done.stdout
-    assert "# peak-footprint" not in done.stdout
+    assert "# peak-footprint" in done.stdout
     assert "# theoretical-makespan" not in done.stdout
     assert "roofline bound=" in done.stdout
     assert "memory peak=" not in done.stdout
@@ -60,11 +112,12 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
 
 
 def test_analyze_json_and_text_report_the_same_conclusions(tf, cwide) -> None:
-    as_json = tf("analyze", f"{cwide}:Model", "--json")
+    analyses = ("--compute-cost", "--memory", "--roofline", "--timeline")
+    as_json = tf("analyze", f"{cwide}:Model", *analyses, "--json")
     assert as_json.returncode == 0, as_json.stderr
     payload = json.loads(as_json.stdout)
 
-    as_text = tf("analyze", f"{cwide}:Model")
+    as_text = tf("analyze", f"{cwide}:Model", *analyses)
     assert as_text.returncode == 0, as_text.stderr
     text = as_text.stdout
     assert as_text.stderr == ""
@@ -83,6 +136,9 @@ def test_analyze_json_and_text_report_the_same_conclusions(tf, cwide) -> None:
     )
     assert "# Tensor[" in text
     assert "compute-cost flops=f32:" in text
+    header, annotated = text.split("\n\n", 1)
+    assert "operands" not in header
+    assert " operands=" in annotated
     assert "roofline bound=" in text
     assert "timeline units=168 waves=2" in text
 

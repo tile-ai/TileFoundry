@@ -257,9 +257,10 @@ whole; a reader who asked what a rule says is not asking for every rule.
 comments, regardless of analysis flags. It never performs candidate search,
 layout enumeration, or automatic resharding.
 
-Each flag names one root analysis. With no flag, `analyze` runs all of them. The
-selected Module's resolved Target determines the hardware specification; there is
-no ordinary `--target` option.
+Each flag names one root analysis. With no analysis flag, `analyze` requests no
+family: it type-checks the selection and prints its complete inferred HIR. The
+selected Module's resolved Target determines the hardware specification for an
+explicit analysis; there is no ordinary `--target` option.
 
 - constraints:
   - `analyze` MUST invoke the public operation once per requested root, because
@@ -269,13 +270,17 @@ no ordinary `--target` option.
   - A selection MUST resolve to a Module. A bare Function MUST be rejected
     naming the reason: it declares neither the Target its numbers are measured
     against nor the topology hierarchy they divide over.
-  - `--json` MUST print the report as JSON instead of text. Both formats MUST
-    carry the same conclusions ([analysis §2](./analysis.md#2-authored-hir-metrics)).
+  - `--json` MUST print the report as JSON instead of text. It MUST be refused as
+    an argument-combination error when no analysis flag was supplied, naming that
+    a report needs a requested root and printing the `analyze` usage. Both
+    formats MUST carry the same conclusions
+    ([analysis §2](./analysis.md#2-authored-hir-metrics)).
   - `--topology LEVEL` MUST be optional, passed through as the public analysis
     operation's `level`, and name the unit for per-unit figures. Its help MUST
     state the default and, for every family, which figure changes with the level
     and when to pass it, together with the global-traffic and observed-peak
     assumptions.
+    With no analysis flag it MUST be accepted and inert.
   - `--dim NAME=EXTENT` MUST bind one dimension the selection leaves open, and
     MUST be repeatable to bind several. One dimension MUST receive one extent;
     a comma-separated list of extents for one dimension MUST be rejected because
@@ -289,10 +294,13 @@ no ordinary `--target` option.
     be rejected naming that dimension, whether or not the two extents agree; the
     later occurrence MUST NOT win, because both came from the caller and choosing
     between them silently answers a request that has no answer.
-  - With no `--dim`, the selection MUST be analysed as authored. A selection that
-    leaves a dimension open MUST then fail naming the dimension, its declared
-    `[lo, hi)` interval, and concrete extents inside that interval the caller can
-    use: counting elements requires an extent, and a range is not one.
+  - With no `--dim`, the selection MUST be analysed or type-checked as authored.
+    A selection that leaves a dimension open MUST then fail naming the dimension,
+    its declared `[lo, hi)` interval, and concrete extents inside that interval
+    the caller can use: inferring its concrete program requires an extent, and a
+    range is not one. The bare form MUST apply stated dimensions before running
+    the same type inference and authored validation preflight used by analysis;
+    this is an internal CLI path, not a public typecheck operation.
   - Every requested analysis MUST be reported together even when each was run at
     the stated extents, which builds one program per analysis. The report MUST
     accept those as one program when they were rebuilt from the same function at
@@ -301,14 +309,17 @@ no ordinary `--target` option.
     resulting signature: a dimension occurring only in a loop bound or a body
     operation's attribute leaves the signature identical at every extent.
   - Output MUST report the analyses that were requested. A dependency that ran
-    because a requested root needed it MUST appear in the executed list and MUST
-    NOT have its own measurements reported.
+    because a requested root needed it MUST appear in the executed list and, other
+    than the bounded roofline support view defined by
+    [analysis §2](./analysis.md#2-authored-hir-metrics), MUST NOT have its own
+    measurements reported.
   - The report's `target` field MUST be the concrete Target value's `identity`,
     so two products served by one Target class remain distinguishable.
-  - On success, text output begins with the `#`-headed report followed by
-    annotated HIR. On inference, verification, or analysis failure, stdout MUST
-    be empty and stderr MUST report the source location, binding where
-    available, and reason.
+  - On success with at least one requested root, text output begins with the
+    `#`-headed report followed by annotated HIR. With no analysis flag, output is
+    the typed HIR alone, with no report header and no analysis Metadata comment.
+    On inference, verification, or analysis failure, stdout MUST be empty and
+    stderr MUST report the source location, binding where available, and reason.
 
 ## Schedule
 

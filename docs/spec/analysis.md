@@ -312,10 +312,14 @@ requested analysis and renders the results together
     presentation, and two families would then disagree about it.
   - A rendering MUST report what the caller *requested*. A requested analysis
     pulls its dependencies in, so records reach the IR that nobody asked to see;
-    those records MUST stay on the IR and MUST NOT be reported. Which records an
-    analysis owns MUST be read from its Target-selected descriptor
-    ([§3.1](#31-target-selected-analyzers)) rather than from a
-    second table.
+    by default those records MUST stay on the IR and MUST NOT be reported. A
+    requested `roofline` view is the bounded exception: alongside its verdict it
+    MUST carry the exact summed work and traffic and the per-level peak footprint
+    its declared dependencies wrote, while `requested` still names only
+    `roofline`. It MUST NOT promote persistent bytes, capacities, advisories,
+    lifetimes, or the per-operand split. Which records an analysis owns MUST be
+    read from its Target-selected descriptor ([§3.1](#31-target-selected-analyzers))
+    rather than from a second table.
   - Every rendering of one run MUST make that selection through one shared
     decision. A summary and an annotated program are two views of the same run,
     and choosing separately is how one of them comes to show a dependency the
@@ -328,6 +332,12 @@ requested analysis and renders the results together
     renderer.
   - Two formats over one report MUST carry the same conclusions. They MUST be
     built from one intermediate structure rather than formatted independently.
+  - A compact text report header MUST contain whole-function facts only. A
+    per-value fact belongs on that value's annotated equation; in particular,
+    `ComputeCostMetadata.operands` MUST render there by its positional argument
+    labels plus `result`, and MUST NOT add one header line per Call. The equation
+    supplies the names those positions refer to, while JSON MAY retain those
+    names and operand types in its structured projection.
 
 ### 2.1 Metadata records
 
@@ -664,6 +674,11 @@ class ParallelCapacityFacts:
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
 operation. One call selects one root analysis by name; the operation resolves
 what that root transitively needs, runs each member once, and reports what ran.
+Its subject is one `Module` and one HIR `Function` that Module owns. Reachable
+HIR callees are part of that selected invocation and do not become separate
+launches because of Module ownership; the invocation rule is owned by
+[hir §1.1](./hir.md#11-function). Analyze does not select, interpret, trace, or
+dummy-run a plain Python orchestration method.
 
 ```python
 class AnalysisResult:

@@ -144,6 +144,20 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     assert "is an observation, not a bound" in help_text
 
 
+def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["analyze", "missing.py", "--json"])
+
+    assert stopped.value.code == 2
+    refused = capsys.readouterr()
+    assert refused.out == ""
+    assert refused.err.startswith(
+        "tilefoundry analyze: error: --json requires at least one analysis flag:"
+    )
+    assert "usage: tilefoundry analyze" in refused.err
+    assert "source file not found" not in refused.err
+
+
 def test_target_list_expressions_execute_and_show_accepts_their_identities(
     capsys, monkeypatch
 ) -> None:

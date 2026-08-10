@@ -83,6 +83,12 @@ class Module:
     a derived function's recorded specialization origin; equal copies and
     same-name functions from another Module MUST remain unowned.
 
+A `Module` is a static ownership and execution-context container, not a dynamic
+invocation. Owning a `Function`, attaching a child `Module`, or declaring a
+`Target` or `Topology` hierarchy never itself begins or counts an invocation;
+Python-to-HIR entry and HIR-to-HIR device calls are governed by
+[hir §1.1](./hir.md#11-function).
+
 - `parse_module` (see [parser §1](./parser.md#1-dsl-syntax)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
   `Module` whose `entry` is set to that function. A function that declares

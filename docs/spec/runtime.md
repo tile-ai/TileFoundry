@@ -260,6 +260,13 @@ class LoadedModule:
     left to fail as a shape error inside the evaluator. `check` compares the
     semantic and runtime forwards ([§1.6](#16-check)). A multi-node composition is chained
     by the caller, one `forward` (or one named function call) per node.
+  - Python entry into an HIR `Function`, whether through `forward`'s entry
+    fallback or a named function runner, is the runtime event governed by
+    [hir §1.1](./hir.md#11-function). A registered plain Python orchestration
+    method stays on the host; every function runner it calls is a separate
+    Python-to-HIR entry. An HIR-to-HIR `Call` remains inside the invocation and
+    MUST NOT be surfaced as another runtime launch merely because its callee has
+    a different Module owner.
   - a causal-LM root MAY define `init_caches`,
     `prepare_inputs_for_generation`, and `append_cache` orchestration methods.
     `prepare_inputs_for_generation(input_ids, step, caches, *, device)` receives

@@ -48,7 +48,16 @@ class ComputeCostMetadata(IRMetadata):
             )
             or "0"
         )
-        return f"compute-cost flops={flop_text} per-unit={local_text} bytes={traffic_text}"
+        operand_text = ",".join(
+            f"{'result' if index == len(self.operands) - 1 else index}:"
+            f"r{value.read}/w{value.write}"
+            for index, value in enumerate(self.operands)
+        )
+        operands = f" operands={operand_text}" if operand_text else ""
+        return (
+            f"compute-cost flops={flop_text} per-unit={local_text} "
+            f"bytes={traffic_text}{operands}"
+        )
 
 
 @dataclass(frozen=True)

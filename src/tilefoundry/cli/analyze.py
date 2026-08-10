@@ -7,6 +7,8 @@ import textwrap
 from typing import Mapping
 
 from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.preflight import infer_authored_types, validate_authored
+from tilefoundry.analysis.walk import reachable_functions
 from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
@@ -15,7 +17,7 @@ from tilefoundry.inspection.analysis_report import (
     report,
     selected_types,
 )
-from tilefoundry.ir.hir.specialize import dim_vars_reached
+from tilefoundry.ir.hir.specialize import dim_vars_reached, specialize_concretely
 
 EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
@@ -40,8 +42,10 @@ def guidance() -> str:
         searches nothing, rewrites nothing, and picks no optimization: what to do
         about a number is yours.
 
-        Complete inferred types are printed whatever the flags are; each flag above
-        adds one root analysis, and with no flag every one of them runs.
+        Complete inferred types are printed whatever the flags are, and with no flag
+        that is the whole answer: analyze type-checks the selection and prints it.
+        Each flag above adds one root analysis, and every analysis is asked for by
+        name.
 
         It reads the authored program, so it answers before any implementation of it
         exists -- and its numbers are the floor an implementation is read against,
@@ -106,6 +110,15 @@ def run_authored_analysis(
             for name, dim_var in unbound
         )
         raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
+    if not analyses:
+        checked = specialize_concretely(function, dims) if dims is not None else function
+        functions = reachable_functions(checked)
+        infer_authored_types(functions, module)
+        validate_authored(functions)
+        annotated = as_script(module, options=PythonPrintOptions(show_types=True))
+        sys.stdout.write(annotated)
+        return 0
+
     results = [
         analyze(module, function, analysis=name, level=topology, dims=dims)
         for name in analyses

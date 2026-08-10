@@ -726,11 +726,12 @@ def test_the_gpu_memory_graph_is_not_a_tree() -> None:
 
 
 def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -> None:
-    """A requested root pulls its dependencies in.
+    """Promote only bounded dependency evidence into a roofline report.
 
     A requested root pulls its dependencies in, so their records land on the
-    IR without having been asked for. A report shows what was requested; the
-    dependency's records stay on the IR for whoever does ask.
+    IR without having been asked for. Roofline promotes only the bounded
+    whole-program evidence that explains its verdict; dependency details stay on
+    the IR for whoever does ask.
 
     Two formats over one structure cannot disagree about a conclusion, so the
     text is checked to carry the verdict the JSON states.
@@ -740,10 +741,25 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
 
     data = report([result])
 
+    assert data["requested"] == ["roofline"]
     assert data["executed"] == ["compute-cost", "memory", "roofline"]
-    assert set(data["function_records"]) == {"roofline"}
+    assert set(data["function_records"]) == {"memory", "roofline"}
+    memory = data["function_records"]["memory"]
+    assert set(memory) == {"footprint"}
+    assert all(set(item) == {"level", "peak_bytes"} for item in memory["footprint"])
+    assert data["totals"]["flops"] == {"f32": 256}
+    assert all(set(call) == {"value", "roofline"} for call in data["calls"])
     assert get_metadata(entry, MemoryMetadata) is not None
+    cost = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    assert cost is not None
+    assert " operands=0:r" in cost.format_comment()
+    assert ",result:r" in cost.format_comment()
 
     payload = json.loads(render_json(data))
     assert payload == data
-    assert f"by={payload['function_records']['roofline']['bound_by']}" in render_text(data)
+    text = render_text(data)
+    assert f"by={payload['function_records']['roofline']['bound_by']}" in text
+    assert "# flops " in text
+    assert "# traffic " in text
+    assert "# peak-footprint " in text
+    assert "operands" not in text

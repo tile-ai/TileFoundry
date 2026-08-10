@@ -704,8 +704,9 @@ is.
   delegates to; any other name is reached only by naming it. A class-body
   `__call__` MUST be rejected: Python resolves a dunder on the type, so one
   attached to the built Module instance would never run.
-- A member MAY call a sibling **defined above it** (the call resolves to the
-  sibling function / launches a sibling device kernel); a forward reference to a
+- An HIR member MAY call a sibling HIR function **defined above it**. The call
+  resolves to a `Call` targeting that Function and remains inside the current
+  kernel invocation ([hir §1.1](./hir.md#11-function)); a forward reference to a
   sibling defined below stays unresolved and MUST fail.
 - The `topologies=(Topology(...), ...)` decorator argument declares the
   domain's complete ordered hierarchy. Omitting it inherits the owning class's
