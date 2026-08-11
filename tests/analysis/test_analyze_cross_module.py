@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.hir_composition import REFERENCE_PROGRAMS, MoEMegaKernel
+from tests.fixtures.logical.hir_composition import REFERENCE_PROGRAMS
+from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
