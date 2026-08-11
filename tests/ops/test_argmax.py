@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
+from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -40,6 +42,12 @@ CASES = [
         (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
         ExpectedError(match="x carries Partial"),
     ),
+    TypeInferCase(
+        "reduction_axis_split_rejected",
+        ArgMax(axis=-1),
+        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(1),)),),
+        ExpectedError(match=r"reduction axis 1.*Split-sharded.*Reshard"),
+    ),
 ]
 
 
@@ -57,3 +65,9 @@ def test_argmax_layout_describes_result_and_preserves_surviving_split():
     assert isinstance(result.layout, ShardLayout)
     assert result.layout.attrs == (Split(0),)
     assert layout_axis_to_tensor_axis(result.layout.layout.shape, result.shape)[0] == 0
+
+
+def test_argmax_matches_torch_reference() -> None:
+    torch.manual_seed(0)
+    x = torch.randn(1, 151936)
+    run_eval_case(EvalCase("greedy_sampling", ArgMax(), (x,), torch.argmax(x, dim=-1)))

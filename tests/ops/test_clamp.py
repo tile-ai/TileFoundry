@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
+from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -28,3 +30,8 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_clamp_typeinfer(case):
     run_typeinfer_case(case)
+
+
+def test_clamp_scalar_bounds_match_torch_reference() -> None:
+    x = torch.linspace(-2.0, 2.0, 32).reshape(4, 8)
+    run_eval_case(EvalCase("scalar_bounds", _OP, (x,), torch.clamp(x, -1.0, 1.0)))

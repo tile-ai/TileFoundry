@@ -69,12 +69,18 @@ def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
     out: dict[int, tuple[str, int | None]] = {}
     for o in range(n_out):
         aff = ma.get_at(o)
+        has_div = any(
+            int(aff.get_coefficient_val(isl.dim_type.DIV, j).num_si()) != 0
+            for j in range(aff.dim(isl.dim_type.DIV))
+        )
         used = [
             (j, int(aff.get_coefficient_val(isl.dim_type.IN, j).num_si()))
             for j in range(n_in)
             if int(aff.get_coefficient_val(isl.dim_type.IN, j).num_si()) != 0
         ]
-        if not used:
+        if has_div:
+            out[o] = ("complex", None)
+        elif not used:
             out[o] = ("const", None)
         elif len(used) == 1 and used[0][1] == 1:
             out[o] = ("proj", used[0][0])

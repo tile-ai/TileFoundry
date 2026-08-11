@@ -8,7 +8,10 @@ reduction axis; ``keepdim=False``.
 from __future__ import annotations
 
 import isl
+import torch
 
+from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
@@ -21,6 +24,7 @@ from tilefoundry.ir.types.shard import (
     canonical_shard_layout,
     try_c_order_strides,
 )
+from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -51,6 +55,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if axis < 0 or axis >= rank:
         ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
 
+    if isinstance(x_ty.layout, ShardLayout):
+        targets = split_target_axes(x_ty.layout, x_ty.shape)
+        if any(
+            isinstance(attr, Split) and targets[mesh_axis] == axis
+            for mesh_axis, attr in enumerate(x_ty.layout.attrs)
+        ):
+            ctx.error(
+                call,
+                f"reduction axis {axis} must not be Split-sharded; use an "
+                "explicit Reshard before ArgMax",
+            )
     reject_partials(ctx, call, "x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
     new_layout = (
@@ -78,6 +93,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         layout=new_layout,
         storage=x_ty.storage,
     )
+
+
+@register_eval(ArgMax)
+def _eval_argmax(ctx):
+    out = torch.argmax(ctx.args[0].data, dim=ctx.op.axis)
+    return TensorValue(data=out, type=ctx.result_type)
 
 
 @register_type_relation(ArgMax)

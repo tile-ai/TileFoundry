@@ -643,8 +643,12 @@ class ArgMax(Op):
 
 - constraints:
   - `x` MUST have rank at least one and `axis` MUST resolve within that rank.
-  - The result MUST remove `axis`, use dtype `i64`, and preserve `x`'s layout
-    and storage.
+  - The result MUST remove `axis`, use dtype `i64`, preserve storage, and derive
+    a layout over the reduced result shape. A `Split` on a surviving logical
+    axis propagates through the registered relation.
+  - The reduction axis MUST NOT be `Split`-sharded. A winning index cannot be
+    recovered from independent per-device winners, so typeinfer requires an
+    explicit `Reshard` instead of silently completing that split.
   - `x` MUST NOT carry a `Partial` state because a winning index cannot be
     recovered from an unpaired per-device partial reduction.
 
@@ -1106,14 +1110,36 @@ Consensus torch.nn.functional ops.
     is `Broadcast` / replicated. On each mesh axis, one `Partial(sum)` is
     therefore allowed; a double-Partial input or a non-`sum` reduction is
     rejected.
-  - `Conv2D` applies the same per-axis multilinear constraint to `input`,
-    `weight`, and `bias`. A `Partial(sum)` on `input` is preserved only when
-    the other value inputs are replicated. A secondary `Partial` on `weight`
-    or `bias` is rejected when the result layout cannot preserve that state.
-  - `SoftMax` / `LayerNorm` normalize across an axis (a non-monotonic
-    combination of every value on that axis), so no `reduction` provably
-    commutes; typeinfer rejects any `Partial` operand, including secondary
-    affine inputs.
+  - `Conv2D` requires rank-4 NCHW input and OIHW weight, a rank-1 bias, and one
+    common operand dtype. `stride` and `dilation` are positive length-2 tuples,
+    `padding` is a non-negative length-2 tuple, and `groups` is positive. Input
+    and output channels MUST be divisible by `groups`, the weight's input
+    channel extent MUST equal `input_channels / groups`, and the bias extent
+    MUST equal the output channels.
+  - `Conv2D` states its grouped input / weight / bias / output relation over
+    output positions and the input-channel and kernel contraction dimensions.
+    Shared shard propagation derives a fresh result layout: input batch and
+    compatible weight/bias output-channel splits survive. A contraction split
+    produces `Partial(sum)` only when the bias carries the same per-mesh-axis
+    `Partial(sum)` state, so completing the partial result adds the bias exactly
+    once. A halo access, incompatible contraction, mesh, or per-axis state that
+    the relation cannot represent MUST fail naming the operand and requiring an
+    explicit `Reshard`; no input layout is copied or real ownership discarded.
+  - `Conv2D` costs `2 * numel(output) * weight.shape[1] * kh * kw` flops after
+    topology projection. Traffic has exactly four slots: complete reads of
+    input, weight, and bias followed by one complete result write.
+  - `SoftMax` normalizes across an axis (a non-monotonic combination of every
+    value on that axis), so no `reduction` provably commutes; typeinfer rejects
+    every `Partial` input.
+  - `LayerNorm(axis=a)` normalizes over the complete trailing shape
+    `x.shape[a:]`, after resolving `a` in `[-rank, rank)`. Weight and bias shapes
+    MUST each equal that suffix exactly rather than merely broadcast to it.
+    `x` MUST use `f32`, `f16`, or `bf16`. Weight and bias dtypes MUST agree and
+    either match `x`, or be `f32` when `x` is `f16`/`bf16`; the result dtype is
+    `x`'s.
+  - `LayerNorm` rejects every `Partial` operand and every `Split` on a logical
+    normalized-suffix axis of `x`, weight, or bias. A `Split` on an `x` prefix
+    axis remains on the same-shape result.
 
 ##### Gelu
 ```python

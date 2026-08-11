@@ -17,6 +17,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.clamp import Clamp
 from tilefoundry.ir.hir.math.softplus import Softplus
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.hir.nn.gelu import Gelu
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.hir.nn.matmul import MatMul
@@ -116,6 +117,21 @@ def _matmul(call: Call, ctx: CostContext) -> Cost:
     batch = math.prod(output.shape[:-2])
     flops = 2 * batch * m * k * n
     return Cost({lhs.dtype: flops}, _traffic((lhs, rhs), output))
+
+
+@register_cost_evaluator(Conv2D)
+def _conv2d(call: Call, ctx: CostContext) -> Cost:
+    input_, weight, bias = _input_types(call, ctx)
+    output = _output_type(call, ctx)
+    if not all(
+        isinstance(type_, TensorType)
+        for type_ in (input_, weight, bias, output)
+    ):
+        raise ValueError("Conv2D cost requires tensor inputs and output")
+    flops = 2 * numel(output) * weight.shape[1] * weight.shape[2] * weight.shape[3]
+    return Cost(
+        {input_.dtype: flops}, _traffic((input_, weight, bias), output)
+    )
 
 
 @register_cost_evaluator(Reduce)
