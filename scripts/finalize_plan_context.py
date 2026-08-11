@@ -232,6 +232,12 @@ class PlanModel:
         return idxs[0]
 
     def _parse_milestone(self, ms_start: int, ms_end: int) -> dict[str, Any]:
+        """Locate one milestone's sections and its policy-criteria markers.
+
+        A milestone with no `##### Accepted by` returns without marker indices;
+        `_require_acceptance` is what reports that, because it holds the contract
+        text the author needs in order to make the call.
+        """
         lines = self.scan
         name = _heading_text(lines[ms_start])
 
@@ -241,7 +247,6 @@ class PlanModel:
             "Target State Design",
             "Related Files",
             "Plan",
-            "Acceptance Criteria",
         ):
             span = _find_section(lines, 4, required, ms_start + 1, ms_end)
             if span is None:
@@ -274,7 +279,18 @@ class PlanModel:
                 )
             effective_paths.append(_strip_path_bullet(item))
 
-        ac_section = sections["Acceptance Criteria"]
+        tsd_start, tsd_end = sections["Target State Design"]
+        ac_section = _find_section(lines, 5, "Accepted by", tsd_start + 1, tsd_end)
+        if ac_section is None:
+            return {
+                "name": name,
+                "related_files": effective_paths,
+                "target_state_section": sections["Target State Design"],
+                "ac_section": None,
+                "policy_ac_start_idx": None,
+                "policy_ac_end_idx": None,
+                "policy_states": {},
+            }
 
         ac_start = ac_end = None
         for k in range(ac_section[0] + 1, ac_section[1]):
@@ -287,7 +303,7 @@ class PlanModel:
             raise FinalizeError(
                 f"{self.path}: milestone {name!r} is missing the "
                 f"`policy_ac:start`/`policy_ac:end` marker pair inside "
-                f"`#### Acceptance Criteria`."
+                f"`##### Accepted by`."
             )
         if ac_end <= ac_start:
             raise FinalizeError(
@@ -346,6 +362,42 @@ def _replace_range(lines: list[str], start_idx: int, end_idx: int, body: list[st
     The replaced slice is `lines[start_idx + 1 : end_idx]`.
     """
     return lines[: start_idx + 1] + body + lines[end_idx:]
+
+
+PLAN_HEADINGS = {
+    2: {"Description", "Milestones", "Final Gate"},
+    4: {"Depends", "Target State Design", "Related Files", "Plan"},
+    5: {"Delivered", "Accepted by"},
+}
+
+
+def _require_known_headings(path: Path, scan: list[str]) -> None:
+    """Reject a heading the template does not define.
+
+    A plan carries the decisions an agent must not make alone, and nothing else.
+    A section the template does not name is where a second statement of acceptance,
+    a design note belonging in the spec, or a status log accumulates -- each of them
+    a source that will later disagree with the one the template names. Scope
+    boundaries and ordering rationale are part of the problem, so they belong in
+    `## Description`.
+    """
+    for index, line in enumerate(scan, start=1):
+        level = _heading_level(line)
+        if level is None or level in (1, 3):
+            continue
+        known = PLAN_HEADINGS.get(level)
+        if known is None:
+            raise FinalizeError(
+                f"{path}:{index}: heading depth {level} is not used by the "
+                f"plan template: {line.strip()!r}"
+            )
+        text = _heading_text(line)
+        if text not in known:
+            raise FinalizeError(
+                f"{path}:{index}: `{line.strip()}` is not a section the plan "
+                f"template defines. Allowed at this depth: "
+                f"{', '.join(sorted(known))}."
+            )
 
 
 def _require_acceptance(plan: "PlanModel", policies: list[dict[str, Any]]) -> None:

@@ -12,6 +12,11 @@ repos:
         entry: clang-format -i
         language: system
         files: \.(h|hpp|cuh|cu|cpp|cc)$
+      - id: plan-template-canonical
+        name: plan-template-canonical
+        entry: python scripts/finalize_plan_context.py --check
+        language: system
+        files: ^docs/plans/TEMPLATE\.md$
       - id: spec-rules-lint
         name: spec-rules-lint
         entry: python scripts/spec_rules_lint.py
