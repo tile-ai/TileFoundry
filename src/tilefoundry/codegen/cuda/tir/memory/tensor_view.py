@@ -14,11 +14,12 @@ from tilefoundry.codegen.cuda.context import (
     register_codegen_cuda,
     topology_scope_str,
 )
-from tilefoundry.ir.core import Constant
+from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimMul, DimVar
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound, upper_bound
+from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Dynamic,
@@ -194,14 +195,18 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
 
 
 def _coord_ref(index_var, ctx: CodegenContext) -> str:
-    """Render a compile-time, scalar, or one-element tile coordinate.
+    """Render a compile-time, scalar, or one-element absolute coordinate.
 
     Integer literals become static coordinates; rank-zero scalars use their
-    native names; one-element offset tensors read element zero. Other ranks fail
-    closed because no general tensor-to-coordinate conversion exists.
+    native names; one-element offset tensors read element zero. A multiplication
+    preserves grid output placement after an ordinal is converted to an element
+    start. Other forms fail closed.
     """
     if isinstance(index_var, Constant):
         return str(int(index_var.value))
+    if isinstance(index_var, Call) and isinstance(index_var.target, DimMul):
+        lhs, rhs = (_coord_ref(arg, ctx) for arg in index_var.args)
+        return f"({lhs} * {rhs})"
     name = ctx.name_for(index_var)
     shape = getattr(getattr(index_var, "type", None), "shape", ()) or ()
     dims = tuple(getattr(d, "value", d) for d in shape)
@@ -236,47 +241,61 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
         if len(call.args) > 2:
             logical_coords = call.args[1:]
             dst_layout = getattr(memory_var.type, "layout", None)
-            win_layout = getattr(let.var.type, "layout", None)
-            if (
-                not isinstance(dst_layout, SL)
-                or not isinstance(win_layout, SL)
-                or ctx.is_kernel_param(memory_var)
-            ):
-                raise NotImplementedError(
-                    "rank-N insert_slice window is only supported over a "
-                    "locally allocated sharded (ShardTensor) destination"
+            if isinstance(dst_layout, SL):
+                tensor_ref = f"tilefoundry::local({mem_name})"
+                dst_local = shard_layout_local_shape(dst_layout)
+                split_axes = {a.axis for a in dst_layout.attrs if isinstance(a, Split)}
+                non_split = [a for a in range(len(dst_local)) if a not in split_axes]
+                if len(logical_coords) != len(non_split):
+                    raise ValueError(
+                        f"tensor_view: {len(logical_coords)} offsets for "
+                        f"{len(non_split)} local axes"
+                    )
+                entries = tuple(zip(non_split, logical_coords, let.var.type.shape))
+                kept = tuple(
+                    entry for entry in entries if int(upper_bound(dst_local[entry[0]])) != 1
                 )
-
-
-
-
-
-
-            dst_local = shard_layout_local_shape(dst_layout)
-            win_local = shard_layout_local_shape(win_layout)
-            split_axes = {a.axis for a in dst_layout.attrs if isinstance(a, Split)}
-            non_split = [a for a in range(len(dst_local)) if a not in split_axes]
-            if len(logical_coords) != len(non_split):
-                raise ValueError(
-                    f"insert_slice: {len(logical_coords)} offsets for a rank-"
-                    f"{len(non_split)} destination"
+                shape = tuple(window_dim for _, _, window_dim in kept)
+                coords = tuple(coord for _, coord, _ in kept)
+            else:
+                tensor_ref = f"{mem_name}_tensor" if ctx.is_kernel_param(memory_var) else mem_name
+                source_shape = tuple(memory_var.type.shape)
+                source_shape_args = ", ".join(
+                    f"cute::Int<{int(upper_bound(dim))}>{{}}" for dim in source_shape
                 )
-            coord_of = dict(zip(non_split, logical_coords))
-            kept = [a for a in range(len(dst_local)) if int(upper_bound(dst_local[a])) != 1]
-            if any(a in split_axes for a in kept):
-                raise NotImplementedError(
-                    "rank-N insert_slice with a per-thread extent > 1 on a "
-                    "sharded axis is not supported"
+                source_stride_args = ", ".join(
+                    f"cute::Int<{stride}>{{}}"
+                    for stride in c_order_strides(
+                        tuple(int(upper_bound(dim)) for dim in source_shape)
+                    )
                 )
-            shape_args = ", ".join(
-                f"cute::Int<{int(upper_bound(win_local[a]))}>{{}}" for a in kept
+                source_name = f"{var_name}__source"
+                ctx.emit(
+                    f"auto {source_name} = cute::make_tensor("
+                    f"{tensor_ref}.data(), cute::make_layout("
+                    f"cute::make_shape({source_shape_args}), "
+                    f"cute::make_stride({source_stride_args})));"
+                )
+                tensor_ref = source_name
+                shape = tuple(let.var.type.shape)
+                if len(logical_coords) != len(shape):
+                    raise ValueError(
+                        f"tensor_view: {len(logical_coords)} offsets for rank-{len(shape)} view"
+                    )
+                coords = tuple(logical_coords)
+            shape_args = ", ".join(f"cute::Int<{int(upper_bound(dim))}>{{}}" for dim in shape)
+            coord_args = ", ".join(_coord_ref(coord, ctx) for coord in coords)
+            zero_args = ", ".join("0" for _ in coords)
+            offset_name = f"{var_name}__offset"
+            ctx.emit(
+                f"auto {offset_name} = cute::domain_offset("
+                f"cute::make_coord({coord_args}), {tensor_ref});"
             )
-            coord_args = ", ".join(_coord_ref(coord_of[a], ctx) for a in kept)
             ctx.emit(
                 f"auto {var_name} = cute::local_tile("
-                f"tilefoundry::local({mem_name}), "
+                f"{offset_name}, "
                 f"cute::make_shape({shape_args}), "
-                f"cute::make_coord({coord_args}));"
+                f"cute::make_coord({zero_args}));"
             )
             return
         index_var = call.args[1]
@@ -305,11 +324,15 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
             K = reduce(
                 mul, (int(upper_bound(s)) for s in let.var.type.shape), 1
             )
+        offset_name = f"{var_name}__offset"
+        ctx.emit(
+            f"auto {offset_name} = cute::domain_offset({_coord_ref(index_var, ctx)}, {tensor_ref});"
+        )
         ctx.emit(
             f"auto {var_name} = cute::local_tile("
-            f"{tensor_ref}, "
+            f"{offset_name}, "
             f"cute::make_shape(cute::Int<{K}>{{}}), "
-            f"cute::make_coord({_coord_ref(index_var, ctx)}));"
+            f"cute::make_coord(0));"
         )
         return
 

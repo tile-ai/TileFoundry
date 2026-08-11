@@ -4,9 +4,9 @@ Constructs a logical tensor view over a memory source
 (tensor / ptr / span). ``layout`` can be a plain ``Layout`` (→ plain view)
 or a ``ShardLayout`` (→ shard tensor view, no allocation).
 
-A slice view carries a coordinate per axis after the memory source: a single
-coordinate is a flat window (cache_update / 1-D insert_slice), multiple
-coordinates are a per-axis N-D window (rank-N insert_slice).
+A slice view carries an absolute element-start coordinate per axis after the
+memory source: a single coordinate is a flat rank-1 window, while multiple
+coordinates are a per-axis N-D window.
 """
 
 from __future__ import annotations

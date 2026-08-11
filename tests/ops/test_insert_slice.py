@@ -370,52 +370,40 @@ def test_cross_cta_reshard_owned_sync() -> None:
     assert kinds.index("Sync") < len(kinds) - 1 - kinds[::-1].index("Copy")
 
 
-_NW_A, _NW_B, _NW_C = 1, 4, 6
-_NW_UB, _NW_UC = 2, 3
-_NW_STEPS = 2
+_SCAN_ROWS, _SCAN_COLS, _SCAN_STEP = 4, 4, 2
 
 
-@module(entry="nd_window", topologies=(Topology("thread", 1),))
-class _NdWindow:
-    """Represent NdWindow.
-
-    A loop-carried rank-3 in-place ``insert_slice`` writing a non-trivial,
-    non-contiguous window (full axis 0, window 2 on axis 1, partial 3-of-6 on
-    axis 2) at the induction variable as the middle-axis tile coordinate.
-    """
+@module(entry="scan_copy", topologies=(Topology("thread", 1),))
+class _ScanCopy:
+    """Read and write each two-row scan window through the same coordinate."""
 
     @func
-    def nd_window(
-        base: Tensor[(_NW_A, _NW_B, _NW_C), "f32"],
-        v: Tensor[(_NW_A, _NW_UB, _NW_UC), "f32"],
-    ):
+    def scan_copy(x: Tensor[(_SCAN_ROWS, _SCAN_COLS), "f32"]):
         with Mesh(("thread",), (1,), ("t",)) as m:
-            br = reshard(base, (_NW_A, _NW_B, _NW_C @ m.t), "rmem")
-            vr = reshard(v, (_NW_A, _NW_UB, _NW_UC @ m.t), "rmem")
-            acc = full_like(br, 0.0)
-            for i in tile(_NW_STEPS):
-                acc = insert_slice(acc, vr, (0, i, 0))
-            return reshard(acc, (_NW_A, _NW_B, _NW_C @ m.t), "gmem")
+            xr = reshard(x, (_SCAN_ROWS, _SCAN_COLS @ m.t), "rmem")
+            acc = full_like(xr, 0.0)
+            for row in tile(_SCAN_ROWS, _SCAN_STEP):
+                acc = insert_slice(acc, xr[row, :], (row, 0))
+            return reshard(acc, (_SCAN_ROWS, _SCAN_COLS @ m.t), "gmem")
+
+
+def test_tile_window_scan_evaluates_to_the_input() -> None:
+    x = torch.arange(_SCAN_ROWS * _SCAN_COLS, dtype=torch.float32).reshape(
+        _SCAN_ROWS, _SCAN_COLS
+    )
+    actual = evaluate(_ScanCopy.lookup("scan_copy"), x, device="cpu")
+    torch.testing.assert_close(actual, x)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_insert_slice_rankn_gpu_oracle() -> None:
-    """The rank-N in-place ``insert_slice`` runs on GPU and matches a torch scatter reference.
-
-    The rank-N in-place ``insert_slice`` runs on GPU and matches a torch
-    scatter reference: a non-contiguous window at a dynamic, non-zero
-    middle-axis coordinate.
-    """
+    """One two-argument tile coordinate drives both GPU reads and writes."""
     import tilefoundry  # noqa: PLC0415
 
-    rm = tilefoundry.compile(_NdWindow, target=CudaTarget("nvidia.h200_sxm"))
-    base = torch.randn(_NW_A, _NW_B, _NW_C, device="cuda")
-    v = torch.randn(_NW_A, _NW_UB, _NW_UC, device="cuda")
-    out = torch.empty(_NW_A, _NW_B, _NW_C, device="cuda")
-    rm(base, v, out)
+    rm = tilefoundry.compile(_ScanCopy, target=CudaTarget("nvidia.h200_sxm"))
+    x = torch.randn(_SCAN_ROWS, _SCAN_COLS, device="cuda")
+    out = torch.empty_like(x)
+    rm(x, out)
     torch.cuda.synchronize()
 
-    exp = torch.zeros(_NW_A, _NW_B, _NW_C, device="cuda")
-    for i in range(_NW_STEPS):
-        exp[:, _NW_UB * i : _NW_UB * i + _NW_UB, 0:_NW_UC] = v
-    assert torch.allclose(out, exp, rtol=1e-4, atol=1e-4), (out - exp).abs().max()
+    assert torch.allclose(out, x, rtol=1e-4, atol=1e-4), (out - x).abs().max()

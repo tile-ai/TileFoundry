@@ -353,6 +353,11 @@ not a count). `start` defaults to `0` (`tile(...)` and `range(stop)`); the
 `range(start, stop[, step])` surface sets it. Each of `start` / `extent` /
 `step` is a `ShapeDim` ([types §4](./types.md#4-dim--symbolic-shape-dimensions)).
 
+For a two-argument `tile(extent, step)`, the parser-side window at one
+iteration is `[induction_var, induction_var + step)`. The induction value is
+already a coordinate in `range(0, extent, step)`, not an ordinal to multiply by
+`step`.
+
 - When `start` / `extent` / `step` are static `int`, the trip count is
   recoverable from the node alone, without the parser-side
   `RangeSlice` binding
@@ -615,6 +620,10 @@ their input when it states one. An input with `layout=None` produces a view with
   source offset plus the starts multiplied by the source strides, and its outer
   layout carries the sliced shape and the retained strides (multiplied by any
   slice step). A runtime-bounded `Slice` MUST remain accepted with `layout=None`.
+- When a `Slice` axis has the adjacent runtime bounds `[start, start + window)`
+  and unit stride, its inferred extent is `window`; the runtime `start` MUST NOT
+  remain in the result shape. Evaluation resolves both bounds in the current
+  expression environment on every invocation.
 
 ##### Rank and ShapeOf
 

@@ -571,6 +571,8 @@ class TensorView(Op):
 
     Attributes:
         memory: input; the base tensor (may be a ``PtrOf`` result).
+        coordinates: optional trailing inputs; one absolute element start per
+            logical window axis (or one absolute flat start for a rank-1 view).
         layout: attribute; the sub-view descriptor — a plain ``Layout`` or a
             ``ShardLayout`` placed over ``memory``.
         shape: attribute; optional logical-shape override (reshape).
@@ -580,7 +582,12 @@ class TensorView(Op):
     layout: object
     shape: tuple | None = None
 ```
-- constraints: []
+- constraints:
+  - With trailing coordinates, codegen derives the view at those absolute
+    element starts. A coordinate is not a tile ordinal and MUST NOT be
+    multiplied by the view extent.
+  - The coordinate count MUST match the logical window rank before any
+    shard-owned layout axes are removed locally.
 
 ##### Copy
 ```python

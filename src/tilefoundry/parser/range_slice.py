@@ -1,9 +1,9 @@
 """Represent chunked tile iteration only while parsing.
 
 Two-argument ``tile(extent, step)`` binds a range whose indexed use lowers to
-``[iv * step, iv * step + step)`` while the IR retains its scalar induction
-variable. Single-argument tile loops bind that scalar directly and never create
-a range slice.
+``[iv, iv + step)`` while the IR retains its scalar induction variable. The
+grid loop already advances ``iv`` by ``step``. Single-argument tile loops bind
+that scalar directly and never create a range slice.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tilefoundry.ir.core.expr import Constant, Expr, Var
-from tilefoundry.ir.types.dim import DimAdd, DimMul, simplify_dim
+from tilefoundry.ir.types.dim import DimAdd, simplify_dim
 from tilefoundry.ir.types.shape_helpers import i64_const
 
 
@@ -42,13 +42,12 @@ class RangeSlice:
 
     @property
     def start(self) -> Expr:
-        """Lower bound of the current iteration: ``iv * step``."""
-        step_e = _to_i64_expr(self.step)
-        return simplify_dim(DimMul, (self.induction_var, step_e))
+        """Lower bound of the current iteration: the current induction value."""
+        return self.induction_var
 
     @property
     def stop(self) -> Expr:
-        """Upper bound of the current iteration: ``iv * step + step``."""
+        """Upper bound of the current iteration: ``iv + step``."""
         step_e = _to_i64_expr(self.step)
         return simplify_dim(DimAdd, (self.start, step_e))
 

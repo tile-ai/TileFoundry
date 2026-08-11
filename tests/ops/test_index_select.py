@@ -15,12 +15,17 @@ from tests.ops.typeinfer_utils import (
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import index_select
+from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
+from tilefoundry.ir.tir.memory.tensor_view import TensorView
+from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.dim import DimMul
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial, ShardLayout, Split
 from tilefoundry.passes.transforms import HirToTirPass
+from tilefoundry.target import CudaTarget
 
 _MESH = make_mesh((2,))
 
@@ -102,7 +107,44 @@ def _module(fn) -> Module:
 
 
 def test_one_element_index_select_lowers_as_a_view() -> None:
-    HirToTirPass().run(_module(_one_index_select))
+    pf = HirToTirPass().run(_module(_one_index_select)).functions[0]
+    views = []
+
+    def walk(stmt):
+        if (
+            isinstance(stmt, LetStmt)
+            and isinstance(stmt.value, Call)
+            and isinstance(stmt.value.target, TensorView)
+            and len(stmt.value.args) == 2
+        ):
+            views.append(stmt.value)
+        for attr in ("body", "stmts"):
+            child = getattr(stmt, attr, None)
+            if isinstance(child, (list, tuple)):
+                for item in child:
+                    walk(item)
+            elif child is not None and hasattr(child, "__dict__"):
+                walk(child)
+
+    walk(pf.body)
+    assert len(views) == 1
+    coordinate = views[0].args[1]
+    assert isinstance(coordinate, Call) and isinstance(coordinate.target, DimMul)
+    assert isinstance(coordinate.args[1], Constant) and coordinate.args[1].value == 3
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_one_element_index_select_gpu_uses_the_axis_stride() -> None:
+    import tilefoundry  # noqa: PLC0415
+
+    runtime = tilefoundry.compile(
+        _module(_one_index_select), target=CudaTarget("nvidia.h200_sxm")
+    )
+    x = torch.arange(12, dtype=torch.float32, device="cuda").reshape(4, 3)
+    index = torch.tensor([2], dtype=torch.int32, device="cuda")
+    actual = runtime(x, index)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(actual, x[2:3])
 
 
 def test_vector_index_select_lowering_fails_closed() -> None:

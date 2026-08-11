@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -13,3 +13,4 @@ class EvalContext:
     args: tuple[Any, ...]
     result_type: Any
     device: str = "cpu"
+    eval_expr: Callable[[Any], Any] | None = None

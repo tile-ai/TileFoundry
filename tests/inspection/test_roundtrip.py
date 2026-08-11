@@ -70,6 +70,21 @@ def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
     assert as_script(import_dsl(script)) == script
 
 
+def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
+    fn = import_dsl(
+        _HEADER + "\n@func\n"
+        'def scan_copy(x: Tensor[(4, 4), "f32"]):\n'
+        '    out = zeros(shape=(4, 4), dtype="f32")\n'
+        "    for row in tile(4, 2):\n"
+        "        out = insert_slice(out, x[row, :], (row, 0))\n"
+        "    return out\n"
+    )
+    script = as_script(fn)
+
+    assert "x[row, :]" in script
+    assert as_script(import_dsl(script)) == script
+
+
 def test_shadowed_call_loc_roundtrips() -> None:
     """Test shadowed call loc roundtrips.
 

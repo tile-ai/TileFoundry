@@ -21,7 +21,7 @@ from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types.dim import DimAdd, DimMul
+from tilefoundry.ir.types.dim import DimAdd
 
 _PRELUDE = """from tilefoundry import func
 from tilefoundry.dsl.tf import *
@@ -39,8 +39,8 @@ def _src(signature: str, *body: str) -> str:
     return f"{_PRELUDE}\n@func\ndef f({signature}:\n{lines}\n"
 
 
-def _slice_op(fn) -> Slice:
-    """The ``Slice`` op of the first Slice Call in *fn*'s grid body."""
+def _slice_call(fn) -> Call:
+    """The first Slice Call in *fn*'s grid body."""
     grid = fn.body
     assert isinstance(grid, GridRegionExpr)
     stack = [grid.body]
@@ -48,9 +48,13 @@ def _slice_op(fn) -> Slice:
         expr = stack.pop()
         if isinstance(expr, Call):
             if isinstance(expr.target, Slice):
-                return expr.target
+                return expr
             stack.extend(expr.args)
     raise AssertionError("no Slice Call found in grid body")
+
+
+def _slice_op(fn) -> Slice:
+    return _slice_call(fn).target
 
 
 @func
@@ -74,20 +78,21 @@ def test_tile_loop_var_in_a_subscript_lifts_to_a_slice():
 
     A ``:`` axis becomes the full static extent, an authored ``0:1`` keeps its
     constant bounds, and the loop var's axis becomes symbolic bounds computed from
-    the induction var (``iv * step`` .. ``iv * step + step``) — the chunk the
+    the induction var (``iv`` .. ``iv + step``) — the chunk the
     iteration owns, not a copy of the whole axis. Strides default to 1.
     """
     chunked = _slice_op(_chunked_subscript)
     assert isinstance(chunked.begin[0], Constant) and chunked.begin[0].value == 0
     assert isinstance(chunked.end[0], Constant) and chunked.end[0].value == 1
-    assert isinstance(chunked.begin[1], Call) and isinstance(chunked.begin[1].target, DimMul)
+    assert chunked.begin[1].name == "ok"
     assert isinstance(chunked.end[1], Call) and isinstance(chunked.end[1].target, DimAdd)
     assert all(isinstance(s, Constant) and s.value == 1 for s in chunked.strides)
+    assert _slice_call(_chunked_subscript).type.shape == (1, 512)
 
     partial = _slice_op(_partial_slice)
     assert isinstance(partial.begin[0], Constant) and partial.begin[0].value == 0
     assert isinstance(partial.end[0], Constant) and partial.end[0].value == 1
-    assert isinstance(partial.begin[1], Call)
+    assert partial.begin[1].name == "ok"
     assert isinstance(partial.end[1], Call)
 
 

@@ -495,6 +495,8 @@ class BaseExprVisitor:
             raise VerifyError(f"undefined name {node.id!r}")
         if isinstance(val, Expr):
             return val
+        if isinstance(val, RangeSlice):
+            return val.start
         if isinstance(val, (int, float, bool)):
             return _constant_from_py(val)
 

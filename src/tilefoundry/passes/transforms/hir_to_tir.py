@@ -34,6 +34,7 @@ from tilefoundry.ir.hir.tensor.index_select import IndexSelect as HirIndexSelect
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice as HirInsertSlice
 from tilefoundry.ir.hir.tensor.reduce import Reduce as HirReduce
 from tilefoundry.ir.hir.tensor.reshape import Reshape as HirReshape
+from tilefoundry.ir.hir.tensor.slice import Slice as HirSlice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem as HirTupleGetItem
 from tilefoundry.ir.tir.arith import (
     Binary as TirBinary,
@@ -74,6 +75,8 @@ from tilefoundry.ir.types import (
     TupleType,
     callable_type_for_prim_function,
 )
+from tilefoundry.ir.types.dim import DimMul, simplify_dim
+from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
 from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout as _Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
@@ -432,7 +435,15 @@ class _Lowerer:
                 layout=out_view_layout,
                 storage=out_var.type.storage,
             )
-            out_view_call = Call(type=out_view_type, target=out_view_op, args=(out_var, iv))
+            element_start = simplify_dim(
+                DimMul,
+                (iv, shape_numel_upper_bound(tuple(view_shape))),
+            )
+            out_view_call = Call(
+                type=out_view_type,
+                target=out_view_op,
+                args=(out_var, element_start),
+            )
             out_view_var = sub._fresh(out_view_type, hint="ov")
             sub._items.append(_Bind(var=out_view_var, value=out_view_call))
             sub._items.append(_eval_call(Copy(), (body_result, out_view_var)))
@@ -1118,7 +1129,13 @@ def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
         layout=view_layout,
         storage=cache.type.storage,
     )
-    tv_call = Call(type=tv_type, target=TensorView(layout=view_layout), args=(cache, cur))
+    i32 = TensorType.scalar(dtype=DType.i32)
+    zero = Constant(value=0, type=i32)
+    tv_call = Call(
+        type=tv_type,
+        target=TensorView(layout=view_layout),
+        args=(cache, zero, cur, zero, zero),
+    )
     sv = ctx.fresh(tv_type, hint="sv")
     ctx.emit_bind(sv, tv_call)
 
@@ -1130,9 +1147,8 @@ def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
 def _insert_slice_coord(ctx: "_Lowerer", off_expr):
     """The scalar window index for an in-place ``insert_slice``.
 
-    The scalar window index for an in-place ``insert_slice``: the window
-    is one tile of the update's own extent starting at the offset, so the
-    offset is the tile index (matching the ``local_tile`` coord). A
+    The scalar window index for an in-place ``insert_slice`` is the absolute
+    element coordinate where the update window starts. A
     compile-time offset folds to a ``Constant`` scalar (emitted as a
     literal coordinate); a runtime scalar offset lowers to its scalar Var
     (its single element is read at the coordinate site).
@@ -1145,6 +1161,33 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
 
 
     return ctx.lower(off_expr)
+
+
+@register_hir_lowering(HirSlice)
+def _lower_slice(ctx: "_Lowerer", target, expr) -> Var:
+    """Lower a unit-stride HIR slice to an absolute-coordinate tensor view."""
+    source = ctx.lower(expr.args[0])
+    if any(not isinstance(s, Constant) or int(s.value) != 1 for s in target.strides):
+        raise NotImplementedError("hir_to_tir: Slice lowering supports unit strides only")
+    coords = tuple(_insert_slice_coord(ctx, begin) for begin in target.begin)
+    view_shape = tuple(expr.type.shape)
+    view_layout = TensorView.layout_for_slice_nd(
+        src_shape=tuple(source.type.shape), sliced_shape=view_shape
+    )
+    view_type = TensorType(
+        shape=view_shape,
+        dtype=source.type.dtype,
+        layout=view_layout,
+        storage=source.type.storage,
+    )
+    view_call = Call(
+        type=view_type,
+        target=TensorView(layout=view_layout),
+        args=(source, *coords),
+    )
+    result = ctx.fresh(view_type, hint="slice")
+    ctx.emit_bind(result, view_call)
+    return result
 
 
 @register_hir_lowering(HirInsertSlice)
@@ -1212,6 +1255,8 @@ def _lower_index_select(ctx: "_Lowerer", target, expr) -> Var:
         shape=tuple(view_shape),
         strides=tuple(c_order_strides(tuple(x.type.shape))),
     )
+    source_stride = c_order_strides(tuple(x.type.shape))[dim]
+    element_start = simplify_dim(DimMul, (index, source_stride))
     tv = TensorView(layout=view_layout)
     tv_type = TensorType(
         shape=view_shape,
@@ -1219,7 +1264,7 @@ def _lower_index_select(ctx: "_Lowerer", target, expr) -> Var:
         layout=view_layout,
         storage=x.type.storage,
     )
-    tv_call = Call(type=tv_type, target=tv, args=(x, index))
+    tv_call = Call(type=tv_type, target=tv, args=(x, element_start))
     sv = ctx.fresh(tv_type, hint="sv")
     ctx.emit_bind(sv, tv_call)
     return sv

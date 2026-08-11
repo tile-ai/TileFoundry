@@ -368,9 +368,11 @@ only difference is the loop-variable binding:
   `1`), `range(start, stop, step)`.
 - `tile(extent)` also binds a scalar `i: i64` (start `0`, step `1`).
 - `tile(extent, step)` binds `i` to a parser-side `RangeSlice`
-  (`start = iv * step`, `stop = start + step`) so `x[:, i]` lifts to a
-  `Slice` over the current window. `RangeSlice` is parser-only and does not
-  reach IR; `start` is `0`.
+  (`start = iv`, `stop = start + step`) so `x[:, i]` lifts to a `Slice` over
+  the current window. The grid domain already advances `iv` by `step`; the
+  binding MUST NOT multiply it again. In any other Expr position, including an
+  `insert_slice` offset tuple, `i` resolves to the scalar `start`. `RangeSlice`
+  is parser-only and does not reach IR; the grid-domain `start` is `0`.
 
 `start-Expr` / `extent-Expr` (the **stop** endpoint, not a length — the
 domain is half-open `[start, extent)`) / `step-Expr` MAY be any `ShapeDim`

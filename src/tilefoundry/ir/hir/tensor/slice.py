@@ -8,7 +8,16 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
+from tilefoundry.ir.types.dim import (
+    DimAdd,
+    DimFloorDiv,
+    DimMax,
+    DimMin,
+    DimMod,
+    DimMul,
+    DimSub,
+    simplify_dim,
+)
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard import (
     ComposedLayout,
@@ -60,6 +69,15 @@ def _slice_dim(begin: Expr, end: Expr, stride: Expr) -> Expr:
             return _i64(0)
         n = max(0, (e - b + s - 1) // s)
         return _i64(n)
+    if isinstance(end, Call) and isinstance(end.target, DimAdd) and end.args[0] is begin:
+        window = end.args[1]
+        if isinstance(stride, Constant) and stride.value == 1:
+            return window
+        bump = simplify_dim(
+            DimAdd,
+            (window, simplify_dim(DimSub, (stride, _i64(1)))),
+        )
+        return simplify_dim(DimFloorDiv, (bump, stride))
     diff = simplify_dim(DimSub, (end, begin))
 
     bump = simplify_dim(
@@ -127,8 +145,39 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Slice)
 def _eval_slice(ctx):
     op = ctx.op
+
+    def _bound(expr):
+        if isinstance(expr, Constant):
+            return int(expr.value)
+        if isinstance(
+            expr,
+            Call,
+        ) and isinstance(
+            expr.target,
+            (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax),
+        ):
+            lhs, rhs = (_bound(arg) for arg in expr.args)
+            if isinstance(expr.target, DimAdd):
+                return lhs + rhs
+            if isinstance(expr.target, DimSub):
+                return lhs - rhs
+            if isinstance(expr.target, DimMul):
+                return lhs * rhs
+            if isinstance(expr.target, DimFloorDiv):
+                return lhs // rhs
+            if isinstance(expr.target, DimMod):
+                return lhs % rhs
+            if isinstance(expr.target, DimMin):
+                return min(lhs, rhs)
+            return max(lhs, rhs)
+        if ctx.eval_expr is None:
+            raise ValueError(
+                f"Slice: dynamic bound {expr!r} requires an evaluator expression resolver"
+            )
+        value = ctx.eval_expr(expr)
+        return int(value.data.reshape(-1)[0].item())
+
     key = tuple(
-        slice(int(b.value), int(e.value), int(s.value))
-        for b, e, s in zip(op.begin, op.end, op.strides)
+        slice(_bound(b), _bound(e), _bound(s)) for b, e, s in zip(op.begin, op.end, op.strides)
     )
     return TensorValue(data=ctx.args[0].data[key], type=ctx.result_type)

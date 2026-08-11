@@ -276,6 +276,19 @@ depends on pass-internal cooperation (dispatch-group resolution, the
 reshard cross-CTA sync fence, tuple-carry field lookup) MAY call other
 `_Lowerer` methods directly; this is the exception, not the norm.
 
+#### Dynamic window lowering
+
+A unit-stride HIR `Slice` lowers to a TIR `TensorView` whose coordinates are
+the per-axis absolute element starts and whose logical shape is the inferred
+slice shape. `InsertSlice` lowers its offsets through the same coordinate
+convention. Neither lowering allocates or copies an intermediate full-size
+tensor; `InsertSlice` copies only its update into the destination view.
+Existing grid-output lowering converts its iteration ordinal to an absolute
+element start by multiplying by the per-iteration output size.
+The supported one-element `IndexSelect` view lowering similarly multiplies its
+axis index by that axis's C-order source stride; vector lowering remains
+unsupported.
+
 #### Mesh structure derivation
 
 `HirToTirPass` MUST NOT fabricate mesh structure. `cta_mesh` and

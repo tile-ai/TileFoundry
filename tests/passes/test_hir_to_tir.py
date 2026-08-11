@@ -25,9 +25,11 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
 from tilefoundry.ir.tir.arith import Binary as TirBinary
+from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
-from tilefoundry.ir.tir.stmts import Evaluate
+from tilefoundry.ir.tir.stmts import Evaluate, LetStmt
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.dim import DimMul
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.shard.shard_layout import Split
@@ -192,6 +194,60 @@ def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
     )
 
     assert _collect_hir_callee_names(in_yield) == {"callee_fn"}
+
+
+def test_grid_output_ordinal_lowers_to_an_absolute_element_start() -> None:
+    """Preserve grid output placement under absolute TensorView coordinates."""
+    body_ty = TensorType(
+        shape=(2,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM
+    )
+    grid_ty = TensorType(
+        shape=(4, 2), dtype=DType.f32, layout=None, storage=StorageKind.GMEM
+    )
+    x = Var(type=body_ty, name="x")
+    iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")
+    grid = GridRegionExpr(
+        type=grid_ty,
+        induction_var=iv,
+        carried_args=(),
+        init_args=(),
+        body=Call(type=body_ty, target=HirReLU(), args=(x,)),
+        yield_values=(),
+        extent=4,
+        step=1,
+    )
+    fn = HirFunction.build(
+        name="grid_output",
+        params=(x,),
+        body=grid,
+        return_type=grid_ty,
+    )
+    pf = HirToTirPass().run(Module(name="t", functions=(fn,), entry=fn.name)).functions[0]
+
+    views = []
+
+    def walk(stmt):
+        if (
+            isinstance(stmt, LetStmt)
+            and isinstance(stmt.value, Call)
+            and isinstance(stmt.value.target, TensorView)
+            and len(stmt.value.args) == 2
+        ):
+            views.append(stmt.value)
+        for attr in ("body", "stmts"):
+            child = getattr(stmt, attr, None)
+            if isinstance(child, (list, tuple)):
+                for item in child:
+                    walk(item)
+            elif child is not None and hasattr(child, "__dict__"):
+                walk(child)
+
+    walk(pf.body)
+    assert len(views) == 1
+    coordinate = views[0].args[1]
+    assert isinstance(coordinate, Call) and isinstance(coordinate.target, DimMul)
+    assert coordinate.args[0] is iv
+    assert isinstance(coordinate.args[1], Constant) and coordinate.args[1].value == 2
 
 
 def _mma_module(op, a_type, b_type, result_type) -> Module:

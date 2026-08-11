@@ -126,7 +126,11 @@ class Evaluator(ExprVisitor):
             )
         return handler(
             EvalContext(
-                op=target, args=args, result_type=call.type, device=self.device
+                op=target,
+                args=args,
+                result_type=call.type,
+                device=self.device,
+                eval_expr=self.visit,
             )
         )
 

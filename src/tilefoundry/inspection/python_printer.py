@@ -39,6 +39,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import dim_vars_reached, display_name, origin_of
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -138,6 +139,8 @@ def _shape_entry_str(entry: object, *, nested: bool) -> str:
     if isinstance(entry, int):
         return str(entry)
     if isinstance(entry, DimVar):
+        return entry.name
+    if isinstance(entry, Var):
         return entry.name
     if isinstance(entry, Constant):
         return str(entry.value)
@@ -344,7 +347,7 @@ def _attr_tuple_str(value: tuple) -> str:
 
 def _is_dim_entry(entry: object) -> bool:
     """Whether *entry* is a dimension rather than a plain attribute value."""
-    return isinstance(entry, (DimVar, Constant)) or (
+    return isinstance(entry, (DimVar, Var, Constant)) or (
         isinstance(entry, Call)
         and isinstance(entry.target, (DimConst, *_DIM_INFIX_OPS, *_DIM_FUNC_OPS))
     )
@@ -810,7 +813,10 @@ def _emit_def(
                 _assign_name(carry)
 
     def _tuple_literal(elements) -> str:
-        inner = ", ".join(_expr_ref(el) for el in elements)
+        inner = ", ".join(
+            repr(el.value) if isinstance(el, Constant) else _expr_ref(el)
+            for el in elements
+        )
         if len(elements) == 1:
             inner += ","
         return f"({inner})"
@@ -907,6 +913,37 @@ def _emit_def(
         if isinstance(target, HirFunction):
             binding = _module_callee_binding(target, child_entries)
             return f"{binding or target.name}({args_str})"
+        if isinstance(target, Slice):
+            indexers = []
+            for axis, (begin, end, stride) in enumerate(
+                zip(target.begin, target.end, target.strides)
+            ):
+                if (
+                    isinstance(begin, Var)
+                    and isinstance(end, Call)
+                    and isinstance(end.target, DimAdd)
+                    and end.args[0] is begin
+                    and isinstance(stride, Constant)
+                    and stride.value == 1
+                ):
+                    indexers.append(_expr_ref(begin))
+                    continue
+                dim = expr.args[0].type.shape[axis]
+                if (
+                    isinstance(begin, Constant)
+                    and begin.value == 0
+                    and isinstance(end, Constant)
+                    and end.value == dim
+                    and isinstance(stride, Constant)
+                    and stride.value == 1
+                ):
+                    indexers.append(":")
+                    continue
+                start = shape_entry_str(begin)
+                stop = shape_entry_str(end)
+                step = shape_entry_str(stride)
+                indexers.append(f"{start}:{stop}" if step == "1" else f"{start}:{stop}:{step}")
+            return f"{_arg_ref(expr.args[0])}[{', '.join(indexers)}]"
 
         alias_name = _kinded_alias_name(target)
         suppress_attrs = {"kind"} if alias_name is not None else set()
@@ -959,7 +996,8 @@ def _emit_def(
             return
         if isinstance(expr, Tuple):
             for element in expr.elements:
-                _emit_expr(element, level)
+                if not isinstance(element, Constant):
+                    _emit_expr(element, level)
             printed.add(key)
             return
         if isinstance(expr, GridRegionExpr):
