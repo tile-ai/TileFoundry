@@ -19,6 +19,7 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
+    FunctionScope,
     Op,
     ParameterInfo,
     TypeInferContext,
@@ -100,7 +101,7 @@ __all__ = [
     "AnalysisRegistry",
     "typeinfer_registry", "verify_stmt_registry", "cost_evaluator_registry",
     "register_typeinfer", "register_verify_stmt", "register_cost_evaluator",
-    "TypeInferContext",
+    "TypeInferContext", "FunctionScope",
     "VerifyError",
 
     "DType", "TensorType", "TupleType", "Type",

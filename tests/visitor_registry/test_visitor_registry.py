@@ -11,14 +11,22 @@ raise rather than return a zero.
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 import pytest
 
+import tilefoundry
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.visitor_registry.contexts import CostContext, VerifyContext
+from tilefoundry.visitor_registry.contexts import (
+    CostContext,
+    FunctionScope,
+    TypeInferContext,
+    VerifyContext,
+)
 from tilefoundry.visitor_registry.registries import codegen_cuda_registry
 from tilefoundry.visitor_registry.visitors import (
     CodegenVisitor,
@@ -73,3 +81,27 @@ def test_visitors_fail_closed_when_unregistered() -> None:
         CodegenVisitor(_Ctx(), codegen_cuda_registry, backend="cuda").emit_expr(call)
     with pytest.raises(VerifyError, match="no cost evaluator registered for _UnknownOp"):
         CostEvaluator(CostContext()).visit_Call(call)
+
+
+def test_where_a_walk_reads_is_one_pair_and_nothing_else() -> None:
+    """The location API is `FunctionScope` and `TypeInferContext.scope`.
+
+    Both are reachable from the package root, because one is how the other is
+    constructed. Nothing else on a context describes where a walk reads, and no
+    context answers a question about one kind of construct.
+    """
+    assert (tilefoundry.FunctionScope, tilefoundry.TypeInferContext) == (
+        FunctionScope,
+        TypeInferContext,
+    )
+    assert FunctionScope.__dataclass_params__.frozen
+    assert [field.name for field in fields(FunctionScope)] == ["module", "function"]
+    assert [field.type for field in fields(FunctionScope)] == ["Module", "Function"]
+
+    for context in (TypeInferContext, VerifyContext, CostContext):
+        declared = [field.name for field in fields(context)]
+        assert declared[:4] == ["scope", "cache", "mesh_scope", "elaboration_cache"]
+        assert not any(
+            hasattr(context, name)
+            for name in ("module", "caller", "child_call", "child_call_owner")
+        )

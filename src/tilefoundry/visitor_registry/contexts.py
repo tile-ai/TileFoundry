@@ -50,8 +50,8 @@ class FunctionScope:
     walk was given rather than globally.
     """
 
-    module: Any
-    function: Any
+    module: Module
+    function: Function
 
 
 @dataclass
@@ -70,11 +70,6 @@ class TypeInferContext:
     cache: dict[int, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
     elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
-
-    @property
-    def module(self):
-        """The Module this walk reads in, or ``None`` when it was given none."""
-        return None if self.scope is None else self.scope.module
 
     def type_of(self, expr: Expr) -> Type:
         key = id(expr)

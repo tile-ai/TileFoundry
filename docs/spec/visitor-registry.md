@@ -193,9 +193,6 @@ class TypeInferContext:
     mesh_scope: tuple = ()
     elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
 
-    @property
-    def module(self) -> "Module | None": ...
-
     def type_of(self, expr: Expr) -> Type: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
@@ -205,11 +202,12 @@ class TypeInferContext:
 than one program, so anything answered about the body being read — which Module
 owns it, what a call in it may reach — is answered within the tree the walk was
 given ([core-ir §1](./core-ir.md#1-module)). A walk given no scope answers
-nothing of that kind rather than guessing, and `module` reads the scope's tree
-so there is one place a walk's Module comes from.
+nothing of that kind rather than guessing.
 
 - constraints:
-  - `scope` MUST be the only context state describing where a walk is reading.
+  - `scope` MUST be the only context state describing where a walk is reading,
+    and the pair MUST be reachable from the package root together, since one is
+    how the other is constructed.
     A walk-visible query answering a question about one construct — which
     Module a particular kind of callee belongs to, how a particular call binds
     its arguments — MUST NOT be added to the context; such a question is
