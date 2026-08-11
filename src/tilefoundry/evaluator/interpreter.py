@@ -274,21 +274,34 @@ def _select_variant(callee: Function, arg_values) -> Function:
     return matches[0]
 
 
-def run_bound(fn: Function, args, *, device: str | None = None, reading=None):
-    """Evaluate *fn* over fully bound *args*, with *reading* in hand.
-
-    The entry a resource reading runs through: every child call reached from
-    here fills its ``ConstTensor`` parameters from the child that owns the
-    callee. The public ``evaluate`` stays exact and resource-free.
-    """
-    device = device or _default_device()
-    values = [
+def _bound_values(fn: Function, args) -> list[TensorValue]:
+    """*args* as evaluator values, left exactly where they already live."""
+    return [
         TensorValue(
             data=torch.as_tensor(arg, dtype=to_torch_dtype(param.type.dtype)),
             type=param.type,
         )
         for param, arg in zip(fn.params, args)
     ]
+
+
+def _selected_body(fn: Function, args) -> Function:
+    """The Function a call on *fn* with these argument values will run."""
+    if not fn.variants:
+        return fn
+    return _select_variant(fn, _bound_values(fn, args))
+
+
+def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
+    """Evaluate *fn* over fully bound *args*, with *reading* in hand.
+
+    The entry a resource reading runs through: every child call reached from
+    here fills its ``ConstTensor`` parameters from the child that owns the
+    callee. It is internal; the public ``evaluate`` stays exact and
+    resource-free.
+    """
+    device = device or _default_device()
+    values = _bound_values(fn, args)
     target = _select_variant(fn, values) if fn.variants else fn
     env = {id(param): value for param, value in zip(target.params, values)}
     dim_env = _bind_dim_vars(target.params, values)

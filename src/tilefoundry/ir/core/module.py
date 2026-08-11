@@ -52,8 +52,8 @@ def owning_module(root: "Module", function: object) -> "Module | None":
     return found
 
 
-def is_child_module_call(root: "Module", caller: object, callee: object) -> bool:
-    """Whether *callee* belongs to a direct child of *caller*'s owner.
+def child_module_of(root: "Module", caller: object, callee: object) -> "Module | None":
+    """The direct child of *caller*'s owner that owns *callee*, else ``None``.
 
     What a collected call no longer carries: the parser's binding record is
     consumed, so which calls supply activations alone is re-derived from
@@ -61,16 +61,20 @@ def is_child_module_call(root: "Module", caller: object, callee: object) -> bool
     whose ends no single node owns, keeps its exact declared arity.
     """
     if not isinstance(callee, HirFunction) or caller is None:
-        return False
+        return None
     owner = owning_module(root, caller)
     called = owning_module(root, callee)
     if owner is None or called is None or called is owner:
-        return False
-    return any(child is called for child in owner.modules)
+        return None
+    return called if any(child is called for child in owner.modules) else None
 
 
 def _called_functions(function) -> tuple:
-    """Every Function *function* calls directly, its variants included."""
+    """Every Function the body of *function* calls directly.
+
+    Its own body and nothing else: a variant this dispatch did not select is
+    not running, and a converter runs offline rather than here.
+    """
     from tilefoundry.ir.core.expr import Call, child_exprs  # noqa: PLC0415 -- cycle
 
     found: list[HirFunction] = []
@@ -88,7 +92,7 @@ def _called_functions(function) -> tuple:
         for child in child_exprs(expr):
             visit(child)
 
-    visit(function)
+    visit(getattr(function, "body", None))
     return tuple(found)
 
 
@@ -457,8 +461,11 @@ class Module:
         canonical weights to *out_dir* as one safetensors shard plus an index.
         See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
         """
-        flat: dict[str, object] = {}
-        self._prepare_into(raw, "", flat, device)
+        staged: dict[str, object] = {}
+        self._prepare_into(raw, "", staged, device)
+        flat = {
+            name: value.detach().contiguous().cpu() for name, value in staged.items()
+        }
 
         import json  # noqa: PLC0415 -- stdlib, only needed here
         from pathlib import Path  # noqa: PLC0415
@@ -477,12 +484,15 @@ class Module:
         """Stage this node's canonical weights, children before their owner.
 
         A converter is an HIR body and may call a child, so the children it
-        could reach are staged first and handed to it as a reading. The staged
-        values stay on *device*; the output shard takes CPU copies.
+        could reach are staged first and handed to it as a reading. Everything
+        staged lands on *device*, which is what a converter then runs on;
+        publishing takes the CPU copies.
         """
         import torch  # noqa: PLC0415 -- optional runtime dep
 
-        from tilefoundry.evaluator import run_bound  # noqa: PLC0415 -- avoid IR→evaluator cycle
+        from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
+            _run_bound,
+        )
 
         children = tuple(
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
@@ -502,7 +512,8 @@ class Module:
         def _fetch(name):
 
             parts = raw.load_group(name)
-            return torch.stack(parts) if parts is not None else raw.load(name)
+            value = torch.stack(parts) if parts is not None else raw.load(name)
+            return value.to(device)
 
         staged: dict[str, object] = {}
         reading = LoadedModule(module=self, constants=staged, modules=children)
@@ -512,14 +523,14 @@ class Module:
             if conv is None:
                 value = _fetch(w)
             else:
-                value = run_bound(
+                value = _run_bound(
                     conv, [_fetch(p.name) for p in conv.params],
                     device=device, reading=reading,
                 )
             source = f"converter for weight {key!r}" if conv is not None else f"raw weight {key!r}"
             _validate_declared(self.name, source, value, decl_type)
             staged[w] = value
-            flat[key] = value.detach().contiguous().cpu()
+            flat[key] = value
         return reading
 
     def cloned(self) -> "Module":
@@ -593,11 +604,13 @@ class LoadedModule:
             f"LoadedModule {self.name!r} has no function, child module, or method {name!r}"
         )
 
-    def reached(self, fn: ModuleFunction) -> tuple[tuple[str, "LoadedModule", object], ...]:
+    def _reached(self, fn: ModuleFunction) -> tuple[tuple[str, "LoadedModule", object], ...]:
         """Every (path, reading, function) a call from *fn* under this one runs.
 
         The same resolver execution uses, so what is checked beforehand is what
-        will be reached. An attached child no call reaches is not listed.
+        will be reached. Reachability follows the body that runs: an attached
+        child no call reaches is not listed, and neither is one only an
+        unselected variant or an offline converter would have reached.
         """
         from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
             child_reading,
@@ -633,7 +646,10 @@ class LoadedModule:
 
         [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
         """
-        from tilefoundry.evaluator import run_bound  # noqa: PLC0415 -- avoid IR→evaluator cycle
+        from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
+            _run_bound,
+            _selected_body,
+        )
 
         expected = sum(1 for p in fn.params if not p.is_const)
         if len(acts) != expected:
@@ -642,13 +658,13 @@ class LoadedModule:
                 f"activation(s) -- its {len(fn.params) - expected} ConstTensor "
                 f"parameter(s) come from the bindings -- but got {len(acts)}"
             )
-        reached = self.reached(fn)
-        self._require_bindings(fn, reached)
         args = []
         activations = iter(acts)
         for param in fn.params:
             args.append(self.constants[param.name] if param.is_const else next(activations))
-        return run_bound(
+        reached = self._reached(_selected_body(fn, args))
+        self._require_bindings(fn, reached)
+        return _run_bound(
             fn, args, device=self._placement(fn, acts, reached), reading=self
         )
 

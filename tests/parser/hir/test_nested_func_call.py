@@ -404,3 +404,51 @@ def test_a_child_call_of_the_wrong_width_is_refused_in_activations() -> None:
             @func
             def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
                 return mlp(x, x)  # noqa: F821
+
+
+@module(entry="run")
+class _Grand:
+    @func
+    def run(x: Tensor[(8,), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+        return tf.mul(x, w)
+
+
+@module(entry="mid")
+class _Mid:
+    grand = _Grand
+
+    @func
+    def mid(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+        return grand(x)  # noqa: F821
+
+
+def test_a_deeper_child_call_survives_a_layout_rebuild_at_the_root() -> None:
+    """A grandchild call is still a child call once the root reshards its input.
+
+    Rebuilding the middle body for a caller's layout re-elaborates the call it
+    makes in turn, and by then the binding record that classified it has been
+    consumed by the middle Module's own collection.
+    """
+
+    @module(
+        entry="root",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 4),),
+    )
+    class _Root:
+        mid = _Mid
+
+        @func
+        def root(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+            with Mesh(("cta",), layout=(4,), names=("tile",)) as cta:
+                local = tf.reshard(x, (8 @ cta.tile,), "gmem")
+                return mid(local)  # noqa: F821
+
+    (middle,) = _Root.modules
+    (grandchild,) = middle.modules
+    call = _Root.entry_function().body
+    assert len(call.args) == 1
+    inner = call.target.body
+    assert len(inner.args) == 1
+    assert [p.is_const for p in inner.target.params] == [False, True]
+    assert origin_of(inner.target) is grandchild.entry_function()

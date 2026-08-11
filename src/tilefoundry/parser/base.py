@@ -74,16 +74,18 @@ class _ModuleCallee(IRMetadata):
     """
 
     binding: str
+    owner: Module
 
 
-def authored_child_call(caller, call) -> bool:
-    """Whether *call* was written through a child-Module binding.
+def authored_child_call(caller, call):
+    """The child Module *call* was written through, else ``None``.
 
     The authoring phase's answer to which calls carry activations only. It
     holds until ``@module`` collection consumes the record, and needs no
     caller: the record is on the call site itself.
     """
-    return get_metadata(call, _ModuleCallee) is not None
+    record = get_metadata(call, _ModuleCallee)
+    return None if record is None else record.owner
 
 
 def authoring_context() -> TypeInferContext:
@@ -783,12 +785,13 @@ class BaseExprVisitor:
     def _resolve_function_target(self, func: ast.AST):
         """Resolve function target.
 
-        Return ``(hir.Function, binding)`` behind a callee AST, or
-        ``(None, None)`` when the callee is not an ``@func``-decorated function.
+        Return ``(hir.Function, binding, owner)`` behind a callee AST, or
+        ``(None, None, None)`` when the callee is not an ``@func``-decorated function.
         ``@func`` evaluates to the ``hir.Function`` directly, so a sibling
         callee binding *is* that Function (see :func:`tilefoundry.script.func`).
         A bare name bound to a ``Module`` is that Module's entry function and
-        reports the name as *binding*; the attribute spelling is refused.
+        reports the name as *binding* and that Module as *owner*; the attribute
+        spelling is refused.
         """
         val: Any = None
         if isinstance(func, ast.Name):
@@ -803,7 +806,7 @@ class BaseExprVisitor:
                         f"{val.name!r} as a child and gives the call a child to "
                         f"reach; this function declares none"
                     )
-                return self._module_entry_target(val, func.id), func.id
+                return self._module_entry_target(val, func.id), func.id, val
         elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             owner = self.env.lookup(func.value.id)
             if owner is None:
@@ -819,8 +822,8 @@ class BaseExprVisitor:
                     f"reaching in for {func.attr!r}"
                 )
         if isinstance(val, HirFunction):
-            return val, None
-        return None, None
+            return val, None, None
+        return None, None, None
 
     @staticmethod
     def _module_entry_target(owner: Module, name: str) -> HirFunction:
@@ -844,7 +847,8 @@ class BaseExprVisitor:
         return entry
 
     def _build_function_call(
-        self, callee: Any, node: ast.Call, name: str, module_binding: str | None = None
+        self, callee: Any, node: ast.Call, name: str,
+        module_binding: str | None = None, owner: Module | None = None,
     ) -> Expr:
         """Build a nested HIR function call with an elaborated target.
 
@@ -890,13 +894,17 @@ class BaseExprVisitor:
             call_for_errors = replace_metadata(
                 call_for_errors, BindingMetadata(explicit_loc)
             )
+        call_ctx = self._ctx if owner is None else TypeInferContext(
+            module=owner, caller=callee, child_call=authored_child_call,
+            elaboration_cache=self._ctx.elaboration_cache,
+        )
         instance = elaborate(
-            callee, tuple(a.type for a in input_args), self._ctx,
-            call=call_for_errors, implicit_const=module_call,
+            callee, tuple(a.type for a in input_args), call_ctx,
+            call=call_for_errors, implicit_const=module_call, owner=owner,
         )
         call = self._build_call(
-            instance, input_args,
-            records=() if module_binding is None else (_ModuleCallee(module_binding),),
+            instance, input_args, ctx=call_ctx,
+            records=() if owner is None else (_ModuleCallee(module_binding, owner),),
         )
         if explicit_loc_given:
             call = replace_metadata(call, BindingMetadata(explicit_loc))
@@ -943,9 +951,11 @@ class BaseExprVisitor:
 
 
 
-        callee_func, module_binding = self._resolve_function_target(node.func)
+        callee_func, module_binding, owner = self._resolve_function_target(node.func)
         if callee_func is not None:
-            return self._build_function_call(callee_func, node, name, module_binding)
+            return self._build_function_call(
+                callee_func, node, name, module_binding, owner
+            )
 
         schema = self._resolve_call_target(node.func)
         if schema is None:
@@ -1093,7 +1103,8 @@ class BaseExprVisitor:
         return self._with_binding(expr, dsl_name)
 
     def _build_call(
-        self, op_inst, args: tuple[Expr, ...], *, records: tuple[IRMetadata, ...] = ()
+        self, op_inst, args: tuple[Expr, ...], *,
+        records: tuple[IRMetadata, ...] = (), ctx: TypeInferContext | None = None,
     ) -> Call:
         """Build a Call with type eagerly populated via the typeinfer registry.
 
@@ -1111,7 +1122,7 @@ class BaseExprVisitor:
         fn = typeinfer_registry.lookup(type(op_inst))
         if fn is None:
             raise VerifyError(f"no typeinfer registered for {type(op_inst).__name__}")
-        computed = fn(placeholder, self._ctx)
+        computed = fn(placeholder, ctx if ctx is not None else self._ctx)
         return dataclasses.replace(placeholder, type=computed)
 
     def _eval_static_or_sugar(

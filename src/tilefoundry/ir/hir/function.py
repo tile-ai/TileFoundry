@@ -180,6 +180,7 @@ def elaborate(
     call: Call | None = None,
     *,
     implicit_const: bool = False,
+    owner: object = None,
 ) -> "Function":
     """Construct a concrete callee for one call site's argument types.
 
@@ -187,7 +188,8 @@ def elaborate(
     templates rebuild per distinct type tuple and reuse the construction
     session's elaboration cache. ``call`` anchors binding errors when present.
     ``implicit_const`` binds the argument types to the non-constant parameters
-    alone and leaves each ``ConstTensor`` parameter's declared type in place.
+    alone and leaves each ``ConstTensor`` parameter's declared type in place;
+    ``owner`` is the Module tree the rebuilt body is read in.
 
     See [hir §1.1](docs/spec/hir.md#11-function).
     """
@@ -221,7 +223,7 @@ def elaborate(
     if cached is not None:
         return cached
 
-    instance = _elaborate_from_bound_types(callee, bound_types, ctx)
+    instance = _elaborate_from_bound_types(callee, bound_types, ctx, owner=owner)
     ctx.elaboration_cache[cache_key] = instance
     return instance
 
@@ -232,6 +234,7 @@ def _elaborate_from_bound_types(
     ctx: TypeInferContext,
     *,
     dims: "Mapping[str, int] | None" = None,
+    owner: object = None,
 ) -> "Function":
     """Rebuild ``callee`` with parameters at *bound_types*.
 
@@ -288,12 +291,14 @@ def _elaborate_from_bound_types(
             new_target = call_expr.target
             if isinstance(call_expr.target, Function):
                 if dims is None:
+                    child = self.body_ctx.child_call_owner(call_expr)
                     new_target = elaborate(
                         call_expr.target,
                         tuple(a.type for a in new_args),
                         self.body_ctx,
                         call=call_expr,
-                        implicit_const=self.body_ctx.binds_activations_only(call_expr),
+                        implicit_const=child is not None,
+                        owner=child,
                     )
                 else:
                     new_target = _specialize_callee(
@@ -375,14 +380,15 @@ def _elaborate_from_bound_types(
             pinned.append(rebuilt)
             return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
 
+    tree = ctx.module if owner is None else owner
     if dims is None:
         body_ctx = TypeInferContext(
-            module=ctx.module, elaboration_cache=ctx.elaboration_cache,
+            module=tree, elaboration_cache=ctx.elaboration_cache,
             caller=callee, child_call=ctx.child_call,
         )
     else:
         body_ctx = TypeInferContext(
-            module=ctx.module, caller=callee, child_call=ctx.child_call
+            module=tree, caller=callee, child_call=ctx.child_call
         )
     new_body = _Elaborator(body_ctx).visit(callee.body)
     derived = Function.build(
@@ -481,14 +487,16 @@ def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
     """
     callee: Function = call.target  # type: ignore[assignment]
     arg_types = tuple(ctx.type_of(a) for a in call.args)
+    child = ctx.child_call_owner(call)
     instance = elaborate(
         callee, arg_types, ctx, call=call,
-        implicit_const=ctx.binds_activations_only(call),
+        implicit_const=child is not None, owner=child,
     )
     if instance.body is None:
         return instance.return_type
     body_ctx = TypeInferContext(
-        module=ctx.module, caller=instance, child_call=ctx.child_call
+        module=ctx.module if child is None else child,
+        caller=instance, child_call=ctx.child_call,
     )
     return body_ctx.type_of(instance.body)
 

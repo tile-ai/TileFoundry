@@ -24,6 +24,7 @@ from tilefoundry.ir.hir.specialize import (
 )
 from tilefoundry.runtime import PREDICATES, RuntimeModule, SafetensorsResource, check
 from tilefoundry.runtime.measure import Predicate
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 SEED = 0
 
@@ -543,7 +544,9 @@ def _one_run(
     if function is not None:
         pinned, unstated = _pin(function, stated)
         if pinned:
-            concrete = specialize_concretely(function, pinned)
+            concrete = specialize_concretely(
+                function, pinned, TypeInferContext(module=target.module)
+            )
     elif stated:
         raise ValueError(
             f"--dim was given, but {target.module.name!r} runs an orchestration "

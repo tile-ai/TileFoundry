@@ -95,6 +95,7 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
                         tuple(a.type for a in expr.args),
                         TypeInferContext(module=child, caller=entry),
                         implicit_const=True,
+                        owner=child,
                     ),
                 )
                 object.__setattr__(

@@ -590,3 +590,44 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsy
         == 0
     )
     assert "weights the checkpoint" in capsys.readouterr().out
+
+
+def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:
+    """Binding an extent must not turn the child call back into an exact one."""
+    source = tmp_path / "composed.py"
+    source.write_text(
+        "from tilefoundry import func, module\n"
+        "from tilefoundry.dsl import ConstTensor, DimVar, Tensor, tf\n"
+        "from tilefoundry.target import CudaTarget\n"
+        "N = DimVar('n_check', 1, 9)\n"
+        "@module(entry='run')\n"
+        "class Leaf:\n"
+        "    @func\n"
+        "    def run(x: Tensor[(N,), 'f32'], w: ConstTensor[(1,), 'f32']) -> Tensor[(N,), 'f32']:\n"
+        "        return tf.mul(x, w)\n"
+        "@module(entry='root', target=CudaTarget('nvidia.h200_sxm'))\n"
+        "class Composed:\n"
+        "    leaf = Leaf\n"
+        "    @func\n"
+        "    def root(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
+        "        return leaf(x)\n",
+        encoding="utf-8",
+    )
+    assert (
+        cli.main(
+            [
+                "check",
+                f"{source}:Composed.root",
+                "--inputs",
+                "random",
+                "--out",
+                "output",
+                "--fn",
+                "nan_inf",
+                "--dim",
+                "n_check=4",
+            ]
+        )
+        == 0
+    )
+    assert "PASS" in capsys.readouterr().out

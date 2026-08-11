@@ -58,23 +58,28 @@ class TypeInferContext:
     caller: Any = None
     child_call: Any = None
 
-    def binds_activations_only(self, call: Call) -> bool:
-        """Whether *call* supplies activations and leaves constants to a reading.
+    def child_call_owner(self, call: Call):
+        """The child Module *call* reaches, or ``None`` for every other call.
 
-        The authoring phase overrides this with the record it wrote. Otherwise a
-        walk that knows the Module tree and whose body it is reading answers by
-        ownership. A walk that knows neither binds every declared parameter, so a
-        standalone or low-level Function call cannot acquire implicit constants.
+        A call that reaches one supplies activations alone. The answer is also
+        the tree the callee's body is read in, which is what lets a call the
+        callee makes in turn be answered the same way however deep it sits. The
+        authoring phase answers from the record it wrote; otherwise a walk that
+        knows a tree and whose body it is reading answers by ownership. A walk
+        that knows neither answers ``None``, so a standalone or low-level
+        Function call cannot acquire implicit constants.
         """
         if self.child_call is not None:
-            return self.child_call(self.caller, call)
+            owner = self.child_call(self.caller, call)
+            if owner is not None:
+                return owner
         if self.module is None or self.caller is None:
-            return False
+            return None
         from tilefoundry.ir.core.module import (  # noqa: PLC0415 — avoid import cycle
-            is_child_module_call,
+            child_module_of,
         )
 
-        return is_child_module_call(self.module, self.caller, call.target)
+        return child_module_of(self.module, self.caller, call.target)
 
     def type_of(self, expr: Expr) -> Type:
         key = id(expr)

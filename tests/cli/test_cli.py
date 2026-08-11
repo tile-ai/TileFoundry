@@ -604,3 +604,31 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     repaired_list = _run_cli(registry, tmp_path, "target", "list")
     assert repaired_list.returncode == 0, repaired_list.stderr
     assert "vendor.bad_sm70" in repaired_list.stdout
+
+
+_COMPOSED_SOURCE = (
+    "from tilefoundry import func, module\n"
+    "from tilefoundry.dsl import ConstTensor, DimVar, Tensor, tf\n"
+    "from tilefoundry.target import CudaTarget\n"
+    "N = DimVar('n_cli', 1, 9)\n"
+    "@module(entry='run')\n"
+    "class Leaf:\n"
+    "    @func\n"
+    "    def run(x: Tensor[(N,), 'f32'], w: ConstTensor[(1,), 'f32']) -> Tensor[(N,), 'f32']:\n"
+    "        return tf.mul(x, w)\n"
+    "@module(entry='root', target=CudaTarget('nvidia.h200_sxm'))\n"
+    "class Composed:\n"
+    "    leaf = Leaf\n"
+    "    @func\n"
+    "    def root(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
+    "        return leaf(x)\n"
+)
+
+
+def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:
+    """Choosing a size for a composed root keeps its child call activation-only."""
+    source = tmp_path / "composed.py"
+    source.write_text(_COMPOSED_SOURCE, encoding="utf-8")
+
+    assert cli.main(["analyze", f"{source}:Composed.root", "--dim", "n_cli=4"]) == 0
+    assert "def root(" in capsys.readouterr().out
