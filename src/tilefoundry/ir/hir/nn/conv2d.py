@@ -15,7 +15,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
 from tilefoundry.ir.types.shard import Layout, ShardLayout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import Partial, Split, split_target_axes
+from tilefoundry.ir.types.shard.shard_layout import split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -156,25 +156,16 @@ def _output_shape(x, weight, stride, padding, dilation, k_h, k_w) -> tuple:
     )
 
 
-def _real_shard_layout(type_) -> ShardLayout | None:
-    layout = type_.layout
-    if isinstance(layout, ShardLayout) and any(
-        isinstance(attr, (Split, Partial)) for attr in layout.attrs
-    ):
-        return layout
-    return None
-
-
 def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     named = (("input", x), ("weight", weight), ("bias", bias))
-    active = [
+    placed = [
         (index, name, layout)
         for index, (name, type_) in enumerate(named)
-        if (layout := _real_shard_layout(type_)) is not None
+        if isinstance((layout := type_.layout), ShardLayout)
     ]
-    if active:
-        mesh = active[0][2].mesh
-        for index, name, layout in active[1:]:
+    if placed:
+        mesh = placed[0][2].mesh
+        for index, name, layout in placed[1:]:
             if layout.mesh != mesh:
                 ctx.error(
                     call,
@@ -186,6 +177,7 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
 
     check_multilinear_partials(ctx, call, (("input", x), ("weight", weight)))
     contraction_splits: dict[int, tuple[str, int]] = {}
+    channel_split_axes: dict[str, set[int]] = {"input": set(), "weight": set()}
     for name, type_, axes in (
         ("input", x, {1: 4}),
         ("weight", weight, {1: 4, 2: 5, 3: 6}),
@@ -198,6 +190,8 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
             if logical_axis not in axes:
                 continue
             domain_dim = axes[logical_axis]
+            if logical_axis == 1:
+                channel_split_axes[name].add(mesh_axis)
             previous = contraction_splits.get(mesh_axis)
             if previous is not None and previous[1] != domain_dim:
                 ctx.error(
@@ -206,6 +200,20 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
                     f"with {previous[0]}; use an explicit Reshard before Conv2D",
                 )
             contraction_splits[mesh_axis] = (name, domain_dim)
+
+    for mesh_axis in sorted(
+        channel_split_axes["input"] ^ channel_split_axes["weight"]
+    ):
+        missing = (
+            "weight"
+            if mesh_axis in channel_split_axes["input"]
+            else "input"
+        )
+        ctx.error(
+            call,
+            f"{missing} must carry a matching input-channel Split on mesh axis "
+            f"{mesh_axis}; use an explicit Reshard before Conv2D",
+        )
 
     required_partial_axes = set(contraction_splits)
     for type_ in (x, weight):

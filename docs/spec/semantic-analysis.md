@@ -154,10 +154,13 @@ def derive_output_shard_layout(
   - A fully-`Broadcast` input `ShardLayout` is replicated: it carries no real
     sharding, contributes no `Split`/`Partial`, and does not pin a mesh. When no
     input carries real sharding, the output carries none.
-  - An input `Split` that accesses a non-projection domain dim, or an
-    output-surviving dim reachable only through a non-projection output access,
-    MUST fail closed. The rule reads only the maps' affine structure, never the
-    domain bounds.
+  - Only a zero-offset, unit-coefficient access of one domain dim is a
+    projection for shared ownership propagation. An input `Split` that accesses
+    any other form, including a nonzero affine translation, or an
+    output-surviving dim reachable only through such an access, MUST fail
+    closed. The shared service reads only the maps' affine structure, never the
+    domain bounds, so it has no owner-boundary alignment proof for a translated
+    access.
   - `Split(axis)` indexes an output layout axis, not a logical tensor axis. A
     reduction-induced `Partial` attaches to no layout axis; it remains a value
     state on the mesh axis that was reduced.

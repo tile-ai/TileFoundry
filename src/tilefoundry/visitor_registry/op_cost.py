@@ -51,6 +51,8 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import DType, TensorType, Type, numel, tensor_bytes
+from tilefoundry.ir.types.shard import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 
 from .contexts import Cost, CostContext, TrafficBytes
 from .registries import register_cost_evaluator
@@ -128,7 +130,22 @@ def _conv2d(call: Call, ctx: CostContext) -> Cost:
         for type_ in (input_, weight, bias, output)
     ):
         raise ValueError("Conv2D cost requires tensor inputs and output")
-    flops = 2 * numel(output) * weight.shape[1] * weight.shape[2] * weight.shape[3]
+    global_weight = ctx.type_of(call.args[1])
+    logical_weight_shape = weight.shape
+    if isinstance(global_weight.layout, ShardLayout):
+        logical_weight_shape = [1] * len(global_weight.shape)
+        axes = layout_axis_to_tensor_axis(
+            global_weight.layout.layout.shape, global_weight.shape
+        )
+        for extent, logical_axis in zip(weight.shape, axes):
+            logical_weight_shape[logical_axis] *= extent
+    flops = (
+        2
+        * numel(output)
+        * logical_weight_shape[1]
+        * logical_weight_shape[2]
+        * logical_weight_shape[3]
+    )
     return Cost(
         {input_.dtype: flops}, _traffic((input_, weight, bias), output)
     )

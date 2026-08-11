@@ -56,8 +56,8 @@ def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
     """Classify each result (out) axis of *m* by how it accesses the domain: - ``("proj", d)``.
 
     Classify each result (out) axis of *m* by how it accesses the domain:
-    - ``("proj", d)`` — a pure projection of domain dim ``d`` (single in-dim,
-      unit coefficient): the access tracks that domain dim.
+    - ``("proj", d)`` — a zero-offset pure projection of domain dim ``d``
+      (single in-dim, unit coefficient): the access tracks that domain dim.
     - ``("const", None)`` — no domain dim involved: a constant (broadcast)
       access.
     - ``("complex", None)`` — multiple in-dims, a non-unit coefficient, or
@@ -73,6 +73,7 @@ def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
             int(aff.get_coefficient_val(isl.dim_type.DIV, j).num_si()) != 0
             for j in range(aff.dim(isl.dim_type.DIV))
         )
+        has_offset = not aff.get_constant_val().is_zero()
         used = [
             (j, int(aff.get_coefficient_val(isl.dim_type.IN, j).num_si()))
             for j in range(n_in)
@@ -82,6 +83,8 @@ def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
             out[o] = ("complex", None)
         elif not used:
             out[o] = ("const", None)
+        elif has_offset:
+            out[o] = ("complex", None)
         elif len(used) == 1 and used[0][1] == 1:
             out[o] = ("proj", used[0][0])
         else:

@@ -14,7 +14,12 @@ from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, infer_call, 
 from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import Layout, ShardLayout, Topology, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Partial, Split, split_target_axes
+from tilefoundry.ir.types.shard.shard_layout import (
+    Broadcast,
+    Partial,
+    Split,
+    split_target_axes,
+)
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _F = DType.f32
@@ -204,10 +209,22 @@ SHARD_ERROR_CASES = [
         _OP,
         (
             make_shard_tensor_type((2, 4, 7, 7), mesh=_MESH, attrs=(Split(1),)),
-            _W,
+            make_shard_tensor_type(
+                (6, 2, 3, 3), mesh=_MESH, attrs=(Split(1),)
+            ),
             make_shard_tensor_type((6,), mesh=_MESH, attrs=(Partial("sum"),)),
         ),
         ExpectedError(match=r"input 0.*non-projection.*Reshard"),
+    ),
+    TypeInferCase(
+        "input_channel_split_requires_weight_peer",
+        Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1),
+        (
+            make_shard_tensor_type((1, 4, 8, 8), mesh=_MESH, attrs=(Split(1),)),
+            make_tensor_type((4, 4, 3, 3)),
+            make_shard_tensor_type((4,), mesh=_MESH, attrs=(Partial("sum"),)),
+        ),
+        ExpectedError(match=r"weight must carry a matching.*mesh axis 0.*Reshard"),
     ),
     TypeInferCase(
         "spatial_halo_is_underivable",
@@ -220,12 +237,38 @@ SHARD_ERROR_CASES = [
         ExpectedError(match=r"input 0.*non-projection.*Reshard"),
     ),
     TypeInferCase(
+        "translated_spatial_split_is_underivable",
+        Conv2D(stride=(1, 1), padding=(4, 0), dilation=(1, 1), groups=1),
+        (
+            make_shard_tensor_type(
+                (1, 4, 8, 8), mesh=make_mesh((4,)), attrs=(Split(2),)
+            ),
+            make_tensor_type((4, 4, 1, 1)),
+            make_tensor_type((4,)),
+        ),
+        ExpectedError(match=r"input 0.*non-projection.*Reshard"),
+    ),
+    TypeInferCase(
         "output_channel_meshes_must_match",
         _OP,
         (
             _X,
             make_shard_tensor_type((6, 2, 3, 3), mesh=make_mesh((2,)), attrs=(Split(0),)),
             make_shard_tensor_type((6,), mesh=make_mesh((3,)), attrs=(Split(0),)),
+        ),
+        ExpectedError(match=r"bias \(input 2\) references a different mesh.*Reshard"),
+    ),
+    TypeInferCase(
+        "broadcast_bias_mesh_must_match",
+        _OP,
+        (
+            _X,
+            make_shard_tensor_type(
+                (6, 2, 3, 3), mesh=make_mesh((2,)), attrs=(Split(0),)
+            ),
+            make_shard_tensor_type(
+                (6,), mesh=make_mesh((3,)), attrs=(Broadcast(),)
+            ),
         ),
         ExpectedError(match=r"bias \(input 2\) references a different mesh.*Reshard"),
     ),
@@ -273,6 +316,30 @@ COST_CASES = [
             TrafficBytes(read=_WEIGHT_BYTES),
             TrafficBytes(read=_BIAS_BYTES),
             TrafficBytes(write=_OUTPUT_BYTES // 2),
+        ),
+        level="cta",
+        topologies=(_CTA,),
+    ),
+    CostCase(
+        "aligned_contraction_cta_projection",
+        Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1),
+        (
+            make_shard_tensor_type(
+                (1, 4, 8, 8), mesh=_CTA_MESH, attrs=(Split(1),)
+            ),
+            make_shard_tensor_type(
+                (4, 4, 3, 3), mesh=_CTA_MESH, attrs=(Split(1),)
+            ),
+            make_shard_tensor_type(
+                (4,), mesh=_CTA_MESH, attrs=(Partial("sum"),)
+            ),
+        ),
+        flops={_F: 2 * 1 * 4 * 6 * 6 * 2 * 3 * 3},
+        traffic=(
+            TrafficBytes(read=1 * 2 * 8 * 8 * 4),
+            TrafficBytes(read=4 * 2 * 3 * 3 * 4),
+            TrafficBytes(read=4 * 4),
+            TrafficBytes(write=1 * 4 * 6 * 6 * 4),
         ),
         level="cta",
         topologies=(_CTA,),

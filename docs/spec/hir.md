@@ -1120,14 +1120,19 @@ Consensus torch.nn.functional ops.
     output positions and the input-channel and kernel contraction dimensions.
     Shared shard propagation derives a fresh result layout: input batch and
     compatible weight/bias output-channel splits survive. A contraction split
-    produces `Partial(sum)` only when the bias carries the same per-mesh-axis
-    `Partial(sum)` state, so completing the partial result adds the bias exactly
-    once. A halo access, incompatible contraction, mesh, or per-axis state that
+    of the input-channel axis MUST be aligned on input and weight at the same
+    mesh axis; a single-sided channel split is not a representable local
+    convolution. A contraction split produces `Partial(sum)` only when the bias
+    carries the same per-mesh-axis `Partial(sum)` state, so completing the
+    partial result adds the bias exactly once. A translated/halo access,
+    incompatible contraction, mesh, or per-axis state that
     the relation cannot represent MUST fail naming the operand and requiring an
     explicit `Reshard`; no input layout is copied or real ownership discarded.
   - `Conv2D` costs `2 * numel(output) * weight.shape[1] * kh * kw` flops after
-    topology projection. Traffic has exactly four slots: complete reads of
-    input, weight, and bias followed by one complete result write.
+    topology projection, where the weight extents are reconstructed on logical
+    I/KH/KW axes from any factorized local layout. Traffic has exactly four
+    slots: complete reads of input, weight, and bias followed by one complete
+    result write.
   - `SoftMax` normalizes across an axis (a non-monotonic combination of every
     value on that axis), so no `reduction` provably commutes; typeinfer rejects
     every `Partial` input.
