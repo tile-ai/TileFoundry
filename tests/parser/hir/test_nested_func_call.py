@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry import func, module, prim_func
-from tilefoundry.dsl import DimVar, DimVarRangePat, Mesh, T, Tensor, tf
+from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, T, Tensor, tf
 from tilefoundry.dsl.tf import add  # noqa: F401 — binds bare ``add``
 from tilefoundry.ir.core import VerifyError, get_metadata
 from tilefoundry.ir.hir.function import Function, elaborate
@@ -174,6 +174,41 @@ def test_a_specialization_variant_calls_the_attached_child() -> None:
     assert variant.body.target is child.entry_function()
     assert variant.body.target is not _Scaled.entry_function()
     assert get_metadata(variant.body, _ModuleCallee) is None
+
+
+def test_a_weight_converter_calls_the_attached_child_too() -> None:
+    @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+    class _WithConverter:
+        leaf = _Callee
+
+        @func
+        def run(x: Tensor[(8,), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+            return tf.add(x, w)
+
+        @run.converter("w")
+        def _convert_w(w: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+            return leaf(w)  # noqa: F821
+
+    (child,) = _WithConverter.modules
+    ((weight, converter),) = _WithConverter.lookup("run").converters
+    assert weight == "w"
+    assert converter.body.target is child.entry_function()
+    assert converter.body.target is not _Callee.entry_function()
+    assert get_metadata(converter.body, _ModuleCallee) is None
+
+
+def test_a_weight_converter_naming_no_direct_binding_is_refused() -> None:
+    with pytest.raises(ValueError, match="no class-body binding attaches"):
+
+        @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+        class _ConverterUnattached:
+            @func
+            def run(x: Tensor[(8,), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+                return tf.add(x, w)
+
+            @run.converter("w")
+            def _convert_w(w: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+                return _Callee(w)
 
 
 def test_a_multiply_rebuilt_child_target_is_owned_only_by_that_child() -> None:

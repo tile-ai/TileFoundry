@@ -53,15 +53,22 @@ def enclosing_declaration(frame: FrameType | None) -> _Entry | None:
 
 
 def _child_exprs(expr):
-    """The Expr-valued children of *expr*, whatever fields hold them."""
+    """The Expr-valued children of *expr*, however deeply its fields nest them.
+
+    A Function reaches its variants through a tuple and its weight converters
+    through a tuple of pairs, and both are functions of the tree being built.
+    """
     from tilefoundry.ir.core.expr import Expr  # noqa: PLC0415 — avoid import cycle
 
-    for member in fields(expr):
-        value = getattr(expr, member.name, None)
+    def walk(value):
         if isinstance(value, Expr):
             yield value
         elif isinstance(value, tuple):
-            yield from (item for item in value if isinstance(item, Expr))
+            for item in value:
+                yield from walk(item)
+
+    for member in fields(expr):
+        yield from walk(getattr(expr, member.name, None))
 
 
 def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
@@ -108,8 +115,6 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
 
     for fn in functions:
         visit(fn)
-        for variant in getattr(fn, "variants", ()):
-            visit(variant)
     if unattached:
         raise ValueError(
             f"@module {owner!r}: call(s) to Module(s) {sorted(set(unattached))} that "
