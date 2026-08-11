@@ -33,10 +33,12 @@ from tilefoundry.ir.hir.shape.shape_extract import ShapeExtract
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.gather import Gather
+from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.reduce import Reduce
@@ -241,6 +243,39 @@ def _slice(call: Call, ctx: CostContext) -> Cost:
     """
     kept = tensor_bytes(_output_type(call, ctx))
     return Cost({}, (TrafficBytes(read=kept), TrafficBytes(write=kept)))
+
+
+@register_cost_evaluator(InsertSlice)
+def _insert_slice(call: Call, ctx: CostContext) -> Cost:
+    """Read and write the update window without charging the untouched dst."""
+    _, update, offsets = _input_types(call, ctx)
+    window = tensor_bytes(update)
+    return Cost(
+        {},
+        (
+            TrafficBytes(),
+            TrafficBytes(read=window),
+            TrafficBytes(read=tensor_bytes(offsets)),
+            TrafficBytes(write=window),
+        ),
+    )
+
+
+@register_cost_evaluator(CacheUpdate)
+def _cache_update(call: Call, ctx: CostContext) -> Cost:
+    """Charge the statically bounded new window, never the whole cache."""
+    _, cur_pos, s, new = _input_types(call, ctx)
+    window = tensor_bytes(new)
+    return Cost(
+        {},
+        (
+            TrafficBytes(),
+            TrafficBytes(read=tensor_bytes(cur_pos)),
+            TrafficBytes(read=tensor_bytes(s)),
+            TrafficBytes(read=window),
+            TrafficBytes(write=window),
+        ),
+    )
 
 
 @register_cost_evaluator(SoftMax)

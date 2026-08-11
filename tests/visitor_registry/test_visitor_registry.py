@@ -46,8 +46,6 @@ def _t() -> TensorType:
 
 
 EXPECTED_MISSING = {
-    "cache_update": ["cost_evaluator"],
-    "insert_slice": ["cost_evaluator"],
     "mma_sm80_16x8x16": ["eval", "cost_evaluator"],
     "quant": ["eval"],
     "wgmma_sm90_64x128x16": ["eval", "cost_evaluator"],

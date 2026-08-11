@@ -997,6 +997,9 @@ class InsertSlice(Op):
   - When `dst` is complete, an `update` carrying a `Partial` MUST be rejected;
     the write result cannot preserve that secondary value state. An explicit
     `Reshard(update, Broadcast)` completes it.
+  - `ComputeCostMetadata` charges no traffic for the untouched `dst`, one
+    window-sized `update` read, the scalar or structural tuple `offsets` read,
+    and one window-sized result write.
 
 ##### CacheUpdate
 ```python
@@ -1033,8 +1036,10 @@ class CacheUpdate(Op):
     carry the identical mesh and per-mesh-axis state; a complete `cache`
     rejects a `new` carrying `Partial`. Typeinfer rejects either mismatch.
   - No affine access relation is registered because the data-dependent write
-    boundaries are opaque. Traffic analysis therefore charges the full tensor
-    types.
+    boundaries are opaque to the polyhedral footprint path. The cost evaluator
+    instead supplies the traffic consumed by memory and roofline analysis: no
+    traffic for the untouched `cache`, one read for each runtime scalar, and a
+    `new`-bounded read and result write.
 
 ##### TopK
 ```python

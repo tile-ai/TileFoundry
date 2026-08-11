@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from tests._source import import_dsl
+from tests.ops.cost_utils import CostCase, run_cost_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -26,8 +27,8 @@ from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.target import CudaTarget
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
+from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
 
 _F = DType.f32
 _I = DType.i32
@@ -192,6 +193,47 @@ def test_insert_slice_rankn_eval_runtime_oob_raises():
     upd = torch.zeros(1, 3, 4)
     with pytest.raises(ValueError, match="out of bounds"):
         _eval_rankn(dst, upd, (0, 6, 0), runtime_axis=1)
+
+
+def test_insert_slice_scalar_cost_charges_only_the_window() -> None:
+    run_cost_case(
+        CostCase(
+            "scalar_offset",
+            _OP,
+            (make_tensor_type((1024,), _F), make_tensor_type((3,), _F), _SI32),
+            traffic=(
+                TrafficBytes(),
+                TrafficBytes(read=3 * 4),
+                TrafficBytes(read=4),
+                TrafficBytes(write=3 * 4),
+            ),
+        )
+    )
+
+
+def test_insert_slice_rankn_costs_literal_and_runtime_offset_leaves() -> None:
+    dst_ty = make_tensor_type((4, 8, 16), _F)
+    update_ty = make_tensor_type((1, 2, 3), _F)
+    offsets = _offsets(_lit(0), _rt("middle"), _lit(4))
+    call = Call(
+        type=dst_ty,
+        target=_OP,
+        args=(
+            Var(type=dst_ty, name="dst"),
+            Var(type=update_ty, name="update"),
+            offsets,
+        ),
+    )
+    result_type = TypeInferVisitor(TypeInferContext()).visit(call)
+    ctx = CostContext(selected_output_type=result_type)
+
+    assert ctx.local_type_of(offsets) == TupleType(fields=(_SI64, _SI32, _SI64))
+    assert CostEvaluator(ctx).visit_Call(call).traffic == (
+        TrafficBytes(),
+        TrafficBytes(read=1 * 2 * 3 * 4),
+        TrafficBytes(read=8 + 4 + 8),
+        TrafficBytes(write=1 * 2 * 3 * 4),
+    )
 
 
 from tilefoundry import func, module  # noqa: E402
