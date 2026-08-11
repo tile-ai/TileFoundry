@@ -692,12 +692,22 @@ class Quant(Op):
 
 - constraints:
   - `x` MUST have rank at least one and MUST NOT carry a `Partial` state.
-  - For a static last extent, `group` MUST divide that extent.
+  - `scheme` is exactly `"per_token_group"`; packed block formats are a
+    different operation boundary. `group` MUST be a positive, non-boolean
+    integer, and `target_dtype` is exactly `fp8e4m3`.
+  - For a static last extent, `group` MUST divide that extent. For a symbolic
+    extent, the scale extent is the symbolic floor division by `group`, and
+    evaluation rejects an indivisible runtime extent before reshaping.
   - The result MUST be `(x_q, x_scale)`: `x_q` preserves `x.shape` with
-    `target_dtype`; `x_scale` has dtype `f32` and, for a static last extent,
-    replaces it by `x.shape[-1] // group`. For a symbolic last extent,
-    `x_scale` retains the original last extent. Both fields preserve layout
-    and storage.
+    `fp8e4m3`; `x_scale` has dtype `f32` and replaces the last extent by
+    `x.shape[-1] // group`. Both fields preserve storage and receive freshly
+    derived layouts over their own shapes. Outer-axis splits propagate. A
+    last-axis split propagates only when its factorization proves that every
+    owner holds complete groups and the scale split is representable;
+    otherwise typeinfer requires an explicit `Reshard`.
+  - Evaluation computes each group's f32 absolute maximum and scale
+    `absmax / 448`, divides, clamps to `[-448, 448]`, then casts to `fp8e4m3`.
+    An all-zero group uses scale one and produces no NaN.
 
 ##### RepeatInterleave
 
