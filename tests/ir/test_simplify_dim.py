@@ -9,6 +9,8 @@ a real broadcast failure.
 
 from __future__ import annotations
 
+import copy
+
 from tilefoundry.ir.core import TypeInferContext
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.core.kinds import UnaryKind
@@ -160,3 +162,18 @@ def test_unary_propagates_dim_var_in_shape() -> None:
 
     assert out_ty.shape[0] is s
     assert (out_ty.shape[0].lo, out_ty.shape[0].hi) == (1, 8)
+
+
+def test_a_copied_dim_var_is_the_canonical_one() -> None:
+    """A deep copy of a shape keeps its ``DimVar`` identity.
+
+    ``Module.cloned`` copies the IR graph when a child is attached, and a
+    signature that came back holding a fresh ``DimVar`` would no longer bind
+    against the one its caller wrote.
+    """
+    s = DimVar(name="S_copy", lo=1, hi=8)
+    in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
+
+    assert copy.deepcopy(s) is s
+    assert copy.deepcopy(in_ty).shape == in_ty.shape
+    assert copy.deepcopy([in_ty])[0].shape[0] is s

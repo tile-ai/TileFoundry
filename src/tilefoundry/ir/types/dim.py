@@ -47,6 +47,10 @@ class DimVar(Op, metaclass=_DimVarMeta):
     lo = ParamDef(kind="attribute", annotation=int)
     hi = ParamDef(kind="attribute", annotation=int)
 
+    def __deepcopy__(self, memo):
+        """Itself: one ``(name, lo, hi)`` is one instance, and copying keeps that."""
+        return self
+
     def __add__(self, other):
         return _dim_binop(DimAdd, self, other)
 

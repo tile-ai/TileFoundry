@@ -13,6 +13,7 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
+    IRMetadata,
     SourceSpanMetadata,
     Tuple,
     TypeInferContext,
@@ -21,6 +22,7 @@ from tilefoundry.ir.core import (
     get_metadata,
     replace_metadata,
 )
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.function import elaborate
@@ -59,6 +61,19 @@ from .sugar import (
 from .symtab import LexicalEnv
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class _ModuleCallee(IRMetadata):
+    """The class-body binding a call reached its callee's Module through.
+
+    Authoring state private to the parser: a class body is parsed before its
+    children are attached, and attaching one copies it, so the binding name is
+    what says which attached child the call meant. ``@module`` collection
+    rebuilds against that child and takes this record off.
+    """
+
+    binding: str
 
 
 _IR_OBJECT_TYPES = {
@@ -257,9 +272,14 @@ class BaseExprVisitor:
 
     token: Token
 
-    def __init__(self, env: LexicalEnv, closure: dict[str, Any]):
+    resolves_module_callees = False
+
+    def __init__(
+        self, env: LexicalEnv, closure: dict[str, Any], *, in_module_body: bool = False
+    ):
         self.env = env
         self.closure = closure
+        self.in_module_body = in_module_body
 
 
 
@@ -748,25 +768,68 @@ class BaseExprVisitor:
     def _resolve_function_target(self, func: ast.AST):
         """Resolve function target.
 
-        Return the ``hir.Function`` instance behind a callee AST, or
-        ``None`` when the callee is not an ``@func``-decorated function.
+        Return ``(hir.Function, binding)`` behind a callee AST, or
+        ``(None, None)`` when the callee is not an ``@func``-decorated function.
         ``@func`` evaluates to the ``hir.Function`` directly, so a sibling
         callee binding *is* that Function (see :func:`tilefoundry.script.func`).
+        A bare name bound to a ``Module`` is that Module's entry function and
+        reports the name as *binding*; the attribute spelling is refused.
         """
         val: Any = None
         if isinstance(func, ast.Name):
             val = self.env.lookup(func.id)
             if val is None:
                 val = self.closure.get(func.id)
-
-
-
+            if isinstance(val, Module) and self.resolves_module_callees:
+                if not self.in_module_body:
+                    raise VerifyError(
+                        f"{func.id!r}: a Module is called only from a function "
+                        f"authored in a @module class body, which is what attaches "
+                        f"{val.name!r} as a child and gives the call a child to "
+                        f"reach; this function declares none"
+                    )
+                return self._module_entry_target(val, func.id), func.id
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            owner = self.env.lookup(func.value.id)
+            if owner is None:
+                owner = self.closure.get(func.value.id)
+            if isinstance(owner, Module) and self.resolves_module_callees:
+                declares = (
+                    f"entry {owner.entry!r}" if owner.entry is not None else "no entry"
+                )
+                raise VerifyError(
+                    f"{ast.unparse(func)!r}: a Module is called through its bare "
+                    f"binding, which calls its entry function; Module {owner.name!r} "
+                    f"declares {declares}, so write {func.value.id}(...) rather than "
+                    f"reaching in for {func.attr!r}"
+                )
         if isinstance(val, HirFunction):
-            return val
-        return None
+            return val, None
+        return None, None
+
+    @staticmethod
+    def _module_entry_target(owner: Module, name: str) -> HirFunction:
+        """The hir Function *owner* is entered through.
+
+        A Module that cannot answer is refused here, naming what it could not
+        answer, rather than falling through to *unknown Op name*.
+        """
+        try:
+            entry = owner.entry_function()
+        except ValueError as exc:
+            raise VerifyError(
+                f"{name!r}: calling a Module calls its entry function -- {exc}"
+            ) from exc
+        if not isinstance(entry, HirFunction):
+            raise VerifyError(
+                f"{name!r}: calling a Module calls its entry function, and Module "
+                f"{owner.name!r} enters through {entry.name!r}, a "
+                f"{type(entry).__name__} rather than an hir Function"
+            )
+        return entry
 
     def _build_function_call(
-        self, callee: Any, node: ast.Call, name: str
+        self, callee: Any, node: ast.Call, name: str, module_binding: str | None = None
     ) -> Expr:
         """Build a nested HIR function call with an elaborated target.
 
@@ -810,6 +873,8 @@ class BaseExprVisitor:
             call=call_for_errors,
         )
         call = self._build_call(instance, input_args)
+        if module_binding is not None:
+            call = replace_metadata(call, _ModuleCallee(module_binding))
         if explicit_loc_given:
             call = replace_metadata(call, BindingMetadata(explicit_loc))
             self._explicit_binding_call_ids.add(id(call))
@@ -855,9 +920,9 @@ class BaseExprVisitor:
 
 
 
-        callee_func = self._resolve_function_target(node.func)
+        callee_func, module_binding = self._resolve_function_target(node.func)
         if callee_func is not None:
-            return self._build_function_call(callee_func, node, name)
+            return self._build_function_call(callee_func, node, name, module_binding)
 
         schema = self._resolve_call_target(node.func)
         if schema is None:

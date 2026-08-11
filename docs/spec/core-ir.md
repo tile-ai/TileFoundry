@@ -80,7 +80,9 @@ class Module:
     another owner MUST NOT change what the first owner's subtree resolves.
   - `owns(function)` MUST use identity and accept the Module's direct functions
     and their specialization variants. With `derived=True`, it MUST also follow
-    a derived function's recorded specialization origin; equal copies and
+    a rebuilt function's recorded origin
+    ([hir §2](./hir.md#2-function-specialization-api)) for the whole chain, not
+    only its first edge — a rebuild may itself be rebuilt; equal copies and
     same-name functions from another Module MUST remain unowned.
 
 A `Module` is a static ownership and execution-context container, not a dynamic
@@ -88,6 +90,36 @@ invocation. Owning a `Function`, attaching a child `Module`, or declaring a
 `Target` or `Topology` hierarchy never itself begins or counts an invocation;
 Python-to-HIR entry and HIR-to-HIR device calls are governed by
 [hir §1.1](./hir.md#11-function).
+
+#### Calling a child Module
+
+An HIR function may call a child `Module` of its own Module. That call is a
+device call in the current kernel invocation, exactly like a call to a sibling
+function: which Module owns the callee counts no invocation and no launch.
+
+- constraints:
+  - Calling a `Module` MUST mean calling its entry function, so the result is an
+    ordinary `Call` on that `Function` and no node distinguishes it. Reaching
+    past the entry for another of the Module's functions MUST be refused, and so
+    MUST a Module callee written outside a `@module` class body: only that body
+    attaches the child the call resolves against
+    ([parser §4.2](./parser.md#42-closure-then-registry-callee-resolution)).
+  - A class body is parsed before its children are attached, and attaching one
+    under an attribute copies it, so collection MUST rebuild each such `Call`
+    against the child attached under the binding that call was written through,
+    including calls inside a specialization variant. Two attributes may hold
+    copies of one Module, and then the binding is the only thing that says which
+    copy a call meant. Which binding that was is authoring state private to the
+    parser; a collected `Call` MUST NOT still carry it, since the rebuilt
+    `Call.target` already states the callee.
+  - Only a direct `name = <Module>` class-body binding attaches a callable name.
+    A name no such binding attaches MUST be refused, naming what the body does
+    bind: there is no child to rebuild against, and collecting it would leave
+    the call pointing outside the tree being built.
+  - Rebuilding at a call site MUST record the entry it was rebuilt from
+    ([hir §1.1](./hir.md#11-function)), so two attached copies of one source
+    Module stay distinguishable and ownership stays answerable without matching
+    on the name a copy keeps.
 
 - `parse_module` (see [parser §1](./parser.md#1-dsl-syntax)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function

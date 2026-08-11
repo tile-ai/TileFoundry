@@ -285,7 +285,8 @@ class Module:
 
         Declared functions and their variants count. Structural equality and
         matching names do not. With ``derived=True``, a recorded
-        ``_specialized_from`` chain may lead back to an owned function.
+        ``_specialized_from`` chain may lead back to an owned function; the
+        whole chain is walked, because a rebuild may itself be rebuilt.
 
         See [core-ir §1](docs/spec/core-ir.md#1-module).
         """
@@ -298,7 +299,11 @@ class Module:
         if not derived:
             return False
         origin = getattr(function, "_specialized_from", None)
-        return origin is not None and self.owns(origin)
+        while origin is not None:
+            if self.owns(origin):
+                return True
+            origin = getattr(origin, "_specialized_from", None)
+        return False
 
     def entry_function(self) -> ModuleFunction:
         if self.entry is None:

@@ -216,7 +216,10 @@ def _elaborate_from_bound_types(
 
     Calls and specializations share this path. Optional *dims* also substitute
     loop bounds and shape-valued operation attributes that are not reachable
-    through expression types.
+    through expression types. The rebuild records ``callee`` as its origin, so
+    the instance a `Call` targets stays connected to the function a Module owns
+    without matching on the name they share; a call site chooses no extent and
+    so records none.
     """
     new_params = tuple(
         Var(type=bt, name=p.name, is_const=p.is_const) for bt, p in zip(bound_types, callee.params)
@@ -355,13 +358,17 @@ def _elaborate_from_bound_types(
     else:
         body_ctx = TypeInferContext(module=ctx.module)
     new_body = _Elaborator(body_ctx).visit(callee.body)
-    return Function.build(
+    derived = Function.build(
         name=callee.name,
         params=new_params,
         body=new_body,
         return_type=new_body.type,
         specializations=callee.specializations,
     )
+    from .specialize import _record_provenance  # noqa: PLC0415 — avoid import cycle
+
+    _record_provenance(derived, callee, dims)
+    return derived
 
 
 def _specialize_callee(

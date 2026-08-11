@@ -153,6 +153,12 @@ op, not at the boundary. A dispatch-prototype callee
 result is the declared `return_type` and the `None` body is never inspected
 (variant selection is **Shape dispatch and specializations** below).
 
+An elaborated instance MUST record the function it was rebuilt from, the same
+record a specialization writes (`origin_of`, **Function specialization API**
+below), so the instance in a `Call.target` stays connected to the function a
+Module owns without matching on the name they share. It records no bound
+dimensions: a call site binds parameter types, it does not choose an extent.
+
 Elaboration memoizes per construction session — one parser run, or one
 top-level `elaborate` call and every nested call it re-elaborates — keyed
 on (callee, argument types): two call sites of the same callee with
@@ -1308,7 +1314,7 @@ BOUND_DIMS = "_specialized_dims"
 
 
 def origin_of(function: object) -> Function | None:
-    """Return the source function of a derived specialization.
+    """Return the source function a rebuilt function came from.
 
     Args:
         function: Candidate derived function.
@@ -1320,7 +1326,7 @@ def origin_of(function: object) -> Function | None:
 
 
 def bound_dims_of(function: object) -> tuple[tuple[str, int], ...] | None:
-    """Return the sorted dimensions bound on a derived specialization.
+    """Return the sorted dimensions a rebuild chose, if it chose any.
 
     Args:
         function: Candidate derived function.
@@ -1419,12 +1425,20 @@ def is_concrete(fn: Function) -> bool:
   - `specialize_function` MUST reject an empty binding, an unknown dimension,
     or a selected implementation with no body. It MUST record the chosen
     implementation and sorted bindings on a rebuilt function so `origin_of`
-    and `bound_dims_of` can recover them.
+    and `bound_dims_of` can recover them. A rebuild that chose no extent — a
+    call site's elaboration — MUST record its origin and no bindings, so
+    `bound_dims_of` stays `None` and two call sites of one callee are not
+    reported as one program at one size.
   - `specialize_concretely` MUST require a non-empty string-to-integer mapping
     and MUST reject any residual dimension after specialization.
   - Provenance and bound-dimension records MUST NOT participate in structural
     equality or hashing; ownership checks use the recorded origin rather than
     a function name.
+  - The recorded origin MUST be the function actually rebuilt, and nothing may
+    re-point it afterwards. A call reaching two named copies of one source
+    Module rebuilds from the entry of the copy it named, so the two calls hold
+    two rebuilds recording two origins; one shared rebuilt instance re-pointed
+    instead would answer both with whichever was written last.
   - `residual_dims` and `dim_vars_reached` MUST inspect the whole function
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
     and called functions. `is_concrete` additionally checks the return type.

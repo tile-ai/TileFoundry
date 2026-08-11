@@ -39,29 +39,32 @@ def display_name(fn: Function) -> str | None:
     return getattr(fn, DISPLAY_NAME, None)
 
 
-def _record_provenance(derived: Function, origin: Function, dims: Mapping[str, int]) -> None:
-    """Note that *derived* is *origin* at *dims*.
+def _record_provenance(
+    derived: Function, origin: Function, dims: Mapping[str, int] | None
+) -> None:
+    """Note that *derived* is *origin*, at *dims* when a size was chosen.
 
     Written through `object.__setattr__` because a Function is frozen; this is
     the same authoring-phase mutation `seal` and `add_variant` use, and it does
     not participate in equality, so two functions specialised from different
     origins are still equal when they are the same program.
 
-    The extents are stored sorted by name, so one set of bindings has one
-    representation and two records can be compared directly rather than each
-    caller having to canonicalise first.
+    Extents are stored sorted by name, so one binding set has one representation.
+    A rebuild that chose none records none rather than an empty set, which would
+    compare equal to another such rebuild's.
     """
     object.__setattr__(derived, PROVENANCE, origin)
-    object.__setattr__(derived, BOUND_DIMS, tuple(sorted(dims.items())))
+    if dims is not None:
+        object.__setattr__(derived, BOUND_DIMS, tuple(sorted(dims.items())))
 
 
 def origin_of(function: object) -> Function | None:
-    """The function *function* was specialised from, if it was."""
+    """The function *function* was rebuilt from, if it was."""
     return getattr(function, PROVENANCE, None)
 
 
 def bound_dims_of(function: object) -> tuple[tuple[str, int], ...] | None:
-    """The extents *function* was specialised at, if it was, sorted by name."""
+    """The extents *function* was rebuilt at, if any were chosen, sorted by name."""
     return getattr(function, BOUND_DIMS, None)
 
 
@@ -158,11 +161,9 @@ def specialize_function(
     if not set(dims) & set(residual_dims(chosen)):
         return chosen
     bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
-    derived = _elaborate_from_bound_types(
+    return _elaborate_from_bound_types(
         chosen, bound, ctx if ctx is not None else TypeInferContext(), dims=dims
     )
-    _record_provenance(derived, chosen, dims)
-    return derived
 
 
 def specialize_concretely(fn: Function, dims: Mapping[str, int]) -> Function:

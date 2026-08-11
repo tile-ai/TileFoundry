@@ -68,12 +68,27 @@ def parse_func(fn, *, topologies=(), specializations=(), extra_closure=None) -> 
     in a ``@module`` class body resolve sibling ``@func`` methods (which are
     ``hir.Function`` values) as nested-call targets.
     """
+    return _parse_func(
+        fn, topologies=topologies, specializations=specializations,
+        extra_closure=extra_closure,
+    )
+
+
+def _parse_func(
+    fn, *, topologies=(), specializations=(), extra_closure=None, in_module_body=False
+) -> Function:
+    """`parse_func` plus whether a ``@module`` class body is being authored.
+
+    Only the decorators can answer that, and only they may state it: it decides
+    whether a name bound to a ``Module`` is a callee at all.
+    """
     node = extract_ast(fn)
     closure = _collect_closure(fn, extra_closure)
     return _parse_func_node(
         node, closure, topologies=topologies,
         specializations=specializations,
         source_filename=getattr(getattr(fn, "__code__", None), "co_filename", "<string>"),
+        in_module_body=in_module_body,
     )
 
 
@@ -87,6 +102,7 @@ def _parse_func_node(
     topologies=(),
     specializations=(),
     source_filename: str = "<string>",
+    in_module_body: bool = False,
 ) -> Function:
     env = LexicalEnv()
     params = _build_params(
@@ -101,7 +117,8 @@ def _parse_func_node(
             raise VerifyError(f"duplicate topology name {t.name!r}")
         topo_ns[t.name] = t
     visitor = _HirBodyVisitor(
-        env, closure, topo_ns=topo_ns, source_filename=source_filename
+        env, closure, topo_ns=topo_ns, source_filename=source_filename,
+        in_module_body=in_module_body,
     )
     if _is_pass_body(node.body):
 
@@ -272,9 +289,13 @@ def _resolve_return_type(node: ast.FunctionDef, closure, body_expr) -> TensorTyp
 
 class _HirBodyVisitor(BaseExprVisitor):
     token = "hir"
+    resolves_module_callees = True
 
-    def __init__(self, env, closure, *, topo_ns=None, source_filename="<string>"):
-        super().__init__(env, closure)
+    def __init__(
+        self, env, closure, *, topo_ns=None, source_filename="<string>",
+        in_module_body=False,
+    ):
+        super().__init__(env, closure, in_module_body=in_module_body)
         self.topo_ns: dict[str, "Topology"] = topo_ns or {}
         self.source_filename = source_filename
         self.pending_constraints: dict[int, ScheduleConstraintMetadata] = {}

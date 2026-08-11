@@ -16,8 +16,9 @@ from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.module import _DECLARING, UNDECLARED
-from tilefoundry.parser import parse_func, parse_prim_func
+from tilefoundry.module import UNDECLARED, enclosing_declaration
+from tilefoundry.parser import parse_prim_func
+from tilefoundry.parser.hir_parser import _parse_func
 from tilefoundry.target.base import target_instance
 
 
@@ -72,23 +73,19 @@ def _definition_namespace() -> dict[str, Any]:
     return ns
 
 
-def _enclosing_topologies() -> tuple | None:
-    """Find the declaration belonging to the enclosing ``@module`` class body."""
+def _enclosing_declaration():
+    """The ``@module`` declaration whose class body encloses this decorator."""
     frame = sys._getframe(1)
     here = __file__
     while frame is not None and frame.f_code.co_filename == here:
         frame = frame.f_back
-    while frame is not None:
-        if "__qualname__" in frame.f_locals:
-            for entry in reversed(_DECLARING):
-                if entry.frame is frame.f_back:
-                    if entry.topologies is not None:
-                        return entry.topologies
-                    break
-        elif frame.f_code.co_name == "<module>":
-            break
-        frame = frame.f_back
-    return None
+    return enclosing_declaration(frame)
+
+
+def _enclosing_topologies() -> tuple | None:
+    """Find the declaration belonging to the enclosing ``@module`` class body."""
+    entry = _enclosing_declaration()
+    return entry.topologies if entry is not None else None
 
 
 def func(fn=None, *, topologies=UNDECLARED, target=None):
@@ -110,9 +107,10 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
         parse_topologies = declared_topologies
         if parse_topologies is None:
             parse_topologies = _enclosing_topologies()
-        ir = parse_func(
+        ir = _parse_func(
             fn_inner, topologies=parse_topologies or (),
             extra_closure=extra_closure,
+            in_module_body=_enclosing_declaration() is not None,
         )
         verify_function(ir)
         if not declares_context:
@@ -142,9 +140,10 @@ def _specialize(self: HirFunction, pattern: Any):
 
     def _wrap_variant(fn_inner):
         extra_closure = _definition_namespace()
-        ir = parse_func(
+        ir = _parse_func(
             fn_inner, topologies=_enclosing_topologies() or (),
             specializations=(pat,), extra_closure=extra_closure,
+            in_module_body=_enclosing_declaration() is not None,
         )
         if ir.body is None:
             raise TypeError(
@@ -176,7 +175,10 @@ def _converter(self: HirFunction, weight_name: str):
 
     def _wrap_converter(fn_inner):
         extra_closure = _definition_namespace()
-        ir = parse_func(fn_inner, extra_closure=extra_closure)
+        ir = _parse_func(
+            fn_inner, extra_closure=extra_closure,
+            in_module_body=_enclosing_declaration() is not None,
+        )
         if ir.body is None:
             raise TypeError(
                 "tilefoundry.converter: a converter must have a real body, "
