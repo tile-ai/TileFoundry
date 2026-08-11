@@ -18,7 +18,7 @@ from tilefoundry.inspection.analysis_report import (
     selected_types,
 )
 from tilefoundry.ir.hir.specialize import dim_vars_reached, specialize_concretely
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
@@ -113,7 +113,9 @@ def run_authored_analysis(
         raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
     if not analyses:
         checked = (
-            specialize_concretely(function, dims, TypeInferContext(module=module))
+            specialize_concretely(
+                function, dims, TypeInferContext(scope=FunctionScope(module, function))
+            )
             if dims is not None
             else function
         )

@@ -12,7 +12,7 @@ from tilefoundry.ir.types import TensorType, Type, callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.substitute import substitute_shape_dim
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,7 @@ class Function(Expr):
             conv.seal()
 
 
+from tilefoundry.ir.hir._call_binding import binding_for  # noqa: E402
 from tilefoundry.ir.visitor import ExprMutator  # noqa: E402
 
 
@@ -124,6 +125,12 @@ def canonical_specialization_signature(
         else:
             parts.append(repr(pat))
     return ";".join(parts)
+
+
+def _scope_for(ctx: TypeInferContext, callee: "Function") -> "FunctionScope | None":
+    """*ctx*'s scope moved to *callee*, whose body is about to be read."""
+    scope = ctx.scope
+    return None if scope is None else dataclasses.replace(scope, function=callee)
 
 
 def _bind_param_type(
@@ -162,44 +169,29 @@ def _bind_param_type(
     return p
 
 
-def bound_params(callee: "Function", *, implicit_const: bool) -> tuple[Var, ...]:
-    """The parameters a call site supplies, in the order it supplies them.
-
-    Every declared parameter, except that a call carrying activations only
-    leaves the ``ConstTensor`` ones to the callee's own resource bindings.
-    """
-    if not implicit_const:
-        return callee.params
-    return tuple(param for param in callee.params if not param.is_const)
-
-
 def elaborate(
     callee: "Function",
     arg_types: tuple[Type, ...],
     ctx: TypeInferContext | None = None,
     call: Call | None = None,
-    *,
-    implicit_const: bool = False,
-    owner: object = None,
 ) -> "Function":
     """Construct a concrete callee for one call site's argument types.
 
     Dispatch prototypes and already-equal bindings return unchanged. Other
     templates rebuild per distinct type tuple and reuse the construction
-    session's elaboration cache. ``call`` anchors binding errors when present.
-    ``implicit_const`` binds the argument types to the non-constant parameters
-    alone and leaves each ``ConstTensor`` parameter's declared type in place;
-    ``owner`` is the Module tree the rebuilt body is read in.
+    session's elaboration cache. ``call`` anchors binding errors when present,
+    and is what says how the call binds: one whose callee's constants come from
+    a Module reading binds the non-constant parameters alone.
 
     See [hir §1.1](docs/spec/hir.md#11-function).
     """
     if ctx is None:
         ctx = TypeInferContext()
-    supplied = bound_params(callee, implicit_const=implicit_const)
-    expected = len(supplied)
+    binding = binding_for(callee, call, ctx)
+    expected = len(binding.params)
     got = len(arg_types)
     if got != expected:
-        kind = "activation(s)" if implicit_const else "parameter(s)"
+        kind = "activation(s)" if binding.from_reading else "parameter(s)"
         ctx.error(
             call if call is not None else callee,
             f"hir Function call {callee.name!r}: arity mismatch — "
@@ -208,7 +200,7 @@ def elaborate(
     given = iter(enumerate(arg_types))
     bound_types = []
     for param in callee.params:
-        if implicit_const and param.is_const:
+        if binding.from_reading and param.is_const:
             bound_types.append(param.type)
             continue
         index, arg_ty = next(given)
@@ -218,12 +210,14 @@ def elaborate(
     if all(bt == p.type for bt, p in zip(bound_types, callee.params)):
         return callee
 
-    cache_key = (id(callee), arg_types, implicit_const)
+    cache_key = (id(callee), arg_types, binding.from_reading)
     cached = ctx.elaboration_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    instance = _elaborate_from_bound_types(callee, bound_types, ctx, owner=owner)
+    instance = _elaborate_from_bound_types(
+        callee, bound_types, ctx, scope=binding.scope
+    )
     ctx.elaboration_cache[cache_key] = instance
     return instance
 
@@ -234,7 +228,7 @@ def _elaborate_from_bound_types(
     ctx: TypeInferContext,
     *,
     dims: "Mapping[str, int] | None" = None,
-    owner: object = None,
+    scope: "FunctionScope | None" = None,
 ) -> "Function":
     """Rebuild ``callee`` with parameters at *bound_types*.
 
@@ -291,14 +285,11 @@ def _elaborate_from_bound_types(
             new_target = call_expr.target
             if isinstance(call_expr.target, Function):
                 if dims is None:
-                    child = self.body_ctx.child_call_owner(call_expr)
                     new_target = elaborate(
                         call_expr.target,
                         tuple(a.type for a in new_args),
                         self.body_ctx,
                         call=call_expr,
-                        implicit_const=child is not None,
-                        owner=child,
                     )
                 else:
                     new_target = _specialize_callee(
@@ -380,16 +371,13 @@ def _elaborate_from_bound_types(
             pinned.append(rebuilt)
             return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
 
-    tree = ctx.module if owner is None else owner
+    inner = scope if scope is not None else _scope_for(ctx, callee)
     if dims is None:
         body_ctx = TypeInferContext(
-            module=tree, elaboration_cache=ctx.elaboration_cache,
-            caller=callee, child_call=ctx.child_call,
+            scope=inner, elaboration_cache=ctx.elaboration_cache
         )
     else:
-        body_ctx = TypeInferContext(
-            module=tree, caller=callee, child_call=ctx.child_call
-        )
+        body_ctx = TypeInferContext(scope=inner)
     new_body = _Elaborator(body_ctx).visit(callee.body)
     derived = Function.build(
         name=callee.name,
@@ -487,16 +475,13 @@ def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
     """
     callee: Function = call.target  # type: ignore[assignment]
     arg_types = tuple(ctx.type_of(a) for a in call.args)
-    child = ctx.child_call_owner(call)
-    instance = elaborate(
-        callee, arg_types, ctx, call=call,
-        implicit_const=child is not None, owner=child,
-    )
+    binding = binding_for(callee, call, ctx)
+    instance = elaborate(callee, arg_types, ctx, call=call)
     if instance.body is None:
         return instance.return_type
+    inner = binding.scope
     body_ctx = TypeInferContext(
-        module=ctx.module if child is None else child,
-        caller=instance, child_call=ctx.child_call,
+        scope=None if inner is None else dataclasses.replace(inner, function=instance)
     )
     return body_ctx.type_of(instance.body)
 

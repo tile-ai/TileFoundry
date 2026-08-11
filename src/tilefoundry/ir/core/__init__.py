@@ -25,7 +25,7 @@ from tilefoundry.visitor_registry.registries import (
     typeinfer_registry,
     verify_stmt_registry,
 )
-from .context import TypeInferContext
+from .context import FunctionScope, TypeInferContext
 
 __all__ = [
     "Expr",
@@ -51,6 +51,7 @@ __all__ = [
     "register_typeinfer",
     "register_verify_stmt",
     "register_cost_evaluator",
+    "FunctionScope",
     "TypeInferContext",
     "VerifyError",
 ]

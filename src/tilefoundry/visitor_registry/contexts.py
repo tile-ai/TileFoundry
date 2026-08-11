@@ -40,46 +40,41 @@ def _constant_type(value: object) -> TensorType:
     return TensorType.meta_scalar(dtype)
 
 
+@dataclass(frozen=True)
+class FunctionScope:
+    """Where a walk is reading: one Module tree, and whose body it is in.
+
+    A `Function` carries no execution context and one object is reachable from
+    more than one program, so anything answered about the function being read --
+    which Module owns it, what it may reach -- is answered within the tree the
+    walk was given rather than globally.
+    """
+
+    module: Any
+    function: Any
+
+
 @dataclass
 class TypeInferContext:
     """Cache walk-local types and format type-inference errors.
 
-    Derivation lives in ``TypeInferVisitor``. ``mesh_scope`` carries enclosing
-    scopes to statement verifiers without generic verification importing
-    operation classes. ``elaboration_cache`` memoizes function instances by
-    template identity and argument types for one parse or elaboration walk.
+    Derivation lives in ``TypeInferVisitor``. ``scope`` says where the walk is
+    reading. ``mesh_scope`` carries enclosing scopes to statement verifiers
+    without generic verification importing operation classes.
+    ``elaboration_cache`` memoizes function instances by template identity and
+    argument types for one parse or elaboration walk.
     See [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
     """
 
-    module: Any = None
+    scope: FunctionScope | None = None
     cache: dict[int, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
     elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
-    caller: Any = None
-    child_call: Any = None
 
-    def child_call_owner(self, call: Call):
-        """The child Module *call* reaches, or ``None`` for every other call.
-
-        A call that reaches one supplies activations alone. The answer is also
-        the tree the callee's body is read in, which is what lets a call the
-        callee makes in turn be answered the same way however deep it sits. The
-        authoring phase answers from the record it wrote; otherwise a walk that
-        knows a tree and whose body it is reading answers by ownership. A walk
-        that knows neither answers ``None``, so a standalone or low-level
-        Function call cannot acquire implicit constants.
-        """
-        if self.child_call is not None:
-            owner = self.child_call(self.caller, call)
-            if owner is not None:
-                return owner
-        if self.module is None or self.caller is None:
-            return None
-        from tilefoundry.ir.core.module import (  # noqa: PLC0415 — avoid import cycle
-            child_module_of,
-        )
-
-        return child_module_of(self.module, self.caller, call.target)
+    @property
+    def module(self):
+        """The Module this walk reads in, or ``None`` when it was given none."""
+        return None if self.scope is None else self.scope.module
 
     def type_of(self, expr: Expr) -> Type:
         key = id(expr)
@@ -207,6 +202,7 @@ class Cost:
 
 
 __all__ = [
+    "FunctionScope",
     "TypeInferContext",
     "VerifyContext",
     "CostContext",

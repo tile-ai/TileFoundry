@@ -130,10 +130,13 @@ carried over from a different call site.
 A call into a child Module elaborates in an activation-only mode: the argument
 types bind to the non-constant parameters in order, and every `ConstTensor`
 parameter keeps its declared type in the rebuilt signature, which is already
-concrete. The mode is part of the elaboration cache key, and it is supplied by
-the caller rather than deduced from the argument count — the default binds every
-declared parameter, so a standalone or low-level call cannot acquire implicit
-constants ([core-ir §1](./core-ir.md#1-module)).
+concrete. The mode is part of the elaboration cache key. Which mode a call is in
+is resolved from the call and the walk's scope
+([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)), never
+from how many arguments it passes, and it is not a question the context answers.
+Elaborating without a call in hand binds every declared parameter, so a
+standalone or low-level call cannot acquire implicit constants
+([core-ir §1](./core-ir.md#1-module)).
 
 Caller and callee MUST resolve one effective `Target` and one effective topology
 hierarchy. This is required of the edges a fixed-dimension query actually

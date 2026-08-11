@@ -24,8 +24,9 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
+from tilefoundry.ir.hir._call_binding import bound_params, set_authoring_reader
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.function import bound_params, elaborate
+from tilefoundry.ir.hir.function import elaborate
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.reshape import Reshape
@@ -77,20 +78,18 @@ class _ModuleCallee(IRMetadata):
     owner: Module
 
 
-def authored_child_call(caller, call):
+def _authored_child_call(call):
     """The child Module *call* was written through, else ``None``.
 
-    The authoring phase's answer to which calls carry activations only. It
-    holds until ``@module`` collection consumes the record, and needs no
-    caller: the record is on the call site itself.
+    The authoring phase's answer to which calls carry activations only. It holds
+    until ``@module`` collection consumes the record, and asks nothing of the
+    walk: the record is on the call site itself.
     """
     record = get_metadata(call, _ModuleCallee)
     return None if record is None else record.owner
 
 
-def authoring_context() -> TypeInferContext:
-    """A type-inference walk that classifies calls by the record above."""
-    return TypeInferContext(child_call=authored_child_call)
+set_authoring_reader(_authored_child_call)
 
 
 _IR_OBJECT_TYPES = {
@@ -300,7 +299,7 @@ class BaseExprVisitor:
 
 
 
-        self._ctx = TypeInferContext(child_call=authored_child_call)
+        self._ctx = TypeInferContext()
 
 
 
@@ -872,7 +871,7 @@ class BaseExprVisitor:
                 f"{extra_kwargs!r} (positional-only at the IR level)"
             )
         module_call = module_binding is not None
-        expected = len(bound_params(callee, implicit_const=module_call))
+        expected = len(bound_params(callee, from_reading=module_call))
         got = len(node.args)
         if got != expected and module_call:
             raise VerifyError(
@@ -886,26 +885,20 @@ class BaseExprVisitor:
                 f"declares {expected} parameter(s), call passed {got}"
             )
         input_args = tuple(self.expr(a) for a in node.args)
+        records = () if owner is None else (_ModuleCallee(module_binding, owner),)
         call_for_errors = Call(
             type=callee.return_type, target=callee, args=input_args,
-            metadata=self._source_metadata(),
+            metadata=(*self._source_metadata(), *records),
         )
         if explicit_loc_given:
             call_for_errors = replace_metadata(
                 call_for_errors, BindingMetadata(explicit_loc)
             )
-        call_ctx = self._ctx if owner is None else TypeInferContext(
-            module=owner, caller=callee, child_call=authored_child_call,
-            elaboration_cache=self._ctx.elaboration_cache,
-        )
         instance = elaborate(
-            callee, tuple(a.type for a in input_args), call_ctx,
-            call=call_for_errors, implicit_const=module_call, owner=owner,
+            callee, tuple(a.type for a in input_args), self._ctx,
+            call=call_for_errors,
         )
-        call = self._build_call(
-            instance, input_args, ctx=call_ctx,
-            records=() if owner is None else (_ModuleCallee(module_binding, owner),),
-        )
+        call = self._build_call(instance, input_args, records=records)
         if explicit_loc_given:
             call = replace_metadata(call, BindingMetadata(explicit_loc))
             self._explicit_binding_call_ids.add(id(call))
@@ -1103,8 +1096,7 @@ class BaseExprVisitor:
         return self._with_binding(expr, dsl_name)
 
     def _build_call(
-        self, op_inst, args: tuple[Expr, ...], *,
-        records: tuple[IRMetadata, ...] = (), ctx: TypeInferContext | None = None,
+        self, op_inst, args: tuple[Expr, ...], *, records: tuple[IRMetadata, ...] = ()
     ) -> Call:
         """Build a Call with type eagerly populated via the typeinfer registry.
 
@@ -1122,7 +1114,7 @@ class BaseExprVisitor:
         fn = typeinfer_registry.lookup(type(op_inst))
         if fn is None:
             raise VerifyError(f"no typeinfer registered for {type(op_inst).__name__}")
-        computed = fn(placeholder, ctx if ctx is not None else self._ctx)
+        computed = fn(placeholder, self._ctx)
         return dataclasses.replace(placeholder, type=computed)
 
     def _eval_static_or_sugar(

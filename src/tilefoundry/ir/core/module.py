@@ -666,7 +666,9 @@ class LoadedModule:
         from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
             child_reading,
         )
-        from tilefoundry.ir.hir.function import bound_params  # noqa: PLC0415 -- cycle
+        from tilefoundry.ir.hir._call_binding import (  # noqa: PLC0415 -- cycle
+            bound_params,
+        )
 
         found: list[tuple[str, LoadedModule, object]] = []
         seen: set[tuple[int, int]] = set()
@@ -680,7 +682,7 @@ class LoadedModule:
             for call in _calls_in(function):
                 declared = call.target
                 child = child_reading(reading, declared)
-                supplied = bound_params(declared, implicit_const=child is not None)
+                supplied = bound_params(declared, from_reading=child is not None)
                 inner = _extended_dims(
                     supplied, tuple(arg.type for arg in call.args), extents
                 )

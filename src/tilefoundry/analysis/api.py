@@ -27,7 +27,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
 from tilefoundry.target import Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
 @dataclass(frozen=True)
@@ -127,7 +127,7 @@ def analyze(
     if dims is not None:
         try:
             function = specialize_concretely(
-                function, dims, TypeInferContext(module=module)
+                function, dims, TypeInferContext(scope=FunctionScope(module, function))
             )
         except SpecializationError as error:
             raise AnalysisError(f"analyze: {error}") from None

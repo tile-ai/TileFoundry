@@ -15,7 +15,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .errors import AnalysisError
@@ -32,7 +32,7 @@ def infer_authored_types(
     with.
     """
     for fn in reversed(tuple(functions)):
-        ctx = TypeInferContext(module=module, caller=fn)
+        ctx = TypeInferContext(scope=FunctionScope(module, fn))
         for expr in postorder(fn.body):
             computed = TypeInferVisitor(ctx).visit(expr)
             if computed != expr.type:

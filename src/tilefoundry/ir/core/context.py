@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
-__all__ = ["TypeInferContext"]
+__all__ = ["FunctionScope", "TypeInferContext"]

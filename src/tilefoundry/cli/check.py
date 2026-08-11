@@ -24,7 +24,7 @@ from tilefoundry.ir.hir.specialize import (
 )
 from tilefoundry.runtime import PREDICATES, RuntimeModule, SafetensorsResource, check
 from tilefoundry.runtime.measure import Predicate
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 SEED = 0
 
@@ -545,7 +545,9 @@ def _one_run(
         pinned, unstated = _pin(function, stated)
         if pinned:
             concrete = specialize_concretely(
-                function, pinned, TypeInferContext(module=target.module)
+                function,
+                pinned,
+                TypeInferContext(scope=FunctionScope(target.module, function)),
             )
     elif stated:
         raise ValueError(

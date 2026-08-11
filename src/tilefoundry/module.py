@@ -55,11 +55,14 @@ def enclosing_declaration(frame: FrameType | None) -> _Entry | None:
 def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
     """Rebuild each marked call against the child attached under its binding.
 
-    Runs before ``Module`` construction seals the functions. A binding the class
-    body does not attach is refused: there is no child to rebuild against, and
-    collecting it would leave the call pointing outside the tree being built.
+    Runs before ``Module`` construction seals the functions. The record is
+    repointed at the attached child before the rebuild reads it, because
+    attaching may have copied the Module the class body named. A binding the
+    class body does not attach is refused: there is no child to rebuild against,
+    and collecting it would leave the call pointing outside the tree being built.
     """
     from tilefoundry.ir.core import (  # noqa: PLC0415 — avoid import cycle
+        FunctionScope,
         TypeInferContext,
         get_metadata,
     )
@@ -89,13 +92,22 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
                 entry = child.entry_function()
                 object.__setattr__(
                     expr,
+                    "metadata",
+                    tuple(
+                        _ModuleCallee(record.binding, child)
+                        if isinstance(m, _ModuleCallee)
+                        else m
+                        for m in expr.metadata
+                    ),
+                )
+                object.__setattr__(
+                    expr,
                     "target",
                     elaborate(
                         entry,
                         tuple(a.type for a in expr.args),
-                        TypeInferContext(module=child, caller=entry),
-                        implicit_const=True,
-                        owner=child,
+                        TypeInferContext(scope=FunctionScope(child, entry)),
+                        call=expr,
                     ),
                 )
                 object.__setattr__(

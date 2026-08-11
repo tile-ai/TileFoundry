@@ -41,7 +41,12 @@ from tilefoundry.ir.types.shard import (
     try_c_order_strides,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.contexts import Cost, CostContext, TypeInferContext
+from tilefoundry.visitor_registry.contexts import (
+    Cost,
+    CostContext,
+    FunctionScope,
+    TypeInferContext,
+)
 from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
 
 from ..errors import ScheduleError
@@ -517,7 +522,8 @@ class _Closer:
                 for bucket_id in input_bucket_ids
             )
             candidate_call, selected_types = self._candidate_call(site, input_types)
-            ctx = TypeInferContext(module=self.program.module)
+            scope = FunctionScope(self.program.module, self.program.root)
+            ctx = TypeInferContext(scope=scope)
             try:
                 output_type = TypeInferVisitor(ctx).visit(candidate_call)
             except (TypeError, ValueError, NotImplementedError, VerifyError, IndexError):
@@ -532,7 +538,7 @@ class _Closer:
                     for value_id, type in zip(site.output_value_ids, output_types)
                 )
                 cost_ctx = CostContext(
-                    module=self.program.module,
+                    scope=scope,
                     selected_types={
                         id(arg): type
                         for arg, type in zip(candidate_call.args, selected_types)
@@ -615,7 +621,7 @@ class _Closer:
                         type=target, target=op, args=(source_var,), metadata=metadata
                     )
                     cost_ctx = CostContext(
-                        module=self.program.module,
+                        scope=FunctionScope(self.program.module, self.program.root),
                         selected_types={id(source_var): source},
                         selected_output_type=target,
                         level=self.topology.name,
