@@ -9,7 +9,7 @@ left-hand side carries, and the target header, whose value must rebuild the
 from dataclasses import dataclass, fields, replace
 
 from tests._source import import_dsl
-from tests.fixtures.demo_ir import build_demo
+from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.ir.core import BindingMetadata, Call, Var
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -33,7 +33,7 @@ class ExtendedCudaArchitecture(CudaArchitecture):
 
 
 def test_inspection_types_are_opt_in_same_line_comments():
-    fn, _, _ = build_demo()
+    fn = RmsnormModule.entry_function()
     canonical = as_script(fn)
     annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
 
@@ -125,7 +125,7 @@ def test_direct_hardware_values_keep_added_fields_in_canonical_source():
 
 
 def test_external_same_named_cuda_target_keeps_its_provider_in_module_source():
-    function, _, _ = build_demo()
+    function = RmsnormModule.entry_function()
     register_target(CudaTarget)
     target = CudaTarget("nvidia.h200_sxm")
     module = Module("external", (function,), function.name, target=target)
@@ -145,7 +145,7 @@ def test_printer_emits_provider_expression_without_interpreting_it():
         def to_python(self) -> PythonExpr:
             return PythonExpr(("from nobody import unknown",), "unknown !!!")
 
-    function, _, _ = build_demo()
+    function = RmsnormModule.entry_function()
     canonical = as_script(
         Module(
             "uninterpretable",
@@ -156,4 +156,4 @@ def test_printer_emits_provider_expression_without_interpreting_it():
     )
 
     assert "from nobody import unknown" in canonical
-    assert '@module(entry="demo", target=unknown !!!)' in canonical
+    assert '@module(entry="rmsnorm", target=unknown !!!)' in canonical

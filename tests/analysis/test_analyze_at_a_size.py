@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import pytest
 
-from tests.fixtures.gqa_online import MAX_CTX, GqaOnline
+from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import MemoryMetadata, TimelineMetadata, analyze
 from tilefoundry.analysis.errors import AnalysisError

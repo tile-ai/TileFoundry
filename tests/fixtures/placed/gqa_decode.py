@@ -5,7 +5,8 @@ prototype follows [hir §1.1](docs/spec/hir.md#11-function) and dispatches on a
 half-open prior-cache length. Small contexts split query heads across CTAs;
 large contexts compute split-KV partials and combine them, admitting the current
 token exactly once. Cross-CTA handoff remains lowering work. Nondivisible block
-sizes fail closed instead of dropping a tail.
+sizes fail closed instead of dropping a tail. The complete Module stays together:
+the large-context path calls its helpers; the small-context path shards heads.
 """
 
 from __future__ import annotations

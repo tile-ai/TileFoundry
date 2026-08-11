@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 
 import pytest
 
-from tests.fixtures.demo_ir import build_demo
+from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, DType, build, func, jit, lower, module
 from tilefoundry.codegen.registry import group_functions_by_target
@@ -245,7 +245,7 @@ def test_authored_target_boundaries_accept_unregistered_target_instances() -> No
 
 
 def test_lowering_and_codegen_keep_the_external_target_instance() -> None:
-    function, _, _ = build_demo()
+    function = RmsnormModule.entry_function()
     target = ExternalCudaTarget("nvidia.h200_sxm")
     module = Module("external", (function,), function.name, target=target)
 
@@ -422,7 +422,7 @@ def test_build_rejects_unequal_device_targets_before_emitting() -> None:
 
 
 def test_target_conflict_diagnostics_use_stable_summaries() -> None:
-    function, _, _ = build_demo()
+    function = RmsnormModule.entry_function()
     declared_target = CudaTarget("nvidia.h200_sxm")
     explicit_target = CudaTarget(
         "nvidia.h200_sxm",

@@ -14,7 +14,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from tests.fixtures import gqa_online
+from tests.fixtures.placed import gqa_decode
 from tests.models.corpus import MODELS_ROOT
 from tilefoundry import cli
 from tilefoundry.cli.source import load_namespace, select_ir
@@ -23,7 +23,7 @@ from tilefoundry.runtime import DictResource
 
 ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5MoE.router.routing"
 
-DISPATCHING = f"{gqa_online.__file__}:GqaOnline.gqa_online_attend"
+DISPATCHING = f"{gqa_decode.__file__}:GqaOnline.gqa_online_attend"
 
 
 @pytest.fixture(scope="module")

@@ -27,7 +27,7 @@ That split is also why attention here is an online softmax rather than one
 as well as to the cache, and the two score groups live in differently shaped
 tensors; each is reduced to its own ``(max, sum, weighted values)`` partial and
 the partials are merged by the same log-sum-exp rescale
-``tests/fixtures/gqa_online.py``'s
+``tests/fixtures/placed/gqa_decode.py``'s
 combine kernel uses. No mask is needed: a single query at the end of the
 context may attend every position there is.
 

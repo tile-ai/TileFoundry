@@ -7,7 +7,7 @@ from typing import ClassVar
 
 import pytest
 
-from tests.fixtures.demo_ir import build_demo
+from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
@@ -29,8 +29,8 @@ class _AnalysisTarget(Target):
 
 
 def _module(target: Target) -> tuple[Module, object]:
-    function, _, _ = build_demo()
-    return Module("demo", (function,), function.name, target=target), function
+    function = RmsnormModule.entry_function()
+    return Module("rmsnorm", (function,), function.name, target=target), function
 
 
 def test_analyze_orders_a_target_selected_dependency_diamond_once() -> None:
@@ -108,7 +108,7 @@ def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() 
     with pytest.raises(ValueError, match="provider analysis failure"):
         analyze(module, function, analysis="broken")
 
-    function, _, _ = build_demo()
+    function = RmsnormModule.entry_function()
     over_limit = Module(
         "over-limit",
         (function,),

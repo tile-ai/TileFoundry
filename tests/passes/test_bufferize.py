@@ -10,7 +10,7 @@ about.
 
 from __future__ import annotations
 
-from tests.fixtures.demo_ir import build_demo
+from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.dispatch import DispatchCall
@@ -24,7 +24,7 @@ from tilefoundry.passes.transforms.bufferize import LifetimeCollector
 
 
 def _lower() -> tuple[PrimFunction, Module]:
-    fn, _, _ = build_demo()
+    fn = RmsnormModule.entry_function()
     module = Module(name="t", functions=(fn,), entry=fn.name)
     module = HirToTirPass().run(module)
     [pf] = module.functions

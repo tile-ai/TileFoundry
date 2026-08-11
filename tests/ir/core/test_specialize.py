@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.fixtures.gqa_online import (
+from tests.fixtures.placed.gqa_decode import (
     MAX_CTX,
     NUM_SPLITS,
     SMALL_CONTEXT_T,

@@ -14,7 +14,7 @@ from dataclasses import replace
 import pytest
 from ortools.sat.python import cp_model
 
-from tests.fixtures.static_online import static_online_attend
+from tests.fixtures.logical.gqa_static import static_online_attend
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm

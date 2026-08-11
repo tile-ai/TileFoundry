@@ -15,7 +15,7 @@ import ast
 
 import pytest
 
-from tests.fixtures.demo_ir import build_demo
+from tests.fixtures.placed.mma_tile import MatmulModule
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- binds bare op names (reshard, ...)
@@ -265,7 +265,7 @@ def test_printer_falls_back_to_verbose_when_mesh_has_no_names() -> None:
     A mesh without ``names=`` cannot use ``@`` sugar; the printer must emit the
     verbose ``ShardLayout(...)`` form instead.
     """
-    fn, _, _ = build_demo()
+    fn = MatmulModule.entry_function()
     src = as_script(fn)
     assert "@" not in src.split("@func")[1].split("def ")[0]
     assert "ShardLayout(" in src

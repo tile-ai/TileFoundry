@@ -1,9 +1,9 @@
-"""Canonical demo fixture builds + printer round-trip preserves topologies."""
+"""The canonical RMSNorm program round-trips with its topologies intact."""
 
 from __future__ import annotations
 
 from tests._source import import_dsl
-from tests.fixtures.demo_canonical import build_demo_canonical
+from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function
@@ -67,7 +67,7 @@ def test_canonical_roundtrip_preserves_topologies_and_compiles() -> None:
     Round-trip is structurally equal + printed text is valid Python +
     the owning module's topology declaration survives.
     """
-    mod1 = build_demo_canonical()
+    mod1 = RmsnormModule
     src = as_script(mod1)
     compile(src, "<test>", "exec")
     assert "topologies=" in src

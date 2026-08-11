@@ -14,7 +14,8 @@ import pytest
 import torch
 
 from tests._source import import_dsl
-from tests.fixtures.gqa_online import (
+from tests.fixtures.logical.gqa_static import static_online_attend
+from tests.fixtures.placed.gqa_decode import (
     GQA_GROUP,
     HEAD_DIM,
     NUM_KV_HEADS,
@@ -22,7 +23,6 @@ from tests.fixtures.gqa_online import (
     NUM_SPLITS,
     gqa_online_attend,
 )
-from tests.fixtures.static_online import static_online_attend
 from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Tuple

@@ -2,7 +2,9 @@
 
 Every extent is a literal, which is what those tests need: a partition plan is
 counted in elements, and a range is not a number. The shape is a decode-regime
-GQA one rather than any published model's -- see ``gqa_online.py``.
+GQA one rather than any published model's -- see ``../placed/gqa_decode.py``.
+The Mesh binding is deliberately unused and the literal-shape reshard names no
+mesh axis: these tests choose a partition rather than read an authored one.
 """
 
 from __future__ import annotations

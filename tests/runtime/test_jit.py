@@ -8,7 +8,7 @@ the contract.
 
 import pytest
 
-from tests.fixtures.demo_ir import build_demo
+from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import jit
 from tilefoundry.target import CudaTarget
 
@@ -22,7 +22,7 @@ def test_jit_rejects_non_ir_inputs_and_string_targets() -> None:
     with pytest.raises(TypeError, match="expected Function or Module"):
         jit(raw_fn, target=CudaTarget("nvidia.h200_sxm"))
 
-    fn, _, _ = build_demo()
+    fn = RmsnormModule.entry_function()
     with pytest.raises(TypeError, match="Target instance, not a string"):
         jit(fn, target="vulkan")
     with pytest.raises(TypeError, match="unexpected keyword argument"):
@@ -32,9 +32,9 @@ def test_jit_rejects_non_ir_inputs_and_string_targets() -> None:
 def test_jit_caches_and_clears() -> None:
     """Same IR → same RuntimeModule; ``cache_clear()`` evicts."""
     jit.cache_clear()
-    fn, _, _ = build_demo()
+    fn = RmsnormModule.entry_function()
     rt1 = jit(fn, target=CudaTarget("nvidia.h200_sxm"))
-    fn2, _, _ = build_demo()
+    fn2 = RmsnormModule.entry_function()
     assert jit(fn2, target=CudaTarget("nvidia.h200_sxm")) is rt1
     jit.cache_clear()
     assert jit(fn, target=CudaTarget("nvidia.h200_sxm")) is not rt1

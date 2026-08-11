@@ -14,7 +14,6 @@ import json
 import os
 import subprocess
 import sys
-import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
@@ -35,67 +34,6 @@ print(json.dumps({
     "tutorial": str(data.directory("tutorial")),
 }))
 """
-
-_MINE_MODEL = """\
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
-from tilefoundry.target import CpuTarget
-
-
-@module(entry="main", target=CpuTarget(), topologies=(Topology("cta", 168),))
-class Mine:
-
-    @func
-    def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(("cta",), (168,), ("block",)) as cta:
-            local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            return tf.reshard(tf.square(local), (168 @ cta.block,), "gmem")
-"""
-
-_MINE_RUNTIME = """\
-from model import Mine
-from tilefoundry.runtime import runtime_func, runtime_module
-
-
-@runtime_module(Mine)
-class MineTwin:
-    @runtime_func
-    def main(self, x):
-        return x * x
-"""
-
-_CMINE_MODEL = """\
-from tilefoundry import func, module
-from tilefoundry.dsl import Tensor
-from tilefoundry.dsl.tf import matmul, rms_norm
-from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
-
-
-@module(entry="root", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 128)))
-class CMine:
-
-    @func
-    def root(
-        x: Tensor[(16, 16), "bf16"],
-        w: Tensor[(16, 16), "bf16"],
-        weight: Tensor[(16,), "f32"],
-    ) -> Tensor[(16, 16), "bf16"]:
-        h = matmul(x, w)
-        return rms_norm(h, weight)
-
-    @module(entry="inner")
-    class child:
-        @func
-        def inner(
-            x: Tensor[(16, 16), "bf16"],
-            w: Tensor[(16, 16), "bf16"],
-            weight: Tensor[(16,), "f32"],
-        ) -> Tensor[(16, 16), "bf16"]:
-            h = matmul(x, w)
-            return rms_norm(h, weight)
-"""
-
 
 def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """*argv* to completion, with no ``PYTHONPATH`` for it to read a checkout by."""
@@ -180,18 +118,24 @@ def mine(tmp_path) -> Path:
     """A two-file model of one's own, which the installation never shipped."""
     home = tmp_path / "mine"
     home.mkdir()
-    (home / "model.py").write_text(_MINE_MODEL, encoding="utf-8")
+    source = REPO / "tests" / "fixtures" / "placed"
+    (home / "model.py").write_text(
+        (source / "square_cpu.py").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     runtime = home / "runtime_model.py"
-    runtime.write_text(_MINE_RUNTIME, encoding="utf-8")
+    runtime.write_text(
+        (source / "square_cpu_runtime.py")
+        .read_text(encoding="utf-8")
+        .replace("from square_cpu import Mine", "from model import Mine"),
+        encoding="utf-8",
+    )
     return runtime
 
 
 @pytest.fixture
-def cmine(tmp_path) -> Path:
-    """A CUDA model of one's own."""
-    path = tmp_path / "cmine.py"
-    path.write_text(textwrap.dedent(_CMINE_MODEL), encoding="utf-8")
-    return path
+def cmine() -> Path:
+    """The corpus' unplaced matmul followed by RMS norm."""
+    return REPO / "tests" / "fixtures" / "logical" / "matmul_rms_norm.py"
 
 
 @pytest.fixture
@@ -202,7 +146,9 @@ def siblings(tmp_path) -> Callable[[str, str], Path]:
         home = tmp_path / directory
         home.mkdir()
         (home / "model.py").write_text(
-            textwrap.dedent(_CMINE_MODEL).replace("class CMine:", f"class {name}:"),
+            (
+                REPO / "tests" / "fixtures" / "logical" / "matmul_rms_norm.py"
+            ).read_text(encoding="utf-8").replace("class CMine:", f"class {name}:"),
             encoding="utf-8",
         )
         runtime = home / "runtime_model.py"
@@ -218,192 +164,45 @@ def siblings(tmp_path) -> Callable[[str, str], Path]:
     return write
 
 
-_TWIN_SOURCE = """
-from dataclasses import replace
-
-from tilefoundry import module
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, func, tf
-from tilefoundry.runtime import RuntimeModule, runtime_func, runtime_module
-from tilefoundry.target import CpuTarget
-
-
-@module(entry="main", target=CpuTarget(), topologies=(Topology("cta", 168),))
-class Model:
-
-    @func
-    def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(("cta",), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            squared = tf.square(x_local)
-            return tf.reshard(squared, (168 @ cta.block,), "gmem")
-
-    @func
-    def zeroed(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(("cta",), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            nothing = tf.sub(x_local, x_local)
-            return tf.reshard(nothing, (168 @ cta.block,), "gmem")
-
-
-@runtime_module(Model)
-class Twin:
-    @runtime_func
-    def main(self, x):
-        return x * x
-
-    @runtime_func
-    def zeroed(self, x):
-        return x - x
-
-
-@runtime_module(Model)
-class Drifted:
-    @runtime_func
-    def main(self, x):
-        return x * x + 0.5
-
-    @runtime_func
-    def zeroed(self, x):
-        return x - x
-
-
-@module(entry="scaled", topologies=(Topology("cta", 168),))
-class Weighted:
-
-    @func
-    def scaled(
-        x: Tensor[(168,), "f32"], w: ConstTensor[(168,), "f32"]
-    ) -> Tensor[(168,), "f32"]:
-        with Mesh(("cta",), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            w_local = tf.reshard(w, (168 @ cta.block,), "rmem")
-            weighted = tf.mul(x_local, w_local)
-            return tf.reshard(weighted, (168 @ cta.block,), "gmem")
-
-
-@runtime_module(Weighted)
-class WeightedTwin:
-    @runtime_func
-    def scaled(self, x, w):
-        return x * w
-
-
-# Only a root may declare a target, so the child above declares none and this
-# copy is where the standalone check gets its CpuTarget.
-WeightedRoot = replace(Weighted, target=CpuTarget())
-
-
-@runtime_module(WeightedRoot)
-class WeightedRootTwin:
-    @runtime_func
-    def scaled(self, x, w):
-        return x * w
-
-
-@module(entry="fused", target=CpuTarget(), topologies=(Topology("cta", 168),))
-class Fused:
-
-    @func
-    def fused(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
-        with Mesh(("cta",), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            squared = tf.square(x_local)
-            shifted = tf.sub(squared, x_local)
-            return tf.reshard(shifted, (168 @ cta.block,), "gmem")
-
-
-@runtime_module(Fused)
-class FusedTwin:
-    @runtime_func
-    def fused(self, x):
-        return x * x - x
-
-
-@module(entry="add_pair", target=CpuTarget(), topologies=(Topology("cta", 168),))
-class Orchestrated:
-
-    @func
-    def add_pair(
-        x: Tensor[(168,), "f32"], a: Tensor[(168,), "f32"], b: Tensor[(168,), "f32"]
-    ) -> Tensor[(168,), "f32"]:
-        return x + a + b
-
-    @func
-    def affine_pair(
-        x: Tensor[(168,), "f32"], scale: Tensor[(168,), "f32"], bias: Tensor[(168,), "f32"]
-    ) -> Tensor[(168,), "f32"]:
-        return x * scale + bias
-
-    def forward(self, x, pair):
-        a, b, scale, bias = pair
-        return self.add_pair(x, a, b), self.affine_pair(x, scale, bias)
-
-
-@runtime_module(Orchestrated)
-class OrchestratedTwin:
-    @runtime_func
-    def add_pair(self, x, a, b):
-        return x + a + b
-
-    @runtime_func
-    def affine_pair(self, x, scale, bias):
-        return x * scale + bias
-
-    def forward(self, x, pair):
-        a, b, scale, bias = pair
-        return self.add_pair(x, a, b), self.affine_pair(x, scale, bias)
-
-
-@module(target=CpuTarget())
-class Nested:
-    child = Weighted
-
-
-@runtime_module(Nested)
-class NestedTwin:
-    child = WeightedTwin
-
-
-class Handwritten(RuntimeModule):
-    def __init__(self):
-        super().__init__(name="handwritten")
-
-
-class Mislabelled(RuntimeModule):
-    module = "not a Module"
-
-    def __init__(self):
-        super().__init__(name="mislabelled")
-"""
+def _fixture_path(category: str, name: str) -> Path:
+    return REPO / "tests" / "fixtures" / category / name
 
 
 @pytest.fixture(scope="module")
-def twin(tmp_path_factory) -> Path:
-    path = tmp_path_factory.mktemp("authored") / "mine.py"
-    path.write_text(textwrap.dedent(_TWIN_SOURCE), encoding="utf-8")
-    return path
+def square_twin() -> Path:
+    return _fixture_path("placed", "square_twin.py")
 
 
-_CWIDE_MODEL = """\
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
-from tilefoundry.target import CudaTarget
+@pytest.fixture(scope="module")
+def weighted_twin() -> Path:
+    return _fixture_path("placed", "weighted_twin.py")
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 168),))
-class Model:
+@pytest.fixture(scope="module")
+def fused_twin() -> Path:
+    return _fixture_path("placed", "fused_twin.py")
 
-    @func
-    def main(x: Tensor[(168,), "f32"]):
-        with Mesh(("cta",), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
-            squared = tf.square(x_local)
-            return tf.reshard(squared, (168 @ cta.block,), "gmem")
-"""
+
+@pytest.fixture(scope="module")
+def orchestrated_twin() -> Path:
+    return _fixture_path("logical", "orchestrated_twin.py")
+
+
+@pytest.fixture(scope="module")
+def nested_twin() -> Path:
+    return _fixture_path("placed", "nested_twin.py")
+
+
+@pytest.fixture(scope="module")
+def handwritten_twin() -> Path:
+    return _fixture_path("logical", "handwritten_twin.py")
+
+
+@pytest.fixture(scope="module")
+def mislabelled_twin() -> Path:
+    return _fixture_path("logical", "mislabelled_twin.py")
 
 
 @pytest.fixture
-def cwide(tmp_path) -> Path:
-    path = tmp_path / "model.py"
-    path.write_text(textwrap.dedent(_CWIDE_MODEL), encoding="utf-8")
-    return path
+def cwide() -> Path:
+    return _fixture_path("placed", "square_cuda.py")
