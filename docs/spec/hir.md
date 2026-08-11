@@ -704,7 +704,8 @@ class Quant(Op):
     derived layouts over their own shapes. Outer-axis splits propagate. A
     last-axis split propagates only when its factorization proves that every
     owner holds complete groups and the scale split is representable;
-    otherwise typeinfer requires an explicit `Reshard`.
+    otherwise typeinfer requires an explicit `Reshard`. A fully `Broadcast`
+    `ShardLayout` pins no mesh and produces unsharded result layouts.
   - Evaluation computes each group's f32 absolute maximum and scale
     `absmax / 448`, divides, clamps to `[-448, 448]`, then casts to `fp8e4m3`.
     An all-zero group uses scale one and produces no NaN.

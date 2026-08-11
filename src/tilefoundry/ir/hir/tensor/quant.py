@@ -6,8 +6,6 @@ The result is ``(x_q, x_scale)``. ``x_q`` preserves the input shape;
 
 from __future__ import annotations
 
-import math
-
 import isl
 import torch
 
@@ -28,6 +26,7 @@ from tilefoundry.ir.types.shard import (
     try_c_order_strides,
 )
 from tilefoundry.ir.types.shard.shard_layout import (
+    Broadcast,
     Split,
     layout_axis_to_tensor_axis,
     shard_layout_local_shape,
@@ -50,6 +49,17 @@ class Quant(Op):
     target_dtype = ParamDef(kind="attribute", annotation=DType, default=DType.fp8e4m3)
 
 
+def _dense_extent(factors) -> int | None:
+    extent = 1
+    for size, stride in sorted(factors, key=lambda item: item[1]):
+        if size == 1:
+            continue
+        if size <= 0 or stride != extent:
+            return None
+        extent *= size
+    return extent
+
+
 def _logical_shard_attrs(call, ctx, x_ty, group: int):
     layout = x_ty.layout
     targets = split_target_axes(layout, x_ty.shape)
@@ -58,23 +68,33 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
         try:
             local_shape = shard_layout_local_shape(layout)
             layout_axes = layout_axis_to_tensor_axis(layout.layout.shape, x_ty.shape)
-            local_last = math.prod(
-                extent
-                for extent, logical_axis in zip(local_shape, layout_axes)
-                if logical_axis == last_axis
-            )
             strides = layout.layout.strides
-            aligned = local_last % group == 0 and strides is not None
+            global_factors = []
+            local_factors = []
+            for physical_axis, logical_axis in enumerate(layout_axes):
+                if logical_axis != last_axis or strides is None:
+                    continue
+                size = static_dim_value(layout.layout.shape[physical_axis])
+                local_size = static_dim_value(local_shape[physical_axis])
+                stride = static_dim_value(strides[physical_axis])
+                if size is None or local_size is None or stride is None:
+                    raise ValueError("dynamic last-axis factor")
+                global_factors.append((size, stride))
+                local_factors.append((local_size, stride))
+            global_last = _dense_extent(global_factors)
+            local_last = _dense_extent(local_factors)
+            aligned = (
+                global_last == static_dim_value(x_ty.shape[last_axis])
+                and local_last is not None
+                and local_last % group == 0
+            )
             for mesh_axis, (attr, target) in enumerate(zip(layout.attrs, targets)):
                 if not isinstance(attr, Split) or target != last_axis:
                     continue
-                stride = static_dim_value(strides[attr.axis]) if strides is not None else None
                 split_extent = static_dim_value(layout.layout.shape[attr.axis])
                 mesh_extent = static_dim_value(layout.mesh.layout.shape[mesh_axis])
                 aligned = (
                     aligned
-                    and stride is not None
-                    and stride % group == 0
                     and split_extent is not None
                     and mesh_extent is not None
                     and mesh_extent > 0
@@ -96,6 +116,8 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
 
 def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
     if isinstance(x_ty.layout, ShardLayout):
+        if all(isinstance(attr, Broadcast) for attr in x_ty.layout.attrs):
+            return None, None
         attrs = _logical_shard_attrs(call, ctx, x_ty, group)
         try:
             return (
