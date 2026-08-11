@@ -262,9 +262,18 @@ def test_a_call_site_rebuilt_target_still_prints_by_its_binding() -> None:
     assert origin_of(rebuilt.target) is imported_child.entry_function()
 
 
+@module(entry="run")
+class _WeightedAtAnySize:
+    @func
+    def run(
+        x: Tensor[(_N, 8), "f32"], w: ConstTensor[(8, 8), "f32"]
+    ) -> Tensor[(_N, 8), "f32"]:
+        return tf.matmul(x, w)
+
+
 @module(entry="dispatch", target=CudaTarget("nvidia.h200_sxm"))
 class _Dispatching:
-    leaf = _Weighted
+    leaf = _WeightedAtAnySize
 
     @func
     def dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
@@ -272,13 +281,24 @@ class _Dispatching:
 
     @dispatch.specialize(DimVarRangePat("n_print", 1, 9))
     def _(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
-        return tf.relu(x)
+        return leaf(x)  # noqa: F821
 
 
-def test_a_specialization_body_imports_back_as_a_variant() -> None:
-    """A display label is print-only; what has to survive is the variant itself."""
-    imported = import_dsl(as_script(_Dispatching))
+def test_a_child_call_in_a_specialization_body_survives_the_round_trip() -> None:
+    """A variant body reaches a child the same way a base body does.
 
+    A prototype has no body, so the variant is the only place this call exists;
+    printing it by the callee's own name would name nothing the class body binds.
+    """
+    source = as_script(_Dispatching)
+    block = source[source.index("@dispatch.specialize(") :]
+    assert "leaf(x)" in block
+
+    imported = import_dsl(source)
+    (imported_child,) = imported.modules
     (variant,) = imported.entry_function().variants
     assert imported.entry_function().body is None
     assert variant.specializations == (DimVarRangePat("n_print", 1, 9),)
+    assert variant.body.target is imported_child.entry_function()
+    assert len(variant.body.args) == 1
+    assert [param.is_const for param in variant.body.target.params] == [False, True]

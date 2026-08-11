@@ -215,3 +215,26 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
         for _op, layout in placed:
             assert layout.outer.shape == shape
             assert layout.offset == offset
+
+
+def test_the_branches_are_placed_alike_where_their_results_meet() -> None:
+    """The join is only meaningful because each branch reshards back first.
+
+    A slice is what one branch runs on, not what its result is handed over as,
+    so the two values the join consumes carry the whole topology and carry it
+    identically.
+    """
+    joined = MoEMegaKernel.entry_function().body
+    branches = [
+        arg for arg in joined.args if isinstance(arg, Call) and isinstance(arg.target, Function)
+    ]
+
+    assert len(branches) == 2
+    meshes = []
+    for branch in branches:
+        (leaf,) = tensor_types(branch.type)
+        assert isinstance(leaf.layout, ShardLayout)
+        assert not isinstance(leaf.layout.mesh.layout, ComposedLayout)
+        assert leaf.layout.mesh.layout.shape == (132,)
+        meshes.append(leaf.layout.mesh)
+    assert meshes[0] == meshes[1]

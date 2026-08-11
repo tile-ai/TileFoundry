@@ -83,8 +83,9 @@ class MoEMegaKernel:
 
     Each branch names its slice with a nested ``Mesh`` scope and reshards into
     it, so the slice reaches the branch primitive's result type rather than
-    staying a lexical scope nothing recorded. Each reshards back outside its
-    scope, so the two results meet unplaced.
+    staying a lexical scope nothing recorded. Each reshards back to the whole
+    topology outside its slice, so the two values the join consumes are placed
+    the same way and their combination means something.
     """
 
     @func
