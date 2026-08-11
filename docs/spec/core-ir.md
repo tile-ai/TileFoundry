@@ -120,6 +120,18 @@ function: which Module owns the callee counts no invocation and no launch.
     ([hir §1.1](./hir.md#11-function)), so two attached copies of one source
     Module stay distinguishable and ownership stays answerable without matching
     on the name a copy keeps.
+  - A Module holds no constants, and a child-Module call MUST NOT put any in
+    the IR. The call carries activation arguments only; the callee keeps its
+    `ConstTensor` parameters with their declared types, and a reading fills them
+    from that child's own constants
+    ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)).
+    A direct Function call still takes one argument per declared parameter.
+  - Which calls carry activations only MUST be stated, never inferred from how
+    many arguments a call passes. Before collection the parser's binding record
+    states it; afterwards it is re-derived from ownership — the callee is
+    uniquely owned by a direct child of the caller's owner. Ownership that is
+    missing, ambiguous, or not a direct child states nothing, and the call keeps
+    its exact declared arity.
 
 - `parse_module` (see [parser §1](./parser.md#1-dsl-syntax)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function

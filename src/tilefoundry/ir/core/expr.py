@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.metadata import IRMetadata, diagnostic_location
@@ -45,6 +45,23 @@ class Expr:
                     f"{type(self).__name__} has duplicate {value_cls.__name__} metadata{where}"
                 )
             seen.add(value_cls)
+
+
+def child_exprs(expr: Expr):
+    """The Expr-valued children of *expr*, however deeply its fields nest them.
+
+    Read off the node rather than listed per class, so a field holding a tuple
+    of Functions or a tuple of (name, Function) pairs is reached like any other.
+    """
+    def walk(value):
+        if isinstance(value, Expr):
+            yield value
+        elif isinstance(value, tuple):
+            for item in value:
+                yield from walk(item)
+
+    for member in fields(expr):
+        yield from walk(getattr(expr, member.name, None))
 
 
 @dataclass(frozen=True)

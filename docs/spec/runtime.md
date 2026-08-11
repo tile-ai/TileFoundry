@@ -172,6 +172,13 @@ exactly the one declared `ConstTensor`'s shape / dtype. A weight needing no
 transform has no converter. Two converters registered for the same weight
 name is an error.
 
+A converter is an HIR body like any other and MAY call a child Module, so
+`prepare` MUST stage a node's children before evaluating that node's converters
+and hand the converter the reading holding them. The staged values stay on the
+requested preparation device while the output shard takes CPU copies; the tree
+is strictly downward, so nothing here is circular and no prepared value becomes
+part of the IR.
+
 `load`, `forward`, and `prepare` are methods on the IR `Module` owned by
 [core-ir §1](./core-ir.md#1-module). This section defines their runtime-facing
 behavior and the distinct loaded view:
@@ -194,6 +201,19 @@ class LoadedModule:
 ```
 
 - constraints:
+  - A reading covers its own Module's declared weights, and holds one child
+    reading per attached child. A call reaching a child MUST take that child's
+    reading ([core-ir §1](./core-ir.md#1-module)), so one Module read twice
+    yields two independent readings and two attachments of one source Module do
+    not borrow each other's constants.
+  - Before anything runs, `forward` MUST walk the readings its call graph
+    actually reaches and refuse one that has no binding for a declared
+    `ConstTensor`, naming the child's path and the missing names. An attached
+    child no call reaches is not walked.
+  - The one device is chosen from the activations and the constants of exactly
+    those reached readings; a spread MUST be refused, naming each device and
+    what sits on it, and nothing is moved to resolve it. An attached child no
+    call reaches has no say in it.
   - `Module.prepare` (semantic side, offline, once): walk the tree; for each
     declared weight, fetch its converter's parameters from `raw` by their
     own (raw) names — a one-to-many alias is assembled here via

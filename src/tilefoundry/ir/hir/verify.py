@@ -11,8 +11,12 @@ from tilefoundry.ir.types.tensor_type import TupleType
 from .function import Function, canonical_specialization_signature
 
 
-def verify_function(fn: Function) -> None:
-    """Verify HIR parameters, symbolic dimensions, body, and variants."""
+def verify_function(fn: Function, *, ctx: TypeInferContext | None = None) -> None:
+    """Verify HIR parameters, symbolic dimensions, body, and variants.
+
+    *ctx* supplies the walk that says which calls carry activations only; the
+    default binds every declared parameter.
+    """
     for p in fn.params:
         if not isinstance(p, Var):
             raise VerifyError(f"hir Function {fn.name!r}: params must be Vars")
@@ -23,7 +27,7 @@ def verify_function(fn: Function) -> None:
                 f"hir Function {fn.name!r}: a function with variants must have "
                 f"no body (a dispatch prototype's body is None / `pass`)"
             )
-        _verify_variants(fn)
+        _verify_variants(fn, ctx)
         return
     if fn.body is None:
         return
@@ -33,10 +37,10 @@ def verify_function(fn: Function) -> None:
         )
     _reject_stmt_nodes(fn.body)
 
-    TypeInferContext().type_of(fn.body)
+    (ctx if ctx is not None else TypeInferContext()).type_of(fn.body)
 
 
-def _verify_variants(base: Function) -> None:
+def _verify_variants(base: Function, ctx: TypeInferContext | None = None) -> None:
     """Verify a dispatch prototype's variants and their envelope partition."""
     base_param_types = tuple(p.type for p in base.params)
     sigs: dict[str, Function] = {}
@@ -68,7 +72,7 @@ def _verify_variants(base: Function) -> None:
                 f"hir Function {base.name!r}: duplicate variant canonical signature {sig!r}"
             )
         sigs[sig] = v
-        verify_function(v)
+        verify_function(v, ctx=ctx)
     _verify_partition(base)
 
 

@@ -1,0 +1,184 @@
+"""Analyze a root that reaches a child Module as one kernel.
+
+A call into a child is device work in the current invocation, so its cost lands
+in the caller's totals and repeating the site or looping over it multiplies that
+work rather than adding an invocation. What the fixed-dimension query has to
+establish first is that the two ends share one execution context.
+
+No GPU, no codegen, no runtime.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from tilefoundry import func, module
+from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.metadata import ComputeCostMetadata
+from tilefoundry.analysis.walk import postorder
+from tilefoundry.dsl import ConstTensor, Tensor, Topology, tf
+from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.target import CudaTarget
+
+_H200 = "nvidia.h200_sxm"
+_CTA = (Topology("cta", 132),)
+
+
+@module(entry="run")
+class _Matmul:
+    @func
+    def run(x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+        return tf.matmul(x, w)
+
+
+def _records(root, entry, *, into_a_child: bool) -> tuple[ComputeCostMetadata, ...]:
+    """The work records on *entry*'s child-Module calls, or on its primitives."""
+    analyze(root, entry, analysis="compute-cost")
+    return tuple(
+        get_metadata(expr, ComputeCostMetadata)
+        for expr in postorder(entry.body)
+        if isinstance(expr, Call)
+        and isinstance(expr.target, Function) is into_a_child
+    )
+
+
+def _flops(records) -> dict[str, int]:
+    total: dict[str, int] = {}
+    for record in records:
+        for name, value in record.flops:
+            total[name] = total.get(name, 0) + value
+    return total
+
+
+def _traffic(records) -> dict[str, int]:
+    total: dict[str, int] = {}
+    for record in records:
+        for name, moved in record.traffic:
+            total[name] = total.get(name, 0) + moved.total_bytes
+    return total
+
+
+def test_a_root_reaching_a_child_is_analysable_as_one_kernel() -> None:
+    @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
+    class _Once:
+        mm = _Matmul
+
+        @func
+        def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return mm(x)  # noqa: F821
+
+    result = analyze(_Once, _Once.entry_function(), analysis="compute-cost")
+    assert result.metadata_types == (ComputeCostMetadata,)
+
+
+def test_a_repeated_call_site_counts_its_work_again() -> None:
+    @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
+    class _Once:
+        mm = _Matmul
+
+        @func
+        def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return mm(x)  # noqa: F821
+
+    @module(entry="twice", target=CudaTarget(_H200), topologies=_CTA)
+    class _Twice:
+        mm = _Matmul
+
+        @func
+        def twice(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return tf.add(mm(x), mm(x))  # noqa: F821
+
+    one = _flops(_records(_Once, _Once.entry_function(), into_a_child=True))
+    two = _flops(_records(_Twice, _Twice.entry_function(), into_a_child=True))
+
+    assert one and two == {name: 2 * value for name, value in one.items()}
+
+
+def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
+    @module(entry="looped", target=CudaTarget(_H200), topologies=_CTA)
+    class _Looped:
+        mm = _Matmul
+
+        @func
+        def looped(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            acc = x
+            for _ in range(3):
+                acc = mm(acc)  # noqa: F821
+            return acc
+
+    @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
+    class _Once:
+        mm = _Matmul
+
+        @func
+        def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return mm(x)  # noqa: F821
+
+    one = _flops(_records(_Once, _Once.entry_function(), into_a_child=True))
+    looped = _flops(_records(_Looped, _Looped.entry_function(), into_a_child=True))
+
+    assert one and looped == {name: 3 * value for name, value in one.items()}
+
+
+def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
+    @module(entry="direct", target=CudaTarget(_H200), topologies=_CTA)
+    class _Direct:
+        @func
+        def direct(
+            x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]
+        ) -> Tensor[(4, 8), "f32"]:
+            return tf.matmul(x, w)
+
+    @module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
+    class _Fused:
+        mm = _Matmul
+
+        @func
+        def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return mm(x)  # noqa: F821
+
+    direct = _traffic(_records(_Direct, _Direct.entry_function(), into_a_child=False))
+    fused = _traffic(_records(_Fused, _Fused.entry_function(), into_a_child=True))
+
+    assert direct and fused == direct
+
+
+def test_a_reached_child_resolving_another_hierarchy_is_invalid() -> None:
+    @module(entry="run", topologies=(Topology("warp", 4),))
+    class _Warped:
+        @func
+        def run(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return tf.add(x, x)
+
+    @module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
+    class _Mismatch:
+        warped = _Warped
+
+        @func
+        def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return warped(x)  # noqa: F821
+
+    with pytest.raises(AnalysisError, match="different topology hierarchy") as caught:
+        analyze(_Mismatch, _Mismatch.entry_function(), analysis="compute-cost")
+    assert "launch" not in str(caught.value)
+
+
+def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
+    @module(entry="run", topologies=_CTA)
+    class _Declared:
+        @func
+        def run(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return tf.add(x, x)
+
+    @module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
+    class _Agreeing:
+        declared = _Declared
+
+        @func
+        def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return declared(x)  # noqa: F821
+
+    result = analyze(_Agreeing, _Agreeing.entry_function(), analysis="compute-cost")
+    assert result.metadata_types == (ComputeCostMetadata,)

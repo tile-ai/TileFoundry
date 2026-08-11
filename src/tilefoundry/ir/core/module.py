@@ -27,6 +27,71 @@ _MISSING_PREPARED_WEIGHT = (
 )
 
 
+def subtree(root: "Module"):
+    """*root* and every Module below it, owners before the children they hold."""
+    yield root
+    for child in root.modules:
+        yield from subtree(child)
+
+
+def owning_module(root: "Module", function: object) -> "Module | None":
+    """The one node of *root*'s subtree that owns *function*, else ``None``.
+
+    A Function carries no execution context and one object is reachable from
+    more than one program, so the question is asked within a supplied tree. It
+    is answered by identity and by recorded origin, never by a name a copy
+    keeps. None covers both no owner and more than one: an unanswerable
+    question states nothing rather than defaulting to the root.
+    """
+    found: "Module | None" = None
+    for node in subtree(root):
+        if node.owns(function, derived=True):
+            if found is not None:
+                return None
+            found = node
+    return found
+
+
+def is_child_module_call(root: "Module", caller: object, callee: object) -> bool:
+    """Whether *callee* belongs to a direct child of *caller*'s owner.
+
+    What a collected call no longer carries: the parser's binding record is
+    consumed, so which calls supply activations alone is re-derived from
+    ownership within *root*. It fails closed -- a same-owner call, and one
+    whose ends no single node owns, keeps its exact declared arity.
+    """
+    if not isinstance(callee, HirFunction) or caller is None:
+        return False
+    owner = owning_module(root, caller)
+    called = owning_module(root, callee)
+    if owner is None or called is None or called is owner:
+        return False
+    return any(child is called for child in owner.modules)
+
+
+def _called_functions(function) -> tuple:
+    """Every Function *function* calls directly, its variants included."""
+    from tilefoundry.ir.core.expr import Call, child_exprs  # noqa: PLC0415 -- cycle
+
+    found: list[HirFunction] = []
+    seen: set[int] = set()
+
+    def visit(expr) -> None:
+        if expr is None or id(expr) in seen:
+            return
+        seen.add(id(expr))
+        if isinstance(expr, Call) and isinstance(expr.target, HirFunction):
+            found.append(expr.target)
+            for arg in expr.args:
+                visit(arg)
+            return
+        for child in child_exprs(expr):
+            visit(child)
+
+    visit(function)
+    return tuple(found)
+
+
 def _validate_declared(module_name, source, value, decl_type) -> None:
     """Refuse a checkpoint value that disagrees with its declared tensor type."""
     from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415 -- avoid evaluator cycle
@@ -408,11 +473,21 @@ class Module:
             json.dumps({"weight_map": {name: shard for name in flat}})
         )
 
-    def _prepare_into(self, raw, prefix: str, flat: dict, device: str) -> None:
+    def _prepare_into(self, raw, prefix: str, flat: dict, device: str) -> "LoadedModule":
+        """Stage this node's canonical weights, children before their owner.
+
+        A converter is an HIR body and may call a child, so the children it
+        could reach are staged first and handed to it as a reading. The staged
+        values stay on *device*; the output shard takes CPU copies.
+        """
         import torch  # noqa: PLC0415 -- optional runtime dep
 
-        from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
+        from tilefoundry.evaluator import run_bound  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
+        children = tuple(
+            child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
+            for child in self.modules
+        )
         converter_map: dict[str, ModuleFunction] = {}
         for fn in self.functions:
             for weight_name, conv in getattr(fn, "converters", ()):
@@ -429,19 +504,23 @@ class Module:
             parts = raw.load_group(name)
             return torch.stack(parts) if parts is not None else raw.load(name)
 
+        staged: dict[str, object] = {}
+        reading = LoadedModule(module=self, constants=staged, modules=children)
         for w, decl_type in self.weights.items():
             conv = converter_map.get(w)
             key = prefix + w
             if conv is None:
                 value = _fetch(w)
             else:
-                value = evaluate(conv, *[_fetch(p.name) for p in conv.params], device=device)
+                value = run_bound(
+                    conv, [_fetch(p.name) for p in conv.params],
+                    device=device, reading=reading,
+                )
             source = f"converter for weight {key!r}" if conv is not None else f"raw weight {key!r}"
             _validate_declared(self.name, source, value, decl_type)
+            staged[w] = value
             flat[key] = value.detach().contiguous().cpu()
-
-        for child in self.modules:
-            child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
+        return reading
 
     def cloned(self) -> "Module":
         """An independent copy of the IR graph: functions, bodies, children.
@@ -514,18 +593,47 @@ class LoadedModule:
             f"LoadedModule {self.name!r} has no function, child module, or method {name!r}"
         )
 
+    def reached(self, fn: ModuleFunction) -> tuple[tuple[str, "LoadedModule", object], ...]:
+        """Every (path, reading, function) a call from *fn* under this one runs.
+
+        The same resolver execution uses, so what is checked beforehand is what
+        will be reached. An attached child no call reaches is not listed.
+        """
+        from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
+            child_reading,
+        )
+
+        found: list[tuple[str, LoadedModule, object]] = []
+        seen: set[tuple[int, int]] = set()
+
+        def visit(path: str, reading: "LoadedModule", function) -> None:
+            key = (id(reading), id(function))
+            if key in seen:
+                return
+            seen.add(key)
+            found.append((path, reading, function))
+            for callee in _called_functions(function):
+                child = child_reading(reading, callee)
+                if child is None:
+                    visit(path, reading, callee)
+                else:
+                    visit(f"{path}.{child.name}" if path else child.name, child, callee)
+
+        visit("", self, fn)
+        return tuple(found)
+
     def _run_bound(self, fn: ModuleFunction, *acts):
         """Run bound.
 
         Evaluate *fn* over *acts*, its ``ConstTensor`` parameters filled by
-        name from these bindings.
+        name from these bindings and a reached child's from that child's own.
 
         Weights and activations must already agree on one device; nothing moves
         implicitly.
 
         [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
         """
-        from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- avoid IR→evaluator cycle
+        from tilefoundry.evaluator import run_bound  # noqa: PLC0415 -- avoid IR→evaluator cycle
 
         expected = sum(1 for p in fn.params if not p.is_const)
         if len(acts) != expected:
@@ -534,41 +642,59 @@ class LoadedModule:
                 f"activation(s) -- its {len(fn.params) - expected} ConstTensor "
                 f"parameter(s) come from the bindings -- but got {len(acts)}"
             )
+        reached = self.reached(fn)
+        self._require_bindings(fn, reached)
         args = []
         activations = iter(acts)
         for param in fn.params:
-            if param.is_const:
-                try:
-                    args.append(self.constants[param.name])
-                except KeyError:
-                    raise KeyError(
-                        f"LoadedModule {self.name!r}: weight {param.name!r} of "
-                        f"{fn.name!r} was not read by load(resource)"
-                    ) from None
-            else:
-                args.append(next(activations))
-        return evaluate(fn, *args, device=self._placement(fn, acts))
+            args.append(self.constants[param.name] if param.is_const else next(activations))
+        return run_bound(
+            fn, args, device=self._placement(fn, acts, reached), reading=self
+        )
 
-    def _placement(self, fn: ModuleFunction, acts: tuple) -> str | None:
+    def _require_bindings(self, fn: ModuleFunction, reached: tuple) -> None:
+        """Refuse a reached reading that cannot cover its callee's constants."""
+        missing: list[str] = []
+        for path, reading, function in reached:
+            absent = [
+                param.name
+                for param in function.params
+                if param.is_const and param.name not in reading.constants
+            ]
+            if absent:
+                where = path or reading.name
+                missing.append(f"{where}: {function.name!r} needs {sorted(absent)}")
+        if missing:
+            raise KeyError(
+                f"LoadedModule {self.name!r}: {fn.name!r} reaches reading(s) with no "
+                f"binding for a declared ConstTensor -- {'; '.join(missing)}. Every "
+                f"reached child fills its own constants from load(resource)"
+            )
+
+    def _placement(self, fn: ModuleFunction, acts: tuple, reached: tuple) -> str | None:
         """Placement.
 
-        The one device all bound constants and tensor activations agree on, or
-        ``None`` when none names one.
+        The one device the tensor activations and every reached reading's
+        constants agree on, or ``None`` when none names one. An attached child
+        no call reaches has no say.
 
         [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
         """
         where: dict[str, list[str]] = {}
-        for name, value in self.constants.items():
-            device = getattr(value, "device", None)
-            if device is not None:
-                where.setdefault(str(device), []).append(f"weight {name!r}")
+        for path, reading, _function in reached:
+            for name, value in reading.constants.items():
+                device = getattr(value, "device", None)
+                if device is not None:
+                    label = f"{path}.{name}" if path else name
+                    where.setdefault(str(device), []).append(f"weight {label!r}")
         for index, value in enumerate(acts):
             device = getattr(value, "device", None)
             if device is not None:
                 where.setdefault(str(device), []).append(f"activation {index}")
         if len(where) > 1:
             spread = "; ".join(
-                f"{device}: {', '.join(names)}" for device, names in sorted(where.items())
+                f"{device}: {', '.join(sorted(set(names)))}"
+                for device, names in sorted(where.items())
             )
             raise ValueError(
                 f"LoadedModule {self.name!r}: {fn.name!r} was given tensors on "

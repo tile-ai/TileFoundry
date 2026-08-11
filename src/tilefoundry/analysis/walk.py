@@ -16,6 +16,7 @@ from tilefoundry.ir.core import (
     get_metadata,
 )
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import owning_module as _owning_module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
@@ -150,6 +151,32 @@ def reachable_functions(root: Function) -> tuple[Function, ...]:
     return tuple(result)
 
 
+def called_functions(fn: Function) -> tuple[Function, ...]:
+    """Every Function *fn* calls directly, in the order its body reaches them."""
+    found: list[Function] = []
+    for expr in postorder(fn.body):
+        if isinstance(expr, Call) and isinstance(expr.target, Function):
+            found.append(expr.target)
+    return tuple(found)
+
+
+def owning_module(root: Module, fn: Function) -> Module:
+    """The one node of *root*'s tree that owns *fn*.
+
+    Asked within a supplied tree, by identity and recorded origin rather than
+    by a name a copy keeps. No owner, or more than one, is refused rather than
+    assigned to the root.
+    """
+    owner = _owning_module(root, fn)
+    if owner is None:
+        raise AnalysisError(
+            f"function {fn.name!r} is owned by no single node of module "
+            f"{root.name!r}; analysis answers ownership within the tree it was "
+            f"given, never by name"
+        )
+    return owner
+
+
 def entry_function(module: Module) -> Function:
     """The HIR Function *module* is entered through."""
     entry = module.entry_function()
@@ -275,12 +302,14 @@ def detach(expr: Expr, metadata_type: type[IRMetadata]) -> None:
 __all__ = [
     "attach",
     "bytes_by_storage",
+    "called_functions",
     "children",
     "describe",
     "detach",
     "enclosing_trips",
     "entry_function",
     "execution_domain",
+    "owning_module",
     "postorder",
     "reachable_functions",
     "tensor_types",

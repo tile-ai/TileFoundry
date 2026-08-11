@@ -127,9 +127,25 @@ parameter propagates through the whole body, including through a `Tuple` or
 that instance's (re-derived) body type, never a stale `return_type` field
 carried over from a different call site.
 
+A call into a child Module elaborates in an activation-only mode: the argument
+types bind to the non-constant parameters in order, and every `ConstTensor`
+parameter keeps its declared type in the rebuilt signature, which is already
+concrete. The mode is part of the elaboration cache key, and it is supplied by
+the caller rather than deduced from the argument count — the default binds every
+declared parameter, so a standalone or low-level call cannot acquire implicit
+constants ([core-ir §1](./core-ir.md#1-module)).
+
+Caller and callee MUST resolve one effective `Target` and one effective topology
+hierarchy. This is required of the edges a fixed-dimension query actually
+reaches, not of an attachment: an attached child no call reaches has no edge to
+check. Inheritance is the canonical spelling, and a child declaring the caller's
+hierarchy explicitly is accepted only when the resolved tuples are equal. A
+mismatch is invalid; it is not a nested launch. A repeated call site, and a call
+a loop varies, repeat device work in the same invocation and add none.
+
 Argument ↔ parameter binding is:
 
-- Arity MUST match — exactly one argument per parameter.
+- Arity MUST match — exactly one argument per supplied parameter.
 - A parameter that is a `TensorType` with `layout is None` is a **template
   wildcard**: it binds to the argument's full type, including any
   `ShardLayout`, once the argument's logical `shape` and `dtype` match.
@@ -1369,12 +1385,15 @@ def specialize_function(
     ...
 
 
-def specialize_concretely(fn: Function, dims: Mapping[str, int]) -> Function:
+def specialize_concretely(
+    fn: Function, dims: Mapping[str, int], ctx: TypeInferContext | None = None
+) -> Function:
     """Specialize a function with no residual symbolic dimensions.
 
     Args:
         fn: Function or dispatch prototype.
         dims: Complete concrete dimension bindings.
+        ctx: Optional shared type-inference context.
 
     Returns:
         A concrete function.

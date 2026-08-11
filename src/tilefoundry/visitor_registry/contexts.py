@@ -55,6 +55,26 @@ class TypeInferContext:
     cache: dict[int, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
     elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
+    caller: Any = None
+    child_call: Any = None
+
+    def binds_activations_only(self, call: Call) -> bool:
+        """Whether *call* supplies activations and leaves constants to a reading.
+
+        The authoring phase overrides this with the record it wrote. Otherwise a
+        walk that knows the Module tree and whose body it is reading answers by
+        ownership. A walk that knows neither binds every declared parameter, so a
+        standalone or low-level Function call cannot acquire implicit constants.
+        """
+        if self.child_call is not None:
+            return self.child_call(self.caller, call)
+        if self.module is None or self.caller is None:
+            return False
+        from tilefoundry.ir.core.module import (  # noqa: PLC0415 — avoid import cycle
+            is_child_module_call,
+        )
+
+        return is_child_module_call(self.module, self.caller, call.target)
 
     def type_of(self, expr: Expr) -> Type:
         key = id(expr)

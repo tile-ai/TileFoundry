@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import sys
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from types import FrameType
 
 
@@ -52,25 +52,6 @@ def enclosing_declaration(frame: FrameType | None) -> _Entry | None:
     return None
 
 
-def _child_exprs(expr):
-    """The Expr-valued children of *expr*, however deeply its fields nest them.
-
-    A Function reaches its variants through a tuple and its weight converters
-    through a tuple of pairs, and both are functions of the tree being built.
-    """
-    from tilefoundry.ir.core.expr import Expr  # noqa: PLC0415 — avoid import cycle
-
-    def walk(value):
-        if isinstance(value, Expr):
-            yield value
-        elif isinstance(value, tuple):
-            for item in value:
-                yield from walk(item)
-
-    for member in fields(expr):
-        yield from walk(getattr(expr, member.name, None))
-
-
 def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
     """Rebuild each marked call against the child attached under its binding.
 
@@ -78,8 +59,14 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
     body does not attach is refused: there is no child to rebuild against, and
     collecting it would leave the call pointing outside the tree being built.
     """
-    from tilefoundry.ir.core import get_metadata  # noqa: PLC0415 — avoid import cycle
-    from tilefoundry.ir.core.expr import Call  # noqa: PLC0415 — avoid import cycle
+    from tilefoundry.ir.core import (  # noqa: PLC0415 — avoid import cycle
+        TypeInferContext,
+        get_metadata,
+    )
+    from tilefoundry.ir.core.expr import (  # noqa: PLC0415 — avoid import cycle
+        Call,
+        child_exprs,
+    )
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.hir.function import elaborate  # noqa: PLC0415
     from tilefoundry.parser.base import _ModuleCallee  # noqa: PLC0415
@@ -98,9 +85,17 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
             elif record.binding not in attached:
                 unattached.append(record.binding)
             else:
-                entry = attached[record.binding].entry_function()
+                child = attached[record.binding]
+                entry = child.entry_function()
                 object.__setattr__(
-                    expr, "target", elaborate(entry, tuple(a.type for a in expr.args))
+                    expr,
+                    "target",
+                    elaborate(
+                        entry,
+                        tuple(a.type for a in expr.args),
+                        TypeInferContext(module=child, caller=entry),
+                        implicit_const=True,
+                    ),
                 )
                 object.__setattr__(
                     expr,
@@ -110,7 +105,7 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
             for arg in expr.args:
                 visit(arg)
             return
-        for child in _child_exprs(expr):
+        for child in child_exprs(expr):
             visit(child)
 
     for fn in functions:

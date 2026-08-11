@@ -680,6 +680,21 @@ launches because of Module ownership; the invocation rule is owned by
 [hir §1.1](./hir.md#11-function). Analyze does not select, interpret, trace, or
 dummy-run a plain Python orchestration method.
 
+- constraints:
+  - Every caller/callee edge the selected query reaches MUST have both ends in
+    one execution context: a callee another Module owns MUST belong to a direct
+    child of the caller's owner, and that child MUST resolve the caller's
+    effective topology hierarchy ([hir §1.1](./hir.md#11-function)). This is
+    checked over what is reached, so an attached child no call reaches has no
+    edge to check. The `Target` needs no second check here: only a root declares
+    one ([core-ir §1](./core-ir.md#1-module)).
+  - The Module owning a reached `Function` MUST be answered within the supplied
+    tree, by identity and recorded origin rather than by name. No owner, or more
+    than one, is refused rather than assigned to the root.
+  - A call into a child is measured as the callee's totals at that site. A
+    repeated site counts again, and a site a loop varies counts once per trip
+    ([§1.4](#14-authored-loops)); neither introduces an invocation record.
+
 ```python
 class AnalysisResult:
     """Record what one composed Analyze call computed.

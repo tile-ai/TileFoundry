@@ -166,7 +166,9 @@ def specialize_function(
     )
 
 
-def specialize_concretely(fn: Function, dims: Mapping[str, int]) -> Function:
+def specialize_concretely(
+    fn: Function, dims: Mapping[str, int], ctx: TypeInferContext | None = None
+) -> Function:
     """*fn* at the stated extents, with nothing left as a range.
 
     The stricter half of `specialize_function`, for callers that go on to run
@@ -188,7 +190,7 @@ def specialize_concretely(fn: Function, dims: Mapping[str, int]) -> Function:
                 f"specialising {fn.name!r}: dimension {name!r} takes an integer "
                 f"extent, got {extent!r}"
             )
-    concrete = specialize_function(fn, dims)
+    concrete = specialize_function(fn, dims, ctx=ctx)
     residual = residual_dims(concrete)
     if residual:
         raise SpecializationError(

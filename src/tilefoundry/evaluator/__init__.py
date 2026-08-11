@@ -17,6 +17,7 @@ from tilefoundry.evaluator.value import (
 
 __all__ = [
     "evaluate",
+    "run_bound",
     "register_eval",
     "eval_registry",
     "Value",
@@ -35,8 +36,10 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    if name == "evaluate":
+    if name in ("evaluate", "run_bound"):
         import importlib  # noqa: PLC0415 — lazy to avoid an IR import cycle
 
-        return importlib.import_module("tilefoundry.evaluator.interpreter").evaluate
+        return getattr(
+            importlib.import_module("tilefoundry.evaluator.interpreter"), name
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

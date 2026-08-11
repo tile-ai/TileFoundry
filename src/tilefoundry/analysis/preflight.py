@@ -19,7 +19,7 @@ from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .errors import AnalysisError
-from .walk import describe, postorder, tensor_types
+from .walk import called_functions, describe, owning_module, postorder, tensor_types
 
 
 def infer_authored_types(
@@ -32,7 +32,7 @@ def infer_authored_types(
     with.
     """
     for fn in reversed(tuple(functions)):
-        ctx = TypeInferContext(module=module)
+        ctx = TypeInferContext(module=module, caller=fn)
         for expr in postorder(fn.body):
             computed = TypeInferVisitor(ctx).visit(expr)
             if computed != expr.type:
@@ -89,4 +89,34 @@ def validate_authored(functions: Iterable[Function]) -> None:
             )
 
 
-__all__ = ["infer_authored_types", "validate_authored"]
+def validate_call_context(module: Module, functions: Iterable[Function]) -> None:
+    """Reject a reached call whose two ends do not share one execution context.
+
+    Checked over what the selected query reaches, not at construction: an
+    attached child no call reaches has no edge to validate. Inheritance is the
+    canonical spelling, so a child declaring the caller's hierarchy explicitly
+    passes and any other value is a different context, not a nested launch.
+    """
+    for caller in functions:
+        caller_owner = owning_module(module, caller)
+        for callee in called_functions(caller):
+            callee_owner = owning_module(module, callee)
+            if callee_owner is caller_owner:
+                continue
+            if not any(child is callee_owner for child in caller_owner.modules):
+                raise AnalysisError(
+                    f"{caller.name!r} calls {callee.name!r} of module "
+                    f"{callee_owner.name!r}, which is not a child of "
+                    f"{caller_owner.name!r}; a call reaches a child of its own module"
+                )
+            if callee_owner.effective_topologies() != caller_owner.effective_topologies():
+                raise AnalysisError(
+                    f"{caller_owner.name!r} calls {callee_owner.name!r}, which "
+                    f"resolves a different topology hierarchy "
+                    f"{callee_owner.effective_topologies()} against "
+                    f"{caller_owner.effective_topologies()}; one kernel invocation "
+                    f"runs one hierarchy -- declare none on the child and inherit"
+                )
+
+
+__all__ = ["infer_authored_types", "validate_authored", "validate_call_context"]

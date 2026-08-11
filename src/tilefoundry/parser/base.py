@@ -25,7 +25,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.function import elaborate
+from tilefoundry.ir.hir.function import bound_params, elaborate
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.reshape import Reshape
@@ -74,6 +74,21 @@ class _ModuleCallee(IRMetadata):
     """
 
     binding: str
+
+
+def authored_child_call(caller, call) -> bool:
+    """Whether *call* was written through a child-Module binding.
+
+    The authoring phase's answer to which calls carry activations only. It
+    holds until ``@module`` collection consumes the record, and needs no
+    caller: the record is on the call site itself.
+    """
+    return get_metadata(call, _ModuleCallee) is not None
+
+
+def authoring_context() -> TypeInferContext:
+    """A type-inference walk that classifies calls by the record above."""
+    return TypeInferContext(child_call=authored_child_call)
 
 
 _IR_OBJECT_TYPES = {
@@ -283,7 +298,7 @@ class BaseExprVisitor:
 
 
 
-        self._ctx = TypeInferContext()
+        self._ctx = TypeInferContext(child_call=authored_child_call)
 
 
 
@@ -852,8 +867,15 @@ class BaseExprVisitor:
                 f"{name!r}: nested @func call does not accept keyword args "
                 f"{extra_kwargs!r} (positional-only at the IR level)"
             )
-        expected = len(callee.params)
+        module_call = module_binding is not None
+        expected = len(bound_params(callee, implicit_const=module_call))
         got = len(node.args)
+        if got != expected and module_call:
+            raise VerifyError(
+                f"{name!r}: Module {name!r} takes {expected} activation(s) — its "
+                f"{len(callee.params) - expected} ConstTensor parameter(s) come from "
+                f"that Module's own bindings — but got {got}"
+            )
         if got != expected:
             raise VerifyError(
                 f"{name!r}: nested @func call arity mismatch — callee "
@@ -870,11 +892,12 @@ class BaseExprVisitor:
             )
         instance = elaborate(
             callee, tuple(a.type for a in input_args), self._ctx,
-            call=call_for_errors,
+            call=call_for_errors, implicit_const=module_call,
         )
-        call = self._build_call(instance, input_args)
-        if module_binding is not None:
-            call = replace_metadata(call, _ModuleCallee(module_binding))
+        call = self._build_call(
+            instance, input_args,
+            records=() if module_binding is None else (_ModuleCallee(module_binding),),
+        )
         if explicit_loc_given:
             call = replace_metadata(call, BindingMetadata(explicit_loc))
             self._explicit_binding_call_ids.add(id(call))
@@ -1069,14 +1092,21 @@ class BaseExprVisitor:
             return expr
         return self._with_binding(expr, dsl_name)
 
-    def _build_call(self, op_inst, args: tuple[Expr, ...]) -> Call:
-        """Build a Call with type eagerly populated via the typeinfer registry."""
+    def _build_call(
+        self, op_inst, args: tuple[Expr, ...], *, records: tuple[IRMetadata, ...] = ()
+    ) -> Call:
+        """Build a Call with type eagerly populated via the typeinfer registry.
+
+        *records* are carried on the node the typeinfer walk sees, because a
+        record stating how the call binds its arguments has to be there before
+        the type is derived from them.
+        """
         args = _with_python_float_dtypes(args)
 
 
         placeholder = Call(
             type=TensorType.scalar(DType.f32), target=op_inst, args=args,
-            metadata=self._source_metadata(),
+            metadata=(*self._source_metadata(), *records),
         )
         fn = typeinfer_registry.lookup(type(op_inst))
         if fn is None:

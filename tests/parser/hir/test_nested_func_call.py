@@ -17,7 +17,7 @@ import pytest
 from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, T, Tensor, tf
 from tilefoundry.dsl.tf import add  # noqa: F401 — binds bare ``add``
-from tilefoundry.ir.core import VerifyError, get_metadata
+from tilefoundry.ir.core import Constant, VerifyError, get_metadata
 from tilefoundry.ir.hir.function import Function, elaborate
 from tilefoundry.ir.hir.specialize import origin_of, specialize_function
 from tilefoundry.ir.types import make_shard_tensor_type
@@ -350,3 +350,57 @@ def test_a_declaration_left_open_by_a_failed_class_body_resolves_nothing() -> No
                 return _Callee(x)
     finally:
         del _DECLARING[open_declarations:]
+
+
+@module(entry="run")
+class _Weighted:
+    @func
+    def run(x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+        return tf.matmul(x, w)
+
+
+def test_a_child_call_carries_activations_and_leaves_the_constants_declared() -> None:
+    @module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
+    class _Fused:
+        mlp = _Weighted
+
+        @func
+        def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+            return mlp(x)  # noqa: F821
+
+    (child,) = _Fused.modules
+    call = _Fused.entry_function().body
+    assert len(call.args) == 1
+    assert [(p.name, p.is_const) for p in call.target.params] == [("x", False), ("w", True)]
+    assert call.target.params[1].type == child.weights["w"]
+    assert all(not isinstance(arg, Constant) for arg in call.args)
+    assert dict(_Fused.weights) == {}
+    assert set(child.weights) == {"w"}
+
+
+def test_a_direct_function_call_keeps_its_declared_arity() -> None:
+    with pytest.raises(VerifyError, match="nested @func call arity mismatch"):
+
+        @module(entry="root", target=CudaTarget("nvidia.h200_sxm"))
+        class _Direct:
+            @func
+            def leaf(
+                x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]
+            ) -> Tensor[(4, 8), "f32"]:
+                return tf.matmul(x, w)
+
+            @func
+            def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+                return leaf(x)  # noqa: F821
+
+
+def test_a_child_call_of_the_wrong_width_is_refused_in_activations() -> None:
+    with pytest.raises(VerifyError, match="takes 1 activation"):
+
+        @module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
+        class _TooMany:
+            mlp = _Weighted
+
+            @func
+            def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+                return mlp(x, x)  # noqa: F821

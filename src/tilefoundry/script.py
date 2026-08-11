@@ -18,6 +18,7 @@ from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.module import UNDECLARED, enclosing_declaration
 from tilefoundry.parser import parse_prim_func
+from tilefoundry.parser.base import authoring_context
 from tilefoundry.parser.hir_parser import _parse_func
 from tilefoundry.target.base import target_instance
 
@@ -112,7 +113,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
             extra_closure=extra_closure,
             in_module_body=_enclosing_declaration() is not None,
         )
-        verify_function(ir)
+        verify_function(ir, ctx=authoring_context())
         if not declares_context:
             return ir
         return Module(
@@ -154,7 +155,7 @@ def _specialize(self: HirFunction, pattern: Any):
         if fn_inner.__name__ != "_":
             object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
         object.__setattr__(ir, "name", self.name)
-        verify_function(ir)
+        verify_function(ir, ctx=authoring_context())
         self.add_variant(ir)
         return ir
 
@@ -186,7 +187,7 @@ def _converter(self: HirFunction, weight_name: str):
             )
 
         object.__setattr__(ir, "name", f"{self.name}.converter[{weight_name}]")
-        verify_function(ir)
+        verify_function(ir, ctx=authoring_context())
         self.add_converter(weight_name, ir)
         return ir
 

@@ -891,6 +891,11 @@ a callee and still raises *unknown Op name*.
     collection needs to rebuild the call against the child attached under that
     name ([core-ir §1](./core-ir.md#1-module)). It is not part of the IR
     contract: collection consumes it and takes it off the call.
+  - A call written through a child binding MUST take one argument per
+    non-constant parameter of the callee, and its diagnostic MUST say so in
+    activations. Every other Function call keeps its exact declared arity. The
+    kind of callee decides this, never the number of arguments written
+    ([core-ir §1](./core-ir.md#1-module)).
   - An attribute callee whose base name is bound to a `Module` MUST be refused,
     naming that a Module is called through its bare binding and its entry. This
     holds for the attribute that names the entry as well: which name was written

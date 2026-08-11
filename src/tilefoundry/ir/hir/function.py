@@ -162,40 +162,61 @@ def _bind_param_type(
     return p
 
 
+def bound_params(callee: "Function", *, implicit_const: bool) -> tuple[Var, ...]:
+    """The parameters a call site supplies, in the order it supplies them.
+
+    Every declared parameter, except that a call carrying activations only
+    leaves the ``ConstTensor`` ones to the callee's own resource bindings.
+    """
+    if not implicit_const:
+        return callee.params
+    return tuple(param for param in callee.params if not param.is_const)
+
+
 def elaborate(
     callee: "Function",
     arg_types: tuple[Type, ...],
     ctx: TypeInferContext | None = None,
     call: Call | None = None,
+    *,
+    implicit_const: bool = False,
 ) -> "Function":
     """Construct a concrete callee for one call site's argument types.
 
     Dispatch prototypes and already-equal bindings return unchanged. Other
     templates rebuild per distinct type tuple and reuse the construction
     session's elaboration cache. ``call`` anchors binding errors when present.
+    ``implicit_const`` binds the argument types to the non-constant parameters
+    alone and leaves each ``ConstTensor`` parameter's declared type in place.
 
     See [hir §1.1](docs/spec/hir.md#11-function).
     """
     if ctx is None:
         ctx = TypeInferContext()
-    expected = len(callee.params)
+    supplied = bound_params(callee, implicit_const=implicit_const)
+    expected = len(supplied)
     got = len(arg_types)
     if got != expected:
+        kind = "activation(s)" if implicit_const else "parameter(s)"
         ctx.error(
             call if call is not None else callee,
             f"hir Function call {callee.name!r}: arity mismatch — "
-            f"callee declares {expected} parameter(s), call passed {got}",
+            f"callee declares {expected} {kind}, call passed {got}",
         )
-    bound_types = [
-        _bind_param_type(ctx, callee, i, param, arg_ty, call)
-        for i, (param, arg_ty) in enumerate(zip(callee.params, arg_types))
-    ]
+    given = iter(enumerate(arg_types))
+    bound_types = []
+    for param in callee.params:
+        if implicit_const and param.is_const:
+            bound_types.append(param.type)
+            continue
+        index, arg_ty = next(given)
+        bound_types.append(_bind_param_type(ctx, callee, index, param, arg_ty, call))
     if callee.variants or callee.body is None:
         return callee
     if all(bt == p.type for bt, p in zip(bound_types, callee.params)):
         return callee
 
-    cache_key = (id(callee), arg_types)
+    cache_key = (id(callee), arg_types, implicit_const)
     cached = ctx.elaboration_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -272,6 +293,7 @@ def _elaborate_from_bound_types(
                         tuple(a.type for a in new_args),
                         self.body_ctx,
                         call=call_expr,
+                        implicit_const=self.body_ctx.binds_activations_only(call_expr),
                     )
                 else:
                     new_target = _specialize_callee(
@@ -354,9 +376,14 @@ def _elaborate_from_bound_types(
             return dataclasses.replace(rebuilt, type=self.body_ctx.type_of(rebuilt))
 
     if dims is None:
-        body_ctx = TypeInferContext(module=ctx.module, elaboration_cache=ctx.elaboration_cache)
+        body_ctx = TypeInferContext(
+            module=ctx.module, elaboration_cache=ctx.elaboration_cache,
+            caller=callee, child_call=ctx.child_call,
+        )
     else:
-        body_ctx = TypeInferContext(module=ctx.module)
+        body_ctx = TypeInferContext(
+            module=ctx.module, caller=callee, child_call=ctx.child_call
+        )
     new_body = _Elaborator(body_ctx).visit(callee.body)
     derived = Function.build(
         name=callee.name,
@@ -454,10 +481,16 @@ def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
     """
     callee: Function = call.target  # type: ignore[assignment]
     arg_types = tuple(ctx.type_of(a) for a in call.args)
-    instance = elaborate(callee, arg_types, ctx, call=call)
+    instance = elaborate(
+        callee, arg_types, ctx, call=call,
+        implicit_const=ctx.binds_activations_only(call),
+    )
     if instance.body is None:
         return instance.return_type
-    return TypeInferContext(module=ctx.module).type_of(instance.body)
+    body_ctx = TypeInferContext(
+        module=ctx.module, caller=instance, child_call=ctx.child_call
+    )
+    return body_ctx.type_of(instance.body)
 
 
 __all__ = [

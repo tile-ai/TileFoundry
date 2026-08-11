@@ -56,16 +56,38 @@ def _bind_dim_vars(params, values) -> dict[str, int]:
     return binding
 
 
+def child_reading(reading, callee: Function):
+    """The child reading a call to *callee* runs against, else ``None``.
+
+    ``None`` is a same-owner call, which binds every declared parameter. A
+    collected call carries no binding record, so which reading supplies the
+    constants is answered by which child owns the callee.
+    """
+    if reading is None or reading.module.owns(callee, derived=True):
+        return None
+    matches = tuple(
+        child for child in reading.modules if child.module.owns(callee, derived=True)
+    )
+    if len(matches) > 1:
+        raise EvalError(
+            f"evaluator: {reading.name!r} holds {len(matches)} readings owning "
+            f"{callee.name!r}; one call reaches one child"
+        )
+    return matches[0] if matches else None
+
+
 class Evaluator(ExprVisitor):
     """``ExprVisitor[Value]`` memoized on ``id(expr)`` within one scope."""
 
     def __init__(
         self, env: dict[int, Value], device: str,
         dim_env: dict[str, int] | None = None,
+        reading=None,
     ) -> None:
         self.env = env
         self.device = device
         self.dim_env = dim_env or {}
+        self.reading = reading
         self.memo: dict[int, Value] = {}
 
     def visit(self, expr) -> Value:
@@ -109,18 +131,27 @@ class Evaluator(ExprVisitor):
         )
 
     def _call_function(self, callee: Function, arg_exprs) -> Value:
-        if len(arg_exprs) != len(callee.params):
+        child = child_reading(self.reading, callee)
+        supplied = [p for p in callee.params if not (child is not None and p.is_const)]
+        if len(arg_exprs) != len(supplied):
+            kind = "activation(s)" if child is not None else "args"
             raise EvalError(
                 f"evaluator: call to {callee.name!r} expects "
-                f"{len(callee.params)} args, got {len(arg_exprs)}"
+                f"{len(supplied)} {kind}, got {len(arg_exprs)}"
             )
-        args = [self.visit(a) for a in arg_exprs]
-
-
+        given = iter(self.visit(a) for a in arg_exprs)
+        args = [
+            _child_constant(child, callee, param)
+            if child is not None and param.is_const
+            else next(given)
+            for param in callee.params
+        ]
         target = _select_variant(callee, args) if callee.variants else callee
         sub_env = {id(param): arg for param, arg in zip(target.params, args)}
         sub_dim_env = _bind_dim_vars(target.params, args)
-        return Evaluator(sub_env, self.device, sub_dim_env).visit(target.body)
+        return Evaluator(
+            sub_env, self.device, sub_dim_env, child if child is not None else self.reading
+        ).visit(target.body)
 
     def _resolve_loop_field(self, dim, what: str) -> int:
         """Resolve loop field.
@@ -174,7 +205,7 @@ class Evaluator(ExprVisitor):
             last = None
             for i in indices:
                 last = Evaluator(
-                    iter_env(i, ()), self.device, self.dim_env
+                    iter_env(i, ()), self.device, self.dim_env, self.reading
                 ).visit(region.body)
             if last is None:
                 raise EvalError(
@@ -184,9 +215,29 @@ class Evaluator(ExprVisitor):
 
         carried = [self.visit(init) for init in region.init_args]
         for i in indices:
-            sub = Evaluator(iter_env(i, carried), self.device, self.dim_env)
+            sub = Evaluator(
+                iter_env(i, carried), self.device, self.dim_env, self.reading
+            )
             carried = [sub.visit(y) for y in region.yield_values]
         return carried[0] if len(carried) == 1 else TupleValue(tuple(carried))
+
+
+def _child_constant(reading, callee: Function, param) -> TensorValue:
+    """*param*'s constant, read from the child *callee* belongs to.
+
+    Wrapped without a device argument: placement is settled before execution
+    and this must not be where a weight quietly moves.
+    """
+    try:
+        value = reading.constants[param.name]
+    except KeyError:
+        raise EvalError(
+            f"evaluator: {reading.name!r} has no binding for {param.name!r} of "
+            f"{callee.name!r}; a child call takes its ConstTensor parameters "
+            f"from that child's own resources"
+        ) from None
+    data = torch.as_tensor(value, dtype=to_torch_dtype(param.type.dtype))
+    return TensorValue(data=data, type=param.type)
 
 
 def _unwrap(value: Value) -> Any:
@@ -221,6 +272,27 @@ def _select_variant(callee: Function, arg_values) -> Function:
             f"{len(matches)} variants (expected exactly one)"
         )
     return matches[0]
+
+
+def run_bound(fn: Function, args, *, device: str | None = None, reading=None):
+    """Evaluate *fn* over fully bound *args*, with *reading* in hand.
+
+    The entry a resource reading runs through: every child call reached from
+    here fills its ``ConstTensor`` parameters from the child that owns the
+    callee. The public ``evaluate`` stays exact and resource-free.
+    """
+    device = device or _default_device()
+    values = [
+        TensorValue(
+            data=torch.as_tensor(arg, dtype=to_torch_dtype(param.type.dtype)),
+            type=param.type,
+        )
+        for param, arg in zip(fn.params, args)
+    ]
+    target = _select_variant(fn, values) if fn.variants else fn
+    env = {id(param): value for param, value in zip(target.params, values)}
+    dim_env = _bind_dim_vars(target.params, values)
+    return _unwrap(Evaluator(env, device, dim_env, reading).visit(target.body))
 
 
 def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = None):

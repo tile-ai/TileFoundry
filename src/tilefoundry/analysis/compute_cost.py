@@ -171,12 +171,12 @@ def analyze_compute_cost(
     callee's totals rather than re-walking its body.
     """
     topologies = _resolved_topologies(module.effective_topologies(), target)
-    whole = CostEvaluator(CostContext(module=module))
-    local = CostEvaluator(
-        CostContext(module=module, level=level, topologies=topologies)
-    )
     totals: dict[int, _Totals] = {}
     for fn in reversed(reachable_functions(function)):
+        whole = CostEvaluator(CostContext(module=module, caller=fn))
+        local = CostEvaluator(
+            CostContext(module=module, level=level, topologies=topologies, caller=fn)
+        )
         flops: dict[str, int] = {}
         flops_per_unit: dict[str, int] = {}
         traffic: dict[str, TrafficBytes] = {}

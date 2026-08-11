@@ -15,7 +15,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.preflight import infer_authored_types, validate_authored
+from tilefoundry.analysis.preflight import (
+    infer_authored_types,
+    validate_authored,
+    validate_call_context,
+)
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.ir.core import IRMetadata
@@ -23,6 +27,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
 from tilefoundry.target import Target, UnsupportedCapabilityError
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 
 @dataclass(frozen=True)
@@ -121,7 +126,9 @@ def analyze(
         )
     if dims is not None:
         try:
-            function = specialize_concretely(function, dims)
+            function = specialize_concretely(
+                function, dims, TypeInferContext(module=module)
+            )
         except SpecializationError as error:
             raise AnalysisError(f"analyze: {error}") from None
 
@@ -251,6 +258,7 @@ def _preflight(module: Module, function: Function) -> tuple[Function, ...]:
     """
     functions = reachable_functions(function)
     infer_authored_types(functions, module)
+    validate_call_context(module, functions)
     validate_authored(functions)
     return functions
 
