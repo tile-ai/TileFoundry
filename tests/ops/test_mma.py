@@ -113,11 +113,12 @@ def test_plain_layout_describes_the_logical_accumulator_result():
     assert result.layout == Layout(shape=(16, 8), strides=(8, 1))
 
 
-def test_known_sm80_fragments_derive_a_fresh_c_fragment_on_their_mesh():
-    mesh = replace(_ATOM.required_scope, names=("x", "y"))
-    a_layout = replace(_ATOM.A, mesh=mesh)
-    b_layout = replace(_ATOM.B, mesh=mesh)
-    expected_c = replace(_ATOM.C, mesh=mesh)
+def test_fragment_mesh_coordinate_names_do_not_affect_compatibility():
+    a_mesh = replace(_ATOM.required_scope, names=("a_m", "a_k"))
+    b_mesh = replace(_ATOM.required_scope, names=("b_k", "b_n"))
+    a_layout = replace(_ATOM.A, mesh=a_mesh)
+    b_layout = replace(_ATOM.B, mesh=b_mesh)
+    expected_c = replace(_ATOM.C, mesh=a_mesh)
     a = TensorType((16, 16), _BF, a_layout, _RMEM)
     b = TensorType((16, 8), _BF, b_layout, _RMEM)
 
@@ -148,17 +149,23 @@ def test_known_sm80_fragments_derive_a_fresh_c_fragment_on_their_mesh():
             id="mismatched_b_fragment",
         ),
         pytest.param(
-            "different_fragment_mesh",
+            "different_physical_mesh_layout",
             _SM80,
             TensorType((16, 16), _BF, _ATOM.A, _RMEM),
             TensorType(
                 (16, 8),
                 _BF,
-                replace(_ATOM.B, mesh=replace(_ATOM.B.mesh, names=("x", "y"))),
+                replace(
+                    _ATOM.B,
+                    mesh=replace(
+                        _ATOM.B.mesh,
+                        layout=Layout(shape=(8, 4), strides=(1, 8)),
+                    ),
+                ),
                 _RMEM,
             ),
-            r"input 1.*different mesh.*Reshard.*materialize-to-RMEM",
-            id="different_fragment_mesh",
+            r"input 1.*known SM80 B fragment layout.*Reshard.*materialize-to-RMEM",
+            id="different_physical_mesh_layout",
         ),
         pytest.param(
             "non_rmem_fragment",

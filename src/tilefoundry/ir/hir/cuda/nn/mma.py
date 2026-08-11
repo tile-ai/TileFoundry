@@ -115,9 +115,12 @@ def _derive_sm80_fragment_layout(a_ty: TensorType, b_ty: TensorType) -> ShardLay
                 f"input {index} does not match the known SM80 {role} fragment layout; "
                 "use an explicit Reshard to that layout and materialize-to-RMEM"
             )
-    if a_ty.layout.mesh != b_ty.layout.mesh:
+    if (
+        a_ty.layout.mesh.topologies != b_ty.layout.mesh.topologies
+        or a_ty.layout.mesh.layout != b_ty.layout.mesh.layout
+    ):
         raise ValueError(
-            "input 1 SM80 B fragment references a different mesh from input 0; "
+            "input 1 SM80 B fragment references a different physical mesh from input 0; "
             "use an explicit Reshard to the common fragment mesh and materialize-to-RMEM"
         )
     return replace(_SM80_ATOM.C, mesh=a_ty.layout.mesh)

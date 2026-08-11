@@ -20,10 +20,6 @@ from tilefoundry.ir.hir.cuda.nn.mma import (
 from tilefoundry.ir.hir.cuda.nn.mma import (
     Wgmma_SM90_64x128x16 as HirWgmma_SM90,
 )
-from tilefoundry.ir.hir.cuda.nn.mma import (
-    _derive_sm80_fragment_layout,
-    _is_lowerable_sm80_target,
-)
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
@@ -49,13 +45,6 @@ from tilefoundry.ir.tir.arith import (
     UnaryKind,
 )
 from tilefoundry.ir.tir.clamp import Clamp as TirClamp
-from tilefoundry.ir.tir.cuda.nn.mma import (
-    Mma as TirMma,
-)
-from tilefoundry.ir.tir.cuda.nn.mma import (
-    SM80_16x8x16_F32BF16BF16F32_TN,
-    make_atom,
-)
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
@@ -923,64 +912,11 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
 @register_hir_lowering(HirMmaSM80_16x8x16)
 @register_hir_lowering(HirWgmma_SM90)
 def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
-    if isinstance(target, HirWgmma_SM90):
-        raise ValueError(
-            "HirToTirPass: Wgmma_SM90_64x128x16 has no implemented TIR atom "
-            "or CUDA runtime; keep it as a logical Analyze node until WGMMA "
-            "lowering exists"
-        )
-    if not _is_lowerable_sm80_target(target):
-        raise ValueError(
-            "HirToTirPass: Mma_SM80_16x8x16 lowering supports only "
-            "BF16/BF16/F32 TN; choose that contract, Reshard to its exact "
-            "fragment layouts, and materialize-to-RMEM"
-        )
-    a_hir_ty = expr.args[0].type
-    b_hir_ty = expr.args[1].type
-    try:
-        c_layout = _derive_sm80_fragment_layout(a_hir_ty, b_hir_ty)
-    except ValueError as error:
-        raise ValueError(f"HirToTirPass: Mma_SM80_16x8x16: {error}") from None
-    if expr.type.layout != c_layout:
-        raise ValueError(
-            "HirToTirPass: Mma_SM80_16x8x16 result does not carry the derived "
-            "C fragment layout; Reshard both inputs to the exact A/B layouts "
-            "and materialize-to-RMEM"
-        )
-
-    a = ctx.lower(expr.args[0])
-    b = ctx.lower(expr.args[1])
-    atom = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
-
-    def canonical_fragment(value: Var, layout: ShardLayout, hint: str) -> Var:
-        if value.type.layout == layout:
-            return value
-        fragment = ctx.alloc(replace(value.type, layout=layout), hint=hint)
-        ctx.emit(_eval_call(Copy(), (value, fragment)))
-        return fragment
-
-    a = canonical_fragment(a, atom.A, "ma")
-    b = canonical_fragment(b, atom.B, "mb")
-    out_type = TensorType(
-        shape=(2, 2),
-        dtype=target.dtype_acc,
-        layout=atom.C,
-        storage=StorageKind.RMEM,
+    name = type(target).__name__
+    raise ValueError(
+        f"HirToTirPass: {name} HIR compile route is unsupported; use the "
+        "independent handwritten TIR MMA atom/runtime surface"
     )
-    r = ctx.alloc(out_type, hint="r")
-
-
-
-
-
-    zero_const = Constant(
-        value=0.0, type=TensorType.meta_scalar(target.dtype_acc),
-    )
-    ctx.emit(_eval_call(Fill(), (r, zero_const)))
-
-
-    ctx.emit(_eval_call(TirMma(atom=atom), (r, a, b)))
-    return r
 
 
 @register_hir_lowering(HirReLU)
