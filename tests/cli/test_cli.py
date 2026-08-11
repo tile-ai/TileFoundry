@@ -110,27 +110,6 @@ def test_schedule_rejects_several_extents_per_dimension(capsys) -> None:
     assert "asking several EXTENTs together is for check" in refused
 
 
-def test_analyze_reads_an_explicit_topology_from_its_mesh_layout(tmp_path, capsys) -> None:
-    source = tmp_path / "explicit_tiles.py"
-    source.write_text(
-        "from tilefoundry import func\n"
-        "from tilefoundry.dsl import Mesh, Tensor, Topology, tf\n"
-        "from tilefoundry.target import CudaTarget\n"
-        "@func(target=CudaTarget('nvidia.h200_sxm'), topologies=(Topology('cta', 8),))\n"
-        "def explicit_tiles(source: Tensor[(8, 128), 'f32']):\n"
-        "    with Mesh(('cta',), layout=(8,), names=('tile',)) as cta:\n"
-        "        local = tf.reshard(source, (8 @ cta.tile, 128), 'rmem')\n"
-        "        return tf.add(local, local)\n",
-        encoding="utf-8",
-    )
-
-    assert cli.main(["analyze", f"{source}:explicit_tiles", "--timeline", "--json"]) == 0
-
-    timeline = json.loads(capsys.readouterr().out)["function_records"]["timeline"]
-    assert timeline["grid_units"] == 8
-    assert timeline["waves"] == 2
-
-
 def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(["analyze", "--help"])

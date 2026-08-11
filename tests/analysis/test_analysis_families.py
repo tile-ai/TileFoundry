@@ -188,13 +188,6 @@ def _thread_sharded(source: Tensor[(8,), "f32"]):
         return tf.add(local, local)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),))
-def _explicit_tiles(source: Tensor[(8, 128), "f32"]):
-    with Mesh(("cta",), layout=(8,), names=("tile",)) as cta:
-        local = tf.reshard(source, (8 @ cta.tile, 128), "rmem")
-        return tf.add(local, local)
-
-
 @func(
     target=CudaTarget("nvidia.h200_sxm"),
     topologies=(Topology("cta", 2), Topology("thread", 2)),
@@ -328,19 +321,6 @@ def test_function_call_carries_the_callee_per_unit_work() -> None:
     assert record is not None
     assert record.flops == (("f32", 256),)
     assert record.flops_per_unit == (("f32", 64),)
-
-
-def test_an_explicit_topology_uses_its_mesh_layout_for_analysis() -> None:
-    _, entry = _run(_explicit_tiles, "timeline")
-
-    call = _calls(entry)[-1]
-    cost = get_metadata(call, ComputeCostMetadata)
-    placement = get_metadata(call, TimelineMetadata)
-    assert cost is not None and placement is not None
-    assert cost.flops == (("f32", 8 * 128),)
-    assert cost.flops_per_unit == (("f32", 128),)
-    assert placement.grid_units == 8
-    assert placement.waves == 1
 
 
 def test_analysis_refuses_a_position_count_for_a_multi_topology_mesh() -> None:

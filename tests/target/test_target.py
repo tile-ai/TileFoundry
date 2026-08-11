@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 import pytest
 
 from tests.fixtures.placed.rmsnorm import RmsnormModule
+from tests.fixtures.placed.square_cuda import Model as SquareCudaModel
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, DType, build, func, jit, lower, module
 from tilefoundry.codegen.registry import group_functions_by_target
@@ -254,6 +255,13 @@ def test_lowering_and_codegen_keep_the_external_target_instance() -> None:
     assert lowered.target is target
     assert all(fn.target is target for fn in lowered.functions)
     assert target.get_code_generator() is CudaTarget("nvidia.h200_sxm").get_code_generator()
+
+
+def test_lower_rejects_a_topology_level_unsupported_by_the_target() -> None:
+    unsupported = replace(SquareCudaModel, topologies=(Topology("warp", 4),))
+
+    with pytest.raises(ValueError, match="unsupported topology level 'warp'"):
+        lower(unsupported)
 
 
 @pytest.mark.parametrize(

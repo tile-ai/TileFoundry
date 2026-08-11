@@ -103,6 +103,9 @@ def lower(
                 f"tilefoundry.lower: explicit target {_target_summary(target)} "
                 f"conflicts with the Module Target {_target_summary(module_target)}"
             )
+    for topology in mod.effective_topologies():
+        module_target.validate_program_topology(topology)
+
     pm = _build_default_pipeline()
     result = pm.run(mod)
     merged = dict(result.metadata)
