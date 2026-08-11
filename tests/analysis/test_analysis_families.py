@@ -116,16 +116,6 @@ class _MovementCosts:
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class _BatchedOnTheRight:
-    @func
-    def main(
-        token: Tensor[(1, 1, 4), "f32"],
-        blocks: Tensor[(5, 4, 3), "f32"],
-    ):
-        return tf.matmul(token, blocks)
-
-
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _Gathered:
     @func
     def main(
@@ -360,23 +350,6 @@ def test_analysis_refuses_a_position_count_for_a_multi_topology_mesh() -> None:
         match="one mesh names multiple topology levels",
     ):
         _run(_multi_topology_mesh, "compute-cost")
-
-
-def test_a_matmul_takes_its_batch_from_what_it_produced() -> None:
-    """Either operand may be the broadcast one, so the output decides the batch.
-
-    A block of a weight matrix multiplied by one token has its batch on the right:
-    reading the left gave a batch of one and charged a whole block loop's arithmetic
-    as a single tile's. The output's batch is what the call produced, and every batch
-    of it was computed.
-    """
-    entry = _BatchedOnTheRight.entry_function()
-    analyze(_BatchedOnTheRight, entry, analysis="compute-cost")
-
-    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
-    assert record is not None
-
-    assert record.flops == (("f32", 2 * 5 * 1 * 4 * 3),)
 
 
 def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:

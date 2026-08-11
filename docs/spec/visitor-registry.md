@@ -604,6 +604,14 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     each level instead. What the evaluator reported stands as the operand's own
     amount; a per-level total is therefore not always the sum of the amounts
     reported here.
+  - an evaluator MUST report the bytes its operation's own semantics move,
+    bounded by what its operand Types state statically:
+    - an operation that writes a window of a container charges the window and
+      MUST NOT charge the container;
+    - an operation that only re-describes or re-indexes existing elements, or
+      that names an existing value at another topology level, charges zero;
+    - when the touched extent is runtime data, the evaluator charges the
+      smallest bound its operand Types state statically.
   - `Reshape` MUST report zero traffic because it re-indexes the same elements.
     `Slice` MUST report one result-sized read and write, for both static and
     runtime bounds, because it moves only the region it keeps. `Transpose` MUST

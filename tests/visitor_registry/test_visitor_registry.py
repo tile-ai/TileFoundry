@@ -16,8 +16,10 @@ from dataclasses import fields
 import pytest
 
 import tilefoundry
+from tilefoundry.evaluator import eval_registry
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
 from tilefoundry.ir.types import DType, TensorType
@@ -27,7 +29,11 @@ from tilefoundry.visitor_registry.contexts import (
     TypeInferContext,
     VerifyContext,
 )
-from tilefoundry.visitor_registry.registries import codegen_cuda_registry
+from tilefoundry.visitor_registry.registries import (
+    codegen_cuda_registry,
+    cost_evaluator_registry,
+    typeinfer_registry,
+)
 from tilefoundry.visitor_registry.visitors import (
     CodegenVisitor,
     CostEvaluator,
@@ -37,6 +43,38 @@ from tilefoundry.visitor_registry.visitors import (
 
 def _t() -> TensorType:
     return TensorType.scalar(DType.f32)
+
+
+EXPECTED_MISSING = {
+    "argmax": ["eval"],
+    "cache_update": ["cost_evaluator"],
+    "clamp": ["eval"],
+    "conv2d": ["eval", "cost_evaluator"],
+    "insert_slice": ["cost_evaluator"],
+    "layer_norm": ["eval"],
+    "local": ["cost_evaluator"],
+    "mma_sm80_16x8x16": ["eval", "cost_evaluator"],
+    "quant": ["eval"],
+    "rank": ["eval", "cost_evaluator"],
+    "shape_compose": ["eval", "cost_evaluator"],
+    "shape_extract": ["eval", "cost_evaluator"],
+    "shape_of": ["eval", "cost_evaluator"],
+    "split": ["eval", "cost_evaluator"],
+    "stack": ["eval", "cost_evaluator"],
+    "wgmma_sm90_64x128x16": ["eval", "cost_evaluator"],
+}
+
+
+def test_every_real_op_has_typeinfer_value_and_cost() -> None:
+    """Report every real tf Op whose analysis registries are incomplete."""
+    registries = (typeinfer_registry, eval_registry, cost_evaluator_registry)
+    missing = {
+        schema.name: [registry.name for registry in registries if not registry.has(schema.op_class)]
+        for schema in iter_schemas()
+        if schema.dialect == "tf" and not schema.is_alias
+    }
+
+    assert {name: gaps for name, gaps in missing.items() if gaps} == EXPECTED_MISSING
 
 
 def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough() -> None:

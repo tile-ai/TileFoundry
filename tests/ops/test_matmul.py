@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.ops.cost_utils import CostCase, run_cost_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -21,16 +22,65 @@ from tests.ops.typeinfer_utils import (
 )
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
+from tilefoundry.ir.types.shard import Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Partial,
     Split,
 )
+from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _MM = MatMul()
 
 
 _M = make_mesh((4,))
+
+
+_CTA = Topology("cta", 5)
+_CTA_MESH = make_mesh((5,), topology=_CTA)
+
+
+COST_CASES = [
+    CostCase(
+        name="batch_from_broadcast_rhs",
+        op=_MM,
+        inputs=(
+            make_tensor_type((1, 1, 4), DType.f32),
+            make_tensor_type((5, 4, 3), DType.f32),
+        ),
+        flops={DType.f32: 2 * 5 * 1 * 4 * 3},
+        traffic=(
+            TrafficBytes(read=1 * 1 * 4 * 4),
+            TrafficBytes(read=5 * 4 * 3 * 4),
+            TrafficBytes(write=5 * 1 * 3 * 4),
+        ),
+    ),
+    CostCase(
+        name="cta_projection_uses_split_rhs_batch",
+        op=_MM,
+        inputs=(
+            make_tensor_type((1, 1, 4), DType.f32),
+            make_shard_tensor_type(
+                (5, 4, 3),
+                mesh=_CTA_MESH,
+                attrs=(Split(axis=0),),
+                dtype=DType.f32,
+            ),
+        ),
+        flops={DType.f32: 2 * 1 * 1 * 4 * 3},
+        traffic=(
+            TrafficBytes(read=1 * 1 * 4 * 4),
+            TrafficBytes(read=1 * 4 * 3 * 4),
+            TrafficBytes(write=1 * 1 * 3 * 4),
+        ),
+        level="cta",
+        topologies=(_CTA,),
+    ),
+]
+
+
+@pytest.mark.parametrize("case", COST_CASES, ids=lambda c: c.name)
+def test_matmul_cost(case):
+    run_cost_case(case)
 
 
 def _sharded(shape, attrs):
