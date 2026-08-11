@@ -52,15 +52,8 @@ EXPECTED_MISSING = {
     "conv2d": ["eval", "cost_evaluator"],
     "insert_slice": ["cost_evaluator"],
     "layer_norm": ["eval"],
-    "local": ["cost_evaluator"],
     "mma_sm80_16x8x16": ["eval", "cost_evaluator"],
     "quant": ["eval"],
-    "rank": ["eval", "cost_evaluator"],
-    "shape_compose": ["eval", "cost_evaluator"],
-    "shape_extract": ["eval", "cost_evaluator"],
-    "shape_of": ["eval", "cost_evaluator"],
-    "split": ["eval", "cost_evaluator"],
-    "stack": ["eval", "cost_evaluator"],
     "wgmma_sm90_64x128x16": ["eval", "cost_evaluator"],
 }
 

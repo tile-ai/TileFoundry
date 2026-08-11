@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import isl
+import torch
+
+from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shape_helpers import i64_const
+from tilefoundry.ir.types.shard import Dynamic, Layout, Partial, ShardLayout, try_c_order_strides
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelationResult,
+    build_relation,
+    register_type_relation,
+)
+from tilefoundry.visitor_registry.relation_build import build_domain
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
 @register_op
@@ -20,20 +32,112 @@ class Stack(Op):
     axis = ParamDef(kind="attribute", annotation=int)
 
 
+def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
+    raw_axis = call.target.axis
+    axis = raw_axis + rank + 1 if raw_axis < 0 else raw_axis
+    if not (0 <= axis <= rank):
+        ctx.error(call, f"axis {raw_axis} out of range for input rank {rank}")
+    return axis
+
+
+@register_type_relation(Stack)
+def _stack_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
+    rank = len(input_types[0].shape)
+    axis = _axis(call, ctx, rank)
+    output_shape = list(input_types[0].shape)
+    output_shape.insert(axis, len(input_types))
+    dims = [f"d{i}" for i in range(rank + 1)]
+    domain_text = ", ".join(dims)
+    input_text = ", ".join((*dims[:axis], *dims[axis + 1 :]))
+    input_maps = tuple(
+        isl.map(f"{{ [{domain_text}] -> [{input_text}] : d{axis} = {index} }}")
+        for index in range(len(input_types))
+    )
+    output_map = isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}")
+    return AccessRelationResult(
+        domain=build_domain(tuple(output_shape)), maps=(*input_maps, output_map)
+    )
+
+
+def _reject_dynamic_shards(call, ctx, types) -> None:
+    for index, type_ in enumerate(types):
+        layout = type_.layout
+        if isinstance(layout, ShardLayout) and any(
+            isinstance(attr, Dynamic) for attr in layout.attrs
+        ):
+            ctx.error(
+                call,
+                f"input {index} has dynamic shard ownership; use an explicit "
+                "Reshard before Stack",
+            )
+
+
+def _require_uniform_partial_slices(call, ctx, types, output: ShardLayout) -> None:
+    for mesh_axis, output_attr in enumerate(output.attrs):
+        if not isinstance(output_attr, Partial):
+            continue
+        for index, type_ in enumerate(types):
+            layout = type_.layout
+            input_attr = (
+                layout.attrs[mesh_axis]
+                if isinstance(layout, ShardLayout)
+                and layout.mesh == output.mesh
+                and mesh_axis < len(layout.attrs)
+                else None
+            )
+            if input_attr != output_attr:
+                ctx.error(
+                    call,
+                    f"input {index} does not carry {output_attr!r} on mesh axis "
+                    f"{mesh_axis}; use an explicit Reshard before Stack",
+                )
+
+
 @register_typeinfer(Stack)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
         ctx.error(call, "Stack requires at least one input")
     types = [ctx.type_of(a) for a in call.args]
     base = types[0]
-    for t in types[1:]:
+    for index, t in enumerate(types[1:], start=1):
         if t.shape != base.shape:
-            ctx.error(call, "Stack inputs must have identical shape")
+            ctx.error(call, f"input {index} shape must match input 0")
         if t.dtype != base.dtype:
-            ctx.error(call, "Stack inputs must have matching dtype")
-    axis = call.target.axis
-    new_len = i64_const(len(call.args))
+            ctx.error(call, f"input {index} dtype must match input 0")
+    axis = _axis(call, ctx, len(base.shape))
     new_shape = list(base.shape)
-    new_shape.insert(axis, new_len)
+    new_shape.insert(axis, len(call.args))
+    new_shape = tuple(new_shape)
+    _reject_dynamic_shards(call, ctx, types)
+    try:
+        relation = build_relation(call, tuple(types), ctx)
+        layout = derive_output_shard_layout(
+            tuple(types), relation, new_shape, fresh_strides=True
+        )
+    except ValueError as error:
+        ctx.error(
+            call,
+            f"cannot derive input ownership: {error}; use an explicit Reshard "
+            "before Stack",
+        )
+    if layout is not None:
+        _require_uniform_partial_slices(call, ctx, types, layout)
+        if getattr(layout.layout, "strides", None) is None:
+            first = next(
+                index for index, type_ in enumerate(types) if isinstance(type_.layout, ShardLayout)
+            )
+            ctx.error(
+                call,
+                f"input {first} ownership produces an unrepresentable result "
+                "layout; use an explicit Reshard before Stack",
+            )
+    else:
+        layout = Layout(shape=new_shape, strides=try_c_order_strides(new_shape))
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
-    return TensorType(shape=tuple(new_shape), dtype=base.dtype, layout=base.layout, storage=storage)
+    return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
+
+
+@register_eval(Stack)
+def _eval_stack(ctx):
+    data = torch.stack(tuple(arg.data for arg in ctx.args), dim=ctx.op.axis)
+    return TensorValue(data=data, type=ctx.result_type)

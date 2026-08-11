@@ -616,6 +616,16 @@ their input when it states one. An input with `layout=None` produces a view with
   layout carries the sliced shape and the retained strides (multiplied by any
   slice step). A runtime-bounded `Slice` MUST remain accepted with `layout=None`.
 
+##### Rank and ShapeOf
+
+- `Rank` produces a rank-0 `i64`; `ShapeOf` produces a rank-1 `i64` vector with
+  one entry per input axis.
+- Both results are host shape metadata with `layout=EMPTY_LAYOUT` and
+  `storage=None`, not device-resident tensors.
+- Evaluation MUST read the concrete runtime tensor rank and extents. A symbolic
+  input `TensorType.shape` is the result bound, not the value returned at
+  runtime.
+
 ##### ArgMax
 
 ```python
@@ -726,11 +736,50 @@ class Split(Op):
 ```
 
 - constraints:
+  - `axis` MUST resolve in `[-rank, rank)`, and `num_splits` MUST be positive.
   - A static selected extent MUST be divisible by `num_splits`; every output
     field has that extent divided by `num_splits` and otherwise preserves the
     input type.
   - A symbolic selected extent is retained in each output until a tighter
     symbolic quotient is available.
+  - Evaluation materializes `num_splits` equal tensors in axis order. Each
+    element carries exactly its corresponding inferred `TupleType` field,
+    including that field's storage and shard layout; the tuple aggregate has no
+    independent layout or storage.
+
+##### Stack
+
+```python
+class Stack(Op):
+    """Stack equal-shaped tensors along a new axis; produces a Tensor.
+
+    Attributes:
+        inputs: input; variadic tensors to stack.
+        axis: attribute; inserted result axis.
+        is_variadic: attribute; Whether the input parameter consumes all args.
+    """
+
+    inputs: Tensor
+    axis: int
+    is_variadic: ClassVar[bool] = True
+```
+
+- constraints:
+  - At least one input is required; every input MUST have the same shape and
+    dtype. `axis` MUST resolve in `[-rank-1, rank]`.
+  - The operation materializes one distinct result. The inserted axis is local
+    and unsharded, and the result layout is freshly derived over the result
+    shape rather than copied from any input.
+  - Stack states a relation in which input `i` accesses the result slice whose
+    inserted-axis coordinate is `i`; every old logical axis projects to the
+    corresponding result axis on the other side of the insertion. Shared shard
+    propagation derives any representable ownership from that relation.
+  - Compatible `Split` ownership carries to the shifted old logical axis. A
+    fully replicated input contributes no sharding. Incompatible input meshes
+    or per-axis states, a non-uniform `Partial` across result slices, and an
+    unrepresentable result layout MUST fail naming the conflicting input and
+    requiring an explicit `Reshard`; typeinfer MUST NOT select input zero's
+    layout or silently discard real ownership.
 
 ##### TupleGetItem
 
@@ -1224,6 +1273,9 @@ class Wgmma_SM90_64x128x16(Mma):
 Shape-level Ops on whole shape values (per-axis dim Ops are
 [types §3](./types.md#3-dtype)).
 
+Shape values are host metadata: their tensor types use `EMPTY_LAYOUT` and
+`storage=None`, and their evaluators move no device bytes.
+
 ##### ShapeExtract
 ```python
 class ShapeExtract(Op):
@@ -1329,6 +1381,8 @@ class Local(Op):
   - `dtype` and `storage` are preserved.
   - The shard wrapper is stripped, leaving the base `Layout`.
   - Static split sizes divide by mesh extent; symbolic sizes pass through.
+  - `Local` only names the current topology position's existing view; it
+    materializes no value and moves no bytes.
 
 ## 2. Function specialization API
 

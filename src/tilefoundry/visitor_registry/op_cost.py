@@ -27,6 +27,9 @@ from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
 from tilefoundry.ir.hir.nn.silu import Silu
 from tilefoundry.ir.hir.nn.softmax import SoftMax
 from tilefoundry.ir.hir.nn.tanh import Tanh
+from tilefoundry.ir.hir.shape.shape_compose import ShapeCompose
+from tilefoundry.ir.hir.shape.shape_extract import ShapeExtract
+from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.cast import Cast
@@ -34,10 +37,14 @@ from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.gather import Gather
 from tilefoundry.ir.hir.tensor.quant import Quant
+from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.split import Split
+from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -292,6 +299,21 @@ def _quant(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(TupleGetItem)
 def _tuple_get_item(call: Call, ctx: CostContext) -> Cost:
     return Cost({}, _idle(call))
+
+
+@register_cost_evaluator(Rank)
+@register_cost_evaluator(ShapeOf)
+@register_cost_evaluator(ShapeCompose)
+@register_cost_evaluator(ShapeExtract)
+@register_cost_evaluator(Local)
+def _metadata_view(call: Call, ctx: CostContext) -> Cost:
+    return Cost({}, _idle(call))
+
+
+@register_cost_evaluator(Split)
+@register_cost_evaluator(Stack)
+def _structure(call: Call, ctx: CostContext) -> Cost:
+    return Cost({}, _traffic(_input_types(call, ctx), _output_type(call, ctx)))
 
 
 @register_cost_evaluator(FullLike)

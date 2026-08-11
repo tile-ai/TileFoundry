@@ -49,10 +49,21 @@ class EvalCase:
     name: str
     op: object
     inputs: tuple[torch.Tensor, ...]
-    expected: torch.Tensor
+    expected: torch.Tensor | tuple
     atol: float = 1e-5
     rtol: float = 1e-5
     storages: tuple[str, ...] = field(default=())
+
+
+def _assert_value(actual, expected, *, atol: float, rtol: float) -> None:
+    if isinstance(expected, tuple):
+        assert isinstance(actual, tuple)
+        assert len(actual) == len(expected)
+        for actual_field, expected_field in zip(actual, expected):
+            _assert_value(actual_field, expected_field, atol=atol, rtol=rtol)
+        return
+    assert isinstance(actual, torch.Tensor)
+    torch.testing.assert_close(actual.float(), expected.float(), atol=atol, rtol=rtol)
 
 
 def run_eval_case(case: EvalCase) -> None:
@@ -66,11 +77,12 @@ def run_eval_case(case: EvalCase) -> None:
         Var(type=tensor_type_of(t, s), name=f"x{i}")
         for i, (t, s) in enumerate(zip(case.inputs, storages))
     )
-    call = Call(type=params[0].type, target=case.op, args=params)
+    placeholder = params[0].type if params else TensorType.meta_scalar()
+    call = Call(type=placeholder, target=case.op, args=params)
     result_type = TypeInferVisitor(TypeInferContext()).visit(call)
     call = replace(call, type=result_type)
     from tilefoundry.ir.hir.function import Function  # noqa: PLC0415 — avoid IR import cycle
 
     fn = Function.build(name="eval_case", params=params, body=call, return_type=result_type)
     out = evaluate(fn, *case.inputs, device="cpu")
-    torch.testing.assert_close(out.float(), case.expected.float(), atol=case.atol, rtol=case.rtol)
+    _assert_value(out, case.expected, atol=case.atol, rtol=case.rtol)

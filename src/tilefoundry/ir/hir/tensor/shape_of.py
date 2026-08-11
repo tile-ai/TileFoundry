@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import torch
+
+from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.expr import Constant
 from tilefoundry.ir.core.param_def import ParamDef
@@ -20,3 +24,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     rank_expr = Constant(type=TensorType.meta_scalar(), value=len(x_ty.shape))
     return TensorType(shape=(rank_expr,), dtype=DType.i64, layout=EMPTY_LAYOUT, storage=None)
+
+
+@register_eval(ShapeOf)
+def _eval_shape_of(ctx):
+    data = torch.tensor(tuple(ctx.args[0].data.shape), dtype=torch.int64)
+    return TensorValue(data=data, type=ctx.result_type)

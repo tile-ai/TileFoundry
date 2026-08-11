@@ -41,6 +41,17 @@ def partial_reductions_by_axis(
     )
 
 
+def _single_affine_piece(m: "isl.map") -> "isl.multi_aff":
+    """Return one affine access even when its iteration domain is restricted."""
+    pieces: list[isl.multi_aff] = []
+    m.as_pw_multi_aff().foreach_piece(lambda _domain, access: pieces.append(access))
+    if len(pieces) != 1:
+        raise ValueError(
+            f"shard propagation requires one affine access piece, got {len(pieces)}"
+        )
+    return pieces[0]
+
+
 def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
     """Classify each result (out) axis of *m* by how it accesses the domain: - ``("proj", d)``.
 
@@ -52,7 +63,7 @@ def _result_access(m: "isl.map") -> dict[int, "tuple[str, int | None]"]:
     - ``("complex", None)`` — multiple in-dims, a non-unit coefficient, or
       otherwise not a pure projection: not supported for shard propagation.
     """
-    ma = m.as_pw_multi_aff().as_multi_aff()
+    ma = _single_affine_piece(m)
     n_in = ma.dim(isl.dim_type.IN)
     n_out = ma.dim(isl.dim_type.OUT)
     out: dict[int, tuple[str, int | None]] = {}
@@ -78,7 +89,7 @@ def _involved_domain_dims(m: "isl.map") -> "set[int]":
     All domain (in) dims referenced by any result axis of *m* — including
     those that appear only inside a non-projection (complex) access.
     """
-    ma = m.as_pw_multi_aff().as_multi_aff()
+    ma = _single_affine_piece(m)
     n_in = ma.dim(isl.dim_type.IN)
     n_out = ma.dim(isl.dim_type.OUT)
     dims: set[int] = set()
@@ -226,9 +237,9 @@ def derive_output_shard_layout(
     if not sharded:
         return None
     mesh = sharded[0][1].mesh
-    for _, sl in sharded:
+    for i, sl in sharded:
         if sl.mesh != mesh:
-            raise ValueError("inputs reference different meshes")
+            raise ValueError(f"input {i} references a different mesh")
     mesh_rank = len(mesh.layout.shape)
 
     *input_maps, output_map = relation.maps
@@ -250,7 +261,8 @@ def derive_output_shard_layout(
                 new_attr: object = Partial(attr.reduction)
                 if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
                     raise ValueError(
-                        f"mesh axis {p}: incompatible output shard {attrs[p]} vs {new_attr}"
+                        f"input {i} mesh axis {p}: incompatible output shard "
+                        f"{attrs[p]} vs {new_attr}"
                     )
                 attrs[p] = new_attr
                 continue
@@ -284,7 +296,8 @@ def derive_output_shard_layout(
                 new_attr = Broadcast()
             if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
                 raise ValueError(
-                    f"mesh axis {p}: incompatible output shard {attrs[p]} vs {new_attr}"
+                    f"input {i} mesh axis {p}: incompatible output shard "
+                    f"{attrs[p]} vs {new_attr}"
                 )
             attrs[p] = new_attr
 

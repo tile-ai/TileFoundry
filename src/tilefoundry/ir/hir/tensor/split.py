@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import torch
+
+from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
@@ -31,8 +35,14 @@ class Split(Op):
 @register_typeinfer(Split)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
-    axis = call.target.axis
+    raw_axis = call.target.axis
+    rank = len(x_ty.shape)
+    axis = raw_axis + rank if raw_axis < 0 else raw_axis
+    if not (0 <= axis < rank):
+        ctx.error(call, f"axis {raw_axis} out of range for rank {rank}")
     n = call.target.num_splits
+    if n <= 0:
+        ctx.error(call, f"num_splits must be positive, got {n}")
     orig = x_ty.shape[axis]
     v = static_dim_value(orig)
     if v is not None:
@@ -63,3 +73,20 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         shape=part_shape, dtype=x_ty.dtype, layout=part_layout, storage=x_ty.storage
     )
     return TupleType(fields=tuple(part_ty for _ in range(n)))
+
+
+@register_eval(Split)
+def _eval_split(ctx):
+    source = ctx.args[0].data
+    axis = ctx.op.axis + source.ndim if ctx.op.axis < 0 else ctx.op.axis
+    n = ctx.op.num_splits
+    extent = source.shape[axis]
+    if extent % n:
+        raise ValueError(f"Split: runtime axis {axis} extent {extent} is not divisible by {n}")
+    parts = torch.chunk(source, n, dim=axis)
+    return TupleValue(
+        tuple(
+            TensorValue(data=part, type=field_type)
+            for part, field_type in zip(parts, ctx.result_type.fields)
+        )
+    )
