@@ -14,8 +14,16 @@ from typing import Union
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
-from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16 as HirMmaSM80_16x8x16
-from tilefoundry.ir.hir.cuda.nn.mma import Wgmma_SM90_64x128x16 as HirWgmma_SM90
+from tilefoundry.ir.hir.cuda.nn.mma import (
+    Mma_SM80_16x8x16 as HirMmaSM80_16x8x16,
+)
+from tilefoundry.ir.hir.cuda.nn.mma import (
+    Wgmma_SM90_64x128x16 as HirWgmma_SM90,
+)
+from tilefoundry.ir.hir.cuda.nn.mma import (
+    _derive_sm80_fragment_layout,
+    _is_lowerable_sm80_target,
+)
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
@@ -41,7 +49,13 @@ from tilefoundry.ir.tir.arith import (
     UnaryKind,
 )
 from tilefoundry.ir.tir.clamp import Clamp as TirClamp
-from tilefoundry.ir.tir.cuda.nn.mma import Mma as TirMma
+from tilefoundry.ir.tir.cuda.nn.mma import (
+    Mma as TirMma,
+)
+from tilefoundry.ir.tir.cuda.nn.mma import (
+    SM80_16x8x16_F32BF16BF16F32_TN,
+    make_atom,
+)
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
@@ -909,24 +923,46 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
 @register_hir_lowering(HirMmaSM80_16x8x16)
 @register_hir_lowering(HirWgmma_SM90)
 def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
+    if isinstance(target, HirWgmma_SM90):
+        raise ValueError(
+            "HirToTirPass: Wgmma_SM90_64x128x16 has no implemented TIR atom "
+            "or CUDA runtime; keep it as a logical Analyze node until WGMMA "
+            "lowering exists"
+        )
+    if not _is_lowerable_sm80_target(target):
+        raise ValueError(
+            "HirToTirPass: Mma_SM80_16x8x16 lowering supports only "
+            "BF16/BF16/F32 TN; choose that contract, Reshard to its exact "
+            "fragment layouts, and materialize-to-RMEM"
+        )
+    a_hir_ty = expr.args[0].type
+    b_hir_ty = expr.args[1].type
+    try:
+        c_layout = _derive_sm80_fragment_layout(a_hir_ty, b_hir_ty)
+    except ValueError as error:
+        raise ValueError(f"HirToTirPass: Mma_SM80_16x8x16: {error}") from None
+    if expr.type.layout != c_layout:
+        raise ValueError(
+            "HirToTirPass: Mma_SM80_16x8x16 result does not carry the derived "
+            "C fragment layout; Reshard both inputs to the exact A/B layouts "
+            "and materialize-to-RMEM"
+        )
+
     a = ctx.lower(expr.args[0])
     b = ctx.lower(expr.args[1])
-
-
-
-
-
-
-
-    if isinstance(target, HirMmaSM80_16x8x16):
-        out_shape = (2, 2)
-    else:
-        out_shape = expr.type.shape
+    base_atom = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
+    atom = replace(
+        base_atom,
+        A=a.type.layout,
+        B=b.type.layout,
+        C=c_layout,
+        required_scope=c_layout.mesh,
+    )
     out_type = TensorType(
-        shape=out_shape,
+        shape=(2, 2),
         dtype=target.dtype_acc,
-        layout=None,
-        storage=a.type.storage,
+        layout=c_layout,
+        storage=StorageKind.RMEM,
     )
     r = ctx.alloc(out_type, hint="r")
 
@@ -940,7 +976,7 @@ def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
     ctx.emit(_eval_call(Fill(), (r, zero_const)))
 
 
-    ctx.emit(_eval_call(TirMma(), (r, a, b)))
+    ctx.emit(_eval_call(TirMma(atom=atom), (r, a, b)))
     return r
 
 

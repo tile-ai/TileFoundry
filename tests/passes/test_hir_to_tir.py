@@ -20,10 +20,18 @@ from tilefoundry.dsl import (
 )
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
 from tilefoundry.ir.tir.arith import Binary as TirBinary
+from tilefoundry.ir.tir.cuda.nn.mma import (
+    Mma as TirMma,
+)
+from tilefoundry.ir.tir.cuda.nn.mma import (
+    SM80_16x8x16_F32BF16BF16F32_TN,
+    make_atom,
+)
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import DType, TensorType
@@ -191,3 +199,130 @@ def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
     )
 
     assert _collect_hir_callee_names(in_yield) == {"callee_fn"}
+
+
+_SM80_ATOM = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
+_SM80_OP = Mma_SM80_16x8x16(
+    dtype_a=DType.bf16, dtype_b=DType.bf16, dtype_acc=DType.f32
+)
+
+
+def _mma_module(op, a_type, b_type, result_type) -> Module:
+    a = Var(type=a_type, name="a")
+    b = Var(type=b_type, name="b")
+    body = Call(type=result_type, target=op, args=(a, b))
+    fn = HirFunction.build(
+        name="mma_kernel", params=(a, b), body=body, return_type=result_type
+    )
+    return Module(name="mma_test", functions=(fn,), entry=fn.name)
+
+
+def _find_tir_mma(stmt) -> Evaluate | None:
+    if isinstance(stmt, Evaluate) and isinstance(stmt.callable, TirMma):
+        return stmt
+    for attr in ("body", "stmts"):
+        value = getattr(stmt, attr, None)
+        if isinstance(value, (list, tuple)):
+            for child in value:
+                found = _find_tir_mma(child)
+                if found is not None:
+                    return found
+        elif value is not None and hasattr(value, "__dict__"):
+            found = _find_tir_mma(value)
+            if found is not None:
+                return found
+    return None
+
+
+def test_sm80_lowering_binds_the_existing_atom_instead_of_codegen_default() -> None:
+    a_type = TensorType((16, 16), DType.bf16, _SM80_ATOM.A, StorageKind.RMEM)
+    b_type = TensorType((16, 8), DType.bf16, _SM80_ATOM.B, StorageKind.RMEM)
+    result_type = TensorType((16, 8), DType.f32, _SM80_ATOM.C, StorageKind.RMEM)
+
+    lowered = HirToTirPass().run(
+        _mma_module(_SM80_OP, a_type, b_type, result_type)
+    )
+    mma = _find_tir_mma(lowered.functions[0].body)
+
+    assert mma is not None
+    assert mma.callable.atom is not None
+    assert mma.callable.atom.op is SM80_16x8x16_F32BF16BF16F32_TN
+
+
+@pytest.mark.parametrize(
+    ("op", "a_type", "b_type", "result_type", "match"),
+    [
+        pytest.param(
+            Wgmma_SM90_64x128x16(
+                dtype_a=DType.bf16, dtype_b=DType.bf16, dtype_acc=DType.f32
+            ),
+            TensorType((64, 16), DType.bf16, None, StorageKind.GMEM),
+            TensorType((16, 128), DType.bf16, None, StorageKind.GMEM),
+            TensorType((64, 128), DType.f32, None, StorageKind.GMEM),
+            r"Wgmma_SM90_64x128x16.*no implemented TIR atom",
+            id="wgmma",
+        ),
+        pytest.param(
+            _SM80_OP,
+            TensorType((16, 16), DType.bf16, None, StorageKind.RMEM),
+            TensorType((16, 8), DType.bf16, None, StorageKind.RMEM),
+            TensorType((16, 8), DType.f32, None, StorageKind.RMEM),
+            r"input 0.*Reshard.*materialize-to-RMEM",
+            id="plain_logical_types",
+        ),
+        pytest.param(
+            Mma_SM80_16x8x16(
+                dtype_a=DType.f16, dtype_b=DType.f16, dtype_acc=DType.f32
+            ),
+            TensorType((16, 16), DType.f16, _SM80_ATOM.A, StorageKind.RMEM),
+            TensorType((16, 8), DType.f16, _SM80_ATOM.B, StorageKind.RMEM),
+            TensorType((16, 8), DType.f32, _SM80_ATOM.C, StorageKind.RMEM),
+            r"supports only BF16/BF16/F32 TN.*materialize-to-RMEM",
+            id="unsupported_dtype",
+        ),
+        pytest.param(
+            Mma_SM80_16x8x16(
+                dtype_a=DType.bf16,
+                dtype_b=DType.bf16,
+                dtype_acc=DType.f32,
+                a_layout="N",
+                b_layout="T",
+            ),
+            TensorType((16, 16), DType.bf16, _SM80_ATOM.A, StorageKind.RMEM),
+            TensorType((16, 8), DType.bf16, _SM80_ATOM.B, StorageKind.RMEM),
+            TensorType((16, 8), DType.f32, _SM80_ATOM.C, StorageKind.RMEM),
+            r"supports only BF16/BF16/F32 TN.*Reshard",
+            id="unsupported_orientation",
+        ),
+        pytest.param(
+            _SM80_OP,
+            TensorType((16, 16), DType.bf16, _SM80_ATOM.A, StorageKind.GMEM),
+            TensorType((16, 8), DType.bf16, _SM80_ATOM.B, StorageKind.GMEM),
+            TensorType((16, 8), DType.f32, _SM80_ATOM.C, StorageKind.GMEM),
+            r"input 0.*not RMEM.*materialize-to-RMEM",
+            id="unsupported_storage",
+        ),
+        pytest.param(
+            _SM80_OP,
+            TensorType((16, 16), DType.bf16, _SM80_ATOM.A, StorageKind.RMEM),
+            TensorType(
+                (16, 8),
+                DType.bf16,
+                SL(
+                    layout=Layout(shape=(16, 8), strides=(8, 1)),
+                    attrs=(Split(0), Split(1)),
+                    mesh=_SM80_ATOM.B.mesh,
+                ),
+                StorageKind.RMEM,
+            ),
+            TensorType((16, 8), DType.f32, _SM80_ATOM.C, StorageKind.RMEM),
+            r"input 1.*known SM80 B fragment layout.*Reshard",
+            id="unsupported_layout",
+        ),
+    ],
+)
+def test_mma_lowering_refuses_unimplemented_contracts(
+    op, a_type, b_type, result_type, match
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        HirToTirPass().run(_mma_module(op, a_type, b_type, result_type))

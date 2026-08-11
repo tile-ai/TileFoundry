@@ -45,10 +45,7 @@ def _t() -> TensorType:
     return TensorType.scalar(DType.f32)
 
 
-EXPECTED_MISSING = {
-    "mma_sm80_16x8x16": ["eval", "cost_evaluator"],
-    "wgmma_sm90_64x128x16": ["eval", "cost_evaluator"],
-}
+EXPECTED_MISSING = {}
 
 
 def test_every_real_op_has_typeinfer_value_and_cost() -> None:

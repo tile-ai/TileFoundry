@@ -298,18 +298,31 @@ TIR shape based on whether `storage` is provided:
   a plain tensor (no `ShardLayout`) and copy from the shard view
   into the plain storage.
 
-#### `Mma_SM80_16x8x16` SSA Op lowering
+#### CUDA MMA SSA Op lowering
 
-The HIR `Mma_SM80_16x8x16` value Op lowers to a three-step TIR
-sequence:
+HIR-to-TIR accepts only `Mma_SM80_16x8x16` with the implemented
+BF16/BF16/F32 TN A/B fragment pair. Both inputs MUST carry their exact known
+`ShardLayout` on the same thread mesh in RMEM, and the HIR result MUST carry
+the derived C fragment. Plain logical Types are valid for HIR evaluation and
+Analyze but MUST fail here with a `Reshard` / materialize-to-RMEM remedy.
+Unsupported SM80 dtype, orientation, storage, or fragment layouts MUST also
+fail here rather than reaching CUDA codegen.
+
+The accepted value Op lowers to a three-step TIR sequence:
 
 1. `LetStmt` allocating a per-thread fragment buffer of shape
-   `(2, 2)` `f32` (matching the SM80 `CLayout` value-axis extent —
-   four elements per lane);
+   `(2, 2)` `f32`, carrying the known C fragment layout (four elements per
+   lane);
 2. `Evaluate(Fill, (r, 0.0))` to zero-initialise the
    accumulator so the underlying PTX `a*b + c` produces `a @ b`
    exactly;
-3. `Evaluate(TirMma, (a, b, r))`.
+3. `Evaluate(TirMma(atom=SM80_16x8x16_F32BF16BF16F32_TN), (r, a, b))`.
+
+The emitted TIR MMA MUST carry this realized atom; it MUST NOT rely on the
+current CUDA codegen fallback for `atom=None`. `Wgmma_SM90_64x128x16` has a
+logical HIR value/cost model but no TIR atom or runtime mapping, so this pass
+MUST reject it by name before emitting any TIR MMA. Adding a real WGMMA atom,
+fragment layouts, and runtime entry is a separate target implementation.
 
 Outer-level `add(acc, mma(a, b))` accumulation patterns lower to a
 separate `tir.arith.Binary` downstream.

@@ -1310,10 +1310,36 @@ class Wgmma_SM90_64x128x16(Mma):
 - constraints:
   - `Mma` is a marker base used for family dispatch and has no independent
     callable parameter surface.
-  - Both concrete operations MUST return a value-form tensor in `dtype_acc`,
-    preserving `a`'s layout and resolving storage from both operands.
-  - `Mma_SM80_16x8x16` returns shape `(16, 8)` and is warp-level;
-    `Wgmma_SM90_64x128x16` returns shape `(64, 128)` and is four-warp-level.
+  - HIR MMA is the two-input value `a @ b`; it has no accumulator input. The
+    evaluator converts the rounded operands to `dtype_acc` before multiplying.
+    The in-place `a*b+c` accumulator is introduced and zero-initialised only by
+    HIR-to-TIR lowering.
+  - `Mma_SM80_16x8x16` requires `a.shape == (16, 16)` and
+    `b.shape == (16, 8)`, and returns `(16, 8)`. `Wgmma_SM90_64x128x16`
+    requires `(64, 16)` and `(16, 128)`, and returns `(64, 128)`.
+  - Each operand dtype MUST equal its declared `dtype_a` / `dtype_b`. Supported
+    `(dtype_a, dtype_b, dtype_acc)` combinations are `(f16, f16, f16)`,
+    `(bf16, bf16, bf16)`, `(f16, f16, f32)`, `(bf16, bf16, f32)`, and
+    `(f32, f32, f32)`. Each orientation MUST be `N` or `T`; orientation names
+    the hardware encoding and does not transpose either logical HIR input.
+  - Plain logical input Types remain valid for evaluation and Analyze. Their
+    result has a fresh row-major logical layout when either operand has a plain
+    layout. Fully `Broadcast` `ShardLayout` inputs carry no real ownership and
+    therefore pin no result mesh.
+  - Only the known SM80 BF16/BF16/F32 TN A/B fragment pair in RMEM derives the
+    known C fragment. Its A/B layouts, `Split` bindings, thread topology, and
+    mesh shape MUST match, both operands MUST name the same mesh, and the
+    derived C layout uses that mesh. Any other genuine SM80 shard claim or
+    fragment in non-RMEM storage MUST fail with an explicit `Reshard` /
+    materialize-to-RMEM remedy.
+  - WGMMA has no representable fragment contract yet. A genuine WGMMA shard
+    claim MUST fail with an explicit `Reshard` remedy, while plain logical
+    WGMMA remains evaluable and analyzable.
+  - Cost is `2*M*N*K` in the operand dtype with exactly three traffic slots:
+    A read, B read, and result write. Byte residency and topology projection
+    come only from the selected operand/result Types.
+  - Physical lowering is narrower than the logical contract; see
+    [passes §7.1](./passes.md#71-hirtotirpass).
 
 #### `ir/hir/shape/`
 

@@ -13,6 +13,7 @@ import math
 
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.clamp import Clamp
 from tilefoundry.ir.hir.math.softplus import Softplus
@@ -121,6 +122,20 @@ def _matmul(call: Call, ctx: CostContext) -> Cost:
     batch = math.prod(output.shape[:-2])
     flops = 2 * batch * m * k * n
     return Cost({lhs.dtype: flops}, _traffic((lhs, rhs), output))
+
+
+@register_cost_evaluator(Mma_SM80_16x8x16)
+@register_cost_evaluator(Wgmma_SM90_64x128x16)
+def _mma(call: Call, ctx: CostContext) -> Cost:
+    a, b = _input_types(call, ctx)
+    output = _output_type(call, ctx)
+    if not all(isinstance(type_, TensorType) for type_ in (a, b, output)):
+        raise ValueError("MMA cost requires tensor inputs and output")
+    if isinstance(call.target, Mma_SM80_16x8x16):
+        m, n, k = 16, 8, 16
+    else:
+        m, n, k = 64, 128, 16
+    return Cost({a.dtype: 2 * m * n * k}, _traffic((a, b), output))
 
 
 @register_cost_evaluator(Conv2D)
