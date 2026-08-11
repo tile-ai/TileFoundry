@@ -208,8 +208,12 @@ class LoadedModule:
     not borrow each other's constants.
   - Before anything runs, `forward` MUST walk the readings its call graph
     actually reaches and refuse one that has no binding for a declared
-    `ConstTensor`, naming the child's path and the missing names. An attached
-    child no call reaches is not walked.
+    `ConstTensor`, naming the child's path and the missing names. What is
+    reached is what runs: the walk follows bodies, resolving each dispatch at
+    the extents this run was given, so an attached child no call reaches, a
+    variant no dispatch selects, and an offline converter's callees are all
+    outside it. A dispatch the walk cannot resolve stops the walk there rather
+    than claiming a branch.
   - The one device is chosen from the activations and the constants of exactly
     those reached readings; a spread MUST be refused, naming each device and
     what sits on it, and nothing is moved to resolve it. An attached child no

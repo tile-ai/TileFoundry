@@ -69,15 +69,15 @@ def child_module_of(root: "Module", caller: object, callee: object) -> "Module |
     return called if any(child is called for child in owner.modules) else None
 
 
-def _called_functions(function) -> tuple:
-    """Every Function the body of *function* calls directly.
+def _calls_in(function) -> tuple:
+    """Every ``Call`` on a Function that the body of *function* makes.
 
     Its own body and nothing else: a variant this dispatch did not select is
     not running, and a converter runs offline rather than here.
     """
     from tilefoundry.ir.core.expr import Call, child_exprs  # noqa: PLC0415 -- cycle
 
-    found: list[HirFunction] = []
+    found: list[Call] = []
     seen: set[int] = set()
 
     def visit(expr) -> None:
@@ -85,7 +85,7 @@ def _called_functions(function) -> tuple:
             return
         seen.add(id(expr))
         if isinstance(expr, Call) and isinstance(expr.target, HirFunction):
-            found.append(expr.target)
+            found.append(expr)
             for arg in expr.args:
                 visit(arg)
             return
@@ -94,6 +94,54 @@ def _called_functions(function) -> tuple:
 
     visit(getattr(function, "body", None))
     return tuple(found)
+
+
+def _extended_dims(params, arg_types, dims: dict) -> dict:
+    """*dims* plus the extents these argument types give *params*' DimVar axes."""
+    from tilefoundry.ir.types.dim import DimVar  # noqa: PLC0415 -- avoid import cycle
+
+    out = dict(dims)
+    for param, arg_type in zip(params, arg_types):
+        declared = getattr(param.type, "shape", None) or ()
+        given = getattr(arg_type, "shape", None) or ()
+        for axis, extent in zip(declared, given):
+            if (
+                isinstance(axis, DimVar)
+                and axis.name not in out
+                and isinstance(extent, int)
+                and not isinstance(extent, bool)
+            ):
+                out[axis.name] = extent
+    return out
+
+
+def _selected_target(call, dims: dict):
+    """The Function *call* runs, choosing a prototype's variant from *dims*.
+
+    A dispatch this walk cannot resolve is left as the prototype, whose body is
+    ``None``, so the walk stops there rather than claiming a branch.
+    """
+    from tilefoundry.ir.core.pattern import DimVarRangePat  # noqa: PLC0415 -- cycle
+    from tilefoundry.ir.hir.specialize import (  # noqa: PLC0415 -- avoid import cycle
+        SpecializationError,
+        variant_for,
+    )
+
+    callee = call.target
+    if not callee.variants:
+        return callee
+    stated = {
+        pattern.dim_var
+        for variant in callee.variants
+        for pattern in variant.specializations
+        if isinstance(pattern, DimVarRangePat)
+    }
+    if not stated <= set(dims):
+        return callee
+    try:
+        return variant_for(callee, dims)
+    except SpecializationError:
+        return callee
 
 
 def _validate_declared(module_name, source, value, decl_type) -> None:
@@ -604,35 +652,46 @@ class LoadedModule:
             f"LoadedModule {self.name!r} has no function, child module, or method {name!r}"
         )
 
-    def _reached(self, fn: ModuleFunction) -> tuple[tuple[str, "LoadedModule", object], ...]:
+    def _reached(
+        self, fn: ModuleFunction, dims: dict | None = None
+    ) -> tuple[tuple[str, "LoadedModule", object], ...]:
         """Every (path, reading, function) a call from *fn* under this one runs.
 
         The same resolver execution uses, so what is checked beforehand is what
-        will be reached. Reachability follows the body that runs: an attached
-        child no call reaches is not listed, and neither is one only an
-        unselected variant or an offline converter would have reached.
+        will be reached. Reachability follows the bodies that run: a variant no
+        dispatch selects, an offline converter, and an attached child no call
+        reaches are all absent. *dims* are the extents the run was given, which
+        is what lets a nested dispatch be resolved the way execution resolves it.
         """
         from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
             child_reading,
         )
+        from tilefoundry.ir.hir.function import bound_params  # noqa: PLC0415 -- cycle
 
         found: list[tuple[str, LoadedModule, object]] = []
         seen: set[tuple[int, int]] = set()
 
-        def visit(path: str, reading: "LoadedModule", function) -> None:
+        def visit(path: str, reading: "LoadedModule", function, extents: dict) -> None:
             key = (id(reading), id(function))
             if key in seen:
                 return
             seen.add(key)
             found.append((path, reading, function))
-            for callee in _called_functions(function):
-                child = child_reading(reading, callee)
+            for call in _calls_in(function):
+                declared = call.target
+                child = child_reading(reading, declared)
+                supplied = bound_params(declared, implicit_const=child is not None)
+                inner = _extended_dims(
+                    supplied, tuple(arg.type for arg in call.args), extents
+                )
+                callee = _selected_target(call, inner)
                 if child is None:
-                    visit(path, reading, callee)
+                    visit(path, reading, callee, inner)
                 else:
-                    visit(f"{path}.{child.name}" if path else child.name, child, callee)
+                    where = f"{path}.{child.name}" if path else child.name
+                    visit(where, child, callee, inner)
 
-        visit("", self, fn)
+        visit("", self, fn, dict(dims or {}))
         return tuple(found)
 
     def _run_bound(self, fn: ModuleFunction, *acts):
@@ -647,6 +706,7 @@ class LoadedModule:
         [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
         """
         from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
+            _dim_bindings,
             _run_bound,
             _selected_body,
         )
@@ -662,7 +722,7 @@ class LoadedModule:
         activations = iter(acts)
         for param in fn.params:
             args.append(self.constants[param.name] if param.is_const else next(activations))
-        reached = self._reached(_selected_body(fn, args))
+        reached = self._reached(_selected_body(fn, args), _dim_bindings(fn, args))
         self._require_bindings(fn, reached)
         return _run_bound(
             fn, args, device=self._placement(fn, acts, reached), reading=self

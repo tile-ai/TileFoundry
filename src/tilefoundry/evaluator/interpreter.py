@@ -285,6 +285,11 @@ def _bound_values(fn: Function, args) -> list[TensorValue]:
     ]
 
 
+def _dim_bindings(fn: Function, args) -> dict[str, int]:
+    """The extents these argument values give *fn*'s ``DimVar`` axes."""
+    return _bind_dim_vars(fn.params, _bound_values(fn, args))
+
+
 def _selected_body(fn: Function, args) -> Function:
     """The Function a call on *fn* with these argument values will run."""
     if not fn.variants:

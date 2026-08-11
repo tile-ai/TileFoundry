@@ -207,3 +207,56 @@ def test_preparation_stages_on_the_device_it_was_given() -> None:
 
     assert str(staged["w"].device) == "meta"
     assert str(reading.constants["w"].device) == "meta"
+
+
+@module(entry="pick")
+class _Nested:
+    near = _Broadcast
+    far = _Broadcast
+
+    @func
+    def pick(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+        pass
+
+    @pick.specialize(DimVarRangePat("n_resource", 1, 5))
+    def _(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+        return near(x)  # noqa: F821
+
+    @pick.specialize(DimVarRangePat("n_resource", 5, 9))
+    def _(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+        return far(x)  # noqa: F821
+
+
+@module(entry="root", target=CudaTarget("nvidia.h200_sxm"))
+class _OverDispatch:
+    nested = _Nested
+
+    @func
+    def root(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+        return nested(x)  # noqa: F821
+
+
+def _over_dispatch_reading():
+    return _OverDispatch.load(
+        _Weights(
+            {
+                "nested.near.w": torch.full((1,), 2.0),
+                "nested.far.w": torch.ones(1, device="meta"),
+            }
+        )
+    )
+
+
+def test_a_dispatch_inside_a_child_reaches_only_the_branch_it_selects() -> None:
+    """The extents the run was given resolve a nested dispatch as execution will."""
+    reading = _over_dispatch_reading()
+
+    assert torch.equal(reading.root(torch.ones(3)), torch.full((3,), 2.0))
+
+
+def test_a_branch_a_nested_dispatch_selects_is_placed_before_it_runs() -> None:
+    """Its child's weight is what the run needs, so it decides the device too."""
+    reading = _over_dispatch_reading()
+
+    with pytest.raises(ValueError, match="nested.far.w"):
+        reading.root(torch.ones(6))
