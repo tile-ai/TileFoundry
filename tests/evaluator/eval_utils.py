@@ -42,8 +42,8 @@ def tensor_type_of(t: torch.Tensor, storage: str = "gmem") -> TensorType:
 class EvalCase:
     """One declarative value case.
 
-    One declarative value case: apply ``op`` to concrete ``inputs`` and
-    expect ``expected`` (a torch tensor) within tolerance.
+    Apply ``op`` to concrete ``inputs`` and recursively compare ``expected``
+    tensor or tuple fields within tolerance.
     """
 
     name: str

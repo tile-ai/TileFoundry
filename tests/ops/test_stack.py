@@ -12,7 +12,7 @@ from tests.ops.cost_utils import CostCase, run_cost_case
 from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, infer_call, run_typeinfer_case
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
+from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, ShardLayout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
@@ -50,6 +50,18 @@ def test_stack_relation_carries_a_single_split_past_the_inserted_axis() -> None:
     assert split_target_axes(result.layout, result.shape) == (2,)
 
 
+def test_stack_relation_carries_uniform_partial_slices() -> None:
+    partial = make_shard_tensor_type(
+        (2, 8), mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+    )
+
+    result = infer_call(Stack(axis=1), partial, partial)
+
+    assert isinstance(result.layout, ShardLayout)
+    assert result.layout.layout.shape == result.shape
+    assert result.layout.attrs == (Partial("sum"),)
+
+
 CASES = [
     TypeInferCase(
         "incompatible_split_axes",
@@ -68,6 +80,30 @@ CASES = [
             make_shard_tensor_type((8, 8), mesh=make_mesh((2,)), attrs=(Split(0),)),
         ),
         ExpectedError(match=r"input 1 references a different mesh.*Reshard"),
+    ),
+    TypeInferCase(
+        "broadcast_operand_on_incompatible_mesh",
+        Stack(axis=0),
+        (
+            make_shard_tensor_type(
+                (8, 8), mesh=make_mesh((2,)), attrs=(Broadcast(),)
+            ),
+            make_shard_tensor_type(
+                (8, 8), mesh=make_mesh((4,)), attrs=(Split(0),)
+            ),
+        ),
+        ExpectedError(match=r"input 1 references a different mesh.*Reshard"),
+    ),
+    TypeInferCase(
+        "partial_and_plain_slices",
+        Stack(axis=0),
+        (
+            make_shard_tensor_type(
+                (8, 8), mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+            ),
+            make_tensor_type((8, 8)),
+        ),
+        ExpectedError(match=r"input 1 does not carry Partial.*Reshard"),
     ),
     TypeInferCase(
         "axis_out_of_range",

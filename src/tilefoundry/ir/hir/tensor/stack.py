@@ -72,6 +72,24 @@ def _reject_dynamic_shards(call, ctx, types) -> None:
             )
 
 
+def _require_compatible_meshes(call, ctx, types) -> None:
+    placed = [
+        (index, type_.layout)
+        for index, type_ in enumerate(types)
+        if isinstance(type_.layout, ShardLayout)
+    ]
+    if not placed:
+        return
+    mesh = placed[0][1].mesh
+    for index, layout in placed[1:]:
+        if layout.mesh != mesh:
+            ctx.error(
+                call,
+                f"input {index} references a different mesh; use an explicit "
+                "Reshard before Stack",
+            )
+
+
 def _require_uniform_partial_slices(call, ctx, types, output: ShardLayout) -> None:
     for mesh_axis, output_attr in enumerate(output.attrs):
         if not isinstance(output_attr, Partial):
@@ -109,6 +127,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape.insert(axis, len(call.args))
     new_shape = tuple(new_shape)
     _reject_dynamic_shards(call, ctx, types)
+    _require_compatible_meshes(call, ctx, types)
     try:
         relation = build_relation(call, tuple(types), ctx)
         layout = derive_output_shard_layout(
