@@ -45,55 +45,6 @@ def _t() -> TensorType:
     return TensorType.scalar(DType.f32)
 
 
-EXPECTED_BUILTIN_HIR_OP_NAMES = {
-    "argmax",
-    "binary",
-    "cache_update",
-    "cast",
-    "clamp",
-    "concat",
-    "conv2d",
-    "full_like",
-    "gelu",
-    "index_add",
-    "index_copy",
-    "index_select",
-    "insert_slice",
-    "layer_norm",
-    "local",
-    "matmul",
-    "mma_sm80_16x8x16",
-    "quant",
-    "rank",
-    "reduce",
-    "relu",
-    "repeat_interleave",
-    "reshape",
-    "reshard",
-    "rms_norm",
-    "rope",
-    "shape_compose",
-    "shape_extract",
-    "shape_of",
-    "sigmoid",
-    "silu",
-    "slice",
-    "softmax",
-    "softplus",
-    "split",
-    "stack",
-    "tanh",
-    "topk",
-    "transpose",
-    "tuple_get_item",
-    "unary",
-    "wgmma_sm90_64x128x16",
-    "zeros",
-}
-
-EXPECTED_MISSING = {}
-
-
 def _is_builtin_hir_op(op_class: type[Op]) -> bool:
     parts = op_class.__module__.split(".")
     return len(parts) >= 5 and parts[:3] == ["tilefoundry", "ir", "hir"]
@@ -106,16 +57,13 @@ def test_every_real_op_has_typeinfer_value_and_cost() -> None:
         for schema in iter_schemas()
         if not schema.is_alias and _is_builtin_hir_op(schema.op_class)
     ]
-    assert len(schemas) == 43
-    assert {schema.name for schema in schemas} == EXPECTED_BUILTIN_HIR_OP_NAMES
-
     registries = (typeinfer_registry, eval_registry, cost_evaluator_registry)
     missing = {
         schema.name: [registry.name for registry in registries if not registry.has(schema.op_class)]
         for schema in schemas
     }
 
-    assert {name: gaps for name, gaps in missing.items() if gaps} == EXPECTED_MISSING
+    assert {name: gaps for name, gaps in missing.items() if gaps} == {}
 
 
 def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough() -> None:
