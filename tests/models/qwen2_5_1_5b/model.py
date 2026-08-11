@@ -295,7 +295,7 @@ class Qwen2_5_1_5B:
     ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `Qwen2Model.embed_tokens`.
         return tf.reshape(
-            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden_size)
+            tf.index_select(w_embed, token_ids, dim=0), new_shape=(1, S, config.hidden_size)
         )
 
     @func

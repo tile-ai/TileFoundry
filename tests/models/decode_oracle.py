@@ -55,8 +55,8 @@ def one_ulp_at(reference: torch.Tensor) -> float:
 def agrees_to_one_rounding(got, want, msg: str = "") -> None:
     """*got* and *want* differ by at most one rounding at *want*'s scale.
 
-    For an assertion that isolates a single primitive boundary. Gather and copy
-    paths reassociate nothing and use `torch.equal` instead.
+    For an assertion that isolates a single primitive boundary. Index selection
+    and copy paths reassociate nothing and use `torch.equal` instead.
     """
     assert got.dtype == want.dtype, (
         f"comparing {got.dtype} against {want.dtype}; build the oracle at the "

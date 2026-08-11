@@ -555,7 +555,7 @@ class BaseExprVisitor:
           binding (``for ok in tile(extent, step)``).
 
         Other forms (constants, computed Expr indices, ellipsis, lists)
-        are deferred to gather/scatter ops and raise here.
+        are deferred to indexed read/write ops and raise here.
         """
         if isinstance(slc, ast.Tuple):
             elts = list(slc.elts)

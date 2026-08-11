@@ -2,7 +2,7 @@
 
 Loop axes prefix enclosed statements only; nested loops order outermost first.
 A carried buffer creates a distance-one dependence that scheduling must order.
-``DimVar`` extents become isl parameters. Data-dependent gathers fail closed
+``DimVar`` extents become isl parameters. Data-dependent selections fail closed
 instead of claiming a known slice. Small loops keep expected delta sets
 hand-transcribable; the corpus Analyze witness covers real tiled kernels.
 """
@@ -48,14 +48,15 @@ def dyn_carry(x: Tensor[(SEQ, 4), "f32"], y: Tensor[(SEQ, 4), "f32"]) -> Tensor[
 
 
 @func
-def data_gather(
+def data_index_select(
     x: Tensor[(8, 4), "f32"],
     y: Tensor[(4,), "f32"],
     idx: Tensor[(), "i32"],
 ) -> Tensor[(4,), "f32"]:
     o = mul(y, y)
     for i in tile(8):
-        o = add(o, gather(x, idx, axis=0))
+        selected = index_select(x, reshape(idx, new_shape=(1,)), dim=0)
+        o = add(o, reshape(selected, new_shape=(4,)))
     return o
 
 
@@ -184,11 +185,11 @@ def test_dynamic_extent_becomes_an_isl_parameter():
     assert _self_deltas(tg, "Binary1").is_equal(isl.set("[seq] -> { [1, 0, 0] : 4 <= seq <= 63 }"))
 
 
-def test_data_dependent_gather_fails_closed():
-    """Test data dependent gather fails closed.
+def test_data_dependent_index_select_fails_closed():
+    """Test data-dependent index selection fails closed.
 
-    A gather whose index is a value, not the loop's own induction variable,
+    An IndexSelect whose index is a value, not the loop's own induction variable,
     has no affine access map -- so extraction refuses rather than inventing one.
     """
     with pytest.raises(ExtractError, match="not an enclosing loop's induction variable"):
-        extract(data_gather)
+        extract(data_index_select)

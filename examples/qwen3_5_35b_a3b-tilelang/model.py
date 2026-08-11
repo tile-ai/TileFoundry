@@ -531,9 +531,19 @@ def build(config):
             # known offset. Each token then runs `top_k` independent SwiGLU
             # experts, batched over the (token, slot) pair, and their outputs are
             # mixed by the routing weights.
-            gate_w = tf.gather(w_gate, indices, axis=0)
-            up_w = tf.gather(w_up, indices, axis=0)
-            down_w = tf.gather(w_down, indices, axis=0)
+            flat_indices = tf.reshape(indices, new_shape=(S * _K,))
+            gate_w = tf.reshape(
+                tf.index_select(w_gate, flat_indices, dim=0),
+                new_shape=(S, _K, _I, _H),
+            )
+            up_w = tf.reshape(
+                tf.index_select(w_up, flat_indices, dim=0),
+                new_shape=(S, _K, _I, _H),
+            )
+            down_w = tf.reshape(
+                tf.index_select(w_down, flat_indices, dim=0),
+                new_shape=(S, _K, _H, _I),
+            )
             token_col = tf.reshape(tokens, new_shape=(S, 1, _H, 1))
             gate = tf.reshape(tf.cast(tf.matmul(gate_w, tf.cast(token_col, dtype=config.dt_w)), dtype=config.dt), new_shape=(S, _K, _I))
             up = tf.reshape(tf.cast(tf.matmul(up_w, tf.cast(token_col, dtype=config.dt_w)), dtype=config.dt), new_shape=(S, _K, _I))
@@ -769,7 +779,7 @@ def build(config):
         ) -> Tensor[(1, S, config.hidden), config.dt]:
             # HF `Qwen3_5MoeModel.embed_tokens`: the decoded token's own row.
             return tf.reshape(
-                tf.gather(table, token_ids, axis=0),
+                tf.index_select(table, token_ids, dim=0),
                 new_shape=(1, S, config.hidden),
             )
 

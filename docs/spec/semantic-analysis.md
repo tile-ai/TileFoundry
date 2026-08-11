@@ -193,5 +193,5 @@ operand layout / mesh compatibility it requires and its result layout;
 there is no uniform cross-op rule imposed from outside typeinfer.
 `Reshard` is the explicit op that changes a value's layout / mesh.
 
-For example, `Gather` owns whether an indexed access is a pure slice or a layout-preserving
-data-dependent gather.
+For example, `IndexSelect` owns whether an indexed access is a foldable
+one-element slice or a materializing data-dependent selection.

@@ -7,7 +7,7 @@ import isl
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
-from tilefoundry.ir.core import Constant, Op
+from tilefoundry.ir.core import Call, Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
@@ -19,6 +19,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
 )
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
@@ -33,6 +34,17 @@ class Reshape(Op):
 
 
 register_access_relation(Reshape)(identity_relations(1))
+
+
+def is_register_scalar_singleton_reshape(expr) -> bool:
+    """Whether ``expr`` only presents one register scalar as a 1-D tensor."""
+    return (
+        isinstance(expr, Call)
+        and isinstance(expr.target, Reshape)
+        and expr.args[0].type.shape == ()
+        and expr.args[0].type.storage is StorageKind.RMEM
+        and expr.type.shape == (1,)
+    )
 
 
 def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):

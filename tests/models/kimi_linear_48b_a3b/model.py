@@ -536,10 +536,10 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
 
         Routing has one subtlety that no config check catches. Selection reads
         ``sigmoid(logits) + e_score_correction_bias``; the routing weights are
-        gathered from the *unbiased* sigmoid scores. So the bias moves *which*
+        selected from the *unbiased* sigmoid scores. So the bias moves *which*
         experts run without appearing in *how much* they count. Recovering the
         unbiased score as ``biased_top_value - bias[index]`` is exact and needs only
-        an axis-0 gather, which is why there is no second gather over the score row.
+        an axis-0 selection, so there is no second selection over the score row.
 
         ``num_expert_group = topk_group = 1`` makes the published grouped-top-k the
         identity -- one group holds every expert, so nothing is ever masked out.
@@ -561,7 +561,15 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             top_biased, indices = tf.topk(biased, k=config.num_experts_per_token, axis=-1)
             # The weights come from the unbiased scores; subtracting the selected
             # experts' bias recovers them exactly.
-            unbiased = top_biased - tf.cast(tf.gather(bias, indices, axis=0), dtype="f32")
+            selected_bias = tf.reshape(
+                tf.index_select(
+                    bias,
+                    tf.reshape(indices, new_shape=(S * _TOPK,)),
+                    dim=0,
+                ),
+                new_shape=(S, _TOPK),
+            )
+            unbiased = top_biased - tf.cast(selected_bias, dtype="f32")
             denom = tf.reduce(unbiased, axes=(-1,), keepdim=True, kind="sum")
             # normalise, *then* scale: moe_renormalize is true and the scaling factor
             # is applied to the normalised weights, not folded into the denominator.
@@ -604,12 +612,22 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             tokens = tf.reshape(hn, new_shape=(S, config.hidden_size))
             weights, indices = router(tokens, w_router, bias, routed_scale)
 
-            # Expert selection is runtime data: the indices drive a gather of the
+            # Expert selection is runtime data: the indices select the
             # expert weights and a batched matmul over [tokens, top_k]. No static
             # 256-way expansion and no Python control flow.
-            g_sel = tf.gather(w_gate, indices, axis=0)
-            u_sel = tf.gather(w_up, indices, axis=0)
-            d_sel = tf.gather(w_down, indices, axis=0)
+            flat_indices = tf.reshape(indices, new_shape=(S * _TOPK,))
+            g_sel = tf.reshape(
+                tf.index_select(w_gate, flat_indices, dim=0),
+                new_shape=(S, _TOPK, _MI, config.hidden_size),
+            )
+            u_sel = tf.reshape(
+                tf.index_select(w_up, flat_indices, dim=0),
+                new_shape=(S, _TOPK, _MI, config.hidden_size),
+            )
+            d_sel = tf.reshape(
+                tf.index_select(w_down, flat_indices, dim=0),
+                new_shape=(S, _TOPK, config.hidden_size, _MI),
+            )
             tok4 = tf.reshape(tokens, new_shape=(S, 1, config.hidden_size, 1))
             gate = tf.reshape(tf.matmul(g_sel, tok4), new_shape=(S, _TOPK, _MI))
             up = tf.reshape(tf.matmul(u_sel, tok4), new_shape=(S, _TOPK, _MI))

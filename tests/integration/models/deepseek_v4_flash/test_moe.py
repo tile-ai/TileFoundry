@@ -6,7 +6,7 @@ from tilefoundry.ir.constraints import LayoutConstraint, constraint_metadata
 from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.hir.tensor.gather import Gather
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -76,7 +76,7 @@ def test_routed_path_is_ordinary_batched_dataflow() -> None:
     moe_topk = deepseek_v4_flash_module.lookup("moe_topk")
 
     op_types = {type(call.target) for call in _calls(moe_experts_core)}
-    assert {Gather, MatMul}.issubset(op_types)
+    assert {IndexSelect, MatMul}.issubset(op_types)
     assert any(type(call.target).__name__ == "Cast" for call in _calls(moe_experts_core))
     assert any(type(call.target).__name__ == "Reshape" for call in _calls(moe_experts_core))
     assert moe_topk.return_type.shape == (1, N_ACT, DIM)
@@ -95,7 +95,7 @@ def test_routed_path_is_ordinary_batched_dataflow() -> None:
     assert len(topk_elements) == 1
     assert all(element.type.shape == (1, N_ACT) for element in topk_elements)
     assert any(
-        isinstance(call.target, Gather) and call.type.shape == (1, N_ACT)
+        isinstance(call.target, IndexSelect) and call.type.shape == (N_ACT,)
         for call in _calls(moe_topk)
     )
     assert any(

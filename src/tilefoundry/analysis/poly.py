@@ -20,7 +20,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.full_like import FullLike
-from tilefoundry.ir.hir.tensor.gather import Gather
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
@@ -144,7 +144,7 @@ def _buffer_namer():
             name = f"{name_for(expr.args[0])}_{expr.target.index}"
             seen[key] = name
             return name
-        if isinstance(expr, Call) and isinstance(expr.target, (Reshape, Gather)):
+        if isinstance(expr, Call) and isinstance(expr.target, (Reshape, IndexSelect)):
             name = name_for(expr.args[0])
             seen[key] = name
             return name
@@ -180,18 +180,19 @@ def _buffer_namer():
 
         ``m`` (a read of ``expr``) rewritten to address ``expr``'s ultimate
         buffer, folding each view hop between the two into the map's range: a
-        reshape recomputes the coordinates, a gather indexed by an enclosing
-        loop's induction variable inserts that loop's own domain dimension at
-        the gathered axis.
+        reshape recomputes the coordinates, and a one-element index_select
+        replaces its selected coordinate with an enclosing loop's induction
+        variable.
         """
         while isinstance(expr, Call):
             target = expr.target
             if isinstance(target, Reshape):
                 m = m.apply_range(flat_reshape_map(expr.args[0].type.shape, expr.type.shape))
-            elif isinstance(target, Gather):
-                axis, pos = _gather_loop_axis(expr, loops)
-                m = m.insert_dims(isl.dim_type.OUT, axis, 1).equate(
-                    isl.dim_type.IN, pos, isl.dim_type.OUT, axis
+            elif isinstance(target, IndexSelect):
+                dim, pos = _index_select_loop_dim(expr, loops)
+                m = m.project_out(isl.dim_type.OUT, dim, 1)
+                m = m.insert_dims(isl.dim_type.OUT, dim, 1).equate(
+                    isl.dim_type.IN, pos, isl.dim_type.OUT, dim
                 )
             else:
                 break
@@ -203,30 +204,35 @@ def _buffer_namer():
     return name_for
 
 
-def _gather_loop_axis(call: Call, loops: tuple[_Loop, ...]) -> tuple[int, int]:
-    """``(gathered axis, enclosing-loop position)`` for a ``Gather`` extract can fold as a view.
+def _index_select_loop_dim(call: Call, loops: tuple[_Loop, ...]) -> tuple[int, int]:
+    """Return the selected dim and loop position for a foldable IndexSelect.
 
-    ``(gathered axis, enclosing-loop position)`` for a ``Gather`` extract
-    can fold as a view: a scalar index that *is* one enclosing loop's
-    induction variable. Anything else raises -- extract has no way to place a
-    data-dependent index in an affine access map.
+    The only affine form is the strict torch index built by reshaping one
+    enclosing induction variable to shape ``(1,)``. Anything else is
+    data-dependent and has no affine access map.
     """
     x_rank = len(call.args[0].type.shape)
-    axis = call.target.axis
-    axis = axis + x_rank if axis < 0 else axis
+    dim = call.target.dim
+    dim = dim + x_rank if dim < 0 else dim
     index = call.args[1]
-    if call.target.batch_dims or getattr(index.type, "shape", None) != ():
+    if not (
+        isinstance(index, Call)
+        and isinstance(index.target, Reshape)
+        and tuple(index.type.shape) == (1,)
+        and len(index.args) == 1
+    ):
         raise ExtractError(
-            "extract: Gather is only modelled for a scalar, non-batched index "
-            f"(got batch_dims={call.target.batch_dims}, index shape "
-            f"{getattr(index.type, 'shape', None)!r})"
+            "extract: IndexSelect is only modelled for an enclosing loop's "
+            "induction variable reshaped to a one-element index "
+            f"(got index shape {getattr(index.type, 'shape', None)!r})"
         )
+    scalar_index = index.args[0]
     for pos, loop in enumerate(loops):
-        if loop.var is index:
-            return axis, pos
+        if loop.var is scalar_index:
+            return dim, pos
     raise ExtractError(
-        "extract: Gather index is not an enclosing loop's induction variable "
-        "-- a data-dependent gather has no affine access map; only "
+        "extract: IndexSelect index is not an enclosing loop's induction variable "
+        "-- a data-dependent selection has no affine access map; only "
         "loop-index addressing (a tile-loop slice) is modelled"
     )
 
@@ -360,7 +366,7 @@ def _read_map(
     """Read map.
 
     A read access for input ``arg``, pierced through any reshape / loop-index
-    gather view (``namer.pierce``) before binding -- the view-fold's landing
+    selection view (``namer.pierce``) before binding -- the view-fold's landing
     point for every op's input side (an op's own output buffer never needs
     piercing, a reshape output is never written to).
     """
@@ -796,7 +802,7 @@ def _walk_calls(
             table[id(e)] = _resolve(callee.body, table)
             continue
 
-        if isinstance(target, (TupleGetItem, Reshape, Gather)):
+        if isinstance(target, (TupleGetItem, Reshape, IndexSelect)):
             table[id(e)] = _maybe_replace_args(e, resolved_args)
             continue
 

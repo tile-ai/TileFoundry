@@ -54,8 +54,10 @@ EXPECTED_BUILTIN_HIR_OP_NAMES = {
     "concat",
     "conv2d",
     "full_like",
-    "gather",
     "gelu",
+    "index_add",
+    "index_copy",
+    "index_select",
     "insert_slice",
     "layer_norm",
     "local",
@@ -104,7 +106,7 @@ def test_every_real_op_has_typeinfer_value_and_cost() -> None:
         for schema in iter_schemas()
         if not schema.is_alias and _is_builtin_hir_op(schema.op_class)
     ]
-    assert len(schemas) == 41
+    assert len(schemas) == 43
     assert {schema.name for schema in schemas} == EXPECTED_BUILTIN_HIR_OP_NAMES
 
     registries = (typeinfer_registry, eval_registry, cost_evaluator_registry)

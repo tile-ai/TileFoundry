@@ -880,34 +880,66 @@ class Cast(Op):
     i64, bool}`; evaluating a `Cast` to a dtype outside this set (e.g. `f4e2m1`)
     raises an unsupported-dtype error.
 
-##### Gather
+##### IndexAdd / IndexCopy / IndexSelect
 ```python
-class Gather(Op):
-    """Gather along one axis, optionally batched; produces a Tensor.
+class IndexAdd(Op):
+    """Return dst with src slices accumulated at index along dim."""
+    dst: Tensor
+    index: Tensor
+    src: Tensor
+    dim: int = 0
 
-    Attributes:
-        x: input; source.
-        indices: input; integer index tensor.
-        axis: attribute; gathered axis.
-        batch_dims: attribute; number of leading batched dims.
-    """
+class IndexCopy(Op):
+    """Return dst with src slices copied to index along dim."""
+    dst: Tensor
+    index: Tensor
+    src: Tensor
+    dim: int = 0
 
+class IndexSelect(Op):
+    """Select whole slices from x at index along dim."""
     x: Tensor
-    indices: Tensor
-    axis: int
-    batch_dims: int = 0
+    index: Tensor
+    dim: int = 0
 ```
+
+These are pure value forms of torch's whole-slice indexing family
+([`torch.index_select`](https://pytorch.org/docs/stable/generated/torch.index_select.html),
+[`Tensor.index_add_`](https://pytorch.org/docs/stable/generated/torch.Tensor.index_add_.html),
+[`Tensor.index_copy_`](https://pytorch.org/docs/stable/generated/torch.Tensor.index_copy_.html)).
+They do not mutate an input. `torch.gather` is the separate elementwise-indexing
+operation and is not an HIR op.
+
 - constraints:
-  - Result shape is `x.shape[:axis] + index.shape[batch_dims:] + x.shape[axis+1:]`; the gathered `axis` is replaced by `index`'s non-batch dims, and `x`'s other dims pass through.
-  - `batch_dims` MUST satisfy `0 <= batch_dims <= min(axis, rank(index))`, and the leading `batch_dims` dims of `x` and `index` MUST be equal.
-  - Element rule: `out[c.., i.., t..] = x[c.., index[b.., i..], t..]`, where the first `batch_dims` of the `axis` leading dims also index `index`.
-  - `batch_dims=0` (default) inserts the full `index` shape at `axis`; a leading-dimension shape coincidence MUST NOT implicitly enable batching — batching is selected only by an explicit positive `batch_dims`.
-  - `batch_dims > 0` is defined for type inference and evaluation over unsharded or fully replicated (`Broadcast`) operands; value-carrying `ShardLayout` operands and the HIR→TIR lowering of a batched gather are not yet supported and MUST fail closed.
-  - `Gather` produces a new tensor: for a `ShardLayout` operand, the internal `Layout` is always natural contiguous over the output shape; it MUST NOT be inherited from the input.
-  - Only the shard `attrs` migrate, per mesh axis. `Broadcast` and `Partial` carry through unchanged — gather is a linear row selection (`gather(Σᵢ xᵢ) == Σᵢ gather(xᵢ)`).
-  - A `Split` targeting the gathered axis produces `Partial(sum)` on that mesh axis (each device already holds the true value at the rows it owns and a zero row elsewhere, so summing the per-device partials across the mesh axis reconstructs the true gather).
-  - A `Split` targeting another axis carries through, with its logical axis renumbered for the axis removed at the gathered `axis` and `index`'s non-batch dims inserted in its place.
-  - Multiple `Split`s where one targets the gathered axis, and a composed layout, have no derivable output and MUST fail closed.
+  - Every `dim` accepts torch-style negative indexing and MUST be in range for
+    the data tensor's rank.
+  - `IndexSelect.index` MUST be rank 1 with dtype i32 or i64. Its result has
+    `x`'s rank, dtype, and storage; `shape[dim]` becomes `index.shape[0]` and all
+    other extents are unchanged.
+  - `IndexSelect` produces a natural contiguous internal `Layout` for a
+    `ShardLayout` input. `Broadcast` and `Partial` states carry through; a
+    `Split` on `dim` becomes `Partial(sum)`, and a `Split` on another dim keeps
+    its target. Multiple `Split`s including `dim`, or a composed shard layout,
+    MUST fail closed.
+  - HIR-to-TIR lowers `IndexSelect` as a view only when `index.shape == (1,)`
+    and every input extent before `dim` is `1`. Other forms require a
+    materializing selection and MUST fail closed.
+  - `IndexAdd` and `IndexCopy` require rank-1 `index`, equal `dst`/`src` dtype
+    and rank, equal non-`dim` extents, and
+    `index.shape[0] == src.shape[dim]`. Their result type is exactly `dst`'s.
+  - `IndexAdd.index` accepts i32 or i64. Repeated indices accumulate. Its value
+    rule uses torch's default `alpha=1`; scaling `src` is explicit HIR.
+  - `IndexCopy.index` accepts i64 only. Repeated indices have undefined output
+    because torch's last copy is nondeterministic; consumers MUST NOT rely on an
+    order.
+  - `IndexAdd` and `IndexCopy` reject a `Partial` on `dst`, `index`, or `src`.
+    Complete `Split` and `Broadcast` layouts remain logical HIR types.
+  - `IndexAdd` and `IndexCopy` have type inference, cost, and evaluator
+    semantics only. No HIR-to-TIR lowering is registered.
+  - `IndexAdd` charges one add and reads `src`, `index`, and the addressed `dst`
+    slices before writing those slices. `IndexCopy` charges no arithmetic and
+    does not read the overwritten `dst` slices. Neither cost scales with the
+    full `dst` extent.
 
 ##### Zeros
 ```python

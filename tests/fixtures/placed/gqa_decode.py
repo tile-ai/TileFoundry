@@ -89,14 +89,32 @@ class GqaOnline:
             for i in tile(C):
                 k_i = tf.reshape(
                     tf.cast(
-                        tf.repeat_interleave(tf.gather(k_cache, i, axis=1), repeats=_G, axis=1),
+                        tf.repeat_interleave(
+                            tf.reshape(
+                                tf.index_select(
+                                    k_cache, tf.reshape(i, new_shape=(1,)), dim=1
+                                ),
+                                new_shape=(1, _HKV, _D),
+                            ),
+                            repeats=_G,
+                            axis=1,
+                        ),
                         dtype="f32",
                     ),
                     new_shape=(1, 1, _HQ, _D),
                 )
                 v_i = tf.reshape(
                     tf.cast(
-                        tf.repeat_interleave(tf.gather(v_cache, i, axis=1), repeats=_G, axis=1),
+                        tf.repeat_interleave(
+                            tf.reshape(
+                                tf.index_select(
+                                    v_cache, tf.reshape(i, new_shape=(1,)), dim=1
+                                ),
+                                new_shape=(1, _HKV, _D),
+                            ),
+                            repeats=_G,
+                            axis=1,
+                        ),
                         dtype="f32",
                     ),
                     new_shape=(1, 1, _HQ, _D),

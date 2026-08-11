@@ -116,13 +116,13 @@ class _MovementCosts:
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class _Gathered:
+class _IndexSelected:
     @func
     def main(
         table: ConstTensor[(1024, 64), "f32"],
         rows: ConstTensor[(4,), "i32"],
     ):
-        return tf.gather(table, rows, axis=0)
+        return tf.index_select(table, rows, dim=0)
 
 
 @module(entry="plain", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
@@ -385,8 +385,8 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
     assert traffic.read == 0
 
 
-def test_a_gather_reads_the_rows_it_names_and_not_the_table() -> None:
-    result, entry = _run(_Gathered, "compute-cost")
+def test_index_select_reads_the_rows_it_names_and_not_the_table() -> None:
+    result, entry = _run(_IndexSelected, "compute-cost")
 
     record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
     assert record is not None

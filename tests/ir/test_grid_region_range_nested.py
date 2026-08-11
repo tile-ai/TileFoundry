@@ -31,7 +31,8 @@ def _range_start_step(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
     acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
     acc = tf.full_like(acc, value=0.0)
     for i in range(1, _M, 2):  # noqa: F821 — odd indices
-        acc = acc + tf.gather(x, i, axis=0)
+        selected = tf.index_select(x, tf.reshape(i, new_shape=(1,)), dim=0)
+        acc = acc + tf.reshape(selected, new_shape=())
     return acc
 
 
@@ -41,9 +42,11 @@ def _nested_sum(x: Tensor[(_M, _K), "f32"]) -> Tensor[(), "f32"]:
     total = tf.reduce(x, axes=(0, 1), keepdim=False, kind=_SUM)
     total = tf.full_like(total, value=0.0)
     for r in range(_M):  # noqa: F821
-        row = tf.gather(x, r, axis=0)
+        selected_row = tf.index_select(x, tf.reshape(r, new_shape=(1,)), dim=0)
+        row = tf.reshape(selected_row, new_shape=(_K,))
         for c in tile(_K):  # noqa: F821
-            total = total + tf.gather(row, c, axis=0)
+            selected = tf.index_select(row, tf.reshape(c, new_shape=(1,)), dim=0)
+            total = total + tf.reshape(selected, new_shape=())
     return total
 
 
@@ -52,7 +55,8 @@ def _dim_expr_half_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
     acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
     acc = tf.full_like(acc, value=0.0)
     for i in tile(_M // 2):  # noqa: F821 — dim-expression extent
-        acc = acc + tf.gather(x, i, axis=0)
+        selected = tf.index_select(x, tf.reshape(i, new_shape=(1,)), dim=0)
+        acc = acc + tf.reshape(selected, new_shape=())
     return acc
 
 
@@ -93,7 +97,8 @@ def _interleaved_two_partial_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
         pacc = tf.full_like(pacc, value=0.0)
         for i in tile(_M // _NSPLIT):  # noqa: F821 — inner: this partial's indices
             idx = p + i * _NSPLIT
-            pacc = pacc + tf.gather(x, idx, axis=0)
+            selected = tf.index_select(x, tf.reshape(idx, new_shape=(1,)), dim=0)
+            pacc = pacc + tf.reshape(selected, new_shape=())
         g = g + pacc
     return g
 

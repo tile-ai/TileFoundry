@@ -582,9 +582,14 @@ def _submodules(config: DSV4Config):
             ],
         ) -> Tensor[(1, config.n_act, config.dim), "bf16"]:
             xt = tf.reshape(x, new_shape=(1, config.dim))
+            flat_eids = tf.reshape(eids, new_shape=(config.n_act,))
 
-            gathered_w1 = tf.cast(tf.gather(w1_weight, eids, axis=0), dtype="bf16")
-            gathered_s1 = tf.cast(tf.gather(w1_scale, eids, axis=0), dtype="bf16")
+            gathered_w1 = tf.cast(
+                tf.index_select(w1_weight, flat_eids, dim=0), dtype="bf16"
+            )
+            gathered_s1 = tf.cast(
+                tf.index_select(w1_scale, flat_eids, dim=0), dtype="bf16"
+            )
             w1 = tf.reshape(
                 tf.reshape(
                     gathered_w1,
@@ -603,8 +608,12 @@ def _submodules(config: DSV4Config):
                 new_shape=(1, config.n_act, config.moe_inter, config.dim),
             )
 
-            gathered_w3 = tf.cast(tf.gather(w3_weight, eids, axis=0), dtype="bf16")
-            gathered_s3 = tf.cast(tf.gather(w3_scale, eids, axis=0), dtype="bf16")
+            gathered_w3 = tf.cast(
+                tf.index_select(w3_weight, flat_eids, dim=0), dtype="bf16"
+            )
+            gathered_s3 = tf.cast(
+                tf.index_select(w3_scale, flat_eids, dim=0), dtype="bf16"
+            )
             w3 = tf.reshape(
                 tf.reshape(
                     gathered_w3,
@@ -623,8 +632,12 @@ def _submodules(config: DSV4Config):
                 new_shape=(1, config.n_act, config.moe_inter, config.dim),
             )
 
-            gathered_w2 = tf.cast(tf.gather(w2_weight, eids, axis=0), dtype="bf16")
-            gathered_s2 = tf.cast(tf.gather(w2_scale, eids, axis=0), dtype="bf16")
+            gathered_w2 = tf.cast(
+                tf.index_select(w2_weight, flat_eids, dim=0), dtype="bf16"
+            )
+            gathered_s2 = tf.cast(
+                tf.index_select(w2_scale, flat_eids, dim=0), dtype="bf16"
+            )
             w2 = tf.reshape(
                 tf.reshape(
                     gathered_w2,
@@ -715,7 +728,7 @@ def _submodules(config: DSV4Config):
         ) -> Tensor[(1, config.n_act, config.dim), "bf16"]:
             # Hash routing: expert ids come from a per-token-id table lookup
             # (tid2eid[token_ids]), not a learned top-k selection, and no bias
-            # is added before the gather.
+            # is added before index selection.
             #
             # tid2eid is stored i64 on disk despite being declared int32 in
             # the reference model -- loaded as i64 directly, matching
@@ -727,8 +740,15 @@ def _submodules(config: DSV4Config):
             )
             softplus = tf.log(tf.exp(gate) + tf.full_like(gate, value=1.0))
             scores = softplus * tf.rsqrt(softplus)
-            eids = tf.gather(tid2eid, token_ids, axis=0)
-            gweights = tf.gather(scores, eids, axis=1, batch_dims=1)
+            eids = tf.index_select(tid2eid, token_ids, dim=0)
+            gweights = tf.reshape(
+                tf.index_select(
+                    tf.reshape(scores, new_shape=(config.n_routed,)),
+                    tf.reshape(eids, new_shape=(config.n_act,)),
+                    dim=0,
+                ),
+                new_shape=(1, config.n_act),
+            )
             weight_sum = tf.reduce(
                 gweights, axes=(-1,), keepdim=True, kind=ReduceKind.SUM
             )
@@ -932,9 +952,14 @@ def _submodules(config: DSV4Config):
             ],
         ) -> Tensor[(1, config.n_act, config.dim), "bf16"]:
             xt = tf.reshape(x, new_shape=(1, config.dim))
+            flat_eids = tf.reshape(eids, new_shape=(config.n_act,))
 
-            gathered_w1 = tf.cast(tf.gather(w1_weight, eids, axis=0), dtype="bf16")
-            gathered_s1 = tf.cast(tf.gather(w1_scale, eids, axis=0), dtype="bf16")
+            gathered_w1 = tf.cast(
+                tf.index_select(w1_weight, flat_eids, dim=0), dtype="bf16"
+            )
+            gathered_s1 = tf.cast(
+                tf.index_select(w1_scale, flat_eids, dim=0), dtype="bf16"
+            )
             w1 = tf.reshape(
                 tf.reshape(
                     gathered_w1,
@@ -953,8 +978,12 @@ def _submodules(config: DSV4Config):
                 new_shape=(1, config.n_act, config.moe_inter, config.dim),
             )
 
-            gathered_w3 = tf.cast(tf.gather(w3_weight, eids, axis=0), dtype="bf16")
-            gathered_s3 = tf.cast(tf.gather(w3_scale, eids, axis=0), dtype="bf16")
+            gathered_w3 = tf.cast(
+                tf.index_select(w3_weight, flat_eids, dim=0), dtype="bf16"
+            )
+            gathered_s3 = tf.cast(
+                tf.index_select(w3_scale, flat_eids, dim=0), dtype="bf16"
+            )
             w3 = tf.reshape(
                 tf.reshape(
                     gathered_w3,
@@ -973,8 +1002,12 @@ def _submodules(config: DSV4Config):
                 new_shape=(1, config.n_act, config.moe_inter, config.dim),
             )
 
-            gathered_w2 = tf.cast(tf.gather(w2_weight, eids, axis=0), dtype="bf16")
-            gathered_s2 = tf.cast(tf.gather(w2_scale, eids, axis=0), dtype="bf16")
+            gathered_w2 = tf.cast(
+                tf.index_select(w2_weight, flat_eids, dim=0), dtype="bf16"
+            )
+            gathered_s2 = tf.cast(
+                tf.index_select(w2_scale, flat_eids, dim=0), dtype="bf16"
+            )
             w2 = tf.reshape(
                 tf.reshape(
                     gathered_w2,
@@ -1071,7 +1104,14 @@ def _submodules(config: DSV4Config):
             scores = softplus * tf.rsqrt(softplus)
             selection = scores + tf.reshape(gate_bias, new_shape=(1, config.n_routed))
             _, eids = tf.topk(selection, k=config.n_act, axis=-1)
-            gweights = tf.gather(scores, eids, axis=1, batch_dims=1)
+            gweights = tf.reshape(
+                tf.index_select(
+                    tf.reshape(scores, new_shape=(config.n_routed,)),
+                    tf.reshape(eids, new_shape=(config.n_act,)),
+                    dim=0,
+                ),
+                new_shape=(1, config.n_act),
+            )
             weight_sum = tf.reduce(
                 gweights, axes=(-1,), keepdim=True, kind=ReduceKind.SUM
             )
@@ -1266,7 +1306,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
             table: ConstTensor[(config.vocab, config.dim), "bf16"],
             token_ids: Tensor[(1,), "i64"],
         ) -> Tensor[(1, 1, config.dim), "bf16"]:
-            return tf.reshape(tf.gather(table, token_ids, axis=0), new_shape=(1, 1, config.dim))
+            return tf.reshape(tf.index_select(table, token_ids, dim=0), new_shape=(1, 1, config.dim))
 
         @func
         def final_rms_norm(

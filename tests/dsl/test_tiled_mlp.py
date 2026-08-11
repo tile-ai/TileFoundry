@@ -71,9 +71,34 @@ class TiledMLP:
         gate_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype="f32")
         up_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype="f32")
         for kh in tile(NK_HID):
-            x_k = tf.cast(tf.gather(x_blk, kh, axis=0), dtype="f32")
-            gate_z = gate_z + tf.matmul(x_k, tf.cast(tf.gather(wg_blk, kh, axis=0), dtype="f32"))
-            up_z = up_z + tf.matmul(x_k, tf.cast(tf.gather(wu_blk, kh, axis=0), dtype="f32"))
+            kh_index = tf.reshape(kh, new_shape=(1,))
+            x_k = tf.cast(
+                tf.reshape(
+                    tf.index_select(x_blk, kh_index, dim=0),
+                    new_shape=(MB, 1, MT, KT),
+                ),
+                dtype="f32",
+            )
+            gate_z = gate_z + tf.matmul(
+                x_k,
+                tf.cast(
+                    tf.reshape(
+                        tf.index_select(wg_blk, kh_index, dim=0),
+                        new_shape=(1, NB_INT, KT, NT),
+                    ),
+                    dtype="f32",
+                ),
+            )
+            up_z = up_z + tf.matmul(
+                x_k,
+                tf.cast(
+                    tf.reshape(
+                        tf.index_select(wu_blk, kh_index, dim=0),
+                        new_shape=(1, NB_INT, KT, NT),
+                    ),
+                    dtype="f32",
+                ),
+            )
         gate = tf.cast(
             tf.reshape(
                 tf.transpose(gate_z, perm=(0, 2, 1, 3)),
@@ -99,9 +124,22 @@ class TiledMLP:
         )
         out_z = tf.zeros(shape=(MB, NB_HID, MT, NT), dtype="f32")
         for ki in tile(NK_INT):
+            ki_index = tf.reshape(ki, new_shape=(1,))
             out_z = out_z + tf.matmul(
-                tf.cast(tf.gather(h_blk, ki, axis=0), dtype="f32"),
-                tf.cast(tf.gather(wd_blk, ki, axis=0), dtype="f32"),
+                tf.cast(
+                    tf.reshape(
+                        tf.index_select(h_blk, ki_index, dim=0),
+                        new_shape=(MB, 1, MT, KT),
+                    ),
+                    dtype="f32",
+                ),
+                tf.cast(
+                    tf.reshape(
+                        tf.index_select(wd_blk, ki_index, dim=0),
+                        new_shape=(1, NB_HID, KT, NT),
+                    ),
+                    dtype="f32",
+                ),
             )
         return tf.cast(
             tf.reshape(

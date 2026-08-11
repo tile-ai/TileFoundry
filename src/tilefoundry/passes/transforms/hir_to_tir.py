@@ -30,7 +30,7 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard, _shared_engine_strides
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate as HirCacheUpdate
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.full_like import FullLike as HirFullLike
-from tilefoundry.ir.hir.tensor.gather import Gather as HirGather
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect as HirIndexSelect
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice as HirInsertSlice
 from tilefoundry.ir.hir.tensor.reduce import Reduce as HirReduce
 from tilefoundry.ir.hir.tensor.reshape import Reshape as HirReshape
@@ -1192,22 +1192,25 @@ def _lower_insert_slice(ctx: "_Lowerer", target, expr) -> Var:
 
 
 
-@register_hir_lowering(HirGather)
-def _lower_gather(ctx: "_Lowerer", target, expr) -> Var:
-    if target.batch_dims != 0:
-
-
+@register_hir_lowering(HirIndexSelect)
+def _lower_index_select(ctx: "_Lowerer", target, expr) -> Var:
+    if tuple(expr.args[1].type.shape) != (1,):
         raise NotImplementedError(
-            "Gather: batched gather lowering (batch_dims>0) is not yet supported"
+            "IndexSelect HIR-to-TIR lowering supports only a one-element index"
+        )
+    rank = len(expr.args[0].type.shape)
+    dim = target.dim + rank if target.dim < 0 else target.dim
+    if any(extent != 1 for extent in expr.args[0].type.shape[:dim]):
+        raise NotImplementedError(
+            "IndexSelect HIR-to-TIR view lowering requires unit leading dims"
         )
     x = ctx.lower(expr.args[0])
-    idx = ctx.lower(expr.args[1])
+    index = ctx.lower(expr.args[1])
 
     view_shape = expr.type.shape
-    view_layout = TensorView.layout_for_slice(
-        src_shape=tuple(x.type.shape),
-        axis=target.axis,
-        sliced_shape=view_shape,
+    view_layout = _Layout(
+        shape=tuple(view_shape),
+        strides=tuple(c_order_strides(tuple(x.type.shape))),
     )
     tv = TensorView(layout=view_layout)
     tv_type = TensorType(
@@ -1216,7 +1219,7 @@ def _lower_gather(ctx: "_Lowerer", target, expr) -> Var:
         layout=view_layout,
         storage=x.type.storage,
     )
-    tv_call = Call(type=tv_type, target=tv, args=(x, idx))
+    tv_call = Call(type=tv_type, target=tv, args=(x, index))
     sv = ctx.fresh(tv_type, hint="sv")
     ctx.emit_bind(sv, tv_call)
     return sv

@@ -49,7 +49,10 @@ def static_online_attend(
             k_i = tf.reshape(
                 tf.cast(
                     tf.repeat_interleave(
-                        tf.gather(k_cache, i, axis=1),
+                        tf.reshape(
+                            tf.index_select(k_cache, tf.reshape(i, new_shape=(1,)), dim=1),
+                            new_shape=(1, NUM_KV_HEADS, HEAD_DIM),
+                        ),
                         repeats=GQA_GROUP,
                         axis=1,
                     ),
@@ -60,7 +63,10 @@ def static_online_attend(
             v_i = tf.reshape(
                 tf.cast(
                     tf.repeat_interleave(
-                        tf.gather(v_cache, i, axis=1),
+                        tf.reshape(
+                            tf.index_select(v_cache, tf.reshape(i, new_shape=(1,)), dim=1),
+                            new_shape=(1, NUM_KV_HEADS, HEAD_DIM),
+                        ),
                         repeats=GQA_GROUP,
                         axis=1,
                     ),

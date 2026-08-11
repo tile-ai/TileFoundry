@@ -362,7 +362,7 @@ class MiniCPM3_4B:
     ) -> Tensor[(1, S, config.hidden_size), _DT]:
         # HF `MiniCPM3ScaledWordEmbedding`: scaled by `scale_emb`.
         row = tf.reshape(
-            tf.gather(w_embed, token_ids, axis=0), new_shape=(1, S, config.hidden_size)
+            tf.index_select(w_embed, token_ids, dim=0), new_shape=(1, S, config.hidden_size)
         )
         return row * EMBED_SCALE
 

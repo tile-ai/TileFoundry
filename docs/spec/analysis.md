@@ -126,7 +126,7 @@ dependents) and classifies every node it meets:
 | Body node | How `extract` models it |
 |---|---|
 | `Call` of a compute op | one statement; or one statement per output branch when the outputs cannot share one domain (`RoPE`'s grouped-query `q` / `k`, whose head counts differ) |
-| `Call` of `TupleGetItem` / `Reshape` / `Gather` | structural view — no statement. It resolves to its source's buffer name, and the coordinate change it expresses is folded into every consumer's access map |
+| `Call` of `TupleGetItem` / `Reshape` / `IndexSelect` | structural view — no statement. It resolves to its source's buffer name, and the coordinate change it expresses is folded into every consumer's access map |
 | `Call` of `Zeros` / `FullLike` | buffer declaration — no statement and no access relation: it names a fresh buffer and gives it a starting value |
 | `Call` whose target is a `Function` | penetrated, not rejected: the callee's params bind to the caller's already-resolved argument expressions, its body is walked in place, and every statement and buffer it contributes is prefixed with the callee name plus a per-call-site index |
 | `GridRegionExpr` | not a statement — it contributes one leading domain dimension to every statement it encloses ([§1.4](#14-authored-loops)) |
@@ -197,12 +197,11 @@ It is modelled as a domain dimension, not as a statement.
     dependence inference then reports the loop carry as a distance-1 dependence
     along that loop's dimension, read at iteration `i` and written at `i - 1`;
     nothing states the carry separately.
-  - A `Gather` on an enclosing loop's own induction variable MUST fold into the
-    consumer's access map as the gathered axis, so iteration `i` addresses slice
-    `i`. A batched gather, a non-scalar index, or an index that is not an
-    enclosing loop's induction variable MUST raise `ExtractError`: a
-    data-dependent gather has no affine access map and MUST NOT be
-    approximated.
+  - An `IndexSelect` whose one-element index is an enclosing loop's induction
+    variable reshaped to `(1,)` MUST fold into the consumer's access map at the
+    selected dim, so iteration `i` addresses slice `i`. Any other index MUST
+    raise `ExtractError`: a data-dependent selection has no affine access map
+    and MUST NOT be approximated.
 
 ### 1.5 Facts over a time relation
 

@@ -1,4 +1,4 @@
-"""Cover TopK's dynamic ``k``, output layout, surface, and gather consumer.
+"""Cover TopK's dynamic ``k``, output layout, surface, and index_select consumer.
 
 Symbolic bounds propagate to the selected axis and reject provably oversized
 values. Other Split axes survive, options round-trip through parsing, and values
@@ -26,7 +26,8 @@ from tests.ops.typeinfer_utils import (
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.tensor.gather import Gather
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import (
@@ -250,12 +251,11 @@ def test_topk_dynamic_k_evaluates_at_two_ctx_bindings():
 _D = 8
 
 
-def test_topk_dynamic_k_downstream_gather_shape_consistent():
-    """Indices from a dynamic-k TopK feed ``gather``.
+def test_topk_dynamic_k_downstream_index_select_shape_consistent():
+    """Indices from a dynamic-k TopK feed ``index_select``.
 
-    Indices from a dynamic-k TopK feed ``gather``; shape (1, K, D) holds,
-    at the type level and at both concrete ctx-length bindings, and the
-    gathered rows match a plain-torch reference.
+    TopK retains its batch axis, so its indices flatten to torch's required 1-D
+    vector before selection and the selected rows reshape back to (1, K, D).
     """
     scores = Var(type=make_tensor_type((1, POS), _F32), name="scores")
     table = Var(type=make_tensor_type((POS, _D), _F32), name="table")
@@ -268,16 +268,29 @@ def test_topk_dynamic_k_downstream_gather_shape_consistent():
     idx_ty = TypeInferVisitor(TypeInferContext()).visit(idx_call)
     idx_call = replace(idx_call, type=idx_ty)
 
-    gather_call = Call(type=idx_ty, target=Gather(axis=0, batch_dims=0), args=(table, idx_call))
-    gather_ty = TypeInferVisitor(TypeInferContext()).visit(gather_call)
-    assert gather_ty.shape == (1, K, _D)
-    gather_call = replace(gather_call, type=gather_ty)
+    flat_index = Call(type=idx_ty, target=Reshape(new_shape=(K,)), args=(idx_call,))
+    flat_index_ty = TypeInferVisitor(TypeInferContext()).visit(flat_index)
+    flat_index = replace(flat_index, type=flat_index_ty)
+
+    selected = Call(type=idx_ty, target=IndexSelect(dim=0), args=(table, flat_index))
+    selected_ty = TypeInferVisitor(TypeInferContext()).visit(selected)
+    assert selected_ty.shape == (K, _D)
+    selected = replace(selected, type=selected_ty)
+
+    output = Call(
+        type=selected_ty,
+        target=Reshape(new_shape=(1, K, _D)),
+        args=(selected,),
+    )
+    output_ty = TypeInferVisitor(TypeInferContext()).visit(output)
+    assert output_ty.shape == (1, K, _D)
+    output = replace(output, type=output_ty)
 
     fn = Function.build(
-        name="topk_dyn_k_gather",
+        name="topk_dyn_k_index_select",
         params=(scores, table),
-        body=gather_call,
-        return_type=gather_ty,
+        body=output,
+        return_type=output_ty,
     )
 
     torch.manual_seed(0)

@@ -38,7 +38,9 @@ from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.full_like import FullLike
-from tilefoundry.ir.hir.tensor.gather import Gather
+from tilefoundry.ir.hir.tensor.index_add import IndexAdd
+from tilefoundry.ir.hir.tensor.index_copy import IndexCopy
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.rank import Rank
@@ -343,16 +345,46 @@ def _topk(call: Call, ctx: CostContext) -> Cost:
     return Cost({dtype: numel(source)}, _traffic(inputs, output))
 
 
-@register_cost_evaluator(Gather)
-def _gather(call: Call, ctx: CostContext) -> Cost:
-    indices = _input_types(call, ctx)[1]
+@register_cost_evaluator(IndexSelect)
+def _index_select(call: Call, ctx: CostContext) -> Cost:
+    index = _input_types(call, ctx)[1]
     rows = tensor_bytes(_output_type(call, ctx))
     return Cost(
         {},
         (
             TrafficBytes(read=rows),
-            TrafficBytes(read=tensor_bytes(indices)),
+            TrafficBytes(read=tensor_bytes(index)),
             TrafficBytes(write=rows),
+        ),
+    )
+
+
+@register_cost_evaluator(IndexAdd)
+def _index_add(call: Call, ctx: CostContext) -> Cost:
+    _, index, src = _input_types(call, ctx)
+    touched = tensor_bytes(src)
+    return Cost(
+        {src.dtype: numel(src)},
+        (
+            TrafficBytes(read=touched),
+            TrafficBytes(read=tensor_bytes(index)),
+            TrafficBytes(read=touched),
+            TrafficBytes(write=touched),
+        ),
+    )
+
+
+@register_cost_evaluator(IndexCopy)
+def _index_copy(call: Call, ctx: CostContext) -> Cost:
+    _, index, src = _input_types(call, ctx)
+    touched = tensor_bytes(src)
+    return Cost(
+        {},
+        (
+            TrafficBytes(),
+            TrafficBytes(read=tensor_bytes(index)),
+            TrafficBytes(read=touched),
+            TrafficBytes(write=touched),
         ),
     )
 

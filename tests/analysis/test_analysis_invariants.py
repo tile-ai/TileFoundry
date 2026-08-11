@@ -167,7 +167,7 @@ def test_one_call_producing_two_tensors_becomes_two_statements() -> None:
 
 
 def test_a_rotation_reads_its_tables_at_the_position_and_not_at_random() -> None:
-    """V1 decodes at `pos_ids == arange(seq)`, so the table gather is affine.
+    """V1 decodes at `pos_ids == arange(seq)`, so the table selection is affine.
 
     That assumption is what lets a rotation be modelled at all: `cos[pos[s]]`
     degenerates to `cos[s]`, broadcast over batch and heads. Asserted on both

@@ -415,9 +415,19 @@ class GraniteMoE:
         # three expert tensors are indexed by it rather than sliced at a known
         # offset. Each token then runs `num_experts_per_tok` independent
         # SwiGLU experts and their outputs are mixed by the routing weights.
-        gate_w = tf.gather(w_gate, indices, axis=0)
-        up_w = tf.gather(w_up, indices, axis=0)
-        down_w = tf.gather(w_down, indices, axis=0)
+        flat_indices = tf.reshape(indices, new_shape=(S * _K,))
+        gate_w = tf.reshape(
+            tf.index_select(w_gate, flat_indices, dim=0),
+            new_shape=(S, _K, _I, _H),
+        )
+        up_w = tf.reshape(
+            tf.index_select(w_up, flat_indices, dim=0),
+            new_shape=(S, _K, _I, _H),
+        )
+        down_w = tf.reshape(
+            tf.index_select(w_down, flat_indices, dim=0),
+            new_shape=(S, _K, _H, _I),
+        )
         token_col = tf.reshape(tokens, new_shape=(S, 1, _H, 1))
         gate = tf.reshape(tf.matmul(gate_w, token_col), new_shape=(S, _K, _I))
         up = tf.reshape(tf.matmul(up_w, token_col), new_shape=(S, _K, _I))
@@ -608,7 +618,7 @@ class Granite4_0_H_Small:
     ) -> Tensor[(1, S, _H), _DT]:
         # HF `GraniteMoeHybridModel.embed_tokens`, times the published
         # `embedding_multiplier` -- which is 12 here, not 1.
-        row = tf.gather(table, token_ids, axis=0)
+        row = tf.index_select(table, token_ids, dim=0)
         return tf.reshape(
             row * tf.full_like(row, value=_EMB_MULT), new_shape=(1, S, _H)
         )

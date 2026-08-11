@@ -5,7 +5,9 @@ from .cache_update import CacheUpdate
 from .cast import Cast
 from .concat import Concat
 from .full_like import FullLike
-from .gather import Gather
+from .index_add import IndexAdd
+from .index_copy import IndexCopy
+from .index_select import IndexSelect
 from .insert_slice import InsertSlice
 from .quant import Quant
 from .rank import Rank
@@ -27,7 +29,9 @@ __all__ = [
     "Cast",
     "Concat",
     "FullLike",
-    "Gather",
+    "IndexAdd",
+    "IndexCopy",
+    "IndexSelect",
     "InsertSlice",
     "Quant",
     "Rank",
