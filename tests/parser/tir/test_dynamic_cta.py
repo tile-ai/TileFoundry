@@ -27,7 +27,7 @@ def _shape_scalars(pf) -> list[str]:
 def test_device_dynamic_dim_injects_shape_scalar() -> None:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(_NT, _TILE), "f32"]):
-        with Mesh((Topology("cta", None),), Layout(shape=(None,), strides=(1,))) as cta:
+        with Mesh((Topology("cta", _NT),), Layout(shape=(_NT,), strides=(1,))) as cta:
             a_view = T.tensor_view(
                 a,
                 layout=ShardLayout(
@@ -66,7 +66,7 @@ def test_host_entry_not_polluted() -> None:
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def dev(a: Tensor[(_NT, _TILE), "f32"]):
-        with Mesh((Topology("cta", None),), Layout(shape=(None,), strides=(1,))) as cta:
+        with Mesh((Topology("cta", _NT),), Layout(shape=(_NT,), strides=(1,))) as cta:
             a_view = T.tensor_view(
                 a,
                 layout=ShardLayout(

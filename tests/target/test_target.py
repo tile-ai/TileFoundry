@@ -20,7 +20,7 @@ from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, DType, build, func, jit, lower, module
 from tilefoundry.codegen.registry import group_functions_by_target
-from tilefoundry.dsl import Tensor
+from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import matmul
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -328,19 +328,19 @@ def test_public_schedule_overrides_refuses_and_rejects_unknown_topologies(
     assert solver_calls == []
 
 
-def test_static_topologies_use_target_resource_facts() -> None:
+def test_program_topologies_use_target_resource_facts() -> None:
     """A declared extent is validated against the level's own resource fact.
 
     A declared extent is validated against the level's own resource fact: a
     grid may be far wider than the machine's SMs and a block may not exceed the
-    threads one supports, and a grid whose size is only known at launch is
-    accepted as declared.
+    threads one supports. A symbolic extent is explicit but deferred until the
+    program's dimensions are resolved.
     """
     target = CudaTarget("nvidia.h200_sxm")
     target.validate_program_topology(Topology("cta", 132))
     target.validate_program_topology(Topology("cta", 310_000))
     target.validate_program_topology(Topology("thread", 1024))
-    target.validate_program_topology(Topology("cta", None))
+    target.validate_program_topology(Topology("cta", DimVar("ctas", 1, 310_001)))
     ExternalCudaTarget("nvidia.h200_sxm").validate_program_topology(Topology("thread", 1024))
     with pytest.raises(ValueError, match="must be positive"):
         target.validate_program_topology(Topology("cta", 0))

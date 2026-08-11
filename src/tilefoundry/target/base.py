@@ -235,24 +235,17 @@ class Target:
         limit = self.get_facts(
             TopologyLimitFacts, topology.name
         ).max_static_extent
-        if topology.size is None:
-            if limit is None:
-                return
+        if isinstance(topology.size, bool):
             raise ValueError(
-                f"{target_summary}: topology {topology.name!r} requires a positive "
-                f"static integer extent, got {topology.size!r}"
+                f"{target_summary}: topology {topology.name!r} extent {topology.size!r} "
+                "must be positive"
             )
-        if not isinstance(topology.size, int) or isinstance(topology.size, bool):
-            raise ValueError(
-                f"{target_summary}: topology {topology.name!r} requires a positive "
-                f"static integer extent, got {topology.size!r}"
-            )
-        if topology.size < 1:
+        if isinstance(topology.size, int) and topology.size < 1:
             raise ValueError(
                 f"{target_summary}: topology {topology.name!r} extent {topology.size} "
                 "must be positive"
             )
-        if limit is not None and topology.size > limit:
+        if isinstance(topology.size, int) and limit is not None and topology.size > limit:
             raise ValueError(
                 f"{target_summary}: topology {topology.name!r} extent {topology.size} "
                 f"must satisfy 1 <= extent <= {limit}"

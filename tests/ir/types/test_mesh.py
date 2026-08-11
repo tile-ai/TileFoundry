@@ -26,15 +26,15 @@ from tilefoundry.schedule.partition.problem import _placement_relation
 def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
     matching = make_mesh((32,), topology="thread")
     mismatching = make_mesh((32,), topology=Topology("thread", 64))
-    launch_provided = make_mesh((8,), topology=Topology("cta", None))
+    explicit = make_mesh((8,), topology=Topology("cta", 8))
 
     assert product(matching.topologies) == 32
     assert product((2, None)) is None
     assert states_consistent_positions(matching)
     assert not states_consistent_positions(mismatching)
-    assert product(launch_provided.topologies) is None
-    assert size(launch_provided.layout) == 8
-    assert states_consistent_positions(launch_provided)
+    assert product(explicit.topologies) == 8
+    assert size(explicit.layout) == 8
+    assert states_consistent_positions(explicit)
     assert not mesh_scope_matches_required_scope(mismatching, matching)
 
 
