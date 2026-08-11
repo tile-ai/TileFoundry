@@ -86,11 +86,8 @@ short bullet list — keep it that way.
   `convention = "google"`.
 - Describe local logic only.
 - The spec is the only durable document a docstring may reference
-  (`docs/spec/... §...`). Never reference `docs/plans/...` — plans are
-  working-process docs, not a stable contract.
-- A constraint that must guide code long-term belongs in the spec
-  first; the comment then cites the spec, never the plan that proposed
-  it.
+  (`docs/spec/... §...`). Never reference `docs/plans/...`.
+- A constraint that must guide code long-term belongs in the spec first.
 - No milestone / version references.
 - No PR / task / commit / issue / msg / thread coordinates.
 - No agent or human names; no discussion / review narration.
@@ -124,24 +121,20 @@ short bullet list — keep it that way.
 
 ### Tests
 
-- Write meaningful positive tests that exercise the intended path.
+- How a milestone is accepted is settled with the author while the plan is
+  written, in its `##### Accepted by`; `scripts/finalize_plan_context.py`
+  refuses to finalize a plan that leaves that choice open, and prints the
+  contract from `docs/policies/project-policy.json`.
 - Each milestone defines its own Target State Design before implementation.
   Show every part the milestone settles in its delivered form as code or compact
-  pseudocode. Implementation and review match that design; tests exercise its
-  externally observable behavior.
+  pseudocode. Implementation and review match that design.
 - A Target State Design covers every step its milestone lists. A step with no
   delivered shape is a reviewer's finding before implementation begins.
-- Start with the smallest existing workflow that reaches the changed behaviour;
-  extend it before creating another test file or harness.
 - One workflow may evidence several acceptance criteria. An acceptance criterion
   describes behaviour, not a one-test obligation.
-- Add a new test only when no existing workflow can reach a public behaviour;
-  state that missing reachability when you ask for the gate.
 - Lock contracts, not implementation detail. Do not test source text, AST shape,
   private calls, object identity, counts, or names merely to prevent a future
   refactor.
-- Add a negative test only for an externally reachable invalid input or error
-  contract; do not add catch-all defensive cases for hypothetical rewrites.
 
 ### DSL / HIR authoring
 

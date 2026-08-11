@@ -297,6 +297,7 @@ class PlanModel:
         return {
             "name": name,
             "related_files": effective_paths,
+            "target_state_section": sections["Target State Design"],
             "ac_section": ac_section,
             "policy_ac_start_idx": ac_start,
             "policy_ac_end_idx": ac_end,
@@ -347,6 +348,36 @@ def _replace_range(lines: list[str], start_idx: int, end_idx: int, body: list[st
     return lines[: start_idx + 1] + body + lines[end_idx:]
 
 
+def _require_acceptance(plan: "PlanModel", policies: list[dict[str, Any]]) -> None:
+    """Every milestone states how its target state is accepted.
+
+    The delivered shape and the way it is accepted are settled together while the
+    plan is written. A milestone that omits the second half would leave that
+    choice to whoever implements it, so finalizing fails and prints the contract
+    the author needs in order to make the call.
+    """
+    guidance = next(
+        (p["guidance"] for p in policies if p.get("guidance")),
+        [],
+    )
+    for milestone in plan.milestones:
+        start, end = milestone["target_state_section"]
+        for required in ("Delivered", "Accepted by"):
+            span = _find_section(plan.scan, 5, required, start + 1, end)
+            body = (
+                [ln for ln in plan.lines[span[0] + 1 : span[1]] if ln.strip()]
+                if span is not None
+                else []
+            )
+            if not body:
+                detail = "\n".join(guidance)
+                raise FinalizeError(
+                    f"{plan.path}: milestone {milestone['name']!r} has no "
+                    f"`##### {required}` under `#### Target State Design`."
+                    + (f"\n\n{detail}" if detail else "")
+                )
+
+
 def finalize_plan(
     plan_path: Path,
     *,
@@ -363,6 +394,7 @@ def finalize_plan(
     """
     plan = PlanModel(plan_path)
     policies = load_policies(policy_path)
+    _require_acceptance(plan, policies)
 
     plan_matched = filter_policies(policies, plan.plan_related_files)
 

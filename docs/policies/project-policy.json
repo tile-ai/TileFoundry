@@ -2,39 +2,29 @@
   "version": 1,
   "policies": [
     {
-      "id": "scope_discipline",
-      "name": "Scope discipline",
-      "description": "One commit touches only what the current task requires; unrelated edits / submodule bumps / autoformat go in separate commits or are called out explicitly.",
-      "when": {
-        "path_glob": ["**"]
-      },
-      "rules": {
-        "implementer": [
-          {"path": "docs/develop.md", "section": "Scope"}
-        ],
-        "reviewer": [
-          {"path": "docs/develop.md", "section": "Scope"}
-        ]
-      }
-    },
-    {
       "id": "milestone_review",
       "name": "Milestone review",
-      "description": "Touched tests and comments retain only meaningful contract coverage after each milestone.",
+      "description": "Touched tests retain only meaningful contract coverage after each milestone.",
       "when": {
-        "path_glob": ["**"]
+        "path_glob": [
+          "**"
+        ]
       },
       "ac": [
-        "Touched tests and comments MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract."
+        "Touched tests MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract."
       ],
       "rules": {
         "implementer": [
-          {"path": "docs/develop.md", "section": "Tests"},
-          {"path": "docs/develop.md", "section": "Code comments"}
+          {
+            "path": "docs/develop.md",
+            "section": "Tests"
+          }
         ],
         "reviewer": [
-          {"path": "docs/develop.md", "section": "Tests"},
-          {"path": "docs/develop.md", "section": "Code comments"}
+          {
+            "path": "docs/develop.md",
+            "section": "Tests"
+          }
         ]
       }
     },
@@ -43,103 +33,52 @@
       "name": "Spec impact",
       "description": "Every source milestone names the specifications it changes among its Related Files, so the public-contract surface is declared once.",
       "when": {
-        "path_glob": ["src/**", "include/**"]
+        "path_glob": [
+          "src/**",
+          "include/**"
+        ]
       },
       "ac": [
         "A milestone that changes a public contract MUST list the owning `docs/spec/*.md` path in its `#### Related Files`; one that changes none lists no spec path."
       ],
       "rules": {
         "implementer": [
-          {"path": "docs/develop.md", "section": "Spec impact"}
+          {
+            "path": "docs/develop.md",
+            "section": "Spec impact"
+          }
         ],
         "reviewer": [
-          {"path": "docs/develop.md", "section": "Spec impact"}
-        ]
-      }
-    },
-    {
-      "id": "clang_format",
-      "name": "C++ formatting",
-      "description": "C++/CUDA sources follow the repo .clang-format; touched files are formatted by the versioned pre-commit clang-format hook (touched-files scope, no tree-wide pass).",
-      "when": {
-        "path_glob": [
-          "include/**",
-          "**/*.cu",
-          "**/*.cuh",
-          "**/*.h",
-          "**/*.hpp",
-          "**/*.cpp",
-          "**/*.cc"
-        ]
-      },
-      "final_ac": [
-        "Touched C++/CUDA files (`*.h`/`*.hpp`/`*.cuh`/`*.cu`/`*.cpp`/`*.cc`) MUST be formatted by the pre-commit `clang-format` hook (or an equivalent `clang-format --dry-run -Werror` check)."
-      ],
-      "rules": {
-        "implementer": [
-          {"path": "docs/develop.md", "section": "C++ formatting"}
-        ],
-        "reviewer": [
-          {"path": "docs/develop.md", "section": "C++ formatting"}
+          {
+            "path": "docs/develop.md",
+            "section": "Spec impact"
+          }
         ]
       }
     },
     {
       "id": "test_discipline",
       "name": "Test discipline",
-      "description": "Tests prove observable behaviour through existing workflows when possible; no defensive checks that lock implementation detail.",
-      "when": {
-        "path_glob": ["tests/**"]
-      },
-      "rules": {
-        "implementer": [
-          {"path": "docs/develop.md", "section": "Tests"}
-        ],
-        "reviewer": [
-          {"path": "docs/develop.md", "section": "Tests"}
-        ]
-      }
-    },
-    {
-      "id": "spec_discipline",
-      "name": "Spec discipline",
-      "description": "Spec sections follow the spec-writing contract: principle-first, RFC 2119 style, no cross-layer leakage.",
-      "when": {
-        "path_glob": ["docs/spec/**"]
-      },
-      "final_ac": [
-        "Spec section MUST NOT enumerate test names; the pre-commit `spec-rules-lint` and `english-only` hooks already reject forbidden section headers, plan / milestone / task / PR / commit references, agent names, and non-English text."
-      ],
-      "rules": {
-        "implementer": [
-          {"path": "docs/SPEC-RULES.md", "section": "Principle"},
-          {"path": "docs/SPEC-RULES.md", "section": "Constraints"}
-        ],
-        "reviewer": [
-          {"path": "docs/SPEC-RULES.md", "section": "Principle"},
-          {"path": "docs/SPEC-RULES.md", "section": "Constraints"}
-        ]
-      }
-    },
-    {
-      "id": "dsl_hir_authoring",
-      "name": "DSL/HIR authoring",
-      "description": "Conventions for @func DSL fixtures: no docstring in @func body, tf.<op> attribute path, variadic op call surface, SSA reachability.",
+      "description": "A test is committed only when it earns its place; how a milestone is accepted is settled with the author, not chosen during implementation.",
       "when": {
         "path_glob": [
-          "tests/models/**",
-          "tests/dsl/**",
-          "src/tilefoundry/dsl/**"
+          "tests/**"
         ]
       },
-      "knowledge": {
-        "implementer": [
-          {"path": "docs/develop.md", "section": "DSL / HIR authoring"}
-        ],
-        "reviewer": [
-          {"path": "docs/develop.md", "section": "DSL / HIR authoring"}
-        ]
-      }
+      "guidance": [
+        "Tests are evidence. One is committed only when it is",
+        "  necessary    -- no existing workflow reaches the behaviour",
+        "  reusable     -- more than this one change will depend on it",
+        "  fragile      -- a plausible future change breaks it",
+        "  non-trivial  -- what it asserts cannot be read off a signature",
+        "A negative case is committed only for an invalid input reachable from outside;",
+        "a hypothetical rewrite is not a plausible future change.",
+        "Anything else is run once and not committed.",
+        "",
+        "`##### Accepted by` states which of the two answers this milestone takes:",
+        "  - nothing new; name the existing suites that must still pass unchanged",
+        "  - the test that earns its place; say which bar it clears and what breaks it"
+      ]
     }
   ]
 }

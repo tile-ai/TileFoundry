@@ -17,14 +17,12 @@ def test_template_finalizer_keeps_milestone_and_final_gate_scoped(
     before, after = finalize_plan(plan, write=False)
     assert before != after
     assert after.count("#### Target State Design") == 2
-    assert after.count("Touched tests and comments MUST be reviewed") == 2
+    assert after.count("Touched tests MUST be reviewed") == 2
     assert after.count("MUST list the owning `docs/spec/*.md` path") == 2
-    assert after.count("Spec section MUST NOT reference plans") == 0
-    assert after.count("No touched C++/CUDA files in this plan") == 1
 
     legacy = after.replace(
-        "- [ ] Touched tests and comments MUST be reviewed",
-        "- [x] Touched tests and comments MUST be reviewed",
+        "- [ ] Touched tests MUST be reviewed",
+        "- [x] Touched tests MUST be reviewed",
         1,
     ).replace(
         "<!-- policy_ac: milestone_review-0 -->",
@@ -35,7 +33,7 @@ def test_template_finalizer_keeps_milestone_and_final_gate_scoped(
     )
     plan.write_text(legacy)
     _, normalized = finalize_plan(plan, write=False)
-    assert "- [x] Touched tests and comments MUST be reviewed" in normalized
+    assert "- [x] Touched tests MUST be reviewed" in normalized
     assert "milestone_review-1" not in normalized
     assert "milestone_review-2" not in normalized
 

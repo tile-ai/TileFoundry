@@ -25,11 +25,21 @@ target_repo: tilefoundry
 - None
 
 #### Target State Design
-<!-- Show every part this milestone designs in its delivered form. Use code or
-     compact pseudocode. -->
+
+##### Delivered
+<!-- The surface this milestone designs, the behaviour it executes, and its
+     output, in delivered form. Use code or compact pseudocode. -->
 ```python
 # <delivered code shape>
 ```
+
+##### Accepted by
+<!-- How this target state is accepted. Two answers are legal, and the first is
+     not an exception:
+       - nothing new; name the existing suites that must still pass unchanged
+       - the test that earns its place; say which bar it clears and what breaks it
+     Settled with the author while the plan is written. -->
+- <existing suite by path, unchanged>
 
 #### Related Files
 <!-- Files this milestone touches. List owning docs/spec/*.md files when it
@@ -47,7 +57,7 @@ target_repo: tilefoundry
 - [ ] AC-0-1: <author-written, milestone-specific observable behaviour>
 - [ ] AC-0-2: <author-written, milestone-specific observable behaviour>
 <!-- policy_ac:start -->
-- [ ] Touched tests and comments MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract. <!-- policy_ac: milestone_review-0 -->
+- [ ] Touched tests MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract. <!-- policy_ac: milestone_review-0 -->
 <!-- policy_ac:end -->
 
 ### Milestone M1: <name>
@@ -56,11 +66,21 @@ target_repo: tilefoundry
 - M0
 
 #### Target State Design
-<!-- Show every part this milestone designs in its delivered form. Use code or
-     compact pseudocode. -->
+
+##### Delivered
+<!-- The surface this milestone designs, the behaviour it executes, and its
+     output, in delivered form. Use code or compact pseudocode. -->
 ```python
 # <delivered code shape>
 ```
+
+##### Accepted by
+<!-- How this target state is accepted. Two answers are legal, and the first is
+     not an exception:
+       - nothing new; name the existing suites that must still pass unchanged
+       - the test that earns its place; say which bar it clears and what breaks it
+     Settled with the author while the plan is written. -->
+- <existing suite by path, unchanged>
 
 #### Related Files
 - <path>
@@ -72,13 +92,11 @@ target_repo: tilefoundry
 #### Acceptance Criteria
 - [ ] AC-1-1: <author-written observable behaviour>
 <!-- policy_ac:start -->
-- [ ] Touched tests and comments MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract. <!-- policy_ac: milestone_review-0 -->
+- [ ] Touched tests MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract. <!-- policy_ac: milestone_review-0 -->
 <!-- policy_ac:end -->
 
 ## Final Gate
 
 <!-- Auto-filled repository-wide gates. -->
 <!-- final_gate:start -->
-- [ ] Spec section MUST NOT enumerate test names; the pre-commit `spec-rules-lint` and `english-only` hooks already reject forbidden section headers, plan / milestone / task / PR / commit references, agent names, and non-English text. <!-- policy_final: spec_discipline-0 -->
-- [ ] No touched C++/CUDA files in this plan — clang-format gate N/A <!-- policy_final: clang_format-na -->
 <!-- final_gate:end -->
