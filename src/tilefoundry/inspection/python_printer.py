@@ -38,7 +38,7 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.specialize import dim_vars_reached, display_name
+from tilefoundry.ir.hir.specialize import dim_vars_reached, display_name, origin_of
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -656,16 +656,36 @@ def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
     return name_map
 
 
+def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -> str | None:
+    """The attribute a call on *target* was written through, if a child's entry.
+
+    Follows the whole chain a rebuilt function records, so a target elaborated
+    for its call site is still recognised. The table is keyed by the attached
+    entry's identity, never by a name, which is what keeps two attached copies
+    of one source Module apart.
+    """
+    candidate: object = target
+    seen: set[int] = set()
+    while isinstance(candidate, HirFunction) and id(candidate) not in seen:
+        seen.add(id(candidate))
+        if id(candidate) in child_entries:
+            return child_entries[id(candidate)]
+        candidate = origin_of(candidate)
+    return None
+
+
 def _emit_def(
     fn: HirFunction, def_name: str, mesh_map: dict, indent: str,
-    options: PythonPrintOptions,
+    options: PythonPrintOptions, child_entries: dict[int, str] | None = None,
 ) -> list[str]:
     """Render one function ``def`` block: signature + body (or ``pass`` for a prototype).
 
     Render one function ``def`` block: signature + body (or ``pass`` for a
     prototype). The caller prepends the decorator line(s). Each call builds its
     own SSA name scope, so a base and its variants do not share names.
+    *child_entries* names the attached children this body may call.
     """
+    child_entries = {} if child_entries is None else child_entries
     lines: list[str] = []
 
 
@@ -841,7 +861,8 @@ def _emit_def(
             )
             return f"reshard({args_str}{layout_kw}{storage})"
         if isinstance(target, HirFunction):
-            return f"{target.name}({args_str})"
+            binding = _module_callee_binding(target, child_entries)
+            return f"{binding or target.name}({args_str})"
 
         alias_name = _kinded_alias_name(target)
         suppress_attrs = {"kind"} if alias_name is not None else set()
@@ -1075,6 +1096,7 @@ def _emit_header(
 
 def _emit_decorated_defs(
     fn: HirFunction, mesh_map: dict[int, str], indent: str, options: PythonPrintOptions,
+    child_entries: dict[int, str] | None = None,
 ) -> list[str]:
     """Emit decorated defs.
 
@@ -1084,7 +1106,7 @@ def _emit_decorated_defs(
     See [inspection §2.6](docs/spec/inspection.md#26-specialization-printing).
     """
     lines: list[str] = ["@func"]
-    lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options))
+    lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options, child_entries))
 
 
     for variant in fn.variants:
@@ -1093,7 +1115,10 @@ def _emit_decorated_defs(
             f"@{fn.name}.specialize({_pattern_ctor(variant.specializations[0])})"
         )
         lines.extend(
-            _emit_def(variant, display_name(variant) or "_", mesh_map, indent, options)
+            _emit_def(
+                variant, display_name(variant) or "_", mesh_map, indent, options,
+                child_entries,
+            )
         )
     return lines
 
@@ -1158,8 +1183,12 @@ def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
 
 
 def _module_decorator_line(mod: Module, entry_name: str | None) -> str:
-    """Render the context this Module declares as an ``@module(...)`` line."""
-    kwargs = [] if entry_name is None else [f'entry="{entry_name}"']
+    """Render the context this Module declares as an ``@module(...)`` line.
+
+    Always the called form. A bare decorator has not run while the class body
+    is evaluated, so a body naming a child call could not resolve it.
+    """
+    kwargs: list[str] = [] if entry_name is None else [f'entry="{entry_name}"']
     if mod.target is not None:
         rendered: PythonExpr = mod.target.to_python()
         kwargs.append(f"target={rendered.text}")
@@ -1167,26 +1196,36 @@ def _module_decorator_line(mod: Module, entry_name: str | None) -> str:
         topo_strs = [f'Topology("{t.name}", {t.size})' for t in mod.topologies]
         rendered_topologies = f'({", ".join(topo_strs)},)' if topo_strs else "()"
         kwargs.append(f"topologies={rendered_topologies}")
-    return f"@module({', '.join(kwargs)})" if kwargs else "@module"
+    return f"@module({', '.join(kwargs)})"
 
 
 def _emit_module_class(
     mod: Module, module_name: str, mesh_map: dict[int, str], indent: str,
     options: PythonPrintOptions,
 ) -> list[str]:
-    """One ``@module`` class block: its functions, then its nested Modules."""
+    """One ``@module`` class block: its nested Modules, then its functions.
+
+    Children first, because a body calling one names the attribute it is bound
+    to and a class body binds in the order it is written.
+    """
     functions = _module_hir_functions(mod)
     entry = mod.entry_function() if functions and mod.entry is not None else None
     lines = [_module_decorator_line(mod, mod.entry), f"class {module_name}:"]
     ordered = tuple(fn for fn in functions if fn is not entry)
     if entry is not None:
         ordered += (entry,)
+    child_entries = {
+        id(child.entry_function()): child.name
+        for child in mod.modules
+        if child.entry is not None and isinstance(child.entry_function(), HirFunction)
+    }
     blocks: list[list[str]] = [
-        _emit_decorated_defs(fn, mesh_map, indent, options) for fn in ordered
-    ]
-    blocks.extend(
         _emit_module_class(child, child.name, mesh_map, indent, options)
         for child in mod.modules
+    ]
+    blocks.extend(
+        _emit_decorated_defs(fn, mesh_map, indent, options, child_entries)
+        for fn in ordered
     )
     for index, block in enumerate(blocks):
         if index:

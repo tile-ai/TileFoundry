@@ -12,14 +12,17 @@ from __future__ import annotations
 
 import pytest
 
+from tests.fixtures.hir_composition import REFERENCE_PROGRAMS, MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.metadata import ComputeCostMetadata
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import postorder, reachable_functions, tensor_types
 from tilefoundry.dsl import ConstTensor, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.types.shard.layout import ComposedLayout
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
 
 _H200 = "nvidia.h200_sxm"
@@ -58,19 +61,6 @@ def _traffic(records) -> dict[str, int]:
         for name, moved in record.traffic:
             total[name] = total.get(name, 0) + moved.total_bytes
     return total
-
-
-def test_a_root_reaching_a_child_is_analysable_as_one_kernel() -> None:
-    @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
-    class _Once:
-        mm = _Matmul
-
-        @func
-        def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return mm(x)  # noqa: F821
-
-    result = analyze(_Once, _Once.entry_function(), analysis="compute-cost")
-    assert result.metadata_types == (ComputeCostMetadata,)
 
 
 def test_a_repeated_call_site_counts_its_work_again() -> None:
@@ -182,3 +172,46 @@ def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
 
     result = analyze(_Agreeing, _Agreeing.entry_function(), analysis="compute-cost")
     assert result.metadata_types == (ComputeCostMetadata,)
+
+
+@pytest.mark.parametrize("name,root", REFERENCE_PROGRAMS, ids=[n for n, _ in REFERENCE_PROGRAMS])
+def test_each_reference_program_is_one_analysable_kernel(name, root) -> None:
+    """The shared programs measure as one root each; what a call means is not restated."""
+    result = analyze(root, root.entry_function(), analysis="compute-cost")
+
+    assert result.metadata_types == (ComputeCostMetadata,)
+
+
+def _placed_primitives(fn) -> list[tuple[str, object]]:
+    """Each costed primitive result in *fn* that a sliced Mesh reached."""
+    found: list[tuple[str, object]] = []
+    for expr in postorder(fn.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        for leaf in tensor_types(expr.type):
+            if isinstance(leaf.layout, ShardLayout) and isinstance(
+                leaf.layout.mesh.layout, ComposedLayout
+            ):
+                found.append((type(expr.target).__name__, leaf.layout.mesh.layout))
+    return found
+
+
+def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
+    """A lexical Mesh scope places nothing; the reshard into it is what does.
+
+    So the branch is read from what its results retained: the sub-box the slice
+    selected, as its own extent and origin rather than an extent alone.
+    """
+    expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
+    reached = {
+        fn.name: _placed_primitives(fn)
+        for fn in reachable_functions(MoEMegaKernel.entry_function())
+    }
+
+    for branch, (shape, offset) in expected.items():
+        placed = reached[branch]
+        assert placed, branch
+        assert {op for op, _ in placed} - {"Reshard"}, branch
+        for _op, layout in placed:
+            assert layout.outer.shape == shape
+            assert layout.offset == offset

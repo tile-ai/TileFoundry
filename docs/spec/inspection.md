@@ -135,6 +135,25 @@ Target prints as the `@module(target=...)` argument and a declared hierarchy
 as the `@module(topologies=...)` argument
 ([parser §2.7](./parser.md#27-module-authoring-surface)).
 
+- constraints:
+  - The decorator MUST print in its called form, `@module()` included. A bare
+    decorator has not run while the class body is evaluated, so a body naming a
+    child call could not resolve it ([parser §1.1](./parser.md#11-decorators)).
+  - A nested Module MUST print before the owner's Functions, because a body
+    calling one names the attribute it is bound to and a class body binds in the
+    order it is written.
+  - A call on the entry of a direct child MUST print as that child's attribute
+    applied to the call's arguments, never as an attribute reach into the child
+    and never by the callee's own name. Which child a call reaches is read from
+    the attached entry's identity and from the origin a rebuilt function records
+    ([hir §1.1](./hir.md#11-function)) — a name is shared by anything called the
+    same, and two attributes may hold copies of one Module. The consumed
+    authoring record is not reconstructed
+    ([core-ir §1](./core-ir.md#1-module)).
+  - Such a call MUST print the arguments it carries, which for a child whose
+    entry declares `ConstTensor` parameters is the activations alone; importing
+    the source restores the complete signature from the child's own class body.
+
 The printer MUST import the concrete Target class from its provider module and
 embed `repr(target)` as the constructor expression. That representation MUST
 rebuild an equal value of the same concrete class when the emitted source is

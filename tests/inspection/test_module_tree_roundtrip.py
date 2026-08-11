@@ -11,14 +11,16 @@ from __future__ import annotations
 
 from tests._source import import_dsl
 from tilefoundry import func, module
-from tilefoundry.dsl import Tensor, tf  # noqa: F401 -- tf used by bodies
+from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf  # noqa: F401
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
 _CTA = Topology("cta", 132)
 _THREAD = Topology("thread", 32)
+_N = DimVar("n_print", 1, 9)
 
 
 @module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
@@ -106,15 +108,16 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     assert topology_free.effective_topologies() == ()
 
 
-def test_a_child_nominating_no_step_prints_as_a_bare_decorator() -> None:
+def test_a_child_nominating_no_step_prints_an_empty_argument_list() -> None:
     """``entry="None"`` would import as a Module whose entry names no function.
 
-    ``entry="None"`` would import as a Module whose entry names no function,
-    so the absence has to print as an absence.
+    ``entry="None"`` would import as a Module whose entry names no function, so
+    the absence has to print as an absence. The decorator is still called: a bare
+    one has not run while a class body naming a child call is evaluated.
     """
     source = as_script(_Tree)
 
-    assert "@module\n    class nominates_nothing:" in source
+    assert "@module()\n    class nominates_nothing:" in source
     assert 'entry="None"' not in source
     assert _child(import_dsl(source), "nominates_nothing").entry is None
 
@@ -164,3 +167,118 @@ def test_a_sibling_call_survives_the_round_trip() -> None:
 
     once = as_script(imported)
     assert as_script(import_dsl(once)) == once
+
+
+@module(entry="run")
+class _Weighted:
+    @func
+    def run(
+        x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]
+    ) -> Tensor[(4, 8), "f32"]:
+        return tf.matmul(x, w)
+
+
+@module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
+class _Composed:
+    first = _Weighted
+    second = _Weighted
+
+    @func
+    def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+        return tf.add(first(x), second(x))  # noqa: F821
+
+
+def test_a_child_call_prints_by_its_binding_and_carries_activations_only() -> None:
+    """The callee's weight is the child's, so the call site never names it.
+
+    Importing restores the complete signature from the child's own class body
+    rather than inventing an argument at the call site.
+    """
+    source = as_script(_Composed)
+
+    assert "v0 = first(x)" in source and "v1 = second(x)" in source
+    assert "_Weighted" not in source and ".run(" not in source
+
+    imported = import_dsl(source)
+    left, right = imported.entry_function().body.args
+    assert len(left.args) == 1
+    assert [param.is_const for param in left.target.params] == [False, True]
+
+
+def test_two_attached_copies_of_one_child_stay_distinct_through_the_trip() -> None:
+    imported = import_dsl(as_script(_Composed))
+
+    first, second = imported.modules
+    assert (first.name, second.name) == ("first", "second")
+    left, right = imported.entry_function().body.args
+    assert left.target is first.entry_function()
+    assert right.target is second.entry_function()
+
+
+def test_a_composed_tree_prints_to_a_fixed_point() -> None:
+    source = as_script(_Composed)
+    once = as_script(import_dsl(source, "_Composed"))
+
+    assert once == source
+    assert as_script(import_dsl(once, "_Composed")) == source
+
+
+def test_a_child_before_the_functions_naming_it() -> None:
+    """A class body binds in source order, so the attribute has to exist first."""
+    source = as_script(_Composed)
+
+    assert source.index("class first:") < source.index("def fused(")
+    assert source.index("class second:") < source.index("def fused(")
+
+
+@module(entry="root", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
+class _Rebuilt:
+    leaf = _Weighted
+
+    @func
+    def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
+        with Mesh(("cta",), layout=(4,), names=("tile",)) as cta:
+            local = tf.reshard(x, (4 @ cta.tile, 8), "gmem")
+            return leaf(local)  # noqa: F821
+
+
+def test_a_call_site_rebuilt_target_still_prints_by_its_binding() -> None:
+    """The printed target is a rebuild, recognised through what it records.
+
+    A layout reaching the callee rebuilds it, so the call no longer targets the
+    attached entry itself; matching on the name would accept any function called
+    the same, which is what the recorded origin replaces.
+    """
+    (child,) = _Rebuilt.modules
+    call = _Rebuilt.entry_function().body
+    assert call.target is not child.entry_function()
+    assert origin_of(call.target) is child.entry_function()
+
+    source = as_script(_Rebuilt)
+    assert "leaf(" in source
+    imported = import_dsl(source)
+    (imported_child,) = imported.modules
+    rebuilt = imported.entry_function().body
+    assert origin_of(rebuilt.target) is imported_child.entry_function()
+
+
+@module(entry="dispatch", target=CudaTarget("nvidia.h200_sxm"))
+class _Dispatching:
+    leaf = _Weighted
+
+    @func
+    def dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
+        pass
+
+    @dispatch.specialize(DimVarRangePat("n_print", 1, 9))
+    def _(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
+        return tf.relu(x)
+
+
+def test_a_specialization_body_imports_back_as_a_variant() -> None:
+    """A display label is print-only; what has to survive is the variant itself."""
+    imported = import_dsl(as_script(_Dispatching))
+
+    (variant,) = imported.entry_function().variants
+    assert imported.entry_function().body is None
+    assert variant.specializations == (DimVarRangePat("n_print", 1, 9),)
