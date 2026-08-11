@@ -208,12 +208,10 @@ nothing of that kind rather than guessing.
   - `scope` MUST be the only context state describing where a walk is reading,
     and the pair MUST be reachable from the package root together, since one is
     how the other is constructed.
-    A walk-visible query answering a question about one construct — which
-    Module a particular kind of callee belongs to, how a particular call binds
-    its arguments — MUST NOT be added to the context; such a question is
-    resolved by whoever asks it, from `scope`.
-
-- constraints:
+  - A walk-visible query answering a question about one construct — which Module
+    a particular kind of callee belongs to, how a particular call binds its
+    arguments ([hir §1.1](./hir.md#11-function)) — MUST NOT be added to the
+    context; such a question is resolved by whoever asks it, from `scope`.
   - `type_of` is a walk-local cache only — it holds no dispatch rule of its
     own. A cache miss delegates to `TypeInferVisitor(self).visit(expr)`
     (below), whose `visit_Call` is what consults

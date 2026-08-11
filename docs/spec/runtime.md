@@ -172,12 +172,12 @@ exactly the one declared `ConstTensor`'s shape / dtype. A weight needing no
 transform has no converter. Two converters registered for the same weight
 name is an error.
 
-A converter is an HIR body like any other and MAY call a child Module, so
-`prepare` MUST stage a node's children before evaluating that node's converters
-and hand the converter the reading holding them. The staged values stay on the
-requested preparation device while the output shard takes CPU copies; the tree
-is strictly downward, so nothing here is circular and no prepared value becomes
-part of the IR.
+A converter is an HIR body like any other and MAY reach another node's function,
+so `prepare` MUST stage a node's children before evaluating that node's
+converters and hand the converter the reading holding them. The staged values
+stay on the requested preparation device while the output shard takes CPU copies;
+the tree is strictly downward, so nothing here is circular and no prepared value
+becomes part of the IR.
 
 `load`, `forward`, and `prepare` are methods on the IR `Module` owned by
 [core-ir §1](./core-ir.md#1-module). This section defines their runtime-facing
@@ -202,10 +202,14 @@ class LoadedModule:
 
 - constraints:
   - A reading covers its own Module's declared weights, and holds one child
-    reading per attached child. A call reaching a child MUST take that child's
-    reading ([core-ir §1](./core-ir.md#1-module)), so one Module read twice
-    yields two independent readings and two attachments of one source Module do
-    not borrow each other's constants.
+    reading per attached child ([core-ir §1](./core-ir.md#1-module)). A call is
+    read in the reading of the Module owning the callee, so the parameters the
+    call does not supply ([hir §1.1](./hir.md#11-function)) are filled by name
+    from that Module's own constants. Which reading applies follows the callee's
+    owner and not the walk's depth, so every sub-evaluation of a body — a called
+    body, one trip of a loop — is read in the reading its call resolved. One
+    Module read twice yields two independent readings, and two attachments of one
+    source Module do not borrow each other's constants.
   - Before anything runs, `forward` MUST walk the readings its call graph
     actually reaches and refuse one that has no binding for a declared
     `ConstTensor`, naming the child's path and the missing names. What is

@@ -108,22 +108,12 @@ corresponding positional input:
   tensor's concrete shape. A later occurrence of the same `DimVar` MUST
   agree with the first binding.
 
-`evaluate` is the exact entry: it takes one input per declared parameter and no
-resource context. A run started from a loaded reading
-([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward))
-carries that reading as private execution state instead.
-
 - constraints:
-  - A `Call` on a `Function` a direct child of the current reading owns MUST
-    switch to that child's reading, take its arguments as activations alone, and
-    fill each `ConstTensor` parameter by name from that child's constants. A
-    call the current reading owns binds every declared parameter as before.
-  - The reading MUST follow every sub-evaluation — a called `Function` body and
-    each iteration of a `GridRegionExpr` alike — so a call is not made invalid
-    by appearing inside a loop.
-  - Filling a `ConstTensor` parameter MUST NOT move the value to another device.
-    Placement is settled before the walk starts, so this is not where a weight
-    quietly changes residency.
+  - `evaluate` is the exact public entry: it MUST take one input per declared
+    parameter and MUST take no resource context. A run whose constants come from
+    a loaded reading instead is `LoadedModule` execution
+    ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)),
+    not this entry.
 
 ## 3. `register_eval` and the eval context
 

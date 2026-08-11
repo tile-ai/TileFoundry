@@ -91,48 +91,6 @@ invocation. Owning a `Function`, attaching a child `Module`, or declaring a
 Python-to-HIR entry and HIR-to-HIR device calls are governed by
 [hir §1.1](./hir.md#11-function).
 
-#### Calling a child Module
-
-An HIR function may call a child `Module` of its own Module. That call is a
-device call in the current kernel invocation, exactly like a call to a sibling
-function: which Module owns the callee counts no invocation and no launch.
-
-- constraints:
-  - Calling a `Module` MUST mean calling its entry function, so the result is an
-    ordinary `Call` on that `Function` and no node distinguishes it. Reaching
-    past the entry for another of the Module's functions MUST be refused, and so
-    MUST a Module callee written outside a `@module` class body: only that body
-    attaches the child the call resolves against
-    ([parser §4.2](./parser.md#42-closure-then-registry-callee-resolution)).
-  - A class body is parsed before its children are attached, and attaching one
-    under an attribute copies it, so collection MUST rebuild each such `Call`
-    against the child attached under the binding that call was written through,
-    including calls inside a specialization variant. Two attributes may hold
-    copies of one Module, and then the binding is the only thing that says which
-    copy a call meant. Which binding that was is authoring state private to the
-    parser; a collected `Call` MUST NOT still carry it, since the rebuilt
-    `Call.target` already states the callee.
-  - Only a direct `name = <Module>` class-body binding attaches a callable name.
-    A name no such binding attaches MUST be refused, naming what the body does
-    bind: there is no child to rebuild against, and collecting it would leave
-    the call pointing outside the tree being built.
-  - Rebuilding at a call site MUST record the entry it was rebuilt from
-    ([hir §1.1](./hir.md#11-function)), so two attached copies of one source
-    Module stay distinguishable and ownership stays answerable without matching
-    on the name a copy keeps.
-  - A Module holds no constants, and a child-Module call MUST NOT put any in
-    the IR. The call carries activation arguments only; the callee keeps its
-    `ConstTensor` parameters with their declared types, and a reading fills them
-    from that child's own constants
-    ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)).
-    A direct Function call still takes one argument per declared parameter.
-  - Which calls carry activations only MUST be stated, never inferred from how
-    many arguments a call passes. Before collection the parser's binding record
-    states it; afterwards it is re-derived from ownership — the callee is
-    uniquely owned by a direct child of the caller's owner. Ownership that is
-    missing, ambiguous, or not a direct child states nothing, and the call keeps
-    its exact declared arity.
-
 - `parse_module` (see [parser §1](./parser.md#1-dsl-syntax)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
   `Module` whose `entry` is set to that function. A function that declares

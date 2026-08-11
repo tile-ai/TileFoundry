@@ -144,15 +144,16 @@ as the `@module(topologies=...)` argument
     order it is written.
   - A call on the entry of a direct child MUST print as that child's attribute
     applied to the call's arguments, never as an attribute reach into the child
-    and never by the callee's own name. Which child a call reaches is read from
-    the attached entry's identity and from the origin a rebuilt function records
-    ([hir §1.1](./hir.md#11-function)) — a name is shared by anything called the
-    same, and two attributes may hold copies of one Module. The consumed
-    authoring record is not reconstructed
-    ([core-ir §1](./core-ir.md#1-module)).
-  - Such a call MUST print the arguments it carries, which for a child whose
-    entry declares `ConstTensor` parameters is the activations alone; importing
-    the source restores the complete signature from the child's own class body.
+    and never by the callee's own name. Which child a call reaches MUST be read
+    from the attached entry's identity and the recorded origin
+    ([hir §1.1](./hir.md#11-function)), not from the name they share and not from
+    the parser's consumed authoring record
+    ([parser §4.2](./parser.md#42-closure-then-registry-callee-resolution)):
+    anything may be called the same, and two attributes may hold copies of one
+    Module.
+  - Such a call MUST print exactly the arguments `Call.args` carries
+    ([hir §1.1](./hir.md#11-function)) and no others; importing the source
+    restores the callee's complete signature from the child's own class body.
 
 The printer MUST import the concrete Target class from its provider module and
 embed `repr(target)` as the constructor expression. That representation MUST

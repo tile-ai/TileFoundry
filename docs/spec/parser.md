@@ -709,22 +709,18 @@ is.
   kernel invocation ([hir §1.1](./hir.md#11-function)); a forward reference to a
   sibling defined below stays unresolved and MUST fail.
 - An HIR member MAY equally call a child `Module` bound **above it** in the same
-  class body. The bare binding means that child's entry function
-  ([core-ir §1](./core-ir.md#1-module)), and the call is the same kind of `Call`,
-  in the same kernel invocation. Because only a called decorator has run by the
-  time the body does, a class body that calls a child MUST be decorated
-  `@module()` / `@module(...)`; the bare `@module` stays available to a body
-  that calls none.
+  class body; that form, what it resolves to, and what it refuses are
+  [§4.2](#42-closure-then-registry-callee-resolution).
 - The `topologies=(Topology(...), ...)` decorator argument declares the
   domain's complete ordered hierarchy. Omitting it inherits the owning class's
   hierarchy; `()` declares an explicitly topology-free domain. The value MUST
   be a tuple of `Topology`; a value that is not MUST be rejected rather than
   read as an empty hierarchy.
 - The printer emits this surface: shared meshes at module level (before the
-  class) so the class body stays function-and-nested-Module-only, then
-  `@module(entry="<entry>", topologies=(...))` — or a bare `@module` for a
-  Module that declares no entry, target, or topology hierarchy — then the
-  functions and nested Modules.
+  class) so the class body stays function-and-nested-Module-only, then the
+  `@module(...)` decorator, then the functions and nested Modules. What that
+  decorator and that order print exactly is
+  [inspection §2.2](./inspection.md#22-module-printer).
 
 #### Design rationale
 
@@ -867,10 +863,12 @@ in the closure nor cataloged under the body's own dialect still raises
 *unknown Op name*.
 
 A bare-name callee bound to a `Function` is that Function, and one bound to a
-`Module` is that Module's entry function ([core-ir §1](./core-ir.md#1-module)).
-Those two are the only callee forms that resolve to a function. A `Module`
-callee belongs to the HIR body parser alone; in TIR a name bound to one is not
-a callee and still raises *unknown Op name*.
+`Module` is the function that Module's `entry` names
+([core-ir §1](./core-ir.md#1-module)). Those two are the only callee forms that
+resolve to a function, and either yields an ordinary Function `Call`
+([hir §1.1](./hir.md#11-function)). A `Module` callee belongs to the HIR body
+parser alone; in TIR a name bound to one is not a callee and still raises
+*unknown Op name*.
 
 - constraints:
   - In an HIR body, a bare name bound to a `Module` MUST resolve to the function
@@ -881,21 +879,27 @@ a callee and still raises *unknown Op name*.
     declares execution context of its own and whether or not something later
     lifts it into a Module. Which declaration is active MUST be decided by the
     declaring frame, not by one being open somewhere, so a declaration a failed
-    class body left open attaches nothing.
+    class body left open attaches nothing. Only a direct `name = <Module>`
+    binding in that body attaches a callable name; a name it does not attach
+    MUST be refused, naming what it does bind.
   - A Module declaring no entry, and one whose entry is not an HIR `Function`,
     MUST each be refused at the call site naming that reason, rather than
     falling through to *unknown Op name* — the callee resolved, and what it
     could not answer is which function a call of it runs.
   - The parser MUST carry the binding name it reached that Module through as
-    private authoring state on the resulting `Call`, which is what `@module`
-    collection needs to rebuild the call against the child attached under that
-    name ([core-ir §1](./core-ir.md#1-module)). It is not part of the IR
-    contract: collection consumes it and takes it off the call.
-  - A call written through a child binding MUST take one argument per
-    non-constant parameter of the callee, and its diagnostic MUST say so in
-    activations. Every other Function call keeps its exact declared arity. The
-    kind of callee decides this, never the number of arguments written
-    ([core-ir §1](./core-ir.md#1-module)).
+    private authoring state on the resulting `Call`. A class body is parsed
+    before its children are attached and attaching renames — so copies — the
+    Module the body named ([core-ir §1](./core-ir.md#1-module)), and that state
+    is what `@module` collection needs to rebuild every such call, inside a
+    specialization variant included, against the child attached under that name.
+    Two attributes may hold copies of one Module, and then the binding is the
+    only thing that says which copy a call meant. It is not part of the IR
+    contract: collection consumes it and takes it off the call, the rebuilt
+    `Call.target` having stated the callee.
+  - The parser MUST check a written call's arity against the supplied-parameter
+    set HIR resolves for it ([hir §1.1](./hir.md#11-function)), and where that
+    set is narrower than the declared parameters its diagnostic MUST count in
+    activations.
   - An attribute callee whose base name is bound to a `Module` MUST be refused,
     naming that a Module is called through its bare binding and its entry. This
     holds for the attribute that names the entry as well: which name was written

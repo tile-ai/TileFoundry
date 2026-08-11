@@ -68,7 +68,9 @@ the current kernel invocation and never begins another one, regardless of which
 `Module` owns the callee. A `Module` is a static container and an invocation is
 a dynamic event: Python entering one root twice is two invocations, and a Python
 loop entering it N times is N. Module ownership, topology equality, call-graph
-depth, and source nesting take no part in this rule.
+depth, source nesting, and how often a call site repeats take no part in this
+rule: a repeated site and a site a loop varies repeat device work inside the
+invocation they are already in.
 
 | Caller | Callee | Meaning |
 |---|---|---|
@@ -127,24 +129,31 @@ parameter propagates through the whole body, including through a `Tuple` or
 that instance's (re-derived) body type, never a stale `return_type` field
 carried over from a different call site.
 
-A call into a child Module elaborates in an activation-only mode: the argument
-types bind to the non-constant parameters in order, and every `ConstTensor`
-parameter keeps its declared type in the rebuilt signature, which is already
-concrete. The mode is part of the elaboration cache key. Which mode a call is in
-is resolved from the call and the walk's scope
-([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)), never
-from how many arguments it passes, and it is not a question the context answers.
-Elaborating without a call in hand binds every declared parameter, so a
-standalone or low-level call cannot acquire implicit constants
-([core-ir §1](./core-ir.md#1-module)).
+How a `Call` binds is part of what it states: which declared parameters
+`Call.args` supply, and the scope
+([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)) the
+callee's body is read in. Argument types bind to the supplied parameters in
+order; a parameter the call does not supply keeps its declared type in the
+rebuilt signature, which for a `ConstTensor` is already concrete — no value it
+stands for enters the IR, and what fills it comes from outside
+([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)). The
+binding is part of the elaboration cache key. It MUST be stated by the call in
+the scope it is read in, never counted from how many arguments the call passes,
+and it is not a question the context answers.
+
+Omitting a parameter is valid only where, within that scope, the callee is
+uniquely owned by a direct child of the caller's owner
+([core-ir §1](./core-ir.md#1-module)); before collection the authored binding
+answers the same question of the child it names. Ownership that is missing,
+ambiguous, or not a direct child supplies every declared parameter, as does
+`elaborate` with no call in hand, so a standalone or low-level call cannot
+acquire implicit constants.
 
 Caller and callee MUST resolve one effective `Target` and one effective topology
-hierarchy. This is required of the edges a fixed-dimension query actually
-reaches, not of an attachment: an attached child no call reaches has no edge to
-check. Inheritance is the canonical spelling, and a child declaring the caller's
-hierarchy explicitly is accepted only when the resolved tuples are equal. A
-mismatch is invalid; it is not a nested launch. A repeated call site, and a call
-a loop varies, repeat device work in the same invocation and add none.
+hierarchy: a same-kernel call is one execution context, whichever `Module` owns
+each end. Inheritance is the canonical spelling, and a callee declaring the
+caller's hierarchy explicitly is accepted only when the resolved tuples are
+equal. A mismatch is invalid; it is not a nested launch.
 
 Argument ↔ parameter binding is:
 
@@ -1457,10 +1466,9 @@ def is_concrete(fn: Function) -> bool:
     equality or hashing; ownership checks use the recorded origin rather than
     a function name.
   - The recorded origin MUST be the function actually rebuilt, and nothing may
-    re-point it afterwards. A call reaching two named copies of one source
-    Module rebuilds from the entry of the copy it named, so the two calls hold
-    two rebuilds recording two origins; one shared rebuilt instance re-pointed
-    instead would answer both with whichever was written last.
+    re-point it afterwards. Two call sites reaching two copies of one source
+    function hold two rebuilds recording two origins; one shared instance
+    re-pointed instead would answer both with whichever was written last.
   - `residual_dims` and `dim_vars_reached` MUST inspect the whole function
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
     and called functions. `is_concrete` additionally checks the return type.
