@@ -319,10 +319,14 @@ The accepted value Op lowers to a three-step TIR sequence:
 3. `Evaluate(TirMma(atom=SM80_16x8x16_F32BF16BF16F32_TN), (r, a, b))`.
 
 The emitted TIR MMA MUST carry this realized atom; it MUST NOT rely on the
-current CUDA codegen fallback for `atom=None`. `Wgmma_SM90_64x128x16` has a
-logical HIR value/cost model but no TIR atom or runtime mapping, so this pass
-MUST reject it by name before emitting any TIR MMA. Adding a real WGMMA atom,
-fragment layouts, and runtime entry is a separate target implementation.
+current CUDA codegen fallback for `atom=None`, and MUST NOT rebind its A/B/C or
+`required_scope` to the caller mesh. When a compatible HIR caller mesh differs
+only in coordinate names, lowering materializes canonical RMEM fragment Vars;
+the caller mesh participates only as the active scope checked against the
+atom's canonical `required_scope`. `Wgmma_SM90_64x128x16` has a logical HIR
+value/cost model but no TIR atom or runtime mapping, so this pass MUST reject it
+by name before emitting any TIR MMA. Adding a real WGMMA atom, fragment layouts,
+and runtime entry is a separate target implementation.
 
 Outer-level `add(acc, mma(a, b))` accumulation patterns lower to a
 separate `tir.arith.Binary` downstream.

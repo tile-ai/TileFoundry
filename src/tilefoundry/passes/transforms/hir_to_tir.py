@@ -950,18 +950,21 @@ def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
 
     a = ctx.lower(expr.args[0])
     b = ctx.lower(expr.args[1])
-    base_atom = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
-    atom = replace(
-        base_atom,
-        A=a.type.layout,
-        B=b.type.layout,
-        C=c_layout,
-        required_scope=c_layout.mesh,
-    )
+    atom = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
+
+    def canonical_fragment(value: Var, layout: ShardLayout, hint: str) -> Var:
+        if value.type.layout == layout:
+            return value
+        fragment = ctx.alloc(replace(value.type, layout=layout), hint=hint)
+        ctx.emit(_eval_call(Copy(), (value, fragment)))
+        return fragment
+
+    a = canonical_fragment(a, atom.A, "ma")
+    b = canonical_fragment(b, atom.B, "mb")
     out_type = TensorType(
         shape=(2, 2),
         dtype=target.dtype_acc,
-        layout=c_layout,
+        layout=atom.C,
         storage=StorageKind.RMEM,
     )
     r = ctx.alloc(out_type, hint="r")

@@ -8,6 +8,8 @@ See [passes §7.1](docs/spec/passes.md#71-hirtotirpass).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from tilefoundry.dsl import (
@@ -235,9 +237,25 @@ def _find_tir_mma(stmt) -> Evaluate | None:
 
 
 def test_sm80_lowering_binds_the_existing_atom_instead_of_codegen_default() -> None:
-    a_type = TensorType((16, 16), DType.bf16, _SM80_ATOM.A, StorageKind.RMEM)
-    b_type = TensorType((16, 8), DType.bf16, _SM80_ATOM.B, StorageKind.RMEM)
-    result_type = TensorType((16, 8), DType.f32, _SM80_ATOM.C, StorageKind.RMEM)
+    caller_mesh = replace(_SM80_ATOM.required_scope, names=("x", "y"))
+    a_type = TensorType(
+        (16, 16),
+        DType.bf16,
+        replace(_SM80_ATOM.A, mesh=caller_mesh),
+        StorageKind.RMEM,
+    )
+    b_type = TensorType(
+        (16, 8),
+        DType.bf16,
+        replace(_SM80_ATOM.B, mesh=caller_mesh),
+        StorageKind.RMEM,
+    )
+    result_type = TensorType(
+        (16, 8),
+        DType.f32,
+        replace(_SM80_ATOM.C, mesh=caller_mesh),
+        StorageKind.RMEM,
+    )
 
     lowered = HirToTirPass().run(
         _mma_module(_SM80_OP, a_type, b_type, result_type)
@@ -245,8 +263,14 @@ def test_sm80_lowering_binds_the_existing_atom_instead_of_codegen_default() -> N
     mma = _find_tir_mma(lowered.functions[0].body)
 
     assert mma is not None
-    assert mma.callable.atom is not None
-    assert mma.callable.atom.op is SM80_16x8x16_F32BF16BF16F32_TN
+    assert mma.callable.atom == _SM80_ATOM
+    assert mma.callable.atom.A is _SM80_ATOM.A
+    assert mma.callable.atom.B is _SM80_ATOM.B
+    assert mma.callable.atom.C is _SM80_ATOM.C
+    assert mma.callable.atom.required_scope is _SM80_ATOM.required_scope
+    assert mma.args[0].type.layout is _SM80_ATOM.C
+    assert mma.args[1].type.layout is _SM80_ATOM.A
+    assert mma.args[2].type.layout is _SM80_ATOM.B
 
 
 @pytest.mark.parametrize(
