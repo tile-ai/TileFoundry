@@ -18,7 +18,6 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.clamp import Clamp
 from tilefoundry.ir.hir.math.softplus import Softplus
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.hir.nn.causal_mask import CausalMask
 from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.hir.nn.gelu import Gelu
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
@@ -34,6 +33,7 @@ from tilefoundry.ir.hir.shape.shape_compose import ShapeCompose
 from tilefoundry.ir.hir.shape.shape_extract import ShapeExtract
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.cast import Cast
@@ -55,6 +55,7 @@ from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import DType, TensorType, Type, numel, tensor_bytes
 from tilefoundry.ir.types.shard import ShardLayout
@@ -252,22 +253,8 @@ def _concat(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Slice)
 def _slice(call: Call, ctx: CostContext) -> Cost:
-    """A slice selects elements and computes none.
-
-    Its traffic is what it actually moves -- the selected region, not the tensor
-    it came from. A model that splits a wide projection into unequal parts does
-    that once per part, and charging each one for the whole projection would
-    report a kernel reading its input as many times as it has pieces.
-    """
-    kept = tensor_bytes(_output_type(call, ctx))
-    return Cost(
-        {},
-        (
-            TrafficBytes(read=kept),
-            TrafficBytes(),
-            TrafficBytes(write=kept),
-        ),
-    )
+    """A slice is a view; its consumers account for the data they move."""
+    return Cost({}, _idle(call))
 
 
 @register_cost_evaluator(InsertSlice)
@@ -308,8 +295,8 @@ def _softmax(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
 
 
-@register_cost_evaluator(CausalMask)
-def _causal_mask(call: Call, ctx: CostContext) -> Cost:
+@register_cost_evaluator(Where)
+def _where(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx, dtype=DType.bool)
 
 
@@ -447,6 +434,12 @@ def _structure(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(FullLike)
 def _full_like(call: Call, ctx: CostContext) -> Cost:
     return Cost({}, _traffic(_input_types(call, ctx), _output_type(call, ctx)))
+
+
+@register_cost_evaluator(Arange)
+def _arange(call: Call, ctx: CostContext) -> Cost:
+    """Coordinates are synthesized metadata until a consumer materializes them."""
+    return Cost({}, _idle(call))
 
 
 @register_cost_evaluator(Zeros)

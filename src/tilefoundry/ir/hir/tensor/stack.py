@@ -11,7 +11,14 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import Dynamic, Layout, Partial, ShardLayout, try_c_order_strides
+from tilefoundry.ir.types.shard import (
+    Dynamic,
+    Layout,
+    Partial,
+    ShardLayout,
+    shard_layout_of,
+    try_c_order_strides,
+)
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -61,8 +68,8 @@ def _stack_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 
 def _reject_dynamic_shards(call, ctx, types) -> None:
     for index, type_ in enumerate(types):
-        layout = type_.layout
-        if isinstance(layout, ShardLayout) and any(
+        layout = shard_layout_of(type_.layout)
+        if layout is not None and any(
             isinstance(attr, Dynamic) for attr in layout.attrs
         ):
             ctx.error(
@@ -74,9 +81,9 @@ def _reject_dynamic_shards(call, ctx, types) -> None:
 
 def _require_compatible_meshes(call, ctx, types) -> None:
     placed = [
-        (index, type_.layout)
+        (index, layout)
         for index, type_ in enumerate(types)
-        if isinstance(type_.layout, ShardLayout)
+        if (layout := shard_layout_of(type_.layout)) is not None
     ]
     if not placed:
         return
@@ -95,10 +102,10 @@ def _require_uniform_partial_slices(call, ctx, types, output: ShardLayout) -> No
         if not isinstance(output_attr, Partial):
             continue
         for index, type_ in enumerate(types):
-            layout = type_.layout
+            layout = shard_layout_of(type_.layout)
             input_attr = (
                 layout.attrs[mesh_axis]
-                if isinstance(layout, ShardLayout)
+                if layout is not None
                 and layout.mesh == output.mesh
                 and mesh_axis < len(layout.attrs)
                 else None
@@ -143,7 +150,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         _require_uniform_partial_slices(call, ctx, types, layout)
         if getattr(layout.layout, "strides", None) is None:
             first = next(
-                index for index, type_ in enumerate(types) if isinstance(type_.layout, ShardLayout)
+                index
+                for index, type_ in enumerate(types)
+                if shard_layout_of(type_.layout) is not None
             )
             ctx.error(
                 call,

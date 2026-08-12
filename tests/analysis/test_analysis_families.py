@@ -428,12 +428,14 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
 
     for name in ("row", "column"):
         function = functions[name]
-        analyze(_MovementCosts, function, analysis="compute-cost")
+        analyze(_MovementCosts, function, analysis="memory")
         (move,) = _calls(function)
         record = get_metadata(move, ComputeCostMetadata)
         assert record is not None
-        kept = 256 * 2048 * 4
-        assert record.traffic_at("gmem") == TrafficBytes(read=kept, write=kept)
+        assert record.traffic_at("gmem").total_bytes == 0
+        footprint = get_metadata(function, MemoryMetadata)
+        assert footprint is not None
+        assert all(item.persistent for item in footprint.lifetimes)
 
     materialized = functions["materialized"]
     analyze(_MovementCosts, materialized, analysis="memory")
@@ -456,9 +458,7 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     concat_cost = get_metadata(concat, ComputeCostMetadata)
     assert selected_cost is not None
     selected_bytes = 256 * 2048 * 4
-    assert selected_cost.traffic_at("gmem") == TrafficBytes(
-        read=selected_bytes, write=selected_bytes
-    )
+    assert selected_cost.traffic_at("gmem").total_bytes == 0
     assert concat_cost is not None
     assert concat_cost.traffic_at("gmem") == TrafficBytes(
         read=2 * selected_bytes,
@@ -466,7 +466,7 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     )
 
 
-def test_slice_costs_the_selected_region_and_not_its_coordinates() -> None:
+def test_slice_costs_no_traffic_for_the_view_or_its_coordinates() -> None:
     source = Var(type=make_tensor_type((1024, 2048)), name="source")
     scalar = make_tensor_type((), DType.i64)
     starts = Tuple(
@@ -482,11 +482,10 @@ def test_slice_costs_the_selected_region_and_not_its_coordinates() -> None:
 
     cost = CostEvaluator(CostContext(selected_output_type=output)).visit_Call(call)
 
-    kept = 256 * 2048 * 4
     assert cost.traffic == (
-        TrafficBytes(read=kept),
         TrafficBytes(),
-        TrafficBytes(write=kept),
+        TrafficBytes(),
+        TrafficBytes(),
     )
 
 

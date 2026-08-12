@@ -8,7 +8,7 @@ See [shard §8](docs/spec/shard.md#8-layout-propagation).
 
 from __future__ import annotations
 
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, shard_layout_of
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
@@ -30,7 +30,8 @@ def reject_partials(ctx, call, arg_name, layout, commutes_with=frozenset()):
 
 
 def _is_replicated_at(layout, axis: int) -> bool:
-    if not isinstance(layout, ShardLayout) or axis >= len(layout.attrs):
+    layout = shard_layout_of(layout)
+    if layout is None or axis >= len(layout.attrs):
         return True
     return isinstance(layout.attrs[axis], Broadcast)
 
@@ -114,12 +115,14 @@ def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name
         for axis, reduction in enumerate(partial_reductions_by_axis(update.layout))
         if reduction is not None
     ]
+    dst_layout = shard_layout_of(dst.layout)
+    update_layout = shard_layout_of(update.layout)
     if dst_partials:
         if not (
-            isinstance(dst.layout, ShardLayout)
-            and isinstance(update.layout, ShardLayout)
-            and update.layout.mesh == dst.layout.mesh
-            and update.layout.attrs == dst.layout.attrs
+            dst_layout is not None
+            and update_layout is not None
+            and update_layout.mesh == dst_layout.mesh
+            and update_layout.attrs == dst_layout.attrs
         ):
             axis, reduction = dst_partials[0]
             ctx.error(

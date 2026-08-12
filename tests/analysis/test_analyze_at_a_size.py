@@ -54,15 +54,15 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("dims", "variant", "bound_by"),
+    ("dims", "variant", "bound_by", "ideal_ns"),
     [
-        ({"ctx": 1024, "seq": 1}, "decode", "memory"),
-        ({"ctx": 1, "seq": 1024}, "prefill", "compute"),
+        ({"ctx": 1024, "seq": 1}, "decode", "memory", 3_496),
+        ({"ctx": 1, "seq": 1024}, "prefill", "compute", 65_449),
     ],
     ids=["decode-open-context", "prefill-open-sequence"],
 )
 def test_block_attention_selects_and_analyzes_each_placed_regime(
-    dims: dict[str, int], variant: str, bound_by: str
+    dims: dict[str, int], variant: str, bound_by: str, ideal_ns: int
 ) -> None:
     result = analyze(
         PrefillDecodeAttention,
@@ -74,7 +74,7 @@ def test_block_attention_selects_and_analyzes_each_placed_regime(
     assert display_name(origin_of(result.function)) == variant
     record = get_metadata(result.function, RooflineMetadata)
     assert record is not None
-    assert record.ideal_ns > 0
+    assert record.ideal_ns == ideal_ns
     assert record.bound_by == bound_by
 
 

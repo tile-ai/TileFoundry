@@ -20,11 +20,10 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import (
     Layout,
-    ShardLayout,
     canonical_shard_layout,
     try_c_order_strides,
 )
-from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
+from tilefoundry.ir.types.shard.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -55,11 +54,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if axis < 0 or axis >= rank:
         ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
 
-    if isinstance(x_ty.layout, ShardLayout):
-        targets = split_target_axes(x_ty.layout, x_ty.shape)
+    source_shard = shard_layout_of(x_ty.layout)
+    if source_shard is not None:
+        targets = split_target_axes(source_shard, x_ty.shape)
         if any(
             isinstance(attr, Split) and targets[mesh_axis] == axis
-            for mesh_axis, attr in enumerate(x_ty.layout.attrs)
+            for mesh_axis, attr in enumerate(source_shard.attrs)
         ):
             ctx.error(
                 call,
@@ -73,7 +73,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if x_ty.layout is None
         else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     )
-    if isinstance(x_ty.layout, ShardLayout):
+    if source_shard is not None:
         relation = build_relation(call, (x_ty,), ctx)
         derived = derive_output_shard_layout(
             (x_ty,),
@@ -85,7 +85,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else canonical_shard_layout(out_shape, x_ty.layout.mesh, x_ty.layout.attrs)
+            else canonical_shard_layout(out_shape, source_shard.mesh, source_shard.attrs)
         )
     return TensorType(
         shape=out_shape,

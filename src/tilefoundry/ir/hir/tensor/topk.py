@@ -36,6 +36,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
     layout_axis_to_tensor_axis,
+    shard_layout_of,
 )
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -172,9 +173,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
                 f"k's statically-derivable upper bound {k_hi} exceeds axis "
                 f"{axis} length {axis_len}",
             )
-    if isinstance(x_ty.layout, ShardLayout):
-        la2ta = layout_axis_to_tensor_axis(x_ty.layout.layout.shape, x_ty.shape)
-        if any(isinstance(a, Split) and la2ta[a.axis] == axis for a in x_ty.layout.attrs):
+    source_shard = shard_layout_of(x_ty.layout)
+    if source_shard is not None:
+        la2ta = layout_axis_to_tensor_axis(source_shard.layout.shape, x_ty.shape)
+        if any(isinstance(a, Split) and la2ta[a.axis] == axis for a in source_shard.attrs):
             ctx.error(call, f"selected axis {axis} must not be Split-sharded")
 
     reject_partials(ctx, call, "x", x_ty.layout)
@@ -187,11 +189,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         if x_ty.layout is None
         else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     )
-    if isinstance(x_ty.layout, ShardLayout):
+    if source_shard is not None:
         relation = build_relation(call, (x_ty,), ctx)
         derived = derive_output_shard_layout((x_ty,), relation, out_shape, fresh_strides=True)
 
-        new_layout = derived if derived is not None else _canonical_shard(x_ty.layout, out_shape)
+        new_layout = derived if derived is not None else _canonical_shard(source_shard, out_shape)
     values_ty = TensorType(
         shape=out_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
     )

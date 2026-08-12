@@ -9,7 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -49,7 +49,7 @@ def _cast_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     new_layout = x_ty.layout
-    if isinstance(x_ty.layout, ShardLayout):
+    if shard_layout_of(x_ty.layout) is not None:
         relation = build_relation(call, (x_ty,), ctx)
         derived = derive_output_shard_layout((x_ty,), relation, x_ty.shape)
         if derived is not None:

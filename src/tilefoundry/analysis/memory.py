@@ -21,6 +21,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import Type, local_type_of
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import Target
@@ -64,10 +65,10 @@ class _Residency:
 def _is_view(expr: Expr) -> bool:
     """Whether *expr* aliases its operand rather than allocating.
 
-    Reshape re-indexes the same elements. Other operations produce values at
-    addresses of their own; buffer aliasing may optimize those later.
+    Reshape and Slice re-index the same elements. Other operations produce
+    values at addresses of their own; buffer aliasing may optimize those later.
     """
-    return isinstance(expr, Call) and isinstance(expr.target, Reshape)
+    return isinstance(expr, Call) and isinstance(expr.target, (Reshape, Slice))
 
 
 def _label(expr: Expr, position: int) -> str:

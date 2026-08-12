@@ -8,6 +8,8 @@ shapes.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import isl
 
 from tilefoundry.ir.types.shard import (
@@ -21,6 +23,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Partial,
     Split,
     layout_axis_to_tensor_axis,
+    shard_layout_of,
 )
 
 
@@ -33,7 +36,8 @@ def partial_reductions_by_axis(
     ``None`` entry denotes an attr that is not a ``Partial``; a non-sharded
     layout returns an empty tuple.
     """
-    if not isinstance(layout, ShardLayout):
+    layout = shard_layout_of(layout)
+    if layout is None:
         return ()
     return tuple(
         attr.reduction if isinstance(attr, Partial) else None
@@ -237,6 +241,12 @@ def derive_output_shard_layout(
     fresh_strides: bool = False,
 ):
     """Derive the output ``ShardLayout`` from the input shards and the forward relation."""
+    input_types = tuple(
+        replace(type_, layout=layout)
+        if (layout := shard_layout_of(type_.layout)) is not None
+        else type_
+        for type_ in input_types
+    )
     sharded = [
         (i, t.layout)
         for i, t in enumerate(input_types)

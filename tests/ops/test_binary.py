@@ -59,6 +59,17 @@ CASES = [
         ),
         ExpectedError(match="conflicting storage"),
     ),
+    TypeInferCase(
+        "host_metadata_abstains_from_storage",
+        _ADD,
+        (
+            make_tensor_type((4, 8), _F, storage=None),
+            make_tensor_type((4, 8), _F, storage="rmem"),
+        ),
+        make_tensor_type(
+            (4, 8), _F, layout=Layout((4, 8), (8, 1)), storage="rmem"
+        ),
+    ),
 ]
 
 

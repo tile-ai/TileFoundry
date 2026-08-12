@@ -15,6 +15,7 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.dim import DimVar, ceildiv
 from tilefoundry.ir.types.shard import (
     Broadcast,
+    ComposedLayout,
     Layout,
     Mesh,
     Partial,
@@ -114,6 +115,25 @@ def test_local_type_preserves_canonical_split_projection(
     assert (
         local_type_of(tensor, level="cta", topologies=(Topology("cta", extent),)).shape == expected
     )
+
+
+def test_local_type_projects_a_static_offset_sharded_view():
+    sharded = make_shard_tensor_type(
+        (64, 8, 1, 16), mesh=_cta_mesh(8), attrs=(Split(1),), storage="smem"
+    )
+    view = TensorType(
+        shape=sharded.shape,
+        dtype=sharded.dtype,
+        layout=ComposedLayout(inner=None, offset=64, outer=sharded.layout),
+        storage=sharded.storage,
+    )
+
+    local = local_type_of(
+        view, level="cta", topologies=(Topology("cta", 8),)
+    )
+
+    assert local.shape == (64, 1, 1, 16)
+    assert local.layout is view.layout
 
 
 @pytest.mark.parametrize(

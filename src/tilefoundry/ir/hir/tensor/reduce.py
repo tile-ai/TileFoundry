@@ -19,7 +19,7 @@ from tilefoundry.ir.types.shard import (
     canonical_shard_layout,
     try_c_order_strides,
 )
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -96,7 +96,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if x_ty.layout is None
         else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     )
-    if isinstance(x_ty.layout, ShardLayout):
+    source_shard = shard_layout_of(x_ty.layout)
+    if source_shard is not None:
         relation = build_relation(call, (x_ty,), ctx)
         derived = derive_output_shard_layout(
             (x_ty,),
@@ -108,7 +109,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else canonical_shard_layout(out_shape, x_ty.layout.mesh, x_ty.layout.attrs)
+            else canonical_shard_layout(out_shape, source_shard.mesh, source_shard.attrs)
         )
 
     return TensorType(

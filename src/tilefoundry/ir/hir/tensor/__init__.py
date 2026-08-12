@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .arange import Arange
 from .argmax import ArgMax
 from .cache_update import CacheUpdate
 from .cast import Cast
@@ -21,9 +22,11 @@ from .stack import Stack
 from .topk import TopK
 from .transpose import Transpose
 from .tuple_get_item import TupleGetItem
+from .where import Where
 from .zeros import Zeros
 
 __all__ = [
+    "Arange",
     "ArgMax",
     "CacheUpdate",
     "Cast",
@@ -45,5 +48,6 @@ __all__ = [
     "TopK",
     "Transpose",
     "TupleGetItem",
+    "Where",
     "Zeros",
 ]

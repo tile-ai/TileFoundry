@@ -14,6 +14,7 @@ from .shard import (
     Split,
     Topology,
     canonical_shard_layout,
+    shard_layout_of,
 )
 from .tensor_type import TensorType, TupleType, Type
 
@@ -117,15 +118,16 @@ def local_type_of(type: Type, *, level: str, topologies: tuple[Topology, ...]) -
     layout = type.layout
     if layout is None:
         return type
-    if isinstance(layout, (Layout, ComposedLayout)):
-        return type
-    if isinstance(layout, ShardLayout):
+    shard = shard_layout_of(layout)
+    if shard is not None:
         return TensorType(
-            shape=_local_layout_shape(layout, selected_level=levels[level], topologies=topologies),
+            shape=_local_layout_shape(shard, selected_level=levels[level], topologies=topologies),
             dtype=type.dtype,
             layout=layout,
             storage=type.storage,
         )
+    if isinstance(layout, (Layout, ComposedLayout)):
+        return type
     raise ValueError(
         f"local_type_of: {type!r} has unresolved layout {layout!r}; local "
         "projection requires None or a resolved ShardLayout"

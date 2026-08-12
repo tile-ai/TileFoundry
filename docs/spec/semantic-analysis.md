@@ -174,6 +174,9 @@ def derive_output_shard_layout(
     operand order.
   - An unmaterialized operand (`storage=umat`) abstains and does not constrain
     the output.
+  - Host shape metadata (`storage=None`) also abstains. If no concrete storage
+    is present, a metadata operand keeps the result at `None`; otherwise an
+    agreeing concrete operand anchors the result.
   - One concrete operand storage is the anchor; the output takes that storage.
   - Several concrete operands that agree on a storage produce that storage.
   - Several concrete operands that disagree on storage cause typeinfer to

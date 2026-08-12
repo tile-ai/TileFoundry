@@ -86,8 +86,18 @@ class PrefillDecodeAttention:
                 )
                 kt = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
                 vt = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.causal_mask(
-                    tf.matmul(qs, kt), query_start, window
+                query_positions = tf.reshape(
+                    tf.arange(SEQ), new_shape=(SEQ, 1)
+                ) + query_start
+                key_positions = tf.reshape(
+                    tf.arange(BLOCK), new_shape=(1, BLOCK)
+                ) + window
+                keep = key_positions <= query_positions
+                raw_scores = tf.matmul(qs, kt)
+                scores = tf.where(
+                    keep,
+                    raw_scores,
+                    tf.full_like(raw_scores, value=-1e30),
                 )
                 block_max = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
                 next_max = tf.max(running_max, block_max)
@@ -167,10 +177,18 @@ class PrefillDecodeAttention:
                         tf.cast(kb, dtype="f32"), perm=(0, 2, 1, 3)
                     )
                     keys = tf.transpose(values, perm=(0, 1, 3, 2))
-                    scores = tf.causal_mask(
-                        tf.matmul(scaled, keys),
-                        query_start,
-                        key_start,
+                    query_positions = tf.reshape(
+                        tf.arange(BLOCK), new_shape=(BLOCK, 1)
+                    ) + query_start
+                    key_positions = tf.reshape(
+                        tf.arange(BLOCK), new_shape=(1, BLOCK)
+                    ) + key_start
+                    keep = key_positions <= query_positions
+                    raw_scores = tf.matmul(scaled, keys)
+                    scores = tf.where(
+                        keep,
+                        raw_scores,
+                        tf.full_like(raw_scores, value=-1e30),
                     )
                     block_max = tf.reduce(
                         scores, axes=(-1,), keepdim=True, kind="max"

@@ -27,7 +27,7 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
+from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 
 from .walk import children, postorder
@@ -306,8 +306,8 @@ def _local_type(ty: TensorType) -> TensorType:
     Partial, broadcast, and dynamic mesh axes consume no tensor axis. Keeping
     this conversion here makes every registered relation sharding-aware.
     """
-    layout = ty.layout
-    if not isinstance(layout, ShardLayout):
+    layout = shard_layout_of(ty.layout)
+    if layout is None:
         return ty
     targets = split_target_axes(layout, ty.shape)
     mesh_extents = layout.mesh.layout.shape

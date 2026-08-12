@@ -20,7 +20,7 @@ from tilefoundry.ir.core.module import owning_module as _owning_module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
-from tilefoundry.ir.types.shard import Mesh, ShardLayout
+from tilefoundry.ir.types.shard import Mesh, shard_layout_of
 from tilefoundry.ir.types.shard.layout_algebra import size
 from tilefoundry.ir.types.storage import StorageKind
 
@@ -239,10 +239,11 @@ def execution_domain(type_: Type) -> dict[str, int] | None:
     """
     domains: set[tuple[tuple[str, int], ...]] = set()
     for tensor in tensor_types(type_):
-        if not isinstance(tensor.layout, ShardLayout):
+        layout = shard_layout_of(tensor.layout)
+        if layout is None:
             continue
         domain: dict[str, int] = {}
-        name, count = _mesh_position_count(tensor.layout.mesh)
+        name, count = _mesh_position_count(layout.mesh)
         previous = domain.get(name)
         if previous is not None and previous != count:
             raise AnalysisError(
@@ -261,9 +262,10 @@ def topology_extent(type_: Type, name: str) -> int | None:
     """The logical extent *type_*'s meshes state for topology *name*."""
     extents: set[int] = set()
     for tensor in tensor_types(type_):
-        if not isinstance(tensor.layout, ShardLayout):
+        layout = shard_layout_of(tensor.layout)
+        if layout is None:
             continue
-        mesh_name, count = _mesh_position_count(tensor.layout.mesh)
+        mesh_name, count = _mesh_position_count(layout.mesh)
         if mesh_name == name:
             extents.add(count)
     if len(extents) > 1:

@@ -22,8 +22,9 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import canonical_shard_layout
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
+from tilefoundry.ir.types.shard import Layout, canonical_shard_layout, try_c_order_strides
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, shard_layout_of
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -181,16 +182,27 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         relation = build_relation(call, (lhs_ty, rhs_ty), ctx)
         out_shape = shape_from_relation(relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape))
         shard = None
-        if isinstance(la, ShardLayout) or isinstance(lb, ShardLayout):
+        if shard_layout_of(la) is not None or shard_layout_of(lb) is not None:
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)
-        layout = shard if shard is not None else _merge_layout(la, lb, out_shape)
+        layout = (
+            shard
+            if shard is not None
+            else _merge_layout(
+                shard_layout_of(la) or la,
+                shard_layout_of(lb) or lb,
+                out_shape,
+            )
+        )
     except ValueError as e:
         ctx.error(call, f"Binary {op.kind.name}: {e}")
+    storage = resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
+    if layout is None and storage in (StorageKind.RMEM, StorageKind.SMEM) and out_shape:
+        layout = Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     return TensorType(
         shape=out_shape,
         dtype=out_dtype,
         layout=layout,
-        storage=resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage),
+        storage=storage,
     )
 
 

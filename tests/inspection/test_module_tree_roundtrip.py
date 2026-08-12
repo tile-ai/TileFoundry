@@ -25,8 +25,9 @@ from tilefoundry.dsl import (  # noqa: F401
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.nn.causal_mask import CausalMask
 from tilefoundry.ir.hir.specialize import origin_of
+from tilefoundry.ir.hir.tensor.arange import Arange
+from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
@@ -90,15 +91,20 @@ def test_prefill_decode_specializations_survive_the_round_trip() -> None:
     imported = import_dsl(source)
     restored = import_dsl(as_script(imported))
 
-    assert "causal_mask(" in source
+    assert "arange(" in source
+    assert "where(" in source
     assert "slice(" in source
     for roundtripped in (imported, restored):
         variants = roundtripped.entry_function().variants
         assert len(variants) == 2
-        assert any(
-            isinstance(expr, Call) and isinstance(expr.target, CausalMask)
-            for expr in postorder(variants[1].body)
-        )
+        for variant in variants:
+            targets = {
+                type(expr.target)
+                for expr in postorder(variant.body)
+                if isinstance(expr, Call)
+            }
+            assert Arange in targets
+            assert Where in targets
 
 
 def _child(mod: Module, name: str) -> Module:

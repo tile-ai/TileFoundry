@@ -12,7 +12,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
+from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -34,9 +34,10 @@ class MatMul(Op):
 
 def _k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
     """The mesh axes on which *t* splits its contraction (K) tensor axis."""
-    if not isinstance(t.layout, ShardLayout):
+    layout = shard_layout_of(t.layout)
+    if layout is None:
         return frozenset()
-    targets = split_target_axes(t.layout, t.shape)
+    targets = split_target_axes(layout, t.shape)
     return frozenset(p for p, ax in enumerate(targets) if ax == k_tensor_axis)
 
 
@@ -151,7 +152,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     except ValueError as e:
         ctx.error(call, str(e))
-    layout = shard if shard is not None else lhs.layout
+    layout = shard if shard is not None else (shard_layout_of(lhs.layout) or lhs.layout)
     storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
     return TensorType(shape=out_shape, dtype=lhs.dtype, layout=layout, storage=storage)
 

@@ -634,8 +634,9 @@ attached only to the Function. Its full JSON projection is under
 - constraints:
   - `MemoryMetadata` MUST be attached per reachable `Function`; a peak spans its
     live ranges and belongs to no single expression.
-  - `Slice` and `Transpose` MUST allocate their results. Analysis MUST NOT infer
-    buffer aliasing from layouts.
+  - `Reshape` and `Slice` are addressing views and MUST NOT receive independent
+    lifetimes. `Transpose` MUST allocate its result. Analysis uses operation
+    semantics for this distinction rather than inferring aliasing from layouts.
   - The memory levels MUST be two flat tuples with a separate relation edge list.
   - A GPU projection MUST cover the explicit levels a program can name and the
     caches traffic passes through, and MUST state that L1 caches L2, that L2

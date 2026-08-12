@@ -172,6 +172,8 @@ def _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset):
         if not isinstance(source_stride, int) or isinstance(source_stride, bool):
             return sharded
         offset += start * source_stride
+    if offset == 0:
+        return sharded
     return ComposedLayout(inner=None, offset=offset, outer=sharded)
 
 

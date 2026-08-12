@@ -11,7 +11,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -61,7 +61,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = tuple(x_ty.shape[p] for p in perm)
 
     new_layout = x_ty.layout
-    if isinstance(x_ty.layout, ShardLayout):
+    source_shard = shard_layout_of(x_ty.layout)
+    if source_shard is not None:
         relation = build_relation(call, (x_ty,), ctx)
         derived = derive_output_shard_layout((x_ty,), relation, new_shape, fresh_strides=False)
         if derived is not None:

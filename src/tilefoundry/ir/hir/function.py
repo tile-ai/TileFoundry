@@ -423,10 +423,10 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
     """*target* with any shape-valued attribute rebuilt at the bound extents.
 
     Which attributes those are is read off the operation rather than listed:
-    an attribute whose entries are all dimension expressions is a shape, and
-    an entry that is an ordinary integer substitutes to itself, so an
-    attribute that merely looks like one -- a permutation, a set of axes --
-    passes through untouched.
+    a scalar dimension expression or an attribute whose entries are all
+    dimension expressions is shape-valued. An ordinary integer substitutes to
+    itself, so an attribute that merely looks like a shape -- a permutation or
+    a set of axes -- passes through untouched.
     """
     if isinstance(target, Function) or not isinstance(target, Op):
         return target
@@ -452,6 +452,11 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
             rebuilt_mesh = substitute_mesh_dims(value, dims)
             if rebuilt_mesh is not value:
                 changed[param.name] = rebuilt_mesh
+            continue
+        if is_dim_expr(value):
+            rebuilt_dim = substitute_shape_dim(value, dims)
+            if rebuilt_dim != value:
+                changed[param.name] = rebuilt_dim
             continue
         if not isinstance(value, tuple) or not value:
             continue

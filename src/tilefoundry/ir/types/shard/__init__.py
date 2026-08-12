@@ -17,6 +17,7 @@ from .shard_layout import (
     ShardLayout,
     Split,
     canonical_shard_layout,
+    shard_layout_of,
 )
 from .utils import make_mesh
 
@@ -43,4 +44,5 @@ __all__ = [
     "P",
     "B",
     "canonical_shard_layout",
+    "shard_layout_of",
 ]

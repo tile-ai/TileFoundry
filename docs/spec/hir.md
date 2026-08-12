@@ -507,6 +507,9 @@ class Binary(Op):
     non-sharded operands produce `layout=None`; broadcasting differently shaped
     views does not make either operand's layout describe the result. This
     fallback MUST NOT accept an incompatible `ShardLayout` pair.
+  - If that fallback result is a shaped value in `rmem` or `smem`, Binary MUST
+    give the newly produced value its own C-order `Layout`; a concrete local
+    result cannot reach authored analysis with an unresolved layout.
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
     output only when `kind` provably commutes with `reduction`
     (`op(reduction(x)) == reduction(op(x))`); typeinfer rejects otherwise,
@@ -618,16 +621,22 @@ their input when it states one. An input with `layout=None` produces a view with
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes. Its result shape is exactly `sizes` and MUST NOT contain
   an induction `Var`.
-- `Slice` with static starts MUST produce a `ComposedLayout`: its offset is the
-  source offset plus the starts multiplied by the source strides, and its outer
-  layout carries the sliced shape and the retained strides (multiplied by any
-  slice step).
+- A plain-layout `Slice` with static starts MUST produce a `ComposedLayout`: its
+  offset is the source offset plus the starts multiplied by the source strides,
+  and its outer layout carries the sliced shape and retained strides (multiplied
+  by any slice step).
 - A `ShardLayout` slice MUST preserve its mesh attributes when every narrowed
   logical axis is unsplit. The corresponding primitive layout position takes
   the window size and stepped stride. Static starts wrap that shard layout in a
-  `ComposedLayout` when the resulting offset is static. Runtime starts, or a
-  static start multiplied by a symbolic source stride, preserve the bare
-  `ShardLayout` because its distribution is known while its offset is not.
+  `ComposedLayout` only when the resulting offset is nonzero. A zero offset,
+  runtime starts, or a static start multiplied by a symbolic source stride
+  preserve the bare `ShardLayout`: the distribution remains directly visible
+  while no useful static displacement is present.
+- `ComposedLayout(inner=None, outer=ShardLayout(...))` is a sharded view.
+  Relation-driven consumers, local projection, execution-domain discovery, and
+  Partial checks MUST read distribution from its outer layout. Its offset is
+  input addressing and MUST NOT be copied to a consumer's newly produced value;
+  another view MAY compose and preserve that offset.
 - Narrowing a logical axis targeted by any `Split` MUST fail type inference:
   the window need not align with that mesh division. A narrowed axis represented
   by more than one factored layout position MUST also fail rather than guess.
@@ -645,6 +654,31 @@ their input when it states one. An input with `layout=None` produces a view with
 - Evaluation MUST read the concrete runtime tensor rank and extents. A symbolic
   input `TensorType.shape` is the result bound, not the value returned at
   runtime.
+
+##### Arange
+
+`Arange(end, start=0, step=1, dtype=i64)` produces the one-dimensional half-open
+integer sequence `[start, end)` in `i32` or `i64`. `start` and `end` MUST be
+static or symbolic `ShapeDim` attributes and specialization MUST substitute
+them just as it substitutes tuple-valued shape attributes. `step` MUST be a
+positive static integer. A statically negative interval is rejected. The
+result extent is `ceildiv(end - start, step)`, with `layout=None` and
+`storage=umat`. Coordinates are synthesized without standalone traffic; their
+consumers own any materialization. The op has type, evaluation, access-relation,
+and cost semantics but no HIR-to-TIR lowering or codegen contract.
+
+##### Where
+
+`Where(condition, input, other)` applies right-aligned broadcasting across all
+three operands and selects elementwise from the two data branches. `condition`
+MUST be `bool`; `input` and `other` MUST have the same dtype. The data branches,
+not the condition, anchor result storage and distribution. A genuinely sharded
+condition MUST be compatible with the distribution derived from the data
+branches; every `Partial` operand is rejected. If the resulting shaped value is
+in `rmem` or `smem` and no branch layout describes the broadcast result, it
+receives a fresh C-order `Layout`. Cost counts one boolean selection per result
+element and complete reads of all three inputs plus one result write. The op has
+no HIR-to-TIR lowering or codegen contract.
 
 ##### ArgMax
 
@@ -1215,19 +1249,6 @@ Consensus torch.nn.functional ops.
   - `LayerNorm` rejects every `Partial` operand and every `Split` on a logical
     normalized-suffix axis of `x`, weight, or bias. A `Split` on an `x` prefix
     axis remains on the same-shape result.
-
-##### CausalMask
-
-`CausalMask(scores, query_start, key_start, value=-inf)` treats the final two
-score axes as query and key positions. Element `(i, j)` is retained exactly
-when `key_start + j <= query_start + i`; every later key is replaced by
-`value`. Both starts MUST be rank-0 `i32` or `i64` inputs, and scores MUST have
-rank at least two. The result preserves scores' shape, dtype, storage, and
-layout. No `Partial` input is valid. A `Split` on either of the final two
-logical axes MUST be rejected because the two scalar starts do not encode a
-mesh-local coordinate offset; splits on prefix axes are preserved. The op has
-HIR type, evaluation, access-relation, and cost semantics only; it has no
-HIR-to-TIR lowering or codegen contract.
 
 ##### Gelu
 ```python

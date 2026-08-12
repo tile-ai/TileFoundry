@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .layout import Layout, LayoutBase
+from .layout import ComposedLayout, Layout, LayoutBase
 from .layout_algebra import try_c_order_strides
 from .mesh import Mesh
 
@@ -54,6 +54,19 @@ class ShardLayout(LayoutBase):
     @property
     def shape(self) -> tuple:
         return self.layout.shape
+
+
+def shard_layout_of(layout: object) -> "ShardLayout | None":
+    """Return the distribution carried directly or by a static-offset view."""
+    if isinstance(layout, ShardLayout):
+        return layout
+    if (
+        isinstance(layout, ComposedLayout)
+        and layout.inner is None
+        and isinstance(layout.outer, ShardLayout)
+    ):
+        return layout.outer
+    return None
 
 
 def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
@@ -233,6 +246,7 @@ __all__ = [
     "P",
     "B",
     "ShardLayout",
+    "shard_layout_of",
     "canonical_shard_layout",
     "shard_layout_local_shape",
     "layout_axis_to_tensor_axis",

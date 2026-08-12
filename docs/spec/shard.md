@@ -566,6 +566,14 @@ logical shape → layout domain in
 relation-driven propagation in
 [semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation).
 
+A static-offset tensor view is represented as
+`ComposedLayout(inner=None, outer=ShardLayout(...))`. `shard_layout_of(layout)`
+MUST return the direct `ShardLayout` or that outer carrier and MUST return
+`None` for other compositions. Services that inspect distribution rather than
+addressing use this projection. The `ComposedLayout.offset` remains a property
+of the input view; propagation derives a fresh result `ShardLayout` and does not
+copy that displacement to a materialized consumer.
+
 ---
 
 ## 9. Layout construction and mesh-scope projection

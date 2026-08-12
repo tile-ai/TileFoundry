@@ -118,8 +118,8 @@ def _memory_evidence(report: dict) -> str | None:
 def _roofline_evidence(report: dict) -> str | None:
     """What `roofline` must have decided: which side bounds, and the time it implies."""
     record = report["function_records"]["roofline"]
-    if record["bound_by"] not in ("compute", "memory"):
-        return f"bound_by is {record['bound_by']!r}, neither side"
+    if record["bound_by"] not in ("compute", "memory", "balanced"):
+        return f"bound_by is {record['bound_by']!r}, no rated resource"
     if not record["ideal_ns"] > 0:
         return f"ideal_ns is {record['ideal_ns']!r}"
     return None

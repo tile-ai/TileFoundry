@@ -613,12 +613,10 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     - when the touched extent is runtime data, the evaluator charges the
       smallest bound its operand Types state statically.
   - `Reshape` MUST report zero traffic because it re-indexes the same elements.
-    `Slice` MUST report one result-sized source read, a zero-traffic structural
-    `starts` slot, and one result-sized write. `Transpose` MUST
-    report one result-sized read and write because its evaluator materializes the
-    permutation. Each evaluator answers from its operation's semantics and MUST
-    NOT infer buffer identity from layouts; buffer aliasing is a later
-    optimization decision.
+    `Slice` MUST also report zero traffic because it is an addressing view; the
+    consumer that reads or materializes the window owns those bytes. `Transpose`
+    MUST report one result-sized read and write because its evaluator materializes
+    the permutation. Each evaluator answers from its operation's semantics.
   - With no level, `CostContext.local_type_of` MUST return the selected Type as
     written. With a level, it MUST apply `local_type_of` using the context's
     topology hierarchy and MUST reject unresolved or non-concrete local extents

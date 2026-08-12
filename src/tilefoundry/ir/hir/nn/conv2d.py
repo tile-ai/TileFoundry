@@ -14,8 +14,8 @@ from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
-from tilefoundry.ir.types.shard import Layout, ShardLayout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import split_target_axes
+from tilefoundry.ir.types.shard import Layout, try_c_order_strides
+from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -161,7 +161,7 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     placed = [
         (index, name, layout)
         for index, (name, type_) in enumerate(named)
-        if isinstance((layout := type_.layout), ShardLayout)
+        if (layout := shard_layout_of(type_.layout)) is not None
     ]
     if placed:
         mesh = placed[0][2].mesh
@@ -182,8 +182,8 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
         ("input", x, {1: 4}),
         ("weight", weight, {1: 4, 2: 5, 3: 6}),
     ):
-        layout = type_.layout
-        if not isinstance(layout, ShardLayout):
+        layout = shard_layout_of(type_.layout)
+        if layout is None:
             continue
         targets = split_target_axes(layout, type_.shape)
         for mesh_axis, logical_axis in enumerate(targets):
@@ -231,7 +231,8 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
             else None
         )
         if reduction != "sum" or not (
-            isinstance(bias.layout, ShardLayout) and bias.layout.mesh == mesh
+            (bias_layout := shard_layout_of(bias.layout)) is not None
+            and bias_layout.mesh == mesh
         ):
             ctx.error(
                 call,
