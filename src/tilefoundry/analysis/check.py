@@ -12,6 +12,7 @@ from tilefoundry.ir.hir._call_binding import binding_for
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
+    PROVENANCE,
     SpecializationError,
     _record_complete_bindings,
     dim_vars_reached,
@@ -200,19 +201,6 @@ def _require_concrete_function_geometry(
         )
 
 
-def _function_identity(function: Function) -> int:
-    """Identity of the authored Function behind a derived instance."""
-    origin = function
-    seen: set[int] = set()
-    while id(origin) not in seen:
-        seen.add(id(origin))
-        parent = getattr(origin, "_specialized_from", None)
-        if not isinstance(parent, Function):
-            break
-        origin = parent
-    return id(origin)
-
-
 def _authored_call(function: Function, call: Call) -> Call:
     """Follow Function rebuilds to the authored Call at the same SSA position."""
     current_function = function
@@ -306,21 +294,12 @@ def _resource_parameters(
     ordered: list[tuple[_ResourceKey, Var]] = []
     emitted: set[_ResourceKey] = set()
     for owner in subtree(module):
-        declarations: dict[str, Var] = {}
         for owned in owner.functions:
-            for param in getattr(owned, "params", ()):
+            if not isinstance(owned, Function):
+                continue
+            for param in owned.params:
                 if not param.is_const:
                     continue
-                previous = declarations.get(param.name)
-                if previous is not None and previous.type != param.type:
-                    raise AnalysisError(
-                        f"reachable Module {owner._owner_path()!r} declares "
-                        f"ConstTensor {param.name!r} with conflicting types "
-                        f"{previous.type!r} and {param.type!r}"
-                    )
-                if previous is not None:
-                    continue
-                declarations[param.name] = param
                 key = (paths[id(owner)], param.name)
                 declaration = needed.get(key)
                 if declaration is not None and key not in emitted:
@@ -369,7 +348,7 @@ class _Inliner:
         path: tuple[str, ...],
         active: frozenset[int],
     ) -> Expr:
-        identity = _function_identity(function)
+        identity = id(function)
         if identity in active:
             raise AnalysisError(
                 f"cannot inline recursive Function call path through {function.name!r}"
@@ -543,7 +522,7 @@ def _inline_view(module: Module, function: Function, budget: int) -> Function:
         variants=(),
         converters=(),
     )
-    object.__setattr__(view, "_specialized_from", function)
+    object.__setattr__(view, PROVENANCE, function)
     return view
 
 
