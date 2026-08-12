@@ -8,8 +8,6 @@ different count of the same flops.
 
 from __future__ import annotations
 
-import math
-
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -47,7 +45,7 @@ def _compute_ns(
         rate = facts.peak_for(dtype)
         if rate is None:
             continue
-        total += math.ceil(value * 1_000_000_000 / rate)
+        total += -(-(value * 1_000_000_000) // rate)
     return total
 
 
@@ -55,11 +53,8 @@ def _memory_ns(traffic: TrafficBytes, facts: ThroughputFacts) -> int:
     """Time the traffic at the target's bandwidth level needs."""
     if facts.memory_bandwidth_bytes_per_second is None or not traffic.total_bytes:
         return _NO_BOUND
-    return math.ceil(
-        traffic.total_bytes
-        * 1_000_000_000
-        / facts.memory_bandwidth_bytes_per_second
-    )
+    numerator = traffic.total_bytes * 1_000_000_000
+    return -(-numerator // facts.memory_bandwidth_bytes_per_second)
 
 
 def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetadata:

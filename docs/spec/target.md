@@ -217,6 +217,10 @@ class CudaTarget(Target):
     through the corresponding getters. These selections MUST NOT use
     `Target.name`, an exact-concrete-type table, or a second extension
     registration.
+  - CUDA's `ThroughputFacts` MUST publish one CTA's compute and HBM-bandwidth
+    rates by dividing each whole-device rate by `device.sm_count`. It MUST name
+    that rate unit `cta`; compiler policy such as `ParallelCapacityFacts` MUST
+    NOT enter this derivation.
   - `topology_limit("cta")` MUST equal `device.sm_count`, and
     `topology_limit("thread")` MUST equal the architecture's corresponding
     structural limit. An unsupported name MUST be refused.

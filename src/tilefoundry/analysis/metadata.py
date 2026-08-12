@@ -45,6 +45,13 @@ class ComputeCostMetadata(IRMetadata):
             (value for name, value in self.traffic if name == level), TrafficBytes()
         )
 
+    def traffic_per_unit_at(self, level: str) -> TrafficBytes:
+        """One unit's traffic at *level*, zero when it does not touch it."""
+        return next(
+            (value for name, value in self.traffic_per_unit if name == level),
+            TrafficBytes(),
+        )
+
     def format_comment(self) -> str:
         flop_text = ",".join(f"{name}:{value}" for name, value in self.flops) or "0"
         local_text = (

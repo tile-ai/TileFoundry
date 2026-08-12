@@ -104,6 +104,9 @@ def throughput(target: AmxTarget, query: object = None) -> ThroughputFacts:
             device.unified_memory_bandwidth_bytes_per_second
         ),
         bandwidth_level="gmem",
+        peak_flops_per_second_per_unit=(),
+        memory_bandwidth_bytes_per_second_per_unit=None,
+        rate_unit="core",
     )
 
 

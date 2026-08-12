@@ -20,6 +20,7 @@ from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.fixtures.placed.square_cuda import Model as SquareCudaModel
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, DType, build, func, jit, lower, module
+from tilefoundry.analysis import AnalysisError, analyze
 from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl.tf import matmul
@@ -51,6 +52,28 @@ from tilefoundry.target.services import CodeGenerator, Scheduler
 
 class ExternalCudaTarget(CudaTarget):
     name = "tests.target.external_cuda"
+
+
+class _NoComputeUnitRateCudaTarget(CudaTarget):
+    name = "tests.target.no_compute_unit_rate_cuda"
+
+    def get_facts(self, facts_type: type, query: object | None = None):
+        facts = super().get_facts(facts_type, query)
+        if facts_type is ThroughputFacts:
+            return replace(facts, peak_flops_per_second_per_unit=())
+        return facts
+
+
+class _NoBandwidthUnitRateCudaTarget(CudaTarget):
+    name = "tests.target.no_bandwidth_unit_rate_cuda"
+
+    def get_facts(self, facts_type: type, query: object | None = None):
+        facts = super().get_facts(facts_type, query)
+        if facts_type is ThroughputFacts:
+            return replace(
+                facts, memory_bandwidth_bytes_per_second_per_unit=None
+            )
+        return facts
 
 
 @func
@@ -160,6 +183,38 @@ def test_document_free_target_projects_facts_and_inherits_standard_analysis() ->
     target.validate_program_topology(Topology("core", 256))
     with pytest.raises(ValueError, match="1 <= extent <= 256"):
         target.validate_program_topology(Topology("core", 257))
+
+
+def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
+    target = CudaTarget("nvidia.h200_sxm")
+    facts = target.get_facts(ThroughputFacts)
+
+    assert facts.rate_unit == "cta"
+    assert dict(facts.peak_flops_per_second_per_unit) == {
+        dtype: rate // target.device.sm_count
+        for dtype, rate in facts.peak_flops_per_second
+    }
+    assert facts.memory_bandwidth_bytes_per_second_per_unit == (
+        target.device.hbm_bandwidth_bytes_per_second // target.device.sm_count
+    )
+
+
+@pytest.mark.parametrize(
+    ("target_type", "missing"),
+    (
+        (_NoComputeUnitRateCudaTarget, r"dtype 'f32'.*'cta'"),
+        (_NoBandwidthUnitRateCudaTarget, r"level 'gmem'.*'cta'"),
+    ),
+)
+def test_timeline_refuses_a_target_without_its_required_one_unit_rate(
+    target_type: type[CudaTarget], missing: str
+) -> None:
+    target = target_type("nvidia.h200_sxm")
+    subject = replace(SquareCudaModel, target=target)
+    function = subject.entry_function()
+
+    with pytest.raises(AnalysisError, match=missing):
+        analyze(subject, function, analysis="timeline")
 
 
 def test_document_free_target_enforces_projection_and_capability_boundaries() -> None:

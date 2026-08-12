@@ -144,21 +144,36 @@ class MemoryHierarchyFacts:
 
 @dataclass(frozen=True)
 class ThroughputFacts:
-    """The rates a roofline divides work by.
+    """The whole-device and one-unit rates used to price work.
 
     ``bandwidth_level`` names the memory level ``memory_bandwidth`` describes,
     so the bound is computed from the traffic at that level rather than from
-    every level summed together.
+    every level summed together. ``rate_unit`` names the topology level whose
+    one-unit rates price local timeline work.
     """
 
     peak_flops_per_second: tuple[tuple[DType, int], ...]
     memory_bandwidth_bytes_per_second: int | None
     bandwidth_level: str
+    peak_flops_per_second_per_unit: tuple[tuple[DType, int], ...]
+    memory_bandwidth_bytes_per_second_per_unit: int | None
+    rate_unit: str
 
     def peak_for(self, dtype: DType) -> int | None:
         """The published rate for *dtype*, or ``None`` when there is none."""
         return next(
             (rate for entry, rate in self.peak_flops_per_second if entry == dtype),
+            None,
+        )
+
+    def peak_per_unit_for(self, dtype: DType) -> int | None:
+        """One unit's published rate for *dtype*, or ``None``."""
+        return next(
+            (
+                rate
+                for entry, rate in self.peak_flops_per_second_per_unit
+                if entry == dtype
+            ),
             None,
         )
 

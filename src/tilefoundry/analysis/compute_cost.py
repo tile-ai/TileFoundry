@@ -12,12 +12,13 @@ from __future__ import annotations
 from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import Type
+from tilefoundry.ir.types import DType, Type
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
+from .facts import ThroughputFacts
 from .metadata import ComputeCostMetadata, TrafficBytes
 from .walk import (
     attach,
@@ -29,6 +30,64 @@ from .walk import (
 )
 
 SELECTOR = "compute-cost"
+
+
+def _local_duration_ns(
+    cost: ComputeCostMetadata,
+    facts: ThroughputFacts,
+    *,
+    level: str,
+    scale: int = 1,
+) -> int:
+    """Price one occurrence's projected work against one unit's rates."""
+    if facts.rate_unit != level:
+        raise AnalysisError(
+            f"timeline: selected topology level {level!r}, but the target's "
+            f"per-unit rates are stated for {facts.rate_unit!r}"
+        )
+
+    compute_ns = 0
+    for name, value in cost.flops_per_unit:
+        if not value:
+            continue
+        dtype = getattr(DType, name, None)
+        if dtype is None:
+            raise AnalysisError(f"timeline: unknown compute dtype {name!r}")
+        rate = facts.peak_per_unit_for(dtype)
+        if rate is None or rate <= 0:
+            raise AnalysisError(
+                f"timeline: target publishes no per-unit compute rate for "
+                f"dtype {name!r} at {level!r}"
+            )
+        compute_ns += -(-(value * scale * 1_000_000_000) // rate)
+
+    traffic = cost.traffic_per_unit_at(facts.bandwidth_level)
+    moved = traffic.total_bytes * scale
+    if not moved:
+        unmodelled = tuple(
+            name
+            for name, value in cost.traffic_per_unit
+            if name != facts.bandwidth_level and value.total_bytes
+        )
+        if unmodelled:
+            names = ", ".join(repr(name) for name in unmodelled)
+            raise AnalysisError(
+                f"timeline: occurrence traffic is only at unmodelled storage "
+                f"level(s) {names}; target bandwidth is stated for "
+                f"{facts.bandwidth_level!r}"
+            )
+
+    memory_ns = 0
+    if moved:
+        rate = facts.memory_bandwidth_bytes_per_second_per_unit
+        if rate is None or rate <= 0:
+            raise AnalysisError(
+                f"timeline: target publishes no per-unit bandwidth for level "
+                f"{facts.bandwidth_level!r} at {level!r}"
+            )
+        memory_ns = -(-(moved * 1_000_000_000) // rate)
+    return max(compute_ns, memory_ns)
+
 
 def _call_movement(
     call: Call,

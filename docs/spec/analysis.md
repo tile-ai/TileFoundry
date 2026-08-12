@@ -330,7 +330,7 @@ Each owns one record type and declares its dependencies and output additions.
 | `compute-cost` | - | `ComputeCostMetadata` | the authored program | `flops`, `traffic` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
 | `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` | bounded dependency evidence, `ideal-bound` | every measured Call |
-| `timeline` | `roofline`, `compute-cost` | `TimelineMetadata` | `ParallelCapacityFacts` | `theoretical-makespan` | every measured Call, shared per execution unit |
+| `timeline` | `compute-cost` | `TimelineMetadata` | `ThroughputFacts`, `ParallelCapacityFacts` | `theoretical-makespan` | every measured Call, shared per execution unit |
 
 Every compact text summary begins with these two lines:
 
@@ -695,19 +695,26 @@ The family reads this target projection:
 
 ```python
 class ThroughputFacts:
-    """Carry the rates used by roofline analysis.
+    """Carry whole-device and one-unit rates used to price work.
 
     Attributes:
         peak_flops_per_second: attribute; Published compute rates by dtype.
         memory_bandwidth_bytes_per_second: attribute; Published memory bandwidth.
         bandwidth_level: attribute; Memory level whose traffic the bandwidth measures.
+        peak_flops_per_second_per_unit: attribute; Published compute rates for one unit.
+        memory_bandwidth_bytes_per_second_per_unit: attribute; One unit's bandwidth share.
+        rate_unit: attribute; Topology level the one-unit rates describe.
     """
 
     peak_flops_per_second: tuple[tuple[DType, int], ...]
     memory_bandwidth_bytes_per_second: int | None
     bandwidth_level: str
+    peak_flops_per_second_per_unit: tuple[tuple[DType, int], ...]
+    memory_bandwidth_bytes_per_second_per_unit: int | None
+    rate_unit: str
 
     def peak_for(self, dtype: DType) -> int | None: ...
+    def peak_per_unit_for(self, dtype: DType) -> int | None: ...
 ```
 
 Requesting roofline adds the exact summed compute-cost `flops` and `traffic`,
@@ -739,6 +746,19 @@ not enter that view. Independently requesting a dependency selects its full form
 as defined in that family's section.
 
 - constraints:
+  - `ThroughputFacts.peak_for` MUST return `None` for a dtype with no published
+    rate; analysis MUST NOT substitute an assumed rate.
+  - `peak_per_unit_for` MUST return `None` for a dtype with no published
+    one-unit rate. Timeline MUST reject non-zero work whose dtype has no such
+    rate and MUST NOT substitute the whole-device rate.
+  - `bandwidth_level` MUST select the traffic level divided by the published
+    bandwidth rather than summing traffic across levels.
+  - Timeline local duration MUST divide `ComputeCostMetadata.flops_per_unit`
+    and `traffic_per_unit` by the matching one-unit rates. It MUST reject
+    non-zero traffic only at storage levels for which the target publishes no
+    bandwidth, and zero work with zero traffic MUST take zero time.
+  - Rate-to-duration divisions MUST use exact integer ceiling division. They
+    MUST NOT pass through floating-point arithmetic.
   - Roofline records MUST be attached to every reachable `Call` and `Function`.
   - Roofline MUST read `ComputeCostMetadata` rather than evaluate the program a
     second time.
@@ -829,7 +849,7 @@ Reported Call and Function records use the same projection under their
     connected through fusable edges MUST form one unit, and every Call in that
     unit MUST carry the same record.
   - `parallel_units` MUST be a positive capacity used to form waves, not a
-    program rewrite.
+    program rewrite or a divisor used to derive one-unit rates.
   - Timeline is a modeled plan and MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
 

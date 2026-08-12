@@ -108,12 +108,20 @@ def throughput(target: CudaTarget, query: object = None) -> ThroughputFacts:
     document supports.
     """
     device = target.device
+    peaks = tuple(
+        sorted(device.dense_flops_per_second.items(), key=lambda item: item[0].name)
+    )
     return ThroughputFacts(
-        peak_flops_per_second=tuple(sorted(
-            device.dense_flops_per_second.items(), key=lambda item: item[0].name
-        )),
+        peak_flops_per_second=peaks,
         memory_bandwidth_bytes_per_second=device.hbm_bandwidth_bytes_per_second,
         bandwidth_level="gmem",
+        peak_flops_per_second_per_unit=tuple(
+            (dtype, rate // device.sm_count) for dtype, rate in peaks
+        ),
+        memory_bandwidth_bytes_per_second_per_unit=(
+            device.hbm_bandwidth_bytes_per_second // device.sm_count
+        ),
+        rate_unit="cta",
     )
 
 

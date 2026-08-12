@@ -75,6 +75,9 @@ class VendorNpuTarget(Target):
                 peak_flops_per_second=((DType.f32, 2_000_000_000_000_000),),
                 memory_bandwidth_bytes_per_second=2_000_000_000_000,
                 bandwidth_level="gmem",
+                peak_flops_per_second_per_unit=(),
+                memory_bandwidth_bytes_per_second_per_unit=None,
+                rate_unit="core",
             )
         elif facts_type is ParallelCapacityFacts:
             value = ParallelCapacityFacts("core", 16)

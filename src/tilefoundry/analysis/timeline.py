@@ -7,7 +7,6 @@ models ordering and occupancy, not lowering or measured performance.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 from ortools.sat.python import cp_model
@@ -22,10 +21,10 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 
 from .check import Placement, _timeline_placements
+from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, ThroughputFacts
-from .metadata import ComputeCostMetadata, RooflineMetadata, TimelineMetadata
-from .roofline import _cost_bound
+from .metadata import ComputeCostMetadata, TimelineMetadata
 from .walk import (
     attach,
     describe,
@@ -167,7 +166,7 @@ def _wave_plan(unit: _Unit, capacity: int) -> list[tuple[int, int]]:
         if index == len(demands) - 1:
             duration = left
         else:
-            duration = math.ceil(unit.duration_ns * demand / unit.extent)
+            duration = -(-(unit.duration_ns * demand) // unit.extent)
             left -= duration
         plan.append((demand, max(duration, 0)))
     return plan
@@ -234,19 +233,29 @@ def _solve(
     return solver.Value(makespan), total_waves, records
 
 
-def _durations(fn: Function) -> dict[int, int]:
-    """Each call's modeled duration, from the bound the roofline family left."""
+def _durations(
+    fn: Function,
+    facts: ThroughputFacts,
+    level: str,
+    trips: dict[int, int] | None = None,
+) -> dict[int, int]:
+    """Each call's local duration, optionally scaled for root loop totals."""
     result: dict[int, int] = {}
     for expr in postorder(fn.body):
         if not isinstance(expr, Call):
             continue
-        bound = get_metadata(expr, RooflineMetadata)
-        if bound is None:
+        cost = get_metadata(expr, ComputeCostMetadata)
+        if cost is None:
             raise AnalysisError(
-                f"{describe(expr)}: the timeline needs the roofline bound this "
+                f"{describe(expr)}: the timeline needs the compute-cost record this "
                 "call was never given"
             )
-        result[id(expr)] = bound.ideal_ns
+        result[id(expr)] = _local_duration_ns(
+            cost,
+            facts,
+            level=level,
+            scale=1 if trips is None else trips.get(id(expr), 1),
+        )
     return result
 
 
@@ -259,6 +268,7 @@ def analyze_timeline(
 ) -> None:
     """Place every reachable Function's calls on the nominal timeline."""
     facts = target.get_facts(ParallelCapacityFacts)
+    throughput = target.get_facts(ThroughputFacts)
     capacity = facts.parallel_units
     if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
         raise AnalysisError(
@@ -267,7 +277,7 @@ def analyze_timeline(
         )
     for fn in reachable_functions(function):
         placements = _timeline_placements(module, fn, facts.topology)
-        durations = _durations(fn)
+        durations = _durations(fn, throughput, facts.topology)
         if not durations:
             attach(fn, TimelineMetadata(grid_units=0, waves=0, start_ns=0, end_ns=0))
             continue
@@ -280,20 +290,7 @@ def analyze_timeline(
         trips = enclosing_trips(fn.body)
         root_units = units
         if trips:
-            throughput = target.get_facts(ThroughputFacts)
-            root_durations = {}
-            for expr in postorder(fn.body):
-                if not isinstance(expr, Call):
-                    continue
-                cost = get_metadata(expr, ComputeCostMetadata)
-                if cost is None:
-                    raise AnalysisError(
-                        f"{describe(expr)}: the timeline needs the compute-cost "
-                        "record this call was never given"
-                    )
-                root_durations[id(expr)] = _cost_bound(
-                    cost, throughput, scale=trips.get(id(expr), 1)
-                ).ideal_ns
+            root_durations = _durations(fn, throughput, facts.topology, trips)
             root_units = _units(fn, root_durations, placements)
             makespan, total_waves, _records = _solve(root_units, capacity)
         attach(

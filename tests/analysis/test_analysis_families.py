@@ -79,6 +79,26 @@ class _MixedPrecision:
         return tf.add(half, half)
 
 
+_ROUNDING_M = 14_593
+_ROUNDING_N = 11_489
+_ROUNDING_K = 298_224_413
+_H200 = CudaTarget("nvidia.h200_sxm")
+_LARGE_H200 = CudaTarget(
+    replace(_H200.device, hbm_capacity_bytes=300_000_000_000_000_000),
+    architecture=_H200.architecture,
+)
+
+
+@module(entry="main", target=_LARGE_H200, topologies=(Topology("cta", 1),))
+class _LargeRooflineRounding:
+    @func
+    def main(
+        lhs: Tensor[(_ROUNDING_M, _ROUNDING_K), "f32"],
+        rhs: ConstTensor[(_ROUNDING_K, _ROUNDING_N), "f32"],
+    ):
+        return tf.matmul(lhs, rhs)
+
+
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _WeightedAdd:
     @func
@@ -213,6 +233,14 @@ def _reshard_boundary(source: Tensor[(1,), "f32"]):
         local = tf.reshard(source, (1 @ cta.tile,), "rmem")
         moved = tf.reshard(local, (1 @ cta.tile,), "rmem")
         return tf.add(moved, moved)
+
+
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+def _zero_cost_view(source: Tensor[(1,), "f32"]):
+    with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
+        local = tf.reshard(source, (1 @ cta.tile,), "gmem")
+        parts = tf.split(local, axis=0, num_splits=1)
+        return parts[0]
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2), Topology("thread", 4)))
@@ -674,6 +702,19 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     assert whole.ideal_ns == max(whole.compute_ns, whole.memory_ns)
 
 
+def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
+    result = analyze(
+        _LargeRooflineRounding,
+        _LargeRooflineRounding.entry_function(),
+        analysis="roofline",
+    )
+    bound = get_metadata(result.function, RooflineMetadata)
+
+    assert bound is not None
+    assert bound.compute_ns == 1_492_537_313_434
+    assert bound.ideal_ns == 1_492_537_313_434
+
+
 def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) -> None:
     """A topology declaration does not place a value or admit dependency writes."""
     compute = analyze(_wide_grid, _entry(_wide_grid), analysis="compute-cost")
@@ -682,7 +723,7 @@ def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) 
     assert get_metadata(roofline.function, RooflineMetadata) is not None
 
     placed, function = _run(_placed_wide_grid, "timeline")
-    assert placed.executed == ("compute-cost", "memory", "roofline", "timeline")
+    assert placed.executed == ("compute-cost", "timeline")
     assert all(get_metadata(call, TimelineMetadata) is not None for call in _calls(function))
 
     ran = False
@@ -721,6 +762,7 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
     assert cost is not None
     assert cost.traffic == (("gmem", TrafficBytes(read=30_720, write=30_720)),)
     assert cost.traffic_per_unit == (("gmem", TrafficBytes(read=256, write=256)),)
+    assert cost.traffic_per_unit_at("gmem") == TrafficBytes(read=256, write=256)
     assert (
         "bytes=gmem:r30720/w30720 per-unit-bytes=gmem:r256/w256 operands="
         in cost.format_comment()
@@ -801,17 +843,23 @@ def test_nested_levels_project_independently_and_broadcast_counts_as_placed() ->
     assert _result_placement(type_, thread) == frozenset(range(4))
 
 
-def test_a_reshard_ends_the_execution_unit_on_both_sides() -> None:
-    """A reshard exists to move data, so no unit may span one."""
-    _, entry = _run(_reshard_boundary, "timeline")
+def test_timeline_refuses_traffic_only_at_an_unmodelled_storage_level() -> None:
+    with pytest.raises(
+        AnalysisError,
+        match=r"traffic is only at unmodelled storage level.*'rmem'.*'gmem'",
+    ):
+        _run(_reshard_boundary, "timeline")
 
-    local, moved, consumer = _calls(entry)[:3]
-    assert isinstance(local.target, Reshard)
-    assert isinstance(moved.target, Reshard)
-    records = [get_metadata(call, TimelineMetadata) for call in (local, moved, consumer)]
-    assert all(record is not None for record in records)
-    assert records[0].end_ns <= records[1].start_ns
-    assert records[1].end_ns <= records[2].start_ns
+
+def test_a_zero_cost_structural_occurrence_has_an_empty_timeline_interval() -> None:
+    _, entry = _run(_zero_cost_view, "timeline")
+
+    view = next(
+        call for call in _calls(entry) if type(call.target).__name__ == "TupleGetItem"
+    )
+    record = get_metadata(view, TimelineMetadata)
+    assert record is not None
+    assert record.start_ns == record.end_ns
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:
