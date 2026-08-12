@@ -1083,10 +1083,10 @@ def _emit_def(
         extent = shape_entry_str(grid.extent)
         step = shape_entry_str(grid.step)
         start = shape_entry_str(grid.start)
-        if grid.start == 0 and grid.step == 1:
-            loop = f"tile({extent})"
-        elif id(grid.induction_var) in _tile_window_steps:
+        if id(grid.induction_var) in _tile_window_steps:
             loop = f"tile({extent}, {step})"
+        elif grid.start == 0 and grid.step == 1:
+            loop = f"range({extent})"
         else:
             loop = f"range({start}, {extent}, {step})"
         lines.append(f"{level}for {grid.induction_var.name} in {loop}:{_comments(grid, options)}")

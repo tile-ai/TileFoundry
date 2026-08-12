@@ -70,7 +70,7 @@ class TiledMLP:
 
         gate_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype="f32")
         up_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype="f32")
-        for kh in tile(NK_HID):
+        for kh in range(NK_HID):
             kh_index = tf.reshape(kh, new_shape=(1,))
             x_k = tf.cast(
                 tf.reshape(
@@ -123,7 +123,7 @@ class TiledMLP:
             new_shape=(NK_INT, 1, NB_HID, KT, NT),
         )
         out_z = tf.zeros(shape=(MB, NB_HID, MT, NT), dtype="f32")
-        for ki in tile(NK_INT):
+        for ki in range(NK_INT):
             ki_index = tf.reshape(ki, new_shape=(1,))
             out_z = out_z + tf.matmul(
                 tf.cast(

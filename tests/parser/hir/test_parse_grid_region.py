@@ -1,19 +1,23 @@
 """``for`` over ``tile`` / ``range`` parses to a GridRegionExpr.
 
-``range`` and two-arg ``tile`` share one loop domain ``(start, extent, step)``;
+``range`` and ``tile`` share one loop domain ``(start, extent, step)``;
 body Assigns whose LHS is an outer-scope Var get lifted to ``carried_args`` +
-``yield_values``. The corpus authors a carried-accumulator ``tile`` loop and
+``yield_values``. The corpus authors a carried-accumulator grid loop and
 evaluates it, so this file keeps the domain forms no model spells out and the
 diagnostics for loop bodies the surface does not support.
 """
 
 from __future__ import annotations
 
+import ast
+from dataclasses import replace
+
 import pytest
 
 from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor
+from tilefoundry.dsl._stub_gen import regen_stubs
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
@@ -34,8 +38,8 @@ def _src(*body: str) -> str:
 
 
 @func
-def _tile_default_step(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
-    for i in tile(8):
+def _range_default_step(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+    for i in range(8):
         y = relu(x)  # noqa: F841
 
 
@@ -52,8 +56,8 @@ def _tile_dimvar_extent(x: Tensor[(_SEQ, 4), "f32"]) -> Tensor[(_SEQ, 4), "f32"]
 
 
 @func
-def _tile_dim_expr_extent(x: Tensor[(_SEQ, 4), "f32"]) -> Tensor[(_SEQ, 4), "f32"]:
-    for i in tile(_SEQ // 2):
+def _range_dim_expr_extent(x: Tensor[(_SEQ, 4), "f32"]) -> Tensor[(_SEQ, 4), "f32"]:
+    for i in range(_SEQ // 2):
         y = relu(x)  # noqa: F841
 
 
@@ -66,23 +70,23 @@ def _range_start_stop_step(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
 def test_iteration_domain_forms():
     """One loop domain behind both spellings.
 
-    One loop domain behind both spellings: a single-arg ``tile`` steps by 1
-    from 0, the second arg is the step, and the extent may be a static int, a
-    ``DimVar``, or a dim expression (a ``Call``, not a bare DimVar). ``range``
-    carries the start and binds a scalar induction var; its ``extent`` is the stop
-    endpoint of the half-open ``[start, extent)`` domain. A loop that rebinds
-    nothing outer carries nothing.
+    ``range`` steps by 1 from 0 unless given a start or step. ``tile`` takes an
+    explicit window step. Either extent may be a static int, a ``DimVar``, or a
+    dim expression (a ``Call``, not a bare DimVar). ``range`` binds a scalar
+    induction var; its ``extent`` is the stop endpoint of the half-open
+    ``[start, extent)`` domain. A loop that rebinds nothing outer carries nothing.
     """
-    grid = _tile_default_step.body
+    grid = _range_default_step.body
     assert isinstance(grid, GridRegionExpr)
     assert (grid.start, grid.extent, grid.step) == (0, 8, 1)
     assert grid.carried_args == ()
     assert grid.init_args == ()
     assert grid.yield_values == ()
+    assert repr(grid) == repr(replace(_tile_extent_step.body, step=1))
 
     assert (_tile_extent_step.body.extent, _tile_extent_step.body.step) == (8, 2)
     assert (_tile_dimvar_extent.body.extent, _tile_dimvar_extent.body.step) == (_SEQ, 2)
-    assert isinstance(_tile_dim_expr_extent.body.extent, Call)
+    assert isinstance(_range_dim_expr_extent.body.extent, Call)
 
     ranged = _range_start_stop_step.body
     assert isinstance(ranged, GridRegionExpr)
@@ -93,14 +97,14 @@ def test_iteration_domain_forms():
 @func
 def _single_carry(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
     o = relu(x)
-    for i in tile(8):
+    for i in range(8):
         o = add(o, x)
     return o
 
 
 @func
 def _inner_only(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
-    for i in tile(8):
+    for i in range(8):
         t = relu(x)
         z = add(t, x)  # noqa: F841
 
@@ -129,7 +133,7 @@ def test_carry_lifting_is_scoped_to_outer_bindings():
 def _nested(x: Tensor[(8, 4), "f32"]) -> Tensor[(8, 4), "f32"]:
     o = relu(x)
     for r in range(8):
-        for c in tile(4):
+        for c in range(4):
             o = add(o, x)
     return o
 
@@ -149,18 +153,38 @@ def test_nested_for_builds_nested_grid_region():
     assert [v.name for v in inner.carried_args] == ["o"]
 
 
-def test_tile_rejects_non_dim_expr():
+def test_single_argument_tile_points_to_range():
+    with pytest.raises(VerifyError, match=r"use range\(extent\)"):
+        import_dsl(_src("for i in tile(8):", "    y = relu(x)"))
+
+
+@pytest.mark.parametrize("loop", ["tile(8, step=2)", "range(stop=8)"])
+def test_grid_loops_reject_keyword_args(loop: str):
+    with pytest.raises(VerifyError, match="positional-only at the IR level"):
+        import_dsl(_src(f"for i in {loop}:", "    y = relu(x)"))
+
+
+def test_generated_tile_stub_requires_window_step(tmp_path):
+    stub = ast.parse(regen_stubs(tmp_path)["tf"].read_text())
+    tile_def = next(
+        node for node in stub.body if isinstance(node, ast.FunctionDef) and node.name == "tile"
+    )
+    assert [arg.arg for arg in tile_def.args.args] == ["extent", "step"]
+    assert tile_def.args.defaults == []
+
+
+def test_range_rejects_non_dim_expr():
 
     with pytest.raises(VerifyError, match="dim expression"):
-        import_dsl(_src("for i in tile(x):", "    y = relu(x)"))
+        import_dsl(_src("for i in range(x):", "    y = relu(x)"))
 
 
-def test_return_inside_tile_body_rejected():
+def test_return_inside_grid_body_rejected():
     with pytest.raises(VerifyError, match="must not contain `return`"):
-        import_dsl(_src("for i in tile(8):", "    return x", "return x"))
+        import_dsl(_src("for i in range(8):", "    return x", "return x"))
 
 
 def test_augassign_in_body_rejected():
 
     with pytest.raises(VerifyError, match="augmented assignment"):
-        import_dsl(_src("o = relu(x)", "for i in tile(8):", "    o += x", "return o"))
+        import_dsl(_src("o = relu(x)", "for i in range(8):", "    o += x", "return o"))

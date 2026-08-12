@@ -26,7 +26,7 @@ TILE = DimVar("tile_size", 2, 8)
 @func
 def carry_loop(x: Tensor[(8, 4), "f32"], y: Tensor[(8, 4), "f32"]) -> Tensor[(8, 4), "f32"]:
     o = mul(x, y)
-    for i in tile(6):
+    for i in range(6):
         o = add(o, x)
     return o
 
@@ -34,8 +34,8 @@ def carry_loop(x: Tensor[(8, 4), "f32"], y: Tensor[(8, 4), "f32"]) -> Tensor[(8,
 @func
 def nested_carry(x: Tensor[(8, 4), "f32"], y: Tensor[(8, 4), "f32"]) -> Tensor[(8, 4), "f32"]:
     o = mul(x, y)
-    for r in tile(4):
-        for c in tile(2):
+    for r in range(4):
+        for c in range(2):
             o = add(o, x)
     return o
 
@@ -43,7 +43,7 @@ def nested_carry(x: Tensor[(8, 4), "f32"], y: Tensor[(8, 4), "f32"]) -> Tensor[(
 @func
 def dyn_carry(x: Tensor[(SEQ, 4), "f32"], y: Tensor[(SEQ, 4), "f32"]) -> Tensor[(SEQ, 4), "f32"]:
     o = mul(x, y)
-    for i in tile(SEQ):
+    for i in range(SEQ):
         o = add(o, x)
     return o
 
@@ -55,7 +55,7 @@ def data_index_select(
     idx: Tensor[(), "i32"],
 ) -> Tensor[(4,), "f32"]:
     o = mul(y, y)
-    for i in tile(8):
+    for i in range(8):
         selected = index_select(x, reshape(idx, new_shape=(1,)), dim=0)
         o = add(o, reshape(selected, new_shape=(4,)))
     return o

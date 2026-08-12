@@ -210,7 +210,7 @@ def test_a_loop_used_as_a_value_prints_the_name_its_carry_has() -> None:
         _HEADER + "\n@func\n"
         'def acc(x: Tensor[(4, 8), "f32"]):\n'
         '    total = zeros(shape=(4, 8), dtype="f32")\n'
-        "    for i in tile(4):\n"
+        "    for i in range(4):\n"
         "        total = add(total, x)\n"
         "    scaled = mul(total, x)\n"
         "    return scaled\n"

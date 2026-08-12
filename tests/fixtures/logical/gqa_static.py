@@ -45,7 +45,7 @@ def static_online_attend(
         m = tf.full_like(tmpl, value=-1e30)
         l = tf.full_like(tmpl, value=0.0)
         o = tf.full_like(q_f, value=0.0)
-        for i in tile(4096):
+        for i in range(4096):
             k_i = tf.reshape(
                 tf.cast(
                     tf.repeat_interleave(

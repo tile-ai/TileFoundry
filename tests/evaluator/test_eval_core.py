@@ -69,7 +69,7 @@ def test_structurally_equal_params_keep_distinct_ssa_bindings():
 @func
 def _carry_sum(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
     acc = a
-    for i in tile(3):
+    for i in range(3):
         acc = add(acc, b)
     return acc
 
@@ -84,7 +84,7 @@ def test_single_carry_accumulator():
 def _carry_two(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
     p = a
     q = b
-    for i in tile(2):
+    for i in range(2):
         p = add(p, b)
         q = add(q, a)
     return add(p, q)

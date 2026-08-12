@@ -187,7 +187,7 @@ def _module_header(dialect: str, types_seen: set[str]) -> str:
 
 
 _DIALECT_INTRINSICS: dict[str, tuple[str, ...]] = {
-    "tf": ("def tile(extent: Any, step: Any = ...) -> Any: ...",),
+    "tf": ("def tile(extent: Any, step: Any) -> Any: ...",),
 }
 
 

@@ -44,7 +44,7 @@ def _nested_sum(x: Tensor[(_M, _K), "f32"]) -> Tensor[(), "f32"]:
     for r in range(_M):  # noqa: F821
         selected_row = tf.index_select(x, tf.reshape(r, new_shape=(1,)), dim=0)
         row = tf.reshape(selected_row, new_shape=(_K,))
-        for c in tile(_K):  # noqa: F821
+        for c in range(_K):  # noqa: F821
             selected = tf.index_select(row, tf.reshape(c, new_shape=(1,)), dim=0)
             total = total + tf.reshape(selected, new_shape=())
     return total
@@ -54,7 +54,7 @@ def _nested_sum(x: Tensor[(_M, _K), "f32"]) -> Tensor[(), "f32"]:
 def _dim_expr_half_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
     acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
     acc = tf.full_like(acc, value=0.0)
-    for i in tile(_M // 2):  # noqa: F821 — dim-expression extent
+    for i in range(_M // 2):  # noqa: F821 — dim-expression extent
         selected = tf.index_select(x, tf.reshape(i, new_shape=(1,)), dim=0)
         acc = acc + tf.reshape(selected, new_shape=())
     return acc
@@ -95,7 +95,7 @@ def _interleaved_two_partial_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
     for p in range(_NSPLIT):  # noqa: F821 — outer: one partial per split
         pacc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
         pacc = tf.full_like(pacc, value=0.0)
-        for i in tile(_M // _NSPLIT):  # noqa: F821 — inner: this partial's indices
+        for i in range(_M // _NSPLIT):  # noqa: F821 — inner: this partial's indices
             idx = p + i * _NSPLIT
             selected = tf.index_select(x, tf.reshape(idx, new_shape=(1,)), dim=0)
             pacc = pacc + tf.reshape(selected, new_shape=())

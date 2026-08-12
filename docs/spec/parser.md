@@ -344,12 +344,16 @@ in what it lowers to:
 ### 1.7 `for i in tile(...)` / `for i in range(...)` (HIR-only)
 
 ```
-for-loop    ::= 'for' identifier 'in' ('tile' | 'range') '(' loop-args ')' ':' suite
-loop-args   ::= extent-Expr                        # tile: extent / range: stop
-              | extent-Expr ',' step-Expr          # tile(extent, step)
-              | start-Expr ',' stop-Expr           # range(start, stop)
-              | start-Expr ',' stop-Expr ',' step-Expr   # range(start, stop, step)
+for-loop    ::= 'for' identifier 'in' 'tile' '(' tile-args ')' ':' suite
+              | 'for' identifier 'in' 'range' '(' range-args ')' ':' suite
+tile-args   ::= extent-Expr ',' step-Expr
+range-args  ::= stop-Expr
+              | start-Expr ',' stop-Expr
+              | start-Expr ',' stop-Expr ',' step-Expr
 ```
+
+Loop arguments are positional-only at the IR authoring surface; keyword
+arguments are rejected.
 
 `tile(...)` and `range(...)` share **one** loop domain `(start, extent,
 step)` and lower to the **same** `GridRegionExpr` ([hir §1.2](./hir.md#12-gridregionexpr)) —
@@ -360,14 +364,14 @@ only difference is the loop-variable binding:
   `x[i]` or write the window manually (`i : i + step`). Args follow Python
   `range`: `range(stop)` (start `0`, step `1`), `range(start, stop)` (step
   `1`), `range(start, stop, step)`.
-- `tile(extent)` also binds a scalar `i: i64` (start `0`, step `1`).
 - `tile(extent, step)` binds `i` to the standard Python
   `slice(iv, iv + step, 1)` so `x[:, i]` lifts to a `Slice` over
   the current window. The grid domain already advances `iv` by `step`; the
   binding MUST NOT multiply it again. In any other Expr position, including an
   `insert_slice` offset tuple, `i` resolves to the scalar `slice.start`. The
   Python `slice` is parser-only and does not reach IR; the grid-domain `start`
-  is `0`.
+  is `0`. A single-argument `tile(extent)` is rejected; use `range(extent)` for
+  scalar iteration.
 
 `start-Expr` / `extent-Expr` (the **stop** endpoint, not a length — the
 domain is half-open `[start, extent)`) / `step-Expr` MAY be any `ShapeDim`
@@ -824,7 +828,7 @@ additive: it never shadows the function's own globals / freevars.
 `LexicalEnv` is a frame stack used by both body visitors for
 parser-time bindings (Mesh axes, the Python `slice` from two-argument `tile`, SSA
 aliasing). Frame push / pop matches the Python-source scope
-(`with Mesh(...)`, `for i in tile(...)`).
+(`with Mesh(...)`, HIR grid loops).
 
 `dispatch.resolve_callable(name, token)` performs strict
 per-dialect Op resolution against `op_registry`; both body visitors'
@@ -1041,7 +1045,7 @@ Python statements that the parser folds into a single `Expr` tree.
 | `x = expr` | `define(x, expr_node)`; no IR node. Subsequent `x` reuses the same `Expr` (SSA-as-DAG). |
 | `x + y` | `Call(Binary(kind=ADD), (x, y))`; the parser maps Python AST `BinOp` / `Compare` / `BoolOp` directly to a `Binary` instance with the matching `BinaryKind`. `UnaryOp` USub / Not maps similarly to `Unary(kind=NEG)` / `Unary(kind=NOT)`. AST `@` (matmul) routes to `MatMul` (a real Op, not kinded). |
 | `foo(a, b)` | `Call(target_op, args)` where `target_op` is constructed by the resolved schema's `builder` ([§4.2](#42-closure-then-registry-callee-resolution) / [§4.3](#43-opschema-and-overload-resolution)). For surface aliases (e.g. `add` / `cmp_eq` / `neg`), the alias's builder returns the kinded target Op (`Binary(kind=...)` / `Unary(kind=...)`); for real Ops, the default builder is the Op class itself. |
-| `for i in tile(...)` | `GridRegionExpr` (see [§1.7](#17-for-i-in-tile--for-i-in-range-hir-only) and below). |
+| `for i in tile(...)` / `for i in range(...)` | `GridRegionExpr` (see [§1.7](#17-for-i-in-tile--for-i-in-range-hir-only) and below). |
 | `with Mesh(...) as m` | Push `m` onto the parser-lexical stack; pop on exit. No IR node. |
 | `return expr` | Sets `Function.body`. A `return` without a value is rejected. |
 | `return (a, b)` / `return a, b` | A literal tuple return (both spellings are the same AST) folds to a core `Tuple` body ([core-ir §2.2](./core-ir.md#22-var--constant--tuple)); `Function.return_type` is the `TupleType` of the element types. Callers destructure via the existing tuple-unpack rule (`o, s = f(...)`). |
@@ -1064,7 +1068,7 @@ variant directly.
 
 ### 5.1 GridRegionExpr carry-out lifting
 
-Inside a `for i in tile(...)` body, an `ast.Assign` whose single
+Inside an HIR grid-loop body, an `ast.Assign` whose single
 `Name` target is already bound in *outer* scope is a loop-carried
 rebinding. The parser:
 

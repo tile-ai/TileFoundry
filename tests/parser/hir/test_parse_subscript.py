@@ -41,7 +41,7 @@ def test_tile_with_too_many_args_rejected():
         "for i in tile(1, 2, 3):",
         "    y = relu(x)",
     )
-    with pytest.raises(VerifyError, match="tile.. takes 1 or 2 arguments"):
+    with pytest.raises(VerifyError, match="tile.. takes 2 arguments"):
         import_dsl(bad)
 
 

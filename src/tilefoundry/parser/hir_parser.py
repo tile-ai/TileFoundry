@@ -583,9 +583,9 @@ class _HirBodyVisitor(BaseExprVisitor):
     def _visit_loop_for(self, node: ast.For, stmts, idx, require_return: bool = True):
         """Lower tile or range loops to a grid region and continue the chain.
 
-        Both forms share start, extent, and step. Two-argument tile loops bind a
-        range slice for indexed use; range and single-argument tile loops bind a
-        scalar induction variable. Neither form is unrolled.
+        Both forms share start, extent, and step. Tile loops bind a range slice
+        for indexed use; range loops bind a scalar induction variable. Neither
+        form is unrolled.
         See [parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only).
         """
         grid = self._build_grid_for(node)
@@ -614,6 +614,11 @@ class _HirBodyVisitor(BaseExprVisitor):
                 f"hir For: iter must be `tile(...)` or `range(...)`, got "
                 f"{loop_kind!r}"
             )
+        if node.iter.keywords:
+            raise VerifyError(
+                f"{loop_kind}() does not accept keyword args "
+                "(positional-only at the IR level)"
+            )
         if not isinstance(node.target, ast.Name):
             raise VerifyError("hir For: target must be a Name")
         iv = Var(type=TensorType.scalar(DType.i64), name=node.target.id)
@@ -641,11 +646,7 @@ class _HirBodyVisitor(BaseExprVisitor):
             iv_binding = iv
         else:
             start = 0
-            if len(loop_args) == 1:
-                extent = self._resolve_loop_bound(loop_args[0])
-                step = 1
-                iv_binding = iv
-            elif len(loop_args) == 2:
+            if len(loop_args) == 2:
                 extent = self._resolve_loop_bound(loop_args[0])
                 step = self._resolve_loop_bound(loop_args[1])
                 step_expr = self._constant_expr(step) if isinstance(step, int) else step
@@ -654,9 +655,14 @@ class _HirBodyVisitor(BaseExprVisitor):
                     simplify_dim(DimAdd, (iv, step_expr)),
                     1,
                 )
+            elif len(loop_args) == 1:
+                raise VerifyError(
+                    "tile(extent) is not supported; use range(extent) for "
+                    "scalar iteration"
+                )
             else:
                 raise VerifyError(
-                    f"tile() takes 1 or 2 arguments (extent[, step]), got {len(loop_args)}"
+                    f"tile() takes 2 arguments (extent, step), got {len(loop_args)}"
                 )
         if not (is_dim_expr(start) and is_dim_expr(extent) and is_dim_expr(step)):
             raise VerifyError(

@@ -282,7 +282,7 @@ class _DecodeStep:
             vr = reshard(v, (1 @ m.t,), "rmem")
             acc = full_like(xr, 0.0)
             cnt = full_like(xr, 0.0)
-            for i in tile(_DEC_STEPS):
+            for i in range(_DEC_STEPS):
                 acc = insert_slice(acc, vr, off)
                 cnt = add(cnt, xr)
             result = add(acc, cnt)
