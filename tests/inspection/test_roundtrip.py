@@ -7,7 +7,9 @@ See [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract).
 """
 
 from tests._source import import_dsl
+from tests.fixtures.placed.gqa_decode import GqaOnline
 from tilefoundry.inspection import as_script
+from tilefoundry.ir.hir.specialize import specialize_concretely
 from tilefoundry.ir.types import DType
 
 _HEADER = (
@@ -217,23 +219,49 @@ def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
     assert as_script(import_dsl(printed)) == printed
 
 
-def test_a_loop_used_as_a_value_prints_the_name_its_carry_has() -> None:
-    """A ``for`` statement binds no name of its own.
-
-    A ``for`` statement binds no name of its own. A loop with one carried
-    value, consumed by a later statement, has to render as that carry — a
-    dangling reference does not survive importing the emitted file.
-    """
+def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"
-        'def acc(x: Tensor[(4, 8), "f32"]):\n'
-        '    total = zeros(shape=(4, 8), dtype="f32")\n'
+        'def online(x: Tensor[(4,), "f32"]):\n'
+        '    m = zeros(shape=(4,), dtype="f32")\n'
+        '    o = zeros(shape=(4,), dtype="f32")\n'
         "    for i in range(4):\n"
-        "        total = add(total, x)\n"
-        "    scaled = mul(total, x)\n"
-        "    return scaled\n"
+        "        m_new = maximum(m, x)\n"
+        "        corr = sub(m, m_new)\n"
+        "        o = add(o, corr)\n"
+        "        m = m_new\n"
+        "    return (m, o)\n"
     )
-    printed = as_script(fn)
 
-    assert "mul(total, x)" in printed, printed
-    assert as_script(import_dsl(printed)) == printed
+    printed = as_script(fn)
+    rebuilt = import_dsl(printed)
+    loop_lines = printed[printed.index("    for i in range(4):") :].splitlines()
+
+    assert loop_lines[-3:] == ["        o = o_2", "        m = m_new", "    return (m, o)"]
+    assert loop_lines.index("        m_new = max(m, x)") < loop_lines.index(
+        "        corr = sub(m, m_new)"
+    )
+    assert repr(fn.body) == repr(rebuilt.body)
+    assert as_script(rebuilt) == printed
+
+
+def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
+    function = specialize_concretely(GqaOnline.entry_function(), {"ctx_len": 8})
+    printed = as_script(function)
+
+    assert printed.count("        m_new = max(m, score)") == 1
+    assert " = sub(m, m_new)" in printed
+    lines = printed.splitlines()
+    start = lines.index("    for i in range(8):")
+    end = next(
+        index
+        for index in range(start + 1, len(lines))
+        if lines[index].startswith("    ")
+        and not lines[index].startswith("        ")
+    )
+    assert lines[end - 3 : end] == [
+        "        l = l_2",
+        "        o = o_2",
+        "        m = m_new",
+    ]
+    assert lines[end] == '    k_n = cast(k_new, dtype="f32")'

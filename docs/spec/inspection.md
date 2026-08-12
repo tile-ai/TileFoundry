@@ -263,6 +263,13 @@ display-only rendering is human-readable and MUST NOT be used as a
 structural round-trip validation artifact: it is held to importing, not to the
 same structural comparison.
 
+A canonical grid loop MUST render each yielded expression under its own unique
+binding. After the loop body has emitted every yielded expression, the printer
+MUST emit one `carry = yield` assignment per carried value, in
+`GridRegionExpr.carried_args` order. Those assignments are the final statements
+in the loop body. This preserves references to the old carry until the update
+point and lets the parser's final-RHS carry rule rebuild the same loop.
+
 A `DimVar` shape entry prints as its bare name, and a shape-valued op attribute
 holding one MUST print it the same way rather than as its repr. The rendering
 MUST therefore also emit, once, a declaration binding each such name to the
