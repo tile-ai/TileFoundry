@@ -10,6 +10,6 @@ class Model:
     @func
     def main(x: Tensor[(168,), "f32"]):
         with Mesh(("cta",), (168,), ("block",)) as cta:
-            x_local = tf.reshard(x, (168 @ cta.block,), "rmem")
+            x_local = tf.reshard(x, (168 @ cta.block,), "gmem")
             squared = tf.square(x_local)
             return tf.reshard(squared, (168 @ cta.block,), "gmem")

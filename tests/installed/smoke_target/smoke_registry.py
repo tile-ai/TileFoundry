@@ -67,11 +67,12 @@ def test_added_documents_and_provider_drive_installed_commands(
         "--compute-cost",
         "--memory",
         "--roofline",
-        "--timeline",
         "--json",
     )
     assert analyzed_npu.returncode == 0, analyzed_npu.stderr
-    assert json.loads(analyzed_npu.stdout)["target"] == "vendor.npu"
+    npu_report = json.loads(analyzed_npu.stdout)
+    assert npu_report["target"] == "vendor.npu"
+    assert npu_report["executed"] == ["compute-cost", "memory", "roofline"]
     scheduled = tf(
         "--registry",
         registry,
