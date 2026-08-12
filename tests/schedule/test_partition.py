@@ -137,14 +137,13 @@ def test_partition_problem_closes_every_hardware_number_before_solving() -> None
     assert all(candidate.duration_ns >= 0 for candidate in problem.candidates.values())
 
 
-def test_partition_prices_a_move_as_one_more_candidate_and_only_where_needed() -> None:
-    """A reshard is not a side channel: it is priced as an ordinary candidate of the same kind.
+def test_partition_keeps_a_synthesized_view_as_one_candidate_only_where_needed() -> None:
+    """A Reshard is not a side channel: it is an ordinary candidate of the same kind.
 
-    A reshard is not a side channel: it is priced as an ordinary candidate of
-    the same kind, with bytes moved and no topology of its own. And it is
-    synthesised only where nothing authored already produces the placement -- a
-    bucket holding both an authored producer and a synthesised one would be
-    charging for a move that has an original.
+    These synthesized Reshards change placement within gmem, so they are
+    zero-copy views with no topology of their own. They exist only where nothing
+    authored already produces the placement -- a bucket holding both an authored
+    producer and a synthesized one would add a redundant conversion.
     """
     _, _, program, facts = _closed()
 
@@ -160,7 +159,7 @@ def test_partition_prices_a_move_as_one_more_candidate_and_only_where_needed() -
     assert all(type(candidate).__name__ == "OpCandidate" for candidate in authored)
     assert all(type(candidate).__name__ == "OpCandidate" for candidate in synthesized)
     for candidate in synthesized:
-        assert candidate.moved_bytes > 0
+        assert candidate.moved_bytes == 0
         assert candidate.topology_count == 0
 
     for bucket in problem.buckets.values():
