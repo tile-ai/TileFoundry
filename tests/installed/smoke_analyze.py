@@ -79,6 +79,14 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
         if row["compute-cost"]["flops_per_unit"]
     ]
     assert positive_per_unit == [64, 640, 7680]
+    routed_relu = next(
+        row
+        for row in payload["calls"]
+        if row["compute-cost"]["flops_per_unit"] == {"f32": 64}
+    )
+    assert routed_relu["compute-cost"]["traffic_per_unit"] == {
+        "gmem": {"read": 256, "write": 256}
+    }
 
     summed_flops = sum(
         row["compute-cost"]["flops"].get("f32", 0)
@@ -216,6 +224,7 @@ def test_analyze_json_and_text_report_the_same_conclusions(tf, cwide) -> None:
     assert "compute-cost flops=f32:" in text
     header, annotated = text.split("\n\n", 1)
     assert "operands" not in header
+    assert " per-unit-bytes=" in annotated
     assert " operands=" in annotated
     assert "roofline bound=" in text
     assert "timeline units=168 waves=2" in text
