@@ -307,18 +307,27 @@ def test_reshard_sugar_accepts_dynamic_bare_and_closure_name_axis() -> None:
     assert body.target.layout.layout.strides is None
 
 
-def test_reshard_sugar_rejects_dynamic_split_axis() -> None:
-    """Test reshard sugar rejects dynamic split axis.
-
-    A bare axis may be dynamic, but a *split* axis (``dim @ mesh.axis``)
-    participates in canonicalisation and must resolve to a static int — a dynamic
-    ``DimVar`` split extent is rejected. Driven through
-    ``parse_shard_layout_sugar`` directly, the layer that canonicalises.
-    """
-    cta = Mesh((Topology("cta", 8),), Layout((8,), (1,)), names=("cta",))
+def test_reshard_sugar_accepts_matching_dynamic_split_axis() -> None:
+    """The same symbolic extent on the value and mesh has local size one."""
+    cta = Mesh((Topology("cta", _S_DYN),), Layout((_S_DYN,), (1,)), names=("cta",))
     node = ast.parse("(1, S @ cta, 32, 128)", mode="eval").body
-    with pytest.raises(ValueError, match="static int"):
-        parse_shard_layout_sugar(node, lambda n: cta if n == "cta" else None, closure={"S": _S_DYN})
+    actual = parse_shard_layout_sugar(
+        node, lambda n: cta if n == "cta" else None, closure={"S": _S_DYN}
+    )
+
+    assert actual.layout.shape == (1, _S_DYN, 32, 128)
+    assert actual.attrs == (Split(1),)
+
+
+def test_reshard_sugar_rejects_unresolved_dynamic_split_axis() -> None:
+    """Different symbolic extents cannot establish divisibility before binding."""
+    other = DimVar("other", 1, 4)
+    cta = Mesh((Topology("cta", other),), Layout((other,), (1,)), names=("cta",))
+    node = ast.parse("(1, S @ cta, 32, 128)", mode="eval").body
+    with pytest.raises(ValueError, match="bind symbolic dimensions"):
+        parse_shard_layout_sugar(
+            node, lambda n: cta if n == "cta" else None, closure={"S": _S_DYN}
+        )
 
 
 def build_mesh_dims_reshard_func(warps, lanes):
@@ -380,20 +389,13 @@ def build_bool_split_extent_single_axis_func():
     return _f
 
 
-@pytest.mark.parametrize(
-    "build_func",
-    [
-        lambda: build_mesh_dims_reshard_func(_MESH_DIM_W, 32),
-        build_bool_split_extent_single_axis_func,
-    ],
-    ids=["dimvar-mesh-dim", "bool-split-single-axis"],
-)
-def test_static_extent_position_rejects_non_static_int(build_func) -> None:
-    """Test static extent position rejects non static int.
+def test_symbolic_mesh_extent_reaches_canonicalization() -> None:
+    """A symbolic mesh extent is valid even when a later split is undecidable."""
+    with pytest.raises(ValueError, match="bind symbolic dimensions"):
+        build_mesh_dims_reshard_func(_MESH_DIM_W, 32)
 
-    A dynamic (``DimVar``) or ``bool`` value in a static-extent position is
-    rejected with a clear static-int diagnostic; the sugar error must surface
-    rather than be swallowed into a generic attribute error.
-    """
-    with pytest.raises(ValueError, match="static int"):
-        build_func()
+
+def test_bool_layout_extent_is_not_a_shape_dimension() -> None:
+    """A bool is never accepted as a layout ``ShapeDim``."""
+    with pytest.raises(ValueError, match="shape dimension"):
+        build_bool_split_extent_single_axis_func()

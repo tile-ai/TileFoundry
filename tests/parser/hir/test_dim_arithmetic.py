@@ -12,10 +12,11 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry import func
-from tilefoundry.dsl import DimVar, Tensor
+from tilefoundry.dsl import DimVar, Tensor, ceildiv, tf
+from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.types.dim import DimAdd, simplify_dim
+from tilefoundry.ir.types.dim import DimAdd, DimMul, simplify_dim
 
 CTX_LEN = DimVar("CTX_LEN", 1, 4097)
 
@@ -58,3 +59,22 @@ def test_verify_anchors_one_name_bare_and_nested_in_a_dim_call() -> None:
     nested = _dim_add_consistency.params[1].type.shape[0]
     assert isinstance(nested, Call) and isinstance(nested.target, DimAdd)
     verify_function(_dim_add_consistency)
+
+
+@func
+def _padded_extent_after_static_call(
+    x: Tensor[(CTX_LEN,), "bf16"],
+):
+    return tf.zeros(
+        shape=(ceildiv(CTX_LEN, 128) * 128,),
+        dtype="bf16",
+    )
+
+
+def test_static_call_result_composes_with_dimension_arithmetic() -> None:
+    """A dim expression returned by a static call remains valid AST arithmetic."""
+    padded = _padded_extent_after_static_call.body.target.shape[0]
+
+    assert isinstance(padded, Call) and isinstance(padded.target, DimMul)
+    assert resolve_dim(padded, {"CTX_LEN": 128}) == 128
+    assert resolve_dim(padded, {"CTX_LEN": 130}) == 256

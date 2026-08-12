@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import torch
 
+from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -37,6 +38,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Zeros)
 def _eval_zeros(ctx):
 
-    shape = tuple(int(d) for d in ctx.op.shape)
+    shape = tuple(resolve_dim(d, ctx.dim_bindings) for d in ctx.op.shape)
     data = torch.zeros(shape, dtype=to_torch_dtype(ctx.op.dtype), device=ctx.device)
     return TensorValue(data=data, type=ctx.result_type)

@@ -52,7 +52,7 @@ def _shared_engine_strides(sl: ShardLayout) -> tuple:
     return _c_order_strides(tuple(sl.layout.shape))
 
 
-def _per_instance_strides(sl: ShardLayout) -> tuple[int, ...]:
+def _per_instance_strides(sl: ShardLayout) -> tuple:
     """Per-instance strides for *sl*.
 
     For each layout dim ``k``:
@@ -64,7 +64,7 @@ def _per_instance_strides(sl: ShardLayout) -> tuple[int, ...]:
       ``shard_layout_local_shape(sl)``, with size-1 positions
       normalised to ``0``.
     """
-    local_shape = shard_layout_local_shape(sl)
+    local_shape = shard_layout_local_shape(sl, require_static=False)
     n = len(local_shape)
     if n == 0:
         return ()
@@ -72,12 +72,12 @@ def _per_instance_strides(sl: ShardLayout) -> tuple[int, ...]:
     for attr in sl.attrs:
         if isinstance(attr, Split):
             split_axes.add(int(attr.axis))
-    base = c_order_strides(tuple(int(d) for d in local_shape))
+    base = _c_order_strides(local_shape)
     out = []
     for k in range(n):
         if k in split_axes:
             out.append(0)
-        elif int(local_shape[k]) == 1:
+        elif isinstance(local_shape[k], int) and local_shape[k] == 1:
             out.append(0)
         else:
             out.append(base[k])

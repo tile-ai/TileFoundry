@@ -609,8 +609,7 @@ Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 
 `Transpose`, statically positioned `Slice`, and `Reshape` derive a view layout from
 their input when it states one. An input with `layout=None` produces a view with
-`layout=None`; a runtime-bounded `Slice` also keeps `layout=None` because
-`ComposedLayout.offset` is static. Neither case says that the view materialized.
+`layout=None`. Neither case says that the view materialized.
 
 - `Transpose` MUST permute the layout shape and strides by the same permutation
   as the tensor shape. A `ShardLayout` MUST remap its split positions through
@@ -622,8 +621,18 @@ their input when it states one. An input with `layout=None` produces a view with
 - `Slice` with static starts MUST produce a `ComposedLayout`: its offset is the
   source offset plus the starts multiplied by the source strides, and its outer
   layout carries the sliced shape and the retained strides (multiplied by any
-  slice step). A runtime-bounded `Slice` MUST remain accepted with `layout=None`.
-- Runtime starts MUST remain ordinary Call operands and produce `layout=None`.
+  slice step).
+- A `ShardLayout` slice MUST preserve its mesh attributes when every narrowed
+  logical axis is unsplit. The corresponding primitive layout position takes
+  the window size and stepped stride. Static starts wrap that shard layout in a
+  `ComposedLayout` when the resulting offset is static. Runtime starts, or a
+  static start multiplied by a symbolic source stride, preserve the bare
+  `ShardLayout` because its distribution is known while its offset is not.
+- Narrowing a logical axis targeted by any `Split` MUST fail type inference:
+  the window need not align with that mesh division. A narrowed axis represented
+  by more than one factored layout position MUST also fail rather than guess.
+- Runtime starts MUST remain ordinary Call operands. A plain layout produces
+  `layout=None`; a safe sharded slice follows the preservation rule above.
   The result type describes a full window; whether a loop iteration can contain
   that window is an analysis-domain question, not a type-inference question.
 
@@ -963,12 +972,14 @@ class Zeros(Op):
         storage: attribute; output storage kind.
     """
 
-    shape: tuple
+    shape: tuple[ShapeDim, ...]
     dtype: DType
     storage: StorageKind = StorageKind.GMEM
 ```
 - constraints:
-  - The result is zero-initialised.
+  - The result is zero-initialised and its logical shape is exactly `shape`.
+  - Evaluation MUST resolve every symbolic shape entry from the function's
+    dimension bindings before allocating the concrete tensor.
 
 ##### Reduce
 ```python
@@ -1204,6 +1215,19 @@ Consensus torch.nn.functional ops.
   - `LayerNorm` rejects every `Partial` operand and every `Split` on a logical
     normalized-suffix axis of `x`, weight, or bias. A `Split` on an `x` prefix
     axis remains on the same-shape result.
+
+##### CausalMask
+
+`CausalMask(scores, query_start, key_start, value=-inf)` treats the final two
+score axes as query and key positions. Element `(i, j)` is retained exactly
+when `key_start + j <= query_start + i`; every later key is replaced by
+`value`. Both starts MUST be rank-0 `i32` or `i64` inputs, and scores MUST have
+rank at least two. The result preserves scores' shape, dtype, storage, and
+layout. No `Partial` input is valid. A `Split` on either of the final two
+logical axes MUST be rejected because the two scalar starts do not encode a
+mesh-local coordinate offset; splits on prefix axes are preserved. The op has
+HIR type, evaluation, access-relation, and cost semantics only; it has no
+HIR-to-TIR lowering or codegen contract.
 
 ##### Gelu
 ```python

@@ -112,10 +112,16 @@ CASES = [
         ),
     ),
     TypeInferCase(
-        "high_to_low_dynamic_bare_axis_rejected",
+        "high_to_low_dynamic_bare_axis_materializes_per_instance",
         Reshard(layout=_SL_DYN_BARE, storage=rmem),
         (make_tensor_type((1, _S_DYN, 32, 128)),),
-        ExpectedError(match="not static after sharding", exc=ValueError),
+        make_tensor_type(
+            (1, _S_DYN, 32, 128),
+            storage=rmem,
+            layout=_materialized(
+                (1, _S_DYN, 32, 128), (0, 4 * 128, 0, 1), (Split(2),), _MESH_DYN
+            ),
+        ),
     ),
 ]
 

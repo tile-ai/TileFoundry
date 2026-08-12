@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from tests._source import import_dsl
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
+from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tilefoundry import func, module
+from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import (  # noqa: F401
     ConstTensor,
     DimVar,
@@ -21,7 +23,9 @@ from tilefoundry.dsl import (  # noqa: F401
     tf,
 )
 from tilefoundry.inspection import as_script
+from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.nn.causal_mask import CausalMask
 from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
@@ -79,6 +83,22 @@ def test_a_derived_topology_and_mesh_geometry_survive_the_round_trip() -> None:
         DerivedPrefill.entry_function().params[0].type
     )
     assert as_script(imported) == source
+
+
+def test_prefill_decode_specializations_survive_the_round_trip() -> None:
+    source = as_script(PrefillDecodeAttention)
+    imported = import_dsl(source)
+    restored = import_dsl(as_script(imported))
+
+    assert "causal_mask(" in source
+    assert "slice(" in source
+    for roundtripped in (imported, restored):
+        variants = roundtripped.entry_function().variants
+        assert len(variants) == 2
+        assert any(
+            isinstance(expr, Call) and isinstance(expr.target, CausalMask)
+            for expr in postorder(variants[1].body)
+        )
 
 
 def _child(mod: Module, name: str) -> Module:

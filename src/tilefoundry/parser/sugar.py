@@ -18,7 +18,8 @@ from typing import Any, Callable
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
+from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
@@ -110,7 +111,13 @@ def _has_sugar(node: ast.AST) -> bool:
 
 
 _EVAL_AST_NODES_NO_CLOSURE = (ast.Constant, ast.Tuple, ast.UnaryOp)
-_EVAL_AST_NODES_WITH_CLOSURE = (*_EVAL_AST_NODES_NO_CLOSURE, ast.Name, ast.Attribute)
+_EVAL_AST_NODES_WITH_CLOSURE = (
+    *_EVAL_AST_NODES_NO_CLOSURE,
+    ast.Name,
+    ast.Attribute,
+    ast.Call,
+    ast.BinOp,
+)
 
 
 def _eval_ast(node: ast.AST, closure: dict[str, Any] | None = None) -> Any:
@@ -153,9 +160,15 @@ def _name_of(node: ast.AST) -> str:
     raise VerifyError(f"expected Name, got {ast.dump(node)}")
 
 
-def _auto_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
+def _dim_mul(a: ShapeDim, b: ShapeDim) -> ShapeDim:
+    if isinstance(a, int) and isinstance(b, int):
+        return a * b
+    return simplify_dim(DimMul, (a, b))
+
+
+def _auto_strides(shape: tuple[ShapeDim, ...]) -> tuple[ShapeDim, ...]:
     """C-order contiguous strides: ``(d0, d1, d2)`` → ``(d1*d2, d2, 1)``."""
-    return c_order_strides(shape)
+    return c_order_strides(shape, mul=_dim_mul)
 
 
 def _resolve_dtype_ast(node: ast.AST, closure: dict[str, Any]) -> DType | None:
@@ -216,7 +229,7 @@ def _resolve_mesh_axis(mesh: Mesh, axis_name: str) -> int:
 
 def _parse_layout_literal(
     node: ast.AST, *, closure: dict[str, Any] | None = None
-) -> tuple[tuple[int, ...], tuple[int, ...] | None]:
+) -> tuple[tuple[ShapeDim, ...], tuple[ShapeDim, ...] | None]:
     """Parse layout shape and optional strides without choosing a final type.
 
     Accept flat dimensions, explicit ``(dimensions, strides)``, or a scalar 1-D
@@ -228,20 +241,17 @@ def _parse_layout_literal(
 
             dim_nodes = list(node.elts[0].elts)
             strides = _eval_ast(node.elts[1], closure)
-            shape = tuple(_extract_dim_int(dn, closure=closure) for dn in dim_nodes)
+            shape = tuple(_extract_dim(dn, closure=closure) for dn in dim_nodes)
         else:
 
             dim_nodes = list(node.elts)
             strides = None
-            shape = tuple(_extract_dim_int(dn, closure=closure) for dn in dim_nodes)
+            shape = tuple(_extract_dim(dn, closure=closure) for dn in dim_nodes)
     elif _is_constant(node):
-        shape = (node.value,)
+        shape = (_extract_dim(node, closure=closure),)
         strides = None
     else:
         raise VerifyError(f"expected tuple layout literal, got {ast.dump(node)}")
-
-    if not all(isinstance(d, int) for d in shape):
-        raise VerifyError(f"layout shape must be all ints, got {shape}")
 
     if strides is not None:
         if not isinstance(strides, tuple):
@@ -254,13 +264,14 @@ def _parse_layout_literal(
     return shape, strides
 
 
-def _extract_dim_int(node: ast.AST, *, closure: dict[str, Any] | None = None) -> int:
-    """Extract the static-int dimension from a layout dim node.
+def _extract_dim(
+    node: ast.AST, *, closure: dict[str, Any] | None = None
+) -> ShapeDim:
+    """Extract a static or symbolic dimension from a layout dim node.
 
     Handles: plain ``Constant(32)``, closure/global ``Name`` references bound to
-    an ``int`` (e.g. ``WARPS = 4``), and ``BinOp(<dim>, MatMult, ...)`` sugar
-    forms where only the left operand is the dimension. The resolved value MUST
-    be a static ``int``; ``bool`` and dynamic (``DimVar``) extents are rejected
+    a ``ShapeDim``, and ``BinOp(<dim>, MatMult, ...)`` sugar forms where only the
+    left operand is the dimension. ``bool`` and non-dimension values are rejected
     with a clear diagnostic rather than a raw AST / attribute error.
     """
     dim_node = node.left if _is_matmul(node) else node
@@ -270,9 +281,9 @@ def _extract_dim_int(node: ast.AST, *, closure: dict[str, Any] | None = None) ->
         try:
             val = _eval_ast(dim_node, closure)
         except ValueError:
-            raise VerifyError(f"expected int dim, got {ast.dump(node)}") from None
-    if isinstance(val, bool) or not isinstance(val, int):
-        raise LayoutSugarError(f"layout dim must be a static int, got {val!r}")
+            raise VerifyError(f"expected shape dimension, got {ast.dump(node)}") from None
+    if not _is_shape_dim(val):
+        raise LayoutSugarError(f"layout dim must be a shape dimension, got {val!r}")
     return val
 
 
@@ -504,7 +515,7 @@ def _get_dim_nodes(node: ast.AST) -> list[ast.AST]:
 
 
 
-_LayoutItem = tuple[int | None, Mesh | None, int | None, str, str | None]
+_LayoutItem = tuple[ShapeDim | None, Mesh | None, int | None, str, str | None]
 
 
 def _parse_layout_item(
@@ -526,27 +537,17 @@ def _parse_layout_item(
         dim @ (mesh.axis, ...)           → [split items…, bare remainder item]
     """
     if _is_constant(node):
-        return [(node.value, None, None, "broadcast", None)]
+        return [(_extract_dim(node, closure=closure), None, None, "broadcast", None)]
 
 
     if _is_matmul(node):
         rhs = node.right
-        dim = None if _is_placeholder(node.left) else _eval_ast(node.left, closure)
+        dim = None if _is_placeholder(node.left) else _extract_dim(node.left, closure=closure)
         if dim is None:
             raise VerifyError(
                 "layout placeholder `_` is not valid in the axis tuple; "
                 'value states go in the `{mesh.axis @ P("reduction")}` set'
             )
-        if not isinstance(dim, int) or isinstance(dim, bool):
-
-
-
-
-            raise LayoutSugarError(
-                f"split layout dim `dim @ mesh.axis` must be a static int, got {dim!r}"
-            )
-
-
         if isinstance(rhs, ast.Tuple):
             return _expand_multi_axis_sugar(dim, rhs.elts, mesh_resolver)
 
@@ -595,7 +596,7 @@ def _parse_layout_item(
 
 
 def _canonicalize_single_axis(
-    dim: int,
+    dim: ShapeDim,
     mesh: Mesh,
     axis: int,
 ) -> list[_LayoutItem]:
@@ -607,6 +608,14 @@ def _canonicalize_single_axis(
     [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     extent = mesh.layout.shape[axis]
+    if not isinstance(dim, int) or not isinstance(extent, int):
+        if dim == extent:
+            return [(dim, mesh, axis, "split", None)]
+        raise LayoutSugarError(
+            f"split layout dim {dim!r} and mesh extent {extent!r} do not have "
+            "a decidable divisibility relation; bind symbolic dimensions before "
+            "authoring this split"
+        )
     if dim % extent != 0:
         raise VerifyError(
             f"dim {dim} not divisible by mesh extent {extent} on axis "
@@ -622,7 +631,7 @@ def _canonicalize_single_axis(
 
 
 def _expand_multi_axis_sugar(
-    dim: int,
+    dim: ShapeDim,
     axis_nodes: list[ast.AST],
     mesh_resolver: MeshResolver,
 ) -> list[_LayoutItem]:
@@ -641,6 +650,16 @@ def _expand_multi_axis_sugar(
     for i, ax_node in enumerate(axis_nodes):
         mesh, axis = _resolve_axis_node(ax_node, mesh_resolver)
         extent = mesh.layout.shape[axis]
+        if not isinstance(remaining, int) or not isinstance(extent, int):
+            if remaining == extent and i == len(axis_nodes) - 1:
+                items.append((extent, mesh, axis, "split", None))
+                remaining = 1
+                continue
+            raise LayoutSugarError(
+                f"split layout dim {dim!r} and mesh extent {extent!r} at axis "
+                f"position {i} do not have a decidable divisibility relation; "
+                "bind symbolic dimensions before authoring this split"
+            )
         if remaining % extent != 0:
             raise VerifyError(
                 f"dim {dim} not divisible by mesh extent {extent} "

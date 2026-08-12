@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh, Topology
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -67,3 +68,40 @@ DIVIDED = [
 @pytest.mark.parametrize(("sharded", "expected"), DIVIDED)
 def test_only_a_mesh_axis_that_owns_a_dim_divides_it(sharded, expected) -> None:
     assert shard_layout_local_shape(sharded) == expected
+
+
+_N = DimVar("local_n", 1, 65)
+_M = DimVar("mesh_n", 1, 65)
+
+
+def _symbolic_layout(axis_extent, mesh_extent, *, split: bool) -> ShardLayout:
+    return ShardLayout(
+        layout=Layout(shape=(axis_extent, 8), strides=None),
+        attrs=(Split(0) if split else Broadcast(),),
+        mesh=Mesh(
+            (Topology("cta", mesh_extent),),
+            Layout(shape=(mesh_extent,), strides=(1,)),
+        ),
+    )
+
+
+def test_unconsumed_symbolic_axis_is_available_to_type_inference() -> None:
+    layout = _symbolic_layout(_N, 8, split=False)
+
+    assert shard_layout_local_shape(layout, require_static=False) == (_N, 8)
+    with pytest.raises(ValueError, match="not static after sharding"):
+        shard_layout_local_shape(layout)
+
+
+@pytest.mark.parametrize("require_static", [False, True], ids=["typeinfer", "lowering"])
+def test_matching_symbolic_split_has_one_local_element(require_static: bool) -> None:
+    layout = _symbolic_layout(_N, _N, split=True)
+
+    assert shard_layout_local_shape(layout, require_static=require_static) == (1, 8)
+
+
+def test_unresolved_symbolic_split_is_rejected() -> None:
+    layout = _symbolic_layout(_N, _M, split=True)
+
+    with pytest.raises(ValueError, match="divisibility.*bind symbolic dimensions"):
+        shard_layout_local_shape(layout, require_static=False)

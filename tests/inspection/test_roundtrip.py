@@ -70,6 +70,19 @@ def test_insert_slice_tuple_offset_arg_roundtrips() -> None:
     assert as_script(import_dsl(script)) == script
 
 
+def test_slice_runtime_starts_tuple_roundtrips() -> None:
+    """An explicit Slice preserves a runtime start that subscript sugar cannot spell."""
+    fn = import_dsl(
+        _HEADER + "\n@func\n"
+        'def cut(x: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]):\n'
+        "    return slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))\n"
+    )
+    script = as_script(fn)
+
+    assert "slice(x, (start, 0), sizes=(2, 4), strides=(1, 1))" in script
+    assert as_script(import_dsl(script)) == script
+
+
 def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"

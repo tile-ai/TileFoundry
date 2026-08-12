@@ -628,14 +628,17 @@ def canonical_shard_layout(
     ...
 
 
-def shard_layout_local_shape(sl: ShardLayout) -> tuple[int, ...]:
+def shard_layout_local_shape(
+    sl: ShardLayout, *, require_static: bool = True
+) -> tuple:
     """Project a global sharding layout to its local shape.
 
     Args:
         sl: Sharding layout to project.
+        require_static: Whether unresolved local extents are rejected.
 
     Returns:
-        The per-shard static shape.
+        The per-shard shape. In strict mode every extent is static.
     """
     ...
 
@@ -721,8 +724,10 @@ def contains(scope: ComposedLayout, t: int) -> bool:
     append a non-unit residual factor. It MUST reject indivisible or
     unrepresentable dynamic multi-axis splits.
   - `shard_layout_local_shape` MUST multiply the divisors of multiple `Split`
-    attributes that name the same layout axis and MUST reject a remaining
-    non-static local extent.
+    attributes that name the same layout axis. Equal symbolic split and mesh
+    extents produce local extent one; other symbolic split relations MUST be
+    rejected as undecidable. An unconsumed symbolic extent MAY pass through
+    only when `require_static=False`; strict mode MUST reject it.
   - `try_c_order_strides` MUST return `None` unless every shape entry is a
     non-boolean integer.
   - Mesh-scope projection MUST accept only an identity inner mapping and an

@@ -18,6 +18,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.clamp import Clamp
 from tilefoundry.ir.hir.math.softplus import Softplus
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.nn.causal_mask import CausalMask
 from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.hir.nn.gelu import Gelu
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
@@ -305,6 +306,11 @@ def _cache_update(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(SoftMax)
 def _softmax(call: Call, ctx: CostContext) -> Cost:
     return _elementwise(call, ctx)
+
+
+@register_cost_evaluator(CausalMask)
+def _causal_mask(call: Call, ctx: CostContext) -> Cost:
+    return _elementwise(call, ctx, dtype=DType.bool)
 
 
 @register_cost_evaluator(LayerNorm)

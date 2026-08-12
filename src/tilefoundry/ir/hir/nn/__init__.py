@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .causal_mask import CausalMask
 from .conv2d import Conv2D
 from .gelu import Gelu
 from .layer_norm import LayerNorm
@@ -13,6 +14,7 @@ from .softmax import SoftMax
 from .tanh import Tanh
 
 __all__ = [
+    "CausalMask",
     "Conv2D",
     "Gelu",
     "LayerNorm",

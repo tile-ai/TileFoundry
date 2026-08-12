@@ -8,6 +8,7 @@ are emitted; otherwise the verbose ``ShardLayout(...)`` form is used.
 from __future__ import annotations
 
 import enum
+import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -401,11 +402,13 @@ def _mesh_str(mesh: Mesh, indent: str = "") -> str:
     return base + ")"
 
 
-def _shard_layout_str(sl: ShardLayout, indent: str = "") -> str:
+def _shard_layout_str(
+    sl: ShardLayout, indent: str = "", *, mesh_ref: str | None = None
+) -> str:
     """ShardLayout(...) constructor string, multi-line for readability."""
     child_indent = indent + "    "
     layout = _layout_str(sl.layout, child_indent)
-    mesh = _mesh_str(sl.mesh, child_indent)
+    mesh = mesh_ref or _mesh_str(sl.mesh, child_indent)
     attrs = ", ".join(_shard_attr_str(a) for a in sl.attrs)
     if len(sl.attrs) == 1:
         attrs += ","
@@ -755,14 +758,25 @@ def _emit_def(
     _forced_names: dict[int, str] = {}
     _tile_window_steps: dict[int, object] = {}
 
+    scalar_iv_uses: set[int] = set()
+    for expr in _order:
+        if not isinstance(expr, Call) or isinstance(expr.target, Slice):
+            continue
+        for arg in expr.args:
+            if isinstance(arg, Var):
+                scalar_iv_uses.add(id(arg))
 
     _grid_internal_ids: set[int] = set()
-    _grid_init_ids: set[int] = set()
+    _nested_grid_ids: set[int] = set()
 
     for expr in _order:
         if not isinstance(expr, GridRegionExpr):
             continue
-        if expr.start == 0 and expr.step != 1:
+        if (
+            expr.start == 0
+            and expr.step != 1
+            and id(expr.induction_var) not in scalar_iv_uses
+        ):
             _tile_window_steps[id(expr.induction_var)] = expr.step
         for carry, init, value in zip(
             expr.carried_args, expr.init_args, expr.yield_values
@@ -775,10 +789,22 @@ def _emit_def(
         for value in expr.yield_values:
             for _ in iter_exprs(value, _grid_internal_ids):
                 pass
+        for nested in iter_exprs(expr.body, set()):
+            if isinstance(nested, GridRegionExpr) and nested is not expr:
+                _nested_grid_ids.add(id(nested))
+        for value in expr.yield_values:
+            for nested in iter_exprs(value, set()):
+                if isinstance(nested, GridRegionExpr) and nested is not expr:
+                    _nested_grid_ids.add(id(nested))
+
+    _root_grid_init_ids: set[int] = set()
+    for expr in _order:
+        if not isinstance(expr, GridRegionExpr) or id(expr) in _nested_grid_ids:
+            continue
         for init in expr.init_args:
-            for _ in iter_exprs(init, _grid_init_ids):
+            for _ in iter_exprs(init, _root_grid_init_ids):
                 pass
-    _grid_internal_ids.difference_update(_grid_init_ids)
+    _grid_internal_ids.difference_update(_root_grid_init_ids)
 
     def _assign_name(expr: Expr) -> str:
         key = id(expr)
@@ -904,9 +930,16 @@ def _emit_def(
         if isinstance(target, Reshard):
             layout_kw = ""
             if target.layout is not None:
-                layout_kw = ", layout=" + _shard_layout_str(
-                    target.layout, indent=indent_here + "    "
+                layout_text = _shard_layout_str(
+                    target.layout,
+                    indent=indent_here + "    ",
+                    mesh_ref=(
+                        mesh_map.get(id(target.layout.mesh))
+                        if target.layout.mesh.names
+                        else None
+                    ),
                 )
+                layout_kw = ", layout=" + layout_text
             storage = (
                 f", storage={target.storage.name.lower()}"
                 if target.storage is not None
@@ -921,6 +954,7 @@ def _emit_def(
             starts = expr.args[1]
             if not isinstance(starts, Tuple):
                 raise ValueError("canonical_source: Slice starts must be a Tuple")
+            runtime_starts = False
             for axis, (start, size, stride) in enumerate(
                 zip(starts.elements, target.sizes, target.strides)
             ):
@@ -946,14 +980,18 @@ def _emit_def(
                     and isinstance(size, int)
                     and isinstance(stride, int)
                 ):
-                    raise ValueError(
-                        "canonical_source: non-tile runtime Slice cannot be "
-                        "represented by the current subscript surface"
-                    )
+                    runtime_starts = True
+                    break
                 begin = int(start.value)
                 stop = begin + size * stride
                 indexers.append(
                     f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}"
+                )
+            if runtime_starts:
+                return (
+                    f"slice({_arg_ref(expr.args[0])}, {_tuple_literal(starts.elements)}, "
+                    f"sizes={_attr_tuple_str(target.sizes)}, "
+                    f"strides={_attr_tuple_str(target.strides)})"
                 )
             return f"{_arg_ref(expr.args[0])}[{', '.join(indexers)}]"
 
@@ -973,7 +1011,13 @@ def _emit_def(
             elif isinstance(value, enum.Enum) and isinstance(value.value, str):
                 attr_strs.append(f'{param.name}="{value.value}"')
             elif isinstance(value, float):
-                attr_strs.append(f"{param.name}={value!r}")
+                if math.isinf(value):
+                    literal = "-1e999" if value < 0 else "1e999"
+                elif math.isnan(value):
+                    literal = "(1e999 - 1e999)"
+                else:
+                    literal = repr(value)
+                attr_strs.append(f"{param.name}={literal}")
             elif isinstance(value, ShardLayout):
                 sl_str = _shard_layout_str(value, indent=indent_here + "        ")
                 attr_strs.append(f"{param.name}={sl_str}")
@@ -1041,7 +1085,7 @@ def _emit_def(
         start = shape_entry_str(grid.start)
         if grid.start == 0 and grid.step == 1:
             loop = f"tile({extent})"
-        elif grid.start == 0:
+        elif id(grid.induction_var) in _tile_window_steps:
             loop = f"tile({extent}, {step})"
         else:
             loop = f"range({start}, {extent}, {step})"

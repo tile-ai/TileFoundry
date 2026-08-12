@@ -17,12 +17,13 @@ from dataclasses import replace
 import pytest
 
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
+from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
-from tilefoundry.analysis import MemoryMetadata, TimelineMetadata, analyze
+from tilefoundry.analysis import MemoryMetadata, RooflineMetadata, TimelineMetadata, analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.inspection.analysis_report import render_text, report
 from tilefoundry.ir.core import get_metadata
-from tilefoundry.ir.hir.specialize import residual_dims, variant_for
+from tilefoundry.ir.hir.specialize import display_name, origin_of, residual_dims, variant_for
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget
@@ -50,6 +51,31 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
     assert result.metadata_types
     assert result.module is module
+
+
+@pytest.mark.parametrize(
+    ("dims", "variant", "bound_by"),
+    [
+        ({"ctx": 1024, "seq": 1}, "decode", "memory"),
+        ({"ctx": 1, "seq": 1024}, "prefill", "compute"),
+    ],
+    ids=["decode-open-context", "prefill-open-sequence"],
+)
+def test_block_attention_selects_and_analyzes_each_placed_regime(
+    dims: dict[str, int], variant: str, bound_by: str
+) -> None:
+    result = analyze(
+        PrefillDecodeAttention,
+        PrefillDecodeAttention.entry_function(),
+        analysis="roofline",
+        dims=dims,
+    )
+
+    assert display_name(origin_of(result.function)) == variant
+    record = get_metadata(result.function, RooflineMetadata)
+    assert record is not None
+    assert record.ideal_ns > 0
+    assert record.bound_by == bound_by
 
 
 @pytest.mark.parametrize("family", FAMILIES)

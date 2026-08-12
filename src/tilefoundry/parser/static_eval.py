@@ -11,17 +11,30 @@ import ast
 from typing import Any, Callable, Literal
 
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.types.dim import is_dim_expr
+from tilefoundry.ir.types.dim import (
+    DimAdd,
+    DimFloorDiv,
+    DimMod,
+    DimMul,
+    DimSub,
+    is_dim_expr,
+    simplify_dim,
+)
 
 DivMode = Literal["true", "floor"]
-
-
-
 
 ALL_NODES: tuple[type, ...] = (
     ast.Constant, ast.Tuple, ast.List, ast.Name, ast.Attribute,
     ast.Subscript, ast.Call, ast.UnaryOp, ast.BinOp,
 )
+
+_DIM_BINOPS = {
+    ast.Add: DimAdd,
+    ast.Sub: DimSub,
+    ast.Mult: DimMul,
+    ast.FloorDiv: DimFloorDiv,
+    ast.Mod: DimMod,
+}
 
 
 def _default_attr_resolver(owner: Any, attr: str) -> Any:
@@ -136,16 +149,19 @@ def eval_static(
             left = ev(left_node)
             right = ev(right_node)
             numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
-
-
-
-
-
             if not numeric and not (is_dim_expr(left) and is_dim_expr(right)):
                 raise VerifyError(
                     f"static BinOp requires numeric or dimension operands, got "
                     f"{type(left).__name__} / {type(right).__name__}"
                 )
+            if not numeric:
+                op_cls = _DIM_BINOPS.get(type(op))
+                if op_cls is None:
+                    raise VerifyError(
+                        f"static dimension BinOp {type(op).__name__} not supported "
+                        f"(use + - * // %)"
+                    )
+                return simplify_dim(op_cls, (left, right))
             return _apply_binop(op, left, right, div=div)
     raise VerifyError(f"cannot statically evaluate AST node {type(node).__name__}")
 

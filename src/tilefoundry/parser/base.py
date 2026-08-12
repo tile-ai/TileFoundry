@@ -1008,8 +1008,16 @@ class BaseExprVisitor:
                 if i < len(input_params):
                     if (
                         isinstance(arg, ast.Tuple)
-                        and schema.name == "insert_slice"
-                        and input_params[i].name == "offsets"
+                        and (
+                            (
+                                schema.name == "insert_slice"
+                                and input_params[i].name == "offsets"
+                            )
+                            or (
+                                schema.name == "slice"
+                                and input_params[i].name == "starts"
+                            )
+                        )
                     ):
 
 

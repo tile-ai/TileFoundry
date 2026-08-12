@@ -12,6 +12,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
+    DimMul,
     DimSub,
     simplify_dim,
 )
@@ -20,6 +21,10 @@ from tilefoundry.ir.types.shard import (
     ComposedLayout,
     Layout,
     ShardLayout,
+)
+from tilefoundry.ir.types.shard.shard_layout import (
+    layout_axis_to_tensor_axis,
+    split_target_axes,
 )
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -77,6 +82,99 @@ def slice_size(begin: Expr, end: Expr, stride: Expr) -> Expr:
     return simplify_dim(DimFloorDiv, (bump, stride))
 
 
+def _constant_int(expr: Expr) -> int | None:
+    if (
+        isinstance(expr, Constant)
+        and isinstance(expr.value, int)
+        and not isinstance(expr.value, bool)
+    ):
+        return int(expr.value)
+    return None
+
+
+def _dim_mul(left, right):
+    if isinstance(left, int) and isinstance(right, int):
+        return left * right
+    return simplify_dim(DimMul, (left, right))
+
+
+def _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset):
+    """Retain distribution when a slice leaves every split logical axis whole."""
+    op = call.target
+    static_starts = tuple(_constant_int(start) for start in starts.elements)
+    narrow_axes = {
+        axis
+        for axis, (start, size, stride, extent) in enumerate(
+            zip(static_starts, op.sizes, op.strides, x_ty.shape)
+        )
+        if start != 0 or size != extent or stride != 1
+    }
+    split_targets = split_target_axes(source, x_ty.shape)
+    for mesh_axis, tensor_axis in enumerate(split_targets):
+        if tensor_axis in narrow_axes:
+            ctx.error(
+                call,
+                f"Slice narrows axis {tensor_axis}, which mesh axis {mesh_axis} "
+                "splits; a window need not align with the mesh division. Slice "
+                "before placing, or reshard to a layout that leaves axis "
+                f"{tensor_axis} whole.",
+            )
+
+    base = source.layout
+    if not isinstance(base, Layout):
+        ctx.error(call, "Slice of a ShardLayout requires a primitive underlying Layout")
+    position_to_axis = layout_axis_to_tensor_axis(base.shape, x_ty.shape)
+    new_shape = list(base.shape)
+    new_strides = None if base.strides is None else list(base.strides)
+    narrow_positions: dict[int, int] = {}
+    for tensor_axis in narrow_axes:
+        positions = [
+            position
+            for position, mapped_axis in enumerate(position_to_axis)
+            if mapped_axis == tensor_axis
+        ]
+        if len(positions) != 1:
+            ctx.error(
+                call,
+                f"Slice narrows axis {tensor_axis}, whose layout uses positions "
+                f"{positions}; the window cannot be represented by one layout axis",
+            )
+        position = positions[0]
+        narrow_positions[tensor_axis] = position
+        new_shape[position] = op.sizes[tensor_axis]
+        if new_strides is not None:
+            new_strides[position] = _dim_mul(
+                new_strides[position], op.strides[tensor_axis]
+            )
+
+    sharded = ShardLayout(
+        layout=Layout(
+            shape=tuple(new_shape),
+            strides=None if new_strides is None else tuple(new_strides),
+        ),
+        attrs=source.attrs,
+        mesh=source.mesh,
+    )
+    if any(start is None for start in static_starts) or not all(
+        isinstance(stride, int) and not isinstance(stride, bool)
+        for stride in op.strides
+    ):
+        return sharded
+
+    offset = inherited_offset
+    if base.strides is None:
+        return sharded
+    for tensor_axis, start in enumerate(static_starts):
+        if start == 0:
+            continue
+        position = narrow_positions[tensor_axis]
+        source_stride = base.strides[position]
+        if not isinstance(source_stride, int) or isinstance(source_stride, bool):
+            return sharded
+        offset += start * source_stride
+    return ComposedLayout(inner=None, offset=offset, outer=sharded)
+
+
 @register_typeinfer(Slice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
@@ -101,18 +199,20 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     layout_shape = shape
     source = x_ty.layout
     inherited_offset = 0
-    if isinstance(source, ShardLayout):
-        source = None
-    elif (
+    if (
         isinstance(source, ComposedLayout)
         and source.inner is None
-        and isinstance(source.outer, Layout)
+        and isinstance(source.outer, (Layout, ShardLayout))
     ):
         inherited_offset = source.offset
         source = source.outer
 
     new_layout = None
-    if isinstance(source, Layout) and source.strides is not None:
+    if isinstance(source, ShardLayout):
+        new_layout = _slice_shard_layout(
+            call, ctx, x_ty, source, starts, inherited_offset
+        )
+    elif isinstance(source, Layout) and source.strides is not None:
         static_starts = []
         steps = []
         for start, stride in zip(starts.elements, op.strides):

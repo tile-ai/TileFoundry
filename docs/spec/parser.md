@@ -220,12 +220,15 @@ layout-sugar  ::= axis-tuple                                            ; implic
                 | '(' axis-tuple ',' stride-tuple ',' value-state ')'   ; explicit strides + value-state
 axis-tuple    ::= '(' axis-spec (',' axis-spec)* ','? ')'
 axis-spec     ::= axis-extent                    ; a layout dim, not split (axis placement only)
-                | static-extent '@' mesh-axis    ; Split(axis_index) on mesh-axis
-                | static-extent '@' '(' mesh-axis (',' mesh-axis)* ')'  ; sequential decomposition
-axis-extent    ::= static-extent | dim-ref        ; a bare axis may be dynamic
-static-extent  ::= integer-literal | static-dim-ref  ; split axes & mesh dims: a static int
-dim-ref        ::= identifier                     ; closure-resolved DimVar (or int); bare axes only
-static-dim-ref ::= identifier                     ; closure/global name bound to a static int (bool rejected)
+                | shape-extent '@' mesh-axis     ; Split(axis_index) on mesh-axis
+                | shape-extent '@' '(' mesh-axis (',' mesh-axis)* ')'  ; sequential decomposition
+axis-extent   ::= dim-expr
+shape-extent  ::= dim-expr
+dim-expr      ::= dim-atom | dim-expr dim-op dim-atom
+dim-atom      ::= integer-literal | dim-ref | dim-call | '(' dim-expr ')'
+dim-ref       ::= identifier                      ; closure-resolved ShapeDim
+dim-call      ::= identifier '(' dim-expr (',' dim-expr)* ')'
+dim-op        ::= '+' | '-' | '*' | '//' | '%'   ; bool rejected
 stride-tuple  ::= '(' integer-literal (',' integer-literal)* ','? ')'
 value-state   ::= '{' partial-spec (',' partial-spec)* ','? '}'  ; a set; only the last outer item
 partial-spec  ::= mesh-axis '@' 'P(' '"' reduction '"' ')'       ; Partial(reduction) on mesh-axis
@@ -233,29 +236,20 @@ mesh-axis     ::= identifier '.' identifier      ; e.g. gpu.cta
 reduction     ::= 'sum' | 'max' | 'min' | …
 ```
 
-A **bare** axis extent (`axis-extent`) may be a static `integer-literal`
-**or** a closure-resolved `dim-ref` — an identifier bound to a `DimVar`
-(or an int) in the function's closure, e.g. a dynamic `seq_len`. A bare
-axis is `Broadcast` (carries no mesh binding). A **split** extent
-(`static-extent` on the left of `@`) MUST resolve to a static int: it
-participates in mesh-extent canonicalisation (factorisation), which a
-dynamic extent cannot. A dynamic split extent is rejected.
+A layout or mesh extent is a `ShapeDim`: a static integer or a
+closure-resolved `DimVar` / dim expression. A bare axis is `Broadcast`
+(carries no mesh binding). A symbolic split is canonicalizable when the split
+extent and mesh-axis extent are the same expression, which gives local extent
+one without symbolic division. Other symbolic split combinations MUST be
+rejected with a diagnostic that asks the author to bind dimensions first.
+The restricted static evaluator MUST keep the five `dim-op` forms as canonical
+dimension arithmetic when either operand is symbolic, including when a
+`dim-call` such as `ceildiv(...)` produced that operand.
 
-Closure/global int resolution applies to mesh-shape dims too; a `bool` or
-dynamic value in a `static-extent` is rejected with a `must be a static int`
-diagnostic.
-
-A dynamic bare axis is admissible only where `Reshard` materialises strides
-in the **shared-engine** form — a same-storage reshard off a plain (non
-per-instance) source, or a low→high storage move. There the deferred stride
-materialisation ([§Stride materialization](#stride-materialization-parser-surface))
-keeps static inner strides as plain ints and only the strides of axes
-*above* the dynamic axis become symbolic dim-exprs. In a **per-instance**
-materialisation (a high→low storage move, or a per-instance source), the
-per-shard local layout shape must be a static int — a register / shared buffer
-cannot be sized by a non-split dynamic axis — so a dynamic non-split bare
-axis is rejected with a deliberate error. A symbolic split axis is likewise
-rejected until its dimensions are bound.
+Implicit C-order strides retain symbolic products. HIR type inference may also
+retain an unconsumed symbolic local extent in a per-instance stride. Lowering
+and code generation keep the stricter boundary: all local extents MUST be
+concrete after dimension binding before storage is materialized.
 
 The `axis-tuple` carries only **axis placement** (`Split` inlined as
 `size @ mesh.axis`; a bare `size` is a non-split layout dim). The optional
