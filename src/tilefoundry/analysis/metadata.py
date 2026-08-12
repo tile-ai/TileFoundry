@@ -24,12 +24,12 @@ class OccurrenceProvenance(IRMetadata):
 
 @dataclass(frozen=True)
 class ComputeCostMetadata(IRMetadata):
-    """Record one call's logical work as authored.
+    """Record one occurrence's work or one Function's total work.
 
     ``flops`` groups global work by dtype; ``flops_per_unit`` applies shard
-    projection at the requested topology level. Global traffic is counted once.
-    ``operands`` is positional against ``(*call.args, call)`` and exists only
-    for direct primitive calls, not aggregate calls into another function.
+    projection at the requested topology level. On a Call, all quantities state
+    one occurrence and ``operands`` is positional against ``(*call.args, call)``.
+    On a Function, loops contribute their trip count and ``operands`` is empty.
     """
 
     flops: tuple[tuple[str, int], ...] = ()

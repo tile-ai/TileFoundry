@@ -22,6 +22,7 @@ from tilefoundry.analysis.walk import postorder, reachable_functions, tensor_typ
 from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
@@ -37,15 +38,16 @@ class _Matmul:
         return tf.matmul(x, w)
 
 
-def _records(root, entry, *, into_a_child: bool) -> tuple[ComputeCostMetadata, ...]:
-    """The work records on *entry*'s child-Module calls, or on its primitives."""
-    analyze(root, entry, analysis="compute-cost")
-    return tuple(
-        get_metadata(expr, ComputeCostMetadata)
-        for expr in postorder(entry.body)
-        if isinstance(expr, Call)
-        and isinstance(expr.target, Function) is into_a_child
-    )
+def _matmul_records(result) -> tuple[ComputeCostMetadata, ...]:
+    """The work records on the inlined MatMul occurrences."""
+    records = []
+    for expr in postorder(result.function.body):
+        if not isinstance(expr, Call) or not isinstance(expr.target, MatMul):
+            continue
+        record = get_metadata(expr, ComputeCostMetadata)
+        assert record is not None
+        records.append(record)
+    return tuple(records)
 
 
 def _flops(records) -> dict[str, int]:
@@ -81,9 +83,14 @@ def test_a_repeated_call_site_counts_its_work_again() -> None:
         def twice(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
             return tf.add(mm(x), mm(x))  # noqa: F821
 
-    one = _flops(_records(_Once, _Once.entry_function(), into_a_child=True))
-    two = _flops(_records(_Twice, _Twice.entry_function(), into_a_child=True))
+    one_result = analyze(_Once, _Once.entry_function(), analysis="compute-cost")
+    two_result = analyze(_Twice, _Twice.entry_function(), analysis="compute-cost")
+    one_records = _matmul_records(one_result)
+    two_records = _matmul_records(two_result)
+    one = _flops(one_records)
+    two = _flops(two_records)
 
+    assert len(one_records) == 1 and two_records == one_records * 2
     assert one and two == {name: 2 * value for name, value in one.items()}
 
 
@@ -107,10 +114,20 @@ def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
         def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
             return mm(x)  # noqa: F821
 
-    one = _flops(_records(_Once, _Once.entry_function(), into_a_child=True))
-    looped = _flops(_records(_Looped, _Looped.entry_function(), into_a_child=True))
+    one_result = analyze(_Once, _Once.entry_function(), analysis="compute-cost")
+    looped_result = analyze(
+        _Looped, _Looped.entry_function(), analysis="compute-cost"
+    )
+    one_occurrence = _matmul_records(one_result)
+    looped_occurrence = _matmul_records(looped_result)
+    one_root = get_metadata(one_result.function, ComputeCostMetadata)
+    looped_root = get_metadata(looped_result.function, ComputeCostMetadata)
 
-    assert one and looped == {name: 3 * value for name, value in one.items()}
+    assert len(one_occurrence) == 1 and looped_occurrence == one_occurrence
+    assert one_root is not None and looped_root is not None
+    assert _flops((looped_root,)) == {
+        name: 3 * value for name, value in _flops((one_root,)).items()
+    }
 
 
 def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
@@ -130,8 +147,10 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
         def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
             return mm(x)  # noqa: F821
 
-    direct = _traffic(_records(_Direct, _Direct.entry_function(), into_a_child=False))
-    fused = _traffic(_records(_Fused, _Fused.entry_function(), into_a_child=True))
+    direct_result = analyze(_Direct, _Direct.entry_function(), analysis="compute-cost")
+    fused_result = analyze(_Fused, _Fused.entry_function(), analysis="compute-cost")
+    direct = _traffic(_matmul_records(direct_result))
+    fused = _traffic(_matmul_records(fused_result))
 
     assert direct and fused == direct
 

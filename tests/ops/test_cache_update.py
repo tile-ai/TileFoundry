@@ -214,7 +214,12 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     )
 
     result = analyze(_KVCacheAppend, entry, analysis="compute-cost", level="cta")
-    record = get_metadata(update, ComputeCostMetadata)
+    analysed_update = next(
+        expr
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, CacheUpdate)
+    )
+    record = get_metadata(analysed_update, ComputeCostMetadata)
     assert result.level == "cta"
     assert record is not None
     assert record.flops == record.flops_per_unit == ()

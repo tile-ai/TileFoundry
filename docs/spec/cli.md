@@ -263,10 +263,11 @@ selected Module's resolved Target determines the hardware specification for an
 explicit analysis; there is no ordinary `--target` option.
 
 - constraints:
-  - `analyze` MUST invoke the public operation once per requested root, because
-    that operation takes one root per call
-    ([analysis §3](./analysis.md#3-composed-analysis)). Requesting two analyses
-    MUST NOT change what either reports.
+  - `analyze` MUST invoke the public operation once with every requested root,
+    so their union dependency closure runs on one inlined Function view
+    ([analysis §3](./analysis.md#3-composed-analysis)). Each closure member MUST
+    run once, and requesting another root MUST NOT let one analyzer change
+    Metadata owned by another.
   - A selection MUST resolve to a Module. A bare Function MUST be rejected
     naming the reason: it declares neither the Target its numbers are measured
     against nor the topology hierarchy they divide over.

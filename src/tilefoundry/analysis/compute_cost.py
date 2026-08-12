@@ -9,8 +9,6 @@ a target's rates.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -30,16 +28,6 @@ from .walk import (
 )
 
 SELECTOR = "compute-cost"
-
-
-@dataclass(frozen=True)
-class _Totals:
-    """One function's work, summed over the calls in its body."""
-
-    flops: tuple[tuple[str, int], ...]
-    flops_per_unit: tuple[tuple[str, int], ...]
-    traffic: tuple[tuple[str, TrafficBytes], ...]
-
 
 def _call_movement(
     call: Call, cost: Cost
@@ -89,60 +77,22 @@ def _accumulate(
     flops_per_unit: dict[str, int],
     traffic: dict[str, TrafficBytes],
     record: ComputeCostMetadata,
+    trips: int,
 ) -> None:
     for name, value in record.flops:
-        flops[name] = flops.get(name, 0) + value
+        flops[name] = flops.get(name, 0) + value * trips
     for name, value in record.flops_per_unit:
-        flops_per_unit[name] = flops_per_unit.get(name, 0) + value
+        flops_per_unit[name] = flops_per_unit.get(name, 0) + value * trips
     for level, value in record.traffic:
         current = traffic.get(level, TrafficBytes())
         traffic[level] = TrafficBytes(
-            current.read + value.read,
-            current.write + value.write,
+            current.read + value.read * trips,
+            current.write + value.write * trips,
         )
 
 
-def _scale_traffic(
-    traffic: tuple[tuple[str, TrafficBytes], ...], trips: int
-) -> tuple[tuple[str, TrafficBytes], ...]:
-    if trips == 1:
-        return traffic
-    return tuple(
-        (level, TrafficBytes(value.read * trips, value.write * trips))
-        for level, value in traffic
-    )
-
-
-def _scale_moved(
-    operands: tuple[TrafficBytes, ...], trips: int
-) -> tuple[TrafficBytes, ...]:
-    if trips == 1:
-        return operands
-    return tuple(
-        TrafficBytes(item.read * trips, item.write * trips) for item in operands
-    )
-
-
-def _scaled(
-    flops: tuple[tuple[str, int], ...],
-    flops_per_unit: tuple[tuple[str, int], ...],
-    traffic: tuple[tuple[str, TrafficBytes], ...],
-    trips: int,
-) -> ComputeCostMetadata:
-    """A callee's totals, charged once per trip of the loops around the call."""
-    return ComputeCostMetadata(
-        flops=tuple((name, value * trips) for name, value in flops),
-        flops_per_unit=tuple(
-            (name, value * trips) for name, value in flops_per_unit
-        ),
-        traffic=_scale_traffic(traffic, trips),
-    )
-
-
-def _scaled_flops(flops: dict, trips: int) -> tuple[tuple[str, int], ...]:
-    return tuple(
-        sorted((dtype.name, value * trips) for dtype, value in flops.items())
-    )
+def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
+    return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
 
 
 def analyze_compute_cost(
@@ -152,14 +102,9 @@ def analyze_compute_cost(
     level: str | None = None,
     options: object | None = None,
 ) -> None:
-    """Attach one work record per Call reachable from *function*.
-
-    Callees are measured before their callers so a call site can report the
-    callee's totals rather than re-walking its body.
-    """
+    """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     topologies = module.effective_topologies()
-    totals: dict[int, _Totals] = {}
-    for fn in reversed(reachable_functions(function)):
+    for fn in reachable_functions(function):
         scope = FunctionScope(module, fn)
         whole = CostEvaluator(CostContext(scope=scope))
         local = CostEvaluator(
@@ -173,34 +118,27 @@ def analyze_compute_cost(
             if not isinstance(expr, Call):
                 continue
             count = trips.get(id(expr), 1)
-            if isinstance(expr.target, Function):
-                child = totals.get(id(expr.target))
-                if child is None:
-                    raise AnalysisError(
-                        f"{describe(expr)}: recursive or unresolved Function call graph"
-                    )
-                record = _scaled(
-                    child.flops, child.flops_per_unit, child.traffic, count
-                )
-            else:
-                try:
-                    whole_cost = whole.visit(expr)
-                    local_cost = local.visit(expr)
-                except (ValueError, VerifyError) as error:
-                    raise AnalysisError(str(error)) from None
-                traffic_by_level, operands = _call_movement(expr, whole_cost)
-                record = ComputeCostMetadata(
-                    flops=_scaled_flops(whole_cost.flops, count),
-                    flops_per_unit=_scaled_flops(local_cost.flops, count),
-                    traffic=_scale_traffic(traffic_by_level, count),
-                    operands=_scale_moved(operands, count),
-                )
+            try:
+                whole_cost = whole.visit(expr)
+                local_cost = local.visit(expr)
+            except (ValueError, VerifyError) as error:
+                raise AnalysisError(str(error)) from None
+            traffic_by_level, operands = _call_movement(expr, whole_cost)
+            record = ComputeCostMetadata(
+                flops=_flops(whole_cost.flops),
+                flops_per_unit=_flops(local_cost.flops),
+                traffic=traffic_by_level,
+                operands=operands,
+            )
             attach(expr, record)
-            _accumulate(flops, flops_per_unit, traffic, record)
-        totals[id(fn)] = _Totals(
-            flops=tuple(sorted(flops.items())),
-            flops_per_unit=tuple(sorted(flops_per_unit.items())),
-            traffic=tuple(sorted(traffic.items())),
+            _accumulate(flops, flops_per_unit, traffic, record, count)
+        attach(
+            fn,
+            ComputeCostMetadata(
+                flops=tuple(sorted(flops.items())),
+                flops_per_unit=tuple(sorted(flops_per_unit.items())),
+                traffic=tuple(sorted(traffic.items())),
+            ),
         )
 
 

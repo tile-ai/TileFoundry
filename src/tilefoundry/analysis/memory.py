@@ -214,19 +214,14 @@ def _peaks(
 
 
 def _function_traffic(fn: Function) -> tuple[tuple[str, TrafficBytes], ...]:
-    """The traffic the compute-cost records on *fn*'s calls add up to."""
-    totals: dict[str, TrafficBytes] = {}
-    for expr in postorder(fn.body):
-        record = get_metadata(expr, ComputeCostMetadata)
-        if record is None:
-            continue
-        for level, value in record.traffic:
-            current = totals.get(level, TrafficBytes())
-            totals[level] = TrafficBytes(
-                current.read + value.read,
-                current.write + value.write,
-            )
-    return tuple(sorted(totals.items()))
+    """Multiplicity-aware traffic from the compute-cost root record."""
+    record = get_metadata(fn, ComputeCostMetadata)
+    if record is None:
+        raise AnalysisError(
+            f"function {fn.name!r}: memory needs the compute-cost root record "
+            "this function was never given"
+        )
+    return record.traffic
 
 
 def _explicit_footprint(

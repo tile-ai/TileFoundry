@@ -22,11 +22,13 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 
 from .errors import AnalysisError
-from .facts import ParallelCapacityFacts
-from .metadata import RooflineMetadata, TimelineMetadata
+from .facts import ParallelCapacityFacts, ThroughputFacts
+from .metadata import ComputeCostMetadata, RooflineMetadata, TimelineMetadata
+from .roofline import _cost_bound
 from .walk import (
     attach,
     describe,
+    enclosing_trips,
     postorder,
     reachable_functions,
     tensor_types,
@@ -292,10 +294,29 @@ def analyze_timeline(
             record = records.get(id(expr))
             if record is not None:
                 attach(expr, record)
+        trips = enclosing_trips(fn.body)
+        root_units = units
+        if trips:
+            throughput = target.get_facts(ThroughputFacts)
+            root_durations = {}
+            for expr in postorder(fn.body):
+                if not isinstance(expr, Call):
+                    continue
+                cost = get_metadata(expr, ComputeCostMetadata)
+                if cost is None:
+                    raise AnalysisError(
+                        f"{describe(expr)}: the timeline needs the compute-cost "
+                        "record this call was never given"
+                    )
+                root_durations[id(expr)] = _cost_bound(
+                    cost, throughput, scale=trips.get(id(expr), 1)
+                ).ideal_ns
+            root_units = _units(fn, root_durations, facts.topology)
+            makespan, total_waves, _records = _solve(root_units, capacity)
         attach(
             fn,
             TimelineMetadata(
-                grid_units=max(unit.extent for unit in units.values()),
+                grid_units=max(unit.extent for unit in root_units.values()),
                 waves=total_waves,
                 start_ns=0,
                 end_ns=makespan,

@@ -99,9 +99,9 @@ def run_authored_analysis(
 ) -> int:
     """Analyse one authored HIR selection and print what was found.
 
-    One public call per requested root, because the operation takes one root at
-    a time. The renderings are composed from those results afterwards, so
-    requesting two analyses cannot change what either of them reports.
+    One public call resolves the requested roots' union closure. Each member
+    runs once on one view, and Metadata ownership keeps one family from changing
+    another's records.
     """
     module = load_authored_ir(source)
     function = module.entry_function()
@@ -134,11 +134,8 @@ def run_authored_analysis(
         sys.stdout.write(annotated)
         return 0
 
-    results = [
-        analyze(module, function, analysis=name, level=topology, dims=dims)
-        for name in analyses
-    ]
-    data = report(results)
+    result = analyze(module, function, analysis=analyses, level=topology, dims=dims)
+    data = report(result)
     if as_json:
         sys.stdout.write(f"{render_json(data)}\n")
         return 0
@@ -146,9 +143,9 @@ def run_authored_analysis(
 
 
     annotated = as_script(
-        module,
+        result.function,
         options=PythonPrintOptions(
-            show_types=True, comment_metadata_types=selected_types(results)
+            show_types=True, comment_metadata_types=selected_types(result)
         ),
     )
     sys.stdout.write(f"{render_text(data)}\n\n{annotated}")

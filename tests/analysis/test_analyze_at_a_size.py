@@ -19,11 +19,24 @@ import pytest
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
-from tilefoundry.analysis import MemoryMetadata, RooflineMetadata, TimelineMetadata, analyze
+from tilefoundry.analysis import (
+    ComputeCostMetadata,
+    MemoryMetadata,
+    RooflineMetadata,
+    TimelineMetadata,
+    analyze,
+)
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.walk import enclosing_trips, postorder
 from tilefoundry.inspection.analysis_report import render_text, report
-from tilefoundry.ir.core import get_metadata
-from tilefoundry.ir.hir.specialize import display_name, origin_of, residual_dims, variant_for
+from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.hir.specialize import (
+    display_name,
+    origin_of,
+    residual_dims,
+    variant_for,
+)
+from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget
@@ -97,71 +110,81 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
 
 
 def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
-    """Several analyses at one size report all of their conclusions, not one's.
-
-    Each analysis asked about a size builds the program itself, so each annotates a
-    rebuild of its own and no two share an object. A report that read one of them
-    would still list every family under `executed` while showing only that family's
-    numbers -- so the ones it dropped read as analyses with nothing to say.
-
-    The same assertion at a fixed shape cannot catch this: with nothing to rebuild,
-    every family annotates one object and reading any of them reads all of them.
-    """
+    """Several requested roots record all conclusions on one concrete view."""
     module = _aimed()
     authored = module.entry_function()
 
-    data = report([analyze(module, authored, analysis=family, dims=DIMS) for family in FAMILIES])
+    result = analyze(module, authored, analysis=FAMILIES, dims=DIMS)
+    data = report(result)
 
+    assert result.analyses == FAMILIES
     assert data["executed"] == list(FAMILIES)
-
-    assert set(data["function_records"]) == {"memory", "roofline", "timeline"}
+    assert set(data["function_records"]) == {
+        "compute-cost",
+        "memory",
+        "roofline",
+        "timeline",
+    }
     assert data["totals"]["flops"], "the work totals summed to nothing"
     text = render_text(data)
     for expected in ("peak-footprint", "ideal-bound", "theoretical-makespan"):
         assert expected in text, f"{expected} is missing from the rendered report"
 
+    single_module = _aimed()
+    single = analyze(
+        single_module,
+        single_module.entry_function(),
+        analysis="timeline",
+        dims=DIMS,
+    )
+    assert tuple(
+        get_metadata(expr, TimelineMetadata)
+        for expr in (single.function, *postorder(single.function.body))
+        if get_metadata(expr, TimelineMetadata) is not None
+    ) == tuple(
+        get_metadata(expr, TimelineMetadata)
+        for expr in (result.function, *postorder(result.function.body))
+        if get_metadata(expr, TimelineMetadata) is not None
+    )
+
 
 def test_a_report_at_a_size_carries_the_per_call_records_of_every_family() -> None:
-    """The same for the per-Call rows, which are keyed by position rather than by identity.
-
-    The same for the per-Call rows, which are keyed by position rather than by
-    identity: two rebuilds share no Call object, so a report that matched them by
-    identity would find none of the second family's.
-
-    `compute-cost` and `timeline` because those are the two families that record on
-    Calls at all -- memory records a footprint over a whole function and has nothing
-    per Call to lose, so pairing it here would assert nothing.
-    """
+    """Per-Call records from several roots inhabit the same occurrences."""
     module = _aimed()
     authored = module.entry_function()
 
-    data = report(
-        [
-            analyze(module, authored, analysis=family, dims=DIMS)
-            for family in ("compute-cost", "timeline")
-        ]
+    result = analyze(
+        module,
+        authored,
+        analysis=("compute-cost", "timeline"),
+        dims=DIMS,
     )
+    data = report(result)
 
     families = {name for row in data["calls"] for name in row if name != "value"}
     assert families == {"compute-cost", "timeline"}, families
 
 
-def test_without_a_size_the_call_is_what_it_was() -> None:
-    """A statically shaped program is unaffected: the result is its own input."""
+def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
+    """A static input remains authored while its analysis view carries records."""
     module = QWEN3_1_7B.build()
     function = module.lookup("mlp")
 
     result = analyze(module, function, analysis="compute-cost")
 
-    assert result.function is function
+    assert result.module is module
+    assert result.function.name == function.name
+    assert origin_of(result.function) is function
+    assert get_metadata(result.function, ComputeCostMetadata) is not None
+    assert get_metadata(function, ComputeCostMetadata) is None
 
 
 @pytest.mark.parametrize(
-    ("ctx_len", "makespan_ns"),
-    ((1, 21_101), (1024, 32_504)),
+    "ctx_len",
+    (1, 1024),
 )
 def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length(
-    ctx_len: int, makespan_ns: int
+    ctx_len: int,
 ) -> None:
     module = QWEN3_1_7B.build()
     function = module.lookup("decoder_layer")
@@ -171,8 +194,69 @@ def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length(
     record = get_metadata(result.function, TimelineMetadata)
     assert record is not None
     assert record.grid_units == 1
-    assert record.waves == 7
-    assert record.end_ns == makespan_ns
+    assert record.waves == 83
+    assert record.end_ns == 10_537
+
+
+def test_gqa_loop_occurrences_cost_one_trip_while_the_root_applies_all_trips() -> None:
+    results = []
+    for extent in (8, 16):
+        module = _aimed()
+        results.append(
+            analyze(
+                module,
+                module.entry_function(),
+                analysis="timeline",
+                dims={"ctx_len": extent},
+            )
+        )
+
+    loop_casts = []
+    for result, extent in zip(results, (8, 16)):
+        trips = enclosing_trips(result.function.body)
+        records = []
+        for expr in postorder(result.function.body):
+            if not (
+                isinstance(expr, Call)
+                and isinstance(expr.target, Cast)
+                and trips.get(id(expr)) == extent
+            ):
+                continue
+            record = get_metadata(expr, ComputeCostMetadata)
+            assert record is not None
+            records.append(record)
+        assert len(records) == 2
+        loop_casts.append(tuple(records))
+
+    assert loop_casts[0] == loop_casts[1]
+    assert [record.flops for record in loop_casts[0]] == [(("f32", 4096),)] * 2
+
+    roots = []
+    for result in results:
+        root = get_metadata(result.function, ComputeCostMetadata)
+        assert root is not None
+        roots.append(root)
+    assert [dict(root.flops)["f32"] for root in roots] == [276_704, 508_128]
+
+    loop_timelines = []
+    for result, extent in zip(results, (8, 16)):
+        trips = enclosing_trips(result.function.body)
+        records = tuple(
+            get_metadata(expr, TimelineMetadata)
+            for expr in postorder(result.function.body)
+            if isinstance(expr, Call)
+            and isinstance(expr.target, Cast)
+            and trips.get(id(expr)) == extent
+        )
+        assert all(record is not None for record in records)
+        loop_timelines.append(records)
+    assert loop_timelines[0] == loop_timelines[1]
+
+    timeline_roots = [
+        get_metadata(result.function, TimelineMetadata) for result in results
+    ]
+    assert all(root is not None for root in timeline_roots)
+    assert [root.end_ns for root in timeline_roots] == [311, 619]
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

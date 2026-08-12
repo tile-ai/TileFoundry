@@ -7,7 +7,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 |---|---|---|
 | Polyhedral model | `extract(hir) -> TileGraph` | one HIR `Function` body as isl domains, access relations and auto-inferred dependences — target-independent |
 | Program check | `check_program(module, function, level=..., budget=...)` | an inlined Function view after validating one authored program and its declared topology |
-| Composed measurement | `analyze(module, function, analysis=...)` | one root analysis and its dependency closure, leaving typed Metadata on the IR |
+| Composed measurement | `analyze(module, function, analysis=...)` | one or more root analyses and their union dependency closure, leaving typed Metadata on the IR |
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
 propagation — is owned by [semantic-analysis](./semantic-analysis.md), and the
@@ -879,8 +879,9 @@ class OccurrenceProvenance(IRMetadata):
     its own algorithm contract.
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
-operation. One call selects one root analysis by name; the operation resolves
-what that root transitively needs, runs each member once, and reports what ran.
+operation. One call selects one or more root analyses by name; the operation
+resolves their union dependency closure, runs each member once, and reports what
+ran.
 Its subject is one `Module` and one HIR `Function` that Module owns. Reachable
 HIR callees are part of that selected invocation and do not become separate
 launches because of Module ownership; the invocation rule is owned by
@@ -905,7 +906,7 @@ class AnalysisResult:
     Attributes:
         module: attribute; Source Module.
         function: attribute; Function that received records.
-        analysis: attribute; Requested root analysis.
+        analyses: attribute; Requested root analyses in first-occurrence order.
         level: attribute; Topology level whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
         metadata_types: attribute; Metadata classes actually written.
@@ -913,7 +914,7 @@ class AnalysisResult:
 
     module: "Module"
     function: "Function"
-    analysis: str
+    analyses: tuple[str, ...]
     level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
@@ -923,7 +924,7 @@ def analyze(
     module: "Module",
     function: "Function",
     *,
-    analysis: str,
+    analysis: str | Iterable[str],
     level: str | None = None,
     options: object | None = None,
     dims: "Mapping[str, int] | None" = None,
@@ -931,8 +932,9 @@ def analyze(
 ```
 
 - constraints:
-  - One call MUST select exactly one root analysis. A caller wanting several
-    roots MUST call the operation once per root.
+  - One call MUST select one or more root analyses. It MUST preserve their
+    first-occurrence order, resolve their union dependency closure, and execute
+    every member once.
   - `level` MUST name one effective Module topology. When omitted, it MUST
     default to the coarsest effective topology; when the Module declares none,
     it MUST remain `None` and no per-unit projection divides. `AnalysisResult.level`
@@ -948,8 +950,8 @@ def analyze(
     range in any of those positions, so the program MUST be analysed at a chosen
     size rather than as authored.
   - `dims=None` MUST behave as a call that states no size: the Function is
-    analysed as authored, and `AnalysisResult.function` MUST be the object the
-    caller supplied.
+    analysed as authored before the shared program check builds the inlined
+    view, and `AnalysisResult.function` MUST be that record-bearing view.
   - When `dims` is stated it MUST be non-empty; every key MUST name a dimension
     reached through the Function graph, its Mesh geometry, or the effective
     Module topology expressions; every value MUST be an integer inside that
@@ -963,12 +965,11 @@ def analyze(
     geometry, and effective topology extents MUST use the same resolved binding.
     Exactly one variant MUST cover the stated size; none and more than one MUST
     both fail.
-  - When `dims` is stated, `AnalysisResult.function` MUST be the concrete Function
-    the records were written onto, derived from the Function the caller supplied,
-    and MUST record both that Function as the one it was specialised from and the
-    extents it was specialised at. `AnalysisResult.module` MUST remain the Module
-    the caller supplied. A reader given the symbolic input would find no records
-    on it.
+  - When `dims` is stated, `AnalysisResult.function` MUST be the inlined view of
+    the concrete Function the records were written onto and MUST retain the
+    specialised Function's origin and extents. `AnalysisResult.module` MUST
+    remain the Module the caller supplied. A reader given the symbolic input
+    would find no records on it.
   - The recorded extents MUST be what identifies which size a derived Function is
     at. They MUST NOT be inferred from its signature: a dimension occurring only
     in a loop bound, a body operation's attribute, or a nested callee leaves the

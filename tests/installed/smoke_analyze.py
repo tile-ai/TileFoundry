@@ -46,6 +46,57 @@ def test_every_analysis_the_command_offers_runs(tf, cmine) -> None:
         assert conclusion in done.stdout, conclusion
 
 
+def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
+    source = Path(__file__).resolve().parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
+    done = tf(
+        "analyze",
+        f"{source}:MoEMegaKernel",
+        "--compute-cost",
+        "--memory",
+        "--roofline",
+        "--timeline",
+        "--json",
+    )
+    assert done.returncode == 0, done.stderr
+    payload = json.loads(done.stdout)
+
+    families = ["compute-cost", "memory", "roofline", "timeline"]
+    assert payload["requested"] == payload["executed"] == families
+    assert set(payload["function_records"]) == set(families)
+    assert len(payload["calls"]) == 7
+    assert all(
+        set(row) == {"value", "compute-cost", "roofline", "timeline"}
+        for row in payload["calls"]
+    )
+
+    positive_per_unit = [
+        row["compute-cost"]["flops_per_unit"]["f32"]
+        for row in payload["calls"]
+        if row["compute-cost"]["flops_per_unit"]
+    ]
+    assert positive_per_unit == [64, 640, 7680]
+
+    summed_flops = sum(
+        row["compute-cost"]["flops"].get("f32", 0)
+        for row in payload["calls"]
+    )
+    summed_traffic = {
+        direction: sum(
+            row["compute-cost"]["traffic"]["gmem"][direction]
+            for row in payload["calls"]
+        )
+        for direction in ("read", "write")
+    }
+    root_cost = payload["function_records"]["compute-cost"]
+    assert root_cost["flops"] == payload["totals"]["flops"] == {"f32": summed_flops}
+    assert (
+        root_cost["traffic"]["gmem"]
+        == payload["totals"]["traffic"]["gmem"]
+        == payload["function_records"]["memory"]["traffic"]["gmem"]
+        == summed_traffic
+    )
+
+
 def test_usage_errors_include_the_command_help(tf) -> None:
     done = tf("analyze")
     assert done.returncode == 2

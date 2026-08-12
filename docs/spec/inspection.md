@@ -520,3 +520,20 @@ def format_dispatch_call(stmt: DispatchCall, indent: str = "") -> str:
 - constraints:
   - These functions are display-only and MUST NOT be treated as parser input.
   - `format_dispatch_call` MUST preserve case order and render the fallback.
+
+## 6. Analysis report rendering
+
+```python
+def report(result: AnalysisResult) -> dict[str, object]:
+    """Project one composed Analyze result into a shared rendering structure."""
+    ...
+```
+
+- constraints:
+  - `report` MUST accept one `AnalysisResult` and read every requested family's
+    records from that result's record-bearing Function. It MUST NOT merge
+    independently rebuilt Functions by identity, origin, dimensions, or walk
+    position.
+  - Text and JSON MUST render the same intermediate structure. Annotated HIR
+    MUST render that same result's Function and the same selected Metadata
+    types.

@@ -33,11 +33,15 @@ def _module(target: Target) -> tuple[Module, object]:
     return Module("rmsnorm", (function,), function.name, target=target), function
 
 
-def test_analyze_orders_a_target_selected_dependency_diamond_once() -> None:
-    ran: list[str] = []
+def test_analyze_orders_the_union_of_target_selected_dependency_roots_once() -> None:
+    ran: list[tuple[str, int]] = []
 
     def service(selector: str, requires: tuple[str, ...] = ()) -> Analyzer:
-        return Analyzer(selector, lambda *_args: ran.append(selector), requires=requires)
+        return Analyzer(
+            selector,
+            lambda _module, function, *_args: ran.append((selector, id(function))),
+            requires=requires,
+        )
 
     target = _AnalysisTarget(
         (
@@ -49,10 +53,12 @@ def test_analyze_orders_a_target_selected_dependency_diamond_once() -> None:
     )
     module, function = _module(target)
 
-    result = analyze(module, function, analysis="top")
+    result = analyze(module, function, analysis=("left", "top", "right", "left"))
 
+    assert result.analyses == ("left", "top", "right")
     assert result.executed == ("base", "left", "right", "top")
-    assert ran == list(result.executed)
+    assert [selector for selector, _function in ran] == list(result.executed)
+    assert {function for _selector, function in ran} == {id(result.function)}
 
 
 def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -> None:

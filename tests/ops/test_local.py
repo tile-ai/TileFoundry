@@ -39,7 +39,12 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
 
     for level in ("cta", "thread"):
         result = analyze(_LocalProgram, entry, analysis="compute-cost", level=level)
-        record = get_metadata(local, ComputeCostMetadata)
+        analysed_local = next(
+            expr
+            for expr in postorder(result.function.body)
+            if isinstance(expr, Call) and isinstance(expr.target, Local)
+        )
+        record = get_metadata(analysed_local, ComputeCostMetadata)
         assert result.level == level
         assert record is not None
         assert record.flops == record.flops_per_unit == ()

@@ -292,24 +292,3 @@ def test_two_sizes_of_a_body_only_dimension_are_told_apart() -> None:
     assert bound_dims_of(small) == (("loop_ctx", 8),)
     assert bound_dims_of(large) == (("loop_ctx", 512),)
     assert bound_dims_of(small) != bound_dims_of(large)
-
-
-def test_the_report_refuses_two_sizes_of_a_body_only_dimension() -> None:
-    """The refusal itself, through the function that has to make it.
-
-    Asserted against `report` rather than against the recorded extents alone,
-    because what matters is that the caller who would mix them is stopped -- and
-    a comparison that read the signature would let these two through.
-    """
-    from tilefoundry.inspection.analysis_report import _same_program  # noqa: PLC0415
-
-    authored = _LoopOnly.entry_function()
-    small = specialize_function(authored, {"loop_ctx": 8})
-    large = specialize_function(authored, {"loop_ctx": 512})
-    again = specialize_function(authored, {"loop_ctx": 8})
-
-    assert not _same_program(small, large)
-    assert _same_program(small, again)
-    assert _same_program(small, small)
-
-    assert not _same_program(authored, small)

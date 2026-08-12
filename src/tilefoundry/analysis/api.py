@@ -1,9 +1,8 @@
 """The public Analyze operation.
 
-One call selects one root analysis. Analyze resolves the root's transitive
+One call selects one or more root analyses. Analyze resolves their transitive
 dependency closure, orders it, and runs each member exactly once, so an
-analysis that several others depend on is computed once rather than per
-dependant.
+analysis that several roots depend on is computed once rather than per root.
 
 The result is semantic. Human text, JSON, and annotated HIR are renderings of
 it and of the Metadata left on the IR, not fields of it.
@@ -11,7 +10,7 @@ it and of the Metadata left on the IR, not fields of it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tilefoundry.analysis.check import _resolve_program_geometry, check_program
@@ -33,13 +32,13 @@ class AnalysisResult:
 
     ``executed`` records dependency order and ``metadata_types`` lists records
     actually written, excluding analyses that matched nothing. ``function`` is
-    the record-bearing input function unless dimension substitution produced a
-    concrete function; ``module`` remains the call's execution domain.
+    the inlined view that carries those records; ``module`` remains the call's
+    execution domain.
     """
 
     module: Module
     function: Function
-    analysis: str
+    analyses: tuple[str, ...]
     level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
@@ -57,8 +56,21 @@ def _algorithm(target: Target, selector: str, *, root: str) -> Analyzer:
         ) from None
 
 
-def _closure(target: Target, root: str) -> tuple[Analyzer, ...]:
-    """*root* and everything it transitively needs, dependencies first.
+def _roots(analysis: str | Sequence[str]) -> tuple[str, ...]:
+    """Normalize one or more root selectors, preserving their first occurrence."""
+    requested = (analysis,) if isinstance(analysis, str) else tuple(analysis)
+    if not requested:
+        raise AnalysisError("analyze: analysis must name at least one root")
+    if any(not isinstance(item, str) or not item for item in requested):
+        raise AnalysisError(
+            "analyze: every analysis must be a non-empty selector, "
+            f"got {analysis!r}"
+        )
+    return tuple(dict.fromkeys(requested))
+
+
+def _closure(target: Target, roots: tuple[str, ...]) -> tuple[Analyzer, ...]:
+    """*roots* and everything they transitively need, dependencies first.
 
     The walk is depth-first over declared names, which both orders the closure
     and detects a cycle: meeting a selector that is still being visited means
@@ -68,7 +80,7 @@ def _closure(target: Target, root: str) -> tuple[Analyzer, ...]:
     done: set[str] = set()
     visiting: list[str] = []
 
-    def visit(selector: str) -> None:
+    def visit(selector: str, root: str) -> None:
         if selector in done:
             return
         if selector in visiting:
@@ -77,12 +89,13 @@ def _closure(target: Target, root: str) -> tuple[Analyzer, ...]:
         visiting.append(selector)
         algorithm = _algorithm(target, selector, root=root)
         for required in algorithm.requires:
-            visit(required)
+            visit(required, root)
         visiting.pop()
         done.add(selector)
         ordered.append(algorithm)
 
-    visit(root)
+    for root in roots:
+        visit(root, root)
     return tuple(ordered)
 
 
@@ -90,18 +103,18 @@ def analyze(
     module: Module,
     function: Function,
     *,
-    analysis: str,
+    analysis: str | Sequence[str],
     level: str | None = None,
     options: object | None = None,
     dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult:
-    """Run *analysis* and its dependency closure over *function*.
+    """Run the requested analyses' union dependency closure over *function*.
 
     The module supplies target and topology; *level* defaults to its coarsest
     level. *dims* selects a specialization and substitutes concrete extents
     before measurement. The original function must be a prototype or variant
-    owned by the module, and the result identifies the concrete function that
-    received records.
+    owned by the module, and the result identifies the concrete inlined view
+    that received records.
     """
     if not isinstance(module, Module):
         raise TypeError(
@@ -117,10 +130,7 @@ def analyze(
             f"analyze: {function.name!r} is not a function of module "
             f"{module.name!r}"
         )
-    if not isinstance(analysis, str) or not analysis:
-        raise AnalysisError(
-            f"analyze: analysis must be a non-empty selector, got {analysis!r}"
-        )
+    roots = _roots(analysis)
     result_module = module
     try:
         module, function = _resolve_program_geometry(
@@ -136,9 +146,9 @@ def analyze(
     topologies = module.effective_topologies()
     if level is None and topologies:
         level = topologies[0].name
-    closure = _closure(target, analysis)
+    closure = _closure(target, roots)
 
-    check_program(module, function, level=level)
+    function = check_program(module, function, level=level)
     functions = reachable_functions(function)
     validate_authored(functions)
 
@@ -164,7 +174,7 @@ def analyze(
     return AnalysisResult(
         module=result_module,
         function=function,
-        analysis=analysis,
+        analyses=roots,
         level=level,
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),

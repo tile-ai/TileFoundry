@@ -242,9 +242,10 @@ def _entry(owner):
 
 
 def _run(owner, analysis: str):
-    """Analyse *owner*'s entry function and hand back that function."""
+    """Analyse *owner*'s entry function and hand back the record-bearing view."""
     entry = _entry(owner)
-    return analyze(owner, entry, analysis=analysis), entry
+    result = analyze(owner, entry, analysis=analysis)
+    return result, result.function
 
 
 def _calls(function) -> tuple[Call, ...]:
@@ -261,7 +262,7 @@ def test_compute_cost_stops_at_the_selected_topology_level() -> None:
     entry = _entry(_thread_sharded)
     cta_result = analyze(_thread_sharded, entry, analysis="compute-cost")
 
-    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    record = get_metadata(_calls(cta_result.function)[-1], ComputeCostMetadata)
     assert record is not None
     assert cta_result.level == "cta"
     assert record.flops == (("f32", 8),)
@@ -269,7 +270,7 @@ def test_compute_cost_stops_at_the_selected_topology_level() -> None:
     traffic = record.traffic
 
     thread_result = analyze(_thread_sharded, entry, analysis="compute-cost", level="thread")
-    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    record = get_metadata(_calls(thread_result.function)[-1], ComputeCostMetadata)
     assert record is not None
     assert thread_result.level == "thread"
     assert record.flops == (("f32", 8),)
@@ -281,23 +282,23 @@ def test_an_unsharded_call_reports_the_same_global_and_per_unit_work() -> None:
     cuda_entry = _CudaAdd.entry_function()
     amx_entry = _AmxAdd.entry_function()
 
-    analyze(_CudaAdd, cuda_entry, analysis="compute-cost")
-    analyze(_AmxAdd, amx_entry, analysis="compute-cost")
+    cuda = analyze(_CudaAdd, cuda_entry, analysis="compute-cost")
+    amx = analyze(_AmxAdd, amx_entry, analysis="compute-cost")
 
-    call = _calls(cuda_entry)[-1]
+    call = _calls(cuda.function)[-1]
     record = get_metadata(call, ComputeCostMetadata)
     assert record is not None
     assert record.flops == (("f32", numel(call.type)),)
     assert record.flops_per_unit == record.flops
-    assert _cost_of(cuda_entry) == _cost_of(amx_entry)
+    assert _cost_of(cuda.function) == _cost_of(amx.function)
 
 
 def test_matmul_layout_changes_only_the_per_unit_work() -> None:
     records = []
     functions = {function.name: function for function in _MatmulLayouts.functions}
     for function in (functions["plain"], functions["split"], functions["broadcast"]):
-        analyze(_MatmulLayouts, function, analysis="roofline")
-        call = _calls(function)[-1]
+        result = analyze(_MatmulLayouts, function, analysis="roofline")
+        call = _calls(result.function)[-1]
         cost = get_metadata(call, ComputeCostMetadata)
         bound = get_metadata(call, RooflineMetadata)
         assert cost is not None and bound is not None
@@ -326,9 +327,9 @@ def test_matmul_layout_changes_only_the_per_unit_work() -> None:
 
 def test_function_call_carries_the_callee_per_unit_work() -> None:
     entry = _NestedSplitAdd.entry_function()
-    analyze(_NestedSplitAdd, entry, analysis="compute-cost")
+    result = analyze(_NestedSplitAdd, entry, analysis="compute-cost")
 
-    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    record = get_metadata(_calls(result.function)[-1], ComputeCostMetadata)
     assert record is not None
     assert record.flops == (("f32", 256),)
     assert record.flops_per_unit == (("f32", 64),)
@@ -353,9 +354,13 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
     as nothing at all, reads differently.
     """
     rotated = _Rotated.entry_function()
-    analyze(_Rotated, rotated, analysis="compute-cost")
+    rotated_result = analyze(_Rotated, rotated, analysis="compute-cost")
     rotation = get_metadata(
-        next(call for call in _calls(rotated) if type(call.target).__name__ == "RoPE"),
+        next(
+            call
+            for call in _calls(rotated_result.function)
+            if type(call.target).__name__ == "RoPE"
+        ),
         ComputeCostMetadata,
     )
     assert rotation is not None
@@ -363,9 +368,13 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
     assert rotation.flops == (("f32", 3 * 2 * 64),)
 
     allocated = _Allocated.entry_function()
-    analyze(_Allocated, allocated, analysis="compute-cost")
+    allocated_result = analyze(_Allocated, allocated, analysis="compute-cost")
     zeros = get_metadata(
-        next(call for call in _calls(allocated) if type(call.target).__name__ == "Zeros"),
+        next(
+            call
+            for call in _calls(allocated_result.function)
+            if type(call.target).__name__ == "Zeros"
+        ),
         ComputeCostMetadata,
     )
     assert zeros is not None
@@ -376,16 +385,16 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
 
 
 def test_index_select_reads_the_rows_it_names_and_not_the_table() -> None:
-    result, entry = _run(_IndexSelected, "compute-cost")
+    result, function = _run(_IndexSelected, "compute-cost")
 
-    record = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    record = get_metadata(_calls(function)[-1], ComputeCostMetadata)
     assert record is not None
     traffic = record.traffic_at("gmem")
     rows = 4 * 64 * 4
     assert traffic.read == rows + 4 * 4
     assert traffic.write == rows
 
-    payload = json.loads(render_json(report([result])))
+    payload = json.loads(render_json(report(result)))
     table, indices, produced = payload["calls"][-1]["compute-cost"]["operands"]
     assert table == {
         "arg": 0,
@@ -410,9 +419,9 @@ def test_an_evaluator_that_misses_an_operand_is_refused(monkeypatch) -> None:
 def test_memory_holds_parameters_resident_past_their_last_reader() -> None:
     """A function cannot reclaim storage its caller handed to it."""
     entry = _WeightedAdd.entry_function()
-    analyze(_WeightedAdd, entry, analysis="memory")
+    result = analyze(_WeightedAdd, entry, analysis="memory")
 
-    record = get_metadata(entry, MemoryMetadata)
+    record = get_metadata(result.function, MemoryMetadata)
     assert record is not None
     held = [item for item in record.lifetimes if item.persistent]
     ordinary = [item for item in record.lifetimes if not item.persistent]
@@ -428,18 +437,18 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
 
     for name in ("row", "column"):
         function = functions[name]
-        analyze(_MovementCosts, function, analysis="memory")
-        (move,) = _calls(function)
+        result = analyze(_MovementCosts, function, analysis="memory")
+        (move,) = _calls(result.function)
         record = get_metadata(move, ComputeCostMetadata)
         assert record is not None
         assert record.traffic_at("gmem").total_bytes == 0
-        footprint = get_metadata(function, MemoryMetadata)
+        footprint = get_metadata(result.function, MemoryMetadata)
         assert footprint is not None
         assert all(item.persistent for item in footprint.lifetimes)
 
     materialized = functions["materialized"]
-    analyze(_MovementCosts, materialized, analysis="memory")
-    transpose, reshape = _calls(materialized)
+    result = analyze(_MovementCosts, materialized, analysis="memory")
+    transpose, reshape = _calls(result.function)
     transpose_cost = get_metadata(transpose, ComputeCostMetadata)
     reshape_cost = get_metadata(reshape, ComputeCostMetadata)
     assert transpose_cost is not None
@@ -447,13 +456,13 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     assert transpose_cost.traffic_at("gmem") == TrafficBytes(read=moved, write=moved)
     assert reshape_cost is not None
     assert reshape_cost.traffic_at("gmem").total_bytes == 0
-    footprint = get_metadata(materialized, MemoryMetadata)
+    footprint = get_metadata(result.function, MemoryMetadata)
     assert footprint is not None
     assert any(not item.persistent and item.bytes == moved for item in footprint.lifetimes)
 
     copied = functions["copied"]
-    analyze(_MovementCosts, copied, analysis="compute-cost")
-    selected, concat = _calls(copied)
+    result = analyze(_MovementCosts, copied, analysis="compute-cost")
+    selected, concat = _calls(result.function)
     selected_cost = get_metadata(selected, ComputeCostMetadata)
     concat_cost = get_metadata(concat, ComputeCostMetadata)
     assert selected_cost is not None
@@ -502,9 +511,9 @@ def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
 def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
     functions = {function.name: function for function in _SharedTile.functions}
     split = functions["split"]
-    analyze(_SharedTile, split, analysis="memory")
+    result = analyze(_SharedTile, split, analysis="memory")
 
-    record = get_metadata(split, MemoryMetadata)
+    record = get_metadata(result.function, MemoryMetadata)
     assert record is not None
     smem = next(item for item in record.footprint if item.level == "smem")
     assert smem.capacity_bytes == 232_448
@@ -521,47 +530,47 @@ def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
 
 def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     matmul = next(fn for fn in _MatmulLayouts.functions if fn.name == "split")
-    analyze(_MatmulLayouts, matmul, analysis="memory")
-    gmem = get_metadata(matmul, MemoryMetadata)
+    result = analyze(_MatmulLayouts, matmul, analysis="memory")
+    gmem = get_metadata(result.function, MemoryMetadata)
     assert gmem is not None
     gmem_lifetimes = {item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"}
-    assert gmem_lifetimes["local_lhs"] == gmem_lifetimes["lhs"] == 4_325_376
+    assert gmem_lifetimes["v0"] == gmem_lifetimes["lhs"] == 4_325_376
 
     shared = next(fn for fn in _SharedTile.functions if fn.name == "split")
-    analyze(_SharedTile, shared, analysis="memory")
-    cta_owned = get_metadata(shared, MemoryMetadata)
+    result = analyze(_SharedTile, shared, analysis="memory")
+    cta_owned = get_metadata(result.function, MemoryMetadata)
     assert cta_owned is not None
     assert (
         next(
             item.bytes
             for item in cta_owned.lifetimes
-            if item.binding == "local" and item.level == "smem"
+            if item.binding == "v0" and item.level == "smem"
         )
         == 211_200
     )
 
     thread_shared = _entry(_modest_shared)
-    analyze(_modest_shared, thread_shared, analysis="memory")
-    still_cta_owned = get_metadata(thread_shared, MemoryMetadata)
+    result = analyze(_modest_shared, thread_shared, analysis="memory")
+    still_cta_owned = get_metadata(result.function, MemoryMetadata)
     assert still_cta_owned is not None
     assert (
         next(
             item.bytes
             for item in still_cta_owned.lifetimes
-            if item.binding == "local" and item.level == "smem"
+            if item.binding == "v0" and item.level == "smem"
         )
         == 4_096
     )
 
     registers = _entry(_thread_sharded)
-    analyze(_thread_sharded, registers, analysis="memory")
-    thread_owned = get_metadata(registers, MemoryMetadata)
+    result = analyze(_thread_sharded, registers, analysis="memory")
+    thread_owned = get_metadata(result.function, MemoryMetadata)
     assert thread_owned is not None
     assert (
         next(
             item.bytes
             for item in thread_owned.lifetimes
-            if item.binding == "local" and item.level == "rmem"
+            if item.binding == "v0" and item.level == "rmem"
         )
         == 8
     )
@@ -617,7 +626,7 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     result = analyze(_CudaAdd, entry, analysis="roofline")
 
     assert result.executed == ("compute-cost", "memory", "roofline")
-    call = _calls(entry)[-1]
+    call = _calls(result.function)[-1]
     cost = get_metadata(call, ComputeCostMetadata)
     bound = get_metadata(call, RooflineMetadata)
     assert cost is not None and bound is not None
@@ -629,12 +638,12 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     assert bound.compute_ns == expected
 
     mixed = _MixedPrecision.entry_function()
-    analyze(_MixedPrecision, mixed, analysis="roofline")
-    whole = get_metadata(mixed, RooflineMetadata)
+    mixed_result = analyze(_MixedPrecision, mixed, analysis="roofline")
+    whole = get_metadata(mixed_result.function, RooflineMetadata)
     assert whole is not None
     per_call = [
         record
-        for call in _calls(mixed)
+        for call in _calls(mixed_result.function)
         if (record := get_metadata(call, RooflineMetadata)) is not None
     ]
     assert len(per_call) > 1
@@ -716,7 +725,7 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     entry = _entry(_CudaAdd)
     result = analyze(_CudaAdd, entry, analysis="roofline")
 
-    data = report([result])
+    data = report(result)
 
     assert data["requested"] == ["roofline"]
     assert data["executed"] == ["compute-cost", "memory", "roofline"]
@@ -726,8 +735,8 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     assert all(set(item) == {"level", "peak_bytes"} for item in memory["footprint"])
     assert data["totals"]["flops"] == {"f32": 256}
     assert all(set(call) == {"value", "roofline"} for call in data["calls"])
-    assert get_metadata(entry, MemoryMetadata) is not None
-    cost = get_metadata(_calls(entry)[-1], ComputeCostMetadata)
+    assert get_metadata(result.function, MemoryMetadata) is not None
+    cost = get_metadata(_calls(result.function)[-1], ComputeCostMetadata)
     assert cost is not None
     assert " operands=0:r" in cost.format_comment()
     assert ",result:r" in cost.format_comment()

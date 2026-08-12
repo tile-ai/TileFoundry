@@ -94,6 +94,20 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
     )
 
 
+def _cost_bound(
+    cost: ComputeCostMetadata, facts: ThroughputFacts, *, scale: int = 1
+) -> RooflineMetadata:
+    """Bound one compute-cost record after applying an execution count."""
+    flops = tuple((name, value * scale) for name, value in cost.flops)
+    traffic = cost.traffic_at(facts.bandwidth_level)
+    traffic = TrafficBytes(traffic.read * scale, traffic.write * scale)
+    return _bound(
+        _compute_ns(flops, facts),
+        _memory_ns(traffic, facts),
+        has_work=bool(cost.flops or cost.traffic),
+    )
+
+
 def analyze_roofline(
     module: Module,
     function: Function,
@@ -104,8 +118,6 @@ def analyze_roofline(
     """Attach a bound to every Call, and one to every Function, reachable here."""
     facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
-        total_flops: dict[str, int] = {}
-        total_traffic = TrafficBytes()
         for expr in postorder(fn.body):
             if not isinstance(expr, Call):
                 continue
@@ -115,32 +127,14 @@ def analyze_roofline(
                     f"{describe(expr)}: roofline needs the compute-cost record "
                     "this call was never given"
                 )
-            traffic = cost.traffic_at(facts.bandwidth_level)
-            attach(
-                expr,
-                _bound(
-                    _compute_ns(cost.flops, facts),
-                    _memory_ns(traffic, facts),
-                    has_work=bool(cost.flops or cost.traffic),
-                ),
+            attach(expr, _cost_bound(cost, facts))
+        total = get_metadata(fn, ComputeCostMetadata)
+        if total is None:
+            raise AnalysisError(
+                f"function {fn.name!r}: roofline needs the compute-cost root "
+                "record this function was never given"
             )
-            for name, value in cost.flops:
-                total_flops[name] = total_flops.get(name, 0) + value
-            total_traffic = TrafficBytes(
-                total_traffic.read + traffic.read,
-                total_traffic.write + traffic.write,
-            )
-
-
-
-        attach(
-            fn,
-            _bound(
-                _compute_ns(tuple(sorted(total_flops.items())), facts),
-                _memory_ns(total_traffic, facts),
-                has_work=bool(total_flops or total_traffic.total_bytes),
-            ),
-        )
+        attach(fn, _cost_bound(total, facts))
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]
