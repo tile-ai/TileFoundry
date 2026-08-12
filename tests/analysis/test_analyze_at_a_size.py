@@ -94,7 +94,11 @@ def test_block_attention_selects_and_analyzes_each_placed_regime(
         dims=dims,
     )
 
-    assert display_name(origin_of(result.function)) == variant
+    concrete = origin_of(result.function)
+    assert concrete is not None
+    selected = origin_of(concrete)
+    assert selected is not None
+    assert display_name(selected) == variant
     record = get_metadata(result.function, RooflineMetadata)
     assert record is not None
     assert record.ideal_ns == ideal_ns

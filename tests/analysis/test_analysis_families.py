@@ -36,7 +36,6 @@ from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_json, render_text, report
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel
 from tilefoundry.ir.types.shard import (
@@ -585,12 +584,15 @@ def test_slice_costs_no_traffic_for_the_view_or_its_coordinates() -> None:
 
 def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
     function = _WindowCost.entry_function()
-    analyze(_WindowCost, function, analysis="compute-cost")
-    adds = [call for call in _calls(function) if isinstance(call.target, Binary)]
+    result = analyze(_WindowCost, function, analysis="compute-cost")
+    adds = [call for call in _calls(result.function) if isinstance(call.target, Binary)]
     loop_cost = get_metadata(adds[-1], ComputeCostMetadata)
+    root_cost = get_metadata(result.function, ComputeCostMetadata)
 
     assert loop_cost is not None
-    assert loop_cost.flops == (("f32", 3 * 4 * 4),)
+    assert loop_cost.flops == (("f32", 4 * 4),)
+    assert root_cost is not None
+    assert root_cost.flops == (("f32", 4 * 4 + 3 * 4 * 4),)
 
 
 def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:

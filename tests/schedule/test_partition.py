@@ -16,10 +16,13 @@ from ortools.sat.python import cp_model
 
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
+from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm
 from tilefoundry.inspection.python_printer import as_script
+from tilefoundry.ir.core import Call
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import ShardLayout, Topology
 from tilefoundry.schedule import PlanVerificationError, ScheduleError, ScheduleOptions, schedule
@@ -34,8 +37,11 @@ from tilefoundry.schedule.partition import (
     build_partition_program,
 )
 from tilefoundry.schedule.partition import solve as solve_module
+from tilefoundry.schedule.partition.problem import CandidateBucket, _Closer
 from tilefoundry.schedule.pipeline.problem import PipelineProblemError
 from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 _SOLVER = ScheduleOptions(workers=1, stop_at_first_solution=True)
 
@@ -168,6 +174,53 @@ def test_partition_keeps_a_synthesized_view_as_one_candidate_only_where_needed()
             [item for item in producers if item.site_id is not None]
             and [item for item in producers if item.site_id is None]
         )
+
+
+def test_partition_prices_a_cross_storage_copy_by_the_bytes_it_moves() -> None:
+    """Cross-storage Reshard cost reaches the candidate consumed by the solve."""
+    function = SquareCuda.entry_function()
+    assert isinstance(function.body, Call)
+    squared = function.body.args[0]
+    assert isinstance(squared, Call)
+    copied = squared.args[0]
+    assert isinstance(copied, Call)
+    assert isinstance(copied.target, Reshard)
+    source = copied.args[0]
+    assert isinstance(source.type, TensorType)
+    assert isinstance(copied.type, TensorType)
+    assert source.type.storage != copied.type.storage
+
+    cost = CostEvaluator(
+        CostContext(
+            scope=FunctionScope(SquareCuda, function),
+            selected_output_type=copied.type,
+        )
+    ).visit_Call(copied)
+    _, _, program, facts = _closed()
+    closer = _Closer(program, facts, Topology("cta", 168), 168)
+    source_type_id = closer._intern(source.type)
+    output_type_id = closer._intern(copied.type)
+    closer.buckets = {
+        0: CandidateBucket(0, source_type_id, (), None, True),
+        1: CandidateBucket(0, output_type_id, (), None, False),
+    }
+    closer._bucket_candidates = {0: [], 1: []}
+
+    candidate_id = closer._add_candidate(
+        None,
+        copied,
+        (0,),
+        (1,),
+        (source.type,),
+        (copied.type,),
+        cost,
+        reshard=True,
+    )
+    candidate = closer.candidates[candidate_id]
+
+    assert cost.bytes == 2 * 168 * 4
+    assert candidate.moved_bytes == cost.bytes
+    assert candidate.topology_count == 0
 
 
 def test_partition_refuses_a_level_the_facts_and_the_program_do_not_share() -> None:
