@@ -204,7 +204,6 @@ def check_program(
 
     functions = reachable_functions(function)
     infer_authored_types(functions, module)
-    _require_concrete_geometry(module, function, error_type=AnalysisError)
     validate_call_context(module, functions)
 
 
