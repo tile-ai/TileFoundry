@@ -26,15 +26,17 @@ class OccurrenceProvenance(IRMetadata):
 class ComputeCostMetadata(IRMetadata):
     """Record one occurrence's work or one Function's total work.
 
-    ``flops`` groups global work by dtype; ``flops_per_unit`` applies shard
-    projection at the requested topology level. On a Call, all quantities state
-    one occurrence and ``operands`` is positional against ``(*call.args, call)``.
-    On a Function, loops contribute their trip count and ``operands`` is empty.
+    ``flops`` and ``traffic`` state global work; their ``*_per_unit`` partners
+    apply shard projection at the requested topology level. On a Call, all
+    quantities state one occurrence and ``operands`` is positional against
+    ``(*call.args, call)``. On a Function, loops contribute their trip count and
+    ``operands`` is empty.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
     flops_per_unit: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
+    traffic_per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
 
     def traffic_at(self, level: str) -> TrafficBytes:
@@ -56,6 +58,13 @@ class ComputeCostMetadata(IRMetadata):
             )
             or "0"
         )
+        local_traffic_text = (
+            ",".join(
+                f"{level}:r{value.read}/w{value.write}"
+                for level, value in self.traffic_per_unit
+            )
+            or "0"
+        )
         operand_text = ",".join(
             f"{'result' if index == len(self.operands) - 1 else index}:"
             f"r{value.read}/w{value.write}"
@@ -64,7 +73,7 @@ class ComputeCostMetadata(IRMetadata):
         operands = f" operands={operand_text}" if operand_text else ""
         return (
             f"compute-cost flops={flop_text} per-unit={local_text} "
-            f"bytes={traffic_text}{operands}"
+            f"bytes={traffic_text} per-unit-bytes={local_traffic_text}{operands}"
         )
 
 

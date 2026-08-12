@@ -420,6 +420,7 @@ class ComputeCostMetadata(IRMetadata):
 | `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written, then multiply by the enclosing recomputation factor. For a Function Call, take the callee's summed `flops` and multiply by the call site's factor. | No |
 | `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge it to the storage level of that operand's Type, and group by level. A multi-level Type conservatively charges its full logical size at every occupied level in each reported direction. A Function Call takes the callee's grouped total. | No |
+| `traffic_per_unit` | Run the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then charge and group the projected movement by storage level. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
 
 Requesting this family adds these summary lines, each prefixed by `# `:
@@ -435,7 +436,7 @@ Every measured Call receives this annotation; `operands` is omitted for a
 Function Call:
 
 ```text
-compute-cost flops=<flopset> per-unit=<flopset> bytes=<levelset>[ operands=<operandset>]
+compute-cost flops=<flopset> per-unit=<flopset> bytes=<levelset> per-unit-bytes=<levelset>[ operands=<operandset>]
 ```
 
 Each reported Call's JSON projection is under its `compute-cost` key. `operands`
@@ -445,6 +446,7 @@ appears only for a primitive Call and contains objects in positional order:
 {"flops": {<dtype>: <int>},
  "flops_per_unit": {<dtype>: <int>},
  "traffic": {<level>: {"read": <int>, "write": <int>}},
+ "traffic_per_unit": {<level>: {"read": <int>, "write": <int>}},
  "operands": [{"arg": <position>, "name": <name>, "type": <type>,
                "read": <int>, "write": <int>}, ...]}
 ```

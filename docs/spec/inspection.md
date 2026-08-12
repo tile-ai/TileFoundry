@@ -537,3 +537,8 @@ def report(result: AnalysisResult) -> dict[str, object]:
   - Text and JSON MUST render the same intermediate structure. Annotated HIR
     MUST render that same result's Function and the same selected Metadata
     types.
+  - A rendered compute-cost record MUST expose the complete global/per-unit by
+    arithmetic/traffic matrix: `flops`, `flops_per_unit`, `traffic`, and
+    `traffic_per_unit`. Its annotated-HIR comment MUST place `per-unit-bytes`
+    immediately after global `bytes`; JSON MUST expose the corresponding four
+    fields without reconstructing any of them.

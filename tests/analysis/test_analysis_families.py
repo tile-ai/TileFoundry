@@ -700,12 +700,12 @@ def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) 
     assert not ran
 
 
-def test_timeline_uses_exact_result_mesh_images() -> None:
-    """Placed results retain both a full Mesh and the nonzero sliced offset."""
+def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> None:
+    """Placement offsets and projected movement survive into one report."""
     result = analyze(
         MoEMegaKernel,
         MoEMegaKernel.entry_function(),
-        analysis="timeline",
+        analysis=("compute-cost", "timeline"),
     )
     placements = _timeline_placements(MoEMegaKernel, result.function, "cta")
     prepared = set(placements.values())
@@ -713,6 +713,35 @@ def test_timeline_uses_exact_result_mesh_images() -> None:
     assert frozenset(range(120)) in prepared
     assert frozenset(range(120, 132)) in prepared
     assert frozenset(range(132)) in prepared
+
+    relu = next(
+        call for call in _calls(result.function) if type(call.target).__name__ == "ReLU"
+    )
+    cost = get_metadata(relu, ComputeCostMetadata)
+    assert cost is not None
+    assert cost.traffic == (("gmem", TrafficBytes(read=30_720, write=30_720)),)
+    assert cost.traffic_per_unit == (("gmem", TrafficBytes(read=256, write=256)),)
+    assert (
+        "bytes=gmem:r30720/w30720 per-unit-bytes=gmem:r256/w256 operands="
+        in cost.format_comment()
+    )
+
+    data = json.loads(render_json(report(result)))
+    row = next(
+        row
+        for row in data["calls"]
+        if row.get("compute-cost", {}).get("flops_per_unit") == {"f32": 64}
+    )
+    rendered = row["compute-cost"]
+    assert {"flops", "flops_per_unit", "traffic", "traffic_per_unit"} <= rendered.keys()
+    assert rendered["traffic"] == {"gmem": {"read": 30_720, "write": 30_720}}
+    assert rendered["traffic_per_unit"] == {"gmem": {"read": 256, "write": 256}}
+    assert set(data["function_records"]["compute-cost"]) == {
+        "flops",
+        "flops_per_unit",
+        "traffic",
+        "traffic_per_unit",
+    }
 
 
 def test_placement_projection_rejects_the_wrong_level_and_invalid_images() -> None:

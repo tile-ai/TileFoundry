@@ -78,6 +78,7 @@ def _compute_cost(record: ComputeCostMetadata, expr: object) -> dict[str, object
         "flops": dict(record.flops),
         "flops_per_unit": dict(record.flops_per_unit),
         "traffic": _traffic(record.traffic),
+        "traffic_per_unit": _traffic(record.traffic_per_unit),
     }
     operands = _operands(record, expr)
     if operands:

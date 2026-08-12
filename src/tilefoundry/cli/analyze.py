@@ -63,8 +63,8 @@ def guidance() -> str:
 
         family         what --topology changes                 pass it when
         ------------   --------------------------------------  ---------------------
-        compute-cost   flops_per_unit. flops and traffic are   the program shards
-                       the device's and do not move
+        compute-cost   flops_per_unit and traffic_per_unit.    the program shards
+                       flops and traffic stay global
         memory         nothing. Footprint follows its owner    never
                        for each storage level
         roofline       nothing. The bound is the machine's     never
@@ -73,7 +73,7 @@ def guidance() -> str:
                        plan is issued against
 
         Two assumptions the reported numbers rest on:
-          traffic is the device's and counted once, so units reading one operand
+          global traffic is the device's and counted once, so units reading one operand
             in common are assumed to read it from memory once. Whether they can is
             a residency question, reported as an advisory.
           a reported peak footprint holds under the order this walk took. Which
