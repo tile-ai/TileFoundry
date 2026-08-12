@@ -23,7 +23,7 @@ _S = DimVar("runtime_shape", 1, 9)
 
 @func
 def _shape_metadata(x: Tensor[(_S, 4), "f32"]):
-    return tf.shape_of(x)
+    return tf.shape_of(x), tf.rank(x)
 
 
 def _idle(arity: int) -> tuple[TrafficBytes, ...]:
@@ -42,9 +42,10 @@ def test_shape_metadata_cost(case):
 
 
 def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
-    actual = evaluate(_shape_metadata, torch.zeros(3, 4), device="cpu")
+    actual_shape, actual_rank = evaluate(_shape_metadata, torch.zeros(3, 4), device="cpu")
 
-    torch.testing.assert_close(actual, torch.tensor([3, 4], dtype=torch.int64))
+    torch.testing.assert_close(actual_shape, torch.tensor([3, 4], dtype=torch.int64))
+    torch.testing.assert_close(actual_rank, torch.tensor(2, dtype=torch.int64))
     calls = [expr for expr in postorder(_shape_metadata.body) if isinstance(expr, Call)]
     metadata_calls = [
         call
