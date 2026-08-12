@@ -681,8 +681,10 @@ TensorType.umat_tensor(shape, dtype)   # ranked: a shape vector
     an undecided one is `UMAT`.
   - A value whose residency no one has decided MUST carry `UMAT`, whether or
     not its value is known at compile time.
-  - Shape elements and `dim.*` results MUST use `umat_scalar`; shape vectors
-    MUST use `umat_tensor`. Restating either field tuple is forbidden, so
-    structural type equality holds across construction sites.
+  - Shape elements and `dim.*` results MUST use `umat_scalar`; shape-vector
+    construction sites MUST use `umat_tensor`. A statically indexed rank-0
+    result from a shape vector MUST use `umat_scalar`; other ranked `Slice`
+    views retain their derived layouts and are not required to be structurally
+    equal to `umat_tensor`.
   - An operand carrying `UMAT` MUST NOT be charged to a memory level by the
     residency of its own type alone; what charges it is where it is consumed.

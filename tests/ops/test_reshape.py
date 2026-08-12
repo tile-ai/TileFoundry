@@ -90,6 +90,21 @@ def test_straddling_split_fails_closed():
     )
 
 
+def test_unmaterialized_sharding_is_not_dropped_by_scalar_reshape():
+    source = make_shard_tensor_type(
+        (4, 8), storage=StorageKind.UMAT, mesh=_M, attrs=(Split(0),)
+    )
+
+    run_typeinfer_case(
+        TypeInferCase(
+            "umat_sharding_scalar_reshape",
+            _reshape(()),
+            (source,),
+            ExpectedError(match="align"),
+        )
+    )
+
+
 def test_merge_carries():
     """Merge: layout (16, 8) -> (128,); the Split-bound mesh axis survives."""
     ty = infer_call(_reshape((128,)), make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)))

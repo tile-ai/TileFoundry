@@ -50,7 +50,7 @@ def _type_text(type_: object) -> str:
     first = tensors[0]
     shape = ",".join(str(dim) for dim in first.shape)
     more = "+" if len(tensors) > 1 else ""
-    storage = "" if first.storage in (None, StorageKind.UMAT) else f" {first.storage}"
+    storage = "" if first.storage is StorageKind.UMAT else f" {first.storage}"
     return f"{first.dtype.name}[{shape}]{more}{storage}"
 
 
