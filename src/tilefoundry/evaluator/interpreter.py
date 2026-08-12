@@ -130,7 +130,7 @@ class Evaluator(ExprVisitor):
                 args=args,
                 result_type=call.type,
                 device=self.device,
-                eval_expr=self.visit,
+                dim_bindings=self.dim_env,
             )
         )
 

@@ -127,7 +127,7 @@ dependents) and classifies every node it meets:
 | Body node | How `extract` models it |
 |---|---|
 | `Call` of a compute op | one statement; or one statement per output branch when the outputs cannot share one domain (`RoPE`'s grouped-query `q` / `k`, whose head counts differ) |
-| `Call` of `TupleGetItem` / `Reshape` / `IndexSelect` | structural view — no statement. It resolves to its source's buffer name, and the coordinate change it expresses is folded into every consumer's access map |
+| `Call` of `TupleGetItem` / `Reshape` / `IndexSelect` / `Slice` | structural view — no statement. It resolves to its source's buffer name, and the coordinate change it expresses is folded into every consumer's access map |
 | `Call` of `Zeros` / `FullLike` | buffer declaration — no statement and no access relation: it names a fresh buffer and gives it a starting value |
 | `Call` whose target is a `Function` | penetrated, not rejected: the callee's params bind to the caller's already-resolved argument expressions, its body is walked in place, and every statement and buffer it contributes is prefixed with the callee name plus a per-call-site index |
 | `GridRegionExpr` | not a statement — it contributes one leading domain dimension to every statement it encloses ([§1.4](#14-authored-loops)) |
@@ -148,6 +148,11 @@ dependents) and classifies every node it meets:
     registered relation is sharding-aware without knowing sharding exists.
   - A `Split`-sharded axis whose extent is not a static integer, or is not
     evenly divisible by its mesh extent, MUST raise `ExtractError`.
+  - A loop-indexed `Slice` read MUST map result coordinate `u` to source
+    coordinate `start + u * stride`. Its consumer statement domain contains
+    only full windows (`start + size * stride <= source_extent`). No residual
+    tail domain is returned. A non-affine start or non-static window step MUST
+    raise `ExtractError`.
   - An op with no registered forward relation MUST raise `ExtractError` naming
     the op and the registration remedy. `extract` MUST NOT guess an access
     pattern and MUST NOT carry a per-op fallback.

@@ -29,10 +29,11 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_json, render_text, report
-from tilefoundry.ir.core import Call, Var, get_metadata
+from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
+from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import DType, make_tensor_type, numel
+from tilefoundry.ir.types import DType, TupleType, make_tensor_type, numel
 from tilefoundry.target import AmxTarget, CudaTarget
 from tilefoundry.visitor_registry import cost_evaluator_registry
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TrafficBytes
@@ -113,6 +114,16 @@ class _MovementCosts:
     def copied(source: Tensor[(1024, 2048), "f32"]):
         selected = source[0:256, :]
         return tf.concat(selected, selected, axis=0)
+
+
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+class _WindowCost:
+    @func
+    def main(source: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
+        out = tf.add(seed, seed)
+        for row in tile(10, 4):
+            out = tf.add(source[row, :], seed)
+        return out
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -455,14 +466,18 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     )
 
 
-def test_runtime_slice_costs_the_selected_region() -> None:
+def test_slice_costs_the_selected_region_and_not_its_coordinates() -> None:
     source = Var(type=make_tensor_type((1024, 2048)), name="source")
-    runtime_end = Var(type=make_tensor_type((), DType.i64), name="end")
+    scalar = make_tensor_type((), DType.i64)
+    starts = Tuple(
+        type=TupleType(fields=(scalar, scalar)),
+        elements=(Constant(type=scalar, value=0), Constant(type=scalar, value=0)),
+    )
     output = make_tensor_type((256, 2048))
     call = Call(
         type=output,
-        target=Slice(begin=(0, 0), end=(runtime_end, 2048), strides=(1, 1)),
-        args=(source,),
+        target=Slice(sizes=(256, 2048), strides=(1, 1)),
+        args=(source, starts),
     )
 
     cost = CostEvaluator(CostContext(selected_output_type=output)).visit_Call(call)
@@ -470,8 +485,19 @@ def test_runtime_slice_costs_the_selected_region() -> None:
     kept = 256 * 2048 * 4
     assert cost.traffic == (
         TrafficBytes(read=kept),
+        TrafficBytes(),
         TrafficBytes(write=kept),
     )
+
+
+def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
+    function = _WindowCost.entry_function()
+    analyze(_WindowCost, function, analysis="compute-cost")
+    adds = [call for call in _calls(function) if isinstance(call.target, Binary)]
+    loop_cost = get_metadata(adds[-1], ComputeCostMetadata)
+
+    assert loop_cost is not None
+    assert loop_cost.flops == (("f32", 3 * 4 * 4),)
 
 
 def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:

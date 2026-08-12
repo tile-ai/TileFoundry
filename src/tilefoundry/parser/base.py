@@ -50,7 +50,6 @@ from .dispatch import (
     resolve_schema,
     resolve_stmt,
 )
-from .range_slice import RangeSlice
 from .static_eval import eval_static
 from .sugar import (
     LayoutSugarError,
@@ -495,7 +494,7 @@ class BaseExprVisitor:
             raise VerifyError(f"undefined name {node.id!r}")
         if isinstance(val, Expr):
             return val
-        if isinstance(val, RangeSlice):
+        if isinstance(val, slice):
             return val.start
         if isinstance(val, (int, float, bool)):
             return _constant_from_py(val)
@@ -522,10 +521,10 @@ class BaseExprVisitor:
 
         - a compile-time list + integer index → the element it holds.
         - ``TupleType`` value + int constant index → ``TupleGetItem``.
-        - ``TensorType`` value + slice/RangeSlice indices → ``Slice``.
+        - ``TensorType`` value + slice indices → ``Slice``.
           Each dim accepts either an ``ast.Slice``
           (full / start:stop[:step]), a Name resolving to a
-          ``RangeSlice`` (from ``for ok in tile(extent, step)``), or a
+          tile-window ``slice`` (from ``for ok in tile(extent, step)``), or a
           compile-time integer, which collapses that axis as it does in torch.
         """
         if isinstance(node.value, ast.Name):
@@ -553,7 +552,7 @@ class BaseExprVisitor:
 
         Each subscript element is one of:
         - ``ast.Slice`` — full or partial ``start:stop[:step]``;
-        - an ``ast.Name`` resolving to a ``RangeSlice`` parser-side
+        - an ``ast.Name`` resolving to a Python ``slice`` parser-side
           binding (``for ok in tile(extent, step)``).
 
         Other forms (constants, computed Expr indices, ellipsis, lists)
@@ -573,26 +572,36 @@ class BaseExprVisitor:
                 f"{len(x_ty.shape)}"
             )
 
-        begin: list[Any] = []
-        end: list[Any] = []
+        starts: list[Expr] = []
+        sizes: list[Any] = []
         strides: list[Any] = []
         collapsed: list[int] = []
         for axis, (el, dim) in enumerate(zip(elts, x_ty.shape)):
             index = self._integer_index(el, dim)
             if index is not None:
-                begin.append(index)
-                end.append(index + 1)
+                starts.append(i64_const(index))
+                sizes.append(1)
                 strides.append(1)
                 collapsed.append(axis)
                 continue
             b, e, s = self._slicer_for_dim(el, dim, axis)
-            begin.append(b)
-            end.append(e)
+            b_expr = b if isinstance(b, Expr) else i64_const(int(b))
+            e_expr = e if isinstance(e, Expr) else i64_const(int(e))
+            s_expr = s if isinstance(s, Expr) else i64_const(int(s))
+            starts.append(b_expr)
+            from tilefoundry.ir.hir.tensor.slice import slice_size  # noqa: PLC0415
+
+            size = slice_size(b_expr, e_expr, s_expr)
+            sizes.append(int(size.value) if isinstance(size, Constant) else size)
             strides.append(s)
 
+        starts_expr = Tuple(
+            type=TupleType(fields=tuple(start.type for start in starts)),
+            elements=tuple(starts),
+        )
         sliced = self._build_call(
-            Slice(begin=tuple(begin), end=tuple(end), strides=tuple(strides)),
-            (value,),
+            Slice(sizes=tuple(sizes), strides=tuple(strides)),
+            (value, starts_expr),
         )
         if not collapsed:
             return sliced
@@ -604,12 +613,12 @@ class BaseExprVisitor:
     def _integer_index(self, el: ast.AST, dim: Any) -> "int | None":
         """The compile-time integer this element is, counted from the front.
 
-        ``ast.Slice`` and a tile ``RangeSlice`` name keep their axis and are left
+        ``ast.Slice`` and a tile-window ``slice`` name keep their axis and are left
         to ``_slicer_for_dim``.
         """
         if isinstance(el, ast.Slice):
             return None
-        if isinstance(el, ast.Name) and isinstance(self.env.lookup(el.id), RangeSlice):
+        if isinstance(el, ast.Name) and isinstance(self.env.lookup(el.id), slice):
             return None
         value = self._static_number(el)
         if isinstance(value, bool) or not isinstance(value, int):
@@ -662,14 +671,19 @@ class BaseExprVisitor:
                 stride = 1
             else:
                 stride = self._eval_static(el.step)
+            if all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in (dim, begin, end, stride)
+            ) and stride > 0:
+                begin, end, stride = slice(begin, end, stride).indices(dim)
             return begin, end, stride
         if isinstance(el, ast.Name):
             val = self.env.lookup(el.id)
-            if isinstance(val, RangeSlice):
-                return val.start, val.stop, 1
+            if isinstance(val, slice):
+                return val.start, val.stop, val.step
         raise VerifyError(
             f"tensor subscript axis {axis}: unsupported indexer "
-            f"{ast.dump(el)} (expected `:`, `a:b`, or a tile RangeSlice)"
+            f"{ast.dump(el)} (expected `:`, `a:b`, or a tile-window slice)"
         )
 
 

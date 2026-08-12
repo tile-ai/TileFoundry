@@ -40,7 +40,6 @@ from .base import (
     _resolve_tensor_type,
     extract_ast,
 )
-from .range_slice import RangeSlice
 from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar
 from .symtab import LexicalEnv
 
@@ -620,7 +619,7 @@ class _HirBodyVisitor(BaseExprVisitor):
         iv = Var(type=TensorType.scalar(DType.i64), name=node.target.id)
 
         loop_args = node.iter.args
-        iv_binding: Expr | RangeSlice
+        iv_binding: Expr | slice
         if loop_kind == "range":
 
 
@@ -649,7 +648,12 @@ class _HirBodyVisitor(BaseExprVisitor):
             elif len(loop_args) == 2:
                 extent = self._resolve_loop_bound(loop_args[0])
                 step = self._resolve_loop_bound(loop_args[1])
-                iv_binding = RangeSlice(induction_var=iv, extent=extent, step=step)
+                step_expr = self._constant_expr(step) if isinstance(step, int) else step
+                iv_binding = slice(
+                    iv,
+                    simplify_dim(DimAdd, (iv, step_expr)),
+                    1,
+                )
             else:
                 raise VerifyError(
                     f"tile() takes 1 or 2 arguments (extent[, step]), got {len(loop_args)}"

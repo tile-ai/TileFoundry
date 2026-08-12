@@ -250,6 +250,18 @@ def test_grid_output_ordinal_lowers_to_an_absolute_element_start() -> None:
     assert isinstance(coordinate.args[1], Constant) and coordinate.args[1].value == 2
 
 
+def test_non_divisible_tile_window_lowering_fails_closed() -> None:
+    @func
+    def f(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
+        out = tf.add(seed, seed)
+        for row in tile(10, 4):
+            out = tf.add(x[row, :], seed)
+        return out
+
+    with pytest.raises(NotImplementedError, match="requires handwritten tail lowering"):
+        HirToTirPass().run(Module(name="t", functions=(f,), entry=f.name))
+
+
 def _mma_module(op, a_type, b_type, result_type) -> Module:
     a = Var(type=a_type, name="a")
     b = Var(type=b_type, name="b")

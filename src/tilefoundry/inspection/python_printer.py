@@ -753,6 +753,7 @@ def _emit_def(
             _op_names_set.add(_op_name(expr.target))
 
     _forced_names: dict[int, str] = {}
+    _tile_window_steps: dict[int, object] = {}
 
 
     _grid_internal_ids: set[int] = set()
@@ -761,6 +762,8 @@ def _emit_def(
     for expr in _order:
         if not isinstance(expr, GridRegionExpr):
             continue
+        if expr.start == 0 and expr.step != 1:
+            _tile_window_steps[id(expr.induction_var)] = expr.step
         for carry, init, value in zip(
             expr.carried_args, expr.init_args, expr.yield_values
         ):
@@ -915,34 +918,43 @@ def _emit_def(
             return f"{binding or target.name}({args_str})"
         if isinstance(target, Slice):
             indexers = []
-            for axis, (begin, end, stride) in enumerate(
-                zip(target.begin, target.end, target.strides)
+            starts = expr.args[1]
+            if not isinstance(starts, Tuple):
+                raise ValueError("canonical_source: Slice starts must be a Tuple")
+            for axis, (start, size, stride) in enumerate(
+                zip(starts.elements, target.sizes, target.strides)
             ):
                 if (
-                    isinstance(begin, Var)
-                    and isinstance(end, Call)
-                    and isinstance(end.target, DimAdd)
-                    and end.args[0] is begin
-                    and isinstance(stride, Constant)
-                    and stride.value == 1
+                    isinstance(start, Var)
+                    and stride == 1
+                    and _tile_window_steps.get(id(start)) == size
                 ):
-                    indexers.append(_expr_ref(begin))
+                    indexers.append(_expr_ref(start))
                     continue
                 dim = expr.args[0].type.shape[axis]
                 if (
-                    isinstance(begin, Constant)
-                    and begin.value == 0
-                    and isinstance(end, Constant)
-                    and end.value == dim
-                    and isinstance(stride, Constant)
-                    and stride.value == 1
+                    isinstance(start, Constant)
+                    and start.value == 0
+                    and size == dim
+                    and stride == 1
                 ):
                     indexers.append(":")
                     continue
-                start = shape_entry_str(begin)
-                stop = shape_entry_str(end)
-                step = shape_entry_str(stride)
-                indexers.append(f"{start}:{stop}" if step == "1" else f"{start}:{stop}:{step}")
+                if not (
+                    isinstance(start, Constant)
+                    and isinstance(start.value, int)
+                    and isinstance(size, int)
+                    and isinstance(stride, int)
+                ):
+                    raise ValueError(
+                        "canonical_source: non-tile runtime Slice cannot be "
+                        "represented by the current subscript surface"
+                    )
+                begin = int(start.value)
+                stop = begin + size * stride
+                indexers.append(
+                    f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}"
+                )
             return f"{_arg_ref(expr.args[0])}[{', '.join(indexers)}]"
 
         alias_name = _kinded_alias_name(target)

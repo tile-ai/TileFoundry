@@ -15,13 +15,14 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Tuple, TypeInferContext, Var, binding_name
+from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import TensorType, TupleType
@@ -87,22 +88,6 @@ class ExtractError(NotImplementedError):
 
 
 @dataclass(frozen=True)
-class _Loop:
-    """Represent Loop.
-
-    One enclosing ``GridRegionExpr``'s iteration axis, as extract models
-    it: a domain dimension ranging over the raw induction values
-    ``[start, extent)`` at stride ``step``. One object per grid node, shared
-    by every statement that grid encloses, so identity names the axis.
-    """
-
-    var: Var
-    start: object
-    extent: object
-    step: object
-
-
-@dataclass(frozen=True)
 class _StatementAccess:
     """Extraction-internal.
 
@@ -119,7 +104,7 @@ class _StatementAccess:
     writes: tuple["isl.map", ...]
     params: dict
     dtypes: dict
-    loops: tuple[_Loop, ...] = ()
+    loops: tuple[GridRegionExpr, ...] = ()
 
 
 def _buffer_namer():
@@ -144,7 +129,7 @@ def _buffer_namer():
             name = f"{name_for(expr.args[0])}_{expr.target.index}"
             seen[key] = name
             return name
-        if isinstance(expr, Call) and isinstance(expr.target, (Reshape, IndexSelect)):
+        if isinstance(expr, Call) and isinstance(expr.target, (Reshape, IndexSelect, Slice)):
             name = name_for(expr.args[0])
             seen[key] = name
             return name
@@ -175,7 +160,7 @@ def _buffer_namer():
         seen[id(phi)] = name
         seen[id(yielded)] = name
 
-    def pierce(m: "isl.map", expr, loops: tuple[_Loop, ...] = ()) -> "isl.map":
+    def pierce(m: "isl.map", expr, loops: tuple[GridRegionExpr, ...] = ()) -> "isl.map":
         """Pierce.
 
         ``m`` (a read of ``expr``) rewritten to address ``expr``'s ultimate
@@ -194,6 +179,8 @@ def _buffer_namer():
                 m = m.insert_dims(isl.dim_type.OUT, dim, 1).equate(
                     isl.dim_type.IN, pos, isl.dim_type.OUT, dim
                 )
+            elif isinstance(target, Slice):
+                m = _slice_read_map(m, expr, loops)
             else:
                 break
             expr = expr.args[0]
@@ -204,7 +191,9 @@ def _buffer_namer():
     return name_for
 
 
-def _index_select_loop_dim(call: Call, loops: tuple[_Loop, ...]) -> tuple[int, int]:
+def _index_select_loop_dim(
+    call: Call, loops: tuple[GridRegionExpr, ...]
+) -> tuple[int, int]:
     """Return the selected dim and loop position for a foldable IndexSelect.
 
     The only affine form is the strict torch index built by reshaping one
@@ -228,13 +217,62 @@ def _index_select_loop_dim(call: Call, loops: tuple[_Loop, ...]) -> tuple[int, i
         )
     scalar_index = index.args[0]
     for pos, loop in enumerate(loops):
-        if loop.var is scalar_index:
+        if loop.induction_var is scalar_index:
             return dim, pos
     raise ExtractError(
         "extract: IndexSelect index is not an enclosing loop's induction variable "
         "-- a data-dependent selection has no affine access map; only "
         "loop-index addressing (a tile-loop slice) is modelled"
     )
+
+
+def _slice_start(start, loops: tuple[GridRegionExpr, ...]) -> tuple[int | None, int]:
+    """Resolve an affine Slice start to an optional loop dimension plus offset."""
+    if isinstance(start, Constant):
+        value = start.value
+        if isinstance(value, int) and not isinstance(value, bool):
+            return None, value
+    if isinstance(start, Var):
+        for pos, loop in enumerate(loops):
+            if loop.induction_var is start:
+                return pos, 0
+    raise ExtractError(
+        "extract: Slice starts must be integer constants or enclosing loop "
+        f"induction variables, got {start!r}"
+    )
+
+
+def _slice_read_map(
+    m: "isl.map", call: Call, loops: tuple[GridRegionExpr, ...]
+) -> "isl.map":
+    """Rewrite Slice-result coordinates into coordinates of its source tensor."""
+    starts = call.args[1]
+    if not isinstance(starts, Tuple):
+        raise ExtractError("extract: Slice starts input must be a Tuple")
+    rank = m.dim(isl.dim_type.OUT)
+    if not (
+        len(starts.elements) == rank
+        and len(call.target.strides) == rank
+    ):
+        raise ExtractError("extract: Slice rank does not match its read relation")
+    transformed = m.insert_dims(isl.dim_type.OUT, rank, rank)
+    local = isl.local_space.from_space(transformed.get_space())
+    for axis, (start, stride) in enumerate(zip(starts.elements, call.target.strides)):
+        if not isinstance(stride, int) or isinstance(stride, bool) or stride <= 0:
+            raise ExtractError(
+                f"extract: Slice stride {stride!r} is not a positive static int"
+            )
+        loop_pos, offset = _slice_start(start, loops)
+        constraint = (
+            isl.constraint.alloc_equality(local)
+            .set_coefficient_si(isl.dim_type.OUT, rank + axis, 1)
+            .set_coefficient_si(isl.dim_type.OUT, axis, -stride)
+            .set_constant_si(-offset)
+        )
+        if loop_pos is not None:
+            constraint = constraint.set_coefficient_si(isl.dim_type.IN, loop_pos, -1)
+        transformed = transformed.add_constraint(constraint)
+    return transformed.project_out(isl.dim_type.OUT, 0, rank)
 
 
 def _assign_statement_names(ops: list[object]) -> list[str]:
@@ -306,7 +344,9 @@ def _static_loop_bound(dim, what: str) -> int:
     )
 
 
-def _loop_domain(inner: "isl.set", loops: tuple[_Loop, ...]) -> tuple["isl.set", dict]:
+def _loop_domain(
+    inner: "isl.set", loops: tuple[GridRegionExpr, ...]
+) -> tuple["isl.set", dict]:
     """Prefix ``inner`` with outermost-first enclosing loop dimensions.
 
     Each dimension spans ``[start, extent)`` by ``step`` and carries the raw
@@ -335,6 +375,62 @@ def _loop_domain(inner: "isl.set", loops: tuple[_Loop, ...]) -> tuple["isl.set",
     prefix = f"[{', '.join(params)}] -> " if params else ""
     box = isl.set(prefix + f"{{ [{', '.join(dims)}] : {' and '.join(bounds)} }}")
     return inner.insert_dims(isl.dim_type.SET, 0, len(loops)).intersect(box), params
+
+
+def _full_slice_domain(
+    domain: "isl.set", args: tuple, loops: tuple[GridRegionExpr, ...]
+) -> "isl.set":
+    """Restrict statements using loop-indexed Slice views to full windows."""
+    result = domain
+    for arg in args:
+        expr = arg
+        while isinstance(expr, Call) and isinstance(
+            expr.target, (TupleGetItem, Reshape, IndexSelect, Slice)
+        ):
+            if isinstance(expr.target, Slice):
+                starts = expr.args[1]
+                if not isinstance(starts, Tuple):
+                    raise ExtractError("extract: Slice starts input must be a Tuple")
+                for axis, (start, size, stride) in enumerate(
+                    zip(starts.elements, expr.target.sizes, expr.target.strides)
+                ):
+                    loop_pos, _ = _slice_start(start, loops)
+                    if loop_pos is None:
+                        continue
+                    if not all(
+                        isinstance(value, int) and not isinstance(value, bool)
+                        for value in (size, stride)
+                    ):
+                        raise ExtractError(
+                            "extract: loop-indexed Slice sizes and strides must be "
+                            "static integers"
+                        )
+                    extent = expr.args[0].type.shape[axis]
+                    local = isl.local_space.from_space(result.get_space())
+                    constraint = (
+                        isl.constraint.alloc_inequality(local)
+                        .set_coefficient_si(isl.dim_type.SET, loop_pos, -1)
+                        .set_constant_si(-(size * stride))
+                    )
+                    if isinstance(extent, int) and not isinstance(extent, bool):
+                        constraint = constraint.set_constant_si(extent - size * stride)
+                    elif isinstance(extent, DimVar):
+                        param = result.find_dim_by_name(isl.dim_type.PARAM, extent.name)
+                        if param < 0:
+                            raise ExtractError(
+                                f"extract: Slice extent parameter {extent.name!r} "
+                                "is absent from the statement domain"
+                            )
+                        constraint = constraint.set_coefficient_si(
+                            isl.dim_type.PARAM, param, 1
+                        )
+                    else:
+                        raise ExtractError(
+                            f"extract: Slice source extent {extent!r} is not affine"
+                        )
+                    result = result.add_constraint(constraint)
+            expr = expr.args[0]
+    return result
 
 
 def _lift(m: "isl.map", depth: int) -> "isl.map":
@@ -388,7 +484,7 @@ def _out_dtype(call: Call, out_idx: int):
 
 def _registered_access(
     call: Call, stmt_name: str, result: AccessRelationResult, namer, prefix: str,
-    loops: tuple[_Loop, ...] = (),
+    loops: tuple[GridRegionExpr, ...] = (),
 ) -> _StatementAccess:
     """Registered access.
 
@@ -397,6 +493,7 @@ def _registered_access(
     RMSNorm).
     """
     prefixed, loop_params = _loop_domain(result.domain, loops)
+    prefixed = _full_slice_domain(prefixed, call.args, loops)
     domain = prefixed.set_tuple_name(stmt_name)
     depth = len(loops)
 
@@ -443,7 +540,7 @@ def _registered_access(
 
 def _rope_branch(
     call: Call, x, cos_cache, sin_cache, pos_ids, out_idx: int,
-    stmt_name: str, namer, prefix: str, loops: tuple[_Loop, ...] = (),
+    stmt_name: str, namer, prefix: str, loops: tuple[GridRegionExpr, ...] = (),
 ) -> _StatementAccess:
     """One RoPE branch (q or k).
 
@@ -456,6 +553,9 @@ def _rope_branch(
     )
     result = build_relation(call, (x_ty, x_ty, cos_ty, sin_ty, pos_ty), TypeInferContext())
     prefixed, loop_params = _loop_domain(result.domain, loops)
+    prefixed = _full_slice_domain(
+        prefixed, (x, cos_cache, sin_cache, pos_ids), loops
+    )
     domain = prefixed.set_tuple_name(stmt_name)
     depth = len(loops)
 
@@ -478,7 +578,11 @@ def _rope_branch(
 
 
 def _rope_access(
-    call: Call, stmt_name: str, namer, prefix: str, loops: tuple[_Loop, ...] = (),
+    call: Call,
+    stmt_name: str,
+    namer,
+    prefix: str,
+    loops: tuple[GridRegionExpr, ...] = (),
 ) -> list[_StatementAccess]:
     """RoPE -> two statements, one per value input.
 
@@ -501,7 +605,11 @@ def _rope_access(
 
 
 def _extract_statement(
-    call: Call, stmt_name: str, namer, prefix: str, loops: tuple[_Loop, ...] = (),
+    call: Call,
+    stmt_name: str,
+    namer,
+    prefix: str,
+    loops: tuple[GridRegionExpr, ...] = (),
 ) -> list[_StatementAccess]:
     if isinstance(call.target, RoPE):
         return _rope_access(call, stmt_name, namer, prefix, loops)
@@ -526,7 +634,7 @@ def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
     read at ``i + 1`` observes a write at ``i``; placing stage first would lose
     loop-carried dependencies.
     """
-    slots: list[_Loop] = []
+    slots: list[GridRegionExpr] = []
     for acc in accesses:
         for loop in acc.loops:
             if not any(loop is seen for seen in slots):
@@ -635,7 +743,7 @@ class _Gathered:
     call: Call
     stmt_name: str
     prefix: str
-    loops: tuple[_Loop, ...] = ()
+    loops: tuple[GridRegionExpr, ...] = ()
 
 
 def _maybe_replace_args(e: Call, resolved_args: tuple) -> Call:
@@ -653,7 +761,7 @@ def _loop_axes(root):
     loop as well as its own. Depth is the number of enclosing grids, taken at
     first sight.
     """
-    axis_of: dict[int, _Loop] = {}
+    axis_of: dict[int, GridRegionExpr] = {}
     seed: dict[int, tuple] = {}
     depth: dict[int, int] = {}
     seen: set[int] = set()
@@ -663,7 +771,7 @@ def _loop_axes(root):
             return
         seen.add(id(expr))
         if isinstance(expr, GridRegionExpr):
-            axis = _Loop(expr.induction_var, expr.start, expr.extent, expr.step)
+            axis = expr
             axis_of[id(expr)] = axis
             depth[id(axis)] = level
             seed[id(expr.induction_var)] = (axis, None)
@@ -682,7 +790,7 @@ def _loop_axes(root):
     return axis_of, seed, depth
 
 
-def _loop_scopes(root) -> dict[int, tuple[_Loop, ...]]:
+def _loop_scopes(root) -> dict[int, tuple[GridRegionExpr, ...]]:
     """Per expression of one function body, the loop axes it varies with, outermost first.
 
     Per expression of one function body, the loop axes it varies with,
@@ -727,7 +835,7 @@ def _loop_scopes(root) -> dict[int, tuple[_Loop, ...]]:
 def _walk_calls(
     body, prefix: str, active: tuple[int, ...],
     site_counter: dict[str, int], table: dict[int, object],
-    loops: tuple[_Loop, ...] = (), carries: list | None = None,
+    loops: tuple[GridRegionExpr, ...] = (), carries: list | None = None,
 ) -> list["_Gathered"]:
     """Walk a body in postorder while penetrating nested function calls.
 
@@ -802,7 +910,7 @@ def _walk_calls(
             table[id(e)] = _resolve(callee.body, table)
             continue
 
-        if isinstance(target, (TupleGetItem, Reshape, IndexSelect)):
+        if isinstance(target, (TupleGetItem, Reshape, IndexSelect, Slice)):
             table[id(e)] = _maybe_replace_args(e, resolved_args)
             continue
 

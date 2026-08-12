@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Union
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core.expr import child_exprs
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.cuda.nn.mma import (
@@ -96,6 +97,43 @@ from tilefoundry.visitor_registry.registries import (
     hir_lowering_registry,
     register_hir_lowering,
 )
+
+
+def _has_induction_slice(root: Expr, induction_var: Var) -> bool:
+    """Whether ``root`` contains a Slice starting at ``induction_var``."""
+    seen: set[int] = set()
+
+    def visit(expr: Expr) -> bool:
+        if id(expr) in seen:
+            return False
+        seen.add(id(expr))
+        if isinstance(expr, Call) and isinstance(expr.target, HirSlice):
+            starts = expr.args[1]
+            if isinstance(starts, Tuple) and any(
+                start is induction_var for start in starts.elements
+            ):
+                return True
+        return any(visit(child) for child in child_exprs(expr))
+
+    return visit(root)
+
+
+def _reject_partial_window(region: GridRegionExpr) -> None:
+    """Reject a tiled Slice tail until residual lowering has an IR contract."""
+    start, extent, step = region.start, region.extent, region.step
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool)
+        for value in (start, extent, step)
+    ):
+        return
+    if step <= 0 or extent <= start or (extent - start) % step == 0:
+        return
+    roots = (region.body, *region.yield_values)
+    if any(_has_induction_slice(root, region.induction_var) for root in roots):
+        raise NotImplementedError(
+            "hir_to_tir: non-divisible tile window requires handwritten tail "
+            f"lowering (start={start}, extent={extent}, step={step})"
+        )
 
 
 def _eval_call(op, args: tuple) -> Evaluate:
@@ -394,6 +432,7 @@ class _Lowerer:
             self._cache[key] = r
             return r
         if isinstance(expr, GridRegionExpr):
+            _reject_partial_window(expr)
 
 
 
@@ -1167,9 +1206,12 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
 def _lower_slice(ctx: "_Lowerer", target, expr) -> Var:
     """Lower a unit-stride HIR slice to an absolute-coordinate tensor view."""
     source = ctx.lower(expr.args[0])
-    if any(not isinstance(s, Constant) or int(s.value) != 1 for s in target.strides):
+    starts = expr.args[1]
+    if not isinstance(starts, Tuple):
+        raise TypeError("hir_to_tir: Slice starts must be a Tuple")
+    if any(s != 1 for s in target.strides):
         raise NotImplementedError("hir_to_tir: Slice lowering supports unit strides only")
-    coords = tuple(_insert_slice_coord(ctx, begin) for begin in target.begin)
+    coords = tuple(_insert_slice_coord(ctx, start) for start in starts.elements)
     view_shape = tuple(expr.type.shape)
     view_layout = TensorView.layout_for_slice_nd(
         src_shape=tuple(source.type.shape), sliced_shape=view_shape

@@ -259,7 +259,14 @@ def _slice(call: Call, ctx: CostContext) -> Cost:
     report a kernel reading its input as many times as it has pieces.
     """
     kept = tensor_bytes(_output_type(call, ctx))
-    return Cost({}, (TrafficBytes(read=kept), TrafficBytes(write=kept)))
+    return Cost(
+        {},
+        (
+            TrafficBytes(read=kept),
+            TrafficBytes(),
+            TrafficBytes(write=kept),
+        ),
+    )
 
 
 @register_cost_evaluator(InsertSlice)

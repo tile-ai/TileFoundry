@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -13,4 +13,8 @@ class EvalContext:
     args: tuple[Any, ...]
     result_type: Any
     device: str = "cpu"
-    eval_expr: Callable[[Any], Any] | None = None
+    dim_bindings: dict[str, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.dim_bindings is None:
+            object.__setattr__(self, "dim_bindings", {})

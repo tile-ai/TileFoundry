@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import copy
 
-from tilefoundry.ir.core import TypeInferContext
+from tilefoundry.ir.core import Tuple, TypeInferContext
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir._helpers import broadcast_shapes
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -131,11 +131,15 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
 
     param = TensorType(shape=(1, 4, 32, 128), dtype=DType.bf16, layout=None, storage="gmem")
     x = Constant(type=param, value=None)
+    starts = Tuple(
+        type=TupleType(fields=(TensorType.scalar(DType.i64),) * 4),
+        elements=(_i64(0), _i64(0), _i64(0), _i64(0)),
+    )
     sliced = TypeInferContext().type_of(
         Call(
             type=TensorType.scalar(DType.bf16),
-            target=Slice(begin=(0, 0, 0, 0), end=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
-            args=(x,),
+            target=Slice(sizes=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
+            args=(x, starts),
         )
     )
     for dim in sliced.shape:

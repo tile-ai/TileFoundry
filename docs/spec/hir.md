@@ -345,7 +345,7 @@ class GridRegionExpr(Expr):
 **Iteration domain.** Both DSL loop surfaces — `for i in tile(...)` and
 `for i in range(...)` — lower to this one node; they share the domain
 `(start, extent, step)` and differ only in the loop-variable binding (`tile`
-2-arg binds a parser-side `RangeSlice`, everything else binds a scalar; see
+2-arg binds a parser-side Python `slice`, everything else binds a scalar; see
 [parser §1.7](./parser.md#17-for-i-in-tile--for-i-in-range-hir-only)). `range` is not unrolled. `induction_var` ranges
 over `range(start, extent, step)`: `start` and `extent` are the **half-open**
 `[start, extent)` Python-range endpoints (so `extent` is the **stop** value,
@@ -359,8 +359,7 @@ already a coordinate in `range(0, extent, step)`, not an ordinal to multiply by
 `step`.
 
 - When `start` / `extent` / `step` are static `int`, the trip count is
-  recoverable from the node alone, without the parser-side
-  `RangeSlice` binding
+  recoverable from the node alone, without the parser-side window binding
   ([parser §1.7](./parser.md#17-for-i-in-tile--for-i-in-range-hir-only)).
 - Every `DimVar` referenced by a `ShapeDim` `start` / `extent` / `step` MUST
   be bound by the enclosing Function's parameter shapes. Resolution
@@ -608,7 +607,7 @@ Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 / `Stack` / `ShapeOf` / `Rank`) follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
-`Transpose`, statically bounded `Slice`, and `Reshape` derive a view layout from
+`Transpose`, statically positioned `Slice`, and `Reshape` derive a view layout from
 their input when it states one. An input with `layout=None` produces a view with
 `layout=None`; a runtime-bounded `Slice` also keeps `layout=None` because
 `ComposedLayout.offset` is static. Neither case says that the view materialized.
@@ -616,14 +615,17 @@ their input when it states one. An input with `layout=None` produces a view with
 - `Transpose` MUST permute the layout shape and strides by the same permutation
   as the tensor shape. A `ShardLayout` MUST remap its split positions through
   the registered relation.
-- `Slice` with static bounds MUST produce a `ComposedLayout`: its offset is the
+- `Slice` is normalized as `Slice(x, starts, sizes=..., strides=...)`.
+  `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
+  `ShapeDim` attributes. Its result shape is exactly `sizes` and MUST NOT contain
+  an induction `Var`.
+- `Slice` with static starts MUST produce a `ComposedLayout`: its offset is the
   source offset plus the starts multiplied by the source strides, and its outer
   layout carries the sliced shape and the retained strides (multiplied by any
   slice step). A runtime-bounded `Slice` MUST remain accepted with `layout=None`.
-- When a `Slice` axis has the adjacent runtime bounds `[start, start + window)`
-  and unit stride, its inferred extent is `window`; the runtime `start` MUST NOT
-  remain in the result shape. Evaluation resolves both bounds in the current
-  expression environment on every invocation.
+- Runtime starts MUST remain ordinary Call operands and produce `layout=None`.
+  The result type describes a full window; whether a loop iteration can contain
+  that window is an analysis-domain question, not a type-inference question.
 
 ##### Rank and ShapeOf
 

@@ -613,8 +613,8 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     - when the touched extent is runtime data, the evaluator charges the
       smallest bound its operand Types state statically.
   - `Reshape` MUST report zero traffic because it re-indexes the same elements.
-    `Slice` MUST report one result-sized read and write, for both static and
-    runtime bounds, because it moves only the region it keeps. `Transpose` MUST
+    `Slice` MUST report one result-sized source read, a zero-traffic structural
+    `starts` slot, and one result-sized write. `Transpose` MUST
     report one result-sized read and write because its evaluator materializes the
     permutation. Each evaluator answers from its operation's semantics and MUST
     NOT infer buffer identity from layouts; buffer aliasing is a later

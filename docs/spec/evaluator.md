@@ -142,15 +142,14 @@ class EvalContext:
         args: attribute; Evaluated operands in Call-argument order.
         result_type: attribute; Call result type.
         device: attribute; Backend device name.
-        eval_expr: attribute; optional resolver for an Expr-valued Op attribute
-            in the current evaluator environment.
+        dim_bindings: attribute; concrete values for symbolic ShapeDims.
     """
 
     op: Any
     args: tuple[Any, ...]
     result_type: Any
     device: str = "cpu"
-    eval_expr: Callable[[Any], Any] | None = None
+    dim_bindings: dict[str, int] | None = None
 
 def handler(ctx: EvalContext) -> Value:
     """Evaluate one registered Op invocation."""
@@ -181,11 +180,12 @@ class Evaluator(ExprVisitor):
 - A `Call` whose `target` is an `Op` evaluates its operands, then
   dispatches through `eval_registry`
   ([§3](#3-register_eval-and-the-eval-context)).
-- An evaluator handler whose Op admits Expr-valued attributes MAY use
-  `EvalContext.eval_expr` to resolve them against the same environment as the
-  operands. `Slice` uses this for dynamic begin/end bounds inside a
-  `GridRegionExpr`; each iteration therefore sees that iteration's induction
-  binding.
+- `EvalContext` carries evaluated operands and concrete `dim_bindings` for
+  call-invariant `ShapeDim` attributes. Expr-valued runtime data MUST be a Call
+  operand; handlers MUST NOT re-enter the evaluator through an attribute.
+- `Slice` consumes its evaluated `starts` tuple and resolves `sizes/strides`
+  through `dim_bindings`. A window exceeding a runtime axis MUST raise
+  `EvalError` rather than return a value whose data disagrees with its full-window type.
 - A `Call` whose `target` is a `Function` ([hir §1.1](./hir.md#11-function)) binds the
   evaluated arguments to the callee's parameters in a fresh environment
   and evaluates the callee `body` — the same value semantics a call site

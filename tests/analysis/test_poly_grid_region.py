@@ -20,6 +20,7 @@ from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamic
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 
 SEQ = DimVar("seq", 4, 64)
+TILE = DimVar("tile_size", 2, 8)
 
 
 @func
@@ -57,6 +58,36 @@ def data_index_select(
     for i in tile(8):
         selected = index_select(x, reshape(idx, new_shape=(1,)), dim=0)
         o = add(o, reshape(selected, new_shape=(4,)))
+    return o
+
+
+@func
+def full_windows(
+    x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]
+) -> Tensor[(4, 4), "f32"]:
+    o = add(seed, seed)
+    for i in tile(10, 4):
+        o = add(x[i, :], seed)
+    return o
+
+
+@func
+def dynamic_full_windows(
+    x: Tensor[(SEQ, 4), "f32"], seed: Tensor[(4, 4), "f32"]
+) -> Tensor[(4, 4), "f32"]:
+    o = add(seed, seed)
+    for i in tile(SEQ, 4):
+        o = add(x[i, :], seed)
+    return o
+
+
+@func
+def unspecialized_window_step(
+    x: Tensor[(10, 4), "f32"], seed: Tensor[(TILE, 4), "f32"]
+) -> Tensor[(TILE, 4), "f32"]:
+    o = add(seed, seed)
+    for i in tile(10, TILE):
+        o = add(x[i, :], seed)
     return o
 
 
@@ -183,6 +214,41 @@ def test_dynamic_extent_becomes_an_isl_parameter():
     dom = _domains(tg)["Binary1"]
     assert "0 <= i0 < seq" in str(dom), dom
     assert _self_deltas(tg, "Binary1").is_equal(isl.set("[seq] -> { [1, 0, 0] : 4 <= seq <= 63 }"))
+
+
+def test_windowed_loop_analyzes_only_full_tiles_and_offsets_its_read():
+    tg = extract(full_windows)
+    domain = _domains(tg)["Binary1"]
+
+    assert domain.is_equal(
+        isl.set("{ Binary1[i, r, c] : 0 <= i <= 4 and i mod 4 = 0 "
+                "and 0 <= r < 4 and 0 <= c < 4 }")
+    )
+    source_reads = tg.reads.intersect_range(
+        isl.union_set("{ x[r, c] : 0 <= r < 10 and 0 <= c < 4 }")
+    )
+    assert source_reads.is_equal(
+        isl.union_map(
+            "{ Binary1[i, r, c] -> x[i + r, c] : "
+            "0 <= i <= 4 and i mod 4 = 0 and 0 <= r < 4 and 0 <= c < 4 }"
+        )
+    )
+
+
+def test_symbolic_extent_keeps_only_parameterized_full_windows():
+    domain = _domains(extract(dynamic_full_windows))["Binary1"]
+
+    assert domain.is_equal(
+        isl.set(
+            "[seq] -> { Binary1[i, r, c] : 4 <= seq < 64 and 0 <= i "
+            "and i + 4 <= seq and i mod 4 = 0 and 0 <= r < 4 and 0 <= c < 4 }"
+        )
+    )
+
+
+def test_unspecialized_window_step_fails_closed():
+    with pytest.raises(ExtractError, match="loop step.*not a static int"):
+        extract(unspecialized_window_step)
 
 
 def test_data_dependent_index_select_fails_closed():

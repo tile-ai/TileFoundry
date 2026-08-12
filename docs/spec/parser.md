@@ -367,12 +367,13 @@ only difference is the loop-variable binding:
   `range`: `range(stop)` (start `0`, step `1`), `range(start, stop)` (step
   `1`), `range(start, stop, step)`.
 - `tile(extent)` also binds a scalar `i: i64` (start `0`, step `1`).
-- `tile(extent, step)` binds `i` to a parser-side `RangeSlice`
-  (`start = iv`, `stop = start + step`) so `x[:, i]` lifts to a `Slice` over
+- `tile(extent, step)` binds `i` to the standard Python
+  `slice(iv, iv + step, 1)` so `x[:, i]` lifts to a `Slice` over
   the current window. The grid domain already advances `iv` by `step`; the
   binding MUST NOT multiply it again. In any other Expr position, including an
-  `insert_slice` offset tuple, `i` resolves to the scalar `start`. `RangeSlice`
-  is parser-only and does not reach IR; the grid-domain `start` is `0`.
+  `insert_slice` offset tuple, `i` resolves to the scalar `slice.start`. The
+  Python `slice` is parser-only and does not reach IR; the grid-domain `start`
+  is `0`.
 
 `start-Expr` / `extent-Expr` (the **stop** endpoint, not a length — the
 domain is half-open `[start, extent)`) / `step-Expr` MAY be any `ShapeDim`
@@ -827,7 +828,7 @@ absent from the closure and fails as an unresolved callee. The merge is
 additive: it never shadows the function's own globals / freevars.
 
 `LexicalEnv` is a frame stack used by both body visitors for
-parser-time bindings (Mesh axes, `RangeSlice` from `tile`, SSA
+parser-time bindings (Mesh axes, the Python `slice` from two-argument `tile`, SSA
 aliasing). Frame push / pop matches the Python-source scope
 (`with Mesh(...)`, `for i in tile(...)`).
 
