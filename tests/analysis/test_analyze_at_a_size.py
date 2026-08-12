@@ -16,6 +16,7 @@ from dataclasses import replace
 
 import pytest
 
+from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
@@ -56,11 +57,27 @@ def _aimed():
     )
 
 
+def _subject(family: str):
+    """A concrete query that satisfies the selected family's readiness."""
+    if family == "timeline":
+        module = DerivedPrefill
+        return (
+            module,
+            module.entry_function(),
+            {
+                "prefill_n": 17,
+                "topology_only": 32,
+            },
+        )
+    module = _aimed()
+    return module, module.entry_function(), DIMS
+
+
 @pytest.mark.parametrize("family", FAMILIES)
 def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
-    module = _aimed()
+    module, function, dims = _subject(family)
 
-    result = analyze(module, module.entry_function(), analysis=family, dims=DIMS)
+    result = analyze(module, function, analysis=family, dims=dims)
 
     assert result.metadata_types
     assert result.module is module
@@ -99,10 +116,9 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     the derived one. Handing back the symbolic input would send a reader looking
     for records on a function that has none.
     """
-    module = _aimed()
-    authored = module.entry_function()
+    module, authored, dims = _subject(family)
 
-    result = analyze(module, authored, analysis=family, dims=DIMS)
+    result = analyze(module, authored, analysis=family, dims=dims)
 
     assert result.function is not authored
     assert result.function.name == authored.name
@@ -111,10 +127,9 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
 
 def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
     """Several requested roots record all conclusions on one concrete view."""
-    module = _aimed()
-    authored = module.entry_function()
+    module, authored, dims = _subject("timeline")
 
-    result = analyze(module, authored, analysis=FAMILIES, dims=DIMS)
+    result = analyze(module, authored, analysis=FAMILIES, dims=dims)
     data = report(result)
 
     assert result.analyses == FAMILIES
@@ -130,12 +145,12 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
     for expected in ("peak-footprint", "ideal-bound", "theoretical-makespan"):
         assert expected in text, f"{expected} is missing from the rendered report"
 
-    single_module = _aimed()
+    single_module, single_function, single_dims = _subject("timeline")
     single = analyze(
         single_module,
-        single_module.entry_function(),
+        single_function,
         analysis="timeline",
-        dims=DIMS,
+        dims=single_dims,
     )
     assert tuple(
         get_metadata(expr, TimelineMetadata)
@@ -150,14 +165,13 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
 
 def test_a_report_at_a_size_carries_the_per_call_records_of_every_family() -> None:
     """Per-Call records from several roots inhabit the same occurrences."""
-    module = _aimed()
-    authored = module.entry_function()
+    module, authored, dims = _subject("timeline")
 
     result = analyze(
         module,
         authored,
         analysis=("compute-cost", "timeline"),
-        dims=DIMS,
+        dims=dims,
     )
     data = report(result)
 
@@ -183,19 +197,17 @@ def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
     "ctx_len",
     (1, 1024),
 )
-def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length(
+def test_qwen_decoder_unplaced_calls_are_refused_at_each_sequence_length(
     ctx_len: int,
 ) -> None:
     module = QWEN3_1_7B.build()
     function = module.lookup("decoder_layer")
 
-    result = analyze(module, function, analysis="timeline", dims={"ctx_len": ctx_len})
-
-    record = get_metadata(result.function, TimelineMetadata)
-    assert record is not None
-    assert record.grid_units == 1
-    assert record.waves == 83
-    assert record.end_ns == 10_537
+    with pytest.raises(
+        AnalysisError,
+        match=r"model.py:\d+:.*has no cta placement",
+    ):
+        analyze(module, function, analysis="timeline", dims={"ctx_len": ctx_len})
 
 
 def test_gqa_loop_occurrences_cost_one_trip_while_the_root_applies_all_trips() -> None:
@@ -206,7 +218,7 @@ def test_gqa_loop_occurrences_cost_one_trip_while_the_root_applies_all_trips() -
             analyze(
                 module,
                 module.entry_function(),
-                analysis="timeline",
+                analysis="compute-cost",
                 dims={"ctx_len": extent},
             )
         )
@@ -237,26 +249,6 @@ def test_gqa_loop_occurrences_cost_one_trip_while_the_root_applies_all_trips() -
         assert root is not None
         roots.append(root)
     assert [dict(root.flops)["f32"] for root in roots] == [276_704, 508_128]
-
-    loop_timelines = []
-    for result, extent in zip(results, (8, 16)):
-        trips = enclosing_trips(result.function.body)
-        records = tuple(
-            get_metadata(expr, TimelineMetadata)
-            for expr in postorder(result.function.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, Cast)
-            and trips.get(id(expr)) == extent
-        )
-        assert all(record is not None for record in records)
-        loop_timelines.append(records)
-    assert loop_timelines[0] == loop_timelines[1]
-
-    timeline_roots = [
-        get_metadata(result.function, TimelineMetadata) for result in results
-    ]
-    assert all(root is not None for root in timeline_roots)
-    assert [root.end_ns for root in timeline_roots] == [311, 619]
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

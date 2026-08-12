@@ -381,11 +381,19 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         "--compute-cost",
         "--memory",
         "--roofline",
-        "--timeline",
         "--json",
     )
     assert analyzed_npu.returncode == 0, analyzed_npu.stderr
     assert json.loads(analyzed_npu.stdout)["target"] == "vendor.npu"
+    unplaced_npu = _run_cli(
+        registry,
+        tmp_path,
+        "analyze",
+        f"{npu_model}:model",
+        "--timeline",
+    )
+    assert unplaced_npu.returncode == 1
+    assert "has no core placement" in unplaced_npu.stderr
     scheduled_npu = _run_cli(
         registry,
         tmp_path,

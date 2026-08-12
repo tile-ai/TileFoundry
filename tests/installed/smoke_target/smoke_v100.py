@@ -45,7 +45,7 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     model = _v100_qwen(tf, tmp_path)
     done = tf(
         "analyze",
-        f"{model}:Qwen3_1_7B.layer0.mlp",
+        f"{model}:Qwen3_1_7B.layer0.placed_mlp",
         "--compute-cost",
         "--memory",
         "--roofline",
@@ -65,11 +65,11 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     )
     assert gmem["peak_bytes"] < 32_000_000_000
     timeline = report["function_records"]["timeline"]
-    assert timeline["grid_units"] == 1
+    assert timeline["grid_units"] == 132
     call_timelines = [call["timeline"] for call in report["calls"]]
     assert call_timelines
-    assert {call["grid_units"] for call in call_timelines} == {1}
-    assert {call["waves"] for call in call_timelines} == {1}
+    assert {call["grid_units"] for call in call_timelines} == {132}
+    assert {call["waves"] for call in call_timelines} == {2}
     assert timeline["waves"] == sum(call["waves"] for call in call_timelines)
 
     scheduled = tf(

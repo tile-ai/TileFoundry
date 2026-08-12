@@ -137,6 +137,12 @@ def decode_reference(layer, hidden_ctx, hidden_new):
     return oracle.decode_reference([layer], hidden_ctx, hidden_new, cos, sin)
 
 
+def mlp_reference(layer, hidden):
+    """HF post-attention norm plus MLP, the fused kernel's exact boundary."""
+    with torch.no_grad():
+        return layer.mlp(layer.post_attention_layernorm(hidden))
+
+
 def decoder_context_kv(model, hidden_ctx, device="cpu"):
     """Per-layer ``(k_cache, v_cache)`` for *hidden_ctx*, in layer order."""
     cos, sin = _rope_at(hidden_ctx.shape[1], device)
@@ -249,5 +255,6 @@ __all__ = [
     "decoder_step_oracle",
     "load_decoder",
     "load_layer",
+    "mlp_reference",
     "run_decoder_step",
 ]

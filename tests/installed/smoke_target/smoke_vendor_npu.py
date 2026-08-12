@@ -39,15 +39,18 @@ def test_document_free_target_analyses_and_selects_its_scheduler(
         "--compute-cost",
         "--memory",
         "--roofline",
-        "--timeline",
         "--json",
     )
     assert analyzed.returncode == 0, analyzed.stderr
     report = json.loads(analyzed.stdout)
     assert report["target"] == "vendor.npu"
-    assert report["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
+    assert report["executed"] == ["compute-cost", "memory", "roofline"]
     assert report["function_records"]["roofline"]["ideal_ns"] > 0
-    assert report["function_records"]["timeline"]["grid_units"] == 1
+
+    rejected = tf("analyze", f"{model}:CMine.root", "--timeline")
+    assert rejected.returncode == 1
+    assert "timeline:" in rejected.stderr
+    assert "has no core placement" in rejected.stderr
 
     scheduled = tf(
         "schedule",

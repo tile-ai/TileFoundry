@@ -20,8 +20,17 @@ from tilefoundry.ir.hir.specialize import (
     origin_of,
     specialize_concretely,
 )
-from tilefoundry.ir.types import callable_type_for
+from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard import ComposedLayout, Layout, Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.shard.layout_algebra import (
+    NotProjectable,
+    apply,
+    image,
+    is_inverse_projectable,
+    project,
+    size,
+)
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
     dim_vars_by_name,
@@ -39,7 +48,7 @@ from .metadata import (
     TimelineMetadata,
 )
 from .preflight import infer_authored_types, validate_call_context
-from .walk import postorder, reachable_functions
+from .walk import describe, postorder, reachable_functions, tensor_types
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
@@ -49,6 +58,171 @@ _DERIVED_METADATA = {
     TimelineMetadata,
 }
 _ResourceKey = tuple[str, str]
+Placement = frozenset[int]
+
+
+def _layout_shards(layout: object) -> tuple[ShardLayout, ...]:
+    """Every ShardLayout nested in one tensor layout, outside first."""
+    if isinstance(layout, ShardLayout):
+        return (layout, *_layout_shards(layout.layout))
+    if isinstance(layout, ComposedLayout):
+        return (*_layout_shards(layout.inner), *_layout_shards(layout.outer))
+    return ()
+
+
+def _mesh_image(mesh: Mesh, selected: Topology) -> Placement:
+    """The exact selected-topology positions named by one Mesh."""
+    actual = tuple(topology.name for topology in mesh.topologies)
+    if len(mesh.topologies) != 1:
+        raise AnalysisError(
+            f"one placement Mesh names topology levels {actual}; selected level "
+            f"{selected.name!r} requires one level whose positions can be projected"
+        )
+    (mesh_topology,) = mesh.topologies
+    if mesh_topology.name != selected.name:
+        raise AnalysisError(
+            f"selected topology level {selected.name!r}, but the result Mesh is "
+            f"placed at level {mesh_topology.name!r}"
+        )
+    selected_size = static_dim_value(selected.size)
+    mesh_size = static_dim_value(mesh_topology.size)
+    if selected_size is None or selected_size <= 0:
+        raise AnalysisError(
+            f"selected topology level {selected.name!r} has unresolved or invalid "
+            f"extent {selected.size!r}"
+        )
+    if mesh_size != selected_size:
+        raise AnalysisError(
+            f"the result Mesh declares {selected.name!r} extent "
+            f"{mesh_topology.size!r}, but the selected topology has extent "
+            f"{selected.size!r}"
+        )
+
+    layout = mesh.layout
+    try:
+        if isinstance(layout, Layout):
+            count = size(layout)
+            if not is_inverse_projectable(layout):
+                raise NotProjectable("plain layout is not inverse-projectable")
+            positions = tuple(apply(layout, coord) for coord in range(count))
+        elif isinstance(layout, ComposedLayout):
+            if not isinstance(layout.outer, Layout):
+                raise NotProjectable("sliced layout has no resolved plain outer layout")
+            count = size(layout.outer)
+            positions = tuple(image(layout, coord) for coord in range(count))
+            if any(project(layout, position) is None for position in positions):
+                raise NotProjectable("sliced layout does not round-trip")
+        else:  # pragma: no cover - Mesh's annotation excludes this shape
+            raise NotProjectable(f"unsupported mesh layout {type(layout).__name__}")
+    except (ArithmeticError, NotProjectable, TypeError, ValueError) as error:
+        raise AnalysisError(
+            f"the {selected.name!r} result Mesh is not projectable: {error}"
+        ) from None
+
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or count <= 0
+        or any(
+            isinstance(position, bool) or not isinstance(position, int) for position in positions
+        )
+    ):
+        raise AnalysisError(
+            f"the {selected.name!r} result Mesh needs a positive static position image"
+        )
+    if len(set(positions)) != len(positions):
+        raise AnalysisError(
+            f"the {selected.name!r} result Mesh maps multiple coordinates to the "
+            f"same position: {positions}"
+        )
+    outside = sorted(position for position in positions if not 0 <= position < selected_size)
+    if outside:
+        raise AnalysisError(
+            f"the {selected.name!r} result Mesh positions {outside} fall outside "
+            f"the selected domain [0, {selected_size})"
+        )
+    placement = frozenset(positions)
+    if isinstance(layout, Layout) and placement != frozenset(range(selected_size)):
+        raise AnalysisError(
+            f"an unsliced {selected.name!r} Mesh must describe the full selected "
+            "domain; use a sliced Mesh so a strict subdomain retains its offset"
+        )
+    return placement
+
+
+def _result_placement(type_: Type, selected: Topology) -> Placement:
+    """The unique execution placement carried by every result tensor leaf."""
+    leaves = tensor_types(type_)
+    if not leaves:
+        raise AnalysisError("the result has no tensor leaf that can carry placement")
+
+    placements: list[tuple[Placement, Mesh]] = []
+    missing: list[str] = []
+    wrong_levels: set[str] = set()
+    for leaf in leaves:
+        shards = _layout_shards(leaf.layout)
+        selected_shards = []
+        leaf_levels: set[str] = set()
+        for shard in shards:
+            names = tuple(topology.name for topology in shard.mesh.topologies)
+            if len(names) != 1:
+                raise AnalysisError(
+                    f"one result Mesh names topology levels {names}; selected level "
+                    f"{selected.name!r} requires one projectable level"
+                )
+            if names[0] == selected.name:
+                selected_shards.append(shard)
+            else:
+                leaf_levels.add(names[0])
+        if not selected_shards:
+            wrong_levels.update(leaf_levels)
+            missing.append(type(leaf.layout).__name__ if leaf.layout is not None else "no layout")
+            continue
+        leaf_placements = [
+            (_mesh_image(shard.mesh, selected), shard.mesh) for shard in selected_shards
+        ]
+        unique = {placement for placement, _mesh in leaf_placements}
+        if len(unique) != 1:
+            raise AnalysisError(
+                f"one result tensor carries conflicting {selected.name!r} "
+                f"placements {sorted(tuple(sorted(item)) for item in unique)}"
+            )
+        placements.append(leaf_placements[0])
+
+    if missing:
+        if wrong_levels:
+            actual = ", ".join(repr(name) for name in sorted(wrong_levels))
+            raise AnalysisError(
+                f"selected topology level {selected.name!r}, but the result is "
+                f"placed at level(s) {actual}"
+            )
+        carried = ", ".join(dict.fromkeys(missing))
+        raise AnalysisError(
+            f"has no {selected.name} placement; its result type carries {carried}, "
+            "not a ShardLayout on the selected level. Reshard it onto a Mesh of "
+            "the selected level, or analyse a family that does not require placement"
+        )
+    unique = {placement for placement, _mesh in placements}
+    if len(unique) != 1:
+        described = [f"{mesh!r} -> {sorted(placement)}" for placement, mesh in placements]
+        raise AnalysisError(
+            "tuple result leaves carry different execution placements: " + "; ".join(described)
+        )
+    return next(iter(unique))
+
+
+def _timeline_placements(module: Module, function: Function, level: str) -> dict[int, Placement]:
+    """Validate and prepare every primitive Call placement for timeline."""
+    selected = module.resolve_topology(level)
+    result: dict[int, Placement] = {}
+    for expr in postorder(function.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        try:
+            result[id(expr)] = _result_placement(expr.type, selected)
+        except AnalysisError as error:
+            raise AnalysisError(f"timeline: {describe(expr)}: {error}") from None
+    return result
 
 
 def _program_dim_vars(module: Module, function: Function) -> dict[str, object]:

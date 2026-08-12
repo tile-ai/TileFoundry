@@ -32,18 +32,22 @@ class Open:
 '''
 
 
-def test_every_analysis_the_command_offers_runs(tf, cmine) -> None:
+def test_logical_analyses_run_and_timeline_requires_result_placement(tf, cmine) -> None:
     done = tf(
         "analyze",
         f"{cmine}:CMine.root",
         "--compute-cost",
         "--memory",
         "--roofline",
-        "--timeline",
     )
     assert done.returncode == 0, done.stderr
     for conclusion in ("flops ", "traffic ", "peak-footprint ", "ideal-bound="):
         assert conclusion in done.stdout, conclusion
+
+    rejected = tf("analyze", f"{cmine}:CMine.root", "--timeline")
+    assert rejected.returncode == 1
+    assert "timeline:" in rejected.stderr
+    assert "has no cta placement" in rejected.stderr
 
 
 def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:

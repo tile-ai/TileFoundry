@@ -41,7 +41,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return Analyzer(
             "timeline",
             analyze_timeline,
-            requires=("roofline",),
+            requires=("roofline", "compute-cost"),
             produces=(TimelineMetadata,),
         )
     return None

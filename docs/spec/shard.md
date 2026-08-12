@@ -275,6 +275,15 @@ full sequence is always `topologies`.
     `size(mesh.layout)`. It accepts a Mesh with one topology only; a
     multi-topology Mesh is rejected rather than projecting its layout onto a
     guessed level.
+  - A reader that asks for an exact participant set at a selected topology level
+    MUST accept a one-topology Mesh for that same level only. For a plain
+    `Layout`, the set is `{apply(layout, c) | 0 <= c < size(layout)}`. For a
+    sliced `ComposedLayout`, it is
+    `{image(layout, c) | 0 <= c < size(layout.outer)}`.
+  - That image MUST be static, positive, inverse-projectable, duplicate-free,
+    and contained in `[0, selected_topology.size)`. A plain Mesh MUST cover the
+    complete selected domain. A strict subdomain MUST use a sliced Mesh so its
+    offset is retained rather than collapsed to an extent.
   - `Mesh` exposes neither a primary `topology` nor `topology_domain()`, and
     it has no attribute-style axis API. In layout sugar, `m.axis` is parser
     syntax resolved to the pair `(mesh, layout_axis_index)`, not a Mesh

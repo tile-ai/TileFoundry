@@ -11,9 +11,12 @@ disagree with itself.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
+import tilefoundry.analysis.compute_cost as compute_cost
+from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -25,15 +28,28 @@ from tilefoundry.analysis import (
     TimelineMetadata,
 )
 from tilefoundry.analysis.api import analyze
+from tilefoundry.analysis.check import _mesh_image, _result_placement, _timeline_placements
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import postorder
-from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_json, render_text, report
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import DType, TupleType, make_tensor_type, numel
+from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel
+from tilefoundry.ir.types.shard import (
+    Broadcast,
+    ComposedLayout,
+    Layout,
+    ShardLayout,
+)
+from tilefoundry.ir.types.shard import (
+    Mesh as IrMesh,
+)
+from tilefoundry.ir.types.shard import (
+    Topology as IrTopology,
+)
 from tilefoundry.target import AmxTarget, CudaTarget
 from tilefoundry.visitor_registry import cost_evaluator_registry
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TrafficBytes
@@ -184,11 +200,18 @@ def _wide_grid(source: Tensor[(1024,), "f32"]):
     return tf.add(source, source)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 1),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 168),))
+def _placed_wide_grid(source: Tensor[(1024,), "f32"]):
+    with Mesh(("cta",), layout=(168,), names=("tile",)) as _cta:
+        placed = tf.reshard(source, (1024,), "gmem")
+        return tf.add(placed, placed)
+
+
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 def _reshard_boundary(source: Tensor[(1,), "f32"]):
-    with Mesh(("thread",), layout=(1,), names=("lane",)) as thread:
-        local = tf.reshard(source, (1 @ thread.lane,), "rmem")
-        moved = tf.reshard(local, (1 @ thread.lane,), "rmem")
+    with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
+        local = tf.reshard(source, (1 @ cta.tile,), "rmem")
+        moved = tf.reshard(local, (1 @ cta.tile,), "rmem")
         return tf.add(moved, moved)
 
 
@@ -651,24 +674,102 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     assert whole.ideal_ns == max(whole.compute_ns, whole.memory_ns)
 
 
-def test_timeline_credits_an_unplaced_call_with_one_position() -> None:
-    """A declared launch hierarchy does not place a value by itself."""
-    _, entry = _run(_wide_grid, "timeline")
+def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) -> None:
+    """A topology declaration does not place a value or admit dependency writes."""
+    compute = analyze(_wide_grid, _entry(_wide_grid), analysis="compute-cost")
+    roofline = analyze(_wide_grid, _entry(_wide_grid), analysis="roofline")
+    assert get_metadata(compute.function, ComputeCostMetadata) is not None
+    assert get_metadata(roofline.function, RooflineMetadata) is not None
 
-    record = get_metadata(_calls(entry)[-1], TimelineMetadata)
-    assert record is not None
-    assert record.grid_units == 1
-    assert record.waves == 1
+    placed, function = _run(_placed_wide_grid, "timeline")
+    assert placed.executed == ("compute-cost", "memory", "roofline", "timeline")
+    assert all(get_metadata(call, TimelineMetadata) is not None for call in _calls(function))
 
-    whole = get_metadata(entry, TimelineMetadata)
-    assert whole is not None
-    assert whole.start_ns == 0
-    ends = [
-        record.end_ns
-        for call in _calls(entry)
-        if (record := get_metadata(call, TimelineMetadata)) is not None
-    ]
-    assert whole.end_ns == max(ends)
+    ran = False
+
+    def unexpected(*_args, **_kwargs):
+        nonlocal ran
+        ran = True
+
+    monkeypatch.setattr(compute_cost, "analyze_compute_cost", unexpected)
+    with pytest.raises(
+        AnalysisError,
+        match=r"test_analysis_families.py:.*has no cta placement",
+    ):
+        _run(_wide_grid, "timeline")
+    assert not ran
+
+
+def test_timeline_uses_exact_result_mesh_images() -> None:
+    """Placed results retain both a full Mesh and the nonzero sliced offset."""
+    result = analyze(
+        MoEMegaKernel,
+        MoEMegaKernel.entry_function(),
+        analysis="timeline",
+    )
+    placements = _timeline_placements(MoEMegaKernel, result.function, "cta")
+    prepared = set(placements.values())
+
+    assert frozenset(range(120)) in prepared
+    assert frozenset(range(120, 132)) in prepared
+    assert frozenset(range(132)) in prepared
+
+
+def test_placement_projection_rejects_the_wrong_level_and_invalid_images() -> None:
+    with pytest.raises(
+        AnalysisError,
+        match=r"selected topology level 'cta'.*placed at level.s. 'thread'",
+    ):
+        analyze(_thread_sharded, _entry(_thread_sharded), analysis="timeline")
+
+    cta = IrTopology("cta", 8)
+    outside = IrMesh(
+        (cta,),
+        ComposedLayout(None, 7, Layout((2,), (1,))),
+    )
+    with pytest.raises(AnalysisError, match=r"positions \[8\].*outside.*\[0, 8\)"):
+        _mesh_image(outside, cta)
+
+    dynamic = replace(
+        outside,
+        layout=ComposedLayout(None, 0, Layout((DimVar("mesh_n", 1, 9),), (1,))),
+    )
+    with pytest.raises(AnalysisError, match="not projectable"):
+        _mesh_image(dynamic, cta)
+
+    strict_plain = IrMesh((cta,), Layout((4,), (1,)))
+    with pytest.raises(AnalysisError, match="must describe the full selected domain"):
+        _mesh_image(strict_plain, cta)
+
+    left = IrMesh((cta,), ComposedLayout(None, 0, Layout((4,), (1,))))
+    right = IrMesh((cta,), ComposedLayout(None, 4, Layout((4,), (1,))))
+    tuple_type = TupleType(
+        (
+            make_tensor_type((8,), layout=ShardLayout(Layout((8,), (1,)), (Broadcast(),), left)),
+            make_tensor_type((8,), layout=ShardLayout(Layout((8,), (1,)), (Broadcast(),), right)),
+        )
+    )
+    with pytest.raises(AnalysisError, match="tuple result leaves carry different"):
+        _result_placement(tuple_type, cta)
+
+
+def test_nested_levels_project_independently_and_broadcast_counts_as_placed() -> None:
+    cta = IrTopology("cta", 2)
+    thread = IrTopology("thread", 4)
+    thread_layout = ShardLayout(
+        Layout((8,), (1,)),
+        (Broadcast(),),
+        IrMesh((thread,), Layout((4,), (1,))),
+    )
+    nested = ShardLayout(
+        thread_layout,
+        (Broadcast(),),
+        IrMesh((cta,), Layout((2,), (1,))),
+    )
+    type_ = TensorType((8,), DType.f32, nested, storage="rmem")
+
+    assert _result_placement(type_, cta) == frozenset((0, 1))
+    assert _result_placement(type_, thread) == frozenset(range(4))
 
 
 def test_a_reshard_ends_the_execution_unit_on_both_sides() -> None:

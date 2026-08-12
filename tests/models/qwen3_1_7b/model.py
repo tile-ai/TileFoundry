@@ -57,7 +57,7 @@ from pathlib import Path
 from transformers import Qwen3Config
 
 from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 — tf used by @func bodies
+from tilefoundry.dsl import ConstTensor, Mesh, Tensor, tf  # noqa: F401 — used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
@@ -80,6 +80,7 @@ _DT = {"bfloat16": "bf16", "float16": "f16", "float32": "f32"}[
 _Q_PROJ = config.num_attention_heads * config.head_dim
 _KV_PROJ = config.num_key_value_heads * config.head_dim
 _GQA = config.num_attention_heads // config.num_key_value_heads
+_TOPOLOGIES = (Topology("cta", 132), Topology("thread", 512))
 
 #: The variance floor every one of this model's norms adds, read from the
 #: checkpoint rather than written down: the norms below are spelled out, so the
@@ -120,7 +121,7 @@ def _generation_rope(device):
     return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
 
 
-@module(entry="decoder_layer")
+@module(entry="decoder_layer", topologies=_TOPOLOGIES)
 class Qwen3_1_7B_DecoderLayer:
     @func
     def input_rms_norm(
@@ -234,6 +235,36 @@ class Qwen3_1_7B_DecoderLayer:
         return tf.matmul(h, w_down)
 
     @func
+    def placed_mlp(
+        hidden: Tensor[(1, S, config.hidden_size), _DT],
+        gamma_post: ConstTensor[(config.hidden_size,), _DT],
+        w_gate: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
+        w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
+    ) -> Tensor[(1, S, config.hidden_size), _DT]:
+        # The same MLP with every result explicitly placed for timeline.
+        with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
+            placed = tf.reshard(hidden, (1, S, config.hidden_size), "gmem")
+            hidden_norm32 = tf.cast(placed, dtype="f32")
+            hidden_norm_var = tf.reduce(
+                hidden_norm32 * hidden_norm32,
+                axes=(-1,),
+                keepdim=True,
+                kind="mean",
+            )
+            hidden_norm = (
+                tf.cast(
+                    hidden_norm32 * tf.rsqrt(hidden_norm_var + _EPS), dtype=_DT
+                )
+                * gamma_post
+            )
+            gate = tf.matmul(hidden_norm, w_gate)
+            up = tf.matmul(hidden_norm, w_up)
+            act = tf.silu(gate)
+            h = act * up
+            return tf.matmul(h, w_down)
+
+    @func
     def decoder_layer(
         hidden: Tensor[(1, S, config.hidden_size), _DT],
         gamma_in: ConstTensor[(config.hidden_size,), _DT],
@@ -266,7 +297,7 @@ class Qwen3_1_7B_DecoderLayer:
         return h1 + mlp_out, k_new, v_new
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(target=CudaTarget("nvidia.h200_sxm"), topologies=_TOPOLOGIES)
 class Qwen3_1_7B:
     """The ordered layer stack plus the norm that closes it."""
 

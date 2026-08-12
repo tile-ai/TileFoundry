@@ -24,7 +24,8 @@ from tests.models.corpus import FunctionCase, ModelCase
 from tests.models.decode_oracle import one_ulp_at
 from tests.models.registry import cases_of
 
-FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
+LOGICAL_FAMILIES = ("compute-cost", "memory", "roofline")
+FAMILIES = (*LOGICAL_FAMILIES, "timeline")
 
 
 SOLVER = ("--solver-timeout=60", "--solver-workers=4", "--first-plan")
@@ -146,24 +147,47 @@ _EVIDENCE = {
 def analysed_every_family(
     tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int] | None = None
 ) -> dict:
-    """Every family asked about one function, in one command, judged one by one.
+    """Judge every family the selected function is ready to run.
 
-    Each family is judged even after an earlier one fails, and the failure names every
-    family that failed, so the verdict stays per family.
+    ``FunctionCase.timeline`` marks an explicitly placed analysis witness. Other
+    shipped functions keep their logical three-family conclusions and must make a
+    separate timeline request fail for missing result placement.
     """
-    report = reported(tf, source, case, selector, FAMILIES, dims)
-    assert report["executed"] == list(FAMILIES), (
-        f"asked for {list(FAMILIES)}, the command ran {report['executed']}"
+    selected = [item for item in case.analyze if item.selector == selector]
+    assert len(selected) == 1, f"{case.id}: analysis selector {selector!r} is not unique"
+    families = FAMILIES if selected[0].timeline else LOGICAL_FAMILIES
+    report = reported(tf, source, case, selector, families, dims)
+    assert report["executed"] == list(families), (
+        f"asked for {list(families)}, the command ran {report['executed']}"
     )
     failed = {
         family: complaint
-        for family, evidence in _EVIDENCE.items()
+        for family in families
+        if (evidence := _EVIDENCE[family])
         if (complaint := evidence(report)) is not None
     }
     assert not failed, f"{selector} at {dict(dims or {})}: " + "; ".join(
         f"{family} {complaint}" for family, complaint in sorted(failed.items())
     )
     return report
+
+
+def timeline_refused(
+    tf,
+    source: Path,
+    case: ModelCase,
+    selected: FunctionCase,
+) -> None:
+    """One unplaced shipped-model function must identify missing placement."""
+    rejected = tf(
+        "analyze",
+        static(source, case, selected.selector),
+        "--timeline",
+        *dim_args(selected.dims),
+    )
+    assert rejected.returncode == 1, rejected.stdout + rejected.stderr
+    assert "timeline:" in rejected.stderr
+    assert "has no" in rejected.stderr and "placement" in rejected.stderr
 
 
 def scheduled(tf, source: Path, case: ModelCase, planned: FunctionCase, *, topology: str = ""):

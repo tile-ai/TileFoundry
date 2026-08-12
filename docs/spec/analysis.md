@@ -330,7 +330,7 @@ Each owns one record type and declares its dependencies and output additions.
 | `compute-cost` | - | `ComputeCostMetadata` | the authored program | `flops`, `traffic` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
 | `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` | bounded dependency evidence, `ideal-bound` | every measured Call |
-| `timeline` | `roofline` | `TimelineMetadata` | `ParallelCapacityFacts` | `theoretical-makespan` | every measured Call, shared per execution unit |
+| `timeline` | `roofline`, `compute-cost` | `TimelineMetadata` | `ParallelCapacityFacts` | `theoretical-makespan` | every measured Call, shared per execution unit |
 
 Every compact text summary begins with these two lines:
 
@@ -366,6 +366,12 @@ comma separators. This difference is intentional.
     analyzer, and MUST NOT resolve an undeclared Target to a default.
   - A family MUST read a dependency's record rather than recompute what it
     states. A number with two derivations has two answers.
+  - Before any member of a requested union closure writes Metadata, Analyze MUST
+    establish every requested root's family-specific readiness. Timeline
+    readiness requires a positive `ParallelCapacityFacts` value for the selected
+    topology and one valid result placement for every costed primitive Call.
+    Failing timeline readiness MUST NOT make the same unplaced program invalid
+    for `compute-cost`, `memory`, or `roofline`.
   - Global logical work, per-unit work, and lifetime order MUST remain
     target-independent. Physical capacity, hierarchy relationships, and
     throughput comparisons are target-aware.
@@ -807,6 +813,14 @@ Reported Call and Function records use the same projection under their
 ```
 
 - constraints:
+  - A primitive Call is eligible for timeline only when every tensor leaf of its
+    result type carries one `ShardLayout` at the selected topology level and all
+    leaves name the same participant set. Inputs MUST NOT supply placement for an
+    unplaced result. `Reshard` executes on the placement of its result.
+  - The participant set MUST be the exact image of the result Mesh layout under
+    [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
+    operand. A `Broadcast` shard attribute still names placement: attributes
+    describe distribution while the Mesh describes which positions participate.
   - A producer-consumer edge MAY fuse only when both values are in local
     register or shared storage, their storage and Mesh sets agree, and their
     parallel extents are equal. `Reshard` MUST end an execution unit. Calls
@@ -987,6 +1001,10 @@ def analyze(
   - Type inference and validation MUST each run once per call, before any
     analysis. No analysis MAY run once either has rejected the IR, because an
     analysis reads inferred types and assumes a verified function.
+  - Family-specific readiness MUST be checked on that inferred inlined view and
+    MUST complete before the first analysis in the dependency closure runs. In
+    particular, a timeline request that lacks result placement MUST fail before
+    dependency Metadata is written.
   - Re-running MUST recompute the closure and refresh the Metadata that closure
     owns. There MUST be no cross-call cache. Metadata owned by nothing in the
     closure MUST be left untouched.

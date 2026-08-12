@@ -53,6 +53,11 @@ CASE = ModelCase(
         ),
         FunctionCase(id="qwen3_1_7b/analyze/mlp", selector="mlp"),
         FunctionCase(
+            id="qwen3_1_7b/analyze/placed_mlp",
+            selector="placed_mlp",
+            timeline=True,
+        ),
+        FunctionCase(
             id="qwen3_1_7b/analyze/decoder_layer",
             selector="decoder_layer",
             dims=ANALYZED_AT,

@@ -33,6 +33,10 @@ def test_every_selected_function_analyses(tf, shipped_source, case, selected) ->
     )
 
 
+def test_unplaced_model_refuses_timeline(tf, shipped_source) -> None:
+    contract.timeline_refused(tf, shipped_source(MODEL), CASES[0], CASES[0].analyze[0])
+
+
 @pytest.mark.parametrize(("case", "planned"), PLANNED)
 def test_every_selected_function_plans(tf, shipped_source, case, planned) -> None:
     contract.scheduled(tf, shipped_source(MODEL), case, planned)

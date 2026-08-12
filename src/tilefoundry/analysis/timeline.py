@@ -21,6 +21,7 @@ from tilefoundry.ir.types.shard import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 
+from .check import Placement, _timeline_placements
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, ThroughputFacts
 from .metadata import ComputeCostMetadata, RooflineMetadata, TimelineMetadata
@@ -32,7 +33,6 @@ from .walk import (
     postorder,
     reachable_functions,
     tensor_types,
-    topology_extent,
 )
 
 SELECTOR = "timeline"
@@ -46,8 +46,12 @@ class _Unit:
 
     calls: list[Call]
     predecessors: set[int]
-    extent: int
+    placement: Placement
     duration_ns: int
+
+    @property
+    def extent(self) -> int:
+        return len(self.placement)
 
 
 def _is_local(type_: Type) -> bool:
@@ -59,13 +63,7 @@ def _is_local(type_: Type) -> bool:
 
 
 def _fusable(producer: Type, consumer: Type) -> bool:
-    """Whether a value can be handed over without leaving the unit.
-
-    Both sides must live in the same local storage and on the same mesh. Same
-    storage alone is not enough: two values in registers on different meshes are
-    held by different sets of threads, so passing one to the other is a
-    redistribution rather than a read.
-    """
+    """Whether a value can be handed over in one local storage tier."""
     if not _is_local(producer) or not _is_local(consumer):
         return False
     producer_tensors = tensor_types(producer)
@@ -88,28 +86,10 @@ def _fusable(producer: Type, consumer: Type) -> bool:
     return bool(producer_meshes) and producer_meshes == consumer_meshes
 
 
-def _extent(call: Call, name: str) -> int:
-    """How many parallel units *call* occupies.
-
-    The output decides when it says anything, then a single agreeing input. A
-    call that neither describes occupies one unit: that is the smallest launch,
-    not a guess at a larger one.
-    """
-    output = topology_extent(call.type, name)
-    if output is not None:
-        return output
-    inputs = {
-        value for arg in call.args if (value := topology_extent(arg.type, name))
-    }
-    if len(inputs) == 1:
-        return next(iter(inputs))
-    return 1
-
-
 def _units(
     fn: Function,
     durations: dict[int, int],
-    topology: str,
+    placements: dict[int, Placement],
 ) -> dict[int, _Unit]:
     """Group *fn*'s calls into execution units by fusable local placement.
 
@@ -133,9 +113,10 @@ def _units(
             producer = call_by_id.get(id(arg))
             if producer is None or isinstance(producer.target, Reshard):
                 continue
-            if _fusable(producer.type, consumer.type) and _extent(
-                producer, topology
-            ) == _extent(consumer, topology):
+            if (
+                _fusable(producer.type, consumer.type)
+                and placements[id(producer)] == placements[id(consumer)]
+            ):
                 left, right = find(id(producer)), find(id(consumer))
                 if left != right:
                     parent[right] = left
@@ -145,14 +126,17 @@ def _units(
         root = find(id(call))
         if root not in index_of:
             index_of[root] = len(index_of)
-    units = {index: _Unit([], set(), 1, 0) for index in index_of.values()}
+    units = {index: _Unit([], set(), frozenset(), 0) for index in index_of.values()}
     unit_of: dict[int, int] = {}
     for call in calls:
         unit_id = index_of[find(id(call))]
         unit_of[id(call)] = unit_id
         unit = units[unit_id]
         unit.calls.append(call)
-        unit.extent = max(unit.extent, _extent(call, topology))
+        placement = placements[id(call)]
+        if unit.placement and unit.placement != placement:  # pragma: no cover
+            raise AnalysisError("one fused timeline unit has conflicting placements")
+        unit.placement = placement
         unit.duration_ns += durations[id(call)]
     for consumer in calls:
         consumer_unit = unit_of[id(consumer)]
@@ -170,13 +154,13 @@ def _wave_plan(unit: _Unit, capacity: int) -> list[tuple[int, int]]:
     much of the unit each wave issues, and the last wave absorbs the remainder
     so the parts still sum to the whole.
     """
+    if unit.extent <= 0:  # pragma: no cover - placement preflight rejects this
+        raise AnalysisError("a timeline unit has no result placement")
     demands: list[int] = []
     remaining = unit.extent
     while remaining > 0:
         demands.append(min(capacity, remaining))
         remaining -= demands[-1]
-    if not demands:
-        demands = [1]
     plan: list[tuple[int, int]] = []
     left = unit.duration_ns
     for index, demand in enumerate(demands):
@@ -200,8 +184,6 @@ def _solve(
     would otherwise collapse into one.
     """
     model = cp_model.CpModel()
-
-
 
     horizon = max(1, sum(max(1, unit.duration_ns) for unit in units.values()))
     waves_by_unit: dict[int, list[tuple[cp_model.IntVar, cp_model.IntVar]]] = {}
@@ -284,11 +266,12 @@ def analyze_timeline(
             f"{capacity!r}"
         )
     for fn in reachable_functions(function):
+        placements = _timeline_placements(module, fn, facts.topology)
         durations = _durations(fn)
         if not durations:
             attach(fn, TimelineMetadata(grid_units=0, waves=0, start_ns=0, end_ns=0))
             continue
-        units = _units(fn, durations, facts.topology)
+        units = _units(fn, durations, placements)
         makespan, total_waves, records = _solve(units, capacity)
         for expr in postorder(fn.body):
             record = records.get(id(expr))
@@ -311,7 +294,7 @@ def analyze_timeline(
                 root_durations[id(expr)] = _cost_bound(
                     cost, throughput, scale=trips.get(id(expr), 1)
                 ).ideal_ns
-            root_units = _units(fn, root_durations, facts.topology)
+            root_units = _units(fn, root_durations, placements)
             makespan, total_waves, _records = _solve(root_units, capacity)
         attach(
             fn,
