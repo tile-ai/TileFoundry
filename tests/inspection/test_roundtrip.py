@@ -100,19 +100,20 @@ def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
 
 def test_non_unit_scalar_index_loop_roundtrips_as_range() -> None:
     """A scalar index is not the full-window signature emitted by ``tile``."""
-    fn = import_dsl(
-        _HEADER + "\n@func\n"
-        'def gather(x: Tensor[(8, 4), "f32"]):\n'
-        '    out = zeros(shape=(4,), dtype="f32")\n'
-        "    for i in range(0, 8, 2):\n"
-        "        out = add(out, x[i])\n"
-        "    return out\n"
-    )
-    script = as_script(fn)
+    for loop in ("range(8)", "range(0, 8, 2)"):
+        fn = import_dsl(
+            _HEADER + "\n@func\n"
+            'def gather(x: Tensor[(8,), "f32"]):\n'
+            '    out = zeros(shape=(), dtype="f32")\n'
+            f"    for i in {loop}:\n"
+            "        out = add(out, x[i])\n"
+            "    return out\n"
+        )
+        script = as_script(fn)
 
-    assert "for i in range(0, 8, 2):" in script
-    assert "for i in tile(" not in script
-    assert as_script(import_dsl(script)) == script
+        assert f"for i in {loop}:" in script
+        assert "for i in tile(" not in script
+        assert as_script(import_dsl(script)) == script
 
 
 def test_shadowed_call_loc_roundtrips() -> None:
@@ -236,4 +237,3 @@ def test_a_loop_used_as_a_value_prints_the_name_its_carry_has() -> None:
 
     assert "mul(total, x)" in printed, printed
     assert as_script(import_dsl(printed)) == printed
-

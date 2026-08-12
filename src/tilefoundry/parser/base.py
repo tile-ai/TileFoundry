@@ -308,6 +308,7 @@ class BaseExprVisitor:
 
 
         self._call_dsl_names: dict[int, str] = {}
+        self._scalar_index_ids: set[int] = set()
         self._active_source_node: ast.AST | None = None
         self._active_binding_hint: str | None = None
         self.source_filename = "<string>"
@@ -521,11 +522,9 @@ class BaseExprVisitor:
 
         - a compile-time list + integer index → the element it holds.
         - ``TupleType`` value + int constant index → ``TupleGetItem``.
-        - ``TensorType`` value + slice indices → ``Slice``.
-          Each dim accepts either an ``ast.Slice``
-          (full / start:stop[:step]), a Name resolving to a
-          tile-window ``slice`` (from ``for ok in tile(extent, step)``), or a
-          compile-time integer, which collapses that axis as it does in torch.
+        - ``TensorType`` + slices / tile-window Names → ``Slice``.
+        - Compile-time integers and scalar range induction Names also reshape
+          away their selected axis, matching torch indexing.
         """
         if isinstance(node.value, ast.Name):
             bound = self.env.lookup(node.value.id)
@@ -584,6 +583,13 @@ class BaseExprVisitor:
                 strides.append(1)
                 collapsed.append(axis)
                 continue
+            scalar_index = self._scalar_index(el)
+            if scalar_index is not None:
+                starts.append(scalar_index)
+                sizes.append(1)
+                strides.append(1)
+                collapsed.append(axis)
+                continue
             b, e, s = self._slicer_for_dim(el, dim, axis)
             b_expr = b if isinstance(b, Expr) else i64_const(int(b))
             e_expr = e if isinstance(e, Expr) else i64_const(int(e))
@@ -636,6 +642,21 @@ class BaseExprVisitor:
                 )
             return normalized
         return value
+
+    def _scalar_index(self, el: ast.AST) -> "Expr | None":
+        """A registered scalar induction index from a ``range`` loop."""
+        if not isinstance(el, ast.Name):
+            return None
+        value = self.env.lookup(el.id)
+        type_ = value.type if isinstance(value, Expr) else None
+        if (
+            id(value) in self._scalar_index_ids
+            and isinstance(type_, TensorType)
+            and type_.shape == ()
+            and type_.dtype is DType.i64
+        ):
+            return value
+        return None
 
     def _list_element(self, name: str, items: list, slc: ast.AST) -> Expr:
         """One element of a compile-time list, taken by compile-time index."""

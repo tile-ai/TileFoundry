@@ -40,6 +40,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import dim_vars_reached, display_name, origin_of
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
@@ -757,6 +758,18 @@ def _emit_def(
 
     _forced_names: dict[int, str] = {}
     _tile_window_steps: dict[int, object] = {}
+    collapsed_slice_ids = {
+        id(expr.args[0])
+        for expr in _order
+        if isinstance(expr, Call)
+        and isinstance(expr.target, Reshape)
+        and len(expr.args) == 1
+        and isinstance(expr.args[0], Call)
+        and isinstance(expr.args[0].target, Slice)
+        and isinstance(expr.args[0].type, TensorType)
+        and isinstance(expr.type, TensorType)
+        and len(expr.type.shape) < len(expr.args[0].type.shape)
+    }
 
     _grid_internal_ids: set[int] = set()
     _nested_grid_ids: set[int] = set()
@@ -769,6 +782,7 @@ def _emit_def(
             and any(
                 isinstance(candidate, Call)
                 and isinstance(candidate.target, Slice)
+                and id(candidate) not in collapsed_slice_ids
                 and len(candidate.args) == 2
                 and isinstance(candidate.args[1], Tuple)
                 and any(

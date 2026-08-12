@@ -703,6 +703,8 @@ class _HirBodyVisitor(BaseExprVisitor):
 
 
         self.env.push_frame()
+        if loop_kind == "range":
+            self._scalar_index_ids.add(id(iv))
         try:
             self.env.define(node.target.id, iv_binding)
             for cname, phi in zip(carry_names, phi_vars):
@@ -720,6 +722,7 @@ class _HirBodyVisitor(BaseExprVisitor):
                     )
                 yield_exprs.append(v)
         finally:
+            self._scalar_index_ids.discard(id(iv))
             self.env.pop_frame()
 
         if not carry_names:
