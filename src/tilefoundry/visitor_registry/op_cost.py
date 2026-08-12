@@ -29,8 +29,6 @@ from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
 from tilefoundry.ir.hir.nn.silu import Silu
 from tilefoundry.ir.hir.nn.softmax import SoftMax
 from tilefoundry.ir.hir.nn.tanh import Tanh
-from tilefoundry.ir.hir.shape.shape_compose import ShapeCompose
-from tilefoundry.ir.hir.shape.shape_extract import ShapeExtract
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
@@ -418,8 +416,6 @@ def _tuple_get_item(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Rank)
 @register_cost_evaluator(ShapeOf)
-@register_cost_evaluator(ShapeCompose)
-@register_cost_evaluator(ShapeExtract)
 @register_cost_evaluator(Local)
 def _metadata_view(call: Call, ctx: CostContext) -> Cost:
     return Cost({}, _idle(call))

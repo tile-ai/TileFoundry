@@ -61,7 +61,7 @@ class PrefillDecodeAttention:
                 v_cache,
                 (0, 0, 0, 0),
             )
-            context_size = tf.shape_extract(tf.shape_of(k_cache), index=1)
+            context_size = tf.shape_of(k_cache)[1]
             query_start = context_size - 1
             qh = tf.reshard(
                 q, (1, SEQ, HEADS @ cta.head, HEAD_DIM), "smem"
