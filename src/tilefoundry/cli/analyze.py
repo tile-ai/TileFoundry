@@ -79,6 +79,12 @@ def guidance() -> str:
           a reported peak footprint holds under the order this walk took. Which
             order the program really takes is settled by scheduling, so the peak
             is an observation, not a bound.
+
+        Each family's record, how every field is computed, and what it prints:
+          tilefoundry spec analysis 2.2.1    compute-cost
+          tilefoundry spec analysis 2.2.2    memory
+          tilefoundry spec analysis 2.2.3    roofline
+          tilefoundry spec analysis 2.2.4    timeline
         """
     )
 

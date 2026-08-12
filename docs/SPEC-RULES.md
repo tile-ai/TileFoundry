@@ -24,7 +24,11 @@ identifier spelled and cased exactly as in the source: a Python class
 Python function as its `def name(...) -> R:` signature, and a C++ construct as
 its struct / class / enum / template declaration. A class MUST NOT be shown as
 a call-form signature. Each entry is followed by a `- constraints:` list, where
-every normative MUST / SHALL / SHOULD sentence lives.
+every normative MUST / SHALL / SHOULD sentence lives. A per-field table MAY
+instead carry the rule that computes each field, one row per field. It is
+normative and is the owning statement for that rule; the same rule MUST NOT also
+appear in the entry's `- constraints:` list. The list keeps every other
+normative sentence.
 
 The interface is concise, never a copy of the implementation: no decorators,
 no registration machinery, no `ParamDef` plumbing, no method or function

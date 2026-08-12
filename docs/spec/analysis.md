@@ -304,49 +304,93 @@ rather than obtained from a scheduler.
 
 ## 2. Authored-HIR metrics
 
-The measurement entry is the composed operation ([§3](#3-composed-analysis)). What a human or a tool
-reads is a *rendering* of its semantic result and of the records it left on the
-IR ([inspection](./inspection.md)); the command line composes one call per
-requested analysis and renders the results together
-([cli §Analyze](./cli.md#analyze)).
+The measurement entry is the composed operation ([§3](#3-composed-analysis)).
+Each family below owns its record, field derivation, target facts, and rendered
+forms. The command line composes one call per requested family and renders those
+results together ([cli §Analyze](./cli.md#analyze)).
+
+Typed records use the immutable `IRMetadata` and optional comment interface
+defined by [core-ir §2](./core-ir.md#2-expr). Their attachment point says what
+they describe: a record on a `Call` describes that call, while a record on a
+`Function` describes the whole function.
 
 - constraints:
+  - One record type MUST mean the same quantity at every attachment point.
+  - A `Function`-attached record MUST NOT be read as data the Function
+    inherently carries. It states what one analysis found for one invocation,
+    and there MUST be no cross-call cache behind it.
+
+### 2.2 Analysis families
+
+The first families are `compute-cost`, `memory`, `roofline`, and `timeline`.
+Each owns one record type and declares its dependencies and output additions.
+
+| Selector | Requires | Owns | Rests on | Text summary adds | Annotates equations |
+|---|---|---|---|---|---|
+| `compute-cost` | - | `ComputeCostMetadata` | the authored program | `flops`, `traffic` | every measured Call |
+| `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
+| `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` | bounded dependency evidence, `ideal-bound` | every measured Call |
+| `timeline` | `roofline` | `TimelineMetadata` | `ParallelCapacityFacts` | `theoretical-makespan` | every measured Call, shared per execution unit |
+
+Every compact text summary begins with these two lines:
+
+```text
+# example
+# analysis target=<target> module=<module> function=<function> topology=<level|none>
+# analyses=<selector>[,<selector>...] executed=<selector>[,<selector>...]
+```
+
+The JSON report carries the same identity and selection in `target`, `module`,
+`function`, `topology`, `requested`, and `executed`. Whole-function
+projections are under `function_records`; `calls` is a value-ordered list whose
+entries have a `value` label and one key per selected family. `totals` appears
+when the selected view includes compute cost or roofline's bounded work evidence.
+
+The output forms below share these placeholders:
+
+| Placeholder | Form | Empty value |
+|---|---|---|
+| `<flopset>` | `<dtype>:<int>[,<dtype>:<int>...]` | `0` |
+| `<levelset>` | `<level>:r<int>/w<int>[,<level>:r<int>/w<int>...]` | `0` |
+| `<peakset>` | `<level>:<int>[,<level>:<int>...]` | `0` |
+| `<operandset>` | `<position>:r<int>/w<int>[,<position>:r<int>/w<int>...]`, where position is an argument integer or `result` | omitted |
+| `<resource>` | `compute`, `memory`, `balanced`, `unrated`, or `none` | `none` |
+
+Summary sets use `=` and comma-space separators; annotation sets use `:` and
+comma separators. This difference is intentional.
+
+- constraints:
+  - A family MUST obtain hardware only through a Facts aggregate it declares
+    ([target §11](./target.md#11-target-facts-projection)). Common analysis code
+    MUST NOT branch on a concrete Target type, MUST NOT call a complete Target
+    analyzer, and MUST NOT resolve an undeclared Target to a default.
+  - A family MUST read a dependency's record rather than recompute what it
+    states. A number with two derivations has two answers.
+  - Global logical work, per-unit work, and lifetime order MUST remain
+    target-independent. Physical capacity, hierarchy relationships, and
+    throughput comparisons are target-aware.
   - A rendering MUST NOT be a field of the semantic result, and an analysis MUST
-    NOT format one. A family that rendered its own text would be deciding
-    presentation, and two families would then disagree about it.
-  - A rendering MUST report what the caller *requested*. A requested analysis
-    pulls its dependencies in, so records reach the IR that nobody asked to see;
-    by default those records MUST stay on the IR and MUST NOT be reported. A
-    requested `roofline` view is the bounded exception: alongside its verdict it
-    MUST carry the exact summed work and traffic and the per-level peak footprint
-    its declared dependencies wrote, while `requested` still names only
-    `roofline`. It MUST NOT promote persistent bytes, capacities, advisories,
-    lifetimes, or the per-operand split. Which records an analysis owns MUST be
-    read from its Target-selected descriptor ([§3.1](#31-target-selected-analyzers))
-    rather than from a second table.
-  - Every rendering of one run MUST make that selection through one shared
-    decision. A summary and an annotated program are two views of the same run,
-    and choosing separately is how one of them comes to show a dependency the
-    caller never asked about.
-  - A rendering MUST show only records that were actually written, so it never
-    reports a measurement that did not happen.
+    NOT format one.
+  - A rendering MUST report what the caller requested. Dependency records nobody
+    requested MUST stay on the IR and MUST NOT be reported except for roofline's
+    bounded evidence defined below. Record ownership MUST come from the
+    Target-selected descriptor ([§3.1](#31-target-selected-analyzers)).
+  - Every rendering of one run MUST select records through one shared decision
+    and MUST show only records actually written.
   - Every reported quantity MUST come from a record, except a total that is the
-    exact sum of records that state it. A quantity that is not derivable that
-    way MUST be recorded by the analysis that computed it, not reassembled by a
-    renderer.
-  - Two formats over one report MUST carry the same conclusions. They MUST be
-    built from one intermediate structure rather than formatted independently.
-  - A compact text report header MUST contain whole-function facts only. A
-    per-value fact belongs on that value's annotated equation; in particular,
-    `ComputeCostMetadata.operands` MUST render there by its positional argument
-    labels plus `result`, and MUST NOT add one header line per Call. The equation
-    supplies the names those positions refer to, while JSON MAY retain those
-    names and operand types in its structured projection.
+    exact sum of records that state it. A quantity not derivable that way MUST be
+    recorded by the analysis that computed it.
+  - Text and JSON MUST be built from one intermediate report and MUST carry the
+    same conclusions.
+  - A compact text summary MUST contain whole-function facts only. Per-value
+    facts MUST stay on their annotated equations; JSON MAY retain operand names
+    and types in its structured projection.
 
-### 2.1 Metadata records
+#### 2.2.1 `compute-cost`
 
-`TrafficBytes` is the shared cost-context record defined by
-[visitor-registry §7](./visitor-registry.md#7-instance-4--cost).
+`compute-cost` measures the logical work and movement of each authored `Call`
+without reading target hardware facts. `TrafficBytes` is the shared cost-context
+record defined by [visitor-registry §7](./visitor-registry.md#7-instance-4--cost).
 
 ```python
 class ComputeCostMetadata(IRMetadata):
@@ -363,7 +407,67 @@ class ComputeCostMetadata(IRMetadata):
     flops_per_unit: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
+```
 
+| Field | How it is computed | Reads the target |
+|---|---|---|
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written, then multiply by the enclosing recomputation factor. For a Function Call, take the callee's summed `flops` and multiply by the call site's factor. | No |
+| `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge it to the storage level of that operand's Type, and group by level. A multi-level Type conservatively charges its full logical size at every occupied level in each reported direction. A Function Call takes the callee's grouped total. | No |
+| `operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
+
+Requesting this family adds these summary lines, each prefixed by `# `:
+
+```text
+flops <dtype>=<int>[, <dtype>=<int>...]
+traffic <level>=r<int>/w<int>[, <level>=r<int>/w<int>...]
+```
+
+An empty flop or traffic set prints as `0` after its label.
+
+Every measured Call receives this annotation; `operands` is omitted for a
+Function Call:
+
+```text
+compute-cost flops=<flopset> per-unit=<flopset> bytes=<levelset>[ operands=<operandset>]
+```
+
+Each reported Call's JSON projection is under its `compute-cost` key. `operands`
+appears only for a primitive Call and contains objects in positional order:
+
+```text
+{"flops": {<dtype>: <int>},
+ "flops_per_unit": {<dtype>: <int>},
+ "traffic": {<level>: {"read": <int>, "write": <int>}},
+ "operands": [{"arg": <position>, "name": <name>, "type": <type>,
+               "read": <int>, "write": <int>}, ...]}
+```
+
+- constraints:
+  - A record MUST be attached to every reachable `Call`; compute cost MUST NOT
+    add a whole-Function record because its exact total is the sum of Call
+    records.
+  - An op with no registered cost evaluator MUST raise `AnalysisError`.
+  - Missing program geometry MUST NOT be replaced with a target capacity.
+  - The enclosing recomputation factor MUST be the product of the authored loop
+    trip counts for loops whose induction variable or carried argument the Call
+    transitively reads. A loop-invariant Call MUST keep a factor of one. The
+    same rule MUST apply to primitive and Function Calls.
+  - Downstream families MUST read the already-scaled record and MUST NOT apply
+    authored loop trip counts a second time.
+  - Two primitive operands MAY name the same value; their positions MUST keep
+    them distinct. A rendering MUST omit an unavailable operand split rather
+    than emit it empty.
+  - Per-level `traffic` and `operands` MUST NOT be assumed equal for a Type that
+    occupies several levels: the aggregate is the conservative placement charge
+    while the operand entry is the evaluator's movement amount.
+
+#### 2.2.2 `memory`
+
+`memory` measures whole-Function value lifetimes, footprints, and the levels at
+which the compute-cost traffic lands.
+
+```python
 class LevelFootprint:
     """How much of one memory level a function needs at its peak.
 
@@ -412,130 +516,26 @@ class MemoryMetadata(IRMetadata):
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     advisories: tuple[str, ...] = ()
-
-class RooflineMetadata(IRMetadata):
-    """A lower bound on time, and which side of the machine sets it.
-
-    Attributes:
-        compute_ns: attribute; Time the flops imply at the target's rates.
-        memory_ns: attribute; Time the traffic implies at the target's bandwidth.
-        ideal_ns: attribute; The ideal bound the two imply.
-        bound_by: attribute; Which resource set the bound.
-    """
-
-    compute_ns: int = 0
-    memory_ns: int = 0
-    ideal_ns: int = 0
-    bound_by: str = "none"
-
-class TimelineMetadata(IRMetadata):
-    """A modeled placement on the nominal timeline.
-
-    Attributes:
-        grid_units: attribute; Parallel-unit extent this placement covers.
-        waves: attribute; Number of waves issued.
-        start_ns: attribute; Modeled start, in ns.
-        end_ns: attribute; Modeled end, in ns.
-    """
-
-    grid_units: int = 1
-    waves: int = 1
-    start_ns: int = 0
-    end_ns: int = 0
 ```
 
-- constraints:
-  - Every record MUST be immutable and MUST render one single-line comment form,
-    so a printer can attach it without knowing the record type
-    ([inspection](./inspection.md)).
-  - A record's attachment point MUST say what it is about, and one record type
-    MUST mean the same quantity wherever it hangs. A `Call`-attached record
-    describes that call; a `Function`-attached record describes that whole
-    function. A type MUST NOT change meaning with its attachment point.
-  - A `Function`-attached record MUST NOT be read as data the Function
-    inherently carries. It states what one analysis found when a call reached
-    that function, and there MUST be no cross-call cache behind it.
-  - `ComputeCostMetadata.flops` and its bytes MUST be derivable from the authored
-    program alone. Flops MUST come from the op's registered cost evaluator
-    ([visitor-registry](./visitor-registry.md)) over the types as written, and
-    bytes from the logical types the operands and result carry. `flops_per_unit`
-    MUST come from the same evaluator over types projected to the analysed level
-    using the program's authored topology and Mesh extents. It MUST NOT
-    substitute a target capacity for missing program geometry. An op with no
-    registered cost evaluator MUST raise `AnalysisError`.
-  - `ValueLifetime.binding` MUST identify one value within its function. An
-    authored name does not: the parser attaches an assignment's name to every
-    nested expression of its right-hand side, so several values answer to one name
-    and a row keyed by it says less than it appears to. A repeated name MUST take
-    the numeric suffix the printed form of the same program uses, the first
-    occurrence keeping the bare name, so a reader can line a row up with the value
-    it measures ([inspection](./inspection.md)).
-  - `operands` MUST be positional against `(*call.args, call)`: one entry per
-    argument in order, then the result. Each entry MUST be the amount the op's
-    cost evaluator reported for that operand, unmodified. Two operands MAY name
-    the same value; the position is what distinguishes them.
-  - Which level an operand's bytes are charged at MUST come from that operand's
-    Type. Where the Type occupies one level, the per-level `traffic` is those
-    same amounts regrouped. Where it spans several, the per-level `traffic` MUST
-    charge the whole Type at each of them, in the directions the op reported
-    movement in: no operand-level count states how the bytes divide, so the
-    aggregate takes a conservative bound while the operand entry keeps the
-    reported amount. The two MUST NOT be assumed equal in general.
-  - Operand attribution is defined for a call on a primitive op only. A call
-    into another `Function` MUST report that function's totals and MUST record
-    no operands: that traffic is an aggregate over the callee's own operands,
-    and no breakdown of this call's arguments describes it. A rendering MUST
-    omit the operand breakdown for such a call rather than emit it empty.
-  - `MemoryMetadata` MUST be attached per `Function`: a peak is a property of the
-    whole function's live ranges and belongs to no single expression.
-  - Parameters MUST be resident from the start of the value order and MUST be
-    `persistent`, held for the whole function: a function cannot reclaim storage
-    its caller owns. Every non-parameter allocation MUST be measured by first
-    definition and last use.
-  - `Reshape` MUST allocate nothing: it re-indexes the same elements. `Slice`
-    and `Transpose` MUST allocate their results. Analysis MUST NOT infer buffer
-    aliasing from layouts; whether an optimization later makes values share a
-    buffer is not an analysis-owned decision.
-  - `RooflineMetadata` MUST be computed from the recorded work rather than from a
-    second reading of the program. On a `Function` the compute and memory times
-    MUST each be summed over the function before being compared, because
-    aggregating per-Call bounds instead would charge the machine for rounding and
-    for overlap it does not suffer.
-  - A dtype or a level the target publishes no rate for MUST contribute nothing
-    to the bound, and MUST NOT be filled in with an assumed rate. Work whose rate
-    is unpublished MUST still report a non-zero bound rather than read as free.
-  - `TimelineMetadata` MUST be attached per **execution unit** — the group of
-    calls fused by compatible local placement and equal parallel extent — so
-    every call of one unit MUST carry the same record. A unit whose extent exceeds
-    the parallel capacity MUST be modelled as consecutive waves. On a `Function`
-    the record MUST span the whole plan, from the origin to the solved makespan.
-  - The timeline is a modeled plan. It MUST NOT be read as a guarantee about
-    lowering, physical occupancy, or runtime performance.
+| Field | How it is computed | Reads the target |
+|---|---|---|
+| `ValueLifetime.binding` | Use the parameter or authored binding name, or `<value N>` when unnamed; repeated names take the printer's numeric suffix in definition order. | No |
+| `ValueLifetime.level` | Emit one lifetime per storage level occupied by the value's Type. | No |
+| `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. | `MemoryHierarchyFacts.explicit_levels[].owner` |
+| `ValueLifetime.defined_at` | Position in the order of parameters followed by body Calls and Constants in SSA postorder. | No |
+| `ValueLifetime.last_used_at` | Greatest recorded consumer position; the last position for a parameter, and also for the Function body when that body is itself a recorded value. | No |
+| `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
+| `LevelFootprint.level` | Each storage level with at least one lifetime, sorted by name. | No |
+| `LevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level over the value order. | No |
+| `LevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
+| `LevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
+| `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
+| `MemoryMetadata.traffic` | Exact per-level sum of the Function's already-scaled `ComputeCostMetadata.traffic`. | No |
+| `MemoryMetadata.lifetimes` | Every value residency except a `Reshape`, which aliases its input. | As above |
+| `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope cache working-set findings. | `MemoryHierarchyFacts` |
 
-### 2.2 Analysis families
-
-The first families are `compute-cost`, `memory`, `roofline`, and `timeline`.
-Each owns one record type and declares what it needs.
-
-| Selector | Requires | Owns | Rests on |
-|---|---|---|---|
-| `compute-cost` | — | `ComputeCostMetadata` | the authored program |
-| `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` |
-| `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` |
-| `timeline` | `roofline` | `TimelineMetadata` | `ParallelCapacityFacts` |
-
-- constraints:
-  - A family MUST obtain hardware only through a Facts aggregate it declares
-    ([target §11](./target.md#11-target-facts-projection)). Common analysis code
-    MUST NOT branch on a concrete Target type, MUST NOT call a complete Target
-    analyzer, and MUST NOT resolve an undeclared Target to a default.
-  - A family MUST read a dependency's record rather than recompute what it
-    states. A number with two derivations has two answers.
-  - Global logical work, per-unit work, and lifetime MUST remain
-    target-independent. Physical capacity, hierarchy relationships, and
-    throughput comparisons are target-aware.
-
-### 2.3 Memory hierarchy facts
+The family reads this target projection:
 
 ```python
 class MemoryRelationKind(Enum):
@@ -601,38 +601,88 @@ class MemoryHierarchyFacts:
     relations: tuple[MemoryLevelRelation, ...]
 ```
 
+Requesting memory adds one summary line and one line per advisory:
+
+```text
+peak-footprint <level>=<int>[, <level>=<int>...]
+advisory <text>
+```
+
+An empty footprint prints as `peak-footprint 0`; no advisory line is emitted
+when there is no advisory.
+
+The record's single-line comment form is:
+
+```text
+memory peak=<peakset> persistent=<int> advisories=<int>
+```
+
+The `analyze` equation printer emits no memory annotation because the record is
+attached only to the Function. Its full JSON projection is under
+`function_records.memory`:
+
+```text
+{"footprint": [{"level": <level>, "peak_bytes": <int>,
+                "persistent_bytes": <int>, "capacity_bytes": <int|null>}, ...],
+ "traffic": {<level>: {"read": <int>, "write": <int>}},
+ "lifetimes": [{"binding": <name>, "level": <level>, "bytes": <int>,
+                "defined_at": <int>, "last_used_at": <int>,
+                "persistent": <bool>}, ...],
+ "advisories": [<text>, ...]}
+```
+
 - constraints:
-  - The levels MUST be two flat tuples and the structure MUST be a separate edge
-    list. A hierarchy that is only ever a tree cannot state that a cache and an
-    addressable level divide one physical block, which is the relationship that
-    decides how much of that block either one gets.
+  - `MemoryMetadata` MUST be attached per reachable `Function`; a peak spans its
+    live ranges and belongs to no single expression.
+  - `Slice` and `Transpose` MUST allocate their results. Analysis MUST NOT infer
+    buffer aliasing from layouts.
+  - The memory levels MUST be two flat tuples with a separate relation edge list.
   - A GPU projection MUST cover the explicit levels a program can name and the
     caches traffic passes through, and MUST state that L1 caches L2, that L2
     caches global memory, and that L1 divides one physical block with shared
-    memory. A target with no such sharing MUST express that by having no such
-    edge, not by a placeholder one.
-  - An implicit level MUST NOT be given a capacity of its own where its usable
-    capacity depends on the program. That capacity MUST be derived from the
-    sharing edge and the sharing level's measured peak.
-  - Every explicit level MUST carry an `owner` supplied by the Target. Its value
-    MUST be one of that Target's declared topology names, or the reserved word
-    `target` when all of its units share one allocation. An implicit cache MUST
-    NOT carry an owner: program values are never resident there, and cache
-    advisories compare capacity scopes instead.
-  - A residency MUST be projected through every declared split at or coarser
-    than its explicit level's owner. A `target`-owned residency MUST remain
-    global. The analysis MUST NOT derive ownership from the storage-level name
-    or from `scope`; in particular, CUDA register capacity is stated per SM while
-    register values are owned by threads.
-  - One value exceeding an explicit level's stated capacity MUST raise
-    `AnalysisError`: no schedule can place that value there. A measured peak
-    exceeding the capacity MUST instead be recorded as an advisory and MUST NOT
-    fail the call. The peak holds under the value order the analysis walked; it
-    is order-dependent and is not a bound over schedules. Exceeding an implicit
-    level's capacity MUST likewise be recorded as an advisory and MUST NOT fail
-    the call, because a working set larger than a cache still runs.
+    memory. A target with no sharing MUST express that with no sharing edge.
+  - An implicit level MUST NOT receive a fixed capacity where its usable capacity
+    depends on the program; that capacity MUST be derived from the sharing edge
+    and the sharing level's measured peak.
+  - Every explicit level MUST carry an `owner` supplied by the Target. It MUST be
+    a declared Target topology or `target`. An implicit cache MUST NOT carry an
+    owner.
+  - Analysis MUST NOT infer memory ownership from a storage level's name or
+    capacity scope.
+  - One value exceeding an explicit level's capacity MUST raise `AnalysisError`.
+    An aggregate explicit peak or implicit working set exceeding capacity MUST
+    instead produce an advisory and MUST NOT fail the call.
 
-### 2.4 Throughput and parallel-capacity facts
+#### 2.2.3 `roofline`
+
+`roofline` converts recorded work into a lower time bound at the target's
+published compute and memory rates.
+
+```python
+class RooflineMetadata(IRMetadata):
+    """A lower bound on time, and which side of the machine sets it.
+
+    Attributes:
+        compute_ns: attribute; Time the flops imply at the target's rates.
+        memory_ns: attribute; Time the traffic imply at the target's bandwidth.
+        ideal_ns: attribute; The ideal bound the two imply.
+        bound_by: attribute; Which resource set the bound.
+    """
+
+    compute_ns: int = 0
+    memory_ns: int = 0
+    ideal_ns: int = 0
+    bound_by: str = "none"
+```
+
+| Field | How it is computed | Reads the target |
+|---|---|---|
+| `compute_ns` | For each recorded dtype with a published rate, round `flops * 1e9 / rate` up to ns and sum the dtype times. A Function uses its summed flops, not a sum of per-Call times. | `ThroughputFacts.peak_flops_per_second` |
+| `memory_ns` | Add reads and writes at `bandwidth_level`, multiply by `1e9 / memory_bandwidth_bytes_per_second`, and round up to ns; zero when no bandwidth is published or no bytes move. A Function uses its summed traffic, not a sum of per-Call times. | `ThroughputFacts.bandwidth_level` and `memory_bandwidth_bytes_per_second` |
+| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when recorded work exists but neither published rate yields a bound, otherwise zero for no work. | Through the two times |
+| `bound_by` | `none` for no bound, `balanced` for equal nonzero times, `memory` when memory is greater, `compute` when compute is greater, and `unrated` for the one-ns unpublished-work bound. | Through the two times |
+
+The family reads this target projection:
 
 ```python
 class ThroughputFacts:
@@ -649,8 +699,80 @@ class ThroughputFacts:
     bandwidth_level: str
 
     def peak_for(self, dtype: DType) -> int | None: ...
+```
 
+Requesting roofline adds the exact summed compute-cost `flops` and `traffic`,
+the memory record's per-level peak, and this verdict to the summary:
 
+```text
+ideal-bound=<int>ns by=<resource>
+```
+
+Every measured Call receives this annotation:
+
+```text
+roofline bound=<int>ns by=<resource> compute=<int>ns memory=<int>ns
+```
+
+Reported Call and Function records use the same projection under their
+`roofline` keys:
+
+```text
+{"compute_ns": <int>, "memory_ns": <int>, "ideal_ns": <int>,
+ "bound_by": <resource>}
+```
+
+When roofline is requested without its dependencies being requested, `totals`
+carries only exact `flops` and `traffic` sums, and `function_records.memory`
+carries only `level` and `peak_bytes` per footprint row. Persistent bytes,
+capacities, advisories, lifetimes, operand splits, and dependency annotations do
+not enter that view. Independently requesting a dependency selects its full form
+as defined in that family's section.
+
+- constraints:
+  - Roofline records MUST be attached to every reachable `Call` and `Function`.
+  - Roofline MUST read `ComputeCostMetadata` rather than evaluate the program a
+    second time.
+  - A recorded compute dtype that is not a `DType` name MUST raise
+    `AnalysisError`.
+  - `ThroughputFacts.peak_for` MUST return `None` for an unpublished dtype rate,
+    and analysis MUST NOT substitute an assumed rate.
+  - The bounded dependency evidence described above MUST be the only dependency
+    data promoted into a roofline-only rendering, while `requested` MUST still
+    name only `roofline`.
+
+#### 2.2.4 `timeline`
+
+`timeline` places roofline-bounded execution units on the nominal timeline under
+a fixed parallel capacity.
+
+```python
+class TimelineMetadata(IRMetadata):
+    """A modeled placement on the nominal timeline.
+
+    Attributes:
+        grid_units: attribute; Parallel-unit extent this placement covers.
+        waves: attribute; Number of waves issued.
+        start_ns: attribute; Modeled start, in ns.
+        end_ns: attribute; Modeled end, in ns.
+    """
+
+    grid_units: int = 1
+    waves: int = 1
+    start_ns: int = 0
+    end_ns: int = 0
+```
+
+| Field | How it is computed | Reads the target |
+|---|---|---|
+| `grid_units` | A Call uses its output's authored extent at `topology`, otherwise one agreeing input extent, otherwise one. A fused unit uses its widest Call; its Calls record that value. A Function records its widest unit, or zero with no work. | `ParallelCapacityFacts.topology` selects the authored extent. |
+| `waves` | On a Call, the unit extent divided into consecutive capacity-sized waves; on a Function, the total waves issued, or zero with no work. | `ParallelCapacityFacts.parallel_units` |
+| `start_ns` | Start of the unit's first wave in the solver's makespan-minimizing placement, subject to its fixed solve budget, producer dependencies, and cumulative capacity. A unit's duration is the sum of its Calls' `RooflineMetadata.ideal_ns`, divided among waves in proportion to their issued units. A Function starts at zero. | `ParallelCapacityFacts.parallel_units` through placement |
+| `end_ns` | End of the same unit's last wave; on a Function, the maximum unit end, or zero with no work. | `ParallelCapacityFacts.parallel_units` through placement |
+
+The family reads this target projection:
+
+```python
 class ParallelCapacityFacts:
     """Carry the parallel capacity assumed by timeline analysis.
 
@@ -663,13 +785,36 @@ class ParallelCapacityFacts:
     parallel_units: int
 ```
 
+Requesting timeline adds this Function verdict to the summary:
+
+```text
+theoretical-makespan=<int>ns
+```
+
+Every measured Call receives this annotation; all Calls fused into one execution
+unit carry the same values:
+
+```text
+timeline units=<int> waves=<int> start=<int>ns end=<int>ns
+```
+
+Reported Call and Function records use the same projection under their
+`timeline` keys:
+
+```text
+{"grid_units": <int>, "waves": <int>, "start_ns": <int>, "end_ns": <int>}
+```
+
 - constraints:
-  - `ThroughputFacts.peak_for` MUST return `None` for a dtype with no published
-    rate; analysis MUST NOT substitute an assumed rate.
-  - `bandwidth_level` MUST select the traffic level divided by the published
-    bandwidth rather than summing traffic across levels.
-  - `parallel_units` is compiler policy over hardware facts and MUST be a
-    capacity used to form waves, not a program rewrite.
+  - A producer-consumer edge MAY fuse only when both values are in local
+    register or shared storage, their storage and Mesh sets agree, and their
+    parallel extents are equal. `Reshard` MUST end an execution unit. Calls
+    connected through fusable edges MUST form one unit, and every Call in that
+    unit MUST carry the same record.
+  - `parallel_units` MUST be a positive capacity used to form waves, not a
+    program rewrite.
+  - Timeline is a modeled plan and MUST NOT be read as a guarantee about
+    lowering, physical occupancy, or runtime performance.
 
 ## 3. Composed analysis
 
@@ -725,9 +870,6 @@ dummy-run a plain Python orchestration method.
   - The Module owning a reached `Function` MUST be answered within the supplied
     tree, by identity and recorded origin rather than by name. No owner, or more
     than one, is refused rather than assigned to the root.
-  - A call is measured as the callee's totals at that site. A repeated site
-    counts again, and a site a loop varies counts once per trip
-    ([§1.4](#14-authored-loops)); neither introduces an invocation record.
 
 ```python
 class AnalysisResult:
