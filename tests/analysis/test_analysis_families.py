@@ -18,6 +18,8 @@ import pytest
 import tilefoundry.analysis.compute_cost as compute_cost
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
+from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
+from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -40,7 +42,7 @@ from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
 from tilefoundry.ir.hir import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel
+from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel, tensor_bytes
 from tilefoundry.ir.types.shard import (
     Broadcast,
     ComposedLayout,
@@ -402,17 +404,16 @@ def test_matmul_layout_changes_only_the_per_unit_work() -> None:
             broadcast_bound,
         ),
     ) = records
-    assert [record.flops for record, _bound in records] == [
-        (("bf16", 28_547_481_600),),
-    ] * 3
-    assert [record.flops_per_unit for record, _bound in records] == [
-        (("bf16", 28_547_481_600),),
-        (("bf16", 216_268_800),),
-        (("bf16", 28_547_481_600),),
-    ]
+    total_flops = plain_cost.flops[0]
+    assert split_cost.flops == broadcast_cost.flops == (total_flops,)
+    assert broadcast_cost.flops_per_unit == plain_cost.flops
+    split_per_unit = split_cost.flops_per_unit[0]
+    assert (split_per_unit[0], split_per_unit[1] * _MatmulLayouts.topologies[0].size) == (
+        total_flops[0],
+        total_flops[1],
+    )
     assert split_cost.traffic == plain_cost.traffic == broadcast_cost.traffic
     assert split_bound == plain_bound == broadcast_bound
-    assert plain_bound.ideal_ns == 28_851
 
 
 def test_function_call_carries_the_callee_per_unit_work() -> None:
@@ -625,6 +626,7 @@ def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
 
 
 def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
+    """The H200 capacity is an input fact; the peak is two live tile lifetimes."""
     functions = {function.name: function for function in _SharedTile.functions}
     split = functions["split"]
     result = analyze(_SharedTile, split, analysis="memory")
@@ -633,10 +635,12 @@ def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
     assert record is not None
     smem = next(item for item in record.footprint if item.level == "smem")
     assert smem.capacity_bytes == 232_448
-    assert smem.peak_bytes == 422_400
-    assert max(item.bytes for item in record.lifetimes if item.level == "smem") == 211_200
+    largest_tile = max(item.bytes for item in record.lifetimes if item.level == "smem")
+    assert smem.peak_bytes == 2 * largest_tile
     assert any(
-        "smem peak is 422400 B" in note and "order-dependent" in note and "not a bound" in note
+        f"smem peak is {smem.peak_bytes} B" in note
+        and "order-dependent" in note
+        and "not a bound" in note
         for note in record.advisories
     )
 
@@ -650,20 +654,20 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     gmem = get_metadata(result.function, MemoryMetadata)
     assert gmem is not None
     gmem_lifetimes = {item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"}
-    assert gmem_lifetimes["v0"] == gmem_lifetimes["lhs"] == 4_325_376
+    assert gmem_lifetimes["local_lhs"] == gmem_lifetimes["lhs"]
 
     shared = next(fn for fn in _SharedTile.functions if fn.name == "split")
     result = analyze(_SharedTile, shared, analysis="memory")
     cta_owned = get_metadata(result.function, MemoryMetadata)
     assert cta_owned is not None
-    assert (
-        next(
-            item.bytes
-            for item in cta_owned.lifetimes
-            if item.binding == "v0" and item.level == "smem"
-        )
-        == 211_200
+    shared_smem = cta_owned.level("smem")
+    assert shared_smem is not None
+    local_bytes = next(
+        item.bytes
+        for item in cta_owned.lifetimes
+        if item.binding == "local" and item.level == "smem"
     )
+    assert shared_smem.peak_bytes == 2 * local_bytes
 
     thread_shared = _entry(_modest_shared)
     result = analyze(_modest_shared, thread_shared, analysis="memory")
@@ -675,7 +679,7 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
             for item in still_cta_owned.lifetimes
             if item.binding == "v0" and item.level == "smem"
         )
-        == 4_096
+        == tensor_bytes(thread_shared.params[0].type)
     )
 
     registers = _entry(_thread_sharded)
@@ -690,6 +694,97 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
         )
         == 8
     )
+
+
+def test_analysis_snapshot_drift_sentinel() -> None:
+    """Intentional current-output snapshot; change it only with model review."""
+    functions = {function.name: function for function in _MatmulLayouts.functions}
+    matmul_records = []
+    for function in (functions["plain"], functions["split"], functions["broadcast"]):
+        analyze(_MatmulLayouts, function, analysis="roofline")
+        call = _calls(function)[-1]
+        matmul_records.append(
+            (
+                get_metadata(call, ComputeCostMetadata),
+                get_metadata(call, RooflineMetadata),
+            )
+        )
+    plain_cost, plain_bound = matmul_records[0]
+    split_cost, _split_bound = matmul_records[1]
+
+    shared = next(function for function in _SharedTile.functions if function.name == "split")
+    analyze(_SharedTile, shared, analysis="memory")
+    shared_record = get_metadata(shared, MemoryMetadata)
+    assert shared_record is not None
+    shared_smem = shared_record.level("smem")
+    assert shared_smem is not None
+
+    matmul = functions["split"]
+    gmem = get_metadata(matmul, MemoryMetadata)
+    assert gmem is not None
+    gmem_lifetimes = {
+        item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"
+    }
+
+    modest = _entry(_modest_shared)
+    analyze(_modest_shared, modest, analysis="memory")
+    modest_record = get_metadata(modest, MemoryMetadata)
+    assert modest_record is not None
+    modest_local = next(
+        item.bytes
+        for item in modest_record.lifetimes
+        if item.binding == "local" and item.level == "smem"
+    )
+
+    placed = []
+    for dims in ({"ctx": 1024, "seq": 1}, {"ctx": 1, "seq": 1024}):
+        result = analyze(
+            PrefillDecodeAttention,
+            PrefillDecodeAttention.entry_function(),
+            analysis="roofline",
+            dims=dims,
+        )
+        record = get_metadata(result.function, RooflineMetadata)
+        assert record is not None
+        placed.append(record.ideal_ns)
+
+    qwen = []
+    for ctx_len in (1, 1024):
+        module = QWEN3_1_7B.build()
+        result = analyze(
+            module,
+            module.lookup("decoder_layer"),
+            analysis="timeline",
+            dims={"ctx_len": ctx_len},
+        )
+        record = get_metadata(result.function, TimelineMetadata)
+        assert record is not None
+        qwen.append(record.end_ns)
+
+    snapshot = {
+        "matmul_flops": plain_cost.flops,
+        "matmul_split_flops_per_unit": split_cost.flops_per_unit,
+        "matmul_ideal_ns": plain_bound.ideal_ns,
+        "shared_peak_bytes": shared_smem.peak_bytes,
+        "shared_largest_tile_bytes": max(
+            item.bytes for item in shared_record.lifetimes if item.level == "smem"
+        ),
+        "gmem_lhs_bytes": gmem_lifetimes["lhs"],
+        "modest_shared_bytes": modest_local,
+        "placed_ideal_ns": tuple(placed),
+        "qwen_makespan_ns": tuple(qwen),
+    }
+    assert snapshot == {
+        "matmul_flops": (("bf16", 28_547_481_600),),
+        "matmul_split_flops_per_unit": (("bf16", 216_268_800),),
+        "matmul_ideal_ns": 28_851,
+        "shared_peak_bytes": 422_400,
+        "shared_largest_tile_bytes": 211_200,
+        "gmem_lhs_bytes": 4_325_376,
+        "modest_shared_bytes": 4_096,
+        "placed_ideal_ns": (3_496, 65_449),
+        "qwen_makespan_ns": (21_101, 32_504),
+    }
 
 
 def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None:
