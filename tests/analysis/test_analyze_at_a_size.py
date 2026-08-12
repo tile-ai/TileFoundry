@@ -78,10 +78,24 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("small_dims", "large_dims", "variant", "bound_by"),
+    ("small_dims", "large_dims", "variant", "bound_by", "min_scale", "max_scale"),
     [
-        ({"ctx": 512, "seq": 1}, {"ctx": 1024, "seq": 1}, "decode", "memory"),
-        ({"ctx": 1, "seq": 512}, {"ctx": 1, "seq": 1024}, "prefill", "compute"),
+        (
+            {"ctx": 512, "seq": 1},
+            {"ctx": 1024, "seq": 1},
+            "decode",
+            "memory",
+            1.9,
+            2.1,
+        ),
+        (
+            {"ctx": 1, "seq": 512},
+            {"ctx": 1, "seq": 1024},
+            "prefill",
+            "compute",
+            3.8,
+            4.2,
+        ),
     ],
     ids=["decode-open-context", "prefill-open-sequence"],
 )
@@ -90,6 +104,8 @@ def test_block_attention_selects_and_analyzes_each_placed_regime(
     large_dims: dict[str, int],
     variant: str,
     bound_by: str,
+    min_scale: float,
+    max_scale: float,
 ) -> None:
     records = []
     for dims in (small_dims, large_dims):
@@ -105,7 +121,8 @@ def test_block_attention_selects_and_analyzes_each_placed_regime(
         assert record.bound_by == bound_by
         records.append(record)
 
-    assert records[0].ideal_ns < records[1].ideal_ns
+    ideal_scale = records[1].ideal_ns / records[0].ideal_ns
+    assert min_scale < ideal_scale < max_scale
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -337,7 +354,8 @@ def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length()
 
     assert all(record.grid_units == 1 for record in records)
     assert all(record.waves == 7 for record in records)
-    assert records[0].end_ns < records[1].end_ns
+    makespan_scale = records[1].end_ns / records[0].end_ns
+    assert 1.4 < makespan_scale < 1.7
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

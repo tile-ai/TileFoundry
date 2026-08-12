@@ -660,14 +660,12 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     result = analyze(_SharedTile, shared, analysis="memory")
     cta_owned = get_metadata(result.function, MemoryMetadata)
     assert cta_owned is not None
-    shared_smem = cta_owned.level("smem")
-    assert shared_smem is not None
     local_bytes = next(
         item.bytes
         for item in cta_owned.lifetimes
         if item.binding == "local" and item.level == "smem"
     )
-    assert shared_smem.peak_bytes == 2 * local_bytes
+    assert local_bytes == tensor_bytes(shared.params[0].type) // _SharedTile.topologies[0].size
 
     thread_shared = _entry(_modest_shared)
     result = analyze(_modest_shared, thread_shared, analysis="memory")
