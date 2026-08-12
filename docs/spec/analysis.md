@@ -323,14 +323,14 @@ they describe: a record on a `Call` describes that call, while a record on a
 ### 2.2 Analysis families
 
 The first families are `compute-cost`, `memory`, `roofline`, and `timeline`.
-Each owns one record type and declares its dependencies and output additions.
+Each owns its record types and declares its dependencies and output additions.
 
 | Selector | Requires | Owns | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata` | the authored program | `flops`, `traffic` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
 | `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` | bounded dependency evidence, `ideal-bound` | every measured Call |
-| `timeline` | `compute-cost` | `TimelineMetadata` | `ThroughputFacts`, `ParallelCapacityFacts` | `theoretical-makespan` | every measured Call, shared per execution unit |
+| `timeline` | `compute-cost` | `TimelineMetadata`, `TimelineSummaryMetadata` | `ThroughputFacts`, `ParallelCapacityFacts` | local makespan, waves, estimated kernel time | every measured Call |
 
 Every compact text summary begins with these two lines:
 
@@ -778,38 +778,62 @@ as defined in that family's section.
 
 #### 2.2.4 `timeline`
 
-`timeline` places roofline-bounded execution units on the nominal timeline under
-a fixed parallel capacity.
+`timeline` places compute-cost-priced occurrences on a CTA-local nominal timeline,
+then scales the root schedule by a fixed physical parallel capacity.
 
 ```python
 class TimelineMetadata(IRMetadata):
-    """A modeled placement on the nominal timeline.
+    """One occurrence's CTA-local interval on the nominal timeline.
 
     Attributes:
-        grid_units: attribute; Parallel-unit extent this placement covers.
-        waves: attribute; Number of waves issued.
         start_ns: attribute; Modeled start, in ns.
         end_ns: attribute; Modeled end, in ns.
         trips: attribute; Number of executions represented by this interval.
         stride_ns: attribute; Start-to-start distance between repeated executions.
     """
 
-    grid_units: int = 1
-    waves: int = 1
     start_ns: int = 0
     end_ns: int = 0
     trips: int = 1
     stride_ns: int = 0
+
+
+class TimelineSummaryMetadata(IRMetadata):
+    """One Function's local schedule and physical-wave estimate.
+
+    Attributes:
+        local_makespan_ns: attribute; Solved CTA-local schedule length, in ns.
+        waves: attribute; Physical waves required by the root topology.
+        estimated_kernel_ns: attribute; Local makespan scaled by waves, in ns.
+    """
+
+    local_makespan_ns: int = 0
+    waves: int = 1
+    estimated_kernel_ns: int = 0
 ```
+
+Occurrence fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `grid_units` | A Call records the cardinality of its exact result participant set. A Function records the widest occurrence, or zero with no work. | `ParallelCapacityFacts.topology` selects the result Mesh level. |
-| `waves` | One on each primitive occurrence; on a Function, the number of direct positive-duration occurrences, or zero with no work. | No |
-| `start_ns` | Start of one occurrence in the makespan-minimizing local schedule subject to producer dependencies and exact participant-set exclusion. A Function starts at zero. | No |
-| `end_ns` | End of that occurrence's first execution; on a Function, the complete local makespan, or zero with no work. | No |
+| `start_ns` | Start of one occurrence in the makespan-minimizing local schedule subject to producer dependencies and exact participant-set exclusion. | No |
+| `end_ns` | End of that occurrence's first execution. | No |
 | `trips` | One outside a loop; within a loop, the enclosing loop trip count represented by the interval. | No |
 | `stride_ns` | Zero outside a loop; within a loop, the solved makespan of one body execution. | No |
+
+Function summary fields are:
+
+| Field | How it is computed | Reads the target |
+|---|---|---|
+| `local_makespan_ns` | End of the CTA-local schedule, or zero with no work. | No |
+| `waves` | `ceil(N / P)`, where `N` is the static extent of the root topology selected by `ParallelCapacityFacts.topology` and `P` is `parallel_units`. | `ParallelCapacityFacts` |
+| `estimated_kernel_ns` | `local_makespan_ns * waves`. | Through `waves` |
+
+Occurrence intervals remain CTA-local. They are not copied once per wave, and
+neither the root topology extent nor `parallel_units` changes them. The capacity
+`P` is compiler policy for concurrent instances; it is distinct from the
+per-unit rates in `ThroughputFacts` even when both projections derive from the
+same physical unit count today.
 
 The family reads this target projection:
 
@@ -829,22 +853,27 @@ class ParallelCapacityFacts:
 Requesting timeline adds this Function verdict to the summary:
 
 ```text
-theoretical-makespan=<int>ns
+timeline local-makespan=<int>ns waves=<int> estimated-kernel=<int>ns
 ```
 
 Every measured Call receives this annotation:
 
 ```text
-timeline units=<int> waves=<int> start=<int>ns end=<int>ns
+timeline start=<int>ns end=<int>ns
 ```
 
-Reported Call and Function records use the same projection under their
+Reported Call and Function records use distinct projections under their
 `timeline` keys:
 
 ```text
-{"grid_units": <int>, "waves": <int>, "start_ns": <int>, "end_ns": <int>,
- "trips": <int>, "stride_ns": <int>}
+Call: {"start_ns": <int>, "end_ns": <int>, "trips": <int>, "stride_ns": <int>}
+Function: {"local_makespan_ns": <int>, "waves": <int>,
+           "estimated_kernel_ns": <int>}
 ```
+
+`estimated_kernel_ns` is a deterministic comparison estimate, not a runtime
+prediction. It deliberately excludes launch overhead, occupancy, utilization,
+traffic volume, and other execution effects that this family does not model.
 
 - constraints:
   - A primitive Call is eligible for timeline only when every tensor leaf of its
@@ -870,8 +899,9 @@ Reported Call and Function records use the same projection under their
     The loop spans `trips * stride_ns`; a consumer of its yield MUST wait for
     that full span. Loop-invariant values remain single occurrences outside it.
   - Equal-makespan schedules MUST use inline occurrence order as a deterministic
-    tie-break, not as an execution dependency. On a `Function`, the record MUST
-    span the whole local plan from the origin to its solved makespan.
+    tie-break, not as an execution dependency. On a `Function`, the summary's
+    `local_makespan_ns` MUST span the whole local plan from the origin to its
+    solved makespan.
   - `parallel_units` is compiler policy over hardware facts. It MUST NOT enter
     one-unit rates or the CTA-local interval solver, and is not a program rewrite.
   - Timeline is a modeled plan and MUST NOT be read as a guarantee about

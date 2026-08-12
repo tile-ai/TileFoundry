@@ -21,6 +21,7 @@ from .metadata import (
     OccurrenceProvenance,
     RooflineMetadata,
     TimelineMetadata,
+    TimelineSummaryMetadata,
     TrafficBytes,
     ValueLifetime,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "TileGraph",
     "TileUnit",
     "TimelineMetadata",
+    "TimelineSummaryMetadata",
     "TrafficBytes",
     "ValueLifetime",
     "access_footprints",

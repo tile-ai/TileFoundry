@@ -98,7 +98,7 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
     assert " per-unit-bytes=" in annotated
     assert " operands=" in annotated
     assert "roofline bound=" in text
-    assert "timeline units=" in text
+    assert "timeline start=" in text
 
     positive_per_unit = [
         row["compute-cost"]["flops_per_unit"]["f32"]
@@ -149,7 +149,11 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
         "ideal_ns": 45,
         "memory_ns": 45,
     }
-    assert payload["function_records"]["timeline"]["end_ns"] == 2_676
+    assert payload["function_records"]["timeline"] == {
+        "estimated_kernel_ns": 2_676,
+        "local_makespan_ns": 2_676,
+        "waves": 1,
+    }
 
 
 def test_usage_errors_include_the_command_help(tf) -> None:
@@ -174,7 +178,7 @@ def test_a_bare_analyze_typechecks_and_prints_only_typed_hir(tf, cmine) -> None:
     assert "compute-cost " not in done.stdout
     assert "memory peak=" not in done.stdout
     assert "roofline bound=" not in done.stdout
-    assert "timeline units=" not in done.stdout
+    assert "timeline start=" not in done.stdout
 
 
 def test_analyze_json_needs_an_explicit_analysis(tf, cmine) -> None:
@@ -221,7 +225,12 @@ def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> No
     )
     assert bound.returncode == 0, bound.stderr
     payload = json.loads(bound.stdout)
-    assert payload["function_records"]["timeline"]["grid_units"] == 3
+    timeline = payload["function_records"]["timeline"]
+    assert timeline == {
+        "estimated_kernel_ns": timeline["local_makespan_ns"],
+        "local_makespan_ns": timeline["local_makespan_ns"],
+        "waves": 1,
+    }
 
 
 def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> None:
@@ -233,11 +242,11 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
     assert "# traffic " in done.stdout
     assert "# ideal-bound=" in done.stdout
     assert "# peak-footprint" in done.stdout
-    assert "# theoretical-makespan" not in done.stdout
+    assert "# timeline local-makespan" not in done.stdout
     assert "roofline bound=" in done.stdout
     assert "memory peak=" not in done.stdout
     assert "compute-cost flops=" not in done.stdout
-    assert "timeline units=" not in done.stdout
+    assert "timeline start=" not in done.stdout
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:

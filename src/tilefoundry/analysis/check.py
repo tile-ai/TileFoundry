@@ -49,6 +49,7 @@ from .metadata import (
     OccurrenceProvenance,
     RooflineMetadata,
     TimelineMetadata,
+    TimelineSummaryMetadata,
 )
 from .preflight import infer_authored_types, validate_call_context
 from .walk import describe, postorder, reachable_functions, tensor_types
@@ -59,6 +60,7 @@ _DERIVED_METADATA = {
     MemoryMetadata,
     RooflineMetadata,
     TimelineMetadata,
+    TimelineSummaryMetadata,
 }
 _ResourceKey = tuple[str, str]
 Placement = frozenset[int]

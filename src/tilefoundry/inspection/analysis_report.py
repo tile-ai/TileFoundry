@@ -19,6 +19,7 @@ from tilefoundry.analysis import (
     MemoryMetadata,
     RooflineMetadata,
     TimelineMetadata,
+    TimelineSummaryMetadata,
     TrafficBytes,
 )
 from tilefoundry.analysis.api import AnalysisResult
@@ -97,12 +98,20 @@ def _roofline(record: RooflineMetadata, expr: object) -> dict[str, object]:
 
 def _timeline(record: TimelineMetadata, expr: object) -> dict[str, object]:
     return {
-        "grid_units": record.grid_units,
-        "waves": record.waves,
         "start_ns": record.start_ns,
         "end_ns": record.end_ns,
         "trips": record.trips,
         "stride_ns": record.stride_ns,
+    }
+
+
+def _timeline_summary(
+    record: TimelineSummaryMetadata, expr: object
+) -> dict[str, object]:
+    return {
+        "local_makespan_ns": record.local_makespan_ns,
+        "waves": record.waves,
+        "estimated_kernel_ns": record.estimated_kernel_ns,
     }
 
 
@@ -140,6 +149,7 @@ _RECORDS: tuple[tuple[str, type[IRMetadata], object], ...] = (
     ("memory", MemoryMetadata, _memory),
     ("roofline", RooflineMetadata, _roofline),
     ("timeline", TimelineMetadata, _timeline),
+    ("timeline", TimelineSummaryMetadata, _timeline_summary),
 )
 
 
@@ -291,7 +301,12 @@ def render_text(data: dict[str, object]) -> str:
             f"ideal-bound={bound['ideal_ns']}ns by={bound['bound_by']}"
         )
     if "timeline" in records:
-        lines.append(f"theoretical-makespan={records['timeline']['end_ns']}ns")
+        timeline = records["timeline"]
+        lines.append(
+            f"timeline local-makespan={timeline['local_makespan_ns']}ns "
+            f"waves={timeline['waves']} "
+            f"estimated-kernel={timeline['estimated_kernel_ns']}ns"
+        )
     return "\n".join(f"# {line}" for line in lines)
 
 

@@ -182,18 +182,12 @@ class RooflineMetadata(IRMetadata):
 
 @dataclass(frozen=True)
 class TimelineMetadata(IRMetadata):
-    """A modeled placement on the nominal timeline.
+    """One occurrence's CTA-local interval on the nominal timeline.
 
-    On a Call this is one occurrence's CTA-local interval. A repeated loop-body
-    occurrence states its first interval plus the trip count and stride needed
-    to derive every later interval.
-
-    On a Function it is the whole function's span, so it starts at the origin
-    and ends at the local makespan the scheduling model solved for.
+    A repeated loop-body occurrence states its first interval plus the trip
+    count and stride needed to derive every later interval.
     """
 
-    grid_units: int = 1
-    waves: int = 1
     start_ns: int = 0
     end_ns: int = 0
     trips: int = 1
@@ -203,14 +197,25 @@ class TimelineMetadata(IRMetadata):
         if self.trips > 1:
             span_end = self.start_ns + self.trips * self.stride_ns
             return (
-                f"timeline units={self.grid_units} waves={self.waves} "
-                f"[{self.start_ns}+{self.stride_ns}t, "
+                f"timeline [{self.start_ns}+{self.stride_ns}t, "
                 f"{self.end_ns}+{self.stride_ns}t) trips={self.trips} "
                 f"span=[{self.start_ns},{span_end})"
             )
+        return f"timeline start={self.start_ns}ns end={self.end_ns}ns"
+
+
+@dataclass(frozen=True)
+class TimelineSummaryMetadata(IRMetadata):
+    """One Function's local schedule and physical-wave estimate."""
+
+    local_makespan_ns: int = 0
+    waves: int = 1
+    estimated_kernel_ns: int = 0
+
+    def format_comment(self) -> str:
         return (
-            f"timeline units={self.grid_units} waves={self.waves} "
-            f"start={self.start_ns}ns end={self.end_ns}ns"
+            f"timeline local-makespan={self.local_makespan_ns}ns "
+            f"waves={self.waves} estimated-kernel={self.estimated_kernel_ns}ns"
         )
 
 
@@ -221,6 +226,7 @@ __all__ = [
     "OccurrenceProvenance",
     "RooflineMetadata",
     "TimelineMetadata",
+    "TimelineSummaryMetadata",
     "TrafficBytes",
     "ValueLifetime",
 ]

@@ -24,9 +24,11 @@ from tilefoundry.analysis import (
     MemoryHierarchyFacts,
     MemoryMetadata,
     MemoryRelationKind,
+    ParallelCapacityFacts,
     RooflineMetadata,
     ThroughputFacts,
     TimelineMetadata,
+    TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _mesh_image, _result_placement, _timeline_placements
@@ -87,6 +89,32 @@ _LARGE_H200 = CudaTarget(
     replace(_H200.device, hbm_capacity_bytes=300_000_000_000_000_000),
     architecture=_H200.architecture,
 )
+
+
+class _ConstrainedCudaTarget(CudaTarget):
+    name = "test.constrained_cuda"
+
+    def get_facts(self, facts_type: type, query: object | None = None):
+        facts = super().get_facts(facts_type, query)
+        if facts_type is ParallelCapacityFacts:
+            return replace(facts, parallel_units=64)
+        return facts
+
+
+_GRID = DimVar("grid", 1, 397)
+
+
+@module(
+    entry="main",
+    target=_H200,
+    topologies=(Topology("cta", _GRID),),
+)
+class _ScalableGrid:
+    @func
+    def main(source: Tensor[(64,), "f32"]):
+        with Mesh(("cta",), layout=(_GRID,), names=("tile",)) as _cta:
+            local = tf.reshard(source, (64,), "gmem")
+            return tf.relu(local)
 
 
 @module(entry="main", target=_LARGE_H200, topologies=(Topology("cta", 1),))
@@ -919,6 +947,65 @@ def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
     assert join.start_ns >= max(routed_out.end_ns, shared_out.end_ns)
 
 
+def test_timeline_scales_one_local_schedule_by_root_capacity() -> None:
+    """Root geometry and capacity scale waves, never occurrence intervals."""
+    results = [
+        analyze(
+            _ScalableGrid,
+            _ScalableGrid.entry_function(),
+            analysis="timeline",
+            dims={"grid": extent},
+        )
+        for extent in (132, 265)
+    ]
+    constrained = replace(
+        _ScalableGrid,
+        target=_ConstrainedCudaTarget("nvidia.h200_sxm"),
+    )
+    results.append(
+        analyze(
+            constrained,
+            constrained.entry_function(),
+            analysis="timeline",
+            dims={"grid": 265},
+        )
+    )
+
+    intervals = [
+        tuple(get_metadata(call, TimelineMetadata) for call in _calls(result.function))
+        for result in results
+    ]
+    summaries = [
+        get_metadata(result.function, TimelineSummaryMetadata) for result in results
+    ]
+    assert intervals[0] == intervals[1] == intervals[2]
+    assert all(summary is not None for summary in summaries)
+    first, wider, constrained_summary = summaries
+    assert first is not None and wider is not None and constrained_summary is not None
+    assert {
+        first.local_makespan_ns,
+        wider.local_makespan_ns,
+        constrained_summary.local_makespan_ns,
+    } == {15}
+    assert (first.waves, wider.waves, constrained_summary.waves) == (1, 3, 5)
+    assert (
+        first.estimated_kernel_ns,
+        wider.estimated_kernel_ns,
+        constrained_summary.estimated_kernel_ns,
+    ) == (15, 45, 75)
+
+    data = report(results[1])
+    assert set(data["function_records"]["timeline"]) == {
+        "local_makespan_ns",
+        "waves",
+        "estimated_kernel_ns",
+    }
+    assert all(
+        set(row["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
+        for row in data["calls"]
+    )
+
+
 def test_placement_projection_rejects_the_wrong_level_and_invalid_images() -> None:
     with pytest.raises(
         AnalysisError,
@@ -998,7 +1085,7 @@ def test_a_zero_cost_structural_occurrence_has_an_empty_timeline_interval() -> N
     ]
     assert all(
         set(item)
-        == {"grid_units", "waves", "start_ns", "end_ns", "trips", "stride_ns"}
+        == {"start_ns", "end_ns", "trips", "stride_ns"}
         for item in timelines
     )
     assert any(
@@ -1019,7 +1106,7 @@ def test_an_unplaced_structural_occurrence_ignores_unmodelled_traffic() -> None:
     assert cost.flops_per_unit == ()
     assert cost.traffic_per_unit_at("gmem").total_bytes == 0
     assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=8, write=8)
-    assert (timeline.grid_units, timeline.start_ns, timeline.end_ns) == (0, 0, 0)
+    assert (timeline.start_ns, timeline.end_ns) == (0, 0)
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:

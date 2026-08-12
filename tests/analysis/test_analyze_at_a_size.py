@@ -24,6 +24,7 @@ from tilefoundry.analysis import (
     MemoryMetadata,
     RooflineMetadata,
     TimelineMetadata,
+    TimelineSummaryMetadata,
     analyze,
 )
 from tilefoundry.analysis.errors import AnalysisError
@@ -139,7 +140,7 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
     }
     assert data["totals"]["flops"], "the work totals summed to nothing"
     text = render_text(data)
-    for expected in ("peak-footprint", "ideal-bound", "theoretical-makespan"):
+    for expected in ("peak-footprint", "ideal-bound", "estimated-kernel"):
         assert expected in text, f"{expected} is missing from the rendered report"
 
     single_module, single_function, single_dims = _subject("timeline")
@@ -157,6 +158,9 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
         get_metadata(expr, TimelineMetadata)
         for expr in (result.function, *postorder(result.function.body))
         if get_metadata(expr, TimelineMetadata) is not None
+    )
+    assert get_metadata(single.function, TimelineSummaryMetadata) == get_metadata(
+        result.function, TimelineSummaryMetadata
     )
 
 
@@ -252,10 +256,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         assert structural_cost.traffic_per_unit_at("gmem").total_bytes == 0
         assert structural_cost.traffic_per_unit == ()
         assert (
-            structural_timeline.grid_units,
             structural_timeline.start_ns,
             structural_timeline.end_ns,
-        ) == (0, 652, 652)
+        ) == (652, 652)
         loop_casts.append(tuple(costs))
         loop_timelines.append(tuple(timelines))
 
@@ -277,7 +280,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             for consumer in consumers
         } == {loop_end}
 
-        root_timeline = get_metadata(result.function, TimelineMetadata)
+        root_timeline = get_metadata(result.function, TimelineSummaryMetadata)
         assert root_timeline is not None
         root_timelines.append(root_timeline)
 
@@ -286,8 +289,6 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     assert [
         tuple(
             (
-                record.grid_units,
-                record.waves,
                 record.start_ns,
                 record.end_ns,
                 record.stride_ns,
@@ -298,8 +299,6 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     ] == [
         tuple(
             (
-                record.grid_units,
-                record.waves,
                 record.start_ns,
                 record.end_ns,
                 record.stride_ns,
@@ -311,7 +310,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         652,
         652,
     )
-    assert [record.end_ns for record in root_timelines] == [9_145, 16_521]
+    assert [record.local_makespan_ns for record in root_timelines] == [9_145, 16_521]
+    assert [record.waves for record in root_timelines] == [1, 1]
+    assert [record.estimated_kernel_ns for record in root_timelines] == [9_145, 16_521]
 
     roots = []
     for result in results:

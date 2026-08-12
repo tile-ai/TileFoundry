@@ -15,13 +15,14 @@ from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.target import Target
 
 from .check import Placement, _timeline_placements
 from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, ThroughputFacts
-from .metadata import ComputeCostMetadata, TimelineMetadata
+from .metadata import ComputeCostMetadata, TimelineMetadata, TimelineSummaryMetadata
 from .walk import (
     attach,
     children,
@@ -270,8 +271,6 @@ def _records(
         end = offset_ns + occurrence.end_ns
         if isinstance(occurrence.expr, Call):
             result[key] = TimelineMetadata(
-                grid_units=len(occurrence.placement),
-                waves=1,
                 start_ns=start,
                 end_ns=end,
                 trips=trips,
@@ -300,6 +299,13 @@ def analyze_timeline(
     """Place every reachable Function's occurrences on a local timeline."""
     placement_facts = target.get_facts(ParallelCapacityFacts)
     throughput = target.get_facts(ThroughputFacts)
+    topology = module.resolve_topology(placement_facts.topology)
+    topology_extent = static_dim_value(topology.size)
+    if topology_extent is None:
+        raise AnalysisError(
+            f"timeline: topology {topology.name!r} has unresolved extent {topology.size!r}"
+        )
+    waves = -(-topology_extent // placement_facts.parallel_units)
     for fn in reachable_functions(function):
         placements = _timeline_placements(
             module,
@@ -316,11 +322,10 @@ def analyze_timeline(
                 attach(expr, record)
         attach(
             fn,
-            TimelineMetadata(
-                grid_units=max((record.grid_units for record in records.values()), default=0),
-                waves=1 if records else 0,
-                start_ns=0,
-                end_ns=schedule.makespan_ns,
+            TimelineSummaryMetadata(
+                local_makespan_ns=schedule.makespan_ns,
+                waves=waves,
+                estimated_kernel_ns=schedule.makespan_ns * waves,
             ),
         )
 
