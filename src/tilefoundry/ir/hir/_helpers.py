@@ -53,14 +53,13 @@ def broadcast_shapes(a: tuple, b: tuple, *, raising: bool = True):
 def resolve_anchor_storage(ctx, call, *storages):
     """Resolve output storage from the concrete residency among the operands.
 
-    ``StorageKind.UMAT`` and host metadata (``None``) abstain. One concrete
-    storage, or several that agree, anchors the output. Disagreement is
-    unsupported; there is no operand-order tie-break. With no concrete anchor,
-    metadata yields ``None`` and otherwise the result is ``StorageKind.UMAT``.
+    ``StorageKind.UMAT`` abstains. One concrete storage, or several that agree,
+    anchors the output. Disagreement is unsupported; there is no operand-order
+    tie-break. With no concrete anchor, the result is ``StorageKind.UMAT``.
     """
-    concrete = {s for s in storages if s is not StorageKind.UMAT and s is not None}
+    concrete = {s for s in storages if s is not StorageKind.UMAT}
     if not concrete:
-        return None if any(s is None for s in storages) else StorageKind.UMAT
+        return StorageKind.UMAT
     if len(concrete) == 1:
         return next(iter(concrete))
     kinds = ", ".join(sorted(str(s) for s in concrete))

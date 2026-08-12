@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Union
 
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
@@ -38,11 +38,13 @@ class TensorType:
     dtype: DType
     layout: "LayoutBase | None"
 
-    storage: Optional[StorageKind]
+    storage: StorageKind
 
     def __post_init__(self) -> None:
 
         normalized = resolve_storage(self.storage)
+        if normalized is None:
+            raise TypeError("TensorType.storage must be a StorageKind, not None")
         if normalized is not self.storage:
             object.__setattr__(self, "storage", normalized)
 
@@ -55,22 +57,34 @@ class TensorType:
     def scalar(
         dtype: DType,
         layout: "LayoutBase | None" = None,
-        storage: Optional[StorageKind] = StorageKind.RMEM,
+        storage: StorageKind = StorageKind.RMEM,
     ) -> "TensorType":
         return TensorType(shape=(), dtype=dtype, layout=layout, storage=storage)
 
     @staticmethod
-    def meta_scalar(dtype: DType = DType.i64) -> "TensorType":
-        """Canonical rank-0 shape/meta scalar.
+    def umat_scalar(dtype: DType = DType.i64) -> "TensorType":
+        """Canonical rank-0 value whose residency is not decided.
 
-        Canonical rank-0 shape/meta scalar (``layout=EMPTY_LAYOUT``,
-        ``storage=None`` — a non-memory-resident compile-time value).
-        Every shape-element / dim-arithmetic type must use this single
-        form so structural type equality holds across construction sites.
+        Shape elements and dimension arithmetic results use this single form
+        so structural type equality holds across construction sites.
         """
         from .shard.layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
 
-        return TensorType(shape=(), dtype=dtype, layout=EMPTY_LAYOUT, storage=None)
+        return TensorType(
+            shape=(), dtype=dtype, layout=EMPTY_LAYOUT, storage=StorageKind.UMAT
+        )
+
+    @staticmethod
+    def umat_tensor(shape: tuple, dtype: DType = DType.i64) -> "TensorType":
+        """Canonical ranked value whose residency is not decided."""
+        from .shard.layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
+
+        return TensorType(
+            shape=tuple(shape),
+            dtype=dtype,
+            layout=EMPTY_LAYOUT,
+            storage=StorageKind.UMAT,
+        )
 
 
 @dataclass(frozen=True)

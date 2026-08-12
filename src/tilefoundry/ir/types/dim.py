@@ -157,7 +157,7 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
     """
     from .tensor_type import TensorType  # noqa: PLC0415
 
-    ti64 = TensorType.meta_scalar()
+    ti64 = TensorType.umat_scalar()
 
     def _wrap(v):
         if isinstance(v, bool):

@@ -511,12 +511,11 @@ handle. Effect Ops appear in Stmt position as `Evaluate(op, args)`
 below; code carries only a one-line purpose docstring
 ([SPEC-RULES](../SPEC-RULES.md)).
 
-- `TensorType.storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` /
-  `tmem`) or `None` ([types §2](./types.md#2-tensortype)). `storage=None` is rank-0-only,
-  reserved for shape-element tensors. A memory-resident TIR tensor MUST carry a
-  concrete level; the unmaterialized `umat` ([types §2](./types.md#2-tensortype)) is an
-  HIR-only value and MUST already be materialized to a concrete level by the
-  time `HirToTirPass` produces TIR — it never appears in TIR.
+- `TensorType.storage` is a `StorageKind` ([types §2](./types.md#2-tensortype)).
+  A memory-resident TIR tensor MUST carry a concrete level; the unmaterialized
+  `umat` ([types §2](./types.md#2-tensortype)) is an HIR-only value and MUST
+  already be materialized to a concrete level by the time `HirToTirPass`
+  produces TIR — it never appears in TIR.
 - `Reshard` does not appear in TIR. HIR-side `Reshard` without a storage change
   lowers to a `TensorView` and performs no allocation or copy; a storage change
   lowers to `LetStmt(AllocTensor)` plus `Evaluate(Copy, ...)` during

@@ -20,7 +20,7 @@ class ShapeExtract(Op):
 
 @register_typeinfer(ShapeExtract)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return TensorType.meta_scalar()
+    return TensorType.umat_scalar()
 
 
 @register_eval(ShapeExtract)

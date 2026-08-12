@@ -61,7 +61,7 @@ def tensor_bytes(type: Type) -> int:
 def make_tensor_type(
     shape: tuple,
     dtype: DType = DType.f32,
-    storage: "str | StorageKind | None" = "gmem",
+    storage: "str | StorageKind" = "gmem",
     layout: object = None,
 ) -> "TensorType":
     """Convenience constructor for a plain (unsharded) ``TensorType``."""
@@ -71,7 +71,7 @@ def make_tensor_type(
 def make_shard_tensor_type(
     shape: tuple,
     dtype: DType = DType.f32,
-    storage: "str | StorageKind | None" = "gmem",
+    storage: "str | StorageKind" = "gmem",
     mesh: Optional[Mesh] = None,
     attrs: tuple = (),
 ) -> "TensorType":

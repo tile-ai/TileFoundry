@@ -1,8 +1,9 @@
 """Define backend-generic memory-space levels.
 
-Surface strings normalize to ``StorageKind`` at the IR boundary. ``None``
-means no memory space; ``UMAT`` marks compiler-internal values whose residency
-has not yet been materialized.
+Surface strings normalize to ``StorageKind`` at the IR boundary. ``UMAT``
+marks compiler-internal values whose residency has not yet been materialized.
+``None`` remains a valid optional attribute value at surface boundaries such as
+``Reshard.storage``; it is not a ``TensorType.storage`` value.
 
 See [types §2](docs/spec/types.md#2-tensortype).
 """
@@ -37,7 +38,7 @@ _STORAGE_NAMES = {
 
 
 def resolve_storage(value: "str | StorageKind | None") -> "StorageKind | None":
-    """Normalise a storage spec to ``StorageKind | None`` at a surface boundary.
+    """Normalise an optional storage spec at a surface boundary.
 
     ``None`` and ``StorageKind`` pass through; a canonical short name string
     (``host`` / ``gmem`` / ``smem`` / ``rmem`` / ``tmem``) maps to its

@@ -38,7 +38,7 @@ def i64_const(value: int) -> "Constant":
 
     from .tensor_type import TensorType  # noqa: PLC0415 - cycle guard
 
-    return Constant(type=TensorType.meta_scalar(), value=int(value))
+    return Constant(type=TensorType.umat_scalar(), value=int(value))
 
 
 def upper_bound(dim) -> int:

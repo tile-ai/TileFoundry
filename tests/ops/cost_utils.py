@@ -28,7 +28,7 @@ class CostCase:
 def run_cost_case(case: CostCase) -> None:
     """Infer and evaluate one Call's cost, including every traffic operand."""
     args = tuple(Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs))
-    placeholder = case.inputs[0] if case.inputs else TensorType.meta_scalar()
+    placeholder = case.inputs[0] if case.inputs else TensorType.umat_scalar()
     call = Call(type=placeholder, target=case.op, args=args)
     result_type = TypeInferVisitor(TypeInferContext()).visit(call)
     call = replace(call, type=result_type)

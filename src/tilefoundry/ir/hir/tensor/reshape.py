@@ -152,6 +152,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     new_shape = tuple(call.target.new_shape)
 
+    if x_ty.storage is StorageKind.UMAT and new_shape == ():
+        return TensorType.umat_scalar(x_ty.dtype)
+
     new_layout = None
     if isinstance(x_ty.layout, ShardLayout):
         genuine = any(not isinstance(a, Broadcast) for a in x_ty.layout.attrs)

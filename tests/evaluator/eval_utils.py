@@ -77,7 +77,7 @@ def run_eval_case(case: EvalCase) -> None:
         Var(type=tensor_type_of(t, s), name=f"x{i}")
         for i, (t, s) in enumerate(zip(case.inputs, storages))
     )
-    placeholder = params[0].type if params else TensorType.meta_scalar()
+    placeholder = params[0].type if params else TensorType.umat_scalar()
     call = Call(type=placeholder, target=case.op, args=params)
     result_type = TypeInferVisitor(TypeInferContext()).visit(call)
     call = replace(call, type=result_type)

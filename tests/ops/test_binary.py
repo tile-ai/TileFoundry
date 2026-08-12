@@ -22,6 +22,7 @@ from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
+from tilefoundry.ir.types.storage import StorageKind
 
 _ADD = Binary(kind=BinaryKind.ADD)
 _MUL = Binary(kind=BinaryKind.MUL)
@@ -60,10 +61,10 @@ CASES = [
         ExpectedError(match="conflicting storage"),
     ),
     TypeInferCase(
-        "host_metadata_abstains_from_storage",
+        "unmaterialized_abstains_from_storage",
         _ADD,
         (
-            make_tensor_type((4, 8), _F, storage=None),
+            make_tensor_type((4, 8), _F, storage=StorageKind.UMAT),
             make_tensor_type((4, 8), _F, storage="rmem"),
         ),
         make_tensor_type(

@@ -72,7 +72,7 @@ def test_simplify_dim_folds_all_constant_args() -> None:
             f"{op_cls.__name__}: expected Constant, got {type(result).__name__}"
         )
         assert result.value == expected
-        assert result.type == TensorType.meta_scalar()
+        assert result.type == TensorType.umat_scalar()
 
 
 def test_simplify_dim_refuses_to_fold_outside_all_int_constants() -> None:

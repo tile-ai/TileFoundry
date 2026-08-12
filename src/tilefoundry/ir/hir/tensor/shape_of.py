@@ -10,7 +10,6 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -22,8 +21,8 @@ class ShapeOf(Op):
 @register_typeinfer(ShapeOf)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    rank_expr = Constant(type=TensorType.meta_scalar(), value=len(x_ty.shape))
-    return TensorType(shape=(rank_expr,), dtype=DType.i64, layout=EMPTY_LAYOUT, storage=None)
+    rank_expr = Constant(type=TensorType.umat_scalar(), value=len(x_ty.shape))
+    return TensorType.umat_tensor((rank_expr,), DType.i64)
 
 
 @register_eval(ShapeOf)

@@ -10,7 +10,6 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import i64_const
-from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -26,12 +25,7 @@ class ShapeCompose(Op):
 @register_typeinfer(ShapeCompose)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     n = len(call.args)
-    return TensorType(
-        shape=(i64_const(n),),
-        dtype=DType.i64,
-        layout=EMPTY_LAYOUT,
-        storage=None,
-    )
+    return TensorType.umat_tensor((i64_const(n),), DType.i64)
 
 
 @register_eval(ShapeCompose)

@@ -17,7 +17,7 @@ from .tensor_type import TensorType
 
 
 def _meta_i64() -> TensorType:
-    return TensorType.meta_scalar()
+    return TensorType.umat_scalar()
 
 
 for _cls in (DimConst, DimVar, DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax):

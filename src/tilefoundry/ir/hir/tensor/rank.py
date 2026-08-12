@@ -19,7 +19,7 @@ class Rank(Op):
 
 @register_typeinfer(Rank)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return TensorType.meta_scalar()
+    return TensorType.umat_scalar()
 
 
 @register_eval(Rank)

@@ -37,7 +37,7 @@ def _constant_type(value: object) -> TensorType:
         dtype = DType.f32
     else:
         raise VerifyError(f"Constant: unsupported value type {type(value).__name__}")
-    return TensorType.meta_scalar(dtype)
+    return TensorType.umat_scalar(dtype)
 
 
 @dataclass(frozen=True)

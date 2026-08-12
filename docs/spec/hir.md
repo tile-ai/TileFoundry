@@ -650,7 +650,7 @@ their input when it states one. An input with `layout=None` produces a view with
 - `Rank` produces a rank-0 `i64`; `ShapeOf` produces a rank-1 `i64` vector with
   one entry per input axis.
 - Both results are host shape metadata with `layout=EMPTY_LAYOUT` and
-  `storage=None`, not device-resident tensors.
+  `storage=umat`, not device-resident tensors.
 - Evaluation MUST read the concrete runtime tensor rank and extents. A symbolic
   input `TensorType.shape` is the result bound, not the value returned at
   runtime.
@@ -1435,7 +1435,7 @@ Shape-level Ops on whole shape values (per-axis dim Ops are
 [types §3](./types.md#3-dtype)).
 
 Shape values are host metadata: their tensor types use `EMPTY_LAYOUT` and
-`storage=None`, and their evaluators move no device bytes.
+`storage=umat`, and their evaluators move no device bytes.
 
 ##### ShapeExtract
 ```python

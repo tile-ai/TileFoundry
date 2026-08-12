@@ -24,7 +24,7 @@ _N = DimVar("arange_n", 1, 17)
 
 
 def _infer(op: Arange) -> TensorType:
-    call = Call(type=TensorType.meta_scalar(), target=op, args=())
+    call = Call(type=TensorType.umat_scalar(), target=op, args=())
     return TypeInferVisitor(TypeInferContext()).visit(call)
 
 

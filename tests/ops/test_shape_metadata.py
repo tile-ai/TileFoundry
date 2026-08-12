@@ -18,6 +18,7 @@ from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _S = DimVar("runtime_shape", 1, 9)
@@ -35,9 +36,7 @@ def _idle(arity: int) -> tuple[TrafficBytes, ...]:
     return tuple(TrafficBytes() for _ in range(arity + 1))
 
 
-_SHAPE_TYPE = TensorType(
-    shape=(2,), dtype=DType.i64, layout=EMPTY_LAYOUT, storage=None
-)
+_SHAPE_TYPE = TensorType.umat_tensor((2,), DType.i64)
 
 
 COST_CASES = [
@@ -64,8 +63,19 @@ def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
         if isinstance(call.target, (Rank, ShapeOf, ShapeCompose, ShapeExtract))
     ]
     assert metadata_calls
-    assert all(call.type.storage is None for call in metadata_calls)
+    assert all(call.type.storage is StorageKind.UMAT for call in metadata_calls)
     assert all(call.type.layout == EMPTY_LAYOUT for call in metadata_calls)
+
+
+@func
+def _shape_element_paths(x: Tensor[(_S, 4), "f32"]):
+    shape = tf.shape_of(x)
+    return shape[1], tf.shape_extract(shape, index=1)
+
+
+def test_shape_element_paths_have_the_same_canonical_type() -> None:
+    first, second = _shape_element_paths.body.elements
+    assert first.type == second.type == TensorType.umat_scalar()
 
 
 def test_shape_compose_preserves_the_empty_shape() -> None:

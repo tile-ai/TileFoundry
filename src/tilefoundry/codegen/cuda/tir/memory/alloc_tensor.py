@@ -6,8 +6,8 @@ LetStmt's var TensorType.
 
 When the var's layout is a ``ShardLayout``, the emitted CUDA wraps the per-thread
 backing cute Tensor in ``tilefoundry::make_shard_tensor(...)``. A non-shard
-storage (``gmem`` / ``smem`` / ``rmem``, or ``storage=None``) keeps the plain
-``TensorType.shape`` materialisation path.
+storage (``gmem`` / ``smem`` / ``rmem``) keeps the plain ``TensorType.shape``
+materialisation path.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _emit_plain_alloc(
     ctx: CodegenContext,
     var,
     name: str,
-    storage: StorageKind | None,
+    storage: StorageKind,
     local_shape: tuple,
 ) -> str:
     """Emit plain alloc.
@@ -38,10 +38,10 @@ def _emit_plain_alloc(
     ``make_shard_tensor`` wrap (or directly as the visible name when
     no shard wrap is needed).
     """
-    if storage is None:
+    if storage is StorageKind.UMAT:
         raise ValueError(
-            f"AllocTensor for {name!r} has no memory space (storage=None); a "
-            f"memory-resident tensor must carry a concrete StorageKind"
+            f"AllocTensor for {name!r} has unmaterialized storage (storage=umat); "
+            "a memory-resident tensor must carry a concrete StorageKind"
         )
     total = shape_numel_upper_bound(local_shape)
     if len(local_shape) > 1:

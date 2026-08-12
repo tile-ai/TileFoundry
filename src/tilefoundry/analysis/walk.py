@@ -208,7 +208,7 @@ def bytes_by_storage(type_: Type) -> dict[str, int]:
     """
     result: dict[str, int] = {}
     for tensor in tensor_types(type_):
-        if tensor.storage is StorageKind.UMAT or tensor.storage is None:
+        if tensor.storage is StorageKind.UMAT:
             continue
         name = str(tensor.storage)
         result[name] = result.get(name, 0) + tensor_bytes(tensor)
