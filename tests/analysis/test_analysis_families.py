@@ -589,7 +589,7 @@ def test_reshard_costs_no_op_and_cross_storage_copy() -> None:
     )
 
 
-def test_slice_costs_no_traffic_for_the_view_or_its_coordinates() -> None:
+def test_slice_costs_coordinates_but_not_the_view() -> None:
     source = Var(type=make_tensor_type((1024, 2048)), name="source")
     scalar = make_tensor_type((), DType.i64)
     starts = Tuple(
@@ -607,7 +607,7 @@ def test_slice_costs_no_traffic_for_the_view_or_its_coordinates() -> None:
 
     assert cost.traffic == (
         TrafficBytes(),
-        TrafficBytes(),
+        TrafficBytes(read=tensor_bytes(starts.type)),
         TrafficBytes(),
     )
 

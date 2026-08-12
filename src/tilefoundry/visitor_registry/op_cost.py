@@ -251,8 +251,16 @@ def _concat(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Slice)
 def _slice(call: Call, ctx: CostContext) -> Cost:
-    """A slice is a view; its consumers account for the data they move."""
-    return Cost({}, _idle(call))
+    """A slice is a view; reading its coordinates still has a cost."""
+    _, starts = _input_types(call, ctx)
+    return Cost(
+        {},
+        (
+            TrafficBytes(),
+            TrafficBytes(read=tensor_bytes(starts)),
+            TrafficBytes(),
+        ),
+    )
 
 
 @register_cost_evaluator(InsertSlice)

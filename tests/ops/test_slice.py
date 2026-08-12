@@ -204,7 +204,7 @@ def test_fused_gqa_qkv_slices_keep_distribution_visible_to_consumers():
     )
 
 
-def test_slice_cost_is_an_idle_view():
+def test_slice_cost_charges_coordinates_but_not_the_view():
     call = _slice_call(
         make_tensor_type((64, 8, 6, 16), _F),
         (0, 0, 4, 0),
@@ -215,7 +215,11 @@ def test_slice_cost_is_an_idle_view():
     cost = CostEvaluator(CostContext()).visit(call)
 
     assert cost.flops == {}
-    assert cost.traffic == (TrafficBytes(), TrafficBytes(), TrafficBytes())
+    assert cost.traffic == (
+        TrafficBytes(),
+        TrafficBytes(read=4 * 8),
+        TrafficBytes(),
+    )
 
 
 def test_static_slice_inherits_an_existing_sharded_view_offset():
