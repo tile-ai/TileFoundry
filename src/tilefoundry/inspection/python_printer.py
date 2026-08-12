@@ -758,14 +758,6 @@ def _emit_def(
     _forced_names: dict[int, str] = {}
     _tile_window_steps: dict[int, object] = {}
 
-    scalar_iv_uses: set[int] = set()
-    for expr in _order:
-        if not isinstance(expr, Call) or isinstance(expr.target, Slice):
-            continue
-        for arg in expr.args:
-            if isinstance(arg, Var):
-                scalar_iv_uses.add(id(arg))
-
     _grid_internal_ids: set[int] = set()
     _nested_grid_ids: set[int] = set()
 
@@ -774,8 +766,23 @@ def _emit_def(
             continue
         if (
             expr.start == 0
-            and expr.step != 1
-            and id(expr.induction_var) not in scalar_iv_uses
+            and any(
+                isinstance(candidate, Call)
+                and isinstance(candidate.target, Slice)
+                and len(candidate.args) == 2
+                and isinstance(candidate.args[1], Tuple)
+                and any(
+                    start is expr.induction_var
+                    and size == expr.step
+                    and stride == 1
+                    for start, size, stride in zip(
+                        candidate.args[1].elements,
+                        candidate.target.sizes,
+                        candidate.target.strides,
+                    )
+                )
+                for candidate in _order
+            )
         ):
             _tile_window_steps[id(expr.induction_var)] = expr.step
         for carry, init, value in zip(

@@ -251,7 +251,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             structural_timeline.grid_units,
             structural_timeline.start_ns,
             structural_timeline.end_ns,
-        ) == (0, 906, 906)
+        ) == (0, 652, 652)
         loop_casts.append(tuple(costs))
         loop_timelines.append(tuple(timelines))
 
@@ -304,10 +304,10 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         )
     ] * 2
     assert (loop_timelines[0][0].start_ns, loop_timelines[0][0].end_ns) == (
-        906,
-        906,
+        652,
+        652,
     )
-    assert [record.end_ns for record in root_timelines] == [9_399, 16_775]
+    assert [record.end_ns for record in root_timelines] == [9_145, 16_521]
 
     roots = []
     for result in results:

@@ -17,6 +17,7 @@ import pytest
 
 import tilefoundry.analysis.compute_cost as compute_cost
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
+from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -241,6 +242,11 @@ def _zero_cost_view(source: Tensor[(1,), "f32"]):
         local = tf.reshard(source, (1 @ cta.tile,), "gmem")
         parts = tf.split(local, axis=0, num_splits=1)
         return parts[0]
+
+
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+def _no_op_reshard(source: Tensor[(1,), "f32"]):
+    return tf.reshard(source)
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -531,6 +537,29 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     )
 
 
+def test_reshard_costs_no_op_and_cross_storage_copy() -> None:
+    no_op, no_op_function = _run(_no_op_reshard, "compute-cost")
+    assert no_op.executed == ("compute-cost",)
+    no_op_cost = get_metadata(_calls(no_op_function)[0], ComputeCostMetadata)
+    assert no_op_cost is not None
+    assert no_op_cost.traffic == ()
+    assert no_op_cost.operands == (TrafficBytes(), TrafficBytes())
+
+    copied = analyze(SquareCuda, SquareCuda.entry_function(), analysis="compute-cost")
+    copied_in = _calls(copied.function)[0]
+    copied_cost = get_metadata(copied_in, ComputeCostMetadata)
+    assert copied_cost is not None
+    moved = 168 * 4
+    assert copied_cost.traffic == (
+        ("gmem", TrafficBytes(read=moved)),
+        ("rmem", TrafficBytes(write=moved)),
+    )
+    assert copied_cost.operands == (
+        TrafficBytes(read=moved),
+        TrafficBytes(write=moved),
+    )
+
+
 def test_slice_costs_no_traffic_for_the_view_or_its_coordinates() -> None:
     source = Var(type=make_tensor_type((1024, 2048)), name="source")
     scalar = make_tensor_type((), DType.i64)
@@ -751,7 +780,7 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
     result = analyze(
         MoEMegaKernel,
         MoEMegaKernel.entry_function(),
-        analysis=("compute-cost", "timeline"),
+        analysis=("compute-cost", "memory", "roofline", "timeline"),
     )
     placements = _timeline_placements(
         MoEMegaKernel,
@@ -764,6 +793,39 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
     assert frozenset(range(120)) in prepared
     assert frozenset(range(120, 132)) in prepared
     assert frozenset(range(132)) in prepared
+
+    calls = _calls(result.function)
+    views = [call for call in calls if type(call.target).__name__ == "Reshard"]
+    assert len(views) == 4
+    for view in views:
+        view_cost = get_metadata(view, ComputeCostMetadata)
+        assert view_cost is not None
+        assert view_cost.traffic == ()
+        assert view_cost.traffic_per_unit == ()
+        assert view_cost.operands == (TrafficBytes(), TrafficBytes())
+
+    call_costs = [get_metadata(call, ComputeCostMetadata) for call in calls]
+    assert all(call_cost is not None for call_cost in call_costs)
+    summed = TrafficBytes(
+        read=sum(call_cost.traffic_at("gmem").read for call_cost in call_costs),
+        write=sum(call_cost.traffic_at("gmem").write for call_cost in call_costs),
+    )
+    root_cost = get_metadata(result.function, ComputeCostMetadata)
+    memory = get_metadata(result.function, MemoryMetadata)
+    roofline = get_metadata(result.function, RooflineMetadata)
+    assert root_cost is not None
+    assert memory is not None
+    assert roofline is not None
+    assert root_cost.traffic_at("gmem") == summed == TrafficBytes(
+        read=122_880,
+        write=92_160,
+    )
+    assert memory.traffic == (("gmem", summed),)
+    assert (roofline.memory_ns, roofline.ideal_ns, roofline.bound_by) == (
+        45,
+        45,
+        "memory",
+    )
 
     relu = next(
         call for call in _calls(result.function) if type(call.target).__name__ == "ReLU"
@@ -821,14 +883,23 @@ def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
     assert shared_in is not None and shared is not None and shared_out is not None
     assert join is not None
 
-    assert routed.start_ns == routed_in.end_ns
-    assert (shared_in.end_ns, shared.start_ns) == (916, 1_768)
+    assert [
+        (record.start_ns, record.end_ns)
+        for record in (
+            routed_in,
+            routed,
+            routed_out,
+            shared_in,
+            shared,
+            shared_out,
+            join,
+        )
+    ] == [(0, 0), (0, 15), (15, 15), (0, 0), (0, 141), (141, 141), (141, 2_676)]
     assert (routed.end_ns - routed.start_ns, shared.end_ns - shared.start_ns) == (
         15,
         141,
     )
     assert routed_in.start_ns == shared_in.start_ns == 0
-    assert min(routed_in.end_ns, shared_in.end_ns) > 0
 
     placements = _timeline_placements(
         MoEMegaKernel,
@@ -843,10 +914,6 @@ def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
     )
     assert placements[id(calls[2])] != placements[id(calls[4])]
     assert placements[id(calls[2])] & placements[id(calls[4])]
-    assert (
-        routed_out.end_ns <= shared.start_ns
-        or shared.end_ns <= routed_out.start_ns
-    )
     assert join.start_ns >= max(routed_out.end_ns, shared_out.end_ns)
 
 

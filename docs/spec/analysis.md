@@ -406,12 +406,14 @@ class ComputeCostMetadata(IRMetadata):
         flops: attribute; Flop count per compute DType name, sorted by name.
         flops_per_unit: attribute; Flop count performed by one unit of the analysed topology level.
         traffic: attribute; TrafficBytes per storage level name.
+        traffic_per_unit: attribute; TrafficBytes per storage level name for one unit of the analysed topology level.
         operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
     flops_per_unit: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
+    traffic_per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
 ```
 
@@ -466,6 +468,10 @@ appears only for a primitive Call and contains objects in positional order:
   - Two primitive operands MAY name the same value; their positions MUST keep
     them distinct. A rendering MUST omit an unavailable operand split rather
     than emit it empty.
+  - A `Reshard` within one storage level MUST report zero movement for both
+    operands; a `Reshard` that changes storage MUST report one full source read
+    and one full destination write. The operand Types then attribute those two
+    amounts to their respective storage levels.
   - Per-level `traffic` and `operands` MUST NOT be assumed equal for a Type that
     occupies several levels: the aggregate is the conservative placement charge
     while the operand entry is the evaluator's movement amount.

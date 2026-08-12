@@ -114,6 +114,14 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
     assert routed_relu["compute-cost"]["traffic_per_unit"] == {
         "gmem": {"read": 256, "write": 256}
     }
+    views = [row for row in payload["calls"] if not row["compute-cost"]["flops"]]
+    assert len(views) == 4
+    assert all(row["compute-cost"]["traffic"] == {} for row in views)
+    assert all(
+        [(item["read"], item["write"]) for item in row["compute-cost"]["operands"]]
+        == [(0, 0), (0, 0)]
+        for row in views
+    )
 
     summed_flops = sum(
         row["compute-cost"]["flops"].get("f32", 0)
@@ -121,7 +129,7 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
     )
     summed_traffic = {
         direction: sum(
-            row["compute-cost"]["traffic"]["gmem"][direction]
+            row["compute-cost"]["traffic"].get("gmem", {}).get(direction, 0)
             for row in payload["calls"]
         )
         for direction in ("read", "write")
@@ -133,7 +141,15 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
         == payload["totals"]["traffic"]["gmem"]
         == payload["function_records"]["memory"]["traffic"]["gmem"]
         == summed_traffic
+        == {"read": 122_880, "write": 92_160}
     )
+    assert payload["function_records"]["roofline"] == {
+        "bound_by": "memory",
+        "compute_ns": 1,
+        "ideal_ns": 45,
+        "memory_ns": 45,
+    }
+    assert payload["function_records"]["timeline"]["end_ns"] == 2_676
 
 
 def test_usage_errors_include_the_command_help(tf) -> None:

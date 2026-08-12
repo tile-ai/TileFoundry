@@ -21,6 +21,32 @@ _ARGS = (
 )
 
 
+def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
+    tf, tmp_path
+) -> None:
+    for name, loop, message in (
+        ("single", "tile(8)", "tile(extent) is not supported; use range(extent)"),
+        ("keyword", "tile(8, step=2)", "positional-only at the IR level"),
+    ):
+        source = tmp_path / f"{name}.py"
+        source.write_text(
+            "from tilefoundry import module\n"
+            "from tilefoundry.dsl import Tensor, func, tf\n\n"
+            '@module(entry="main")\n'
+            "class Bad:\n"
+            "    @func\n"
+            '    def main(x: Tensor[(8,), "f32"]):\n'
+            f"        for i in {loop}:\n"
+            "            y = tf.relu(x)\n",
+            encoding="utf-8",
+        )
+
+        done = tf("check", f"{source}:Bad", *_ARGS)
+
+        assert done.returncode == 1
+        assert message in done.stderr
+
+
 def test_check_help_explains_input_and_output_positions(tf) -> None:
     done = tf("check", "--help")
     assert done.returncode == 0, done.stderr

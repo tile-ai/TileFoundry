@@ -1518,6 +1518,14 @@ dispatches on `(layout, storage)`:
 - `layout=Layout(strides=tuple)` (verbose) → dest strides are taken verbatim;
   typeinfer MUST NOT rewrite them (e.g. SM80 MMA fragment layouts).
 
+**Cost classification.** A Reshard whose source and destination storage are
+the same is a zero-copy view and reports zero traffic, including the
+`layout=None` no-op. A Reshard that changes storage is a copy and reports one
+full source read plus one full destination write. Layout changes alone do not
+turn a same-storage view into traffic. This follows the same boundary as
+`Slice`, whose consumers account for the data they move, and `Arange`, whose
+coordinates remain synthesized metadata until a consumer materializes them.
+
 **Cross-CTA fence.** The grid fence for a cross-CTA reshard is owned by the
 reshard lowering, not by a separately authored sync. When a reshard reads a
 gmem shard produced under a different CTA ownership (an ownership change across

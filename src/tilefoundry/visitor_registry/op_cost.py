@@ -471,6 +471,8 @@ def _transpose(call: Call, ctx: CostContext) -> Cost:
 def _reshard(call: Call, ctx: CostContext) -> Cost:
     source = _input_types(call, ctx)[0]
     destination = _output_type(call, ctx)
+    if source.storage == destination.storage:
+        return Cost({}, _idle(call))
     return Cost({}, (
         TrafficBytes(read=tensor_bytes(source)),
         TrafficBytes(write=tensor_bytes(destination)),
