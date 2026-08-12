@@ -610,4 +610,26 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     source.write_text(_COMPOSED_SOURCE, encoding="utf-8")
 
     assert cli.main(["analyze", f"{source}:Composed.root", "--dim", "n_cli=4"]) == 0
-    assert "def root(" in capsys.readouterr().out
+    expanded = capsys.readouterr().out
+    assert "def root(" in expanded
+    assert "leaf_w: ConstTensor" in expanded
+    assert "leaf(" not in expanded
+
+
+def test_analyze_prints_the_deterministic_inlined_mega_kernel(capsys) -> None:
+    source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
+    selector = f"{source}:MoEMegaKernel"
+
+    assert cli.main(["analyze", selector]) == 0
+    first = capsys.readouterr().out
+    assert cli.main(["analyze", selector]) == 0
+    second = capsys.readouterr().out
+
+    assert first == second
+    assert "routed_expert(" not in first
+    assert "shared_expert(" not in first
+    assert first.count("reshard(tokens") == 2
+    assert "v0 = reshard(tokens" in first
+    assert "v3 = reshard(tokens" in first
+    assert "offset=0" in first
+    assert "offset=120" in first

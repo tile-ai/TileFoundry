@@ -14,14 +14,23 @@ import pytest
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
+from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.rmsnorm import RmsnormModule
-from tilefoundry import func
-from tilefoundry.analysis import AnalysisError, TileGraph, check_program, extract
-from tilefoundry.analysis.walk import values_of
-from tilefoundry.dsl import Tensor
+from tilefoundry import func, module
+from tilefoundry.analysis import (
+    AnalysisError,
+    OccurrenceProvenance,
+    TileGraph,
+    check_program,
+    extract,
+)
+from tilefoundry.analysis.walk import postorder, values_of
+from tilefoundry.dsl import ConstTensor, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
-from tilefoundry.ir.core import Call, TypeInferContext, Var
+from tilefoundry.ir.core import Call, TypeInferContext, Var, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.quant import Quant
@@ -78,13 +87,105 @@ def test_analyze_applies_authored_readiness_after_the_shared_program_check() -> 
     function = module.entry_function()
     metadata_before = {id(expr): expr.metadata for expr in values_of(function)}
 
-    assert check_program(module, function, level="cta") is None
+    expanded = check_program(module, function, level="cta")
+    assert expanded is not function
+    assert not any(
+        isinstance(expr, Call) and isinstance(expr.target, Function)
+        for expr in postorder(expanded.body)
+    )
     with pytest.raises(
         AnalysisError,
         match=r"authored analysis does not accept where\(\.\.\.\)",
     ):
         analysis_api.analyze(module, function, analysis="compute-cost")
     assert {id(expr): expr.metadata for expr in values_of(function)} == metadata_before
+
+
+def test_check_program_keeps_loops_and_names_inlined_occurrences() -> None:
+    module = static_online_attend
+    authored = module.entry_function()
+    authored_body = authored.body
+    source_metadata = {id(expr): expr.metadata for expr in postorder(authored.body)}
+
+    first = check_program(module, authored)
+    second = check_program(module, authored)
+
+    first_values = postorder(first.body)
+    second_values = postorder(second.body)
+    first_calls = [expr for expr in first_values if isinstance(expr, Call)]
+    second_calls = [expr for expr in second_values if isinstance(expr, Call)]
+    authored_calls = [
+        expr for expr in postorder(authored.body) if isinstance(expr, Call)
+    ]
+    (loop,) = (expr for expr in first_values if isinstance(expr, GridRegionExpr))
+
+    assert authored.body is authored_body
+    assert {id(expr): expr.metadata for expr in postorder(authored.body)} == source_metadata
+    assert loop.extent == 4096
+    assert loop.induction_var.name == "i"
+    assert tuple(item.name for item in loop.carried_args) == ("l", "o", "m")
+    assert len(loop.yield_values) == 3
+    assert len(first_calls) < 100
+    assert [binding_name(expr) for expr in first_calls] == [
+        binding_name(expr) for expr in second_calls
+    ]
+    assert len({binding_name(expr) for expr in first_calls}) == len(first_calls)
+    assert [get_metadata(expr, OccurrenceProvenance) for expr in first_calls] == [
+        OccurrenceProvenance(source_call=id(source), call_path=(authored.name,))
+        for source in authored_calls
+    ]
+
+
+def test_check_program_reuses_promoted_child_resources_and_enforces_its_budget() -> None:
+    from tests.fixtures.logical.hir_composition import CrossModule  # noqa: PLC0415
+
+    authored = CrossModule.entry_function()
+    expanded = check_program(CrossModule, authored)
+
+    assert [(param.name, param.is_const) for param in expanded.params] == [
+        ("x", False),
+        ("expert.w", True),
+    ]
+    (resource,) = (param for param in expanded.params if param.is_const)
+    calls = [expr for expr in postorder(expanded.body) if isinstance(expr, Call)]
+    assert all(any(arg is resource for arg in expr.args) for expr in calls)
+    assert {
+        get_metadata(expr, OccurrenceProvenance).call_path for expr in calls
+    } == {("root", "run", "0")}
+    with pytest.raises(
+        AnalysisError,
+        match=r"produces \d+ body nodes, exceeding the node budget 0",
+    ):
+        check_program(CrossModule, authored, budget=0)
+
+
+def test_check_program_keeps_resources_of_two_attachments_distinct() -> None:
+    @module(entry="run")
+    class Weighted:
+        @func
+        def run(
+            x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]
+        ) -> Tensor[(4,), "f32"]:
+            return mul(x, w)  # noqa: F405
+
+    @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+    class Paired:
+        left = Weighted
+        right = Weighted
+
+        @func
+        def run(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+            return add(left(w), right(w))  # noqa: F405, F821
+
+    expanded = check_program(Paired, Paired.entry_function())
+    resources = {param.name: param for param in expanded.params if param.is_const}
+    calls = [expr for expr in postorder(expanded.body) if isinstance(expr, Call)]
+
+    assert expanded.params[0].name == "w" and not expanded.params[0].is_const
+    assert tuple(resources) == ("left.w", "right.w")
+    assert any(resources["left.w"] in call.args for call in calls)
+    assert any(resources["right.w"] in call.args for call in calls)
+    assert resources["left.w"] is not resources["right.w"]
 
 
 @func

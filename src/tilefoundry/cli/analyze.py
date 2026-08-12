@@ -128,9 +128,9 @@ def run_authored_analysis(
             )
         except SpecializationError as error:
             raise ValueError(f"analyze: {error}") from None
-        check_program(checked_module, checked)
+        expanded = check_program(checked_module, checked)
         validate_authored(reachable_functions(checked))
-        annotated = as_script(module, options=PythonPrintOptions(show_types=True))
+        annotated = as_script(expanded, options=PythonPrintOptions(show_types=True))
         sys.stdout.write(annotated)
         return 0
 

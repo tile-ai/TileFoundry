@@ -6,7 +6,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 | Surface | Entry | What it states |
 |---|---|---|
 | Polyhedral model | `extract(hir) -> TileGraph` | one HIR `Function` body as isl domains, access relations and auto-inferred dependences — target-independent |
-| Program check | `check_program(module, function, level=...)` | whether one authored program and its declared topology are valid for a consuming algorithm |
+| Program check | `check_program(module, function, level=..., budget=...)` | an inlined Function view after validating one authored program and its declared topology |
 | Composed measurement | `analyze(module, function, analysis=...)` | one root analysis and its dependency closure, leaving typed Metadata on the IR |
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
@@ -828,13 +828,20 @@ def check_program(
     function: "Function",
     *,
     level: str | None = None,
-) -> None: ...
+    budget: int = _INLINE_NODES,
+) -> "Function": ...
+
+
+class OccurrenceProvenance(IRMetadata):
+    source_call: int
+    call_path: tuple[str, ...]
 ```
 
 - constraints:
   - The operation MUST infer types over the full reachable Function graph and
     validate its caller/callee execution context, and MUST NOT run an analysis
-    or schedule algorithm or attach derived Metadata.
+    or schedule algorithm or attach derived Metadata to the authored IR.
+    `OccurrenceProvenance` belongs only to the returned analysis view.
   - The reachable Function and Mesh geometry and every effective Module
     topology extent MUST be concrete before this operation runs. Public Analyze
     and Schedule calls with `dims` MUST resolve all three through one binding
@@ -847,6 +854,25 @@ def check_program(
   - A non-`None` `level` MUST name exactly one effective Module topology.
   - Analyze and Schedule MUST call this operation before any consuming
     algorithm.
+  - The returned Function MUST inline every reachable HIR Function call at its
+    call site while retaining each `GridRegionExpr` as one loop. Its induction
+    variable, carried values, and yields MUST NOT be replaced with iterations.
+    The authored Module and Function MUST remain unchanged.
+  - The returned Function parameters MUST be the authored entry parameters
+    followed by the `ConstTensor` declarations needed by reachable Module
+    readings. A promoted declaration MUST be named by the clean dot-joined
+    Module path and weight name used by runtime checkpoint keys. Declarations
+    MUST follow the Module tree's owner-before-children order, and within one
+    Module are unioned by name in Function/parameter order. Separate attachment
+    paths MUST remain separate resources. Unequal types for one `(module path,
+    weight name)` MUST fail. No constant value enters the IR.
+  - Every primitive Call in the returned view MUST have a deterministic unique
+    binding and `OccurrenceProvenance(source_call, call_path)`. `source_call`
+    identifies its source Call and `call_path` identifies its Function-call
+    occurrence; loops do not add coordinates to the path.
+  - `budget` MUST be a non-negative integer limiting the number of unique body
+    expression nodes after inlining. An oversized view MUST fail with both its
+    size and the limit and MUST NOT return a partial Function.
   - Authored-analysis readiness is not a program-level check. Analyze MUST
     separately reject schedule constraints and unresolved local layouts before
     running an analyzer; Schedule MAY consume or diagnose those inputs under
