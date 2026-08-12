@@ -43,15 +43,17 @@ def dim_vars_by_name(value: object) -> dict[str, "DimVar"]:
     return found
 
 
-def _layout_types() -> tuple[type, ...]:
-    """The layout descriptors, imported at call time to avoid a cycle."""
+def _shard_types() -> tuple[type, ...]:
+    """Shard geometry descriptors, imported at call time to avoid a cycle."""
     from .shard.layout import ComposedLayout, Layout  # noqa: PLC0415
+    from .shard.mesh import Mesh, Topology  # noqa: PLC0415
     from .shard.shard_layout import ShardLayout  # noqa: PLC0415
 
-    return (Layout, ComposedLayout, ShardLayout)
+    return (Layout, ComposedLayout, ShardLayout, Mesh, Topology)
 
 
 def _collect(value: object, found: dict[str, "DimVar"]) -> None:
+    Layout, ComposedLayout, ShardLayout, Mesh, Topology = _shard_types()
     if isinstance(value, TensorType):
         for entry in value.shape:
             _collect(entry, found)
@@ -69,6 +71,16 @@ def _collect(value: object, found: dict[str, "DimVar"]) -> None:
         for entry in value:
             _collect(entry, found)
         return
+    if isinstance(value, Topology):
+        _collect(value.size, found)
+        return
+    if isinstance(value, Mesh):
+        _collect(value.topologies, found)
+        _collect_layout(value.layout, found)
+        return
+    if isinstance(value, (Layout, ComposedLayout, ShardLayout)):
+        _collect_layout(value, found)
+        return
     if isinstance(value, Call) and isinstance(value.target, _DIM_OP_TYPES):
         for arg in value.args:
             _collect(arg, found)
@@ -77,9 +89,10 @@ def _collect(value: object, found: dict[str, "DimVar"]) -> None:
 def _collect_layout(layout: object, found: dict[str, "DimVar"]) -> None:
     if layout is None:
         return
-    Layout, ComposedLayout, ShardLayout = _layout_types()
+    Layout, ComposedLayout, ShardLayout, _, _ = _shard_types()
     if isinstance(layout, ShardLayout):
         _collect_layout(layout.layout, found)
+        _collect(layout.mesh, found)
         return
     if isinstance(layout, ComposedLayout):
         _collect_layout(layout.outer, found)
@@ -125,17 +138,18 @@ def substitute_layout_dims(layout: object, bindings: Mapping[str, int]) -> objec
     A layout restates the shape it describes, so leaving it behind produces a
     type whose shape is a number and whose layout is still a range -- concrete
     to anything that reads the shape, and not to anything that reads the layout.
-    The mesh is untouched: it states machine positions, which no program size
-    derives from.
+    A shard layout's Mesh is part of that geometry: its layout and topology
+    extents may be derived from the same dimensions as the tensor shape.
     """
     if layout is None:
         return layout
-    Layout, ComposedLayout, ShardLayout = _layout_types()
+    Layout, ComposedLayout, ShardLayout, _, _ = _shard_types()
     if isinstance(layout, ShardLayout):
         inner = substitute_layout_dims(layout.layout, bindings)
-        if inner is layout.layout:
+        mesh = substitute_mesh_dims(layout.mesh, bindings)
+        if inner is layout.layout and mesh is layout.mesh:
             return layout
-        return ShardLayout(layout=inner, attrs=layout.attrs, mesh=layout.mesh)
+        return ShardLayout(layout=inner, attrs=layout.attrs, mesh=mesh)
     if isinstance(layout, ComposedLayout):
         outer = substitute_layout_dims(layout.outer, bindings)
         inner = substitute_layout_dims(layout.inner, bindings)
@@ -150,6 +164,29 @@ def substitute_layout_dims(layout: object, bindings: Mapping[str, int]) -> objec
             return layout
         return Layout(shape=shape, strides=strides)
     return layout
+
+
+def substitute_topology_dims(topology: object, bindings: Mapping[str, int]) -> object:
+    """*topology* with its extent rebuilt from *bindings*."""
+    _, _, _, _, Topology = _shard_types()
+    if not isinstance(topology, Topology):
+        return topology
+    size = substitute_shape_dim(topology.size, bindings)
+    if size == topology.size:
+        return topology
+    return Topology(topology.name, size)
+
+
+def substitute_mesh_dims(mesh: object, bindings: Mapping[str, int]) -> object:
+    """*mesh* with layout and topology dimensions rebuilt together."""
+    _, _, _, Mesh, _ = _shard_types()
+    if not isinstance(mesh, Mesh):
+        return mesh
+    topologies = tuple(substitute_topology_dims(item, bindings) for item in mesh.topologies)
+    layout = substitute_layout_dims(mesh.layout, bindings)
+    if topologies == mesh.topologies and layout is mesh.layout:
+        return mesh
+    return Mesh(topologies=topologies, layout=layout, names=mesh.names)
 
 
 def _substitute_nested(entries: tuple, bindings: Mapping[str, int]) -> tuple:
@@ -214,8 +251,32 @@ def _checked(variable: DimVar, extent: int) -> int:
 
 
 def has_symbolic_dims(value: object) -> bool:
-    """Whether anything reachable from *value* is still a range."""
-    return bool(dim_vars_in(value))
+    """Whether anything reachable from *value* is not a static dimension."""
+    Layout, ComposedLayout, ShardLayout, Mesh, Topology = _shard_types()
+    if isinstance(value, DimVar):
+        return True
+    if isinstance(value, Call) and isinstance(value.target, _DIM_OP_TYPES):
+        return True
+    if isinstance(value, TensorType):
+        return has_symbolic_dims(value.shape) or has_symbolic_dims(value.layout)
+    if isinstance(value, TupleType):
+        return any(has_symbolic_dims(field) for field in value.fields)
+    if isinstance(value, Topology):
+        return has_symbolic_dims(value.size)
+    if isinstance(value, Mesh):
+        return has_symbolic_dims(value.topologies) or has_symbolic_dims(value.layout)
+    if isinstance(value, ShardLayout):
+        return has_symbolic_dims(value.layout) or has_symbolic_dims(value.mesh)
+    if isinstance(value, ComposedLayout):
+        return any(
+            has_symbolic_dims(entry)
+            for entry in (value.inner, value.offset, value.outer)
+        )
+    if isinstance(value, Layout):
+        return has_symbolic_dims(value.shape) or has_symbolic_dims(value.strides)
+    if isinstance(value, tuple):
+        return any(has_symbolic_dims(entry) for entry in value)
+    return False
 
 
 __all__ = [
@@ -225,5 +286,7 @@ __all__ = [
     "has_symbolic_dims",
     "substitute_dims",
     "substitute_layout_dims",
+    "substitute_mesh_dims",
     "substitute_shape_dim",
+    "substitute_topology_dims",
 ]

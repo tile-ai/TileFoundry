@@ -69,6 +69,12 @@ strides are not materialized. Consumers that need a concrete integer —
 require static `int` entries and **fail closed** on a symbolic / dynamic one
 rather than guessing.
 
+Dimension substitution traverses a tensor's logical shape and layout together.
+For a `ShardLayout` it also traverses the bound `Mesh`: the Mesh layout and each
+`Topology.size` are geometry of the same program and MUST receive the same
+binding. A consumer that needs fixed geometry MUST reject any residual `DimVar`
+or dimension expression before asking `size` or `product` for a position count.
+
 ---
 
 ## 2. `Layout` hierarchy

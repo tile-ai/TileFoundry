@@ -19,7 +19,7 @@ from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.metadata import ComputeCostMetadata
 from tilefoundry.analysis.walk import postorder, reachable_functions, tensor_types
-from tilefoundry.dsl import ConstTensor, Tensor, Topology, tf
+from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.shard.layout import ComposedLayout
@@ -157,13 +157,16 @@ def test_a_reached_child_resolving_another_hierarchy_is_invalid() -> None:
 
 
 def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
-    @module(entry="run", topologies=_CTA)
+    extent = DimVar("child_topology_extent", 1, 133)
+    hierarchy = (Topology("cta", extent),)
+
+    @module(entry="run", topologies=hierarchy)
     class _Declared:
         @func
         def run(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
             return tf.add(x, x)
 
-    @module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
+    @module(entry="fused", target=CudaTarget(_H200), topologies=hierarchy)
     class _Agreeing:
         declared = _Declared
 
@@ -171,7 +174,12 @@ def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
         def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
             return declared(x)  # noqa: F821
 
-    result = analyze(_Agreeing, _Agreeing.entry_function(), analysis="compute-cost")
+    result = analyze(
+        _Agreeing,
+        _Agreeing.entry_function(),
+        analysis="compute-cost",
+        dims={"child_topology_extent": 132},
+    )
     assert result.metadata_types == (ComputeCostMetadata,)
 
 

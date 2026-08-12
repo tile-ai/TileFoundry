@@ -431,8 +431,10 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
     if isinstance(target, Function) or not isinstance(target, Op):
         return target
     from tilefoundry.ir.types.shard.layout import LayoutBase  # noqa: PLC0415
+    from tilefoundry.ir.types.shard.mesh import Mesh  # noqa: PLC0415
     from tilefoundry.ir.types.substitute import (  # noqa: PLC0415
         substitute_layout_dims,
+        substitute_mesh_dims,
     )
 
     changed: dict[str, object] = {}
@@ -445,6 +447,11 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
             rebuilt_layout = substitute_layout_dims(value, dims)
             if rebuilt_layout is not value:
                 changed[param.name] = rebuilt_layout
+            continue
+        if isinstance(value, Mesh):
+            rebuilt_mesh = substitute_mesh_dims(value, dims)
+            if rebuilt_mesh is not value:
+                changed[param.name] = rebuilt_mesh
             continue
         if not isinstance(value, tuple) or not value:
             continue

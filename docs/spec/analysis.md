@@ -684,6 +684,11 @@ def check_program(
   - The operation MUST infer types over the full reachable Function graph and
     validate its caller/callee execution context, and MUST NOT run an analysis
     or schedule algorithm or attach derived Metadata.
+  - The reachable Function and Mesh geometry and every effective Module
+    topology extent MUST be concrete before this operation runs. Public Analyze
+    and Schedule calls with `dims` MUST resolve all three through one binding
+    pass before calling this gate; a residual dimension expression MUST fail
+    before any consuming algorithm runs.
   - Every effective Module topology MUST name a level the resolved Target
     supports. A resolved static extent MUST be positive and within that level's
     finite hardware limit. A rejection MUST name the level, its extent, and the
@@ -763,23 +768,27 @@ def analyze(
     ([core-ir §1](./core-ir.md#1-module)). A Function derived by specialising one
     of these MUST be refused, so that ownership is settled before anything is
     rebuilt.
-  - `dims` states one extent per dimension the Function declares as a range. An
-    analysis counts elements and holds them against a machine, and neither has an
-    answer for a range, so a Function stating a range MUST be analysed at a
-    chosen size rather than as authored.
+  - `dims` states one extent per dimension reached through the Function graph,
+    its Mesh geometry, or the effective Module topology expressions. An analysis
+    counts elements and holds them against a machine, and has no answer for a
+    range in any of those positions, so the program MUST be analysed at a chosen
+    size rather than as authored.
   - `dims=None` MUST behave as a call that states no size: the Function is
     analysed as authored, and `AnalysisResult.function` MUST be the object the
     caller supplied.
   - When `dims` is stated it MUST be non-empty; every key MUST name a dimension
-    the Function declares as a range; every value MUST be an integer inside that
+    reached through the Function graph, its Mesh geometry, or the effective
+    Module topology expressions; every value MUST be an integer inside that
     dimension's declared bounds; every dimension the Function selects a variant
     on MUST be given a value; and no dimension MAY remain a range after
     substitution. Each of these MUST fail with an Analysis domain error. A stated
     `dims` MUST NOT be silently ignored, including when the Function declares no
     range at all.
   - Variant resolution and substitution MUST happen after the ownership check and
-    before any algorithm runs. Exactly one variant MUST cover the stated size;
-    none and more than one MUST both fail.
+    before the shared program check or any algorithm runs. Function types, Mesh
+    geometry, and effective topology extents MUST use the same resolved binding.
+    Exactly one variant MUST cover the stated size; none and more than one MUST
+    both fail.
   - When `dims` is stated, `AnalysisResult.function` MUST be the concrete Function
     the records were written onto, derived from the Function the caller supplied,
     and MUST record both that Function as the one it was specialised from and the

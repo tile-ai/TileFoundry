@@ -10,6 +10,7 @@ See [hir §2](docs/spec/hir.md#2-function-specialization-api).
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 
 from tilefoundry.ir.core.pattern import DimVarRangePat
@@ -56,6 +57,18 @@ def _record_provenance(
     object.__setattr__(derived, PROVENANCE, origin)
     if dims is not None:
         object.__setattr__(derived, BOUND_DIMS, tuple(sorted(dims.items())))
+
+
+def _record_complete_bindings(
+    function: Function, dims: Mapping[str, int]
+) -> Function:
+    """Record a public call's complete program bindings on a derived Function."""
+    if bound_dims_of(function) is None:
+        derived = dataclasses.replace(function)
+        _record_provenance(derived, function, dims)
+        return derived
+    object.__setattr__(function, BOUND_DIMS, tuple(sorted(dims.items())))
+    return function
 
 
 def origin_of(function: object) -> Function | None:
@@ -269,7 +282,49 @@ def _collect_entries(value: object, found: dict[str, object]) -> None:
 
 def is_concrete(fn: Function) -> bool:
     """Whether *fn* states extents everywhere a size is required."""
-    return not residual_dims(fn) and not has_symbolic_dims(fn.return_type)
+    return not _function_has_symbolic_dims(fn, set())
+
+
+def _function_has_symbolic_dims(fn: Function, seen: set[int]) -> bool:
+    if id(fn) in seen:
+        return False
+    seen.add(id(fn))
+    if any(has_symbolic_dims(param.type) for param in fn.params):
+        return True
+    if has_symbolic_dims(fn.return_type):
+        return True
+    if any(_function_has_symbolic_dims(variant, seen) for variant in fn.variants):
+        return True
+    return _expr_has_symbolic_dims(fn.body, seen)
+
+
+def _expr_has_symbolic_dims(expr: object, seen: set[int], depth: int = 0) -> bool:
+    if expr is None or depth > 256:
+        return False
+    if has_symbolic_dims(getattr(expr, "type", None)):
+        return True
+    target = getattr(expr, "target", None)
+    if isinstance(target, Function):
+        if _function_has_symbolic_dims(target, seen):
+            return True
+    elif target is not None:
+        for attribute in getattr(type(target), "params", lambda: ())():
+            if attribute.kind == "attribute" and has_symbolic_dims(
+                getattr(target, attribute.name, None)
+            ):
+                return True
+    for name in ("args", "elements", "init_args", "yield_values", "carried_args"):
+        if any(
+            _expr_has_symbolic_dims(child, seen, depth + 1)
+            for child in getattr(expr, name, ()) or ()
+        ):
+            return True
+    if any(
+        has_symbolic_dims(getattr(expr, bound, None))
+        for bound in ("extent", "step", "start")
+    ):
+        return True
+    return _expr_has_symbolic_dims(getattr(expr, "body", None), seen, depth + 1)
 
 
 __all__ = [

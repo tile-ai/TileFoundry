@@ -11,16 +11,35 @@ from __future__ import annotations
 
 from tests._source import import_dsl
 from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf  # noqa: F401
+from tilefoundry.dsl import (  # noqa: F401
+    ConstTensor,
+    DimVar,
+    DimVarRangePat,
+    Mesh,
+    Tensor,
+    ceildiv,
+    tf,
+)
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.specialize import origin_of
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types.shard import Broadcast, Layout, ShardLayout, Topology
 from tilefoundry.target import CudaTarget
 
 _CTA = Topology("cta", 132)
 _THREAD = Topology("thread", 32)
 _N = DimVar("n_print", 1, 9)
+_N_TILE = ceildiv(_N, 4)
+_TOPOLOGY_ONLY = DimVar("topology_only_print", 1, 33)
+_DERIVED_MESH = Mesh(
+    (Topology("cta", _N_TILE),),
+    Layout((_N_TILE,), (1,)),
+)
+_DERIVED_LAYOUT = ShardLayout(
+    Layout((_N_TILE, 4), None),
+    (Broadcast(),),
+    _DERIVED_MESH,
+)
 
 
 @module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
@@ -56,6 +75,33 @@ class _Tree:
         @func
         def helper(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
             return tf.relu(x)
+
+
+@module(
+    entry="prefill",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", _N_TILE), Topology("thread", _TOPOLOGY_ONLY)),
+)
+class _DerivedGeometry:
+    @func
+    def prefill(
+        x: Tensor[(_N_TILE, 4), "f32", _DERIVED_LAYOUT]
+    ) -> Tensor[(_N_TILE, 4), "f32", _DERIVED_LAYOUT]:
+        return tf.relu(x)
+
+
+def test_a_derived_topology_and_mesh_geometry_survive_the_round_trip() -> None:
+    source = as_script(_DerivedGeometry)
+    imported = import_dsl(source)
+
+    assert 'n_print = DimVar("n_print", 1, 9)' in source
+    assert 'topology_only_print = DimVar("topology_only_print", 1, 33)' in source
+    assert 'Topology("cta", ceildiv(n_print, 4))' in source
+    assert imported.topologies == _DerivedGeometry.topologies
+    assert imported.entry_function().params[0].type == (
+        _DerivedGeometry.entry_function().params[0].type
+    )
+    assert as_script(imported) == source
 
 
 def _child(mod: Module, name: str) -> Module:

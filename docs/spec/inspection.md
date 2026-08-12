@@ -134,6 +134,10 @@ the declaration-versus-inheritance split survives the round trip. A declared
 Target prints as the `@module(target=...)` argument and a declared hierarchy
 as the `@module(topologies=...)` argument
 ([parser §2.7](./parser.md#27-module-authoring-surface)).
+Every dimension referenced only by a declared topology expression MUST still
+be emitted in the dimension prelude. A topology `ShapeDim` MUST use the same
+DSL expression text as tensor and Mesh geometry, including public constructors
+such as `ceildiv`, so importing restores the same expression tree.
 
 - constraints:
   - The decorator MUST print in its called form, `@module()` included. A bare
@@ -239,7 +243,9 @@ validation artifact.
 
 A rendering is one of two surfaces:
 
-**Canonical** — the rendering of a function with no `DimVar` parameter. It
+**Canonical** — the rendering of a function with no `DimVar` parameter, or a
+Module whose Functions have no `DimVar` parameter and whose symbolic dimensions
+occur in round-trippable tensor, Mesh, or topology geometry. It
 MUST round-trip: printing, importing, and the test-side structural comparison
 MUST agree over
 

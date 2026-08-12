@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from tilefoundry.analysis.check import check_program
+from tilefoundry.analysis.check import _resolve_program_geometry, check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.registry import Analyzer
@@ -22,7 +22,7 @@ from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
+from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
@@ -121,13 +121,16 @@ def analyze(
         raise AnalysisError(
             f"analyze: analysis must be a non-empty selector, got {analysis!r}"
         )
-    if dims is not None:
-        try:
-            function = specialize_concretely(
-                function, dims, TypeInferContext(scope=FunctionScope(module, function))
-            )
-        except SpecializationError as error:
-            raise AnalysisError(f"analyze: {error}") from None
+    result_module = module
+    try:
+        module, function = _resolve_program_geometry(
+            module,
+            function,
+            dims,
+            TypeInferContext(scope=FunctionScope(module, function)),
+        )
+    except SpecializationError as error:
+        raise AnalysisError(f"analyze: {error}") from None
 
     target = module.resolve_target()
     topologies = module.effective_topologies()
@@ -159,7 +162,7 @@ def analyze(
                  for _expr_id, metadata_type in (key,)}
 
     return AnalysisResult(
-        module=module,
+        module=result_module,
         function=function,
         analysis=analysis,
         level=level,

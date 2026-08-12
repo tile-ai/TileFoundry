@@ -38,22 +38,26 @@ def schedule(
     ([core-ir §1](./core-ir.md#1-module)). A Function derived by specialising one
     of these MUST be refused, so that ownership is settled before anything is
     rebuilt.
-  - `dims` states one extent per dimension the Function declares as a range. A
-    solver places work across a level by counting it and holds a tile against a
-    capacity in bytes, so a Function stating a range MUST be solved at a chosen
+  - `dims` states one extent per dimension reached through the Function graph,
+    its Mesh geometry, or the effective Module topology expressions. A solver
+    places work across a level by counting it and holds a tile against a capacity
+    in bytes, so a range in any of those positions MUST be solved at a chosen
     size rather than as authored.
   - `dims=None` MUST behave as a call that states no size: the Function is
     solved as authored.
   - When `dims` is stated it MUST be non-empty; every key MUST name a dimension
-    the Function declares as a range; every value MUST be an integer inside that
+    reached through the Function graph, its Mesh geometry, or the effective
+    Module topology expressions; every value MUST be an integer inside that
     dimension's declared bounds; every dimension the Function selects a variant
     on MUST be given a value; and no dimension MAY remain a range after
     substitution. Each of these MUST fail with a Schedule domain error. A stated
     `dims` MUST NOT be silently ignored, including when the Function declares no
     range at all.
   - Variant resolution and substitution MUST happen after the ownership check
-    and before the algorithm runs. Exactly one variant MUST cover the stated
-    size; none and more than one MUST both fail.
+    and before the shared program check or algorithm runs. Function types, Mesh
+    geometry, and effective topology extents MUST use the same resolved binding.
+    Exactly one variant MUST cover the stated size; none and more than one MUST
+    both fail.
   - The Target MUST come from `module.resolve_target()`
     ([core-ir §1](./core-ir.md#1-module)); a call MUST NOT override it and MUST
     NOT fall back to a default Target when no Module in the owner chain declares
@@ -173,7 +177,10 @@ class ScheduleResult:
     record that Function as the one it was specialised from, and the plan MUST
     verify against it. A caller returned its own symbolic input would hold a
     plan it cannot check.
-  - `topology` MUST be the level as the Module declares it, not a normalized copy.
+  - `topology` MUST be the level at the resolved geometry. With no `dims` it is
+    the object the Module declares; with `dims` its extent is the value obtained
+    from that binding. The plan MUST solve and verify against this same level,
+    while `module` remains the object the caller supplied.
 
 ### 2.3 `SchedulePlan`
 

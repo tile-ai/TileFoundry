@@ -63,6 +63,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
 )
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import _expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
@@ -128,6 +129,10 @@ def shape_entry_str(entry: object) -> str:
     See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions) and
     [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
     """
+    return _shape_entry_str(entry, nested=False)
+
+
+def _shape_entry_str(entry: object, *, nested: bool) -> str:
     if isinstance(entry, bool):
         return repr(entry)
     if isinstance(entry, int):
@@ -137,21 +142,58 @@ def shape_entry_str(entry: object) -> str:
     if isinstance(entry, Constant):
         return str(entry.value)
     if isinstance(entry, Call):
+        ceildiv_args = _ceildiv_args(entry)
+        if ceildiv_args is not None:
+            a, b = ceildiv_args
+            return (
+                f"ceildiv({_shape_entry_str(a, nested=False)}, "
+                f"{_shape_entry_str(b, nested=False)})"
+            )
         target = entry.target
         if isinstance(target, DimConst):
             return str(target.value)
         for op_cls, sym in _DIM_INFIX_OPS.items():
             if isinstance(target, op_cls):
                 a, b = entry.args
-                return f"{shape_entry_str(a)} {sym} {shape_entry_str(b)}"
+                rendered = (
+                    f"{_shape_entry_str(a, nested=True)} {sym} "
+                    f"{_shape_entry_str(b, nested=True)}"
+                )
+                return f"({rendered})" if nested else rendered
         for op_cls, fname in _DIM_FUNC_OPS.items():
             if isinstance(target, op_cls):
-                rendered = ", ".join(shape_entry_str(a) for a in entry.args)
+                rendered = ", ".join(
+                    _shape_entry_str(a, nested=False) for a in entry.args
+                )
                 return f"{fname}({rendered})"
         return repr(entry)
     if isinstance(entry, Expr):
         return repr(entry)
     return repr(entry)
+
+
+def _ceildiv_args(entry: Call) -> tuple[object, object] | None:
+    """Recover the public constructor from ceildiv's canonical arithmetic tree."""
+    if not isinstance(entry.target, DimFloorDiv) or len(entry.args) != 2:
+        return None
+    numerator, divisor = entry.args
+    if not (
+        isinstance(numerator, Call)
+        and isinstance(numerator.target, DimSub)
+        and len(numerator.args) == 2
+        and isinstance(numerator.args[1], Constant)
+        and numerator.args[1].value == 1
+    ):
+        return None
+    added = numerator.args[0]
+    if not (
+        isinstance(added, Call)
+        and isinstance(added.target, DimAdd)
+        and len(added.args) == 2
+        and added.args[1] == divisor
+    ):
+        return None
+    return added.args[0], divisor
 
 
 def _classify_shard_attrs(
@@ -210,7 +252,9 @@ def _shard_layout_surface_str(
         return None
 
     dims = [
-        f"{d} {' '.join(f'@ {r}' for r in splits[i])}" if i in splits else str(d)
+        f"{shape_entry_str(d)} {' '.join(f'@ {r}' for r in splits[i])}"
+        if i in splits
+        else shape_entry_str(d)
         for i, d in enumerate(layout.shape)
     ]
     dim_str = ", ".join(dims)
@@ -331,7 +375,7 @@ def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
         return (
             "ComposedLayout(\n"
             f"{child_indent}inner={_layout_str(layout.inner, child_indent)},\n"
-            f"{child_indent}offset={layout.offset},\n"
+            f"{child_indent}offset={shape_entry_str(layout.offset)},\n"
             f"{child_indent}outer={_layout_str(layout.outer, child_indent)},\n"
             f"{indent})"
         )
@@ -340,7 +384,7 @@ def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
 
 def _topologies_str(mesh: Mesh) -> str:
     topologies = ", ".join(
-        f'Topology("{topology.name}", {topology.size})'
+        f'Topology("{topology.name}", {shape_entry_str(topology.size)})'
         for topology in mesh.topologies
     )
     return f"({topologies}{',' if len(mesh.topologies) == 1 else ''})"
@@ -1065,7 +1109,7 @@ def _emit_header(
     if fn.variants:
         lines.append("from tilefoundry.ir.core.pattern import DimVarRangePat")
     if dim_vars:
-        lines.append("from tilefoundry.ir.types.dim import DimVar")
+        lines.append("from tilefoundry.ir.types.dim import DimVar, ceildiv")
     lines.append("")
 
 
@@ -1193,7 +1237,10 @@ def _module_decorator_line(mod: Module, entry_name: str | None) -> str:
         rendered: PythonExpr = mod.target.to_python()
         kwargs.append(f"target={rendered.text}")
     if mod.topologies is not None:
-        topo_strs = [f'Topology("{t.name}", {t.size})' for t in mod.topologies]
+        topo_strs = [
+            f'Topology("{t.name}", {shape_entry_str(t.size)})'
+            for t in mod.topologies
+        ]
         rendered_topologies = f'({", ".join(topo_strs)},)' if topo_strs else "()"
         kwargs.append(f"topologies={rendered_topologies}")
     return f"@module({', '.join(kwargs)})"
@@ -1269,6 +1316,8 @@ def _module_to_python(
     dim_vars: dict[str, object] = {}
     for fn in functions:
         dim_vars.update(dim_vars_reached(fn))
+    for node in _module_tree(root):
+        dim_vars.update(dim_vars_by_name(node.topologies or ()))
     lines = _emit_header(
         header_of, meshes, mesh_map, indent4, for_module=True, target=root.target,
         dim_vars=dim_vars,
@@ -1286,3 +1335,9 @@ def _module_to_python(
         )
     )
     return "\n".join(lines) + "\n"
+
+
+def _module_tree(root: Module) -> Iterator[Module]:
+    yield root
+    for child in root.modules:
+        yield from _module_tree(child)

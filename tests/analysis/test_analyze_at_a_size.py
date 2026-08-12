@@ -12,20 +12,30 @@ answer for -- it only lets the ones it owns be asked about at a size.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pytest
 
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
-from tilefoundry.analysis import MemoryMetadata, TimelineMetadata, analyze
+from tilefoundry.analysis import Analyzer, MemoryMetadata, TimelineMetadata, analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.inspection.analysis_report import render_text, report
 from tilefoundry.ir.core import get_metadata
-from tilefoundry.ir.hir.specialize import residual_dims, variant_for
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.hir.specialize import bound_dims_of, residual_dims, variant_for
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.dim import DimVar, ceildiv
+from tilefoundry.ir.types.shard import (
+    Broadcast,
+    Layout,
+    Mesh,
+    ShardLayout,
+    Topology,
+)
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
+from tilefoundry.schedule.plan import SchedulePlan
 from tilefoundry.target import CudaTarget
+from tilefoundry.target.services import Scheduler
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
@@ -40,6 +50,113 @@ def _aimed():
     return replace(
         GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
     )
+
+
+_GEOMETRY_N = DimVar("geometry_n", 1, 65)
+_GEOMETRY_TILES = ceildiv(_GEOMETRY_N, 8)
+_GEOMETRY_MESH = Mesh(
+    (Topology("cta", _GEOMETRY_TILES),),
+    Layout((_GEOMETRY_TILES,), (1,)),
+)
+_GEOMETRY_LAYOUT = ShardLayout(
+    Layout((_GEOMETRY_TILES, 8), None),
+    (Broadcast(),),
+    _GEOMETRY_MESH,
+)
+
+
+@dataclass(frozen=True)
+class _GeometryPlan(SchedulePlan):
+    extent: int
+
+    def verify(self, module, function, topology) -> None:
+        assert topology == Topology("cta", self.extent)
+
+    def to_json(self) -> str:
+        return f'{{"extent": {self.extent}}}'
+
+    def render(self) -> str:
+        return f"geometry extent {self.extent}"
+
+
+def _derived_geometry_module():
+    tensor = TensorType(
+        shape=(_GEOMETRY_TILES, 8),
+        dtype=DType.f32,
+        layout=_GEOMETRY_LAYOUT,
+        storage="gmem",
+    )
+
+    from tilefoundry.ir.core import Var  # noqa: PLC0415
+    from tilefoundry.ir.core.module import Module  # noqa: PLC0415
+    from tilefoundry.ir.hir.function import Function  # noqa: PLC0415
+
+    source = Var(name="source", type=tensor)
+    function = Function.build(
+        name="derived_geometry",
+        params=(source,),
+        body=source,
+        return_type=tensor,
+    )
+    return Module(
+        "derived_geometry",
+        (function,),
+        function.name,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", _GEOMETRY_TILES),),
+    )
+
+
+def test_one_binding_resolves_function_mesh_and_topology_before_consumers(
+    monkeypatch,
+) -> None:
+    module = _derived_geometry_module()
+    function = module.entry_function()
+    seen_analysis: list[tuple[Topology, ...]] = []
+    seen_schedule: list[tuple[Topology, ...]] = []
+
+    def analyze_geometry(module, function, *_args) -> None:
+        seen_analysis.append(module.effective_topologies())
+
+    def schedule_geometry(module, function, _target, topology, _options):
+        seen_schedule.append(module.effective_topologies())
+        return _GeometryPlan(topology.size)
+
+    monkeypatch.setattr(
+        CudaTarget,
+        "get_analyzer",
+        lambda _self, selector: Analyzer(selector, analyze_geometry),
+    )
+    monkeypatch.setattr(
+        CudaTarget,
+        "get_scheduler",
+        lambda _self, topology: Scheduler(topology, schedule_geometry),
+    )
+
+    with pytest.raises(AnalysisError, match="symbolic"):
+        analyze(module, function, analysis="geometry")
+    assert seen_analysis == []
+
+    bindings = {"geometry_n": 17}
+    analyzed = analyze(module, function, analysis="geometry", dims=bindings)
+    scheduled = schedule(module, function, topology="cta", dims=bindings)
+
+    expected = (Topology("cta", 3),)
+    assert seen_analysis == [expected]
+    assert seen_schedule == [expected]
+    assert analyzed.module is module
+    assert scheduled.module is module
+    assert scheduled.topology == Topology("cta", 3)
+    assert bound_dims_of(analyzed.function) == (("geometry_n", 17),)
+    assert bound_dims_of(scheduled.function) == (("geometry_n", 17),)
+    scheduled.plan.verify(scheduled.module, scheduled.function, scheduled.topology)
+
+    tensor = analyzed.function.params[0].type
+    assert tensor.shape == (3, 8)
+    assert isinstance(tensor.layout, ShardLayout)
+    assert tensor.layout.layout.shape == (3, 8)
+    assert tensor.layout.mesh.layout.shape == (3,)
+    assert tensor.layout.mesh.topologies == expected
 
 
 @pytest.mark.parametrize("family", FAMILIES)
