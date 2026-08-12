@@ -1,23 +1,20 @@
-"""Plan modeled work on a fixed number of parallel units.
+"""Place modeled work on exact logical participant sets.
 
-Consecutive work at the same local storage and parallel extent forms one launch.
-Launches run in capacity-limited waves subject to dependencies. The result
-models ordering and occupancy, not lowering or measured performance.
+Each primitive occurrence occupies every logical position named by its result
+placement for one CTA-local duration. Dependencies and intersecting participant
+sets constrain the intervals; physical wave scaling is a separate concern.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ortools.sat.python import cp_model
 
-from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import Type
-from tilefoundry.ir.types.shard import shard_layout_of
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.target import Target
 
 from .check import Placement, _timeline_placements
@@ -27,11 +24,12 @@ from .facts import ParallelCapacityFacts, ThroughputFacts
 from .metadata import ComputeCostMetadata, TimelineMetadata
 from .walk import (
     attach,
+    children,
     describe,
-    enclosing_trips,
+    loop_repeated_values,
+    loop_trip_count,
     postorder,
     reachable_functions,
-    tensor_types,
 )
 
 SELECTOR = "timeline"
@@ -40,206 +38,43 @@ _SOLVE_SECONDS = 5.0
 
 
 @dataclass
-class _Unit:
-    """One launch: the calls it issues, what it waits for, and how wide it is."""
+class _Occurrence:
+    """One primitive occurrence or one structured loop in a local schedule."""
 
-    calls: list[Call]
-    predecessors: set[int]
+    expr: Call | GridRegionExpr
     placement: Placement
     duration_ns: int
+    source_index: int
+    predecessors: set[int] = field(default_factory=set)
+    body: _Schedule | None = None
+    trips: int = 1
+    start_ns: int = 0
+    end_ns: int = 0
+
+
+@dataclass
+class _Schedule:
+    """The direct occurrences in one Function or loop body."""
+
+    occurrences: dict[int, _Occurrence]
+    external_predecessors: set[int]
+    makespan_ns: int = 0
 
     @property
-    def extent(self) -> int:
-        return len(self.placement)
-
-
-def _is_local(type_: Type) -> bool:
-    """Whether every tensor leaf of *type_* stays inside one parallel unit."""
-    tensors = tensor_types(type_)
-    return bool(tensors) and all(
-        tensor.storage in {StorageKind.RMEM, StorageKind.SMEM} for tensor in tensors
-    )
-
-
-def _fusable(producer: Type, consumer: Type) -> bool:
-    """Whether a value can be handed over in one local storage tier."""
-    if not _is_local(producer) or not _is_local(consumer):
-        return False
-    producer_tensors = tensor_types(producer)
-    consumer_tensors = tensor_types(consumer)
-    producer_storages = {tensor.storage for tensor in producer_tensors}
-    if len(producer_storages) != 1:
-        return False
-    if producer_storages != {tensor.storage for tensor in consumer_tensors}:
-        return False
-    producer_meshes = {
-        layout.mesh
-        for tensor in producer_tensors
-        if (layout := shard_layout_of(tensor.layout)) is not None
-    }
-    consumer_meshes = {
-        layout.mesh
-        for tensor in consumer_tensors
-        if (layout := shard_layout_of(tensor.layout)) is not None
-    }
-    return bool(producer_meshes) and producer_meshes == consumer_meshes
-
-
-def _units(
-    fn: Function,
-    durations: dict[int, int],
-    placements: dict[int, Placement],
-) -> dict[int, _Unit]:
-    """Group *fn*'s calls into execution units by fusable local placement.
-
-    A reshard is never fused across: it exists precisely to move data between
-    placements, so the unit must end there.
-    """
-    calls = [expr for expr in postorder(fn.body) if isinstance(expr, Call)]
-    call_by_id = {id(call): call for call in calls}
-    parent = {id(call): id(call) for call in calls}
-
-    def find(value: int) -> int:
-        while parent[value] != value:
-            parent[value] = parent[parent[value]]
-            value = parent[value]
-        return value
-
-    for consumer in calls:
-        if isinstance(consumer.target, Reshard):
-            continue
-        for arg in consumer.args:
-            producer = call_by_id.get(id(arg))
-            if producer is None or isinstance(producer.target, Reshard):
-                continue
-            if (
-                _fusable(producer.type, consumer.type)
-                and placements[id(producer)] == placements[id(consumer)]
-            ):
-                left, right = find(id(producer)), find(id(consumer))
-                if left != right:
-                    parent[right] = left
-
-    index_of: dict[int, int] = {}
-    for call in calls:
-        root = find(id(call))
-        if root not in index_of:
-            index_of[root] = len(index_of)
-    units = {index: _Unit([], set(), frozenset(), 0) for index in index_of.values()}
-    unit_of: dict[int, int] = {}
-    for call in calls:
-        unit_id = index_of[find(id(call))]
-        unit_of[id(call)] = unit_id
-        unit = units[unit_id]
-        unit.calls.append(call)
-        placement = placements[id(call)]
-        if unit.placement and unit.placement != placement:  # pragma: no cover
-            raise AnalysisError("one fused timeline unit has conflicting placements")
-        unit.placement = placement
-        unit.duration_ns += durations[id(call)]
-    for consumer in calls:
-        consumer_unit = unit_of[id(consumer)]
-        for arg in consumer.args:
-            producer_unit = unit_of.get(id(arg))
-            if producer_unit is not None and producer_unit != consumer_unit:
-                units[consumer_unit].predecessors.add(producer_unit)
-    return units
-
-
-def _wave_plan(unit: _Unit, capacity: int) -> list[tuple[int, int]]:
-    """Split one unit into ``(demand, duration)`` waves of at most *capacity*.
-
-    The unit's own duration is divided across its waves in proportion to how
-    much of the unit each wave issues, and the last wave absorbs the remainder
-    so the parts still sum to the whole.
-    """
-    if unit.extent <= 0:  # pragma: no cover - placement preflight rejects this
-        raise AnalysisError("a timeline unit has no result placement")
-    demands: list[int] = []
-    remaining = unit.extent
-    while remaining > 0:
-        demands.append(min(capacity, remaining))
-        remaining -= demands[-1]
-    plan: list[tuple[int, int]] = []
-    left = unit.duration_ns
-    for index, demand in enumerate(demands):
-        if index == len(demands) - 1:
-            duration = left
-        else:
-            duration = -(-(unit.duration_ns * demand) // unit.extent)
-            left -= duration
-        plan.append((demand, max(duration, 0)))
-    return plan
-
-
-def _solve(
-    units: dict[int, _Unit], capacity: int
-) -> tuple[int, int, dict[int, TimelineMetadata]]:
-    """Place every unit's waves.
-
-    Returns the makespan, the total number of waves issued, and one record per
-    call keyed by identity. The wave total is counted here rather than derived
-    from the records, because two distinct units can be placed identically and
-    would otherwise collapse into one.
-    """
-    model = cp_model.CpModel()
-
-    horizon = max(1, sum(max(1, unit.duration_ns) for unit in units.values()))
-    waves_by_unit: dict[int, list[tuple[cp_model.IntVar, cp_model.IntVar]]] = {}
-    intervals = []
-    demands = []
-    for unit_id, unit in units.items():
-        waves: list[tuple[cp_model.IntVar, cp_model.IntVar]] = []
-        for index, (demand, duration) in enumerate(_wave_plan(unit, capacity)):
-            start = model.NewIntVar(0, horizon, f"u{unit_id}_w{index}_start")
-            end = model.NewIntVar(0, horizon, f"u{unit_id}_w{index}_end")
-            intervals.append(
-                model.NewIntervalVar(start, duration, end, f"u{unit_id}_w{index}")
-            )
-            demands.append(demand)
-            if waves:
-                model.Add(start >= waves[-1][1])
-            waves.append((start, end))
-        waves_by_unit[unit_id] = waves
-    for unit_id, unit in units.items():
-        first_start = waves_by_unit[unit_id][0][0]
-        for predecessor in unit.predecessors:
-            model.Add(first_start >= waves_by_unit[predecessor][-1][1])
-    model.AddCumulative(intervals, demands, capacity)
-    makespan = model.NewIntVar(0, horizon, "makespan")
-    model.AddMaxEquality(
-        makespan, [waves[-1][1] for waves in waves_by_unit.values()]
-    )
-    model.Minimize(makespan)
-    solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 1
-    solver.parameters.max_time_in_seconds = _SOLVE_SECONDS
-    status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise AnalysisError("the fixed-capacity timeline is infeasible")
-
-    records: dict[int, TimelineMetadata] = {}
-    for unit_id, unit in units.items():
-        waves = waves_by_unit[unit_id]
-        record = TimelineMetadata(
-            grid_units=unit.extent,
-            waves=len(waves),
-            start_ns=solver.Value(waves[0][0]),
-            end_ns=solver.Value(waves[-1][1]),
+    def placement(self) -> Placement:
+        return frozenset(
+            position
+            for occurrence in self.occurrences.values()
+            for position in occurrence.placement
         )
-        for call in unit.calls:
-            records[id(call)] = record
-    total_waves = sum(len(waves) for waves in waves_by_unit.values())
-    return solver.Value(makespan), total_waves, records
 
 
 def _durations(
     fn: Function,
     facts: ThroughputFacts,
     level: str,
-    trips: dict[int, int] | None = None,
 ) -> dict[int, int]:
-    """Each call's local duration, optionally scaled for root loop totals."""
+    """Return one CTA-local duration for every primitive occurrence."""
     result: dict[int, int] = {}
     for expr in postorder(fn.body):
         if not isinstance(expr, Call):
@@ -250,12 +85,206 @@ def _durations(
                 f"{describe(expr)}: the timeline needs the compute-cost record this "
                 "call was never given"
             )
-        result[id(expr)] = _local_duration_ns(
-            cost,
-            facts,
-            level=level,
-            scale=1 if trips is None else trips.get(id(expr), 1),
+        result[id(expr)] = _local_duration_ns(cost, facts, level=level)
+    return result
+
+
+def _producer_ids(expr: Expr, schedulable: set[int]) -> set[int]:
+    """Find the nearest schedulable producers beneath a value expression."""
+    if id(expr) in schedulable:
+        return {id(expr)}
+    return {producer for child in children(expr) for producer in _producer_ids(child, schedulable)}
+
+
+def _solve(occurrences: dict[int, _Occurrence]) -> int:
+    """Solve one loop-free local scope and return its makespan."""
+    if not occurrences:
+        return 0
+
+    ordered = sorted(occurrences.values(), key=lambda item: item.source_index)
+    horizon = sum(item.duration_ns for item in ordered)
+    model = cp_model.CpModel()
+    starts: dict[int, cp_model.IntVar] = {}
+    ends: dict[int, cp_model.IntVar] = {}
+    intervals_by_position: dict[int, list[cp_model.IntervalVar]] = {}
+    for index, occurrence in enumerate(ordered):
+        key = id(occurrence.expr)
+        start = model.NewIntVar(0, horizon, f"c{index}_start")
+        end = model.NewIntVar(0, horizon, f"c{index}_end")
+        model.Add(end == start + occurrence.duration_ns)
+        starts[key] = start
+        ends[key] = end
+        if occurrence.duration_ns > 0:
+            interval = model.NewIntervalVar(start, occurrence.duration_ns, end, f"c{index}")
+            for position in occurrence.placement:
+                intervals_by_position.setdefault(position, []).append(interval)
+
+    for occurrence in ordered:
+        key = id(occurrence.expr)
+        for predecessor in occurrence.predecessors:
+            model.Add(starts[key] >= ends[predecessor])
+
+    for intervals in intervals_by_position.values():
+        model.AddNoOverlap(intervals)
+
+    makespan = model.NewIntVar(0, horizon, "makespan")
+    model.AddMaxEquality(makespan, [ends[id(item.expr)] for item in ordered])
+    model.Minimize(makespan)
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    solver.parameters.max_time_in_seconds = _SOLVE_SECONDS
+    if solver.Solve(model) != cp_model.OPTIMAL:
+        raise AnalysisError("the participant-set timeline has no optimal schedule")
+
+    optimum = solver.Value(makespan)
+    model.Add(makespan == optimum)
+    model.Minimize(
+        sum(
+            (len(ordered) - index) * starts[id(occurrence.expr)]
+            for index, occurrence in enumerate(ordered)
         )
+    )
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    solver.parameters.max_time_in_seconds = _SOLVE_SECONDS
+    if solver.Solve(model) != cp_model.OPTIMAL:
+        raise AnalysisError("the participant-set timeline tie-break has no optimum")
+
+    for occurrence in ordered:
+        key = id(occurrence.expr)
+        occurrence.start_ns = solver.Value(starts[key])
+        occurrence.end_ns = solver.Value(ends[key])
+    return optimum
+
+
+def _schedule(
+    fn: Function,
+    durations: dict[int, int],
+    placements: dict[int, Placement],
+) -> _Schedule:
+    """Build and solve the Function's nested occurrence schedules."""
+    values = postorder(fn.body)
+    source_index = {id(expr): index for index, expr in enumerate(values)}
+    loops = [expr for expr in values if isinstance(expr, GridRegionExpr)]
+    repeated = {id(loop): loop_repeated_values(loop) for loop in loops}
+
+    parent: dict[int, int | None] = {}
+    for loop in loops:
+        candidates = [
+            owner for owner in loops if owner is not loop and id(loop) in repeated[id(owner)]
+        ]
+        parent[id(loop)] = (
+            min(candidates, key=lambda item: len(repeated[id(item)])) if candidates else None
+        )
+        if parent[id(loop)] is not None:
+            parent[id(loop)] = id(parent[id(loop)])
+
+    scope_of: dict[int, int | None] = {}
+    for expr in values:
+        if isinstance(expr, Call):
+            candidates = [loop for loop in loops if id(expr) in repeated[id(loop)]]
+            scope_of[id(expr)] = (
+                id(min(candidates, key=lambda item: len(repeated[id(item)])))
+                if candidates
+                else None
+            )
+        elif isinstance(expr, GridRegionExpr):
+            scope_of[id(expr)] = parent[id(expr)]
+
+    schedulable = set(scope_of)
+
+    def representative(producer: int, scope: int | None) -> int:
+        producer_scope = scope_of[producer]
+        if producer_scope == scope:
+            return producer
+        child = producer_scope
+        while child is not None and parent[child] != scope:
+            child = parent[child]
+        return producer if child is None else child
+
+    def build(scope: int | None) -> _Schedule:
+        direct = [
+            expr
+            for expr in values
+            if isinstance(expr, (Call, GridRegionExpr)) and scope_of[id(expr)] == scope
+        ]
+        occurrences: dict[int, _Occurrence] = {}
+        child_external: dict[int, set[int]] = {}
+        for expr in direct:
+            if isinstance(expr, Call):
+                occurrence = _Occurrence(
+                    expr,
+                    placements[id(expr)],
+                    durations[id(expr)],
+                    source_index[id(expr)],
+                )
+            else:
+                body = build(id(expr))
+                child_external[id(expr)] = body.external_predecessors
+                occurrence = _Occurrence(
+                    expr,
+                    body.placement,
+                    loop_trip_count(expr) * body.makespan_ns,
+                    source_index[id(expr)],
+                    body=body,
+                    trips=loop_trip_count(expr),
+                )
+            occurrences[id(expr)] = occurrence
+
+        external: set[int] = set()
+        for occurrence in occurrences.values():
+            expr = occurrence.expr
+            operands = expr.args if isinstance(expr, Call) else expr.init_args
+            producers = {
+                producer for operand in operands for producer in _producer_ids(operand, schedulable)
+            }
+            if isinstance(expr, GridRegionExpr):
+                producers.update(child_external[id(expr)])
+            for producer in producers:
+                resolved = representative(producer, scope)
+                if scope_of[resolved] == scope:
+                    occurrence.predecessors.add(resolved)
+                else:
+                    external.add(resolved)
+
+        plan = _Schedule(occurrences, external)
+        plan.makespan_ns = _solve(occurrences)
+        return plan
+
+    return build(None)
+
+
+def _records(
+    schedule: _Schedule,
+    *,
+    offset_ns: int = 0,
+    trips: int = 1,
+    stride_ns: int = 0,
+) -> dict[int, TimelineMetadata]:
+    """Materialize absolute first-trip intervals from a nested schedule."""
+    result: dict[int, TimelineMetadata] = {}
+    for key, occurrence in schedule.occurrences.items():
+        start = offset_ns + occurrence.start_ns
+        end = offset_ns + occurrence.end_ns
+        if isinstance(occurrence.expr, Call):
+            result[key] = TimelineMetadata(
+                grid_units=len(occurrence.placement),
+                waves=1,
+                start_ns=start,
+                end_ns=end,
+                trips=trips,
+                stride_ns=stride_ns if trips > 1 else 0,
+            )
+            continue
+        if occurrence.body is not None:
+            result.update(
+                _records(
+                    occurrence.body,
+                    offset_ns=start,
+                    trips=occurrence.trips,
+                    stride_ns=occurrence.body.makespan_ns,
+                )
+            )
     return result
 
 
@@ -266,40 +295,25 @@ def analyze_timeline(
     level: str | None = None,
     options: object | None = None,
 ) -> None:
-    """Place every reachable Function's calls on the nominal timeline."""
-    facts = target.get_facts(ParallelCapacityFacts)
+    """Place every reachable Function's occurrences on a local timeline."""
+    placement_facts = target.get_facts(ParallelCapacityFacts)
     throughput = target.get_facts(ThroughputFacts)
-    capacity = facts.parallel_units
-    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
-        raise AnalysisError(
-            "the timeline requires a positive parallel-unit capacity, got "
-            f"{capacity!r}"
-        )
     for fn in reachable_functions(function):
-        placements = _timeline_placements(module, fn, facts.topology)
-        durations = _durations(fn, throughput, facts.topology)
-        if not durations:
-            attach(fn, TimelineMetadata(grid_units=0, waves=0, start_ns=0, end_ns=0))
-            continue
-        units = _units(fn, durations, placements)
-        makespan, total_waves, records = _solve(units, capacity)
+        placements = _timeline_placements(module, fn, placement_facts.topology)
+        durations = _durations(fn, throughput, placement_facts.topology)
+        schedule = _schedule(fn, durations, placements)
+        records = _records(schedule)
         for expr in postorder(fn.body):
             record = records.get(id(expr))
             if record is not None:
                 attach(expr, record)
-        trips = enclosing_trips(fn.body)
-        root_units = units
-        if trips:
-            root_durations = _durations(fn, throughput, facts.topology, trips)
-            root_units = _units(fn, root_durations, placements)
-            makespan, total_waves, _records = _solve(root_units, capacity)
         attach(
             fn,
             TimelineMetadata(
-                grid_units=max(unit.extent for unit in root_units.values()),
-                waves=total_waves,
+                grid_units=max((record.grid_units for record in records.values()), default=0),
+                waves=1 if records else 0,
                 start_ns=0,
-                end_ns=makespan,
+                end_ns=schedule.makespan_ns,
             ),
         )
 

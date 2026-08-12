@@ -786,6 +786,55 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
     }
 
 
+def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
+    """Dependencies and exact Mesh intersections determine local intervals."""
+    first = analyze(
+        MoEMegaKernel,
+        MoEMegaKernel.entry_function(),
+        analysis="timeline",
+    )
+    second = analyze(
+        MoEMegaKernel,
+        MoEMegaKernel.entry_function(),
+        analysis="timeline",
+    )
+    calls = _calls(first.function)
+    records = tuple(get_metadata(call, TimelineMetadata) for call in calls)
+    repeated = tuple(
+        get_metadata(call, TimelineMetadata) for call in _calls(second.function)
+    )
+    assert all(record is not None for record in records)
+    assert records == repeated
+
+    routed_in, routed, routed_out, shared_in, shared, shared_out, join = records
+    assert routed_in is not None and routed is not None and routed_out is not None
+    assert shared_in is not None and shared is not None and shared_out is not None
+    assert join is not None
+
+    assert routed.start_ns == routed_in.end_ns
+    assert shared.start_ns == shared_in.end_ns
+    assert (routed.end_ns - routed.start_ns, shared.end_ns - shared.start_ns) == (
+        15,
+        141,
+    )
+    assert routed_in.start_ns == shared_in.start_ns == 0
+    assert min(routed_in.end_ns, shared_in.end_ns) > 0
+
+    placements = _timeline_placements(MoEMegaKernel, first.function, "cta")
+    assert placements[id(calls[2])] == placements[id(calls[5])]
+    assert (
+        routed_out.end_ns <= shared_out.start_ns
+        or shared_out.end_ns <= routed_out.start_ns
+    )
+    assert placements[id(calls[2])] != placements[id(calls[4])]
+    assert placements[id(calls[2])] & placements[id(calls[4])]
+    assert (
+        routed_out.end_ns <= shared.start_ns
+        or shared.end_ns <= routed_out.start_ns
+    )
+    assert join.start_ns >= max(routed_out.end_ns, shared_out.end_ns)
+
+
 def test_placement_projection_rejects_the_wrong_level_and_invalid_images() -> None:
     with pytest.raises(
         AnalysisError,
@@ -852,7 +901,7 @@ def test_timeline_refuses_traffic_only_at_an_unmodelled_storage_level() -> None:
 
 
 def test_a_zero_cost_structural_occurrence_has_an_empty_timeline_interval() -> None:
-    _, entry = _run(_zero_cost_view, "timeline")
+    result, entry = _run(_zero_cost_view, "timeline")
 
     view = next(
         call for call in _calls(entry) if type(call.target).__name__ == "TupleGetItem"
@@ -860,6 +909,20 @@ def test_a_zero_cost_structural_occurrence_has_an_empty_timeline_interval() -> N
     record = get_metadata(view, TimelineMetadata)
     assert record is not None
     assert record.start_ns == record.end_ns
+    timelines = [
+        row["timeline"] for row in report(result)["calls"] if "timeline" in row
+    ]
+    assert all(
+        set(item)
+        == {"grid_units", "waves", "start_ns", "end_ns", "trips", "stride_ns"}
+        for item in timelines
+    )
+    assert any(
+        item["start_ns"] == item["end_ns"]
+        and item["trips"] == 1
+        and item["stride_ns"] == 0
+        for item in timelines
+    )
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:

@@ -542,3 +542,6 @@ def report(result: AnalysisResult) -> dict[str, object]:
     `traffic_per_unit`. Its annotated-HIR comment MUST place `per-unit-bytes`
     immediately after global `bytes`; JSON MUST expose the corresponding four
     fields without reconstructing any of them.
+  - A rendered timeline record MUST expose `grid_units`, `waves`, `start_ns`,
+    `end_ns`, `trips`, and `stride_ns` from the attached record. It MUST NOT
+    expand a parameterized loop into one JSON row per trip.

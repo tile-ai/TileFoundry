@@ -69,8 +69,8 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     call_timelines = [call["timeline"] for call in report["calls"]]
     assert call_timelines
     assert {call["grid_units"] for call in call_timelines} == {132}
-    assert {call["waves"] for call in call_timelines} == {2}
-    assert timeline["waves"] == sum(call["waves"] for call in call_timelines)
+    assert all(call["end_ns"] >= call["start_ns"] for call in call_timelines)
+    assert timeline["end_ns"] == max(call["end_ns"] for call in call_timelines)
 
     scheduled = tf(
         "schedule",

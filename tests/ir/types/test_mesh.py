@@ -4,7 +4,6 @@ import ast
 
 import pytest
 
-from tilefoundry.analysis.timeline import _fusable
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import (
     Layout,
@@ -86,16 +85,10 @@ def test_named_mesh_axis_sugar_carries_a_layout_index() -> None:
     assert partial_layout.attrs == (Partial("sum"),)
 
 
-def test_mesh_value_equality_is_usable_by_timeline_and_partition() -> None:
+def test_mesh_value_equality_is_usable_by_partition() -> None:
     left = make_mesh((8,), topology="thread")
     right = make_mesh((8,), topology="thread")
     layout = Layout(shape=(8,), strides=(1,))
-    producer = TensorType(
-        shape=(8,),
-        dtype=DType.f32,
-        layout=ShardLayout(layout, (Split(0),), left),
-        storage="rmem",
-    )
     consumer = TensorType(
         shape=(8,),
         dtype=DType.f32,
@@ -105,5 +98,4 @@ def test_mesh_value_equality_is_usable_by_timeline_and_partition() -> None:
 
     assert left == right
     assert hash(left) == hash(right)
-    assert _fusable(producer, consumer)
     assert _placement_relation(consumer, left) == "SAME_INTERVAL"

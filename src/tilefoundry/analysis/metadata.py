@@ -184,22 +184,30 @@ class RooflineMetadata(IRMetadata):
 class TimelineMetadata(IRMetadata):
     """A modeled placement on the nominal timeline.
 
-    On a Call this is the placement of the execution unit that call belongs to.
-    Every call fused into one unit carries the same record: the placement was
-    decided for the unit, and a distinct one per call would suggest a resolution
-    the model does not have.
+    On a Call this is one occurrence's CTA-local interval. A repeated loop-body
+    occurrence states its first interval plus the trip count and stride needed
+    to derive every later interval.
 
     On a Function it is the whole function's span, so it starts at the origin
-    and ends at the makespan the scheduling model solved for. ``grid_units`` is
-    then the widest unit extent and ``waves`` the waves issued in total.
+    and ends at the local makespan the scheduling model solved for.
     """
 
     grid_units: int = 1
     waves: int = 1
     start_ns: int = 0
     end_ns: int = 0
+    trips: int = 1
+    stride_ns: int = 0
 
     def format_comment(self) -> str:
+        if self.trips > 1:
+            span_end = self.start_ns + self.trips * self.stride_ns
+            return (
+                f"timeline units={self.grid_units} waves={self.waves} "
+                f"[{self.start_ns}+{self.stride_ns}t, "
+                f"{self.end_ns}+{self.stride_ns}t) trips={self.trips} "
+                f"span=[{self.start_ns},{span_end})"
+            )
         return (
             f"timeline units={self.grid_units} waves={self.waves} "
             f"start={self.start_ns}ns end={self.end_ns}ns"

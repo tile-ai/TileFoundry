@@ -54,15 +54,15 @@ def enclosing_trips(root: Expr | None) -> dict[int, int]:
     for loop in postorder(root):
         if not isinstance(loop, GridRegionExpr):
             continue
-        count = _trip_count(loop)
+        count = loop_trip_count(loop)
         if count == 1:
             continue
-        for expr_id in _repeated_by(loop):
+        for expr_id in loop_repeated_values(loop):
             trips[expr_id] = trips.get(expr_id, 1) * count
     return trips
 
 
-def _repeated_by(loop: GridRegionExpr) -> set[int]:
+def loop_repeated_values(loop: GridRegionExpr) -> set[int]:
     """Return ids of values *loop* recomputes on every trip.
 
     Values depending on the induction variable or a carried argument change each
@@ -81,7 +81,7 @@ def _repeated_by(loop: GridRegionExpr) -> set[int]:
     return repeated
 
 
-def _trip_count(loop: GridRegionExpr) -> int:
+def loop_trip_count(loop: GridRegionExpr) -> int:
     """How many times *loop* runs, or one when its bounds are not numbers.
 
     One rather than a guess: an extent still carrying a range has no trip count, and
@@ -311,6 +311,8 @@ __all__ = [
     "enclosing_trips",
     "entry_function",
     "execution_domain",
+    "loop_repeated_values",
+    "loop_trip_count",
     "owning_module",
     "postorder",
     "reachable_functions",

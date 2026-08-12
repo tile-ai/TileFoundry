@@ -784,20 +784,26 @@ class TimelineMetadata(IRMetadata):
         waves: attribute; Number of waves issued.
         start_ns: attribute; Modeled start, in ns.
         end_ns: attribute; Modeled end, in ns.
+        trips: attribute; Number of executions represented by this interval.
+        stride_ns: attribute; Start-to-start distance between repeated executions.
     """
 
     grid_units: int = 1
     waves: int = 1
     start_ns: int = 0
     end_ns: int = 0
+    trips: int = 1
+    stride_ns: int = 0
 ```
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `grid_units` | A Call uses its output's authored extent at `topology`, otherwise one agreeing input extent, otherwise one. A fused unit uses its widest Call; its Calls record that value. A Function records its widest unit, or zero with no work. | `ParallelCapacityFacts.topology` selects the authored extent. |
-| `waves` | On a Call, the unit extent divided into consecutive capacity-sized waves; on a Function, the total waves issued, or zero with no work. | `ParallelCapacityFacts.parallel_units` |
-| `start_ns` | Start of the unit's first wave in the solver's makespan-minimizing placement, subject to its fixed solve budget, producer dependencies, and cumulative capacity. A unit's duration is the sum of its Calls' `RooflineMetadata.ideal_ns`, divided among waves in proportion to their issued units. A Function starts at zero. | `ParallelCapacityFacts.parallel_units` through placement |
-| `end_ns` | End of the same unit's last wave; on a Function, the maximum unit end, or zero with no work. | `ParallelCapacityFacts.parallel_units` through placement |
+| `grid_units` | A Call records the cardinality of its exact result participant set. A Function records the widest occurrence, or zero with no work. | `ParallelCapacityFacts.topology` selects the result Mesh level. |
+| `waves` | One on each primitive occurrence; on a Function, the number of direct positive-duration occurrences, or zero with no work. | No |
+| `start_ns` | Start of one occurrence in the makespan-minimizing local schedule subject to producer dependencies and exact participant-set exclusion. A Function starts at zero. | No |
+| `end_ns` | End of that occurrence's first execution; on a Function, the complete local makespan, or zero with no work. | No |
+| `trips` | One outside a loop; within a loop, the enclosing loop trip count represented by the interval. | No |
+| `stride_ns` | Zero outside a loop; within a loop, the solved makespan of one body execution. | No |
 
 The family reads this target projection:
 
@@ -820,8 +826,7 @@ Requesting timeline adds this Function verdict to the summary:
 theoretical-makespan=<int>ns
 ```
 
-Every measured Call receives this annotation; all Calls fused into one execution
-unit carry the same values:
+Every measured Call receives this annotation:
 
 ```text
 timeline units=<int> waves=<int> start=<int>ns end=<int>ns
@@ -831,7 +836,8 @@ Reported Call and Function records use the same projection under their
 `timeline` keys:
 
 ```text
-{"grid_units": <int>, "waves": <int>, "start_ns": <int>, "end_ns": <int>}
+{"grid_units": <int>, "waves": <int>, "start_ns": <int>, "end_ns": <int>,
+ "trips": <int>, "stride_ns": <int>}
 ```
 
 - constraints:
@@ -843,13 +849,22 @@ Reported Call and Function records use the same projection under their
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
     operand. A `Broadcast` shard attribute still names placement: attributes
     describe distribution while the Mesh describes which positions participate.
-  - A producer-consumer edge MAY fuse only when both values are in local
-    register or shared storage, their storage and Mesh sets agree, and their
-    parallel extents are equal. `Reshard` MUST end an execution unit. Calls
-    connected through fusable edges MUST form one unit, and every Call in that
-    unit MUST carry the same record.
-  - `parallel_units` MUST be a positive capacity used to form waves, not a
-    program rewrite or a divisor used to derive one-unit rates.
+  - Every primitive occurrence has one fixed duration and occupies its exact
+    participant set. An SSA consumer MUST start no earlier than its producers
+    end. Two positive-duration occurrences whose participant sets intersect
+    MUST NOT overlap; disjoint sets MAY overlap, while a partial intersection
+    serializes each whole occurrence rather than splitting it by participant.
+  - A `GridRegionExpr` MUST be represented as one structured timeline node. Its
+    body is solved once: `stride_ns` is that body's local makespan and the t-th
+    execution of a body occurrence with first interval `[start_ns, end_ns)` is
+    `[start_ns + t*stride_ns, end_ns + t*stride_ns)`, for `0 <= t < trips`.
+    The loop spans `trips * stride_ns`; a consumer of its yield MUST wait for
+    that full span. Loop-invariant values remain single occurrences outside it.
+  - Equal-makespan schedules MUST use inline occurrence order as a deterministic
+    tie-break, not as an execution dependency. On a `Function`, the record MUST
+    span the whole local plan from the origin to its solved makespan.
+  - `parallel_units` is compiler policy over hardware facts. It MUST NOT enter
+    one-unit rates or the CTA-local interval solver, and is not a program rewrite.
   - Timeline is a modeled plan and MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
 

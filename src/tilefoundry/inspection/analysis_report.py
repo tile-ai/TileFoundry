@@ -101,6 +101,8 @@ def _timeline(record: TimelineMetadata, expr: object) -> dict[str, object]:
         "waves": record.waves,
         "start_ns": record.start_ns,
         "end_ns": record.end_ns,
+        "trips": record.trips,
+        "stride_ns": record.stride_ns,
     }
 
 
