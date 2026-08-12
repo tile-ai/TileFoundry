@@ -14,6 +14,7 @@ import pytest
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
 import tilefoundry.schedule.api as schedule_api
+from tests._source import import_dsl
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import func
 from tilefoundry.analysis import AnalysisError, TileGraph, check_program, extract
@@ -92,6 +93,39 @@ def test_check_program_is_the_reusable_gate_for_public_consumers(
     assert len(calls) == 2
     assert all(module is valid and function is entry for module, function, _level in calls)
     assert [level for _module, _function, level in calls] == ["cta", "cta"]
+
+
+def test_analyze_applies_authored_readiness_after_the_shared_program_check() -> None:
+    function = import_dsl(
+        '''from __future__ import annotations
+from tilefoundry import func
+from tilefoundry.dsl import Tensor, tf
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+
+cta_mesh = Mesh((Topology("cta", 8),), Layout((8,), (1,)))
+
+@func
+def constrained(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
+    y: where(layout=(8 @ cta, 16), mesh=cta_mesh, storage="gmem") = tf.add(x, x)
+    return y
+'''
+    )
+    module = Module(
+        "constrained",
+        (function,),
+        function.name,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 8),),
+    )
+    metadata_before = {id(expr): expr.metadata for expr in values_of(function)}
+
+    assert check_program(module, function, level="cta") is None
+    with pytest.raises(
+        AnalysisError,
+        match=r"authored analysis does not accept where\(\.\.\.\)",
+    ):
+        analysis_api.analyze(module, function, analysis="compute-cost")
+    assert {id(expr): expr.metadata for expr in values_of(function)} == metadata_before
 
 
 @func
