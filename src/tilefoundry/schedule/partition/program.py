@@ -299,14 +299,7 @@ class _Extractor:
         if isinstance(expr, Var):
             refs = env.get(id(expr))
             if refs is None:
-                refs = next(
-                    (
-                        self._param_values[(function_path[:depth], id(expr))]
-                        for depth in range(len(function_path), -1, -1)
-                        if (function_path[:depth], id(expr)) in self._param_values
-                    ),
-                    (),
-                )
+                refs = self._param_values.get((function_path, id(expr)), ())
             self._expr_values[key] = refs
             return refs
         if isinstance(expr, Constant):
@@ -526,13 +519,14 @@ class _Extractor:
         self._active_functions.add(id(function))
         self.function_instances.append((function_path, function))
         try:
+            function_env = dict(env)
             if function is self.root:
                 for param in function.params:
-                    self._source_value(param, function_path)
+                    function_env[id(param)] = self._source_value(param, function_path)
             else:
                 for param, refs in zip(function.params, env.values()):
                     self._param_values[(function_path, id(param))] = refs
-            self._process_expr(function.body, function, function_path, env)
+            self._process_expr(function.body, function, function_path, function_env)
         finally:
             self._active_functions.remove(id(function))
 

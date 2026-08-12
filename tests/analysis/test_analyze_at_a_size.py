@@ -38,9 +38,11 @@ from tilefoundry.ir.hir.specialize import (
     variant_for,
 )
 from tilefoundry.ir.hir.tensor.cast import Cast
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
+from tilefoundry.schedule.partition import build_partition_program
 from tilefoundry.target import CudaTarget
 
 CONTEXT = 32
@@ -410,6 +412,14 @@ def test_scheduling_at_a_stated_size_plans_and_verifies() -> None:
     assert residual_dims(result.function) == ()
     result.plan.verify(module, result.function, result.topology)
     assert result.plan.to_json() == result.plan.to_json()
+
+    program = build_partition_program(module, result.function)
+    selections = [site for site in program.sites if isinstance(site.call.target, IndexSelect)]
+    assert len(selections) == 2
+    assert {
+        program.values[site.input_value_ids[0][0]].source.name
+        for site in selections
+    } == {"k_cache", "v_cache"}
 
 
 def test_scheduling_refuses_a_size_no_variant_covers() -> None:
