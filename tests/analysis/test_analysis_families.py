@@ -243,6 +243,11 @@ def _zero_cost_view(source: Tensor[(1,), "f32"]):
         return parts[0]
 
 
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+def _unplaced_structural(source: Tensor[(), "i64", None, "rmem"]):
+    return tf.stack(source, axis=0)
+
+
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2), Topology("thread", 4)))
 def _thread_sharded(source: Tensor[(8,), "f32"]):
     with Mesh(("thread",), layout=(4,), names=("lane",)) as thread:
@@ -748,7 +753,12 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
         MoEMegaKernel.entry_function(),
         analysis=("compute-cost", "timeline"),
     )
-    placements = _timeline_placements(MoEMegaKernel, result.function, "cta")
+    placements = _timeline_placements(
+        MoEMegaKernel,
+        result.function,
+        "cta",
+        MoEMegaKernel.resolve_target().get_facts(ThroughputFacts),
+    )
     prepared = set(placements.values())
 
     assert frozenset(range(120)) in prepared
@@ -812,7 +822,7 @@ def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
     assert join is not None
 
     assert routed.start_ns == routed_in.end_ns
-    assert shared.start_ns == shared_in.end_ns
+    assert (shared_in.end_ns, shared.start_ns) == (916, 1_768)
     assert (routed.end_ns - routed.start_ns, shared.end_ns - shared.start_ns) == (
         15,
         141,
@@ -820,7 +830,12 @@ def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
     assert routed_in.start_ns == shared_in.start_ns == 0
     assert min(routed_in.end_ns, shared_in.end_ns) > 0
 
-    placements = _timeline_placements(MoEMegaKernel, first.function, "cta")
+    placements = _timeline_placements(
+        MoEMegaKernel,
+        first.function,
+        "cta",
+        MoEMegaKernel.resolve_target().get_facts(ThroughputFacts),
+    )
     assert placements[id(calls[2])] == placements[id(calls[5])]
     assert (
         routed_out.end_ns <= shared_out.start_ns
@@ -923,6 +938,19 @@ def test_a_zero_cost_structural_occurrence_has_an_empty_timeline_interval() -> N
         and item["stride_ns"] == 0
         for item in timelines
     )
+
+
+def test_an_unplaced_structural_occurrence_ignores_unmodelled_traffic() -> None:
+    _result, entry = _run(_unplaced_structural, "timeline")
+
+    (view,) = _calls(entry)
+    cost = get_metadata(view, ComputeCostMetadata)
+    timeline = get_metadata(view, TimelineMetadata)
+    assert cost is not None and timeline is not None
+    assert cost.flops_per_unit == ()
+    assert cost.traffic_per_unit_at("gmem").total_bytes == 0
+    assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=8, write=8)
+    assert (timeline.grid_units, timeline.start_ns, timeline.end_ns) == (0, 0, 0)
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:

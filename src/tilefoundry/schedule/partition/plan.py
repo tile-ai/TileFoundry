@@ -109,7 +109,11 @@ def _layout_json(type: Type) -> object:
         "mesh_shape": [str(dim) for dim in layout.mesh.layout.shape],
         "attrs": [attr.__class__.__name__ for attr in layout.attrs],
         "shape": [str(dim) for dim in layout.layout.shape],
-        "strides": [str(stride) for stride in layout.layout.strides],
+        "strides": (
+            None
+            if layout.layout.strides is None
+            else [str(stride) for stride in layout.layout.strides]
+        ),
     }
 
 

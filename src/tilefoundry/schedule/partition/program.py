@@ -299,7 +299,14 @@ class _Extractor:
         if isinstance(expr, Var):
             refs = env.get(id(expr))
             if refs is None:
-                refs = self._param_values.get((function_path, id(expr)), ())
+                refs = next(
+                    (
+                        self._param_values[(function_path[:depth], id(expr))]
+                        for depth in range(len(function_path), -1, -1)
+                        if (function_path[:depth], id(expr)) in self._param_values
+                    ),
+                    (),
+                )
             self._expr_values[key] = refs
             return refs
         if isinstance(expr, Constant):

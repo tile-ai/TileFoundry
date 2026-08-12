@@ -32,6 +32,16 @@ from .walk import (
 SELECTOR = "compute-cost"
 
 
+def _is_structural_occurrence(
+    cost: ComputeCostMetadata,
+    facts: ThroughputFacts,
+) -> bool:
+    """Whether an occurrence has no work priced by the target's local rates."""
+    return all(not value for _name, value in cost.flops_per_unit) and not (
+        cost.traffic_per_unit_at(facts.bandwidth_level).total_bytes
+    )
+
+
 def _local_duration_ns(
     cost: ComputeCostMetadata,
     facts: ThroughputFacts,
@@ -45,6 +55,9 @@ def _local_duration_ns(
             f"timeline: selected topology level {level!r}, but the target's "
             f"per-unit rates are stated for {facts.rate_unit!r}"
         )
+
+    if _is_structural_occurrence(cost, facts):
+        return 0
 
     compute_ns = 0
     for name, value in cost.flops_per_unit:
@@ -138,6 +151,36 @@ def _call_movement(
     return levels, tuple(charged)
 
 
+def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
+    return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
+
+
+def _call_cost_record(
+    expr: Call,
+    whole: CostEvaluator,
+    local: CostEvaluator,
+) -> ComputeCostMetadata:
+    """Measure one Call without attaching the resulting record."""
+    try:
+        whole_cost = whole.visit(expr)
+        local_cost = local.visit(expr)
+    except (ValueError, VerifyError) as error:
+        raise AnalysisError(str(error)) from None
+    traffic_by_level, operands = _call_movement(expr, whole_cost)
+    local_types = (
+        *(local.ctx.local_type_of(arg) for arg in expr.args),
+        local.ctx.local_output_type(expr),
+    )
+    local_traffic, _local_operands = _call_movement(expr, local_cost, local_types)
+    return ComputeCostMetadata(
+        flops=_flops(whole_cost.flops),
+        flops_per_unit=_flops(local_cost.flops),
+        traffic=traffic_by_level,
+        traffic_per_unit=local_traffic,
+        operands=operands,
+    )
+
+
 def _accumulate(
     flops: dict[str, int],
     flops_per_unit: dict[str, int],
@@ -164,10 +207,6 @@ def _accumulate(
         )
 
 
-def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
-    return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
-
-
 def analyze_compute_cost(
     module: Module,
     function: Function,
@@ -192,26 +231,7 @@ def analyze_compute_cost(
             if not isinstance(expr, Call):
                 continue
             count = trips.get(id(expr), 1)
-            try:
-                whole_cost = whole.visit(expr)
-                local_cost = local.visit(expr)
-            except (ValueError, VerifyError) as error:
-                raise AnalysisError(str(error)) from None
-            traffic_by_level, operands = _call_movement(expr, whole_cost)
-            local_types = (
-                *(local.ctx.local_type_of(arg) for arg in expr.args),
-                local.ctx.local_output_type(expr),
-            )
-            local_traffic, _local_operands = _call_movement(
-                expr, local_cost, local_types
-            )
-            record = ComputeCostMetadata(
-                flops=_flops(whole_cost.flops),
-                flops_per_unit=_flops(local_cost.flops),
-                traffic=traffic_by_level,
-                traffic_per_unit=local_traffic,
-                operands=operands,
-            )
+            record = _call_cost_record(expr, whole, local)
             attach(expr, record)
             _accumulate(
                 flops,

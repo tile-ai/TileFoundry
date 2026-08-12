@@ -37,9 +37,12 @@ from tilefoundry.ir.types.substitute import (
     substitute_shape_dim,
     substitute_topology_dims,
 )
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
+from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
+from .facts import ThroughputFacts
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -211,9 +214,23 @@ def _result_placement(type_: Type, selected: Topology) -> Placement:
     return next(iter(unique))
 
 
-def _timeline_placements(module: Module, function: Function, level: str) -> dict[int, Placement]:
+def _timeline_placements(
+    module: Module,
+    function: Function,
+    level: str,
+    facts: ThroughputFacts,
+) -> dict[int, Placement]:
     """Validate and prepare every primitive Call placement for timeline."""
     selected = module.resolve_topology(level)
+    scope = FunctionScope(module, function)
+    whole = CostEvaluator(CostContext(scope=scope))
+    local = CostEvaluator(
+        CostContext(
+            scope=scope,
+            level=level,
+            topologies=module.effective_topologies(),
+        )
+    )
     result: dict[int, Placement] = {}
     for expr in postorder(function.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
@@ -221,6 +238,10 @@ def _timeline_placements(module: Module, function: Function, level: str) -> dict
         try:
             result[id(expr)] = _result_placement(expr.type, selected)
         except AnalysisError as error:
+            cost = _call_cost_record(expr, whole, local)
+            if _is_structural_occurrence(cost, facts):
+                result[id(expr)] = frozenset()
+                continue
             raise AnalysisError(f"timeline: {describe(expr)}: {error}") from None
     return result
 

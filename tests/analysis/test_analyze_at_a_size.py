@@ -16,7 +16,6 @@ from dataclasses import replace
 
 import pytest
 
-from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
@@ -31,6 +30,7 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import enclosing_trips, postorder
 from tilefoundry.inspection.analysis_report import render_text, report
 from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
     display_name,
     origin_of,
@@ -38,6 +38,7 @@ from tilefoundry.ir.hir.specialize import (
     variant_for,
 )
 from tilefoundry.ir.hir.tensor.cast import Cast
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget
@@ -59,16 +60,6 @@ def _aimed():
 
 def _subject(family: str):
     """A concrete query that satisfies the selected family's readiness."""
-    if family == "timeline":
-        module = DerivedPrefill
-        return (
-            module,
-            module.entry_function(),
-            {
-                "prefill_n": 17,
-                "topology_only": 32,
-            },
-        )
     module = _aimed()
     return module, module.entry_function(), DIMS
 
@@ -210,7 +201,7 @@ def test_qwen_decoder_unplaced_calls_are_refused_at_each_sequence_length(
         analyze(module, function, analysis="timeline", dims={"ctx_len": ctx_len})
 
 
-def test_gqa_loop_occurrences_cost_one_trip_while_the_root_applies_all_trips() -> None:
+def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> None:
     results = []
     for extent in (8, 16):
         module = _aimed()
@@ -218,37 +209,110 @@ def test_gqa_loop_occurrences_cost_one_trip_while_the_root_applies_all_trips() -
             analyze(
                 module,
                 module.entry_function(),
-                analysis="compute-cost",
+                analysis=("compute-cost", "timeline"),
                 dims={"ctx_len": extent},
             )
         )
 
     loop_casts = []
+    loop_timelines = []
+    root_timelines = []
     for result, extent in zip(results, (8, 16)):
         trips = enclosing_trips(result.function.body)
-        records = []
+        costs = []
+        timelines = []
+        structural = []
         for expr in postorder(result.function.body):
-            if not (
-                isinstance(expr, Call)
-                and isinstance(expr.target, Cast)
-                and trips.get(id(expr)) == extent
-            ):
+            if not isinstance(expr, Call) or trips.get(id(expr)) != extent:
                 continue
-            record = get_metadata(expr, ComputeCostMetadata)
-            assert record is not None
-            records.append(record)
-        assert len(records) == 2
-        loop_casts.append(tuple(records))
+            timeline = get_metadata(expr, TimelineMetadata)
+            assert timeline is not None
+            timelines.append(timeline)
+            if isinstance(expr.target, Reshape):
+                cost = get_metadata(expr, ComputeCostMetadata)
+                assert cost is not None
+                structural.append((cost, timeline))
+            if isinstance(expr.target, Cast):
+                cost = get_metadata(expr, ComputeCostMetadata)
+                assert cost is not None
+                costs.append(cost)
+        assert len(costs) == 2
+        assert len(timelines) == 19
+        assert len(structural) == 1
+        assert {record.trips for record in timelines} == {extent}
+        assert {record.stride_ns for record in timelines} == {922}
+        structural_cost, structural_timeline = structural[0]
+        assert structural_cost.flops_per_unit == ()
+        assert structural_cost.traffic_per_unit_at("gmem").total_bytes == 0
+        assert structural_cost.traffic_per_unit == ()
+        assert (
+            structural_timeline.grid_units,
+            structural_timeline.start_ns,
+            structural_timeline.end_ns,
+        ) == (0, 906, 906)
+        loop_casts.append(tuple(costs))
+        loop_timelines.append(tuple(timelines))
+
+        loop = next(
+            expr
+            for expr in postorder(result.function.body)
+            if isinstance(expr, GridRegionExpr)
+        )
+        consumers = [
+            expr
+            for expr in postorder(result.function.body)
+            if isinstance(expr, Call) and any(arg is loop for arg in expr.args)
+        ]
+        loop_start = min(record.start_ns for record in timelines)
+        loop_end = loop_start + extent * timelines[0].stride_ns
+        assert len(consumers) == 3
+        assert {
+            get_metadata(consumer, TimelineMetadata).start_ns
+            for consumer in consumers
+        } == {loop_end}
+
+        root_timeline = get_metadata(result.function, TimelineMetadata)
+        assert root_timeline is not None
+        root_timelines.append(root_timeline)
 
     assert loop_casts[0] == loop_casts[1]
-    assert [record.flops for record in loop_casts[0]] == [(("f32", 4096),)] * 2
+    assert [record.flops for record in loop_casts[0]] == [(("f32", 512),)] * 2
+    assert [
+        tuple(
+            (
+                record.grid_units,
+                record.waves,
+                record.start_ns,
+                record.end_ns,
+                record.stride_ns,
+            )
+            for record in records
+        )
+        for records in loop_timelines
+    ] == [
+        tuple(
+            (
+                record.grid_units,
+                record.waves,
+                record.start_ns,
+                record.end_ns,
+                record.stride_ns,
+            )
+            for record in loop_timelines[0]
+        )
+    ] * 2
+    assert (loop_timelines[0][0].start_ns, loop_timelines[0][0].end_ns) == (
+        906,
+        906,
+    )
+    assert [record.end_ns for record in root_timelines] == [9_399, 16_775]
 
     roots = []
     for result in results:
         root = get_metadata(result.function, ComputeCostMetadata)
         assert root is not None
         roots.append(root)
-    assert [dict(root.flops)["f32"] for root in roots] == [276_704, 508_128]
+    assert [dict(root.flops)["f32"] for root in roots] == [212_192, 386_272]
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

@@ -123,6 +123,14 @@ def _solve(occurrences: dict[int, _Occurrence]) -> int:
         key = id(occurrence.expr)
         for predecessor in occurrence.predecessors:
             model.Add(starts[key] >= ends[predecessor])
+        if occurrence.duration_ns == 0:
+            if occurrence.predecessors:
+                model.AddMaxEquality(
+                    starts[key],
+                    [ends[predecessor] for predecessor in occurrence.predecessors],
+                )
+            else:
+                model.Add(starts[key] == 0)
 
     for intervals in intervals_by_position.values():
         model.AddNoOverlap(intervals)
@@ -130,25 +138,19 @@ def _solve(occurrences: dict[int, _Occurrence]) -> int:
     makespan = model.NewIntVar(0, horizon, "makespan")
     model.AddMaxEquality(makespan, [ends[id(item.expr)] for item in ordered])
     model.Minimize(makespan)
+    model.AddDecisionStrategy(
+        [starts[id(item.expr)] for item in ordered],
+        cp_model.CHOOSE_FIRST,
+        cp_model.SELECT_MIN_VALUE,
+    )
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
+    solver.parameters.search_branching = cp_model.FIXED_SEARCH
     solver.parameters.max_time_in_seconds = _SOLVE_SECONDS
     if solver.Solve(model) != cp_model.OPTIMAL:
         raise AnalysisError("the participant-set timeline has no optimal schedule")
 
     optimum = solver.Value(makespan)
-    model.Add(makespan == optimum)
-    model.Minimize(
-        sum(
-            (len(ordered) - index) * starts[id(occurrence.expr)]
-            for index, occurrence in enumerate(ordered)
-        )
-    )
-    solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 1
-    solver.parameters.max_time_in_seconds = _SOLVE_SECONDS
-    if solver.Solve(model) != cp_model.OPTIMAL:
-        raise AnalysisError("the participant-set timeline tie-break has no optimum")
 
     for occurrence in ordered:
         key = id(occurrence.expr)
@@ -299,7 +301,12 @@ def analyze_timeline(
     placement_facts = target.get_facts(ParallelCapacityFacts)
     throughput = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
-        placements = _timeline_placements(module, fn, placement_facts.topology)
+        placements = _timeline_placements(
+            module,
+            fn,
+            placement_facts.topology,
+            throughput,
+        )
         durations = _durations(fn, throughput, placement_facts.topology)
         schedule = _schedule(fn, durations, placements)
         records = _records(schedule)

@@ -18,7 +18,7 @@ from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by the @func bo
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names for the @func body
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, ShardLayout, Topology
 
 HEAD_DIM = 128
 NUM_Q_HEADS = 32
@@ -48,6 +48,18 @@ _HKV = NUM_KV_HEADS
 _G = GQA_GROUP
 _SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
+_CTA_MESH = Mesh((Topology("cta", NUM_CTA),), Layout((NUM_CTA,), (1,)))
+_CACHE_LAYOUT = ShardLayout(
+    Layout((1, C, _HKV, _D)),
+    (Broadcast(),),
+    _CTA_MESH,
+)
+_TOKEN_LAYOUT = ShardLayout(
+    Layout((1, S, _HKV, _D)),
+    (Broadcast(),),
+    _CTA_MESH,
+)
+
 
 @module(entry="gqa_online_attend", topologies=(Topology("cta", NUM_CTA),))
 class GqaOnline:
@@ -61,10 +73,10 @@ class GqaOnline:
     @func
     def gqa_online_attend(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16"],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16"],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         pass
@@ -72,52 +84,37 @@ class GqaOnline:
     @gqa_online_attend.specialize(DimVarRangePat("ctx_len", 0, SMALL_CONTEXT_T))
     def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16"],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16"],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         with Mesh(("cta",), layout=Layout((NUM_CTA,), (1,))) as cta:
-            q_sh = reshard(q, layout=(1, S, _HQ @ cta, _D))
+            q_sh = reshard(q, layout=(1, S, _HKV, _G @ cta, _D))
             q_f = tf.cast(q_sh, dtype="f32")
-            q_s = q_f * tf.full_like(q_f, value=_SCALE)
-            tmpl = tf.reduce(q_f, axes=(-1,), keepdim=True, kind="sum")
+            q_groups = tf.transpose(
+                tf.reshape(q_f, new_shape=(1, S, _HKV, _G, _D)),
+                perm=(0, 1, 3, 2, 4),
+            )
+            q_s = q_groups * tf.full_like(q_groups, value=_SCALE)
+            tmpl = tf.reduce(q_groups, axes=(-1,), keepdim=True, kind="sum")
             m = tf.full_like(tmpl, value=-1e30)
             l = tf.full_like(tmpl, value=0.0)
-            o = tf.full_like(q_f, value=0.0)
-            for i in tile(C):
-                k_i = tf.reshape(
-                    tf.cast(
-                        tf.repeat_interleave(
-                            tf.reshape(
-                                tf.index_select(
-                                    k_cache, tf.reshape(i, new_shape=(1,)), dim=1
-                                ),
-                                new_shape=(1, _HKV, _D),
-                            ),
-                            repeats=_G,
-                            axis=1,
-                        ),
-                        dtype="f32",
-                    ),
-                    new_shape=(1, 1, _HQ, _D),
+            o = tf.full_like(q_groups, value=0.0)
+            for i in range(C):
+                i_sh = reshard(
+                    tf.reshape(i, new_shape=(1,)),
+                    layout=(1,),
+                    storage="gmem",
                 )
-                v_i = tf.reshape(
-                    tf.cast(
-                        tf.repeat_interleave(
-                            tf.reshape(
-                                tf.index_select(
-                                    v_cache, tf.reshape(i, new_shape=(1,)), dim=1
-                                ),
-                                new_shape=(1, _HKV, _D),
-                            ),
-                            repeats=_G,
-                            axis=1,
-                        ),
-                        dtype="f32",
-                    ),
-                    new_shape=(1, 1, _HQ, _D),
+                k_i = tf.cast(
+                    tf.index_select(k_cache, i_sh, dim=1),
+                    dtype="f32",
+                )
+                v_i = tf.cast(
+                    tf.index_select(v_cache, i_sh, dim=1),
+                    dtype="f32",
                 )
                 score = tf.reduce(q_s * k_i, axes=(-1,), keepdim=True, kind="sum")
                 m_new = tf.max(m, score)
@@ -127,15 +124,19 @@ class GqaOnline:
                 o = o * corr + p * v_i
                 m = m_new
 
-            k_n = tf.cast(tf.repeat_interleave(k_new, repeats=_G, axis=2), dtype="f32")
-            v_n = tf.cast(tf.repeat_interleave(v_new, repeats=_G, axis=2), dtype="f32")
+            k_n = tf.cast(k_new, dtype="f32")
+            v_n = tf.cast(v_new, dtype="f32")
             score_n = tf.reduce(q_s * k_n, axes=(-1,), keepdim=True, kind="sum")
             m_all = tf.max(m, score_n)
             p_n = tf.exp(score_n - m_all)
             corr_n = tf.exp(m - m_all)
             l = l * corr_n + p_n
             o = o * corr_n + p_n * v_n
-            return tf.cast(o / l, dtype="bf16")
+            grouped = tf.transpose(o / l, perm=(0, 1, 3, 2, 4))
+            return tf.cast(
+                tf.reshape(grouped, new_shape=(1, S, _HQ, _D)),
+                dtype="bf16",
+            )
 
     @func
     def _ctx_partials(
@@ -215,10 +216,10 @@ class GqaOnline:
     @gqa_online_attend.specialize(DimVarRangePat("ctx_len", SMALL_CONTEXT_T, MAX_CTX))
     def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16"],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16"],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16"],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", _TOKEN_LAYOUT],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         m_p, l_p, o_p = _ctx_partials(q, k_cache, v_cache)

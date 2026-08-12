@@ -843,8 +843,11 @@ Reported Call and Function records use the same projection under their
 - constraints:
   - A primitive Call is eligible for timeline only when every tensor leaf of its
     result type carries one `ShardLayout` at the selected topology level and all
-    leaves name the same participant set. Inputs MUST NOT supply placement for an
-    unplaced result. `Reshard` executes on the placement of its result.
+    leaves name the same participant set. An occurrence whose `flops_per_unit`
+    are all zero and whose `traffic_per_unit` is zero at the target's published
+    bandwidth level is structural: it needs no result placement and receives an
+    empty interval at its dependency-ready time. Inputs MUST NOT supply placement
+    for an unplaced result. `Reshard` executes on the placement of its result.
   - The participant set MUST be the exact image of the result Mesh layout under
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
     operand. A `Broadcast` shard attribute still names placement: attributes

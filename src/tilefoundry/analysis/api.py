@@ -19,7 +19,7 @@ from tilefoundry.analysis.check import (
     check_program,
 )
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.facts import ParallelCapacityFacts
+from tilefoundry.analysis.facts import ParallelCapacityFacts, ThroughputFacts
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.walk import reachable_functions, values_of
@@ -133,7 +133,11 @@ def _require_family_readiness(
         raise AnalysisError(
             f"timeline: the target must publish a positive parallel-unit capacity, got {capacity!r}"
         )
-    _timeline_placements(module, function, level)
+    try:
+        throughput = target.get_facts(ThroughputFacts)
+    except UnsupportedCapabilityError as error:
+        raise AnalysisError(f"timeline: {error}") from None
+    _timeline_placements(module, function, level, throughput)
 
 
 def analyze(
