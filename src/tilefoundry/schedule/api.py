@@ -15,7 +15,6 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError
-from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.target.services import Scheduler
@@ -56,17 +55,6 @@ def _topology(module: Module, name: str) -> Topology:
         level = module.resolve_topology(name)
     except ValueError as error:
         raise ScheduleError(f"schedule: {error}") from None
-    extent = static_dim_value(level.size)
-    if extent is None:
-        raise ScheduleError(
-            f"schedule: topology {name!r} has extent {level.size!r}, which is "
-            "not known until launch; scheduling a level requires its static "
-            "extent. The rule: tilefoundry spec target topology-levels"
-        )
-    if extent < 1:
-        raise ScheduleError(
-            f"schedule: topology {name!r} extent {extent} must be positive"
-        )
     return level
 
 

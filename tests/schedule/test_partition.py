@@ -14,13 +14,12 @@ from dataclasses import replace
 import pytest
 from ortools.sat.python import cp_model
 
-from tests._source import import_dsl
+from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm
 from tilefoundry.inspection.python_printer import as_script
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import ShardLayout, Topology
 from tilefoundry.schedule import PlanVerificationError, ScheduleError, ScheduleOptions, schedule
@@ -98,27 +97,8 @@ def test_partition_schedules_through_the_public_operation_without_rewriting() ->
 
 
 def test_partition_accepts_an_authored_where_constraint_through_schedule() -> None:
-    function = import_dsl(
-        '''from __future__ import annotations
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
-
-cta_mesh = Mesh((Topology("cta", 8),), Layout((8,), (1,)))
-
-@func
-def constrained(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
-    y: where(layout=(8 @ cta, 16), mesh=cta_mesh, storage="gmem") = tf.add(x, x)
-    return y
-'''
-    )
-    module = Module(
-        "constrained",
-        (function,),
-        function.name,
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 8),),
-    )
+    module = AuthoredConstraint
+    function = module.entry_function()
 
     plan = schedule(
         module,

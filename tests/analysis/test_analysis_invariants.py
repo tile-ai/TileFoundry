@@ -13,8 +13,7 @@ import pytest
 
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
-import tilefoundry.schedule.api as schedule_api
-from tests._source import import_dsl
+from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import func
 from tilefoundry.analysis import AnalysisError, TileGraph, check_program, extract
@@ -29,7 +28,7 @@ from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.types import DType, make_tensor_type
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.schedule import ScheduleError
+from tilefoundry.schedule import ScheduleError, schedule
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
@@ -68,55 +67,15 @@ def test_check_program_is_the_reusable_gate_for_public_consumers(
     with pytest.raises(AnalysisError, match="unsupported topology level 'warp'"):
         cli_analyze.run_authored_analysis("unused.py:invalid", ())
 
-    valid = Module(
-        "valid-topology",
-        (entry,),
-        entry.name,
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1),),
-    )
-    assert check_program(valid, entry, level="cta") is None
-
-    calls: list[tuple[Module, object, str | None]] = []
-
-    def reject(module, function, *, level=None):
-        calls.append((module, function, level))
-        raise AnalysisError("test program rejection")
-
-    monkeypatch.setattr(analysis_api, "check_program", reject)
-    monkeypatch.setattr(schedule_api, "check_program", reject)
-    with pytest.raises(AnalysisError, match="test program rejection"):
-        analysis_api.analyze(valid, entry, analysis="compute-cost")
-    with pytest.raises(ScheduleError, match="test program rejection"):
-        schedule_api.schedule(valid, entry, topology="cta")
-
-    assert len(calls) == 2
-    assert all(module is valid and function is entry for module, function, _level in calls)
-    assert [level for _module, _function, level in calls] == ["cta", "cta"]
+    with pytest.raises(AnalysisError, match="unsupported topology level 'warp'"):
+        analysis_api.analyze(invalid, entry, analysis="compute-cost")
+    with pytest.raises(ScheduleError, match="unsupported topology level 'warp'"):
+        schedule(invalid, entry, topology="warp")
 
 
 def test_analyze_applies_authored_readiness_after_the_shared_program_check() -> None:
-    function = import_dsl(
-        '''from __future__ import annotations
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
-
-cta_mesh = Mesh((Topology("cta", 8),), Layout((8,), (1,)))
-
-@func
-def constrained(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
-    y: where(layout=(8 @ cta, 16), mesh=cta_mesh, storage="gmem") = tf.add(x, x)
-    return y
-'''
-    )
-    module = Module(
-        "constrained",
-        (function,),
-        function.name,
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 8),),
-    )
+    module = AuthoredConstraint
+    function = module.entry_function()
     metadata_before = {id(expr): expr.metadata for expr in values_of(function)}
 
     assert check_program(module, function, level="cta") is None

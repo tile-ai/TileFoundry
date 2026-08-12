@@ -95,6 +95,29 @@ def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:
     assert "# analysis " not in bound.stdout
 
 
+def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> None:
+    source = f"{derived_prefill}:DerivedPrefill.prefill"
+    unbound = tf("analyze", source, "--timeline", "--json")
+    assert unbound.returncode == 1
+    assert unbound.stdout == ""
+    assert "prefill_n is declared as [1, 65)" in unbound.stderr
+    assert "topology_only is declared as [1, 1025)" in unbound.stderr
+
+    bound = tf(
+        "analyze",
+        source,
+        "--timeline",
+        "--dim",
+        "prefill_n=17",
+        "--dim",
+        "topology_only=32",
+        "--json",
+    )
+    assert bound.returncode == 0, bound.stderr
+    payload = json.loads(bound.stdout)
+    assert payload["function_records"]["timeline"]["grid_units"] == 3
+
+
 def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> None:
     done = tf("analyze", f"{cwide}:Model", "--roofline")
     assert done.returncode == 0, done.stderr

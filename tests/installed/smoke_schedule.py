@@ -36,20 +36,28 @@ def test_schedule_selects_a_nested_function(tf, cmine) -> None:
     assert any(item["id"] == "MM" for item in payload["statements"])
 
 
-def test_a_symbolic_extent_cannot_be_scheduled(tf, tmp_path, cmine) -> None:
-    unsized = tmp_path / "unsized.py"
-    source = cmine.read_text(encoding="utf-8").replace(
-        "from tilefoundry.dsl import Tensor",
-        'from tilefoundry.dsl import DimVar, Tensor\n\n_CTA_EXTENT = DimVar("cta_extent", 1, 1025)',
+def test_partition_resolves_derived_execution_geometry(tf, derived_prefill) -> None:
+    source = f"{derived_prefill}:DerivedPrefill.prefill"
+    unbound = tf("schedule", source, "--topology", "cta", *_CTA_SOLVER)
+    assert unbound.returncode == 1
+    assert "symbolic" in unbound.stderr
+    assert "bind every dimension before analysis or scheduling" in unbound.stderr
+
+    bound = tf(
+        "schedule",
+        source,
+        "--topology",
+        "cta",
+        "--dim",
+        "prefill_n=17",
+        "--dim",
+        "topology_only=32",
+        "--json",
+        *_CTA_SOLVER,
     )
-    unsized.write_text(
-        source.replace('Topology("cta", 1)', 'Topology("cta", _CTA_EXTENT)'),
-        encoding="utf-8",
-    )
-    done = tf("schedule", f"{unsized}:CMine.root", "--topology", "cta")
-    assert done.returncode == 1
-    assert "not known until launch" in done.stderr
-    assert "The rule: tilefoundry spec target topology-levels" in done.stderr
+    assert bound.returncode == 0, bound.stderr
+    payload = json.loads(bound.stdout)
+    assert payload["extent"] == 3
 
 
 def test_a_module_without_an_entry_names_its_functions_and_the_rule(tf, tmp_path, cmine) -> None:
