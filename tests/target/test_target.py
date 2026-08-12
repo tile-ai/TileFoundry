@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 
 import pytest
 
+from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.fixtures.placed.square_cuda import Model as SquareCudaModel
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
@@ -210,7 +211,7 @@ def test_timeline_refuses_a_target_without_its_required_one_unit_rate(
     target_type: type[CudaTarget], missing: str
 ) -> None:
     target = target_type("nvidia.h200_sxm")
-    subject = replace(SquareCudaModel, target=target)
+    subject = replace(MoEMegaKernel, target=target)
     function = subject.entry_function()
 
     with pytest.raises(AnalysisError, match=missing):

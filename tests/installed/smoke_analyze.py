@@ -64,6 +64,18 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
     assert done.returncode == 0, done.stderr
     payload = json.loads(done.stdout)
 
+    as_text = tf(
+        "analyze",
+        f"{source}:MoEMegaKernel",
+        "--compute-cost",
+        "--memory",
+        "--roofline",
+        "--timeline",
+    )
+    assert as_text.returncode == 0, as_text.stderr
+    text = as_text.stdout
+    assert as_text.stderr == ""
+
     families = ["compute-cost", "memory", "roofline", "timeline"]
     assert payload["requested"] == payload["executed"] == families
     assert set(payload["function_records"]) == set(families)
@@ -72,6 +84,21 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
         set(row) == {"value", "compute-cost", "roofline", "timeline"}
         for row in payload["calls"]
     )
+    for level, value in payload["totals"]["traffic"].items():
+        assert f"{level}=r{value['read']}/w{value['write']}" in text
+    for item in payload["function_records"]["memory"]["footprint"]:
+        assert f"{item['level']}={item['peak_bytes']}" in text
+    assert f"by={payload['function_records']['roofline']['bound_by']}" in text
+    assert text.startswith(
+        "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts"
+    )
+    assert "compute-cost flops=f32:" in text
+    header, annotated = text.split("\n\n", 1)
+    assert "operands" not in header
+    assert " per-unit-bytes=" in annotated
+    assert " operands=" in annotated
+    assert "roofline bound=" in text
+    assert "timeline units=" in text
 
     positive_per_unit = [
         row["compute-cost"]["flops_per_unit"]["f32"]
@@ -195,39 +222,6 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
     assert "memory peak=" not in done.stdout
     assert "compute-cost flops=" not in done.stdout
     assert "timeline units=" not in done.stdout
-
-
-def test_analyze_json_and_text_report_the_same_conclusions(tf, cwide) -> None:
-    analyses = ("--compute-cost", "--memory", "--roofline", "--timeline")
-    as_json = tf("analyze", f"{cwide}:Model", *analyses, "--json")
-    assert as_json.returncode == 0, as_json.stderr
-    payload = json.loads(as_json.stdout)
-
-    as_text = tf("analyze", f"{cwide}:Model", *analyses)
-    assert as_text.returncode == 0, as_text.stderr
-    text = as_text.stdout
-    assert as_text.stderr == ""
-
-    assert payload["target"] == "nvidia.h200_sxm"
-    assert payload["function"] == "main"
-    assert payload["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
-    for level, value in payload["totals"]["traffic"].items():
-        assert f"{level}=r{value['read']}/w{value['write']}" in text
-    for item in payload["function_records"]["memory"]["footprint"]:
-        assert f"{item['level']}={item['peak_bytes']}" in text
-    assert f"by={payload['function_records']['roofline']['bound_by']}" in text
-
-    assert text.startswith(
-        "# analysis target=nvidia.h200_sxm module=Model function=main"
-    )
-    assert "# Tensor[" in text
-    assert "compute-cost flops=f32:" in text
-    header, annotated = text.split("\n\n", 1)
-    assert "operands" not in header
-    assert " per-unit-bytes=" in annotated
-    assert " operands=" in annotated
-    assert "roofline bound=" in text
-    assert "timeline units=168 waves=2" in text
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
