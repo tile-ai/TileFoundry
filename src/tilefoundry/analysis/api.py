@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.ir.core import IRMetadata
@@ -136,6 +137,7 @@ def analyze(
 
     check_program(module, function, level=level)
     functions = reachable_functions(function)
+    validate_authored(functions)
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple[int, type]] = set()

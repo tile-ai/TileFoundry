@@ -681,9 +681,9 @@ def check_program(
 ```
 
 - constraints:
-  - The operation MUST infer types and validate the full reachable Function
-    graph once, including caller/callee execution context, and MUST NOT run an
-    analysis or schedule algorithm or attach derived Metadata.
+  - The operation MUST infer types over the full reachable Function graph and
+    validate its caller/callee execution context, and MUST NOT run an analysis
+    or schedule algorithm or attach derived Metadata.
   - Every effective Module topology MUST name a level the resolved Target
     supports. A resolved static extent MUST be positive and within that level's
     finite hardware limit. A rejection MUST name the level, its extent, and the
@@ -691,6 +691,10 @@ def check_program(
   - A non-`None` `level` MUST name exactly one effective Module topology.
   - Analyze and Schedule MUST call this operation before any consuming
     algorithm.
+  - Authored-analysis readiness is not a program-level check. Analyze MUST
+    separately reject schedule constraints and unresolved local layouts before
+    running an analyzer; Schedule MAY consume or diagnose those inputs under
+    its own algorithm contract.
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
 operation. One call selects one root analysis by name; the operation resolves

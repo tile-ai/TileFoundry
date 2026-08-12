@@ -14,11 +14,13 @@ from dataclasses import replace
 import pytest
 from ortools.sat.python import cp_model
 
+from tests._source import import_dsl
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm
 from tilefoundry.inspection.python_printer import as_script
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import ShardLayout, Topology
 from tilefoundry.schedule import PlanVerificationError, ScheduleError, ScheduleOptions, schedule
@@ -93,6 +95,43 @@ def test_partition_schedules_through_the_public_operation_without_rewriting() ->
     assert result.plan.proof.best_bound_ns <= result.plan.proof.objective_ns
     assert result.plan.root_results
     assert as_script(result.module) == before
+
+
+def test_partition_consumes_authored_where_constraints_through_schedule() -> None:
+    function = import_dsl(
+        '''from __future__ import annotations
+from tilefoundry import func
+from tilefoundry.dsl import Tensor, tf
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+
+cta_mesh = Mesh((Topology("cta", 8),), Layout((8,), (1,)))
+
+@func
+def constrained(x: Tensor[(8, 16), "bf16"]) -> Tensor[(8, 16), "bf16"]:
+    y: where(layout=(8 @ cta, 16), mesh=cta_mesh, storage="gmem") = tf.add(x, x)
+    return y
+'''
+    )
+    module = Module(
+        "constrained",
+        (function,),
+        function.name,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 8),),
+    )
+
+    plan = schedule(
+        module,
+        function,
+        topology="cta",
+        options=_SOLVER,
+    ).plan
+
+    values = {value.id: value for value in plan.values}
+    (root_id,) = plan.root_results
+    root = values[root_id]
+    assert isinstance(root.type.layout, ShardLayout)
+    assert root.type.layout.mesh.topologies == (Topology("cta", 8),)
 
 
 def test_partition_program_states_the_program_without_asking_the_hardware() -> None:

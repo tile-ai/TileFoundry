@@ -6,7 +6,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 
 from .errors import AnalysisError
-from .preflight import infer_authored_types, validate_authored, validate_call_context
+from .preflight import infer_authored_types, validate_call_context
 from .walk import reachable_functions
 
 
@@ -16,7 +16,7 @@ def check_program(
     *,
     level: str | None = None,
 ) -> None:
-    """Prove one authored program is ready for a consuming algorithm."""
+    """Prove one authored program's shared invariants before an algorithm runs."""
     target = module.resolve_target()
     for topology in module.effective_topologies():
         try:
@@ -35,7 +35,6 @@ def check_program(
     functions = reachable_functions(function)
     infer_authored_types(functions, module)
     validate_call_context(module, functions)
-    validate_authored(functions)
 
 
 __all__ = ["check_program"]

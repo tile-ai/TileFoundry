@@ -7,6 +7,8 @@ import textwrap
 from typing import Mapping
 
 from tilefoundry.analysis import analyze, check_program
+from tilefoundry.analysis.preflight import validate_authored
+from tilefoundry.analysis.walk import reachable_functions
 from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
@@ -118,6 +120,7 @@ def run_authored_analysis(
             else function
         )
         check_program(module, checked)
+        validate_authored(reachable_functions(checked))
         annotated = as_script(module, options=PythonPrintOptions(show_types=True))
         sys.stdout.write(annotated)
         return 0

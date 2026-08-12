@@ -8,7 +8,7 @@ import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
-from tilefoundry.dsl.tf import matmul, rms_norm
+from tilefoundry.dsl.tf import matmul, rms_norm, sigmoid
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import schedule
 from tilefoundry.schedule.pipeline import (
@@ -41,6 +41,18 @@ def bf16_gemm_rmsnorm(
 
 def _module():
     return replace(bf16_gemm_rmsnorm, topologies=(Topology("cta", 1), Topology("thread", 128)))
+
+
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 8),))
+def local_sigmoid(x: Tensor[(8,), "f32", None, "rmem"]):
+    return sigmoid(x)
+
+
+def test_pipeline_accepts_a_local_value_before_layout_is_resolved() -> None:
+    result = schedule(local_sigmoid, local_sigmoid.entry_function(), topology="thread")
+
+    assert result.topology == Topology("thread", 8)
+    assert tuple(statement.id for statement in result.plan.statements) == ("Sigmoid",)
 
 
 def test_pipeline_closes_target_facts_before_solving_and_exports_stable_values() -> None:

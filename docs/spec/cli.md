@@ -299,10 +299,11 @@ explicit analysis; there is no ordinary `--target` option.
     its declared `[lo, hi)` interval, and concrete extents inside that interval
     the caller can use: inferring its concrete program requires an extent, and a
     range is not one. The bare form MUST apply stated dimensions before running
-    the public program check used by Analyze and Schedule; this is an internal
-    CLI path, not a public typecheck operation. It MUST reject an unsupported
-    declared topology level or an extent over that level's target limit, even
-    though no analysis family was requested.
+    the public program check used by Analyze and Schedule, followed by the same
+    authored-analysis readiness validation as Analyze; this is an internal CLI
+    path, not a public typecheck operation. It MUST reject an unsupported declared
+    topology level or an extent over that level's target limit, even though no
+    analysis family was requested.
   - Every requested analysis MUST be reported together even when each was run at
     the stated extents, which builds one program per analysis. The report MUST
     accept those as one program when they were rebuilt from the same function at
