@@ -11,6 +11,7 @@ import ast
 from typing import Any, Callable, Literal
 
 from tilefoundry.ir.core import VerifyError
+from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -82,6 +83,16 @@ def _eval_index(node: ast.AST, ev: Callable[[ast.AST], Any]) -> Any:
     return ev(node)
 
 
+def _is_runtime_scalar(value: Any) -> bool:
+    """Whether *value* is a runtime rank-0 integer tensor expression."""
+    type_ = getattr(value, "type", None)
+    return (
+        isinstance(type_, TensorType)
+        and type_.shape == ()
+        and type_.dtype in (DType.i32, DType.i64)
+    )
+
+
 def eval_static(
     node: ast.AST,
     *,
@@ -91,6 +102,7 @@ def eval_static(
     div: DivMode = "true",
     attr_resolver: Callable[[Any, str], Any] | None = None,
     on_closure_name: Callable[[Any, str], None] | None = None,
+    allow_runtime_scalar: bool = False,
 ) -> Any:
     """Evaluate a restricted static-AST subset.
 
@@ -109,6 +121,7 @@ def eval_static(
             div=div,
             attr_resolver=attr_resolver,
             on_closure_name=on_closure_name,
+            allow_runtime_scalar=allow_runtime_scalar,
         )
 
     match node:
@@ -149,7 +162,12 @@ def eval_static(
             left = ev(left_node)
             right = ev(right_node)
             numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
-            if not numeric and not (is_dim_expr(left) and is_dim_expr(right)):
+            dim_operands = is_dim_expr(left) and is_dim_expr(right)
+            runtime_operands = allow_runtime_scalar and all(
+                is_dim_expr(operand) or _is_runtime_scalar(operand)
+                for operand in (left, right)
+            )
+            if not numeric and not (dim_operands or runtime_operands):
                 raise VerifyError(
                     f"static BinOp requires numeric or dimension operands, got "
                     f"{type(left).__name__} / {type(right).__name__}"

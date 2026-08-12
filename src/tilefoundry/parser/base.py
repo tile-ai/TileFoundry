@@ -33,6 +33,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.dtype import FloatDType
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard.layout import Layout
@@ -604,6 +605,12 @@ class BaseExprVisitor:
             from tilefoundry.ir.hir.tensor.slice import slice_size  # noqa: PLC0415
 
             size = slice_size(b_expr, e_expr, s_expr)
+            if not is_dim_expr(size):
+                raise VerifyError(
+                    f"tensor subscript axis {axis}: a run-time start needs the "
+                    "stop endpoint written as `start + K` for a compile-time K, "
+                    "because Slice takes a static size"
+                )
             sizes.append(int(size.value) if isinstance(size, Constant) else size)
             strides.append(s)
 
@@ -689,15 +696,20 @@ class BaseExprVisitor:
             if el.lower is None:
                 begin = 0
             else:
-                begin = self._eval_static(el.lower)
+                begin = self._slicer_endpoint(el.lower)
             if el.upper is None:
                 end = dim
             else:
-                end = self._eval_static(el.upper)
+                end = self._slicer_endpoint(el.upper)
             if el.step is None:
                 stride = 1
             else:
                 stride = self._eval_static(el.step)
+            if not is_dim_expr(stride):
+                raise VerifyError(
+                    f"tensor subscript axis {axis}: slice stride must be a "
+                    "compile-time dimension"
+                )
             if all(
                 isinstance(value, int) and not isinstance(value, bool)
                 for value in (dim, begin, end, stride)
@@ -712,6 +724,13 @@ class BaseExprVisitor:
             f"tensor subscript axis {axis}: unsupported indexer "
             f"{ast.dump(el)} (expected `:`, `a:b`, or a tile-window slice)"
         )
+
+    def _slicer_endpoint(self, node: ast.AST):
+        """Resolve a slice endpoint, admitting runtime scalar dim arithmetic."""
+        try:
+            return self._eval_static(node, allow_runtime_scalar=True)
+        except VerifyError:
+            return self.expr(node)
 
 
 
@@ -1274,7 +1293,7 @@ class BaseExprVisitor:
         """
         return getattr(owner, attr)
 
-    def _eval_static(self, node: ast.AST):
+    def _eval_static(self, node: ast.AST, *, allow_runtime_scalar: bool = False):
         """Eval static.
 
         Evaluate an AST node statically for attribute kwargs (axis=1,
@@ -1291,6 +1310,7 @@ class BaseExprVisitor:
             lookup=self.env.lookup,
             attr_resolver=self._resolve_static_attribute,
             on_closure_name=_warn_if_ir_object,
+            allow_runtime_scalar=allow_runtime_scalar,
         )
 
 

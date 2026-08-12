@@ -17,7 +17,9 @@ from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare bindings used by @func bodies
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import VerifyError
+from tilefoundry.ir.core import Call, VerifyError
+from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 
 _PRELUDE = """from tilefoundry import func
 from tilefoundry.dsl.tf import *
@@ -79,6 +81,89 @@ def test_an_integer_index_drops_its_axis_and_a_slice_keeps_it():
     torch.testing.assert_close(
         evaluate(_strided_and_clamped, x, device="cpu"), x[:, :, 1:20:3]
     )
+
+
+def test_runtime_start_slice_has_static_size_and_no_plain_layout_claim():
+    src = _PRELUDE + (
+        '\nfrom tilefoundry.ir.types.shard import Layout\n'
+        'plain_layout = Layout((8, 4), (4, 1))\n'
+        '\n@func\ndef f(x: Tensor[(8, 4), "f32", plain_layout], '
+        'start: Tensor[(), "i64"]) -> Tensor[(4, 4), "f32"]:\n'
+        "    return x[start:start + 4, :]\n"
+    )
+    fn = import_dsl(src)
+
+    assert isinstance(fn.body, Call)
+    assert isinstance(fn.body.target, Slice)
+    assert fn.body.target.sizes == (4, 4)
+    assert fn.body.args[1].elements[0] is fn.params[1]
+    assert fn.body.type.layout is None
+
+    x = torch.arange(32, dtype=torch.float32).reshape(8, 4)
+    start = torch.tensor(2, dtype=torch.int64)
+    torch.testing.assert_close(
+        evaluate(fn, x, start, device="cpu"), x[2:6, :]
+    )
+
+
+def test_runtime_start_slice_keeps_sharding_without_an_offset():
+    src = _PRELUDE + (
+        '\nfrom tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology\n'
+        '\n@func\ndef f(x: Tensor[(8, 4), "f32", ShardLayout('
+        'layout=Layout((8, 2, 2), (4, 2, 1)), attrs=(Split(1),), '
+        'mesh=Mesh((Topology("gpu", 2),), Layout((2,), (1,)), names=("g",)))], '
+        'start: Tensor[(), "i64"]) -> Tensor[(2, 4), "f32"]:\n'
+        "    return x[start:start + 2, :]\n"
+    )
+    fn = import_dsl(src)
+
+    assert isinstance(fn.body, Call)
+    assert isinstance(fn.body.target, Slice)
+    assert fn.body.target.sizes == (2, 4)
+    assert isinstance(fn.body.type.layout, ShardLayout)
+    assert fn.body.type.layout.attrs == fn.body.args[0].type.layout.attrs
+    assert fn.body.type.layout.layout.shape == (2, 2, 2)
+
+
+def test_runtime_slice_stride_is_still_compile_time():
+    bad = _src(
+        'x: Tensor[(8, 4), "f32"], step: Tensor[(), "i64"]'
+        ') -> Tensor[(4, 4), "f32"]',
+        "return x[0:8:step, :]",
+    )
+    with pytest.raises(
+        VerifyError,
+        match=r"tensor subscript axis 0: slice stride must be a compile-time dimension",
+    ):
+        import_dsl(bad)
+
+
+def test_range_scalar_can_drive_a_manual_slice_window():
+    fn = import_dsl(_src(
+        'x: Tensor[(8, 4), "f32"]) -> Tensor[(2, 4), "f32"]',
+        "out = x[0:2, :]",
+        "for i in range(0, 8, 2):",
+        "    out = x[i:i + 2, :]",
+        "return out",
+    ))
+
+    x = torch.arange(32, dtype=torch.float32).reshape(8, 4)
+    torch.testing.assert_close(
+        evaluate(fn, x, device="cpu"), x[6:8, :]
+    )
+
+
+def test_runtime_start_slice_rejects_an_unrelated_stop():
+    bad = _src(
+        'x: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]'
+        ') -> Tensor[(4, 4), "f32"]',
+        "return x[start:8, :]",
+    )
+    with pytest.raises(
+        VerifyError,
+        match=r"tensor subscript axis 0: a run-time start needs the stop endpoint",
+    ):
+        import_dsl(bad)
 
 
 def test_a_compile_time_list_is_indexed_where_it_is_written():
