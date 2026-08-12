@@ -9,17 +9,27 @@ implementation output, so a formula round-trip cannot validate itself.
 from __future__ import annotations
 
 import isl
+import pytest
 
+import tilefoundry.analysis.api as analysis_api
+import tilefoundry.cli.analyze as cli_analyze
+import tilefoundry.schedule.api as schedule_api
+from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import func
-from tilefoundry.analysis import TileGraph, extract
+from tilefoundry.analysis import AnalysisError, TileGraph, check_program, extract
+from tilefoundry.analysis.walk import values_of
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
 from tilefoundry.ir.core import Call, TypeInferContext, Var
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.schedule import ScheduleError
+from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
@@ -31,6 +41,57 @@ B, S, H, D = 1, 5, 2, 3
 
 
 HQ, HKV, HEAD_DIM, MAX_POS = 16, 8, 128, 8
+
+
+def test_check_program_is_the_reusable_gate_for_public_consumers(
+    monkeypatch,
+) -> None:
+    entry = RmsnormModule.entry_function()
+    invalid = Module(
+        "invalid-topology",
+        (entry,),
+        entry.name,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("warp", 4),),
+    )
+    metadata_before = {id(expr): expr.metadata for expr in values_of(entry)}
+
+    with pytest.raises(
+        AnalysisError,
+        match=r"level 'warp' with extent 4 is invalid: .*unsupported topology level 'warp'",
+    ):
+        check_program(invalid, entry, level="warp")
+    assert {id(expr): expr.metadata for expr in values_of(entry)} == metadata_before
+
+    monkeypatch.setattr(cli_analyze, "load_authored_ir", lambda _source: invalid)
+    with pytest.raises(AnalysisError, match="unsupported topology level 'warp'"):
+        cli_analyze.run_authored_analysis("unused.py:invalid", ())
+
+    valid = Module(
+        "valid-topology",
+        (entry,),
+        entry.name,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1),),
+    )
+    assert check_program(valid, entry, level="cta") is None
+
+    calls: list[tuple[Module, object, str | None]] = []
+
+    def reject(module, function, *, level=None):
+        calls.append((module, function, level))
+        raise AnalysisError("test program rejection")
+
+    monkeypatch.setattr(analysis_api, "check_program", reject)
+    monkeypatch.setattr(schedule_api, "check_program", reject)
+    with pytest.raises(AnalysisError, match="test program rejection"):
+        analysis_api.analyze(valid, entry, analysis="compute-cost")
+    with pytest.raises(ScheduleError, match="test program rejection"):
+        schedule_api.schedule(valid, entry, topology="cta")
+
+    assert len(calls) == 2
+    assert all(module is valid and function is entry for module, function, _level in calls)
+    assert [level for _module, _function, level in calls] == ["cta", "cta"]
 
 
 @func

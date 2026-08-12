@@ -28,6 +28,7 @@ class Target:
     def get_analyzer(self, selector: str) -> Analyzer: ...
     def get_scheduler(self, topology: str) -> Scheduler: ...
     def get_code_generator(self) -> CodeGenerator: ...
+    def validate_program_topology(self, topology: Topology) -> None: ...
     def get_facts(
         self,
         facts_type: type[FactsT],
@@ -82,6 +83,10 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
   - Target values MUST remain immutable hardware values. Their service getters
     select immutable descriptors and Facts; normal Python inheritance carries
     those selections to a subclass unless it overrides or refuses them.
+  - `validate_program_topology` MUST reject a level outside `topology_levels`
+    and any resolved static extent that is not positive or exceeds the finite
+    `TopologyLimitFacts` bound for that level. The shared program check MUST use
+    this method rather than reproduce a backend's topology limits.
   - A provider MAY import `Analyzer` and `Scheduler` from `tilefoundry.target`
     to construct getter results. That package MUST NOT expose `CodeGenerator`
     or `LinkableModule` as provider API.

@@ -25,6 +25,7 @@ from .metadata import (
 )
 from .registry import Analyzer
 from .api import AnalysisResult, analyze
+from .check import check_program
 from .poly import (
     AccessFootprint,
     AxisExtent,
@@ -65,6 +66,7 @@ __all__ = [
     "access_footprints",
     "analyze",
     "carried_distances",
+    "check_program",
     "extract",
     "statement_time_dims",
     "time_extents",

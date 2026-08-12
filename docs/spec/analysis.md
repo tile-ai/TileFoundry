@@ -6,6 +6,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 | Surface | Entry | What it states |
 |---|---|---|
 | Polyhedral model | `extract(hir) -> TileGraph` | one HIR `Function` body as isl domains, access relations and auto-inferred dependences — target-independent |
+| Program check | `check_program(module, function, level=...)` | whether one authored program and its declared topology are valid for a consuming algorithm |
 | Composed measurement | `analyze(module, function, analysis=...)` | one root analysis and its dependency closure, leaving typed Metadata on the IR |
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
@@ -666,6 +667,30 @@ class ParallelCapacityFacts:
     capacity used to form waves, not a program rewrite.
 
 ## 3. Composed analysis
+
+`tilefoundry.analysis.check_program` is the shared, reusable gate before an
+analysis or schedule algorithm runs.
+
+```python
+def check_program(
+    module: "Module",
+    function: "Function",
+    *,
+    level: str | None = None,
+) -> None: ...
+```
+
+- constraints:
+  - The operation MUST infer types and validate the full reachable Function
+    graph once, including caller/callee execution context, and MUST NOT run an
+    analysis or schedule algorithm or attach derived Metadata.
+  - Every effective Module topology MUST name a level the resolved Target
+    supports. A resolved static extent MUST be positive and within that level's
+    finite hardware limit. A rejection MUST name the level, its extent, and the
+    reason.
+  - A non-`None` `level` MUST name exactly one effective Module topology.
+  - Analyze and Schedule MUST call this operation before any consuming
+    algorithm.
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
 operation. One call selects one root analysis by name; the operation resolves

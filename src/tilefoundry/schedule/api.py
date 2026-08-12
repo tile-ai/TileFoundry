@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from tilefoundry.analysis.check import check_program
+from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError, specialize_concretely
@@ -126,8 +128,10 @@ def schedule(
             raise ScheduleError(f"schedule: {error}") from None
 
     target = module.resolve_target()
-    for declared_topology in module.effective_topologies():
-        target.validate_program_topology(declared_topology)
+    try:
+        check_program(module, function, level=topology)
+    except AnalysisError as error:
+        raise ScheduleError(f"schedule: {error}") from None
     level = _topology(module, topology)
     algorithm = _algorithm(target, topology)
     resolved_options = _options(options)

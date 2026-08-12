@@ -14,12 +14,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.preflight import (
-    infer_authored_types,
-    validate_authored,
-    validate_call_context,
-)
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.ir.core import IRMetadata
@@ -134,22 +130,12 @@ def analyze(
 
     target = module.resolve_target()
     topologies = module.effective_topologies()
-    for topology in topologies:
-        target.validate_program_topology(topology)
     if level is None and topologies:
         level = topologies[0].name
-    if level is not None:
-        try:
-            module.resolve_topology(level)
-        except ValueError as error:
-            raise AnalysisError(f"analyze: {error}") from None
     closure = _closure(target, analysis)
 
-
-
-
-
-    functions = _preflight(module, function)
+    check_program(module, function, level=level)
+    functions = reachable_functions(function)
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple[int, type]] = set()
@@ -165,8 +151,6 @@ def analyze(
         for _expr_id, metadata_type in records:
             if metadata_type not in order:
                 order.append(metadata_type)
-
-
 
     final = _metadata_snapshot(functions)
     surviving = {metadata_type for key in written_records & final.keys()
@@ -248,19 +232,6 @@ def _require_owned_writes(
             f"{sorted(item.__name__ for item in owned)}"
         )
     return written
-
-
-def _preflight(module: Module, function: Function) -> tuple[Function, ...]:
-    """Infer authored types and validate, once per public call.
-
-    Both cover the whole call graph reachable from *function*, because an
-    analysis that walks into a callee reads the callee's inferred types too.
-    """
-    functions = reachable_functions(function)
-    infer_authored_types(functions, module)
-    validate_call_context(module, functions)
-    validate_authored(functions)
-    return functions
 
 
 __all__ = ["AnalysisResult", "analyze"]
