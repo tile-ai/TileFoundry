@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -146,18 +145,6 @@ def _scaled_flops(flops: dict, trips: int) -> tuple[tuple[str, int], ...]:
     )
 
 
-def _resolved_topologies(
-    topologies: tuple[Topology, ...], target: Target
-) -> tuple[Topology, ...]:
-    """Fill launch-provided extents from the target's physical limits."""
-    return tuple(
-        topology
-        if topology.size is not None
-        else Topology(topology.name, target.topology_limit(topology.name))
-        for topology in topologies
-    )
-
-
 def analyze_compute_cost(
     module: Module,
     function: Function,
@@ -170,7 +157,7 @@ def analyze_compute_cost(
     Callees are measured before their callers so a call site can report the
     callee's totals rather than re-walking its body.
     """
-    topologies = _resolved_topologies(module.effective_topologies(), target)
+    topologies = module.effective_topologies()
     totals: dict[int, _Totals] = {}
     for fn in reversed(reachable_functions(function)):
         scope = FunctionScope(module, fn)

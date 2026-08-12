@@ -254,8 +254,8 @@ keeps static inner strides as plain ints and only the strides of axes
 materialisation (a high→low storage move, or a per-instance source), the
 per-shard local layout shape must be a static int — a register / shared buffer
 cannot be sized by a non-split dynamic axis — so a dynamic non-split bare
-axis is rejected with a deliberate error (only a launch-provided CTA `Split`,
-whose per-shard extent is a static 1, may consume a dynamic axis).
+axis is rejected with a deliberate error. A symbolic split axis is likewise
+rejected until its dimensions are bound.
 
 The `axis-tuple` carries only **axis placement** (`Split` inlined as
 `size @ mesh.axis`; a bare `size` is a non-split layout dim). The optional
@@ -403,8 +403,8 @@ binding              ::= topology '@' 'B()'
 `where(...)` is keyword-only and non-empty. A layout axis is `_`, an integer
 or symbolic extent, or `extent @ topology`. The split form binds an existing
 `Split` attribute to the physical layout position. `_` is a private
-constraint wildcard and is distinct from `Layout`'s `None` launch-provided
-extent. `B()` and `P(...)` reuse the existing `Broadcast` and `Partial`
+constraint wildcard and is never stored as an entry in `Layout.shape`. `B()`
+and `P(...)` reuse the existing `Broadcast` and `Partial`
 `ShardAttr` values; a topology may be bound at most once in one layout
 constraint. `mesh` resolves to a `Mesh`, and `storage` resolves through the
 current storage-kind registry. CTA capability checks do not occur in this

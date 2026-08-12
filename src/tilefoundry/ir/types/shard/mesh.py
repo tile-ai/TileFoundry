@@ -3,28 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.types.shape_dim import ShapeDim
+from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-
-_LAUNCH_PROVIDED_TOPOLOGY = "cta"
 
 
 @dataclass(frozen=True)
 class Topology:
-    """Name one hardware level and its static or launch-provided size.
-
-    Only CTA topology may use ``None`` for launch-provided extent. See
-    [target §4](docs/spec/target.md#4-cudatarget).
-    """
+    """Name one hardware level and its explicit static or symbolic size."""
 
     name: str
 
-    size: "ShapeDim | None"
+    size: "ShapeDim"
 
     def __post_init__(self) -> None:
-        if self.size is None and self.name != _LAUNCH_PROVIDED_TOPOLOGY:
+        if self.size is None:
             raise ValueError(
-                f"Topology {self.name!r}: only a {_LAUNCH_PROVIDED_TOPOLOGY!r} "
-                "topology may have a launch-provided (None) extent. The rule: "
+                f"Topology {self.name!r}: extent must be explicit; None is not "
+                "a ShapeDim. The rule: "
                 "tilefoundry spec target topology-levels"
             )
 
@@ -43,6 +38,14 @@ class Mesh:
     topologies: tuple[Topology, ...]
     layout: "Layout | ComposedLayout"
     names: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for axis, extent in enumerate(flatten(self.layout.shape)):
+            if extent is None:
+                raise ValueError(
+                    f"Mesh: layout axis {axis} must have an explicit extent; "
+                    "None is not a ShapeDim. The rule: tilefoundry spec shard mesh"
+                )
 
     def __getitem__(self, key) -> "Mesh":
         """Return a constant sub-mesh selected by integers or unit-step slices.

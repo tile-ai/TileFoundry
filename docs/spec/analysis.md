@@ -143,9 +143,8 @@ dependents) and classifies every node it meets:
     per-shard local shape when it carries a `ShardLayout`: each mesh `Split`'s
     target *tensor* axis divided by that mesh axis's extent, tensor rank
     preserved. A `Partial` / `Broadcast` / `Dynamic` mesh axis consumes no
-    tensor axis; a launch-provided (deferred) mesh extent narrows its axis to
-    `1`. Narrowing is centralized in the extraction, so every registered
-    relation is sharding-aware without knowing sharding exists.
+    tensor axis. Narrowing is centralized in the extraction, so every
+    registered relation is sharding-aware without knowing sharding exists.
   - A `Split`-sharded axis whose extent is not a static integer, or is not
     evenly divisible by its mesh extent, MUST raise `ExtractError`.
   - An op with no registered forward relation MUST raise `ExtractError` naming
@@ -454,11 +453,10 @@ class TimelineMetadata(IRMetadata):
     program alone. Flops MUST come from the op's registered cost evaluator
     ([visitor-registry](./visitor-registry.md)) over the types as written, and
     bytes from the logical types the operands and result carry. `flops_per_unit`
-    MUST come from the same evaluator over types projected to the analysed level.
-    Only that field MAY read the target, and only to resolve a launch-provided
-    mesh extent through `topology_limit`; that per-unit projection MUST round up
-    to the largest share one unit performs in a wave. An op with no registered
-    cost evaluator MUST raise `AnalysisError`.
+    MUST come from the same evaluator over types projected to the analysed level
+    using the program's authored topology and Mesh extents. It MUST NOT
+    substitute a target capacity for missing program geometry. An op with no
+    registered cost evaluator MUST raise `AnalysisError`.
   - `ValueLifetime.binding` MUST identify one value within its function. An
     authored name does not: the parser attaches an assignment's name to every
     nested expression of its right-hand side, so several values answer to one name
@@ -515,7 +513,7 @@ Each owns one record type and declares what it needs.
 
 | Selector | Requires | Owns | Rests on |
 |---|---|---|---|
-| `compute-cost` | — | `ComputeCostMetadata` | the authored program; `topology_limit` for a launch-provided per-unit extent |
+| `compute-cost` | — | `ComputeCostMetadata` | the authored program |
 | `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` |
 | `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` |
 | `timeline` | `roofline` | `TimelineMetadata` | `ParallelCapacityFacts` |
@@ -527,10 +525,9 @@ Each owns one record type and declares what it needs.
     analyzer, and MUST NOT resolve an undeclared Target to a default.
   - A family MUST read a dependency's record rather than recompute what it
     states. A number with two derivations has two answers.
-  - Global logical work and lifetime MUST remain target-independent.
-    `flops_per_unit` MAY depend on a target's parallel width when a mesh extent is
-    launch-provided. Physical capacity, hierarchy relationships, and throughput
-    comparisons are target-aware.
+  - Global logical work, per-unit work, and lifetime MUST remain
+    target-independent. Physical capacity, hierarchy relationships, and
+    throughput comparisons are target-aware.
 
 ### 2.3 Memory hierarchy facts
 

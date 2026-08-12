@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.core.kinds import UnaryKind
-from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.types import (
     DType,
     TensorType,
@@ -26,8 +23,6 @@ from tilefoundry.ir.types.shard import (
     Topology,
     make_mesh,
 )
-from tilefoundry.visitor_registry.contexts import CostContext
-from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 
 def test_tensor_type_equality_over_a_dim_var_shape_entry() -> None:
@@ -97,7 +92,7 @@ def test_local_type_rejects_a_zero_mesh_extent() -> None:
         local_type_of(type, level="gpu", topologies=(Topology("gpu", 0),))
 
 
-def _cta_mesh(extent: int | None) -> Mesh:
+def _cta_mesh(extent: int) -> Mesh:
     return Mesh(
         topologies=(Topology("cta", extent),),
         layout=Layout(shape=(extent,), strides=(1,)),
@@ -163,39 +158,13 @@ def test_canonical_shard_layout_keeps_rejecting_non_divisible_splits(
         make_shard_tensor_type((1, shape, 128, 2048), mesh=_cta_mesh(extent), attrs=(Split(1),))
 
 
-@pytest.mark.parametrize(("axis", "expected"), [(1056, 8), (1000, 8), (8, 1)])
-def test_local_type_uses_ceildiv_for_a_resolved_launch_extent(axis: int, expected: int) -> None:
-    tensor = make_shard_tensor_type((1, axis, 128, 2048), mesh=_cta_mesh(None), attrs=(Split(1),))
-
-    assert local_type_of(tensor, level="cta", topologies=(Topology("cta", 132),)).shape == (
-        1,
-        expected,
-        128,
-        2048,
-    )
-
-
-def test_local_type_rejects_multiple_launch_provided_split_axes() -> None:
-    mesh = Mesh(
-        topologies=(Topology("cta", None),),
-        layout=Layout(shape=(None, None), strides=None),
-    )
-    tensor = make_shard_tensor_type((1056, 128), mesh=mesh, attrs=(Split(0), Split(1)))
-
-    with pytest.raises(
-        ValueError,
-        match=r"mesh Mesh\(.*Split axes \(0, 1\).*one parallel width with no per-axis source",
-    ):
-        local_type_of(tensor, level="cta", topologies=(Topology("cta", 132),))
-
-
 @pytest.mark.parametrize(
     "axis", [DimVar("S_fixed", 1, 8193), ceildiv(DimVar("S_fixed_tiles", 1, 8193), 128)]
 )
 def test_local_type_rejects_dynamic_split_against_fixed_mesh(axis: object) -> None:
     tensor = make_shard_tensor_type((1, axis, 128, 2048), mesh=_cta_mesh(132), attrs=(Split(1),))
 
-    with pytest.raises(ValueError, match="launch-provided"):
+    with pytest.raises(ValueError, match="bind the axis before local projection"):
         local_type_of(tensor, level="cta", topologies=(Topology("cta", 132),))
 
 
@@ -207,21 +176,6 @@ def test_local_type_rejects_unfactorized_inexact_split_with_two_loop_form() -> N
 
     with pytest.raises(ValueError, match=r"two loops out as \(ceildiv\(N, T\), T\)"):
         local_type_of(type=tensor, level="cta", topologies=(Topology("cta", 3),))
-
-
-def test_cost_evaluator_uses_the_resolved_launch_extent() -> None:
-    tile_count = 132
-    tensor = make_shard_tensor_type(
-        (1, tile_count, 128, 2048), mesh=_cta_mesh(None), attrs=(Split(1),)
-    )
-    source = Var(type=tensor, name="source")
-    call = Call(type=tensor, target=Unary(kind=UnaryKind.NEG), args=(source,))
-
-    cost = CostEvaluator(CostContext(level="cta", topologies=(Topology("cta", 132),))).visit_Call(
-        call
-    )
-
-    assert cost.flops[DType.f32] == 128 * 2048
 
 
 def test_local_type_stops_before_a_finer_split() -> None:

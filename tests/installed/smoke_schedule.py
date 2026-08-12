@@ -36,10 +36,14 @@ def test_schedule_selects_a_nested_function(tf, cmine) -> None:
     assert any(item["id"] == "MM" for item in payload["statements"])
 
 
-def test_a_launch_provided_extent_cannot_be_scheduled(tf, tmp_path, cmine) -> None:
+def test_a_symbolic_extent_cannot_be_scheduled(tf, tmp_path, cmine) -> None:
     unsized = tmp_path / "unsized.py"
+    source = cmine.read_text(encoding="utf-8").replace(
+        "from tilefoundry.dsl import Tensor",
+        'from tilefoundry.dsl import DimVar, Tensor\n\n_CTA_EXTENT = DimVar("cta_extent", 1, 1025)',
+    )
     unsized.write_text(
-        cmine.read_text(encoding="utf-8").replace('Topology("cta", 1)', 'Topology("cta", None)'),
+        source.replace('Topology("cta", 1)', 'Topology("cta", _CTA_EXTENT)'),
         encoding="utf-8",
     )
     done = tf("schedule", f"{unsized}:CMine.root", "--topology", "cta")

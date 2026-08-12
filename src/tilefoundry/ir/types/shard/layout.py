@@ -18,7 +18,7 @@ class LayoutBase:
 class Layout(LayoutBase):
     """Cute-style layout: shape + per-axis cute strides."""
 
-    shape: tuple["ShapeDim | None", ...]
+    shape: tuple["ShapeDim", ...]
     strides: Optional[tuple["ShapeDim", ...]] = None
 
 

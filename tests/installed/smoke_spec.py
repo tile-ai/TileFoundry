@@ -80,7 +80,7 @@ def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
 @pytest.mark.parametrize(
     ("topic", "section", "expected"),
     (
-        ("target", "topology-levels", "Only `cta` MAY have a launch-provided"),
+        ("target", "topology-levels", "`Topology.size` MUST be an explicit `ShapeDim`"),
         ("core-ir", "target-inheritance", 'with `target=CudaTarget("nvidia.h200_sxm")`'),
         ("core-ir", "default-step", "MUST have no default step"),
         ("cli", "check", "A FAIL with `--inputs random`"),

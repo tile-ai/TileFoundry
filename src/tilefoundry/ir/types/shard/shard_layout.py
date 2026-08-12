@@ -59,9 +59,9 @@ class ShardLayout(LayoutBase):
 def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "ShardLayout":
     """Bind logical axes to mesh axes in the canonical factored layout.
 
-    Static splits produce mesh-sized positions plus a residual; dynamic or
-    launch-provided single-axis splits remain whole. Attributes are remapped to
-    factored positions and strides are rebuilt in C order when static.
+    Static splits produce mesh-sized positions plus a residual; dynamic
+    single-axis splits remain whole. Attributes are remapped to factored
+    positions and strides are rebuilt in C order when static.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
@@ -80,9 +80,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
             continue
 
         axis_static = isinstance(axis_size, int) and not isinstance(axis_size, bool)
-        if len(splitting_mesh_axes) == 1 and (
-            mesh_shape[splitting_mesh_axes[0]] is None or not axis_static
-        ):
+        if len(splitting_mesh_axes) == 1 and not axis_static:
             factor_position[splitting_mesh_axes[0]] = len(layout_shape)
             layout_shape.append(axis_size)
             continue
@@ -145,9 +143,7 @@ def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
             if not (0 <= k < len(local)):
                 continue
             mesh_ext = mesh_shape[mesh_axis_idx]
-            if mesh_ext is None:
-                local[k] = 1
-            elif isinstance(mesh_ext, int) and isinstance(local[k], int):
+            if isinstance(mesh_ext, int) and isinstance(local[k], int):
                 if mesh_ext != 0:
                     local[k] //= mesh_ext
 
@@ -155,8 +151,8 @@ def shard_layout_local_shape(sl: "ShardLayout") -> tuple[int, ...]:
         if not isinstance(d, int):
             raise ValueError(
                 f"shard_layout_local_shape: per-shard dim {i} ({d!r}) is not "
-                f"static after sharding; only a launch-provided CTA split "
-                f"(per-shard 1) may consume a dynamic axis"
+                "static after sharding; bind symbolic dimensions before local "
+                "projection"
             )
     return tuple(local)
 

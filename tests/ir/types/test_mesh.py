@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
 from tilefoundry.analysis.timeline import _fusable
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import (
@@ -29,7 +31,6 @@ def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
     explicit = make_mesh((8,), topology=Topology("cta", 8))
 
     assert product(matching.topologies) == 32
-    assert product((2, None)) is None
     assert states_consistent_positions(matching)
     assert not states_consistent_positions(mismatching)
     assert product(explicit.topologies) == 8
@@ -38,7 +39,14 @@ def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
     assert not mesh_scope_matches_required_scope(mismatching, matching)
 
 
-def test_mesh_is_an_unmodified_record_without_axis_attributes() -> None:
+def test_topology_and_mesh_require_explicit_extents() -> None:
+    with pytest.raises(ValueError, match="extent must be explicit"):
+        Topology("cta", None)
+    with pytest.raises(ValueError, match="layout axis 0 must have an explicit extent"):
+        Mesh((Topology("cta", 8),), Layout(shape=(None,), strides=(1,)))
+
+
+def test_mesh_is_a_frozen_record_without_axis_attributes() -> None:
     topologies = (Topology("thread", 32),)
     layout = Layout(shape=(4, 8), strides=(8, 1))
 
@@ -47,7 +55,6 @@ def test_mesh_is_an_unmodified_record_without_axis_attributes() -> None:
     assert mesh.topologies is topologies
     assert mesh.layout is layout
     assert mesh.names == ("warp", "lane")
-    assert "__post_init__" not in Mesh.__dict__
     assert not hasattr(mesh, "topology")
     assert not hasattr(mesh, "axes")
 

@@ -13,18 +13,12 @@ def _as_layout(mesh: Mesh) -> Layout:
 
 
 def states_consistent_positions(mesh: Mesh) -> bool:
-    declared = product(mesh.topologies)
-    return declared is None or declared == size(mesh.layout)
+    return product(mesh.topologies) == size(mesh.layout)
 
 
 def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     """True iff ``current`` provides the thread participation ``required`` needs."""
     if current.topologies[0].name != required.topologies[0].name:
-        return False
-
-    cur_domain = product(current.topologies)
-    req_domain = product(required.topologies)
-    if cur_domain is None or req_domain is None:
         return False
 
     cur_layout = _as_layout(current)

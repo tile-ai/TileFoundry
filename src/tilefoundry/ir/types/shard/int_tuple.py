@@ -23,15 +23,13 @@ def flatten(t: object) -> tuple[object, ...]:
     return tuple(value for item in t for value in flatten(item))
 
 
-def product(t) -> "ShapeDim | None":
+def product(t) -> "ShapeDim":
     from .mesh import Topology  # noqa: PLC0415
 
     result = 1
     for v in flatten(t):
         if isinstance(v, Topology):
             v = v.size
-        if v is None:
-            return None
         result *= v
     return result
 

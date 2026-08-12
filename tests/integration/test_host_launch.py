@@ -220,17 +220,6 @@ def test_dynamic_cta_rejects_implicit_entry() -> None:
         tilefoundry.compile(mod, target=CudaTarget("nvidia.h200_sxm"))
 
 
-def test_dynamic_thread_topology_rejected() -> None:
-    """Only a ``cta`` topology may carry a launch-provided (``None``) extent.
-
-    Only a ``cta`` topology may carry a launch-provided (``None``) extent; a
-    dynamic thread/warp extent has no launch source and is rejected at
-    construction.
-    """
-    with pytest.raises(ValueError, match=r"only a 'cta' topology"):
-        Topology("thread", None)
-
-
 def _launch_entry_with_grid_x(extent):
     """A CPU host entry whose single launch uses *extent* as ``grid_x``.
 

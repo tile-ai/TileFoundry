@@ -120,12 +120,10 @@ def local_type_of(
   - A `Split` at `level` or a coarser topology level MUST divide; a finer
     `Split`, `Broadcast`, and `Partial` MUST NOT divide.
   - Each resolved nested `ShardLayout` MUST be applied exactly once per layer.
-    A mesh axis's stated extent MUST take precedence; only an axis whose extent
-    is launch-provided MAY use the corresponding resolved topology extent, and
-    that division MUST round up. A stated static extent that does not divide the
-    split dimension MUST still raise. A Mesh with launch-provided extents on
-    more than one `Split` axis MUST raise: one topology level supplies one
-    parallel width and states no way to assign it among those axes.
+    Every mesh axis MUST state its own extent, and local projection MUST use
+    that extent without substituting a target or topology capacity. A stated
+    static extent that does not divide the split dimension MUST raise. A
+    symbolic tensor axis or mesh extent MUST be bound before local projection.
   - Every axis of a Mesh carrying one topology MUST be read at that topology
     level. A Mesh carrying multiple topologies remains a valid Mesh, but local
     projection MUST reject it when asking for a position count by topology name

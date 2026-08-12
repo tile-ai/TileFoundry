@@ -95,7 +95,7 @@ def local_type_of(type: Type, *, level: str, topologies: tuple[Topology, ...]) -
     A ``Split`` at *level* or a coarser declared level divides. Finer splits do
     not change what the containing unit holds, while ``Broadcast`` and
     ``Partial`` never divide. ``topologies`` supplies the ordered hierarchy and
-    concrete extents; callers resolve launch-provided extents before projecting.
+    concrete extents.
     """
     levels = {topology.name: index for index, topology in enumerate(topologies)}
     if level not in levels:
@@ -157,30 +157,17 @@ def _local_layout_shape(
     shape = list(
         _nested_layout_shape(layout.layout, selected_level=selected_level, topologies=topologies)
     )
-    declared = {topology.name: (index, topology.size) for index, topology in enumerate(topologies)}
+    declared = {topology.name: index for index, topology in enumerate(topologies)}
     if len(layout.mesh.topologies) > 1:
         raise ValueError(
             "local_type_of: one mesh names multiple topology levels; "
             "a level boundary cannot assign its position count"
         )
     (topology,) = layout.mesh.topologies
-    resolved = declared.get(topology.name)
-    if resolved is None:
+    topology_level = declared.get(topology.name)
+    if topology_level is None:
         raise ValueError(f"local_type_of: shard uses undeclared topology level {topology.name!r}")
-    topology_level, resolved_extent = resolved
     mesh_shape = layout.mesh.layout.shape
-    launch_split_axes = tuple(
-        mesh_axis
-        for mesh_axis, attr in enumerate(layout.attrs)
-        if isinstance(attr, Split) and mesh_axis < len(mesh_shape) and mesh_shape[mesh_axis] is None
-    )
-    if topology_level <= selected_level and len(launch_split_axes) > 1:
-        raise ValueError(
-            f"local_type_of: mesh {layout.mesh!r} has launch-provided extents "
-            f"on Split axes {launch_split_axes}; topology level {topology.name!r} "
-            "has one parallel width with no per-axis source, so assigning it "
-            "to those axes would be a guess"
-        )
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
@@ -188,27 +175,19 @@ def _local_layout_shape(
             continue
         if mesh_axis >= len(mesh_shape):
             raise ValueError("local_type_of: shard attribute exceeds mesh layout rank")
-        mesh_extent = mesh_shape[mesh_axis]
-        extent = resolved_extent if mesh_extent is None else mesh_extent
+        extent = mesh_shape[mesh_axis]
         axis = attr.axis
         if not isinstance(axis, int) or isinstance(axis, bool) or not 0 <= axis < len(shape):
             raise ValueError("local_type_of: Split axis is not a concrete layout axis")
         if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
             raise ValueError("local_type_of: mesh extent is not a concrete positive integer")
-        if mesh_extent is None:
-            if not isinstance(shape[axis], int) or isinstance(shape[axis], bool):
-                raise ValueError(
-                    f"local_type_of: axis {axis} has dynamic extent {shape[axis]!r}; "
-                    "bind it before projecting a launch-provided mesh extent"
-                )
-            shape[axis] = (shape[axis] + extent - 1) // extent
-        elif extent == shape[axis]:
+        if extent == shape[axis]:
             shape[axis] = 1
         elif not isinstance(shape[axis], int) or isinstance(shape[axis], bool):
             raise ValueError(
                 f"local_type_of: axis {axis} has dynamic extent {shape[axis]!r} "
-                f"and mesh extent {extent} states a fixed position count; a "
-                "dynamic axis is split by a mesh sized to it (launch-provided)"
+                f"and mesh extent {extent} states a fixed position count; bind "
+                "the axis before local projection"
             )
         elif shape[axis] % extent:
             raise ValueError(

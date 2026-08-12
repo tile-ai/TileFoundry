@@ -383,12 +383,7 @@ def analyze_memory(
 ) -> None:
     """Attach one memory record to every Function reachable from *function*."""
     facts = target.get_facts(MemoryHierarchyFacts)
-    topologies = tuple(
-        topology
-        if topology.size is not None
-        else Topology(topology.name, target.topology_limit(topology.name))
-        for topology in module.effective_topologies()
-    )
+    topologies = module.effective_topologies()
     for fn in reachable_functions(function):
         try:
             residencies, length = _residencies(

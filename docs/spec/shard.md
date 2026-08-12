@@ -54,7 +54,7 @@ The primitive building block, taken from pycute's `shape` / `stride`
 convention. It is not just a flat tuple — nested tuples are allowed:
 
 ```python
-IntTuple = int | tuple[IntTuple, ...]    # entry: an `int`, a symbolic/dynamic dim (`ShapeDim`), `None` (launch-provided extent), or a nested `IntTuple`
+IntTuple = ShapeDim | tuple[IntTuple, ...]    # entry: a static or symbolic extent, or a nested `IntTuple`
 ```
 
 - constraints:
@@ -62,11 +62,12 @@ IntTuple = int | tuple[IntTuple, ...]    # entry: an `int`, a symbolic/dynamic d
     the `shape` / `strides` of `Layout` and `ShardLayout` are `IntTuple`.
 
 A `shape` / `stride` entry is not restricted to a static `int`: it may be a
-symbolic / dynamic dim (a `DimVar` or dim `Expr` — a `ShapeDim`), or `None`
-for a launch-provided (dynamic-CTA) extent (`Layout(shape=(None,),
-strides=(1,))`). Consumers that need a concrete integer — `Mesh.__getitem__`
-and `T.sync` participation ([tir §1.5](./tir.md#15-sync)) — require static `int` entries and
-**fail closed** on a symbolic / dynamic one rather than guessing.
+symbolic / dynamic dim (a `DimVar` or dim `Expr` — a `ShapeDim`). `None` is not
+a shape extent; only the complete `Layout.strides` field may be `None` while
+strides are not materialized. Consumers that need a concrete integer —
+`Mesh.__getitem__` and `T.sync` participation ([tir §1.5](./tir.md#15-sync)) —
+require static `int` entries and **fail closed** on a symbolic / dynamic one
+rather than guessing.
 
 ---
 
@@ -209,11 +210,11 @@ class Topology:
 
     Attributes:
         name: attribute; Stable topology-level name.
-        size: attribute; Static, symbolic, or launch-provided extent.
+        size: attribute; Explicit static or symbolic extent.
     """
 
     name: str
-    size: ShapeDim | None
+    size: ShapeDim
 
 class Mesh:
     """Record a parallel device domain and its logical positions.
@@ -250,19 +251,20 @@ object.
 full sequence is always `topologies`.
 
 - constraints:
-  - `Mesh` is a frozen record. It performs no construction-time normalization
+  - `Topology` construction rejects a `None` size. `Mesh` construction rejects
+    a `None` entry in its layout shape. Beyond that explicit-extent check,
+    `Mesh` is a frozen record: it performs no construction-time normalization
     or position-consistency check. Its `topologies` field is a
-    `tuple[Topology, ...]`; helpers such as `make_mesh` construct that tuple
-    for handwritten Python.
+    `tuple[Topology, ...]`; helpers such as `make_mesh` construct that tuple for
+    handwritten Python.
   - The author surface is `with Mesh(("cta",), layout=(128,)) as cta:`. The
     parser resolves the non-empty tuple of declared topology names to the
     `Topology` tuple before it constructs the record. A bare string and the
     `topology=` keyword are not Mesh author forms.
-  - `states_consistent_positions(mesh)` is true when the product of static
-    topology sizes equals `size(mesh.layout)`, or when a topology size is
-    launch-provided. Mesh-scope verification asserts this predicate; Mesh
-    construction and slicing do not, so a derived slice remains a record of
-    its parent scope.
+  - `states_consistent_positions(mesh)` is true when the product of topology
+    sizes equals `size(mesh.layout)`. Mesh-scope verification asserts this
+    predicate; Mesh construction and slicing do not, so a derived slice
+    remains a record of its parent scope.
   - A reader that asks for a position count by topology name reads
     `size(mesh.layout)`. It accepts a Mesh with one topology only; a
     multi-topology Mesh is rejected rather than projecting its layout onto a
