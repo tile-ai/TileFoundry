@@ -201,6 +201,15 @@ class _RuntimeCoordinateCosts:
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+class _UnmaterializedIndexTensorCosts:
+    @func
+    def main():
+        row_positions = tf.reshape(tf.arange(128), new_shape=(1, 128))
+        column_positions = tf.reshape(tf.arange(128), new_shape=(128, 1))
+        return row_positions <= column_positions
+
+
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class _WindowCost:
     @func
     def main(source: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
@@ -658,6 +667,23 @@ def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
         ("rmem", TrafficBytes(read=8)),
     )
     assert record.operands[1] == TrafficBytes(read=16)
+
+
+def test_non_scalar_unmaterialized_operands_are_charged_at_rmem() -> None:
+    function = _UnmaterializedIndexTensorCosts.entry_function()
+    analyze(_UnmaterializedIndexTensorCosts, function, analysis="compute-cost")
+
+    (binary,) = [call for call in _calls(function) if isinstance(call.target, Binary)]
+    assert tuple(arg.type.shape for arg in binary.args) == ((1, 128), (128, 1))
+    assert all(arg.type.storage is StorageKind.UMAT for arg in binary.args)
+    record = get_metadata(binary, ComputeCostMetadata)
+    assert record is not None
+    assert record.traffic == (("rmem", TrafficBytes(read=2_048)),)
+    assert record.operands == (
+        TrafficBytes(read=1_024),
+        TrafficBytes(read=1_024),
+        TrafficBytes(write=2_048),
+    )
 
 
 def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
