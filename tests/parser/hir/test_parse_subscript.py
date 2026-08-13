@@ -271,6 +271,33 @@ def test_a_compile_time_offset_moves_a_tile_window_without_resizing_it():
     torch.testing.assert_close(evaluate(_summed_offsets, gu, seed, device="cpu"), expected)
 
 
+def test_a_run_time_endpoint_and_a_moved_window_share_one_subscript():
+    """One axis takes its start at run time while another moves its window.
+
+    Both keep ``Slice.sizes`` static, by different routes: a run-time endpoint
+    pairs with a compile-time window, and a move keeps the window it was given.
+    """
+    mixed = import_dsl(_src(
+        'x: Tensor[(8, 8), "f32"], e: Tensor[(), "i64"], '
+        f'seed: Tensor[(2, {_STEP}), "f32"]) -> Tensor[(2, {_STEP}), "f32"]',
+        "out = add(seed, seed)",
+        f"for n in tile({_HALF}, {_STEP}):",
+        f"    out = add(out, x[e:e + 2, n + {_HALF}])",
+        "return out",
+    ))
+
+    x = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    seed = torch.ones((2, _STEP), dtype=torch.float32)
+    expected = seed * 2
+    for lo in range(0, _HALF, _STEP):
+        expected = expected + x[3:5, lo + _HALF:lo + _HALF + _STEP]
+
+    torch.testing.assert_close(
+        evaluate(mixed, x, torch.tensor(3, dtype=torch.int64), seed, device="cpu"),
+        expected,
+    )
+
+
 def test_a_moved_window_round_trips_as_the_move_it_was_written_as():
     script = as_script(_fused_halves)
     assert f"gu[:, n + {_HALF}]" in script, script
