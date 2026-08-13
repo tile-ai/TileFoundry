@@ -346,6 +346,37 @@ projections are under `function_records`; `calls` is a value-ordered list whose
 entries have a `value` label and one key per selected family. `totals` appears
 when the selected view includes compute cost or roofline's bounded work evidence.
 
+One result is rendered once, and every surface reads that rendering:
+
+```python
+def report(result: AnalysisResult) -> dict[str, object]:
+    """Project one composed Analyze result into a shared rendering structure."""
+    ...
+
+def render_analysis(result: AnalysisResult) -> AnalysisRendering:
+    """Render one annotated program and its report data in a single pass."""
+    ...
+```
+
+- `report` MUST accept one `AnalysisResult` and read every requested family's
+  records from that result's record-bearing Function. It MUST NOT merge
+  independently rebuilt Functions by identity, origin, dimensions, or walk
+  position.
+- Text, JSON, and annotated HIR MUST come from one `render_analysis` call over
+  the same result's Function and selected Metadata types. Each rendered Call
+  record's `value` is `<left-hand-side>:<line>`, where `line` is the physical
+  line containing that statement's `=`, even when its comment ends a later line
+  of the same statement. Both surfaces MUST use the line locations collected by
+  that one printer pass rather than recover them from names or text.
+- A Call equation carrying a record MUST state it in that line's Metadata
+  comment. A carry update is a name rebinding rather than a Call equation, so it
+  receives neither a comment nor a report row.
+- A parameterized loop occurrence MUST stay one record. Neither surface expands
+  it into one entry per trip.
+- A compute-cost comment MUST place `per-unit-bytes` immediately after global
+  `bytes`, and JSON MUST expose all four quantities without reconstructing any
+  of them from the others.
+
 The output forms below share these placeholders:
 
 | Placeholder | Form | Empty value |
