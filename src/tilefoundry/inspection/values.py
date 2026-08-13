@@ -3,9 +3,9 @@
 A record states typed fields ([core-ir §2](docs/spec/core-ir.md#2-expr)); what
 they look like is decided here, so a family arrives by declaring what it has
 rather than by writing a form string -- which is how five came to spell one value
-five ways. Only a value Python cannot already read needs a rendering: three do,
-and ``int`` / ``str`` / a mapping of them do not. The constants below are the
-ladder of [inspection §2.8](docs/spec/inspection.md#28-record-comment-forms),
+five ways. A value earns a rendering of its own only where Python cannot already
+read it: an ``int``, a token, and a mapping of them get none. The constants below
+are the ladder of [inspection §2.8](docs/spec/inspection.md#28-record-comment-forms),
 one each, and nothing else in the tree spells one.
 """
 
