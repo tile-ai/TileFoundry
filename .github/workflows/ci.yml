@@ -23,6 +23,7 @@ jobs:
     runs-on: [self-hosted, tilefoundry]
     container: tilefoundry-ci-runner:local
     env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       # The package cache lives in the runner's work directory, the same mount the
       # checkout is on. Hardlinks cannot cross a mount point even within one
       # filesystem, so a cache anywhere else would cost this job a full copy of
@@ -131,29 +132,27 @@ jobs:
             coverage html --show-contexts -d htmlcov --data-file=.coverage
           fi
           cp "$RUNNER_TEMP"/requirements*.txt . 2>/dev/null || true
+      # One artifact, so one upload: this runner reset the connection on a second
+      # one right after the first succeeded. The resolution rides along because it
+      # is generated rather than tracked, and a report is worth little without
+      # knowing what was installed under it.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-html
-          path: htmlcov/
-          if-no-files-found: ignore
-      # The resolution is generated, not tracked, so the run keeps a copy of the
-      # one it installed.
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: requirements
-          path: requirements*.txt
+          name: coverage-report
+          path: |
+            htmlcov/
+            requirements*.txt
           if-no-files-found: ignore
       # Neither mode reaches what the other does -- the source run never enters the
       # CLI commands only a shipped wheel exercises -- so each uploads under its own
       # flag and Codecov unions them. The uploader runs from a throwaway
       # environment: it pins `click<8.3`, which this project's `transformers` cannot
-      # live with.
+      # live with. Codecov answers a tokenless upload for this repository with
+      # `Token required because branch is protected`, so the step runs only where
+      # the secret is readable -- never on a fork's pull request.
       - name: Upload coverage to Codecov
-        if: always()
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        if: always() && env.CODECOV_TOKEN != ''
         run: |
           for mode in source installed; do
             [ -f "coverage-$mode.xml" ] || continue
