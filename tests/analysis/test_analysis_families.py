@@ -18,6 +18,7 @@ import pytest
 import tilefoundry.analysis.compute_cost as compute_cost
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
+from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry import func, module
@@ -822,6 +823,18 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         placed.append(record.ideal_ns)
         placed_traffic.append(report([result])["totals"]["traffic"])
 
+    flash = analyze(
+        FlashSplitKDecode,
+        FlashSplitKDecode.entry_function(),
+        analysis="roofline",
+        dims={"ctx": 4096},
+    )
+    flash_slices = tuple(
+        get_metadata(expr, ComputeCostMetadata).traffic
+        for expr in postorder(flash.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, Slice)
+    )
+
     qwen = []
     for ctx_len in (1, 1024):
         module = QWEN3_1_7B.build()
@@ -847,6 +860,8 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "modest_shared_bytes": modest_local,
         "placed_ideal_ns": tuple(placed),
         "placed_traffic": tuple(placed_traffic),
+        "flash_split_traffic": report([flash])["totals"]["traffic"],
+        "flash_split_offset_slice_traffic": flash_slices,
         "qwen_makespan_ns": tuple(qwen),
     }
     assert snapshot == {
@@ -869,6 +884,21 @@ def test_analysis_snapshot_drift_sentinel() -> None:
                 "rmem": {"read": 279_488, "write": 0},
                 "smem": {"read": 795_541_504, "write": 484_638_720},
             },
+        ),
+        "flash_split_traffic": {
+            "gmem": {"read": 2_132_544, "write": 35_328},
+            "rmem": {"read": 336, "write": 104},
+            "smem": {"read": 11_935_872, "write": 11_614_592},
+        },
+        "flash_split_offset_slice_traffic": (
+            (
+                ("gmem", TrafficBytes(read=0, write=0)),
+                ("rmem", TrafficBytes(read=128, write=0)),
+            ),
+            (
+                ("gmem", TrafficBytes(read=0, write=0)),
+                ("rmem", TrafficBytes(read=128, write=0)),
+            ),
         ),
         "qwen_makespan_ns": (21_101, 32_504),
     }

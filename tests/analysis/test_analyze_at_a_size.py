@@ -16,6 +16,7 @@ from dataclasses import replace
 
 import pytest
 
+from tests.fixtures.placed.flash_split_k_decode import BLOCK, WORKERS, FlashSplitKDecode
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
@@ -28,8 +29,8 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.walk import enclosing_trips, postorder
-from tilefoundry.inspection.analysis_report import render_analysis
+from tilefoundry.analysis.walk import enclosing_trips, postorder, tensor_types
+from tilefoundry.inspection.analysis_report import render_analysis, render_text, report
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
@@ -41,7 +42,10 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.types import tensor_bytes
+from tilefoundry.ir.types.shard import Partial, ShardLayout, Topology, shard_layout_of
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.schedule.partition import build_partition_program
 from tilefoundry.target import CudaTarget
@@ -123,6 +127,68 @@ def test_block_attention_selects_and_analyzes_each_placed_regime(
 
     ideal_scale = records[1].ideal_ns / records[0].ideal_ns
     assert min_scale < ideal_scale < max_scale
+
+
+def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
+    result = analyze(
+        FlashSplitKDecode,
+        FlashSplitKDecode.entry_function(),
+        analysis="roofline",
+        dims={"ctx": 4096},
+    )
+
+    assert result.function is not FlashSplitKDecode.entry_function()
+    loops = [
+        expr for expr in postorder(result.function.body) if isinstance(expr, GridRegionExpr)
+    ]
+    assert len(loops) == 1
+    (loop,) = loops
+    assert loop.step == BLOCK * WORKERS
+
+    loop_exprs = postorder(loop)
+    assert not any(
+        isinstance(attr, Partial)
+        for expr in loop_exprs
+        if isinstance(expr, Call)
+        for tensor in tensor_types(expr.type)
+        for layout in (shard_layout_of(tensor.layout),)
+        if isinstance(layout, ShardLayout)
+        for attr in layout.attrs
+    )
+
+    slices = [
+        expr
+        for expr in loop_exprs
+        if isinstance(expr, Call) and isinstance(expr.target, Slice)
+    ]
+    assert len(slices) == 2
+    for window in slices:
+        starts = window.args[1].elements
+        base = starts[1]
+        assert isinstance(base, Call)
+        assert base.args[0] is loop.induction_var
+        assert base.target.kind.value == "add"
+        assert window.target.sizes[1] == BLOCK
+        record = get_metadata(window, ComputeCostMetadata)
+        assert record is not None
+        assert record.traffic_at("rmem").read > 0
+
+    cache_bytes = tensor_bytes(result.function.params[1].type)
+    kv_windows = [
+        expr
+        for expr in loop_exprs
+        if isinstance(expr, Call)
+        and isinstance(expr.target, Reshard)
+        and expr.args
+        and isinstance(expr.args[0], Call)
+        and isinstance(expr.args[0].target, Slice)
+    ]
+    assert len(kv_windows) == 2
+    assert all(
+        get_metadata(window, ComputeCostMetadata).traffic_at("gmem").read
+        == cache_bytes // WORKERS
+        for window in kv_windows
+    )
 
 
 @pytest.mark.parametrize("family", FAMILIES)
