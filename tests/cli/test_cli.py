@@ -625,34 +625,40 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     assert "leaf(" not in expanded
 
 
-def test_analyze_prints_the_deterministic_inlined_mega_kernel(capsys) -> None:
+def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"
+    flags = ["--compute-cost", "--memory", "--roofline", "--timeline"]
 
-    assert cli.main(["analyze", selector]) == 0
-    first = capsys.readouterr().out
-    assert cli.main(["analyze", selector]) == 0
-    second = capsys.readouterr().out
-
-    assert first == second
-    assert "routed_expert(" not in first
-    assert "shared_expert(" not in first
-    assert first.count("reshard(tokens") == 2
-    assert "v0 = reshard(tokens" in first
-    assert "v3 = reshard(tokens" in first
-    assert "offset=0" in first
-    assert "offset=120" in first
-
-
-def test_analyze_keys_timeline_records_to_their_rendered_equations(capsys) -> None:
-    source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
-    selector = f"{source}:MoEMegaKernel"
-
-    assert cli.main(["analyze", selector, "--timeline", "--json"]) == 0
+    assert cli.main(["analyze", selector, *flags, "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert cli.main(["analyze", selector, "--timeline"]) == 0
-    header, annotated = capsys.readouterr().out.split("\n\n", 1)
+    assert cli.main(["analyze", selector, *flags]) == 0
+    first = capsys.readouterr().out
+    assert cli.main(["analyze", selector, *flags]) == 0
+    second = capsys.readouterr().out
+    assert first == second
+
+    header, annotated = first.split("\n\n", 1)
     lines = annotated.splitlines()
+    assert payload["requested"] == payload["executed"] == [
+        "compute-cost",
+        "memory",
+        "roofline",
+        "timeline",
+    ]
+    assert set(payload["function_records"]) == {
+        "compute-cost",
+        "memory",
+        "roofline",
+        "timeline",
+    }
+    assert "routed_expert(" not in annotated
+    assert "shared_expert(" not in annotated
+    assert annotated.count("reshard(tokens") == 2
+    assert "v0 = reshard(tokens" in annotated
+    assert "v3 = reshard(tokens" in annotated
+    assert "offset=0" in annotated
+    assert "offset=120" in annotated
 
     summary = payload["function_records"]["timeline"]
     assert (
@@ -664,6 +670,10 @@ def test_analyze_keys_timeline_records_to_their_rendered_equations(capsys) -> No
 
     rows = payload["calls"]
     assert len(rows) == 7
+    assert all(
+        set(row) == {"value", "compute-cost", "roofline", "timeline"}
+        for row in rows
+    )
     starts = []
     for row in rows:
         value, line_text = row["value"].rsplit(":", 1)

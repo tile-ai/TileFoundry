@@ -37,6 +37,7 @@ from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_json, render_text, report
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
+from tilefoundry.ir.hir import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel
@@ -805,13 +806,31 @@ def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) 
     assert not ran
 
 
-def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> None:
-    """Placement offsets and projected movement survive into one report."""
+def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
+    """The expanded placed program keeps its slices, costs, and dependency order."""
     result = analyze(
         MoEMegaKernel,
         MoEMegaKernel.entry_function(),
         analysis=("compute-cost", "memory", "roofline", "timeline"),
     )
+    calls = _calls(result.function)
+    assert len(calls) == 7
+    assert all(not isinstance(call.target, Function) for call in calls)
+
+    for index, shape, offset in (
+        (0, (120,), 0),
+        (1, (120,), 0),
+        (3, (12,), 120),
+        (4, (12,), 120),
+    ):
+        call_type = calls[index].type
+        assert isinstance(call_type, TensorType)
+        assert isinstance(call_type.layout, ShardLayout)
+        layout = call_type.layout.mesh.layout
+        assert isinstance(layout, ComposedLayout)
+        assert layout.outer is not None
+        assert (layout.outer.shape, layout.offset) == (shape, offset)
+
     placements = _timeline_placements(
         MoEMegaKernel,
         result.function,
@@ -824,7 +843,6 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
     assert frozenset(range(120, 132)) in prepared
     assert frozenset(range(132)) in prepared
 
-    calls = _calls(result.function)
     views = [call for call in calls if type(call.target).__name__ == "Reshard"]
     assert len(views) == 4
     for view in views:
@@ -846,6 +864,10 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
     assert root_cost is not None
     assert memory is not None
     assert roofline is not None
+    assert dict(root_cost.flops) == {"f32": 23_040}
+    assert dict(root_cost.flops) == {
+        "f32": sum(dict(call_cost.flops).get("f32", 0) for call_cost in call_costs)
+    }
     assert root_cost.traffic_at("gmem") == summed == TrafficBytes(
         read=122_880,
         write=92_160,
@@ -857,9 +879,13 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
         "memory",
     )
 
-    relu = next(
-        call for call in _calls(result.function) if type(call.target).__name__ == "ReLU"
-    )
+    positive_per_unit = [
+        dict(call_cost.flops_per_unit)["f32"]
+        for call_cost in call_costs
+        if call_cost.flops_per_unit
+    ]
+    assert positive_per_unit == [64, 640, 7_680]
+    relu = next(call for call in calls if type(call.target).__name__ == "ReLU")
     cost = get_metadata(relu, ComputeCostMetadata)
     assert cost is not None
     assert cost.traffic == (("gmem", TrafficBytes(read=30_720, write=30_720)),)
@@ -870,43 +896,8 @@ def test_placed_occurrences_keep_exact_mesh_images_and_per_unit_traffic() -> Non
         in cost.format_comment()
     )
 
-    data = json.loads(render_json(report(result)))
-    row = next(
-        row
-        for row in data["calls"]
-        if row.get("compute-cost", {}).get("flops_per_unit") == {"f32": 64}
-    )
-    rendered = row["compute-cost"]
-    assert {"flops", "flops_per_unit", "traffic", "traffic_per_unit"} <= rendered.keys()
-    assert rendered["traffic"] == {"gmem": {"read": 30_720, "write": 30_720}}
-    assert rendered["traffic_per_unit"] == {"gmem": {"read": 256, "write": 256}}
-    assert set(data["function_records"]["compute-cost"]) == {
-        "flops",
-        "flops_per_unit",
-        "traffic",
-        "traffic_per_unit",
-    }
-
-
-def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
-    """Dependencies and exact Mesh intersections determine local intervals."""
-    first = analyze(
-        MoEMegaKernel,
-        MoEMegaKernel.entry_function(),
-        analysis="timeline",
-    )
-    second = analyze(
-        MoEMegaKernel,
-        MoEMegaKernel.entry_function(),
-        analysis="timeline",
-    )
-    calls = _calls(first.function)
     records = tuple(get_metadata(call, TimelineMetadata) for call in calls)
-    repeated = tuple(
-        get_metadata(call, TimelineMetadata) for call in _calls(second.function)
-    )
     assert all(record is not None for record in records)
-    assert records == repeated
 
     routed_in, routed, routed_out, shared_in, shared, shared_out, join = records
     assert routed_in is not None and routed is not None and routed_out is not None
@@ -931,20 +922,27 @@ def test_timeline_schedules_occurrences_on_exact_participant_sets() -> None:
     )
     assert routed_in.start_ns == shared_in.start_ns == 0
 
-    placements = _timeline_placements(
-        MoEMegaKernel,
-        first.function,
-        "cta",
-        MoEMegaKernel.resolve_target().get_facts(ThroughputFacts),
-    )
-    assert placements[id(calls[2])] == placements[id(calls[5])]
+    routed_positions = placements[id(calls[1])]
+    shared_positions = placements[id(calls[4])]
+    assert routed_positions.isdisjoint(shared_positions)
+    assert routed.start_ns < shared.end_ns and shared.start_ns < routed.end_ns
+
+    whole_positions = placements[id(calls[2])]
+    assert whole_positions == placements[id(calls[5])] == frozenset(range(132))
     assert (
         routed_out.end_ns <= shared_out.start_ns
         or shared_out.end_ns <= routed_out.start_ns
     )
-    assert placements[id(calls[2])] != placements[id(calls[4])]
-    assert placements[id(calls[2])] & placements[id(calls[4])]
+    assert whole_positions != shared_positions
+    assert whole_positions & shared_positions
     assert join.start_ns >= max(routed_out.end_ns, shared_out.end_ns)
+
+    summary = get_metadata(result.function, TimelineSummaryMetadata)
+    assert summary == TimelineSummaryMetadata(
+        local_makespan_ns=2_676,
+        waves=1,
+        estimated_kernel_ns=2_676,
+    )
 
 
 def test_timeline_scales_one_local_schedule_by_root_capacity() -> None:

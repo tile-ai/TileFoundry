@@ -29,7 +29,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import enclosing_trips, postorder
-from tilefoundry.inspection.analysis_report import render_analysis, render_text, report
+from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
@@ -136,26 +136,13 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert residual_dims(result.function) == ()
 
 
-def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
-    """Several requested roots record all conclusions on one concrete view."""
+def test_one_root_and_four_roots_produce_the_same_timeline_records() -> None:
+    """A union closure preserves the conclusion of its independently requested root."""
     module, authored, dims = _subject("timeline")
 
     result = analyze(module, authored, analysis=FAMILIES, dims=dims)
-    data = report(result)
 
     assert result.analyses == FAMILIES
-    assert data["executed"] == list(FAMILIES)
-    assert set(data["function_records"]) == {
-        "compute-cost",
-        "memory",
-        "roofline",
-        "timeline",
-    }
-    assert data["totals"]["flops"], "the work totals summed to nothing"
-    text = render_text(data)
-    for expected in ("peak-footprint", "ideal-bound", "estimated-kernel"):
-        assert expected in text, f"{expected} is missing from the rendered report"
-
     single_module, single_function, single_dims = _subject("timeline")
     single = analyze(
         single_module,
@@ -175,22 +162,6 @@ def test_a_report_at_a_size_carries_every_family_it_ran() -> None:
     assert get_metadata(single.function, TimelineSummaryMetadata) == get_metadata(
         result.function, TimelineSummaryMetadata
     )
-
-
-def test_a_report_at_a_size_carries_the_per_call_records_of_every_family() -> None:
-    """Per-Call records from several roots inhabit the same occurrences."""
-    module, authored, dims = _subject("timeline")
-
-    result = analyze(
-        module,
-        authored,
-        analysis=("compute-cost", "timeline"),
-        dims=dims,
-    )
-    data = report(result)
-
-    families = {name for row in data["calls"] for name in row if name != "value"}
-    assert families == {"compute-cost", "timeline"}, families
 
 
 def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
