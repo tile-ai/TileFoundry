@@ -75,7 +75,8 @@ def test_models_source_names_the_shipped_directory_and_its_files(
     analysed = tf("analyze", static, "--compute-cost")
     assert analysed.returncode == 0, analysed.stderr
     assert "target=nvidia.h200_sxm" in analysed.stdout
-    assert "flops" in analysed.stdout and "traffic gmem=" in analysed.stdout
+    assert "# compute-cost flops=bf16:" in analysed.stdout
+    assert "traffic=gmem:r" in analysed.stdout
 
     targetless = f"{copied / 'model.py'}:Qwen3_1_7B_DecoderLayer"
     rejected = tf("analyze", targetless, "--compute-cost", "--dim", "ctx_len=128")
