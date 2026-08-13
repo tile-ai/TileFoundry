@@ -58,6 +58,12 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+#   What a CI run leaves in the checkout: one report per measured mode, plus the
+#   config and the data file the installed run combines its subprocesses into.
+coverage-source.xml
+coverage-installed.xml
+coveragerc-installed
+.coverage-installed*
 
 # Translations
 *.mo

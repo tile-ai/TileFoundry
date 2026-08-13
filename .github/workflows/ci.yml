@@ -35,8 +35,15 @@ jobs:
         run: |
           mkdir -p third_party/cutlass
           ln -sfnT /opt/cutlass/include third_party/cutlass/include
+      # `pytest-cov` owns the measurement because it owns the xdist half: plain
+      # `coverage run -m pytest -n 4` leaves the workers disagreeing about what
+      # they collected. `--cov-context=test` records which test reached each
+      # branch, which is what reading a report for redundancy needs.
       - name: Run tests
-        run: .venv/bin/python -m pytest tests/ -n 4
+        run: |
+          .venv/bin/python -m pytest tests/ -n 4 \
+            --cov=tilefoundry --cov-branch --cov-context=test \
+            --cov-report=xml:coverage-source.xml --cov-report=
       - name: Build the wheel
         run: |
           mkdir -p "$RUNNER_TEMP/wheel"
@@ -49,11 +56,57 @@ jobs:
             "$RUNNER_TEMP"/wheel/tilefoundry-*.whl
       - name: Verify the installed surface
         run: |
-          TF_SMOKE_VENV="$PWD/.wheel-venv" \
+          clean_site=$(.wheel-venv/bin/python -c \
+            'import sysconfig; print(sysconfig.get_path("purelib"))')
+          # What runs the wheel is a subprocess in the clean environment, not this
+          # pytest, so coverage starts inside that interpreter. The package is
+          # copied in beside the wheel rather than reached through the shared
+          # read-only environment: a `.pth` that cannot import writes a traceback
+          # to stderr, and these tests assert stderr is empty.
+          coverage_package=$(.venv/bin/python -c \
+            'import coverage, pathlib; print(pathlib.Path(coverage.__file__).parent)')
+          cp -r "$coverage_package" "$clean_site/coverage"
+          printf 'import coverage; coverage.process_startup()\n' \
+            > "$clean_site/zzz-coverage-subprocess.pth"
+          # `[paths]` folds the wheel's own location back onto the checkout, so
+          # both modes report the same files.
+          cat > coveragerc-installed <<EOF
+          [run]
+          branch = True
+          parallel = True
+          source = tilefoundry
+          data_file = $PWD/.coverage-installed
+
+          [paths]
+          package =
+              $PWD/src/tilefoundry
+              $clean_site/tilefoundry
+          EOF
+          COVERAGE_PROCESS_START="$PWD/coveragerc-installed" \
+            TF_SMOKE_VENV="$PWD/.wheel-venv" \
             .wheel-venv/bin/python -m pytest tests/installed \
             -o python_files='smoke_*.py' -q -n 8
+          .venv/bin/python -m coverage combine --rcfile=coveragerc-installed
+          .venv/bin/python -m coverage xml --rcfile=coveragerc-installed \
+            -o coverage-installed.xml
       - name: Decode the published checkpoint with the shipped source
         run: |
           .wheel-venv/bin/python tests/installed/qwen3_1_7b_l3.py \
             --venv "$PWD/.wheel-venv" \
             --work "$RUNNER_TEMP/l3"
+      # A readable report of the source run, whose `--show-contexts` names the
+      # tests that reached each line. Percentages alone cannot answer which test
+      # a line is covered by, which is the question consolidating the suite asks.
+      - name: Publish the coverage report
+        if: always()
+        run: |
+          if [ -f .coverage ]; then
+            .venv/bin/python -m coverage html --show-contexts -d htmlcov \
+              --data-file=.coverage
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-html
+          path: htmlcov/
+          if-no-files-found: ignore

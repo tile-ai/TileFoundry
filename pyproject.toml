@@ -35,8 +35,19 @@ Repository = "https://github.com/tile-ai/TileFoundry"
 tilefoundry = "tilefoundry.cli:main"
 
 [project.optional-dependencies]
-test = ["pytest>=8", "pytest-xdist>=3"]
+test = ["pytest>=8", "pytest-xdist>=3", "pytest-cov>=7"]
 dev = ["pre-commit>=3", "ruff>=0.14", "setuptools>=68", "setuptools-scm>=8"]
+
+[tool.coverage.run]
+branch = true
+# The importable package, not a directory: the source run measures the checkout
+# and the installed run measures the same package inside a wheel's site-packages.
+source = ["tilefoundry"]
+
+[tool.coverage.report]
+# Coverage here is an instrument for consolidating the suite, not a pass mark; a
+# threshold waits until that consolidation is done.
+skip_empty = true
 
 [tool.setuptools_scm]
 
