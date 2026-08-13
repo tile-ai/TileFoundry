@@ -131,7 +131,11 @@ def test_block_attention_selects_and_analyzes_each_placed_regime(
             analysis="roofline",
             dims=dims,
         )
-        assert display_name(origin_of(result.function)) == variant
+        concrete = origin_of(result.function)
+        assert concrete is not None
+        selected = origin_of(concrete)
+        assert selected is not None
+        assert display_name(selected) == variant
         record = get_metadata(result.function, RooflineMetadata)
         assert record is not None
         assert record.bound_by == bound_by
@@ -451,21 +455,18 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     assert "timeline [652+920t, 652+920t) trips=8 span=[652,8012)" in lines[58]
     assert lines[82].strip() == "m = v16"
     assert "timeline" not in lines[82]
-def test_qwen_decoder_unplaced_calls_have_one_position_at_each_sequence_length() -> None:
+@pytest.mark.parametrize("ctx_len", (1, 1024))
+def test_qwen_decoder_unplaced_calls_are_refused_at_each_sequence_length(
+    ctx_len: int,
+) -> None:
     module = QWEN3_1_7B.build()
     function = module.lookup("decoder_layer")
 
-    records = []
-    for ctx_len in (1, 1024):
-        result = analyze(module, function, analysis="timeline", dims={"ctx_len": ctx_len})
-        record = get_metadata(result.function, TimelineMetadata)
-        assert record is not None
-        records.append(record)
-
-    assert all(record.grid_units == 1 for record in records)
-    assert all(record.waves == 7 for record in records)
-    makespan_scale = records[1].end_ns / records[0].end_ns
-    assert 1.4 < makespan_scale < 1.7
+    with pytest.raises(
+        AnalysisError,
+        match=r"model.py:\d+:.*has no cta placement",
+    ):
+        analyze(module, function, analysis="timeline", dims={"ctx_len": ctx_len})
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

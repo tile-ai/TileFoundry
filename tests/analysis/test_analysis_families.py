@@ -20,7 +20,6 @@ from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
-from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -729,7 +728,7 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     gmem = get_metadata(result.function, MemoryMetadata)
     assert gmem is not None
     gmem_lifetimes = {item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"}
-    assert gmem_lifetimes["local_lhs"] == gmem_lifetimes["lhs"]
+    assert gmem_lifetimes["v0"] == gmem_lifetimes["lhs"]
 
     shared = next(fn for fn in _SharedTile.functions if fn.name == "split")
     result = analyze(_SharedTile, shared, analysis="memory")
@@ -738,7 +737,7 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     local_bytes = next(
         item.bytes
         for item in cta_owned.lifetimes
-        if item.binding == "local" and item.level == "smem"
+        if item.binding == "v0" and item.level == "smem"
     )
     assert local_bytes == tensor_bytes(shared.params[0].type) // _SharedTile.topologies[0].size
 
@@ -773,9 +772,12 @@ def test_analysis_snapshot_drift_sentinel() -> None:
     """Intentional current-output snapshot; change it only with model review."""
     functions = {function.name: function for function in _MatmulLayouts.functions}
     matmul_records = []
+    split_result = None
     for function in (functions["plain"], functions["split"], functions["broadcast"]):
-        analyze(_MatmulLayouts, function, analysis="roofline")
-        call = _calls(function)[-1]
+        result = analyze(_MatmulLayouts, function, analysis="roofline")
+        if function is functions["split"]:
+            split_result = result
+        call = _calls(result.function)[-1]
         matmul_records.append(
             (
                 get_metadata(call, ComputeCostMetadata),
@@ -786,27 +788,27 @@ def test_analysis_snapshot_drift_sentinel() -> None:
     split_cost, _split_bound = matmul_records[1]
 
     shared = next(function for function in _SharedTile.functions if function.name == "split")
-    analyze(_SharedTile, shared, analysis="memory")
-    shared_record = get_metadata(shared, MemoryMetadata)
+    shared_result = analyze(_SharedTile, shared, analysis="memory")
+    shared_record = get_metadata(shared_result.function, MemoryMetadata)
     assert shared_record is not None
     shared_smem = shared_record.level("smem")
     assert shared_smem is not None
 
-    matmul = functions["split"]
-    gmem = get_metadata(matmul, MemoryMetadata)
+    assert split_result is not None
+    gmem = get_metadata(split_result.function, MemoryMetadata)
     assert gmem is not None
     gmem_lifetimes = {
         item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"
     }
 
     modest = _entry(_modest_shared)
-    analyze(_modest_shared, modest, analysis="memory")
-    modest_record = get_metadata(modest, MemoryMetadata)
+    modest_result = analyze(_modest_shared, modest, analysis="memory")
+    modest_record = get_metadata(modest_result.function, MemoryMetadata)
     assert modest_record is not None
     modest_local = next(
         item.bytes
         for item in modest_record.lifetimes
-        if item.binding == "local" and item.level == "smem"
+        if item.binding == "v0" and item.level == "smem"
     )
 
     placed = []
@@ -821,7 +823,7 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         record = get_metadata(result.function, RooflineMetadata)
         assert record is not None
         placed.append(record.ideal_ns)
-        placed_traffic.append(report([result])["totals"]["traffic"])
+        placed_traffic.append(report(result)["totals"]["traffic"])
 
     flash = analyze(
         FlashSplitKDecode,
@@ -835,19 +837,6 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         if isinstance(expr, Call) and isinstance(expr.target, Slice)
     )
 
-    qwen = []
-    for ctx_len in (1, 1024):
-        module = QWEN3_1_7B.build()
-        result = analyze(
-            module,
-            module.lookup("decoder_layer"),
-            analysis="timeline",
-            dims={"ctx_len": ctx_len},
-        )
-        record = get_metadata(result.function, TimelineMetadata)
-        assert record is not None
-        qwen.append(record.end_ns)
-
     snapshot = {
         "matmul_flops": plain_cost.flops,
         "matmul_split_flops_per_unit": split_cost.flops_per_unit,
@@ -860,9 +849,8 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "modest_shared_bytes": modest_local,
         "placed_ideal_ns": tuple(placed),
         "placed_traffic": tuple(placed_traffic),
-        "flash_split_traffic": report([flash])["totals"]["traffic"],
+        "flash_split_traffic": report(flash)["totals"]["traffic"],
         "flash_split_offset_slice_traffic": flash_slices,
-        "qwen_makespan_ns": tuple(qwen),
     }
     assert snapshot == {
         "matmul_flops": (("bf16", 28_547_481_600),),
@@ -872,35 +860,34 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "shared_largest_tile_bytes": 211_200,
         "gmem_lhs_bytes": 4_325_376,
         "modest_shared_bytes": 4_096,
-        "placed_ideal_ns": (3_496, 65_449),
+        "placed_ideal_ns": (3_496, 65_447),
         "placed_traffic": (
             {
                 "gmem": {"read": 8_390_656, "write": 8_388_608},
                 "rmem": {"read": 17_256, "write": 0},
-                "smem": {"read": 21_670_592, "write": 21_432_512},
+                    "smem": {"read": 21_669_568, "write": 21_432_000},
             },
             {
                 "gmem": {"read": 4_194_304, "write": 8_388_608},
                 "rmem": {"read": 279_488, "write": 0},
-                "smem": {"read": 795_541_504, "write": 484_638_720},
+                    "smem": {"read": 794_492_928, "write": 484_114_432},
             },
         ),
         "flash_split_traffic": {
             "gmem": {"read": 2_132_480, "write": 35_328},
             "rmem": {"read": 400, "write": 104},
-            "smem": {"read": 11_935_872, "write": 11_614_592},
+            "smem": {"read": 11_899_776, "write": 11_578_752},
         },
         "flash_split_offset_slice_traffic": (
             (
                 ("gmem", TrafficBytes(read=0, write=0)),
-                ("rmem", TrafficBytes(read=128, write=0)),
+                    ("rmem", TrafficBytes(read=32, write=0)),
             ),
             (
                 ("gmem", TrafficBytes(read=0, write=0)),
-                ("rmem", TrafficBytes(read=128, write=0)),
+                    ("rmem", TrafficBytes(read=32, write=0)),
             ),
         ),
-        "qwen_makespan_ns": (21_101, 32_504),
     }
 
 
