@@ -232,11 +232,12 @@ def _launch_entry_with_grid_x(extent):
     from tilefoundry.ir.tir.stmts import Evaluate, Sequential  # noqa: PLC0415
     from tilefoundry.ir.tir.symbol_ref import SymbolRef  # noqa: PLC0415
     from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType  # noqa: PLC0415
+    from tilefoundry.ir.types.storage import StorageKind  # noqa: PLC0415
     from tilefoundry.target import CpuTarget  # noqa: PLC0415
 
     t = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem")
     a = Var(type=t, name="a")
-    i64 = TensorType.scalar(DType.i64)
+    i64 = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
     one = Constant(type=i64, value=1)
     ref = SymbolRef(name="dev", type=CallableType(return_type=UnitType(), parameters=(t,)))
     args = (ref, extent, one, one, one, one, one, a)
@@ -268,12 +269,17 @@ def test_launch_extent_rejects_external_shapeof() -> None:
     from tilefoundry.ir.tir.shape import ShapeOf  # noqa: PLC0415
     from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
     from tilefoundry.ir.types import DType, TensorType  # noqa: PLC0415
+    from tilefoundry.ir.types.storage import StorageKind  # noqa: PLC0415
 
     external = Var(
         type=TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem"),
         name="y_external",
     )
-    bad = ShapeOf(type=TensorType.scalar(DType.i32), param=external, axis=0)
+    bad = ShapeOf(
+        type=TensorType.scalar(DType.i32, storage=StorageKind.RMEM),
+        param=external,
+        axis=0,
+    )
     entry = _launch_entry_with_grid_x(bad)
     with pytest.raises(VerifyError, match="not a forwarded"):
         verify_prim_function(entry)

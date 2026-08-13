@@ -14,5 +14,6 @@ gmem = StorageKind.GMEM
 smem = StorageKind.SMEM
 rmem = StorageKind.RMEM
 tmem = StorageKind.TMEM
+umat = StorageKind.UMAT
 
-__all__ = ["host", "gmem", "smem", "rmem", "tmem"]
+__all__ = ["host", "gmem", "smem", "rmem", "tmem", "umat"]

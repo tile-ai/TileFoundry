@@ -33,6 +33,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
@@ -264,7 +265,7 @@ def _verify_shape_of(expr: ShapeOf) -> None:
         raise VerifyError(f"ShapeOf.param must be a Var, got {type(expr.param).__name__}")
     if not isinstance(expr.axis, int) or isinstance(expr.axis, bool) or expr.axis < 0:
         raise VerifyError(f"ShapeOf.axis must be a non-negative int, got {expr.axis!r}")
-    expected = TensorType.scalar(dtype=DType.i32)
+    expected = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
     if expr.type != expected:
         raise VerifyError(f"ShapeOf.type must be rank-0 i32 scalar TensorType, got {expr.type}")
 

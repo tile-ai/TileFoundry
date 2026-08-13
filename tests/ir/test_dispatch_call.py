@@ -21,6 +21,7 @@ from tilefoundry.ir.tir.stmts import Abort, Evaluate, Return, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef, symbol_call
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.ir.types import DType, TensorType, callable_type_for_prim_function
+from tilefoundry.ir.types.storage import StorageKind
 
 
 def _x_type() -> TensorType:
@@ -28,7 +29,7 @@ def _x_type() -> TensorType:
 
 
 def _scalar_i32() -> TensorType:
-    return TensorType.scalar(dtype=DType.i32)
+    return TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
 
 
 def _build_module(

@@ -87,11 +87,12 @@ def launch_call(
         DimSub,
         DimVar,
     )
+    from tilefoundry.ir.types.storage import StorageKind  # noqa: PLC0415
 
     forwarded_args = tuple(forwarded_args)
     _DIM_OPS = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
-    i64 = TensorType.scalar(DType.i64)
-    i32 = TensorType.scalar(DType.i32)
+    i64 = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
+    i32 = TensorType.scalar(DType.i32, storage=StorageKind.RMEM)
 
     dimvar_src: dict[int, tuple] = {}
     for param, arg in zip(callee.params, forwarded_args):

@@ -8,6 +8,7 @@ from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.verify import _verify_shape_of
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.storage import StorageKind
 
 
 def _x_param() -> Var:
@@ -18,7 +19,11 @@ def _x_param() -> Var:
 
 def test_shape_of_rejects_negative_axis():
     p = _x_param()
-    so = ShapeOf(type=TensorType.scalar(dtype=DType.i32), param=p, axis=-1)
+    so = ShapeOf(
+        type=TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM),
+        param=p,
+        axis=-1,
+    )
     with pytest.raises(VerifyError, match="non-negative"):
         _verify_shape_of(so)
 

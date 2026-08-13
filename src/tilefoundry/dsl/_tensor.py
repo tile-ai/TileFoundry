@@ -21,8 +21,16 @@ def _tensor_type_getitem(args) -> TensorType:
         dtype_val = DType.from_name(dtype_val)
     if not isinstance(shape, tuple):
         shape = (shape,)
-    layout = args[2] if len(args) > 2 else None
-    storage = args[3] if len(args) > 3 and args[3] else StorageKind.GMEM
+    layout = None
+    storage = StorageKind.GMEM
+    if len(args) > 2:
+        layout_or_storage = args[2]
+        if isinstance(layout_or_storage, (str, StorageKind)):
+            storage = layout_or_storage
+        else:
+            layout = layout_or_storage
+    if len(args) > 3 and args[3]:
+        storage = args[3]
     return TensorType(
         shape=shape,
         dtype=dtype_val,

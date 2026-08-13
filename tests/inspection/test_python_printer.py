@@ -11,12 +11,14 @@ from dataclasses import dataclass, fields, replace
 from tests._source import import_dsl
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.inspection import PythonPrintOptions, as_script
+from tilefoundry.inspection.analysis_report import _type_text
 from tilefoundry.ir.core import BindingMetadata, Call, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, register_target
 from tilefoundry.target.cuda import CudaArchitecture
 from tilefoundry.target.cuda import CudaTarget as BuiltinCudaTarget
@@ -78,6 +80,28 @@ def test_binding_metadata_names_the_emitted_binding():
     )
 
     assert "v0 = add(source, source)" in as_script(unbound_function)
+
+
+def test_umat_type_is_printed_and_round_trips() -> None:
+    tensor_type = TensorType.scalar(DType.i64, storage=StorageKind.UMAT)
+    source = Var(name="source", type=tensor_type)
+    function = Function.build(
+        name="umat_annotation",
+        params=(source,),
+        body=source,
+        return_type=tensor_type,
+    )
+
+    rendered = as_script(function)
+
+    assert 'Tensor[(), "i64", "umat"]' in rendered
+    rebuilt = import_dsl(rendered)
+    assert rebuilt.params[0].type == tensor_type
+    assert rebuilt.return_type == tensor_type
+
+
+def test_analysis_report_names_umat_storage() -> None:
+    assert _type_text(TensorType.umat_scalar()) == "i64[] umat"
 
 
 def _rebuild(rendered: PythonExpr):

@@ -17,6 +17,7 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import LetStmt, Return, Sequential
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType, make_tensor_type
+from tilefoundry.ir.types.storage import StorageKind
 
 
 def _alloc_call(t: TensorType) -> Call:
@@ -68,7 +69,7 @@ def test_letstmt_rejects_alloc_nested_in_other_expr():
     Call(AllocTensor, ...) may only appear directly as
     LetStmt.value, never nested inside another Expr operand.
     """
-    t_scalar = TensorType.scalar(DType.f32)
+    t_scalar = TensorType.scalar(DType.f32, storage=StorageKind.RMEM)
 
     nested = Call(
         type=t_scalar,

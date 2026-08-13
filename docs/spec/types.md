@@ -54,7 +54,7 @@ class TensorType:
     def scalar(
         dtype: DType,
         layout: LayoutBase | None = None,
-        storage: StorageKind = StorageKind.RMEM,
+        storage: StorageKind = StorageKind.UMAT,
     ) -> "TensorType": ...
 
     def umat_scalar(dtype: DType = DType.i64) -> "TensorType": ...
@@ -205,9 +205,8 @@ def resolve_storage(value: "str | StorageKind | None") -> "StorageKind | None":
     `TMEM=5` / `tmem`, and `UMAT=6` / `umat`.
   - `resolve_storage` MUST pass through `None` and a `StorageKind` instance.
     It MUST accept exactly the canonical strings `host`, `gmem`, `smem`,
-    `rmem`, and `tmem`, and MUST reject other strings and non-storage values.
-  - `UMAT` is an IR-internal unmaterialized value and MUST NOT be accepted as
-    a surface string.
+    `rmem`, `tmem`, and `umat`, and MUST reject other strings and non-storage
+    values. Matching is case-sensitive.
   - The storage vocabulary is closed at the IR type boundary. It MUST NOT
     provide target-specific registration or capability validation.
 

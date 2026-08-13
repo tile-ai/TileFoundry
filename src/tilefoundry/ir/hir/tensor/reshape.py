@@ -37,12 +37,12 @@ register_access_relation(Reshape)(identity_relations(1))
 
 
 def is_register_scalar_singleton_reshape(expr) -> bool:
-    """Whether ``expr`` only presents one register scalar as a 1-D tensor."""
+    """Whether ``expr`` only presents one unmaterialized scalar as a 1-D tensor."""
     return (
         isinstance(expr, Call)
         and isinstance(expr.target, Reshape)
         and expr.args[0].type.shape == ()
-        and expr.args[0].type.storage is StorageKind.RMEM
+        and expr.args[0].type.storage is StorageKind.UMAT
         and expr.type.shape == (1,)
     )
 

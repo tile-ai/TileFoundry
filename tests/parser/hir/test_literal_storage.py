@@ -4,8 +4,8 @@ A literal such as ``1`` or ``2.0`` carries no committed memory residency; its
 ``TensorType.storage`` is ``StorageKind.UMAT`` so that, in an op, it abstains
 from output storage resolution and the concrete operand anchors the result
 regardless of operand order. Model bodies that multiply by a literal exercise
-that resolution; what no model can exercise is the surface refusing to name the
-internal kind.
+that resolution; the same kind is also a legal explicit surface annotation
+when a caller wants to preserve that unresolved residency.
 """
 
 from __future__ import annotations
@@ -22,14 +22,8 @@ from tilefoundry.ir.types import DType
 _EPS = 1e-6
 
 
-def test_umat_is_not_an_accepted_surface_storage() -> None:
-    """`umat` is compiler-internal: a runtime annotation MUST NOT carry it.
-
-    `umat` is compiler-internal: a runtime annotation MUST NOT carry it, so
-    the storage surface rejects the string. This keeps an unmaterialized value
-    from being smuggled onto a runtime param/return, where it would reach
-    codegen without materialization.
-    """
+def test_umat_is_an_accepted_surface_storage() -> None:
+    """An explicit ``umat`` annotation preserves unresolved residency."""
     src = (
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor\n"
@@ -38,8 +32,9 @@ def test_umat_is_not_an_accepted_surface_storage() -> None:
         "def f(x: Tensor[(8,), 'f32', None, 'umat']) -> Tensor[(8,), 'f32']:\n"
         "    return x\n"
     )
-    with pytest.raises(ValueError, match="unknown storage"):
-        import_dsl(src)
+    parsed = import_dsl(src)
+    assert parsed.params[0].type.storage.name == "UMAT"
+    assert parsed.return_type.storage.name == "GMEM"
 
 
 @func

@@ -23,6 +23,7 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.types.storage import StorageKind
 
 _SEQ = DimVar("seq_len", 1, 100)
 
@@ -93,6 +94,7 @@ def test_iteration_domain_forms():
     assert isinstance(ranged, GridRegionExpr)
     assert (ranged.start, ranged.extent, ranged.step) == (2, 8, 3)
     assert isinstance(ranged.induction_var, Var)
+    assert ranged.induction_var.type.storage is StorageKind.UMAT
 
 
 @func

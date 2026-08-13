@@ -30,7 +30,10 @@ def _tensor_var(name: str, shape: tuple[int, ...]) -> Var:
 
 
 def _shape_scalar(name: str) -> Var:
-    return Var(name=name, type=TensorType.scalar(dtype=DType.i32))
+    return Var(
+        name=name,
+        type=TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM),
+    )
 
 
 def _mangled_prim_func(name: str, x: Var) -> PrimFunction:
@@ -46,7 +49,13 @@ def test_dispatch_call_emits_if_chain_and_trap_fallback() -> None:
 
     dispatch = DispatchCall(
         callee_name="main",
-        subjects=(ShapeOf(param=x, axis=1, type=TensorType.scalar(dtype=DType.i32)),),
+        subjects=(
+            ShapeOf(
+                param=x,
+                axis=1,
+                type=TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM),
+            ),
+        ),
         case_patterns=(
             (DimVarRangePat(dim_var="S", lo=1, hi=3),),
             (DimVarRangePat(dim_var="S", lo=4, hi=7),),

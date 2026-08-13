@@ -182,8 +182,8 @@ dim            ::= integer-literal | dim-Expr        ; dim-Expr per types §4
 dtype          ::= '"f32"' | '"f16"' | '"bf16"' | …  ; see types §3
 layout         ::= layout-sugar                      ; see §1.5
                 | 'ShardLayout(' … ')'              ; verbose, see shard §7
-storage        ::= '"host"' | '"gmem"' | '"smem"' | '"rmem"' | '"tmem"'
-                | 'host' | 'gmem' | 'smem' | 'rmem' | 'tmem'
+storage        ::= '"host"' | '"gmem"' | '"smem"' | '"rmem"' | '"tmem"' | '"umat"'
+                | 'host' | 'gmem' | 'smem' | 'rmem' | 'tmem' | 'umat'
 ```
 
 `Tensor[...]` and `ConstTensor[...]` resolve to the same ordinary `TensorType`;
@@ -208,7 +208,7 @@ Tensor[(), "bf16"]                                    # scalar
     descriptor before constructing `TensorType`.
   - An unknown dtype string MUST be rejected; it MUST NOT fall back to another
     descriptor.
-  - Bare storage names MUST resolve to the five constants exported by
+  - Bare storage names MUST resolve to the six constants exported by
     `tilefoundry.dsl.storage`; they are equivalent to the quoted spellings.
 
 ### 1.5 Layout sugar

@@ -32,7 +32,7 @@ from tilefoundry.inspection.python_printer import (
 )
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.hir.specialize import bound_dims_of, origin_of
 
 
 def _traffic(traffic: tuple[tuple[str, TrafficBytes], ...]) -> dict[str, dict[str, int]]:
@@ -50,7 +50,7 @@ def _type_text(type_: object) -> str:
     first = tensors[0]
     shape = ",".join(str(dim) for dim in first.shape)
     more = "+" if len(tensors) > 1 else ""
-    storage = "" if first.storage is StorageKind.UMAT else f" {first.storage}"
+    storage = f" {first.storage}"
     return f"{first.dtype.name}[{shape}]{more}{storage}"
 
 

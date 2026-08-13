@@ -735,6 +735,7 @@ def test_analysis_snapshot_drift_sentinel() -> None:
     )
 
     placed = []
+    placed_traffic = []
     for dims in ({"ctx": 1024, "seq": 1}, {"ctx": 1, "seq": 1024}):
         result = analyze(
             PrefillDecodeAttention,
@@ -745,6 +746,7 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         record = get_metadata(result.function, RooflineMetadata)
         assert record is not None
         placed.append(record.ideal_ns)
+        placed_traffic.append(report([result])["totals"]["traffic"])
 
     qwen = []
     for ctx_len in (1, 1024):
@@ -770,6 +772,7 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "gmem_lhs_bytes": gmem_lifetimes["lhs"],
         "modest_shared_bytes": modest_local,
         "placed_ideal_ns": tuple(placed),
+        "placed_traffic": tuple(placed_traffic),
         "qwen_makespan_ns": tuple(qwen),
     }
     assert snapshot == {
@@ -781,6 +784,16 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "gmem_lhs_bytes": 4_325_376,
         "modest_shared_bytes": 4_096,
         "placed_ideal_ns": (3_496, 65_449),
+        "placed_traffic": (
+            {
+                "gmem": {"read": 8_390_656, "write": 8_388_608},
+                "smem": {"read": 21_670_592, "write": 21_432_512},
+            },
+            {
+                "gmem": {"read": 4_194_304, "write": 8_388_608},
+                "smem": {"read": 795_541_504, "write": 484_638_720},
+            },
+        ),
         "qwen_makespan_ns": (21_101, 32_504),
     }
 

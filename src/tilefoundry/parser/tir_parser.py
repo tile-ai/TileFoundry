@@ -29,6 +29,7 @@ from tilefoundry.ir.types.dim import (
     is_dim_expr,
 )
 from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import StmtVisitor
 from tilefoundry.target import CudaTarget, default_target
 from tilefoundry.utils.spec_ref import spec_ref_render
@@ -143,7 +144,7 @@ def _shape_scalar_params(
     the runtime extent). Idempotent: a param that already exists is skipped.
     """
     existing = {p.name for p in params}
-    scalar_i32 = TensorType.scalar(dtype=DType.i32)
+    scalar_i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
     seen: set[str] = set()
     extra: list[Var] = []
     for p in params:
@@ -462,7 +463,10 @@ class _TirBodyVisitor(BaseExprVisitor):
             start, stop, step = self.expr(args[0]), self.expr(args[1]), self.expr(args[2])
         else:
             raise VerifyError("tir: range() expects 1-3 args")
-        iv = Var(type=TensorType.scalar(DType.i64), name=node.target.id)
+        iv = Var(
+            type=TensorType.scalar(DType.i64, storage=StorageKind.RMEM),
+            name=node.target.id,
+        )
         self.env.push_frame()
         try:
             self.env.define(node.target.id, iv)
@@ -483,7 +487,10 @@ class _TirBodyVisitor(BaseExprVisitor):
         if item.optional_vars is None or not isinstance(item.optional_vars, ast.Name):
             raise VerifyError("tir: `with Mesh(...) as name` requires a single Name binding")
         binding_name = item.optional_vars.id
-        binding = Var(type=TensorType.scalar(DType.i64), name=binding_name)
+        binding = Var(
+            type=TensorType.scalar(DType.i64, storage=StorageKind.RMEM),
+            name=binding_name,
+        )
         self.env.push_frame()
         try:
             self.env.define(binding_name, mesh)

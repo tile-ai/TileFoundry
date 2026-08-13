@@ -159,7 +159,9 @@ def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
     )
     sl = SL(layout=Layout(shape=(4,), strides=(1,)), attrs=(Split(0),), mesh=mesh)
     body_ty = TensorType(shape=(4,), dtype=DType.f32, layout=sl, storage=StorageKind.GMEM)
-    iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")
+    iv = Var(
+        type=TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM), name="i"
+    )
     in_body = GridRegionExpr(
         type=body_ty,
         induction_var=iv,
@@ -175,7 +177,7 @@ def test_the_hir_walks_reach_every_child_of_a_grid_region() -> None:
     assert cta_mesh is mesh
     assert thread_mesh is None
 
-    scalar_ty = TensorType.scalar(dtype=DType.f32)
+    scalar_ty = TensorType.scalar(dtype=DType.f32, storage=StorageKind.RMEM)
     callee = HirFunction.build(
         name="callee_fn",
         params=(),
@@ -205,7 +207,9 @@ def test_grid_output_ordinal_lowers_to_an_absolute_element_start() -> None:
         shape=(4, 2), dtype=DType.f32, layout=None, storage=StorageKind.GMEM
     )
     x = Var(type=body_ty, name="x")
-    iv = Var(type=TensorType.scalar(dtype=DType.i32), name="i")
+    iv = Var(
+        type=TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM), name="i"
+    )
     grid = GridRegionExpr(
         type=grid_ty,
         induction_var=iv,

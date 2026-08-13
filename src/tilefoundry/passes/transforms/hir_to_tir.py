@@ -490,7 +490,7 @@ class _Lowerer:
             body_seq = self._close(sub)
 
 
-            i32_scalar = TensorType.scalar(dtype=DType.i32)
+            i32_scalar = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
             start_val = Constant(value=0, type=i32_scalar)
             stop_val = Constant(value=M, type=i32_scalar)
             step_val = Constant(value=1, type=i32_scalar)
@@ -577,7 +577,7 @@ class _Lowerer:
 
         body_seq = self._close(sub)
 
-        i32_scalar = TensorType.scalar(dtype=DType.i32)
+        i32_scalar = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
         for_loop = For(
             induction_var=iv,
             start=Constant(value=start, type=i32_scalar),
@@ -740,7 +740,7 @@ class _Lowerer:
                 f"not supported in v0 sub-call dispatch)"
             )
         self._shape_param_names.add((subject_param.name, axis))
-        scalar_i32 = TensorType.scalar(dtype=DType.i32)
+        scalar_i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
         subject = ShapeOf(type=scalar_i32, param=subject_param, axis=axis)
         case_patterns = tuple((pat,) for _, pat in reachable)
         case_calls: list[Evaluate] = []
@@ -1168,7 +1168,7 @@ def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
         layout=view_layout,
         storage=cache.type.storage,
     )
-    i32 = TensorType.scalar(dtype=DType.i32)
+    i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
     zero = Constant(value=0, type=i32)
     tv_call = Call(
         type=tv_type,
@@ -1192,7 +1192,7 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
     literal coordinate); a runtime scalar offset lowers to its scalar Var
     (its single element is read at the coordinate site).
     """
-    i32 = TensorType.scalar(dtype=DType.i32)
+    i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
     if isinstance(off_expr, Constant):
         val = off_expr.value
         elem = int(val[0]) if isinstance(val, (list, tuple)) else int(val)
@@ -1581,7 +1581,7 @@ def _lower_function(
 
 
     shape_params: list[Var] = []
-    scalar_i32_ty = TensorType.scalar(dtype=DType.i32)
+    scalar_i32_ty = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
     for pname, axis in sorted(shape_param_names):
         shape_params.append(
             Var(type=scalar_i32_ty, name=shape_var_name(pname, axis))
@@ -1655,7 +1655,7 @@ def _build_dispatch_entry(
             Var(type=flat, name="out" if len(field_types) == 1 else f"out{i}")
         )
     subject_param = entry_params[param_index]
-    scalar_i32 = TensorType.scalar(dtype=DType.i32)
+    scalar_i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
     subject = ShapeOf(type=scalar_i32, param=subject_param, axis=axis)
     case_patterns: list[tuple[DimVarRangePat, ...]] = []
     case_calls: list[Evaluate] = []

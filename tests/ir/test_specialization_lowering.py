@@ -28,6 +28,7 @@ from tilefoundry.ir.tir.stmts import (
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms import HirToTirPass
 
 
@@ -111,7 +112,9 @@ def test_entry_dispatch_two_arms() -> None:
     entry = _find_function(out, "main")
 
     assert entry.params[-1].name == "x_shape_0"
-    assert entry.params[-1].type == TensorType.scalar(dtype=DType.i32)
+    assert entry.params[-1].type == TensorType.scalar(
+        dtype=DType.i32, storage=StorageKind.RMEM
+    )
 
     body_stmts = entry.body.body
     assert isinstance(body_stmts[0], DispatchCall)

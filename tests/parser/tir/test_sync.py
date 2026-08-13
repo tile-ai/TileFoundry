@@ -23,6 +23,7 @@ from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Mesh, Topology
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CudaTarget
 
 
@@ -36,7 +37,7 @@ def _cta_mesh() -> Mesh:
 
 
 def _binding(name: str = "m") -> Var:
-    return Var(type=TensorType.scalar(DType.i64), name=name)
+    return Var(type=TensorType.scalar(DType.i64, storage=StorageKind.RMEM), name=name)
 
 
 def _syncs(body) -> list[Sync]:

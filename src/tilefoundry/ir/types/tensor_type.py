@@ -57,7 +57,7 @@ class TensorType:
     def scalar(
         dtype: DType,
         layout: "LayoutBase | None" = None,
-        storage: StorageKind = StorageKind.RMEM,
+        storage: StorageKind = StorageKind.UMAT,
     ) -> "TensorType":
         return TensorType(shape=(), dtype=dtype, layout=layout, storage=storage)
 
