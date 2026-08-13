@@ -13,6 +13,7 @@ that drift.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -24,6 +25,11 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.api import AnalysisResult
 from tilefoundry.analysis.walk import postorder, tensor_types
+from tilefoundry.inspection.python_printer import (
+    PythonPrintOptions,
+    _PrintedStatement,
+    _render_hir_function,
+)
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
 
@@ -165,8 +171,12 @@ def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str
     return result
 
 
-def _call_label(call: Call, index: int) -> str:
-    return binding_name(call) or f"<value {index}>"
+@dataclass(frozen=True)
+class AnalysisRendering:
+    """One annotated program and the report projected from that rendering."""
+
+    data: dict[str, object]
+    annotated: str
 
 
 def selected_types(
@@ -189,10 +199,18 @@ def selected_types(
     return tuple(order)
 
 
-def report(result: AnalysisResult) -> dict[str, object]:
-    """Build one report from one composed analysis result."""
+def render_analysis(result: AnalysisResult) -> AnalysisRendering:
+    """Render one result once for both annotated source and report data."""
     function = result.function
-    selected = frozenset(selected_types(result))
+    selected_types_ = selected_types(result)
+    selected = frozenset(selected_types_)
+    rendered = _render_hir_function(
+        function,
+        options=PythonPrintOptions(
+            show_types=True,
+            comment_metadata_types=selected_types_,
+        ),
+    )
     target = result.module.resolve_target()
     function_records = _records_of(function, selected)
     if "roofline" in result.analyses and "memory" not in function_records:
@@ -207,14 +225,19 @@ def report(result: AnalysisResult) -> dict[str, object]:
         "requested": list(result.analyses),
         "executed": list(result.executed),
         "function_records": function_records,
-        "calls": _call_records(function, selected),
+        "calls": _call_records(function, selected, rendered.statements),
     }
     available = set(result.metadata_types)
     if ComputeCostMetadata in selected or (
         "roofline" in data["requested"] and ComputeCostMetadata in available
     ):
         data["totals"] = _work_totals(function)
-    return data
+    return AnalysisRendering(data=data, annotated=rendered.source)
+
+
+def report(result: AnalysisResult) -> dict[str, object]:
+    """Build one report from one composed analysis result."""
+    return render_analysis(result).data
 
 
 def _roofline_memory_support(result: AnalysisResult) -> dict[str, object] | None:
@@ -231,13 +254,17 @@ def _roofline_memory_support(result: AnalysisResult) -> dict[str, object] | None
 
 
 def _call_records(
-    function: Function, selected: frozenset[type[IRMetadata]]
+    function: Function,
+    selected: frozenset[type[IRMetadata]],
+    statements: dict[int, _PrintedStatement],
 ) -> list[dict[str, object]]:
-    """Every selected per-Call record in program order."""
+    """Every selected record whose Call has an equation in the rendered view."""
     return [
-        {"value": _call_label(expr, index), **records}
-        for index, expr in enumerate(postorder(function.body))
-        if isinstance(expr, Call) and (records := _records_of(expr, selected))
+        {"value": f"{statement.value}:{statement.line}", **records}
+        for expr in postorder(function.body)
+        if isinstance(expr, Call)
+        and (statement := statements.get(id(expr))) is not None
+        and (records := _records_of(expr, selected))
     ]
 
 
@@ -303,7 +330,8 @@ def render_text(data: dict[str, object]) -> str:
     if "timeline" in records:
         timeline = records["timeline"]
         lines.append(
-            f"timeline local-makespan={timeline['local_makespan_ns']}ns "
+            f"timeline root={data['module']}::{data['function']} "
+            f"local-makespan={timeline['local_makespan_ns']}ns "
             f"waves={timeline['waves']} "
             f"estimated-kernel={timeline['estimated_kernel_ns']}ns"
         )
@@ -315,4 +343,11 @@ def render_json(data: dict[str, object]) -> str:
     return json.dumps(data, indent=2, sort_keys=True)
 
 
-__all__ = ["render_json", "render_text", "report", "selected_types"]
+__all__ = [
+    "AnalysisRendering",
+    "render_analysis",
+    "render_json",
+    "render_text",
+    "report",
+    "selected_types",
+]

@@ -93,6 +93,26 @@ class PythonPrintOptions:
     comment_metadata_types: tuple[type[IRMetadata], ...] = ()
 
 
+@dataclass(frozen=True)
+class _PrintedStatement:
+    """The left-hand side and physical start line of one emitted Call."""
+
+    value: str
+    line: int
+
+
+@dataclass(frozen=True)
+class _PythonRendering:
+    """Rendered source and the Call statements produced in that same pass."""
+
+    source: str
+    statements: dict[int, _PrintedStatement]
+
+
+def _physical_line_count(lines: list[str]) -> int:
+    return sum(line.count("\n") + 1 for line in lines)
+
+
 def _compact_type(ty: object) -> str:
     """One physical-line, DSL-shaped type annotation for inspection output."""
     if isinstance(ty, TensorType):
@@ -728,6 +748,9 @@ def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -
 def _emit_def(
     fn: HirFunction, def_name: str, mesh_map: dict, indent: str,
     options: PythonPrintOptions, child_entries: dict[int, str] | None = None,
+    *,
+    line_offset: int = 0,
+    statements: dict[int, _PrintedStatement] | None = None,
 ) -> list[str]:
     """Render one function ``def`` block: signature + body (or ``pass`` for a prototype).
 
@@ -1053,6 +1076,11 @@ def _emit_def(
 
     def _emit_inline_call(expr: Call, level: str) -> None:
         name = _names[id(expr)]
+        if statements is not None:
+            statements[id(expr)] = _PrintedStatement(
+                value=name,
+                line=line_offset + _physical_line_count(lines) + 1,
+            )
         lines.append(
             f"{level}{name} = {_format_call(expr, level)}"
             f"{_comments(expr, options)}"
@@ -1148,6 +1176,11 @@ def _emit_def(
             continue
         if isinstance(expr, Call):
             name = _names[id(expr)]
+            if statements is not None:
+                statements[id(expr)] = _PrintedStatement(
+                    value=name,
+                    line=line_offset + _physical_line_count(lines) + 1,
+                )
             lines.append(
                 f"{indent}{name} = {_format_call(expr, indent)}"
                 f"{_comments(expr, options)}"
@@ -1257,6 +1290,9 @@ def _emit_header(
 def _emit_decorated_defs(
     fn: HirFunction, mesh_map: dict[int, str], indent: str, options: PythonPrintOptions,
     child_entries: dict[int, str] | None = None,
+    *,
+    line_offset: int = 0,
+    statements: dict[int, _PrintedStatement] | None = None,
 ) -> list[str]:
     """Emit decorated defs.
 
@@ -1266,7 +1302,18 @@ def _emit_decorated_defs(
     See [inspection §2.6](docs/spec/inspection.md#26-specialization-printing).
     """
     lines: list[str] = ["@func"]
-    lines.extend(_emit_def(fn, fn.name, mesh_map, indent, options, child_entries))
+    lines.extend(
+        _emit_def(
+            fn,
+            fn.name,
+            mesh_map,
+            indent,
+            options,
+            child_entries,
+            line_offset=line_offset + _physical_line_count(lines),
+            statements=statements,
+        )
+    )
 
 
     for variant in fn.variants:
@@ -1278,15 +1325,17 @@ def _emit_decorated_defs(
             _emit_def(
                 variant, display_name(variant) or "_", mesh_map, indent, options,
                 child_entries,
+                line_offset=line_offset + _physical_line_count(lines),
+                statements=statements,
             )
         )
     return lines
 
 
-def hir_function_to_python(
+def _render_hir_function(
     fn: HirFunction, *, options: PythonPrintOptions | None = None,
-) -> str:
-    """Convert a HIR Function to canonical Python DSL source.
+) -> _PythonRendering:
+    """Render a HIR Function and locate every Call equation in the same pass.
 
     A normal function prints as a single ``@func``. A dispatch prototype
     (``variants != ()``) prints as a ``pass``-bodied ``@func`` base followed by
@@ -1300,8 +1349,25 @@ def hir_function_to_python(
     lines = _emit_header(
         fn, meshes, mesh_map, indent, dim_vars=dim_vars_reached(fn)
     )
-    lines.extend(_emit_decorated_defs(fn, mesh_map, indent, options or PythonPrintOptions()))
-    return "\n".join(lines) + "\n"
+    statements: dict[int, _PrintedStatement] = {}
+    lines.extend(
+        _emit_decorated_defs(
+            fn,
+            mesh_map,
+            indent,
+            options or PythonPrintOptions(),
+            line_offset=_physical_line_count(lines),
+            statements=statements,
+        )
+    )
+    return _PythonRendering("\n".join(lines) + "\n", statements)
+
+
+def hir_function_to_python(
+    fn: HirFunction, *, options: PythonPrintOptions | None = None,
+) -> str:
+    """Convert a HIR Function to canonical Python DSL source."""
+    return _render_hir_function(fn, options=options).source
 
 
 def as_script(

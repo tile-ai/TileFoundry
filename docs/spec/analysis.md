@@ -853,7 +853,8 @@ class ParallelCapacityFacts:
 Requesting timeline adds this Function verdict to the summary:
 
 ```text
-timeline local-makespan=<int>ns waves=<int> estimated-kernel=<int>ns
+timeline root=<Module>::<Function> local-makespan=<int>ns waves=<int>
+estimated-kernel=<int>ns
 ```
 
 Every measured Call receives this annotation:

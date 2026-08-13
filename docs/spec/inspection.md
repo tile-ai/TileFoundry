@@ -534,6 +534,10 @@ def format_dispatch_call(stmt: DispatchCall, indent: str = "") -> str:
 def report(result: AnalysisResult) -> dict[str, object]:
     """Project one composed Analyze result into a shared rendering structure."""
     ...
+
+def render_analysis(result: AnalysisResult) -> AnalysisRendering:
+    """Render one annotated program and its report data in a single pass."""
+    ...
 ```
 
 - constraints:
@@ -541,9 +545,13 @@ def report(result: AnalysisResult) -> dict[str, object]:
     records from that result's record-bearing Function. It MUST NOT merge
     independently rebuilt Functions by identity, origin, dimensions, or walk
     position.
-  - Text and JSON MUST render the same intermediate structure. Annotated HIR
-    MUST render that same result's Function and the same selected Metadata
-    types.
+  - Text, JSON, and annotated HIR MUST come from one `render_analysis` call over
+    the same result's Function and selected Metadata types. Each rendered Call
+    record's `value` is `<left-hand-side>:<line>`, where `line` is the physical
+    line containing that statement's `=`, even when its comment ends a later
+    line of the same statement. The annotated source and JSON MUST use the line
+    locations collected by that one printer pass, not independently recover
+    them from names or text.
   - A rendered compute-cost record MUST expose the complete global/per-unit by
     arithmetic/traffic matrix: `flops`, `flops_per_unit`, `traffic`, and
     `traffic_per_unit`. Its annotated-HIR comment MUST place `per-unit-bytes`
@@ -554,3 +562,10 @@ def report(result: AnalysisResult) -> dict[str, object]:
     parameterized loop into one JSON row per trip. A rendered Function timeline
     record MUST instead expose only `local_makespan_ns`, `waves`, and
     `estimated_kernel_ns` from its attached summary.
+  - Each Call equation with a timeline record MUST carry that interval in its
+    same-line Metadata comment. Repeated loop-body occurrences retain the
+    parameterized interval, trip count, stride, and span. Carry updates are
+    name rebindings rather than Call equations and MUST NOT receive a timeline
+    comment or report row. The text header MUST state
+    `timeline root=<Module>::<Function> local-makespan=<int>ns waves=<int>
+    estimated-kernel=<int>ns`.

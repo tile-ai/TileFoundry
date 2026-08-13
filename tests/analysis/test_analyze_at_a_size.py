@@ -29,7 +29,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import enclosing_trips, postorder
-from tilefoundry.inspection.analysis_report import render_text, report
+from tilefoundry.inspection.analysis_report import render_analysis, render_text, report
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
@@ -333,6 +333,54 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         assert root is not None
         roots.append(root)
     assert [dict(root.flops)["f32"] for root in roots] == [211_936, 385_760]
+
+    rendered = render_analysis(results[0])
+    lines = rendered.annotated.splitlines()
+    rows = [row for row in rendered.data["calls"] if "timeline" in row]
+    comments = [
+        line.split("; timeline ", 1)[1]
+        for line in lines
+        if "; timeline " in line
+    ]
+    expected_comments = []
+    for row in rows:
+        value, line_text = row["value"].rsplit(":", 1)
+        line = int(line_text)
+        assert lines[line - 1].lstrip().startswith(f"{value} = ")
+        timeline = row["timeline"]
+        if timeline["trips"] > 1:
+            span_end = (
+                timeline["start_ns"]
+                + timeline["trips"] * timeline["stride_ns"]
+            )
+            expected_comments.append(
+                f"[{timeline['start_ns']}+{timeline['stride_ns']}t, "
+                f"{timeline['end_ns']}+{timeline['stride_ns']}t) "
+                f"trips={timeline['trips']} "
+                f"span=[{timeline['start_ns']},{span_end})"
+            )
+        else:
+            expected_comments.append(
+                f"start={timeline['start_ns']}ns end={timeline['end_ns']}ns"
+            )
+
+    assert comments == expected_comments
+    first = next(row for row in rows if row["value"].startswith("v0:"))
+    assert first["value"] == "v0:44"
+    assert lines[43].lstrip().startswith("v0 = reshard(")
+    assert "; timeline start=0ns end=0ns" in lines[47]
+    structural = next(row for row in rows if row["value"].startswith("v10:"))
+    assert set(structural) == {"value", "compute-cost", "timeline"}
+    assert structural["value"] == "v10:59"
+    assert structural["timeline"] == {
+        "end_ns": 652,
+        "start_ns": 652,
+        "stride_ns": 920,
+        "trips": 8,
+    }
+    assert "timeline [652+920t, 652+920t) trips=8 span=[652,8012)" in lines[58]
+    assert lines[82].strip() == "m = v16"
+    assert "timeline" not in lines[82]
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

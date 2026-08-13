@@ -13,10 +13,9 @@ from tilefoundry.analysis.walk import reachable_functions
 from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
+    render_analysis,
     render_json,
     render_text,
-    report,
-    selected_types,
 )
 from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
@@ -25,7 +24,7 @@ EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
     "memory": "where that traffic lands, and the footprint it holds live against the capacity",
     "roofline": "which of compute or memory limits each value, and the limit in time",
-    "timeline": "when each value runs under those limits, and over how many units",
+    "timeline": "when each value runs, and the root's physical-wave estimate",
 }
 
 
@@ -135,20 +134,15 @@ def run_authored_analysis(
         return 0
 
     result = analyze(module, function, analysis=analyses, level=topology, dims=dims)
-    data = report(result)
+    rendered = render_analysis(result)
+    data = rendered.data
     if as_json:
         sys.stdout.write(f"{render_json(data)}\n")
         return 0
 
 
 
-    annotated = as_script(
-        result.function,
-        options=PythonPrintOptions(
-            show_types=True, comment_metadata_types=selected_types(result)
-        ),
-    )
-    sys.stdout.write(f"{render_text(data)}\n\n{annotated}")
+    sys.stdout.write(f"{render_text(data)}\n\n{rendered.annotated}")
     return 0
 
 

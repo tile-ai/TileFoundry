@@ -100,6 +100,32 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
     assert "roofline bound=" in text
     assert "timeline start=" in text
 
+    summary = payload["function_records"]["timeline"]
+    assert (
+        "# timeline root=MoEMegaKernel::experts "
+        f"local-makespan={summary['local_makespan_ns']}ns "
+        f"waves={summary['waves']} "
+        f"estimated-kernel={summary['estimated_kernel_ns']}ns"
+    ) in header.splitlines()
+    lines = annotated.splitlines()
+    rows = payload["calls"]
+    comments = []
+    for row in rows:
+        value, line_text = row["value"].rsplit(":", 1)
+        line = int(line_text)
+        assert lines[line - 1].lstrip().startswith(f"{value} = ")
+        timeline = row["timeline"]
+        comments.append(
+            f"start={timeline['start_ns']}ns end={timeline['end_ns']}ns"
+        )
+    assert [
+        line.split("; timeline ", 1)[1]
+        for line in lines
+        if "; timeline " in line
+    ] == comments
+    assert len({row["value"] for row in rows}) == len(rows)
+    assert "units=" not in annotated
+
     positive_per_unit = [
         row["compute-cost"]["flops_per_unit"]["f32"]
         for row in payload["calls"]

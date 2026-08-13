@@ -642,3 +642,43 @@ def test_analyze_prints_the_deterministic_inlined_mega_kernel(capsys) -> None:
     assert "v3 = reshard(tokens" in first
     assert "offset=0" in first
     assert "offset=120" in first
+
+
+def test_analyze_keys_timeline_records_to_their_rendered_equations(capsys) -> None:
+    source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
+    selector = f"{source}:MoEMegaKernel"
+
+    assert cli.main(["analyze", selector, "--timeline", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert cli.main(["analyze", selector, "--timeline"]) == 0
+    header, annotated = capsys.readouterr().out.split("\n\n", 1)
+    lines = annotated.splitlines()
+
+    summary = payload["function_records"]["timeline"]
+    assert (
+        "# timeline root=MoEMegaKernel::experts "
+        f"local-makespan={summary['local_makespan_ns']}ns "
+        f"waves={summary['waves']} "
+        f"estimated-kernel={summary['estimated_kernel_ns']}ns"
+    ) in header.splitlines()
+
+    rows = payload["calls"]
+    assert len(rows) == 7
+    starts = []
+    for row in rows:
+        value, line_text = row["value"].rsplit(":", 1)
+        line = int(line_text)
+        starts.append(line)
+        assert lines[line - 1].lstrip().startswith(f"{value} = ")
+
+    for index, (row, start) in enumerate(zip(rows, starts)):
+        stop = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines)
+        statement = "\n".join(lines[start - 1 : stop])
+        timeline = row["timeline"]
+        assert (
+            f"timeline start={timeline['start_ns']}ns end={timeline['end_ns']}ns"
+            in statement
+        )
+    assert len([line for line in lines if "; timeline " in line]) == len(rows)
+    assert len({row["value"] for row in rows}) == len(rows)
+    assert "units=" not in annotated
