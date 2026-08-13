@@ -17,7 +17,7 @@ from tilefoundry.codegen.cuda.context import (
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
-from tilefoundry.ir.types.dim import DimMul, DimVar
+from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound, upper_bound
 from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -194,19 +194,25 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
     return preamble, value_expr
 
 
+_COORD_OPERATORS = {DimAdd: "+", DimSub: "-", DimMul: "*"}
+
+
 def _coord_ref(index_var, ctx: CodegenContext) -> str:
     """Render a compile-time, scalar, or one-element absolute coordinate.
 
     Integer literals become static coordinates; rank-zero scalars use their
-    native names; one-element offset tensors read element zero. A multiplication
-    preserves grid output placement after an ordinal is converted to an element
-    start. Other forms fail closed.
+    native names; one-element offset tensors read element zero. Dim arithmetic
+    renders as the arithmetic itself: a multiplication preserves grid output
+    placement after an ordinal is converted to an element start, and an addition
+    moves a window's base by a compile-time offset. Other forms fail closed.
     """
     if isinstance(index_var, Constant):
         return str(int(index_var.value))
-    if isinstance(index_var, Call) and isinstance(index_var.target, DimMul):
-        lhs, rhs = (_coord_ref(arg, ctx) for arg in index_var.args)
-        return f"({lhs} * {rhs})"
+    if isinstance(index_var, Call):
+        operator = _COORD_OPERATORS.get(type(index_var.target))
+        if operator is not None:
+            lhs, rhs = (_coord_ref(arg, ctx) for arg in index_var.args)
+            return f"({lhs} {operator} {rhs})"
     name = ctx.name_for(index_var)
     shape = getattr(getattr(index_var, "type", None), "shape", ()) or ()
     dims = tuple(getattr(d, "value", d) for d in shape)

@@ -41,7 +41,7 @@ from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import dim_vars_reached, display_name, origin_of
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -347,6 +347,13 @@ def _shape_tuple(shape: tuple) -> str:
     if len(rendered) == 1:
         return f"({rendered[0]},)"
     return "(" + ", ".join(rendered) + ")"
+
+
+def _moved_window_ref(name: str, offset: int) -> str:
+    """A tile-window indexer, carrying the compile-time offset that moves it."""
+    if offset == 0:
+        return name
+    return f"{name} + {offset}" if offset > 0 else f"{name} - {-offset}"
 
 
 def _attr_tuple_str(value: tuple) -> str:
@@ -809,7 +816,7 @@ def _emit_def(
                 and len(candidate.args) == 2
                 and isinstance(candidate.args[1], Tuple)
                 and any(
-                    start is expr.induction_var
+                    window_base(start)[0] is expr.induction_var
                     and size == expr.step
                     and stride == 1
                     for start, size, stride in zip(
@@ -848,6 +855,31 @@ def _emit_def(
             for _ in iter_exprs(init, _root_grid_init_ids):
                 pass
     _grid_internal_ids.difference_update(_root_grid_init_ids)
+
+    def _moved_window(start, size, stride):
+        """The tile window and offset *start* moves it by, else ``None``."""
+        window, offset = window_base(start)
+        if (
+            isinstance(window, Var)
+            and stride == 1
+            and _tile_window_steps.get(id(window)) == size
+        ):
+            return window, offset
+        return None
+
+
+    _inlined_start_ids = {
+        id(start)
+        for expr in _order
+        if isinstance(expr, Call)
+        and isinstance(expr.target, Slice)
+        and len(expr.args) == 2
+        and isinstance(expr.args[1], Tuple)
+        for start, size, stride in zip(
+            expr.args[1].elements, expr.target.sizes, expr.target.strides
+        )
+        if _moved_window(start, size, stride) is not None
+    }
 
     def _assign_name(expr: Expr) -> str:
         key = id(expr)
@@ -917,6 +949,19 @@ def _emit_def(
 
 
         return _tuple_literal(a.elements) if isinstance(a, Tuple) else _expr_ref(a)
+
+    def _start_ref(start, size, stride) -> str:
+        """One Slice start as source.
+
+        A moved tile window prints as the move itself -- the offset is a
+        compile-time constant, so it belongs in the indexer rather than in a
+        statement of its own.
+        """
+        moved = _moved_window(start, size, stride)
+        if moved is None:
+            return repr(start.value) if isinstance(start, Constant) else _expr_ref(start)
+        window, offset = moved
+        return _moved_window_ref(_expr_ref(window), offset)
 
 
 
@@ -1001,12 +1046,8 @@ def _emit_def(
             for axis, (start, size, stride) in enumerate(
                 zip(starts.elements, target.sizes, target.strides)
             ):
-                if (
-                    isinstance(start, Var)
-                    and stride == 1
-                    and _tile_window_steps.get(id(start)) == size
-                ):
-                    indexers.append(_expr_ref(start))
+                if _moved_window(start, size, stride) is not None:
+                    indexers.append(_start_ref(start, size, stride))
                     continue
                 dim = expr.args[0].type.shape[axis]
                 if (
@@ -1031,8 +1072,16 @@ def _emit_def(
                     f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}"
                 )
             if runtime_starts:
+                start_refs = ", ".join(
+                    _start_ref(start, size, stride)
+                    for start, size, stride in zip(
+                        starts.elements, target.sizes, target.strides
+                    )
+                )
+                if len(starts.elements) == 1:
+                    start_refs += ","
                 return (
-                    f"slice({_arg_ref(expr.args[0])}, {_tuple_literal(starts.elements)}, "
+                    f"slice({_arg_ref(expr.args[0])}, ({start_refs}), "
                     f"sizes={_attr_tuple_str(target.sizes)}, "
                     f"strides={_attr_tuple_str(target.strides)})"
                 )
@@ -1091,6 +1140,9 @@ def _emit_def(
         key = id(expr)
         if key in printed:
             return
+        if key in _inlined_start_ids:
+            printed.add(key)
+            return
         if isinstance(expr, Var):
             printed.add(key)
             return
@@ -1148,6 +1200,9 @@ def _emit_def(
 
     for expr in _order:
         if isinstance(expr, Var) or id(expr) in _grid_internal_ids:
+            continue
+        if id(expr) in _inlined_start_ids:
+            printed.add(id(expr))
             continue
         if isinstance(expr, GridRegionExpr):
             _emit_grid(expr, indent)

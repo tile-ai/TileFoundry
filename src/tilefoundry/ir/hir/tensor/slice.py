@@ -92,6 +92,32 @@ def _constant_int(expr: Expr) -> int | None:
     return None
 
 
+def window_base(start: Expr) -> "tuple[Expr | None, int]":
+    """Split a window start into the base it moves off and its constant offset.
+
+    A start moved by a compile-time offset (``i + C``) reports ``(i, C)``, a
+    plain start reports itself at offset ``0``, and an integer constant reports
+    ``(None, value)``. A start whose offset is not compile-time has no constant
+    to take out, so it reports itself unmoved and its reader decides whether it
+    models anything.
+    """
+    value = _constant_int(start)
+    if value is not None:
+        return None, value
+    if isinstance(start, Call) and isinstance(start.target, (DimAdd, DimSub)):
+        sign = 1 if isinstance(start.target, DimAdd) else -1
+        left, right = start.args
+        right_offset = _constant_int(right)
+        if right_offset is not None:
+            base, offset = window_base(left)
+            return base, offset + sign * right_offset
+        left_offset = _constant_int(left)
+        if left_offset is not None and sign == 1:
+            base, offset = window_base(right)
+            return base, offset + left_offset
+    return start, 0
+
+
 def _dim_mul(left, right):
     if isinstance(left, int) and isinstance(right, int):
         return left * right
@@ -271,4 +297,4 @@ def _eval_slice(ctx):
     return TensorValue(data=ctx.args[0].data[tuple(key)], type=ctx.result_type)
 
 
-__all__ = ["Slice", "slice_size"]
+__all__ = ["Slice", "slice_size", "window_base"]

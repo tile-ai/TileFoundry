@@ -82,6 +82,16 @@ def dynamic_full_windows(
 
 
 @func
+def moved_windows(
+    x: Tensor[(12, 4), "f32"], seed: Tensor[(3, 4), "f32"]
+) -> Tensor[(3, 4), "f32"]:
+    o = add(seed, seed)
+    for i in tile(6, 3):
+        o = add(x[i + 6, :], seed)
+    return o
+
+
+@func
 def unspecialized_window_step(
     x: Tensor[(10, 4), "f32"], seed: Tensor[(TILE, 4), "f32"]
 ) -> Tensor[(TILE, 4), "f32"]:
@@ -231,6 +241,31 @@ def test_windowed_loop_analyzes_only_full_tiles_and_offsets_its_read():
         isl.union_map(
             "{ Binary1[i, r, c] -> x[i + r, c] : "
             "0 <= i <= 4 and i mod 4 = 0 and 0 <= r < 4 and 0 <= c < 4 }"
+        )
+    )
+
+
+def test_a_moved_window_carries_its_offset_into_the_access_map():
+    """A window moved by a compile-time offset reads the same loop dimension.
+
+    A window moved by a compile-time offset reads the same loop dimension shifted
+    by that offset, so the offset belongs in the access map rather than in a
+    separate statement -- the move is an address, not a computation.
+    """
+    tg = extract(moved_windows)
+    domain = _domains(tg)["Binary1"]
+
+    assert domain.is_equal(
+        isl.set("{ Binary1[i, r, c] : 0 <= i <= 3 and i mod 3 = 0 "
+                "and 0 <= r < 3 and 0 <= c < 4 }")
+    )
+    source_reads = tg.reads.intersect_range(
+        isl.union_set("{ x[r, c] : 0 <= r < 12 and 0 <= c < 4 }")
+    )
+    assert source_reads.is_equal(
+        isl.union_map(
+            "{ Binary1[i, r, c] -> x[i + r + 6, c] : "
+            "0 <= i <= 3 and i mod 3 = 0 and 0 <= r < 3 and 0 <= c < 4 }"
         )
     )
 

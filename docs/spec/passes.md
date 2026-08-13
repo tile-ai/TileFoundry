@@ -278,9 +278,12 @@ reshard cross-CTA sync fence, tuple-carry field lookup) MAY call other
 
 A unit-stride HIR `Slice` lowers to a `TensorView` at the per-axis absolute
 element starts; `InsertSlice` uses the same coordinate convention. Neither
-multiplies an already-absolute coordinate by a window extent. A non-divisible
-tile loop whose body consumes such a fixed-shape window MUST raise until a
-handwritten residual-tail lowering is supplied.
+multiplies an already-absolute coordinate by a window extent. A start that is dim
+arithmetic over literals and scalar Vars is an address the emitter computes, so
+lowering MUST carry it to the coordinate site rather than lower it as a value. A
+non-divisible tile loop whose body consumes such a fixed-shape window MUST raise
+until a handwritten residual-tail lowering is supplied; a window moved by a
+compile-time offset is still that loop's window for this rule.
 
 #### Mesh structure derivation
 

@@ -33,7 +33,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.dim import is_dim_expr
+from tilefoundry.ir.types.dim import DimAdd, is_dim_expr, simplify_dim
 from tilefoundry.ir.types.dtype import FloatDType
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard.layout import Layout
@@ -310,6 +310,10 @@ class BaseExprVisitor:
 
         self._call_dsl_names: dict[int, str] = {}
         self._scalar_index_ids: set[int] = set()
+
+
+
+        self._tile_windows: dict[int, tuple[Any, Any]] = {}
         self._active_source_node: ast.AST | None = None
         self._active_binding_hint: str | None = None
         self.source_filename = "<string>"
@@ -731,9 +735,13 @@ class BaseExprVisitor:
             val = self.env.lookup(el.id)
             if isinstance(val, slice):
                 return val.start, val.stop, val.step
+        moved = self._moved_tile_window(el, dim, axis)
+        if moved is not None:
+            return moved.start, moved.stop, moved.step
         raise VerifyError(
             f"tensor subscript axis {axis}: unsupported indexer "
-            f"{ast.dump(el)} (expected `:`, `a:b`, or a tile-window slice)"
+            f"{ast.dump(el)} (expected `:`, `a:b`, a tile-window slice, or a "
+            f"tile window moved by a compile-time integer)"
         )
 
     def _slicer_endpoint(self, node: ast.AST):
@@ -742,6 +750,102 @@ class BaseExprVisitor:
             return self._eval_static(node, allow_runtime_scalar=True)
         except VerifyError:
             return self.expr(node)
+
+    def _tile_window(self, node: ast.AST) -> "slice | None":
+        """The tile window *node* names, else ``None``."""
+        if not isinstance(node, ast.Name):
+            return None
+        value = self.env.lookup(node.id)
+        if isinstance(value, slice) and id(value.start) in self._tile_windows:
+            return value
+        return None
+
+    def _window_move(self, el: ast.AST) -> "tuple[slice, int] | None":
+        """The tile window *el* reads and the offset that moves it.
+
+        ``None`` when *el* names no window. Offsets accumulate, so
+        ``i + QN + KN`` and ``QN + KN + i`` name one move by one sum, and each
+        term is a compile-time integer on its own.
+        """
+        window = self._tile_window(el)
+        if window is not None:
+            return window, 0
+        if not isinstance(el, ast.BinOp) or not isinstance(el.op, (ast.Add, ast.Sub)):
+            return None
+        sign = -1 if isinstance(el.op, ast.Sub) else 1
+        moved = self._window_move(el.left)
+        offset_node = el.right
+        if moved is None:
+            moved = self._window_move(el.right)
+            if moved is None:
+                return None
+            if sign == -1:
+                raise VerifyError(
+                    f"{ast.unparse(el)!r}: an offset moves a window, so the window "
+                    f"is what the offset is added to -- subtracting it from "
+                    f"{ast.unparse(el.left)!r} reverses the window rather than "
+                    f"moving it"
+                )
+            offset_node = el.left
+        offset = self._static_number(offset_node)
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            raise VerifyError(
+                f"{ast.unparse(el)!r}: a tile window moves by a compile-time "
+                f"integer, and {ast.unparse(offset_node)!r} is not one"
+            )
+        window, carried = moved
+        return window, carried + sign * offset
+
+    def _moved_tile_window(self, el: ast.AST, dim: Any, axis: int) -> "slice | None":
+        """The window ``i + C`` reads, or ``None`` when *el* names no window.
+
+        A tile window is a length bound to a moving base, so a compile-time
+        offset moves the base and leaves the length alone: ``i + C`` reads
+        ``[lo + C, lo + C + step)``. The base was already computed at compile
+        time, so this axis keeps the static extent ``i`` alone gives it.
+        """
+        move = self._window_move(el)
+        if move is None:
+            return None
+        window, offset = move
+        if offset == 0:
+            return window
+        extent, length = self._tile_windows[id(window.start)]
+        self._check_moved_window(el, axis, offset, extent, length, dim)
+        base = simplify_dim(DimAdd, (window.start, offset))
+        return slice(base, simplify_dim(DimAdd, (base, length)), window.step)
+
+    @staticmethod
+    def _check_moved_window(
+        el: ast.AST, axis: int, offset: int, extent: Any, length: Any, dim: Any
+    ) -> None:
+        """Refuse a move that reads off the axis.
+
+        The loop domain, the window length, the offset and the axis extent are
+        all compile-time, so the last window a moved read touches is too. A
+        symbolic extent leaves the bound to evaluate time, which is where an
+        unmoved window's own tail is caught.
+        """
+        if offset < 0:
+            raise VerifyError(
+                f"tensor subscript axis {axis}: {ast.unparse(el)!r} moves the "
+                f"window back by {-offset}, and this loop's first window starts "
+                f"at 0, so it would begin before the axis"
+            )
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in (extent, length, dim)
+        ):
+            return
+        if extent <= 0 or length <= 0:
+            return
+        last = (extent - 1) // length * length
+        if last + offset + length > dim:
+            raise VerifyError(
+                f"tensor subscript axis {axis}: {ast.unparse(el)!r} reads "
+                f"[{last + offset}, {last + offset + length}) on its last "
+                f"iteration, and the axis is {dim} long"
+            )
 
 
 

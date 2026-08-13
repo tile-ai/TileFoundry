@@ -620,7 +620,10 @@ their input when it states one. An input with `layout=None` produces a view with
 - `Slice` is normalized as `Slice(x, starts, sizes=..., strides=...)`.
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes. Its result shape is exactly `sizes` and MUST NOT contain
-  an induction `Var`.
+  an induction `Var`. A start MAY be dim arithmetic over an induction `Var` — a
+  window moved off that loop's window by a compile-time offset. That start is an
+  address computed where it is read, not a value some op produces, so a walk over
+  compute ops MUST leave it alone.
 - A plain-layout `Slice` with static starts MUST produce a `ComposedLayout`: its
   offset is the source offset plus the starts multiplied by the source strides,
   and its outer layout carries the sliced shape and retained strides (multiplied

@@ -36,6 +36,7 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice as HirInsertSlice
 from tilefoundry.ir.hir.tensor.reduce import Reduce as HirReduce
 from tilefoundry.ir.hir.tensor.reshape import Reshape as HirReshape
 from tilefoundry.ir.hir.tensor.slice import Slice as HirSlice
+from tilefoundry.ir.hir.tensor.slice import window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem as HirTupleGetItem
 from tilefoundry.ir.tir.arith import (
     Binary as TirBinary,
@@ -76,7 +77,7 @@ from tilefoundry.ir.types import (
     TupleType,
     callable_type_for_prim_function,
 )
-from tilefoundry.ir.types.dim import DimMul, simplify_dim
+from tilefoundry.ir.types.dim import DimMul, is_dim_op_call, simplify_dim
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
 from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout as _Layout
@@ -100,7 +101,11 @@ from tilefoundry.visitor_registry.registries import (
 
 
 def _has_induction_slice(root: Expr, induction_var: Var) -> bool:
-    """Whether ``root`` contains a Slice starting at ``induction_var``."""
+    """Whether ``root`` contains a Slice starting at ``induction_var``.
+
+    A window moved by a compile-time offset is still that loop's window, so a
+    tail it cannot read is still that loop's tail.
+    """
     seen: set[int] = set()
 
     def visit(expr: Expr) -> bool:
@@ -110,7 +115,7 @@ def _has_induction_slice(root: Expr, induction_var: Var) -> bool:
         if isinstance(expr, Call) and isinstance(expr.target, HirSlice):
             starts = expr.args[1]
             if isinstance(starts, Tuple) and any(
-                start is induction_var for start in starts.elements
+                window_base(start)[0] is induction_var for start in starts.elements
             ):
                 return True
         return any(visit(child) for child in child_exprs(expr))
@@ -1189,7 +1194,9 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
     The scalar window index for an in-place ``insert_slice`` is the absolute
     element coordinate where the update window starts. A
     compile-time offset folds to a ``Constant`` scalar (emitted as a
-    literal coordinate); a runtime scalar offset lowers to its scalar Var
+    literal coordinate); dim arithmetic over the induction variable is a
+    coordinate the emitter computes, so it is carried through rather than
+    lowered to a tensor op; a runtime scalar offset lowers to its scalar Var
     (its single element is read at the coordinate site).
     """
     i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
@@ -1197,9 +1204,25 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
         val = off_expr.value
         elem = int(val[0]) if isinstance(val, (list, tuple)) else int(val)
         return Constant(value=elem, type=i32)
+    if _is_coordinate_arithmetic(off_expr):
+        return off_expr
 
 
     return ctx.lower(off_expr)
+
+
+def _is_coordinate_arithmetic(expr) -> bool:
+    """Whether *expr* is dim arithmetic over literals and scalar Vars.
+
+    Such an offset is an address the emitter computes, not a value a tensor op
+    produces, so lowering carries it through to the coordinate site.
+    """
+    if not is_dim_op_call(expr):
+        return False
+    return all(
+        isinstance(arg, (Constant, Var)) or _is_coordinate_arithmetic(arg)
+        for arg in expr.args
+    )
 
 
 @register_hir_lowering(HirSlice)

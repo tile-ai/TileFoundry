@@ -15,18 +15,18 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var, binding_name
+from tilefoundry.ir.core import Call, Tuple, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
-from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import TensorType, TupleType
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 
@@ -227,18 +227,22 @@ def _index_select_loop_dim(
 
 
 def _slice_start(start, loops: tuple[GridRegionExpr, ...]) -> tuple[int | None, int]:
-    """Resolve an affine Slice start to an optional loop dimension plus offset."""
-    if isinstance(start, Constant):
-        value = start.value
-        if isinstance(value, int) and not isinstance(value, bool):
-            return None, value
-    if isinstance(start, Var):
+    """Resolve an affine Slice start to an optional loop dimension plus offset.
+
+    A window moved by a compile-time offset (``i + C``) is that same loop
+    dimension carrying the offset, so both halves of the pair are used.
+    """
+    base, offset = window_base(start)
+    if base is None:
+        return None, offset
+    if isinstance(base, Var):
         for pos, loop in enumerate(loops):
-            if loop.induction_var is start:
-                return pos, 0
+            if loop.induction_var is base:
+                return pos, offset
     raise ExtractError(
-        "extract: Slice starts must be integer constants or enclosing loop "
-        f"induction variables, got {start!r}"
+        "extract: Slice starts must be integer constants, enclosing loop "
+        "induction variables, or one of those moved by a compile-time offset, "
+        f"got {start!r}"
     )
 
 
@@ -394,7 +398,7 @@ def _full_slice_domain(
                 for axis, (start, size, stride) in enumerate(
                     zip(starts.elements, expr.target.sizes, expr.target.strides)
                 ):
-                    loop_pos, _ = _slice_start(start, loops)
+                    loop_pos, offset = _slice_start(start, loops)
                     if loop_pos is None:
                         continue
                     if not all(
@@ -407,13 +411,17 @@ def _full_slice_domain(
                         )
                     extent = expr.args[0].type.shape[axis]
                     local = isl.local_space.from_space(result.get_space())
+
+
+
+                    span = size * stride + offset
                     constraint = (
                         isl.constraint.alloc_inequality(local)
                         .set_coefficient_si(isl.dim_type.SET, loop_pos, -1)
-                        .set_constant_si(-(size * stride))
+                        .set_constant_si(-span)
                     )
                     if isinstance(extent, int) and not isinstance(extent, bool):
-                        constraint = constraint.set_constant_si(extent - size * stride)
+                        constraint = constraint.set_constant_si(extent - span)
                     elif isinstance(extent, DimVar):
                         param = result.find_dim_by_name(isl.dim_type.PARAM, extent.name)
                         if param < 0:
@@ -911,6 +919,13 @@ def _walk_calls(
             continue
 
         if isinstance(target, (TupleGetItem, Reshape, IndexSelect, Slice)):
+            table[id(e)] = _maybe_replace_args(e, resolved_args)
+            continue
+
+        if is_dim_op_call(e):
+
+
+
             table[id(e)] = _maybe_replace_args(e, resolved_args)
             continue
 

@@ -186,6 +186,10 @@ class Evaluator(ExprVisitor):
 - `Slice` consumes its evaluated `starts` tuple and resolves `sizes/strides`
   through `dim_bindings`. A window exceeding a runtime axis MUST raise
   `EvalError` rather than return a value whose data disagrees with its full-window type.
+- A dim-arithmetic `Call` reached as an operand — a `Slice` start moved off a
+  loop's induction variable is one — folds the values its operands evaluated to.
+  It performs the arithmetic `resolve_dim` performs in a shape position; only the
+  leaves differ, being operands rather than `DimVar` sizes.
 - A `Call` whose `target` is a `Function` ([hir §1.1](./hir.md#11-function)) binds the
   evaluated arguments to the callee's parameters in a fresh environment
   and evaluates the callee `body` — the same value semantics a call site

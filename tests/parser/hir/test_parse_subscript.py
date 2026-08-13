@@ -229,6 +229,111 @@ def test_tile_window_canonical_roundtrip_preserves_evaluation():
     torch.testing.assert_close(evaluate(restored, x, seed, device="cpu"), expected)
 
 
+_HALF, _STEP, _ROWS = 4, 2, 3
+
+
+@func
+def _fused_halves(gu: Tensor[(_ROWS, 2 * _HALF), "f32"], seed: Tensor[(_ROWS, _STEP), "f32"]):
+    out = add(seed, seed)
+    for n in tile(_HALF, _STEP):
+        out = add(out, mul(gu[:, n], gu[:, n + _HALF]))
+    return out
+
+
+@func
+def _summed_offsets(gu: Tensor[(_ROWS, 2 * _HALF), "f32"], seed: Tensor[(_ROWS, _STEP), "f32"]):
+    out = add(seed, seed)
+    for n in tile(_HALF, _STEP):
+        out = add(out, mul(gu[:, n], gu[:, _HALF + 1 + n - 1]))
+    return out
+
+
+def _fused_reference(gu, seed):
+    out = seed * 2
+    for lo in range(0, _HALF, _STEP):
+        out = out + gu[:, lo:lo + _STEP] * gu[:, lo + _HALF:lo + _HALF + _STEP]
+    return out
+
+
+def test_a_compile_time_offset_moves_a_tile_window_without_resizing_it():
+    """Two windows a fixed distance apart, read in one loop over one tensor.
+
+    The fused ``[gate | up]`` read: the offset moves the base and leaves the
+    length, so both reads have the same static shape and land ``_HALF`` columns
+    apart. Offsets accumulate, so a sum of terms names the same move.
+    """
+    gu = torch.arange(_ROWS * 2 * _HALF, dtype=torch.float32).reshape(_ROWS, 2 * _HALF)
+    seed = torch.ones((_ROWS, _STEP), dtype=torch.float32)
+    expected = _fused_reference(gu, seed)
+
+    assert _fused_halves.return_type.shape == (_ROWS, _STEP)
+    torch.testing.assert_close(evaluate(_fused_halves, gu, seed, device="cpu"), expected)
+    torch.testing.assert_close(evaluate(_summed_offsets, gu, seed, device="cpu"), expected)
+
+
+def test_a_moved_window_round_trips_as_the_move_it_was_written_as():
+    script = as_script(_fused_halves)
+    assert f"gu[:, n + {_HALF}]" in script, script
+
+    gu = torch.arange(_ROWS * 2 * _HALF, dtype=torch.float32).reshape(_ROWS, 2 * _HALF)
+    seed = torch.ones((_ROWS, _STEP), dtype=torch.float32)
+    torch.testing.assert_close(
+        evaluate(import_dsl(script), gu, seed, device="cpu"),
+        _fused_reference(gu, seed),
+    )
+
+
+def test_a_move_a_window_cannot_make_is_rejected():
+    """Each way a move stops describing a window of the same length on the axis.
+
+    Each way a move stops describing a window of the same length inside the
+    axis: an offset that is not compile-time, a subtraction that reverses the
+    window instead of moving it, a move that walks the last window off the end,
+    and a move that starts the first window before the front. The extent, the
+    window length and the offset are all compile-time, so the last two are
+    answered here rather than at evaluate time.
+    """
+    runtime_offset = _src(
+        'x: Tensor[(1, 8), "f32"], k: Tensor[(), "i64"]) -> Tensor[(1, 2), "f32"]',
+        "o = relu(x[:, 0:2])",
+        "for n in tile(4, 2):",
+        "    o = relu(x[:, n + k])",
+        "return o",
+    )
+    with pytest.raises(VerifyError, match="moves by a compile-time integer"):
+        import_dsl(runtime_offset)
+
+    reversed_window = _src(
+        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
+        "o = relu(x[:, 0:2])",
+        "for n in tile(4, 2):",
+        "    o = relu(x[:, 4 - n])",
+        "return o",
+    )
+    with pytest.raises(VerifyError, match="reverses the window"):
+        import_dsl(reversed_window)
+
+    off_the_end = _src(
+        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
+        "o = relu(x[:, 0:2])",
+        "for n in tile(4, 2):",
+        "    o = relu(x[:, n + 5])",
+        "return o",
+    )
+    with pytest.raises(VerifyError, match=r"reads \[7, 9\).*axis is 8 long"):
+        import_dsl(off_the_end)
+
+    before_the_front = _src(
+        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
+        "o = relu(x[:, 0:2])",
+        "for n in tile(4, 2):",
+        "    o = relu(x[:, n - 2])",
+        "return o",
+    )
+    with pytest.raises(VerifyError, match="begin before the axis"):
+        import_dsl(before_the_front)
+
+
 def test_unsupported_subscripts_are_rejected():
     """Two shapes of illegal indexer, each named by its own diagnostic.
 
@@ -253,3 +358,13 @@ def test_unsupported_subscripts_are_rejected():
     )
     with pytest.raises(VerifyError, match="integer constant index"):
         import_dsl(runtime_tuple_index)
+
+    scaled_window = _src(
+        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
+        "o = relu(x[:, 0:2])",
+        "for n in tile(4, 2):",
+        "    o = relu(x[:, n * 2])",
+        "return o",
+    )
+    with pytest.raises(VerifyError, match="unsupported indexer"):
+        import_dsl(scaled_window)

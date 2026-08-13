@@ -3,9 +3,18 @@
 This is an evaluation-time utility (it substitutes runtime ``DimVar`` sizes and
 folds the dim expression), distinct from the IR-construction / folding in
 ``tilefoundry.ir.types.dim``.
+
+A dim expression also reaches the interpreter as an operand rather than as a
+shape -- a ``Slice`` start moved off a loop's induction variable is one -- so the
+same folding is registered per dim op. There it folds the values its arguments
+already evaluated to instead of substituting ``DimVar`` sizes.
 """
 from __future__ import annotations
 
+from typing import Callable
+
+from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -18,7 +27,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
 )
 
-_FOLDERS = {
+_FOLDERS: dict[type, Callable[[int, int], int]] = {
     DimAdd: lambda a, b: a + b,
     DimSub: lambda a, b: a - b,
     DimMul: lambda a, b: a * b,
@@ -63,6 +72,37 @@ def resolve_dim(dim, bindings: dict[str, int]) -> int:
             raise ValueError("resolve_dim: division/modulo by zero")
         return int(fold(a, b))
     raise ValueError(f"resolve_dim: unrecognised Dim {type(dim).__name__}")
+
+
+def _dim_op_eval(op_cls: type, fold: Callable[[int, int], int]):
+    """The evaluator for one dim op in operand position.
+
+    An operand-position dim expression is a compile-time coordinate, so its
+    leaves are ``Constant`` / induction ``Var`` rather than ``DimVar`` sizes:
+    the operands arrive already evaluated and only the arithmetic is left.
+    """
+
+    def _eval(ctx):
+        name = op_cls.__name__
+        if len(ctx.args) != 2:
+            raise EvalError(f"evaluator: {name} takes 2 operands, got {len(ctx.args)}")
+        operands = []
+        for arg in ctx.args:
+            if not isinstance(arg, TensorValue) or arg.data.numel() != 1:
+                raise EvalError(f"evaluator: {name} operands are single integers")
+            operands.append(int(arg.data.reshape(-1)[0].item()))
+        if op_cls in (DimFloorDiv, DimMod) and operands[1] == 0:
+            raise EvalError(f"evaluator: {name} by zero")
+        return TensorValue(
+            data=ctx.args[0].data.new_tensor(int(fold(*operands))),
+            type=ctx.result_type,
+        )
+
+    return _eval
+
+
+for _op_cls, _fold in _FOLDERS.items():
+    register_eval(_op_cls)(_dim_op_eval(_op_cls, _fold))
 
 
 __all__ = ["resolve_dim"]

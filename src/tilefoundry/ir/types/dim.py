@@ -215,6 +215,18 @@ def is_dim_expr(value) -> bool:
     return False
 
 
+def is_dim_op_call(value) -> bool:
+    """True iff *value* is a ``Call`` over one of this module's dim ops.
+
+    Unlike :func:`is_dim_expr` this asks only what the call computes, not what
+    it computes over, so it also holds for a coordinate built on a scalar ``Var``
+    that only the surrounding walk can resolve. Dim arithmetic is an address
+    rather than a value some kernel produces, so a walk over compute ops uses
+    this to leave it alone.
+    """
+    return isinstance(value, Call) and isinstance(value.target, _DIM_OP_TYPES)
+
+
 def dim_min(a, b) -> Expr:
     """Symbolic ``min`` dim expression, folded to a ``Constant`` when both operands are static.
 
@@ -265,6 +277,7 @@ __all__ = [
     "DimMax",
     "simplify_dim",
     "is_dim_expr",
+    "is_dim_op_call",
     "dim_min",
     "dim_max",
     "ceildiv",

@@ -1,7 +1,8 @@
-"""Slice's sharded-layout preservation and rejection boundary.
+"""Slice's sharded-layout preservation, rejection boundary, and moved windows.
 
 Windows on unsplit logical axes retain distribution. Narrowing a split axis is
-rejected because the window need not align with that mesh division.
+rejected because the window need not align with that mesh division. A window
+moved by a compile-time offset reads a fused ``[gate | up]`` tensor on GPU.
 """
 
 from __future__ import annotations
@@ -276,3 +277,55 @@ def test_runtime_start_slice_does_not_claim_a_static_layout():
         _slice_type(make_tensor_type((1024, 2048), _F), (0, 0), (256, 2048), (1, 1)).layout
         is None
     )
+
+
+import torch  # noqa: E402
+
+from tilefoundry import func, module  # noqa: E402
+from tilefoundry.dsl import Mesh, Tensor, Topology  # noqa: E402
+from tilefoundry.dsl.tf import *  # noqa: E402,F401,F403
+from tilefoundry.evaluator import evaluate  # noqa: E402
+from tilefoundry.target import CudaTarget  # noqa: E402
+
+_HALF, _COLS, _STEP = 4, 4, 2
+
+
+@module(entry="moved_copy", topologies=(Topology("thread", 1),))
+class _MovedWindow:
+    """Read the far half of a fused tensor through a window moved by a constant."""
+
+    @func
+    def moved_copy(gu: Tensor[(2 * _HALF, _COLS), "f32"]):
+        with Mesh(("thread",), (1,), ("t",)) as m:
+            gr = reshard(gu, (2 * _HALF, _COLS @ m.t), "rmem")
+            acc = full_like(gr, 0.0)
+            for r in tile(_HALF, _STEP):
+                acc = insert_slice(acc, gr[r + _HALF, :], (r, 0))
+            return reshard(acc, (2 * _HALF, _COLS @ m.t), "gmem")
+
+
+def _moved_reference(gu):
+    return torch.cat([gu[_HALF:, :], torch.zeros_like(gu[_HALF:, :])])
+
+
+def test_a_moved_window_reads_the_far_half_of_one_tensor():
+    gu = torch.arange(2 * _HALF * _COLS, dtype=torch.float32).reshape(2 * _HALF, _COLS)
+
+    actual = evaluate(_MovedWindow.lookup("moved_copy"), gu, device="cpu")
+
+    torch.testing.assert_close(actual, _moved_reference(gu))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_moved_window_gpu_oracle():
+    """The offset reaches the emitted address, not just the evaluator's arithmetic."""
+    import tilefoundry  # noqa: PLC0415
+
+    rm = tilefoundry.compile(_MovedWindow, target=CudaTarget("nvidia.h200_sxm"))
+    gu = torch.randn(2 * _HALF, _COLS, device="cuda")
+    out = torch.zeros(2 * _HALF, _COLS, device="cuda")
+    rm(gu, out)
+    torch.cuda.synchronize()
+
+    expected = _moved_reference(gu)
+    assert torch.allclose(out, expected, rtol=1e-4, atol=1e-4), (out - expected).abs().max()

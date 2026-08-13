@@ -385,7 +385,22 @@ value is carried verbatim into `GridRegionExpr.start` / `.extent` / `.step`
 and resolved at evaluate time ([hir §1.2](./hir.md#12-gridregionexpr)).
 
 A tensor subscript `x[slice0, …]` inside a loop body lifts to a
-`hir.tensor.Slice` Op call. An `ast.Assign` whose single Name target is
+`hir.tensor.Slice` Op call.
+
+A subscript axis MAY **move** a tile window by a compile-time integer: `x[:, i + C]`
+reads `[lo + C, lo + C + step)`, the window `i` alone reads translated by `C`. The
+base is compile-time either way, so the moved start is a dim expression over `iv`
+and the axis keeps the static extent `i` alone gives it. Offsets accumulate, so
+`i + A + B` and `A + B + i` name one move by one sum, and each term is a
+compile-time integer on its own. `C - i` MUST be refused: it reverses the window
+rather than moving it. The loop domain, the window length, the offset and the axis
+extent are all compile-time, so a move whose first window would start before the
+axis, or whose last window would end past a static extent, MUST be refused where it
+is written — unlike an unmoved window's own tail, which the axis extent catches at
+evaluate time. In an Expr position `i + C` is ordinary scalar arithmetic over
+`slice.start` and carries none of this.
+
+An `ast.Assign` whose single Name target is
 bound in *outer* scope is a loop-carried rebinding (see [§5](#5-hir-parser) for the carry-out
 lift). A **nested** `for ... in tile/range(...)` is allowed and lifts to a
 nested `GridRegionExpr`; the carry scan recurses into nested loops, so an
