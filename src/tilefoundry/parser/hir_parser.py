@@ -43,7 +43,6 @@ from tilefoundry.ir.types.shard import (
     Topology,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (

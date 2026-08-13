@@ -30,24 +30,23 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import enclosing_trips, postorder, tensor_types
-from tilefoundry.inspection.analysis_report import render_analysis, render_text, report
-from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.inspection.analysis_report import render_analysis
+from tilefoundry.ir.core import Call, Constant, get_metadata
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import (
     display_name,
     origin_of,
     residual_dims,
     variant_for,
 )
+from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.core import Constant
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.sharding.local import Local
-from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import tensor_bytes
 from tilefoundry.ir.types.shard import (

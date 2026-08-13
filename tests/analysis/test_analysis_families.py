@@ -16,10 +16,10 @@ from dataclasses import replace
 import pytest
 
 import tilefoundry.analysis.compute_cost as compute_cost
-from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
-from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
+from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
+from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry import func, module
 from tilefoundry.analysis import (

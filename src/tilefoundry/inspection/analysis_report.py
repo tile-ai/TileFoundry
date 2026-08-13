@@ -32,7 +32,6 @@ from tilefoundry.inspection.python_printer import (
 )
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.specialize import bound_dims_of, origin_of
 
 
 def _traffic(traffic: tuple[tuple[str, TrafficBytes], ...]) -> dict[str, dict[str, int]]:
