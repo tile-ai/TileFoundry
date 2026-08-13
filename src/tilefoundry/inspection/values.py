@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields
-from typing import get_type_hints
+from dataclasses import dataclass, fields, is_dataclass
+from typing import get_args, get_origin, get_type_hints
 
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
@@ -206,6 +206,92 @@ def _says_nothing(value: object, default: object) -> bool:
     return entries is not None and not entries
 
 
+_EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}
+
+
+def expr_field(
+    record: type[IRMetadata], key: str, of: Callable[..., object]
+) -> None:
+    """Declare that one field is reported from the expression it is attached to.
+
+    A record states what it measured, not what the program calls the things it
+    measured. A field whose report needs those names is read by *of*, which is
+    given the record and its expression, and returns ``None`` where the program
+    offers no such reading.
+    """
+    _EXPR_FIELDS.setdefault(record, {})[key] = of
+
+
+def expr_fields(record: type[IRMetadata]) -> frozenset[str]:
+    """Which of *record*'s fields are reported from its expression."""
+    return frozenset(_EXPR_FIELDS.get(record, {}))
+
+
+def render_record(record: IRMetadata, expr: object) -> dict[str, object]:
+    """One record as report data, keyed by its own field names.
+
+    Nothing is left out and nothing is folded: a default, a ``None``, and an
+    empty mapping are each a fact a program may branch on, and the key is the
+    field name unchanged so a consumer reading the record reads the same word.
+    """
+    from_expr = _EXPR_FIELDS.get(type(record), {})
+    hints = get_type_hints(type(record))
+    reported: dict[str, object] = {}
+    for field in fields(record):
+        if field.name in from_expr:
+            value = from_expr[field.name](record, expr)
+            if value is not None:
+                reported[field.name] = value
+            continue
+        reported[field.name] = _reported_value(
+            getattr(record, field.name), hints[field.name]
+        )
+    return reported
+
+
+def _reported_value(value: object, declared: object) -> object:
+    """One value as report data, read through the type its field declared.
+
+    The type is what decides, because a value cannot: an empty tuple of pairs and
+    an empty tuple of strings are the same object and different reports.
+    """
+    if value is None:
+        return None
+    if is_dataclass(declared) and isinstance(declared, type):
+        hints = get_type_hints(declared)
+        return {
+            field.name: _reported_value(getattr(value, field.name), hints[field.name])
+            for field in fields(declared)
+        }
+    origin = get_origin(declared)
+    if origin is dict:
+        _, value_type = get_args(declared)
+        return {key: _reported_value(item, value_type) for key, item in value.items()}
+    if origin in (tuple, list):
+        item_type = _item_type(declared)
+        pair = _pair_types(item_type)
+        if pair is not None:
+            return {key: _reported_value(item, pair[1]) for key, item in value}
+        return [_reported_value(item, item_type) for item in value]
+    return value
+
+
+def _item_type(declared: object) -> object:
+    """What one entry of a declared sequence is."""
+    args = [arg for arg in get_args(declared) if arg is not Ellipsis]
+    return args[0] if args else object
+
+
+def _pair_types(declared: object) -> tuple[object, object] | None:
+    """The key and value types of a declared pair, or ``None`` if it is not one."""
+    if get_origin(declared) is not tuple:
+        return None
+    args = get_args(declared)
+    if len(args) != 2 or Ellipsis in args:
+        return None
+    return args[0], args[1]
+
+
 def _paired_flops(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[int]]:
     """Each dtype's work, whole and per unit, as one value."""
     per_unit = dict(record.flops_per_unit)
@@ -292,7 +378,10 @@ __all__ = [
     "comment",
     "comment_of",
     "declared_records",
+    "expr_field",
+    "expr_fields",
     "family_of",
     "render_comment",
+    "render_record",
     "render_value",
 ]

@@ -423,6 +423,16 @@ its family name alone.
     recorded by the analysis that computed it.
   - Text and JSON MUST be built from one intermediate report and MUST carry the
     same conclusions.
+  - A family's JSON projection MUST be its record's fields under their own names,
+    with nothing left out: a default, a `null`, and an empty mapping are each a
+    fact a program branches on, and a key spelled by hand is a key that can drift
+    from the field it reports. A field whose projection needs the expression the
+    record is attached to MUST be declared as one, and MAY be absent where the
+    program offers no such reading -- `operands` on a Function Call, which charges
+    a callee total no operand position names. A comment over the same record MAY
+    state fewer keys, or projected ones
+    ([inspection §2.8](./inspection.md#28-record-comment-forms)), and what it
+    leaves out MUST stay in the JSON projection.
   - A compact text summary MUST contain whole-function facts only. Per-value
     facts MUST stay on their annotated equations; JSON MAY retain operand names
     and types in its structured projection.

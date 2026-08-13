@@ -45,7 +45,10 @@ from tilefoundry.inspection.values import (
     TRIPS,
     comment_of,
     declared_records,
+    expr_fields,
+    family_of,
     render_comment,
+    render_record,
 )
 from tilefoundry.ir.core import (
     BindingMetadata,
@@ -601,6 +604,23 @@ def _assert_shape(text: str, declared: object) -> None:
         raise AssertionError(f"{declared} has no rendering: {text}")
 
 
+def _every_record() -> dict[type, list[tuple[object, object]]]:
+    """Every record one real analysis leaves, each with the expression it is on."""
+    result = analyze(
+        MoEMegaKernel,
+        MoEMegaKernel.entry_function(),
+        analysis=("compute-cost", "memory", "roofline", "timeline"),
+    )
+    function = result.function
+    found: dict[type, list[tuple[object, object]]] = {}
+    for expr in (function, *postorder(function.body)):
+        for value in expr.metadata:
+            found.setdefault(type(value), []).append((value, expr))
+    assert set(declared_records()) <= set(found)
+    assert {BindingMetadata, OccurrenceProvenance} <= set(found)
+    return found
+
+
 def test_a_record_comment_states_only_what_it_declared() -> None:
     """Every key on a comment maps back to a field or a declared projection.
 
@@ -610,27 +630,13 @@ def test_a_record_comment_states_only_what_it_declared() -> None:
     declared type renders in, and a record that measured nothing states its
     family name and stops. Metadata that is not a report states nothing at all.
     """
-    result = analyze(
-        MoEMegaKernel,
-        MoEMegaKernel.entry_function(),
-        analysis=("compute-cost", "memory", "roofline", "timeline"),
-    )
-    function = result.function
-    found: dict[type, list[object]] = {}
-    for expr in (function, *postorder(function.body)):
-        for value in expr.metadata:
-            found.setdefault(type(value), []).append(value)
-
-    assert set(declared_records()) <= set(found)
-    assert {BindingMetadata, OccurrenceProvenance} <= set(found)
-
-    for record_type, records in found.items():
+    for record_type, records in _every_record().items():
         declared = comment_of(record_type)
         if declared is None:
-            assert all(render_comment(record) is None for record in records)
+            assert all(render_comment(record) is None for record, _ in records)
             continue
         keys = {emission.key.replace("_", "-"): emission for emission in declared.emissions}
-        for record in records:
+        for record, _ in records:
             emitted = _emitted(render_comment(record), declared.family)
             for key, value in emitted.items():
                 emission = keys.get(key) or (
@@ -646,3 +652,30 @@ def test_a_record_comment_states_only_what_it_declared() -> None:
         declared = comment_of(record_type)
         nothing = render_comment(record_type())
         assert nothing == declared.family or nothing.startswith(f"{declared.family}{FIELD}")
+
+
+def test_a_reported_record_keys_every_field_by_its_own_name() -> None:
+    """JSON is the record's own field names, and the comment cannot crop it.
+
+    A handwritten projection could rename a key and no output assertion would
+    notice, and a comment leaving a key out must not take it out of what programs
+    read: a default, a zero, and a null are facts a consumer branches on. So the
+    report states every field a record has, under the field's own name, and the
+    only key it may leave out is one read from the expression, which is where a
+    Function Call has no operand split to state.
+    """
+    for record_type, records in _every_record().items():
+        if comment_of(record_type) is None:
+            continue
+        names = {field.name for field in dataclass_fields(record_type)}
+        for record, expr in records:
+            reported = render_record(record, expr)
+
+            assert set(reported) <= names
+            assert names - set(reported) <= expr_fields(record_type)
+            for key, value in _emitted(
+                render_comment(record), family_of(record_type)
+            ).items():
+                stated = reported.get(key.replace("-", "_"))
+                if isinstance(stated, int | str):
+                    assert value == str(stated), (key, value, stated)

@@ -18,10 +18,6 @@ from dataclasses import dataclass
 from tilefoundry.analysis import (
     ComputeCostMetadata,
     MemoryMetadata,
-    RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
-    TrafficBytes,
 )
 from tilefoundry.analysis.api import AnalysisResult
 from tilefoundry.analysis.walk import postorder, tensor_types
@@ -30,15 +26,14 @@ from tilefoundry.inspection.python_printer import (
     _PrintedStatement,
     _render_hir_function,
 )
+from tilefoundry.inspection.values import (
+    declared_records,
+    expr_field,
+    family_of,
+    render_record,
+)
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
-
-
-def _traffic(traffic: tuple[tuple[str, TrafficBytes], ...]) -> dict[str, dict[str, int]]:
-    return {
-        level: {"read": value.read, "write": value.write}
-        for level, value in traffic
-    }
 
 
 def _type_text(type_: object) -> str:
@@ -63,10 +58,16 @@ def _operand_name(operand: object) -> str:
     return type(operand).__name__.lower()
 
 
-def _operands(record: ComputeCostMetadata, expr: object) -> list[dict[str, object]]:
-    """Each recorded amount, against the operand it was charged to."""
-    if not isinstance(expr, Call):
-        return []
+def _operands(
+    record: ComputeCostMetadata, expr: object
+) -> list[dict[str, object]] | None:
+    """Each recorded amount, against the operand of the program it was charged to.
+
+    ``None`` where there is no such split to report: a Function Call charges its
+    callee's total, and an operand position names nothing there.
+    """
+    if not isinstance(expr, Call) or not record.operands:
+        return None
     operands = (*expr.args, expr)
     return [
         {
@@ -80,94 +81,18 @@ def _operands(record: ComputeCostMetadata, expr: object) -> list[dict[str, objec
     ]
 
 
-def _compute_cost(record: ComputeCostMetadata, expr: object) -> dict[str, object]:
-    projected: dict[str, object] = {
-        "flops": dict(record.flops),
-        "flops_per_unit": dict(record.flops_per_unit),
-        "traffic": _traffic(record.traffic),
-        "traffic_per_unit": _traffic(record.traffic_per_unit),
-    }
-    operands = _operands(record, expr)
-    if operands:
-        projected["operands"] = operands
-    return projected
-
-
-def _roofline(record: RooflineMetadata, expr: object) -> dict[str, object]:
-    return {
-        "compute_ns": record.compute_ns,
-        "memory_ns": record.memory_ns,
-        "ideal_ns": record.ideal_ns,
-        "bound_by": record.bound_by,
-    }
-
-
-def _timeline(record: TimelineMetadata, expr: object) -> dict[str, object]:
-    return {
-        "start_ns": record.start_ns,
-        "end_ns": record.end_ns,
-        "trips": record.trips,
-        "stride_ns": record.stride_ns,
-    }
-
-
-def _timeline_summary(
-    record: TimelineSummaryMetadata, expr: object
-) -> dict[str, object]:
-    return {
-        "local_makespan_ns": record.local_makespan_ns,
-        "waves": record.waves,
-        "estimated_kernel_ns": record.estimated_kernel_ns,
-    }
-
-
-def _memory(record: MemoryMetadata, expr: object) -> dict[str, object]:
-    return {
-        "footprint": [
-            {
-                "level": item.level,
-                "peak_bytes": item.peak_bytes,
-                "persistent_bytes": item.persistent_bytes,
-                "capacity_bytes": item.capacity_bytes,
-            }
-            for item in record.footprint
-        ],
-        "traffic": _traffic(record.traffic),
-        "lifetimes": [
-            {
-                "binding": item.binding,
-                "level": item.level,
-                "bytes": item.bytes,
-                "defined_at": item.defined_at,
-                "last_used_at": item.last_used_at,
-                "persistent": item.persistent,
-            }
-            for item in record.lifetimes
-        ],
-        "advisories": list(record.advisories),
-    }
-
-
-
-
-_RECORDS: tuple[tuple[str, type[IRMetadata], object], ...] = (
-    ("compute-cost", ComputeCostMetadata, _compute_cost),
-    ("memory", MemoryMetadata, _memory),
-    ("roofline", RooflineMetadata, _roofline),
-    ("timeline", TimelineMetadata, _timeline),
-    ("timeline", TimelineSummaryMetadata, _timeline_summary),
-)
+expr_field(ComputeCostMetadata, "operands", _operands)
 
 
 def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str, object]:
     """Every selected record on *expr*, keyed by the family that owns it."""
     result: dict[str, object] = {}
-    for name, metadata_type, project in _RECORDS:
+    for metadata_type in declared_records():
         if metadata_type not in selected:
             continue
         record = get_metadata(expr, metadata_type)
         if record is not None:
-            result[name] = project(record, expr)
+            result[family_of(metadata_type)] = render_record(record, expr)
     return result
 
 
@@ -281,10 +206,8 @@ def _work_totals(function: Function) -> dict[str, object]:
     record = get_metadata(function, ComputeCostMetadata)
     if record is None:
         return {"flops": {}, "traffic": {}}
-    return {
-        "flops": dict(record.flops),
-        "traffic": _traffic(record.traffic),
-    }
+    reported = render_record(record, function)
+    return {"flops": reported["flops"], "traffic": reported["traffic"]}
 
 
 def _flop_text(flops: dict[str, int]) -> str:
