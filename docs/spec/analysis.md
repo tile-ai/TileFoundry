@@ -678,11 +678,13 @@ Requesting memory adds one summary line and one line per advisory:
 
 ```text
 peak-footprint=<level>:<int>[,<level>:<int>...]
-advisory=<text>
+advisory="<text>"
 ```
 
 An empty footprint states the family name alone; each advisory is its own line, so
-a program with none adds none.
+a program with none adds none. An advisory is a sentence, so it is quoted and
+escaped ([inspection §2.8](./inspection.md#28-record-comment-forms)); JSON carries
+the same text raw.
 
 The record's single-line comment form projects the footprint it holds; `traffic`
 and `lifetimes` are read from JSON, not from a line:

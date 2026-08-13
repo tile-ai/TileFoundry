@@ -8,6 +8,7 @@ implementation output, so a formula round-trip cannot validate itself.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import MISSING
 from dataclasses import fields as dataclass_fields
@@ -18,6 +19,7 @@ import pytest
 
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
+from tests.analysis.test_analysis_families import _oversized_working_set
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
@@ -45,6 +47,7 @@ from tilefoundry.inspection.values import (
     PER_UNIT,
     TRIPS,
     AdvisorySummary,
+    Prose,
     comment_of,
     declared_records,
     expr_fields,
@@ -566,13 +569,23 @@ def test_a_quantised_scale_is_written_once_per_group() -> None:
     assert "128" in str(scale)
 
 
+_KEYED = re.compile(rf'(?P<key>[\w-]+){FIELD}(?P<value>"(?:[^"\\]|\\.)*"|\S+)')
+
+
 def _emitted(text: str, family: str) -> dict[str, str]:
-    """One comment taken apart by the record and field layers of the ladder."""
+    """One comment taken apart by the record and field layers of the ladder.
+
+    The record layer splits outside a quoted value, which is the whole reason a
+    value that holds a separator has to bracket itself. That the pairs rejoin to
+    exactly what was read is how the split is held to being one.
+    """
     if text.startswith(f"{family}{FIELD}"):
         return {family: text[len(family) + len(FIELD) :]}
     head, _, rest = text.partition(FIELDS)
     assert head == family, text
-    return dict(part.split(FIELD, 1) for part in rest.split(FIELDS) if part)
+    keyed = list(_KEYED.finditer(rest))
+    assert FIELDS.join(match.group(0) for match in keyed) == rest, rest
+    return {match["key"]: match["value"] for match in keyed}
 
 
 def _assert_shape(text: str, declared: object) -> None:
@@ -583,6 +596,8 @@ def _assert_shape(text: str, declared: object) -> None:
     """
     if declared is int:
         assert re.fullmatch(r"-?\d+", text), (text, declared)
+    elif declared is Prose:
+        assert re.fullmatch(r'"(?:[^"\\]|\\.)*"', text), (text, declared)
     elif declared is str:
         assert FIELD not in text and FIELDS not in text, (text, declared)
     elif declared is TrafficBytes:
@@ -610,12 +625,11 @@ def _assert_shape(text: str, declared: object) -> None:
         raise AssertionError(f"{declared} has no rendering: {text}")
 
 
-def _analysed_mega() -> tuple[dict[type, list[tuple[object, object]]], tuple[object, ...]]:
-    """What one real analysis leaves on the IR, and the views it reports.
+_PROSE_PROBE = 'l2 holds 2 B, spills; says "no" over \\'
 
-    Between them they cover every declared record but ``AdvisorySummary``, which
-    needs a program that overflows a cache; the memory family test pins that line.
-    """
+
+def _analysed_mega() -> tuple[dict[type, list[tuple[object, object]]], tuple[object, ...]]:
+    """What one real analysis leaves on the IR, and the views it reports."""
     result = analyze(
         MoEMegaKernel,
         MoEMegaKernel.entry_function(),
@@ -627,10 +641,35 @@ def _analysed_mega() -> tuple[dict[type, list[tuple[object, object]]], tuple[obj
     for expr in (function, *postorder(function.body)):
         for value in expr.metadata:
             found.setdefault(type(value), []).append((value, expr))
-    covered = set(found) | {type(view) for view in rendered.summary}
-    assert set(declared_records()) <= covered | {AdvisorySummary}
-    assert {BindingMetadata, OccurrenceProvenance} <= covered
     return found, rendered.summary
+
+
+def _every_stated_record() -> dict[type, list[object]]:
+    """Every declared record, from real analyses, plus one prose probe.
+
+    The mega kernel fits its caches, so an advisory needs the second program;
+    the probe then carries every separator the ladder uses, which is what a
+    quoted value has to survive.
+    """
+    found, views = _analysed_mega()
+    stated: dict[type, list[object]] = {
+        record_type: [record for record, _ in records]
+        for record_type, records in found.items()
+    }
+    for view in views:
+        stated.setdefault(type(view), []).append(view)
+    advisory = render_analysis(
+        analyze(_oversized_working_set, _oversized_working_set.entry_function(), analysis="memory")
+    )
+    stated.setdefault(AdvisorySummary, []).extend(
+        view for view in advisory.summary if isinstance(view, AdvisorySummary)
+    )
+    stated[AdvisorySummary].append(AdvisorySummary(Prose(_PROSE_PROBE)))
+
+    assert set(declared_records()) <= set(stated)
+    assert {BindingMetadata, OccurrenceProvenance} <= set(stated)
+    assert len(stated[AdvisorySummary]) > 1
+    return stated
 
 
 def test_a_record_comment_states_only_what_it_declared() -> None:
@@ -643,15 +682,7 @@ def test_a_record_comment_states_only_what_it_declared() -> None:
     family name and stops. Metadata that is not a report states nothing at all,
     and a summary line is held to the same rules as an annotated equation.
     """
-    found, views = _analysed_mega()
-    stated: dict[type, list[object]] = {
-        record_type: [record for record, _ in records]
-        for record_type, records in found.items()
-    }
-    for view in views:
-        stated.setdefault(type(view), []).append(view)
-
-    for record_type, records in stated.items():
+    for record_type, records in _every_stated_record().items():
         declared = comment_of(record_type)
         if declared is None:
             assert all(render_comment(record) is None for record in records)
@@ -666,6 +697,8 @@ def test_a_record_comment_states_only_what_it_declared() -> None:
                 assert emission is not None, (key, declared)
                 assert not emission.opt_in, (key, "asked for nothing")
                 _assert_shape(value, emission.type)
+                if emission.type is Prose:
+                    assert json.loads(value) == str(emission.of(record))
 
     for record_type in declared_records():
         if any(field.default is MISSING for field in dataclass_fields(record_type)):

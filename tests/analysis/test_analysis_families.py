@@ -915,7 +915,7 @@ def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None
     assert not any("l1 holds" in note for note in record.advisories)
 
     lines = render_text(render_analysis(result)).splitlines()
-    assert [f"# advisory={note}" for note in record.advisories] == [
+    assert [f"# advisory={json.dumps(note)}" for note in record.advisories] == [
         line for line in lines if line.startswith("# advisory")
     ]
 

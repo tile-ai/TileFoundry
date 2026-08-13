@@ -31,6 +31,7 @@ from tilefoundry.inspection.python_printer import (
 from tilefoundry.inspection.values import (
     AdvisorySummary,
     MemorySummary,
+    Prose,
     ReportIdentity,
     ReportSelection,
     TimelineSummaryView,
@@ -216,7 +217,7 @@ def _summary(
         memory = get_metadata(function, MemoryMetadata)
         views.append(MemorySummary(peak_footprint(memory)))
         if MemoryMetadata in selected:
-            views.extend(AdvisorySummary(note) for note in memory.advisories)
+            views.extend(AdvisorySummary(Prose(note)) for note in memory.advisories)
     if "roofline" in function_records:
         views.append(get_metadata(function, RooflineMetadata))
     if "timeline" in function_records:

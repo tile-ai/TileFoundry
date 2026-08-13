@@ -333,6 +333,10 @@ separates unless that value brackets itself:
   - A value MUST be an `int`, a `str`, a mapping of them, or a type with a
     declared rendering. `int` and `str` MUST NOT be wrapped in a type that
     renders identically.
+  - A `str` that is a token renders bare. Text that is a sentence MUST render as
+    a quoted, escaped DSL string literal ([§2.3](#23-dsl-text-forms)), which is
+    what lets it hold a separator the ladder uses; a reader splits a layer
+    outside the quotes.
   - A key whose value equals what it declared it says nothing by MUST be left
     out, so a record that measured nothing collapses to its family name.
   - A record declaring exactly one key MUST use the family name as that key: for

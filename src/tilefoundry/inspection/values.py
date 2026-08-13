@@ -11,6 +11,7 @@ one each, and nothing else in the tree spells one.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -37,6 +38,16 @@ PARTS = "; "
 TRIPS = "*"
 
 
+class Prose(str):
+    """Text that is a sentence rather than a token.
+
+    A token renders bare, which only works while it holds no separator. A
+    sentence holds several -- spaces, commas, a semicolon -- so it renders as a
+    quoted, escaped string literal, which brackets it: a reader splits a layer
+    outside the quotes ([inspection §2.8](docs/spec/inspection.md#28-record-comment-forms)).
+    """
+
+
 def _trip_interval(value: TripInterval, render: Callable[[object], str]) -> str:
     """One interval, offset by the trip index when it repeats."""
     if value.trips <= 1:
@@ -46,6 +57,7 @@ def _trip_interval(value: TripInterval, render: Callable[[object], str]) -> str:
 
 
 RENDER: dict[type, Callable[..., str]] = {
+    Prose: lambda value, render: json.dumps(str(value)),
     TrafficBytes: lambda value, render: f"r{value.read}{PAIR}w{value.write}",
     TotalAndPerUnit: (
         lambda value, render: f"{render(value.total)}{PER_UNIT}{render(value.per_unit)}"
@@ -374,7 +386,7 @@ class MemorySummary(IRMetadata):
 class AdvisorySummary(IRMetadata):
     """One thing the memory walk observed that a reader should weigh."""
 
-    text: str
+    text: Prose
 
 
 @dataclass(frozen=True)
@@ -434,6 +446,7 @@ __all__ = [
     "PAIR",
     "PARTS",
     "PER_UNIT",
+    "Prose",
     "RENDER",
     "TRIPS",
     "MemorySummary",
