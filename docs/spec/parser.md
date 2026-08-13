@@ -1054,10 +1054,10 @@ Python statements that the parser folds into a single `Expr` tree.
 
 An assignment whose RHS computes a new expression records the LHS as that
 expression's binding. A bare-name RHS computes nothing: rebinding an existing
-name (for example the final `m = m_new` update of a loop carry) MUST reuse the
-same `Expr` object without replacing its binding metadata. Giving that value a
-second name (`z = y`, including the annotated `z: where(...) = y` form) is
-rejected; use the existing name instead.
+value under either a new or existing name (for example `acc = x` to initialize
+a loop carry, or the final `m = m_new` carry update) MUST reuse the same `Expr`
+object without replacing its binding metadata. A new name updates the parser's
+symbol table; it does not add or rename an IR node.
 
 `for` / `if` / `while` over arbitrary ranges, conditionals, and other
 Stmt forms are TIR-only. They are rejected by the HIR parser.
@@ -1098,7 +1098,7 @@ The HIR parser attaches one `ScheduleConstraintMetadata` record to one
 existing tensor `Expr`. Attachment MUST update that node in place: it MUST NOT
 rebuild the annotated value or any consumer in its SSA DAG. An annotation with
 a value still follows the assignment rule above, so it may annotate a newly
-computed RHS but cannot introduce an alias for a bare-name RHS.
+computed RHS or bind another name to an existing value without copying it.
 Tensor parameters, tensor-valued intermediate SSA
 values, and bound tensor-valued `TupleGetItem` values are valid subjects.
 Whole tuples, shape scalars, unit values, direct subscripts, and unresolved

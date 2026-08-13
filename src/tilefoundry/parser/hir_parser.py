@@ -398,11 +398,6 @@ class _HirBodyVisitor(BaseExprVisitor):
         if isinstance(node, ast.Name):
             value = self.env.lookup(node.id)
             if isinstance(value, Expr):
-                if not isinstance(self.env.lookup(target_name), Expr):
-                    raise VerifyError(
-                        f"hir: {target_name} = {node.id} does not name a new "
-                        "computation; use the existing name"
-                    )
                 return value
         return self._maybe_autofill_binding(
             self.expr_with_binding(node, target_name), target_name

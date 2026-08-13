@@ -16,6 +16,7 @@ import pytest
 
 from tests._source import import_dsl
 from tilefoundry import func
+from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl._stub_gen import regen_stubs
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
@@ -153,17 +154,21 @@ def test_carry_rebinding_reuses_the_existing_rhs_node() -> None:
     assert correction.args[1] is yielded["m"]
 
 
-@pytest.mark.parametrize(
-    "alias",
-    ["z = y", 'z: where(storage="gmem") = y'],
-    ids=["plain", "annotated"],
-)
-def test_a_bare_name_cannot_introduce_a_second_binding(alias: str) -> None:
-    with pytest.raises(
-        VerifyError,
-        match="does not name a new computation; use the existing name",
-    ):
-        import_dsl(_src("y = relu(x)", alias, "return y"))
+@func
+def _carry_initialized_from_a_parameter(
+    x: Tensor[(8,), "f32"],
+) -> Tensor[(8,), "f32"]:
+    acc = x
+    for i in range(8):
+        acc = add(acc, x)
+    return acc
+
+
+def test_a_bare_name_initializes_a_carry_without_adding_a_call() -> None:
+    grid = _carry_initialized_from_a_parameter.body
+    assert isinstance(grid, GridRegionExpr)
+    assert grid.init_args[0] is _carry_initialized_from_a_parameter.params[0]
+    assert [expr for expr in postorder(grid) if isinstance(expr, Call)] == [grid.body]
 
 
 @func

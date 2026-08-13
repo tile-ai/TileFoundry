@@ -101,7 +101,7 @@ def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
 
         @func
         def looped(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            acc = tf.reshape(x, new_shape=(4, 8))
+            acc = x
             for _ in range(3):
                 acc = mm(acc)  # noqa: F821
             return acc

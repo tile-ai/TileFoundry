@@ -103,9 +103,10 @@ def test_constraint_metadata_attaches_to_the_existing_ssa_node(monkeypatch) -> N
     )
     function = import_dsl(
         _source(
-            """    y: where(storage="gmem") = tf.add(x, x)
-    z = tf.mul(y, y)
-    return z"""
+            """    y = tf.add(x, x)
+    z: where(storage="gmem") = y
+    out = tf.mul(z, z)
+    return out"""
         )
     )
 
