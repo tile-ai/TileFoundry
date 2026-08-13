@@ -35,6 +35,7 @@ from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.walk import postorder, values_of
 from tilefoundry.dsl import ConstTensor, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
+from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import (
     ENTRIES,
     ENTRY,
@@ -43,6 +44,7 @@ from tilefoundry.inspection.values import (
     PAIR,
     PER_UNIT,
     TRIPS,
+    AdvisorySummary,
     comment_of,
     declared_records,
     expr_fields,
@@ -600,25 +602,35 @@ def _assert_shape(text: str, declared: object) -> None:
             assert separator == ENTRY, entry
             _assert_shape(key, key_type)
             _assert_shape(value, value_type)
+    elif get_origin(declared) is tuple:
+        (item_type,) = (arg for arg in get_args(declared) if arg is not Ellipsis)
+        for item in text.split(ENTRIES):
+            _assert_shape(item, item_type)
     else:
         raise AssertionError(f"{declared} has no rendering: {text}")
 
 
-def _every_record() -> dict[type, list[tuple[object, object]]]:
-    """Every record one real analysis leaves, each with the expression it is on."""
+def _analysed_mega() -> tuple[dict[type, list[tuple[object, object]]], tuple[object, ...]]:
+    """What one real analysis leaves on the IR, and the views it reports.
+
+    Between them they cover every declared record but ``AdvisorySummary``, which
+    needs a program that overflows a cache; the memory family test pins that line.
+    """
     result = analyze(
         MoEMegaKernel,
         MoEMegaKernel.entry_function(),
         analysis=("compute-cost", "memory", "roofline", "timeline"),
     )
+    rendered = render_analysis(result)
     function = result.function
     found: dict[type, list[tuple[object, object]]] = {}
     for expr in (function, *postorder(function.body)):
         for value in expr.metadata:
             found.setdefault(type(value), []).append((value, expr))
-    assert set(declared_records()) <= set(found)
-    assert {BindingMetadata, OccurrenceProvenance} <= set(found)
-    return found
+    covered = set(found) | {type(view) for view in rendered.summary}
+    assert set(declared_records()) <= covered | {AdvisorySummary}
+    assert {BindingMetadata, OccurrenceProvenance} <= covered
+    return found, rendered.summary
 
 
 def test_a_record_comment_states_only_what_it_declared() -> None:
@@ -628,15 +640,24 @@ def test_a_record_comment_states_only_what_it_declared() -> None:
     projection nobody declared can grow a sixth. So the walk is held to the
     declarations: every key is one of them, every value keeps the shape its
     declared type renders in, and a record that measured nothing states its
-    family name and stops. Metadata that is not a report states nothing at all.
+    family name and stops. Metadata that is not a report states nothing at all,
+    and a summary line is held to the same rules as an annotated equation.
     """
-    for record_type, records in _every_record().items():
+    found, views = _analysed_mega()
+    stated: dict[type, list[object]] = {
+        record_type: [record for record, _ in records]
+        for record_type, records in found.items()
+    }
+    for view in views:
+        stated.setdefault(type(view), []).append(view)
+
+    for record_type, records in stated.items():
         declared = comment_of(record_type)
         if declared is None:
-            assert all(render_comment(record) is None for record, _ in records)
+            assert all(render_comment(record) is None for record in records)
             continue
         keys = {emission.key.replace("_", "-"): emission for emission in declared.emissions}
-        for record, _ in records:
+        for record in records:
             emitted = _emitted(render_comment(record), declared.family)
             for key, value in emitted.items():
                 emission = keys.get(key) or (
@@ -650,8 +671,9 @@ def test_a_record_comment_states_only_what_it_declared() -> None:
         if any(field.default is MISSING for field in dataclass_fields(record_type)):
             continue
         declared = comment_of(record_type)
-        nothing = render_comment(record_type())
-        assert nothing == declared.family or nothing.startswith(f"{declared.family}{FIELD}")
+        nothing = _emitted(render_comment(record_type()), declared.family)
+        assert set(nothing) <= {declared.family, "waves"}, nothing
+        assert nothing.get("waves", "1") == "1"
 
 
 def test_a_reported_record_keys_every_field_by_its_own_name() -> None:
@@ -664,7 +686,8 @@ def test_a_reported_record_keys_every_field_by_its_own_name() -> None:
     only key it may leave out is one read from the expression, which is where a
     Function Call has no operand split to state.
     """
-    for record_type, records in _every_record().items():
+    found, _ = _analysed_mega()
+    for record_type, records in found.items():
         if comment_of(record_type) is None:
             continue
         names = {field.name for field in dataclass_fields(record_type)}

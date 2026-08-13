@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import get_args, get_origin, get_type_hints
 
 from tilefoundry.analysis.metadata import (
@@ -55,13 +55,15 @@ RENDER: dict[type, Callable[..., str]] = {
 
 
 def render_value(value: object) -> str:
-    """One value, rendered by its own type or as the mapping it is."""
+    """One value, rendered by its own type or as the entries it holds."""
     for value_type, render in RENDER.items():
         if isinstance(value, value_type):
             return render(value, render_value)
     entries = _entries_of(value)
     if entries is not None:
         return ENTRIES.join(f"{key}{ENTRY}{render_value(item)}" for key, item in entries)
+    if isinstance(value, tuple | list):
+        return ENTRIES.join(render_value(item) for item in value)
     return str(value)
 
 
@@ -117,7 +119,7 @@ def _derived_family(record: type) -> str:
 
 def _field_projections(record: type[IRMetadata], names: tuple[str, ...]) -> tuple[Projection, ...]:
     hints = get_type_hints(record)
-    defaults = {field.name: field.default for field in fields(record)}
+    defaults = {item.name: item.default for item in fields(record)}
     return tuple(
         Projection(name, hints[name], _read(name), defaults[name]) for name in names
     )
@@ -142,7 +144,7 @@ def comment(
     *family* is only for a record whose reported name is not the one its class
     name states.
     """
-    declared = emitted or tuple(field.name for field in fields(record))
+    declared = emitted or tuple(item.name for item in fields(record))
     emissions = tuple(
         item
         if isinstance(item, Projection)
@@ -237,15 +239,13 @@ def render_record(record: IRMetadata, expr: object) -> dict[str, object]:
     from_expr = _EXPR_FIELDS.get(type(record), {})
     hints = get_type_hints(type(record))
     reported: dict[str, object] = {}
-    for field in fields(record):
-        if field.name in from_expr:
-            value = from_expr[field.name](record, expr)
+    for name in (item.name for item in fields(record)):
+        if name in from_expr:
+            value = from_expr[name](record, expr)
             if value is not None:
-                reported[field.name] = value
+                reported[name] = value
             continue
-        reported[field.name] = _reported_value(
-            getattr(record, field.name), hints[field.name]
-        )
+        reported[name] = _reported_value(getattr(record, name), hints[name])
     return reported
 
 
@@ -260,8 +260,8 @@ def _reported_value(value: object, declared: object) -> object:
     if is_dataclass(declared) and isinstance(declared, type):
         hints = get_type_hints(declared)
         return {
-            field.name: _reported_value(getattr(value, field.name), hints[field.name])
-            for field in fields(declared)
+            item.name: _reported_value(getattr(value, item.name), hints[item.name])
+            for item in fields(declared)
         }
     origin = get_origin(declared)
     if origin is dict:
@@ -320,7 +320,7 @@ def _by_operand(record: ComputeCostMetadata) -> dict[str, TrafficBytes]:
     }
 
 
-def _peak_bytes(record: MemoryMetadata) -> dict[str, int]:
+def peak_footprint(record: MemoryMetadata) -> dict[str, int]:
     """How much of each level the function holds at its peak."""
     return {item.level: item.peak_bytes for item in record.footprint}
 
@@ -345,6 +345,56 @@ def _source_span(record: SourceSpanMetadata) -> str:
     return f"{record.file}:{record.line}:{record.column}"
 
 
+@dataclass(frozen=True)
+class ReportIdentity(IRMetadata):
+    """Which program, on which machine, this report is about."""
+
+    target: str = ""
+    module: str = ""
+    function: str = ""
+    topology: str = "none"
+
+
+@dataclass(frozen=True)
+class ReportSelection(IRMetadata):
+    """What was asked for, and what running it took."""
+
+    requested: tuple[str, ...] = ()
+    executed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MemorySummary(IRMetadata):
+    """What one function holds at its peak, per level."""
+
+    peak_bytes: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AdvisorySummary(IRMetadata):
+    """One thing the memory walk observed that a reader should weigh."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class TimelineSummaryView(IRMetadata):
+    """One function's local plan, under the root the report is about.
+
+    ``root`` is the report's own identity composed for a reader, not something
+    the timeline family measured, which is why it lives here and not on
+    ``TimelineSummaryMetadata``. ``waves`` is stated even when it is one: how
+    many passes over the machine a plan takes is a conclusion, and one wave is an
+    answer rather than nothing to say. It is declared with no value it says
+    nothing by, so the suppression rule itself stays one rule.
+    """
+
+    root: str = ""
+    local_makespan_ns: int = 0
+    waves: int = 1
+    estimated_kernel_ns: int = 0
+
+
 comment(
     ComputeCostMetadata,
     Projection("flops", dict[str, TotalAndPerUnit[int]], _paired_flops),
@@ -353,7 +403,7 @@ comment(
 )
 comment(
     MemoryMetadata,
-    Projection("peak", dict[str, int], _peak_bytes),
+    Projection("peak", dict[str, int], peak_footprint),
     Projection("persistent", int, _persistent_bytes, default=0),
     Projection("advisories", int, _advisory_count, default=0),
 )
@@ -361,9 +411,22 @@ comment(RooflineMetadata, "ideal_ns", "bound_by")
 comment(TimelineMetadata, Projection("interval", TripInterval, _interval))
 comment(TimelineSummaryMetadata, family="timeline")
 comment(SourceSpanMetadata, Projection("span", str, _source_span), family="source")
+comment(ReportIdentity, family="analysis")
+comment(ReportSelection, family="selection")
+comment(MemorySummary, family="peak-footprint")
+comment(AdvisorySummary, family="advisory")
+comment(
+    TimelineSummaryView,
+    "root",
+    "local_makespan_ns",
+    Projection("waves", int, _read("waves")),
+    "estimated_kernel_ns",
+    family="timeline",
+)
 
 
 __all__ = [
+    "AdvisorySummary",
     "ENTRIES",
     "ENTRY",
     "FIELD",
@@ -373,14 +436,19 @@ __all__ = [
     "PER_UNIT",
     "RENDER",
     "TRIPS",
+    "MemorySummary",
     "Projection",
     "RecordComment",
+    "ReportIdentity",
+    "ReportSelection",
+    "TimelineSummaryView",
     "comment",
     "comment_of",
     "declared_records",
     "expr_field",
     "expr_fields",
     "family_of",
+    "peak_footprint",
     "render_comment",
     "render_record",
     "render_value",

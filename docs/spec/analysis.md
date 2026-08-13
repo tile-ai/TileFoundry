@@ -327,18 +327,24 @@ Each owns its record types and declares its dependencies and output additions.
 
 | Selector | Requires | Owns | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|
-| `compute-cost` | - | `ComputeCostMetadata` | the authored program | `flops`, `traffic` | every measured Call |
+| `compute-cost` | - | `ComputeCostMetadata` | the authored program | `compute-cost` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
-| `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` | bounded dependency evidence, `ideal-bound` | every measured Call |
-| `timeline` | `compute-cost` | `TimelineMetadata`, `TimelineSummaryMetadata` | `ThroughputFacts`, `ParallelCapacityFacts` | local makespan, waves, estimated kernel time | every measured Call |
+| `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` | bounded dependency evidence, `roofline` | every measured Call |
+| `timeline` | `compute-cost` | `TimelineMetadata`, `TimelineSummaryMetadata` | `ThroughputFacts`, `ParallelCapacityFacts` | `timeline` | every measured Call |
 
 Every compact text summary begins with these two lines:
 
 ```text
 # example
-# analysis target=<target> module=<module> function=<function> topology=<level|none>
-# analyses=<selector>[,<selector>...] executed=<selector>[,<selector>...]
+# analysis target=<target> module=<module> function=<function> topology=<level>
+# selection requested=<selector>[,<selector>...] executed=<selector>[,<selector>...]
 ```
+
+Every summary line is one record walked exactly as an annotated equation is
+([inspection §2.8](./inspection.md#28-record-comment-forms)), so the two surfaces
+cannot spell one value two ways. What the report is about and what was asked of it
+are records of the report rather than of the IR; every other summary line is a
+record of the selected Function.
 
 The JSON report carries the same identity and selection in `target`, `module`,
 `function`, `topology`, `requested`, and `executed`. Whole-function
@@ -470,14 +476,13 @@ class ComputeCostMetadata(IRMetadata):
 | `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge concrete tensor leaves to their storage levels, and group by level. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
 | `operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
 
-Requesting this family adds these summary lines, each prefixed by `# `:
+Requesting this family adds one summary line, prefixed by `# `: the Function's own
+record, stated exactly as a Call's is. The whole program's work is not a second
+record.
 
 ```text
-flops <dtype>=<int>[, <dtype>=<int>...]
-traffic <level>=r<int>/w<int>[, <level>=r<int>/w<int>...]
+compute-cost flops=<dtype>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...]
 ```
-
-An empty flop or traffic set prints as `0` after its label.
 
 Every measured Call receives this annotation. Each key pairs the whole quantity
 with one unit's share, so the two `*_per_unit` fields are not separate keys.
@@ -672,12 +677,12 @@ class MemoryHierarchyFacts:
 Requesting memory adds one summary line and one line per advisory:
 
 ```text
-peak-footprint <level>=<int>[, <level>=<int>...]
-advisory <text>
+peak-footprint=<level>:<int>[,<level>:<int>...]
+advisory=<text>
 ```
 
-An empty footprint prints as `peak-footprint 0`; no advisory line is emitted
-when there is no advisory.
+An empty footprint states the family name alone; each advisory is its own line, so
+a program with none adds none.
 
 The record's single-line comment form projects the footprint it holds; `traffic`
 and `lifetimes` are read from JSON, not from a line:
@@ -782,7 +787,7 @@ Requesting roofline adds the exact summed compute-cost `flops` and `traffic`,
 the memory record's per-level peak, and this verdict to the summary:
 
 ```text
-ideal-bound=<int>ns by=<resource>
+roofline ideal-ns=<int> bound-by=<resource>
 ```
 
 Every measured Call receives this annotation. `compute_ns` and `memory_ns` are
@@ -910,9 +915,14 @@ class ParallelCapacityFacts:
 Requesting timeline adds this Function verdict to the summary:
 
 ```text
-timeline root=<Module>::<Function> local-makespan=<int>ns waves=<int>
-estimated-kernel=<int>ns
+timeline root=<Module>::<Function> local-makespan-ns=<int> waves=<int> estimated-kernel-ns=<int>
 ```
+
+`root` is the report's own identity, composed by inspection from the module and
+function it already states; it is not a field of `TimelineSummaryMetadata` and does
+not appear in that record's JSON projection. `waves` is stated even when it is one,
+because how many passes over the machine a plan takes is a conclusion and one wave
+is an answer.
 
 Every measured Call receives this annotation, one interval whether or not it
 repeats: a single trip states its own bounds, and a repeated occurrence states

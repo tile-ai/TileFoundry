@@ -669,12 +669,28 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     assert "offset=120" in annotated
 
     summary = payload["function_records"]["timeline"]
-    assert (
+    cost = payload["function_records"]["compute-cost"]
+    whole, unit = cost["traffic"]["gmem"], cost["traffic_per_unit"]["gmem"]
+    peak = payload["function_records"]["memory"]["footprint"]
+    bound = payload["function_records"]["roofline"]
+    assert header.splitlines() == [
+        "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts "
+        f"topology={payload['topology']}",
+        f"# selection requested={','.join(payload['requested'])} "
+        f"executed={','.join(payload['executed'])}",
+        "# compute-cost "
+        f"flops=f32:{cost['flops']['f32']}@{cost['flops_per_unit']['f32']} "
+        f"traffic=gmem:r{whole['read']}/w{whole['write']}"
+        f"@r{unit['read']}/w{unit['write']}",
+        f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
+        f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# timeline root=MoEMegaKernel::experts "
-        f"local-makespan={summary['local_makespan_ns']}ns "
+        f"local-makespan-ns={summary['local_makespan_ns']} "
         f"waves={summary['waves']} "
-        f"estimated-kernel={summary['estimated_kernel_ns']}ns"
-    ) in header.splitlines()
+        f"estimated-kernel-ns={summary['estimated_kernel_ns']}",
+    ]
+    assert payload["totals"]["flops"] == cost["flops"]
+    assert payload["totals"]["traffic"] == cost["traffic"]
 
     hoisted = {
         line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line

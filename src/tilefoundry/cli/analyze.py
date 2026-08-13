@@ -136,14 +136,13 @@ def run_authored_analysis(
 
     result = analyze(module, function, analysis=analyses, level=topology, dims=dims)
     rendered = render_analysis(result, operands=operands)
-    data = rendered.data
     if as_json:
-        sys.stdout.write(f"{render_json(data)}\n")
+        sys.stdout.write(f"{render_json(rendered.data)}\n")
         return 0
 
 
 
-    sys.stdout.write(f"{render_text(data)}\n\n{rendered.annotated}")
+    sys.stdout.write(f"{render_text(rendered)}\n\n{rendered.annotated}")
     return 0
 
 

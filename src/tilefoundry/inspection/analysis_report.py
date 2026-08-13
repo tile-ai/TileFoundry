@@ -13,11 +13,13 @@ that drift.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from tilefoundry.analysis import (
     ComputeCostMetadata,
     MemoryMetadata,
+    RooflineMetadata,
+    TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.api import AnalysisResult
 from tilefoundry.analysis.walk import postorder, tensor_types
@@ -27,9 +29,16 @@ from tilefoundry.inspection.python_printer import (
     _render_hir_function,
 )
 from tilefoundry.inspection.values import (
+    AdvisorySummary,
+    MemorySummary,
+    ReportIdentity,
+    ReportSelection,
+    TimelineSummaryView,
     declared_records,
     expr_field,
     family_of,
+    peak_footprint,
+    render_comment,
     render_record,
 )
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
@@ -98,10 +107,16 @@ def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str
 
 @dataclass(frozen=True)
 class AnalysisRendering:
-    """One annotated program and the report projected from that rendering."""
+    """One annotated program and the report projected from that rendering.
+
+    *summary* is one record per summary line, in reading order. They are the same
+    records the equations are annotated from, so a summary line and an equation
+    cannot state one number two ways.
+    """
 
     data: dict[str, object]
     annotated: str
+    summary: tuple[IRMetadata, ...] = ()
 
 
 def selected_types(
@@ -165,7 +180,53 @@ def render_analysis(
         "roofline" in data["requested"] and ComputeCostMetadata in available
     ):
         data["totals"] = _work_totals(function)
-    return AnalysisRendering(data=data, annotated=rendered.source)
+    return AnalysisRendering(
+        data=data,
+        annotated=rendered.source,
+        summary=_summary(function, data, function_records, selected),
+    )
+
+
+def _summary(
+    function: Function,
+    data: dict[str, object],
+    function_records: dict[str, object],
+    selected: frozenset[type[IRMetadata]],
+) -> tuple[IRMetadata, ...]:
+    """One record per summary line: what this report is about, then its findings.
+
+    A conclusion is stated by the record that holds it, on the same terms the
+    equations state theirs. Which lines appear is the same question as which
+    records the report carries, so it is asked of those and not of the text.
+    """
+    views: list[IRMetadata] = [
+        ReportIdentity(
+            target=data["target"],
+            module=data["module"],
+            function=data["function"],
+            topology=data["topology"] or "none",
+        ),
+        ReportSelection(
+            requested=tuple(data["requested"]), executed=tuple(data["executed"])
+        ),
+    ]
+    if "totals" in data:
+        views.append(get_metadata(function, ComputeCostMetadata) or ComputeCostMetadata())
+    if "memory" in function_records:
+        memory = get_metadata(function, MemoryMetadata)
+        views.append(MemorySummary(peak_footprint(memory)))
+        if MemoryMetadata in selected:
+            views.extend(AdvisorySummary(note) for note in memory.advisories)
+    if "roofline" in function_records:
+        views.append(get_metadata(function, RooflineMetadata))
+    if "timeline" in function_records:
+        summary = get_metadata(function, TimelineSummaryMetadata)
+        views.append(
+            TimelineSummaryView(
+                root=f"{data['module']}::{data['function']}", **asdict(summary)
+            )
+        )
+    return tuple(views)
 
 
 def report(result: AnalysisResult) -> dict[str, object]:
@@ -210,63 +271,13 @@ def _work_totals(function: Function) -> dict[str, object]:
     return {"flops": reported["flops"], "traffic": reported["traffic"]}
 
 
-def _flop_text(flops: dict[str, int]) -> str:
-    return ", ".join(f"{name}={value}" for name, value in sorted(flops.items())) or "0"
-
-
-def _traffic_text(traffic: dict[str, dict[str, int]]) -> str:
-    return (
-        ", ".join(
-            f"{level}=r{value['read']}/w{value['write']}"
-            for level, value in sorted(traffic.items())
-        )
-        or "0"
-    )
-
-
-def render_text(data: dict[str, object]) -> str:
+def render_text(rendering: AnalysisRendering) -> str:
     """The report as one stable line per conclusion, each prefixed with ``#``.
 
-    A conclusion appears only when a record states it, or -- for the work totals
-    -- when it is the exact sum of records that do.
+    Every line is one record walked the way an annotated equation is, so nothing
+    here knows what a family has: a conclusion appears when a record states it.
     """
-    lines = [
-        f"analysis target={data['target']} module={data['module']} "
-        f"function={data['function']} topology={data['topology'] or 'none'}",
-        f"analyses={','.join(data['requested'])} executed={','.join(data['executed'])}",
-    ]
-    totals = data.get("totals")
-    if totals is not None:
-        lines.append(f"flops {_flop_text(totals['flops'])}")
-        lines.append(f"traffic {_traffic_text(totals['traffic'])}")
-    records = data["function_records"]
-    if "memory" in records:
-        memory = records["memory"]
-        lines.append(
-            "peak-footprint "
-            + (
-                ", ".join(
-                    f"{item['level']}={item['peak_bytes']}"
-                    for item in memory["footprint"]
-                )
-                or "0"
-            )
-        )
-        lines.extend(f"advisory {note}" for note in memory.get("advisories", ()))
-    if "roofline" in records:
-        bound = records["roofline"]
-        lines.append(
-            f"ideal-bound={bound['ideal_ns']}ns by={bound['bound_by']}"
-        )
-    if "timeline" in records:
-        timeline = records["timeline"]
-        lines.append(
-            f"timeline root={data['module']}::{data['function']} "
-            f"local-makespan={timeline['local_makespan_ns']}ns "
-            f"waves={timeline['waves']} "
-            f"estimated-kernel={timeline['estimated_kernel_ns']}ns"
-        )
-    return "\n".join(f"# {line}" for line in lines)
+    return "\n".join(f"# {render_comment(view)}" for view in rendering.summary)
 
 
 def render_json(data: dict[str, object]) -> str:
