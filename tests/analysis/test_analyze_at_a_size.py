@@ -210,7 +210,11 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         assert record is not None
         assert record.traffic_at("rmem").read > 0
 
-    assert slices[0].args[1].elements[1].args[1].args[0] is slices[1].args[1].elements[1].args[1].args[0]
+    first_offset = slices[0].args[1].elements[1].args[1]
+    second_offset = slices[1].args[1].elements[1].args[1]
+    first_worker_index = first_offset.args[0]
+    second_worker_index = second_offset.args[0]
+    assert first_worker_index is second_worker_index
 
     cache_bytes = tensor_bytes(result.function.params[1].type)
     kv_windows = [

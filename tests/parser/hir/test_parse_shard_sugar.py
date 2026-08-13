@@ -20,7 +20,7 @@ from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- binds bare op names (reshard, ...)
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call
+from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
@@ -299,7 +299,7 @@ def test_mesh_axis_in_expr_is_a_rank_zero_position_coordinate() -> None:
 
 
 def test_mesh_coordinate_cannot_slice_an_already_placed_tensor() -> None:
-    with pytest.raises(ValueError, match="data-dependent mesh ownership"):
+    with pytest.raises(VerifyError, match="data-dependent mesh ownership"):
         @func(topologies=(Topology("cta", 8),))
         def _bad(x: Tensor[(8,), "i64"]) -> Tensor[(4,), "i64"]:
             with Mesh(("cta",), layout=(8,), names=("w",)) as cta:

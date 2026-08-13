@@ -294,7 +294,11 @@ class _HirBodyVisitor(BaseExprVisitor):
         )
 
     def _mesh_coordinate(self, node: ast.Attribute) -> Expr | None:
-        """Build or reuse the current rank-0 coordinate for a mesh axis."""
+        """Build or reuse the current rank-0 coordinate for a mesh axis.
+
+        Arange is an invariant source; the explicit C-order stride keeps the
+        generated layout within the injective layout contract.
+        """
         resolved = self._mesh_axis_node(node)
         if resolved is None:
             return None
@@ -315,7 +319,7 @@ class _HirBodyVisitor(BaseExprVisitor):
             for mesh_axis in range(len(mesh.layout.shape))
         )
         layout = ShardLayout(
-            layout=Layout(shape=(extent,), strides=(0,)),
+            layout=Layout(shape=(extent,), strides=(1,)),
             attrs=attrs,
             mesh=mesh,
         )
