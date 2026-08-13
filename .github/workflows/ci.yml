@@ -145,3 +145,18 @@ jobs:
           name: requirements
           path: requirements*.txt
           if-no-files-found: ignore
+      # Neither mode reaches what the other does -- the source run never enters the
+      # CLI commands only a shipped wheel exercises -- so each uploads under its own
+      # flag and Codecov unions them. The uploader runs from a throwaway
+      # environment: it pins `click<8.3`, which this project's `transformers` cannot
+      # live with.
+      - name: Upload coverage to Codecov
+        if: always()
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          for mode in source installed; do
+            [ -f "coverage-$mode.xml" ] || continue
+            uvx --from "codecov-cli==11.3.1" codecovcli upload-process \
+              --flag "$mode" --file "coverage-$mode.xml" --disable-search
+          done

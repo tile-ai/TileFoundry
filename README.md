@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/tilefoundry/"><img src="https://img.shields.io/pypi/v/tilefoundry.svg" alt="PyPI"></a>
+  <a href="https://codecov.io/gh/tile-ai/TileFoundry"><img src="https://codecov.io/gh/tile-ai/TileFoundry/branch/main/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/badge/status-early%20development-orange" alt="Status: early development">
   <a href="https://github.com/tile-ai/TileFoundry/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
