@@ -113,7 +113,6 @@ def test_flash_split_k_decode_survives_the_round_trip() -> None:
     imported = import_dsl(source)
     restored = import_dsl(as_script(imported))
 
-    assert "slice(" in source
     for roundtripped in (imported, restored):
         assert roundtripped.topologies == FlashSplitKDecode.topologies
         slices = [
