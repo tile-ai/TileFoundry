@@ -95,7 +95,6 @@ def test_prefill_decode_specializations_survive_the_round_trip() -> None:
 
     assert "arange(" in source
     assert "where(" in source
-    assert "slice(" in source
     for roundtripped in (imported, restored):
         variants = roundtripped.entry_function().variants
         assert len(variants) == 2

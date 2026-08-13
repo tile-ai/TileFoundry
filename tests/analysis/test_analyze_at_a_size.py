@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import pytest
 
-from tests.fixtures.placed.flash_split_k_decode import BLOCK, WORKERS, FlashSplitKDecode
+from tests.fixtures.placed.flash_split_k_decode import BLOCK, HEADS, WORKERS, FlashSplitKDecode
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
@@ -43,9 +43,21 @@ from tilefoundry.ir.hir.tensor.cast import Cast
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.core import Constant
+from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import tensor_bytes
-from tilefoundry.ir.types.shard import Partial, ShardLayout, Topology, shard_layout_of
+from tilefoundry.ir.types.shard import (
+    Broadcast,
+    Partial,
+    ShardLayout,
+    Split,
+    Topology,
+    shard_layout_of,
+)
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.schedule.partition import build_partition_program
 from tilefoundry.target import CudaTarget
@@ -167,7 +179,27 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         base = starts[1]
         assert isinstance(base, Call)
         assert base.args[0] is loop.induction_var
-        assert base.target.kind.value == "add"
+        assert isinstance(base.target, Binary) and base.target.kind is BinaryKind.ADD
+        offset = base.args[1]
+        assert isinstance(offset, Call)
+        assert isinstance(offset.target, Binary) and offset.target.kind is BinaryKind.MUL
+        assert isinstance(offset.args[1], Constant) and offset.args[1].value == BLOCK
+
+        worker_index = offset.args[0]
+        assert isinstance(worker_index, Call)
+        assert isinstance(worker_index.target, Reshape)
+        local_index = worker_index.args[0]
+        assert isinstance(local_index, Call)
+        assert isinstance(local_index.target, Local)
+        worker_shard = local_index.args[0]
+        assert isinstance(worker_shard, Call)
+        assert isinstance(worker_shard.target, Reshard)
+        assert worker_shard.args[0] is result.function.params[3]
+        assert worker_shard.target.storage is StorageKind.RMEM
+        worker_layout = worker_shard.target.layout
+        assert isinstance(worker_layout, ShardLayout)
+        assert worker_layout.mesh.layout.shape == (HEADS, WORKERS)
+        assert worker_layout.attrs == (Broadcast(), Split(axis=0))
         assert window.target.sizes[1] == BLOCK
         record = get_metadata(window, ComputeCostMetadata)
         assert record is not None
