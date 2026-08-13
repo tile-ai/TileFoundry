@@ -37,14 +37,10 @@ class FlashSplitKDecode:
         q: Tensor[(1, 1, HEADS, HEAD_DIM), "bf16"],
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
         v_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
-        wid: Tensor[(WORKERS,), "i64"],
     ) -> Tensor[(1, 1, HEADS, HEAD_DIM), "bf16"]:
         with Mesh(
             ("cta",), layout=(HEADS, WORKERS), names=("head", "w")
         ) as cta:
-            here = tf.reshape(
-                tf.local(tf.reshard(wid, (WORKERS @ cta.w,), "rmem")), ()
-            )
             qh = tf.reshard(
                 q, (1, 1, HEADS @ cta.head, HEAD_DIM), "smem"
             )
@@ -66,7 +62,7 @@ class FlashSplitKDecode:
             acc = tf.full_like(acc_slots, value=0.0)
 
             for c in tile(CTX, BLOCK * WORKERS):
-                base = c + here * BLOCK
+                base = c + cta.w * BLOCK
                 kb = tf.reshard(
                     k_cache[:, base : base + BLOCK, :, :],
                     (1, BLOCK, HEADS @ cta.head, HEAD_DIM),

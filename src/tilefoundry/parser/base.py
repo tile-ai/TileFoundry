@@ -38,7 +38,7 @@ from tilefoundry.ir.types.dtype import FloatDType
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.visitor_registry import typeinfer_registry
 
@@ -339,6 +339,10 @@ class BaseExprVisitor:
         """
         return self.env.innermost_mesh()
 
+    def _contains_mesh_coordinate(self, node: ast.AST) -> bool:
+        """Whether *node* contains a dialect-specific mesh coordinate."""
+        return False
+
 
 
     def expr(self, node: ast.AST) -> Expr:
@@ -576,6 +580,13 @@ class BaseExprVisitor:
             raise VerifyError(
                 f"tensor subscript rank {len(elts)} != tensor rank "
                 f"{len(x_ty.shape)}"
+            )
+        if shard_layout_of(x_ty.layout) is not None and any(
+            self._contains_mesh_coordinate(el) for el in elts
+        ):
+            raise VerifyError(
+                "tensor subscript uses a mesh coordinate to index an already "
+                "placed tensor; data-dependent mesh ownership is unresolved"
             )
 
         starts: list[Expr] = []

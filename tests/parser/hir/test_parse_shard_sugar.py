@@ -21,7 +21,11 @@ from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- binds bare op names (reshard, ...)
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call
+from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.arange import Arange
+from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import (
     Layout,
@@ -269,6 +273,38 @@ def test_printer_falls_back_to_verbose_when_mesh_has_no_names() -> None:
     src = as_script(fn)
     assert "@" not in src.split("@func")[1].split("def ")[0]
     assert "ShardLayout(" in src
+
+
+def test_mesh_axis_in_expr_is_a_rank_zero_position_coordinate() -> None:
+    @func(topologies=(Topology("cta", 8),))
+    def _coordinate() -> Tensor[(), "i64"]:
+        with Mesh(("cta",), layout=(8,), names=("w",)) as cta:
+            return cta.w
+
+    body = _coordinate.entry_function().body
+    assert isinstance(body, Call) and isinstance(body.target, Reshape)
+    assert body.type.shape == ()
+    assert body.type.dtype is DType.i64
+
+    local = body.args[0]
+    assert isinstance(local, Call) and isinstance(local.target, Local)
+    worker_shard = local.args[0]
+    assert isinstance(worker_shard, Call) and isinstance(worker_shard.target, Reshard)
+    source = worker_shard.args[0]
+    assert isinstance(source, Call) and isinstance(source.target, Arange)
+    assert source.target.end == 8
+    assert worker_shard.target.storage is StorageKind.RMEM
+    assert worker_shard.target.layout.mesh.layout.shape == (8,)
+    assert worker_shard.target.layout.attrs == (Split(axis=0),)
+
+
+def test_mesh_coordinate_cannot_slice_an_already_placed_tensor() -> None:
+    with pytest.raises(ValueError, match="data-dependent mesh ownership"):
+        @func(topologies=(Topology("cta", 8),))
+        def _bad(x: Tensor[(8,), "i64"]) -> Tensor[(4,), "i64"]:
+            with Mesh(("cta",), layout=(8,), names=("w",)) as cta:
+                placed = reshard(x, (8 @ cta.w,), "rmem")  # noqa: F821
+                return placed[cta.w : cta.w + 4]
 
 
 _S_DYN = DimVar("seq_len", 1, 4)

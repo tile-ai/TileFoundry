@@ -47,6 +47,7 @@ from tilefoundry.ir.core import Constant
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import tensor_bytes
 from tilefoundry.ir.types.shard import (
@@ -194,7 +195,11 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         worker_shard = local_index.args[0]
         assert isinstance(worker_shard, Call)
         assert isinstance(worker_shard.target, Reshard)
-        assert worker_shard.args[0] is result.function.params[3]
+        worker_source = worker_shard.args[0]
+        assert isinstance(worker_source, Call)
+        assert isinstance(worker_source.target, Arange)
+        assert worker_source.target.end == WORKERS
+        assert worker_source.target.start == 0
         assert worker_shard.target.storage is StorageKind.RMEM
         worker_layout = worker_shard.target.layout
         assert isinstance(worker_layout, ShardLayout)
@@ -204,6 +209,8 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         record = get_metadata(window, ComputeCostMetadata)
         assert record is not None
         assert record.traffic_at("rmem").read > 0
+
+    assert slices[0].args[1].elements[1].args[1].args[0] is slices[1].args[1].elements[1].args[1].args[0]
 
     cache_bytes = tensor_bytes(result.function.params[1].type)
     kv_windows = [

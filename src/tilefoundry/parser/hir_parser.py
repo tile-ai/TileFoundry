@@ -17,6 +17,10 @@ from tilefoundry.ir.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.ir.core import BindingMetadata, Expr, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.arange import Arange
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -29,7 +33,17 @@ from tilefoundry.ir.types.dim import (
     is_dim_expr,
     simplify_dim,
 )
-from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
+from tilefoundry.ir.types.shard import (
+    Broadcast,
+    Layout,
+    Mesh,
+    Partial,
+    ShardLayout,
+    Split,
+    Topology,
+)
+from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (
@@ -39,7 +53,7 @@ from .base import (
     _resolve_tensor_type,
     extract_ast,
 )
-from .sugar import _is_tuple_sugar, parse_mesh_layout_sugar
+from .sugar import _is_tuple_sugar, _resolve_mesh_axis, parse_mesh_layout_sugar
 from .symtab import LexicalEnv
 
 _HIR_FUNCTION = "[hir §1.1](docs/spec/hir.md#11-function)"
@@ -262,6 +276,76 @@ class _HirBodyVisitor(BaseExprVisitor):
         super().__init__(env, closure, in_module_body=in_module_body)
         self.topo_ns: dict[str, "Topology"] = topo_ns or {}
         self.source_filename = source_filename
+        self.pending_constraints: dict[int, ScheduleConstraintMetadata] = {}
+        self._mesh_coordinate_cache: dict[tuple[int, int], Expr] = {}
+
+    def _mesh_axis_node(self, node: ast.AST):
+        """Resolve ``mesh.axis`` when it names a lexical Mesh object."""
+        if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+            return None
+        mesh = self.env.lookup(node.value.id)
+        if not isinstance(mesh, Mesh):
+            return None
+        return mesh, _resolve_mesh_axis(mesh, node.attr)
+
+    def _contains_mesh_coordinate(self, node: ast.AST) -> bool:
+        return any(
+            self._mesh_axis_node(candidate) is not None for candidate in ast.walk(node)
+        )
+
+    def _mesh_coordinate(self, node: ast.Attribute) -> Expr | None:
+        """Build or reuse the current rank-0 coordinate for a mesh axis."""
+        resolved = self._mesh_axis_node(node)
+        if resolved is None:
+            return None
+        mesh, axis = resolved
+        extent = mesh.layout.shape[axis]
+        if not isinstance(extent, int) or isinstance(extent, bool):
+            raise VerifyError(
+                f"mesh coordinate {ast.unparse(node)!r} requires a concrete axis extent"
+            )
+        cache_key = (id(mesh), axis)
+        cached = self._mesh_coordinate_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        vector = self._build_call(Arange(end=extent), ())
+        attrs = tuple(
+            Split(axis=0) if mesh_axis == axis else Broadcast()
+            for mesh_axis in range(len(mesh.layout.shape))
+        )
+        layout = ShardLayout(
+            layout=Layout(shape=(extent,), strides=(0,)),
+            attrs=attrs,
+            mesh=mesh,
+        )
+        placed = self._build_call(
+            Reshard(layout=layout, storage=StorageKind.RMEM), (vector,)
+        )
+        local = self._build_call(Local(), (placed,))
+        coordinate = self._build_call(Reshape(new_shape=()), (local,))
+        self._mesh_coordinate_cache[cache_key] = coordinate
+        return coordinate
+
+    def _resolve_static_attribute(self, owner, attr: str):
+        if isinstance(owner, Mesh):
+            _resolve_mesh_axis(owner, attr)
+            raise VerifyError(
+                f"mesh coordinate {attr!r} is a run-time Expr, not a static value"
+            )
+        return super()._resolve_static_attribute(owner, attr)
+
+    def visit_Attribute(self, node: ast.Attribute) -> Expr:
+        coordinate = self._mesh_coordinate(node)
+        if coordinate is not None:
+            return coordinate
+        return super().visit_Attribute(node)
+
+    def _slicer_endpoint(self, node: ast.AST):
+        try:
+            return self._eval_static(node, allow_runtime_scalar=True)
+        except VerifyError:
+            return self.expr(node)
 
 
 

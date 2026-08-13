@@ -328,7 +328,12 @@ in what it lowers to:
 
 - **HIR** treats it as an **active mesh context** — a parser-lexical
   alias for the constructed `Mesh`, so layout sugar ([§1.5](#15-layout-sugar)) may bind axes
-  with `… @ m.axis` and tensors authored under it reuse the one `Mesh`.
+  with `… @ m.axis` and tensors authored under it reuse the one `Mesh`. In a layout
+  position, `m.axis` names the static mesh axis used by `dim @ m.axis`. In an HIR
+  Expr position, the same name is the current rank-0 coordinate along that axis; the
+  parser synthesizes the invariant index vector and its local view. Such a coordinate
+  may index an unplaced tensor in a runtime slice; indexing an already placed tensor
+  is rejected because its data-dependent mesh ownership is unresolved.
   It is not a tensor-binding scope and emits **no IR node**. Ordinary
   values assigned inside `suite` follow normal function-body visibility
   (not confined); `return` inside `suite` returns from the enclosing

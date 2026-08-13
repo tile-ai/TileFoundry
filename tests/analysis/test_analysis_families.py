@@ -886,8 +886,8 @@ def test_analysis_snapshot_drift_sentinel() -> None:
             },
         ),
         "flash_split_traffic": {
-            "gmem": {"read": 2_132_544, "write": 35_328},
-            "rmem": {"read": 336, "write": 104},
+            "gmem": {"read": 2_132_480, "write": 35_328},
+            "rmem": {"read": 400, "write": 104},
             "smem": {"read": 11_935_872, "write": 11_614_592},
         },
         "flash_split_offset_slice_traffic": (
