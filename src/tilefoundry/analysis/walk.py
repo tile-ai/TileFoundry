@@ -199,18 +199,24 @@ def tensor_types(type_: Type) -> tuple[TensorType, ...]:
             return ()
 
 
-def bytes_by_storage(type_: Type) -> dict[str, int]:
+def bytes_by_storage(
+    type_: Type, *, umat_level: str | None = None
+) -> dict[str, int]:
     """Logical bytes *type_* occupies, per storage level name.
 
-    An unmaterialized leaf occupies nothing: it has no committed residency yet,
-    so charging it to a level would report capacity for a placement no one has
-    chosen.
+    An unmaterialized leaf occupies nothing by default: it has no committed
+    residency yet, so charging it to a level would report capacity for a
+    placement no one has chosen. A consuming analysis may provide the level at
+    which such a leaf is materialized for that operation.
     """
     result: dict[str, int] = {}
     for tensor in tensor_types(type_):
         if tensor.storage is StorageKind.UMAT:
-            continue
-        name = str(tensor.storage)
+            if umat_level is None:
+                continue
+            name = umat_level
+        else:
+            name = str(tensor.storage)
         result[name] = result.get(name, 0) + tensor_bytes(tensor)
     return result
 

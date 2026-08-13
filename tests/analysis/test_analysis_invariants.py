@@ -16,7 +16,6 @@ import tilefoundry.cli.analyze as cli_analyze
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.rmsnorm import RmsnormModule
-<<<<<<< HEAD
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     AnalysisError,

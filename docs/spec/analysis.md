@@ -452,8 +452,8 @@ class ComputeCostMetadata(IRMetadata):
 |---|---|---|
 | `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written, then multiply by the enclosing recomputation factor. For a Function Call, take the callee's summed `flops` and multiply by the call site's factor. | No |
 | `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge it to the storage level of that operand's Type, and group by level. A multi-level Type conservatively charges its full logical size at every occupied level in each reported direction. A Function Call takes the callee's grouped total. | No |
 | `traffic_per_unit` | Run the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then charge and group the projected movement by storage level. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge concrete tensor leaves to their storage levels, and group by level. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
 | `operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
 
 Requesting this family adds these summary lines, each prefixed by `# `:
@@ -500,9 +500,15 @@ appears only for a primitive Call and contains objects in positional order:
     them distinct. A rendering MUST omit an unavailable operand split rather
     than emit it empty.
   - A `Reshard` within one storage level MUST report zero movement for both
-    operands; a `Reshard` that changes storage MUST report one full source read
-    and one full destination write. The operand Types then attribute those two
-    amounts to their respective storage levels.
+  operands; a `Reshard` that changes storage MUST report one full source read
+  and one full destination write. The operand Types then attribute those two
+  amounts to their respective storage levels.
+  - A `UMAT` operand appearing in `Call.args` MUST contribute its own logical
+    bytes at `rmem`; a `UMAT` value appearing only in an Op attribute MUST
+    contribute no traffic.
+  - A Type with concrete and `UMAT` leaves MUST charge each leaf's bytes at
+    its own level. It MUST NOT assign the aggregate movement of the operand to
+    the one concrete level merely because that is the only committed level.
   - Per-level `traffic` and `operands` MUST NOT be assumed equal for a Type that
     occupies several levels: the aggregate is the conservative placement charge
     while the operand entry is the evaluator's movement amount.

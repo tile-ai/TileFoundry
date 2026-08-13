@@ -34,6 +34,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _mesh_image, _result_placement, _timeline_placements
+from tilefoundry.analysis.compute_cost import _call_movement
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
@@ -55,6 +56,7 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard import (
     Topology as IrTopology,
 )
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import AmxTarget, CudaTarget
 from tilefoundry.visitor_registry import cost_evaluator_registry
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TrafficBytes
@@ -181,6 +183,21 @@ class _MovementCosts:
     def copied(source: Tensor[(1024, 2048), "f32"]):
         selected = source[0:256, :]
         return tf.concat(selected, selected, axis=0)
+
+
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+class _UnmaterializedValueCosts:
+    @func
+    def main(source: Tensor[(8, 4), "f32"]):
+        shape_value = tf.shape_of(source)[1]
+        return tf.zeros(shape=(shape_value,), dtype="i64", storage="umat")
+
+
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+class _RuntimeCoordinateCosts:
+    @func
+    def main(source: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]):
+        return source[start : start + 4, :]
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -612,6 +629,37 @@ def test_slice_costs_coordinates_but_not_the_view() -> None:
     )
 
 
+def test_unmaterialized_shape_values_are_not_charged_as_attributes() -> None:
+    function = _UnmaterializedValueCosts.entry_function()
+    zeros = _calls(function)[-1]
+    shape_value = zeros.target.shape[0]
+    assert shape_value.type.storage is StorageKind.UMAT
+    assert shape_value not in zeros.args
+    assert zeros.type.storage is StorageKind.UMAT
+    traffic, operands = _call_movement(zeros, Cost({}, (TrafficBytes(write=16),)))
+    assert operands == (TrafficBytes(write=16),)
+    assert traffic == ()
+
+
+def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
+    function = _RuntimeCoordinateCosts.entry_function()
+    analyze(_RuntimeCoordinateCosts, function, analysis="compute-cost")
+
+    (slice_call,) = _calls(function)
+    starts = slice_call.args[1]
+    assert tuple(str(field.storage) for field in starts.type.fields) == (
+        "gmem",
+        "umat",
+    )
+    record = get_metadata(slice_call, ComputeCostMetadata)
+    assert record is not None
+    assert record.traffic == (
+        ("gmem", TrafficBytes(read=8)),
+        ("rmem", TrafficBytes(read=8)),
+    )
+    assert record.operands[1] == TrafficBytes(read=16)
+
+
 def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
     function = _WindowCost.entry_function()
     result = analyze(_WindowCost, function, analysis="compute-cost")
@@ -787,10 +835,12 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "placed_traffic": (
             {
                 "gmem": {"read": 8_390_656, "write": 8_388_608},
+                "rmem": {"read": 17_256, "write": 0},
                 "smem": {"read": 21_670_592, "write": 21_432_512},
             },
             {
                 "gmem": {"read": 4_194_304, "write": 8_388_608},
+                "rmem": {"read": 279_488, "write": 0},
                 "smem": {"read": 795_541_504, "write": 484_638_720},
             },
         ),

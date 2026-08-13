@@ -686,4 +686,5 @@ TensorType.umat_tensor(shape, dtype)   # ranked: a shape vector
     views retain their derived layouts and are not required to be structurally
     equal to `umat_tensor`.
   - An operand carrying `UMAT` MUST NOT be charged to a memory level by the
-    residency of its own type alone; what charges it is where it is consumed.
+    residency of its own type alone; what charges it is where it is consumed
+    ([analysis §2.2.1](./analysis.md#221-compute-cost)).

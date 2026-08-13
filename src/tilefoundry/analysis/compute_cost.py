@@ -13,6 +13,7 @@ from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType, Type
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -27,9 +28,11 @@ from .walk import (
     enclosing_trips,
     postorder,
     reachable_functions,
+    tensor_types,
 )
 
 SELECTOR = "compute-cost"
+_UMAT_CONSUMPTION_LEVEL = str(StorageKind.RMEM)
 
 
 def _is_structural_occurrence(
@@ -112,6 +115,9 @@ def _call_movement(
     How much moves is the op's answer; which level it moves at is a function of
     that operand's Type. *operand_types* supplies the projected types for the
     per-unit reading.
+    Concrete leaves use their declared levels; a UMAT leaf gets the level at
+    which this call consumes it. The result is deliberately not a consuming
+    argument, even when it is UMAT.
     """
     operands = (*call.args, call)
     types = operand_types or tuple(operand.type for operand in operands)
@@ -125,10 +131,17 @@ def _call_movement(
     charged: list[TrafficBytes] = []
     if len(types) != len(operands):  # pragma: no cover - internal caller contract
         raise AnalysisError("cost movement needs one projected type per operand")
-    for type_, moved in zip(types, cost.traffic):
-        by_level = bytes_by_storage(type_)
+    for index, (type_, moved) in enumerate(zip(types, cost.traffic)):
+        is_call_arg = index < len(call.args)
+        has_umat = any(
+            tensor.storage is StorageKind.UMAT for tensor in tensor_types(type_)
+        )
+        by_level = bytes_by_storage(
+            type_,
+            umat_level=_UMAT_CONSUMPTION_LEVEL if is_call_arg else None,
+        )
         charged.append(moved)
-        if len(by_level) == 1:
+        if len(by_level) == 1 and not has_umat:
             (level,) = by_level
             reads[level] = reads.get(level, 0) + moved.read
             writes[level] = writes.get(level, 0) + moved.write
