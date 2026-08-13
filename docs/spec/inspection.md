@@ -304,8 +304,14 @@ A record MUST declare that it renders as a comment, and MAY declare which keys
 it emits: a field by its own name, anything else as a projection carrying its
 key, its type, and where its value comes from. Metadata with no declaration
 renders as nothing, which is how an annotation that is not a report -- a binding
-name, a constraint -- stays off the line. A comment MUST NOT emit a key the
-family's JSON projection cannot state; it MAY emit fewer.
+name, a constraint -- stays off the line.
+
+A record an analysis report projects ([analysis §2](./analysis.md#2-authored-hir-metrics))
+MUST NOT emit a key that projection cannot state; it MAY emit fewer, because a
+comment is read on a line and JSON is read by a program. A record no report
+projects is comment-only -- `SourceSpanMetadata` is where an expression was
+authored, which no family measures -- and there is no projection for it to be a
+subset of.
 
 One separator per layer, and a separator MUST NOT appear inside a value it
 separates unless that value brackets itself:
