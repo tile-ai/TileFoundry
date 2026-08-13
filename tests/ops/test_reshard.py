@@ -100,6 +100,16 @@ CASES = [
         ),
     ),
     TypeInferCase(
+        "unmaterialized_to_high_sugar_materializes_shared",
+        Reshard(layout=_SL_L2H, storage=gmem),
+        (make_tensor_type((4, 64), storage=StorageKind.UMAT),),
+        make_tensor_type(
+            (4, 64),
+            storage=gmem,
+            layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H),
+        ),
+    ),
+    TypeInferCase(
         "same_storage_dynamic_bare_axis_shared_engine",
         Reshard(layout=_SL_DYN_BARE, storage=None),
         (make_tensor_type((1, _S_DYN, 32, 128)),),

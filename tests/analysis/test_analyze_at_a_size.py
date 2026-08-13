@@ -226,8 +226,10 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         and isinstance(expr.args[0].target, Slice)
     ]
     assert len(kv_windows) == 2
+    trips = enclosing_trips(result.function.body)
     assert all(
-        get_metadata(window, ComputeCostMetadata).traffic_at("gmem").read
+        trips.get(id(window), 1)
+        * get_metadata(window, ComputeCostMetadata).traffic_at("gmem").read
         == cache_bytes // WORKERS
         for window in kv_windows
     )

@@ -653,9 +653,9 @@ def test_unmaterialized_shape_values_are_not_charged_as_attributes() -> None:
 
 def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
     function = _RuntimeCoordinateCosts.entry_function()
-    analyze(_RuntimeCoordinateCosts, function, analysis="compute-cost")
+    result = analyze(_RuntimeCoordinateCosts, function, analysis="compute-cost")
 
-    (slice_call,) = _calls(function)
+    (slice_call,) = _calls(result.function)
     starts = slice_call.args[1]
     assert tuple(str(field.storage) for field in starts.type.fields) == (
         "gmem",
@@ -672,9 +672,9 @@ def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
 
 def test_non_scalar_unmaterialized_operands_are_charged_at_rmem() -> None:
     function = _UnmaterializedIndexTensorCosts.entry_function()
-    analyze(_UnmaterializedIndexTensorCosts, function, analysis="compute-cost")
+    result = analyze(_UnmaterializedIndexTensorCosts, function, analysis="compute-cost")
 
-    (binary,) = [call for call in _calls(function) if isinstance(call.target, Binary)]
+    (binary,) = [call for call in _calls(result.function) if isinstance(call.target, Binary)]
     assert tuple(arg.type.shape for arg in binary.args) == ((1, 128), (128, 1))
     assert all(arg.type.storage is StorageKind.UMAT for arg in binary.args)
     record = get_metadata(binary, ComputeCostMetadata)

@@ -126,8 +126,12 @@ def _materialize_reshard_strides(
 
     Pre-condition: ``layout.layout.strides is None`` (sugar). For
     verbose paths the caller short-circuits before this helper.
+    UMAT materializes in RMEM, so it uses that boundary when choosing sugar
+    strides.
     """
-    src_storage = src_ty.storage
+    src_storage = (
+        StorageKind.RMEM if src_ty.storage is StorageKind.UMAT else src_ty.storage
+    )
     src_layout = src_ty.layout if isinstance(src_ty.layout, ShardLayout) else None
     if src_storage == new_storage:
         if _src_form_is_per_instance(src_layout):
