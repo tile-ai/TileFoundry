@@ -16,6 +16,7 @@ import tilefoundry.cli.analyze as cli_analyze
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.rmsnorm import RmsnormModule
+<<<<<<< HEAD
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     AnalysisError,
@@ -24,6 +25,7 @@ from tilefoundry.analysis import (
     check_program,
     extract,
 )
+from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.walk import postorder, values_of
 from tilefoundry.dsl import ConstTensor, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
@@ -40,11 +42,15 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.quant import Quant
+from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
-from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, schedule
+from tilefoundry.schedule.partition import PartitionProgramError, build_partition_program
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
@@ -202,6 +208,64 @@ def test_check_program_keeps_resources_of_two_attachments_distinct() -> None:
     assert any(resources["left.w"] in call.args for call in calls)
     assert any(resources["right.w"] in call.args for call in calls)
     assert resources["left.w"] is not resources["right.w"]
+def test_only_unmaterialized_loop_indices_get_the_singleton_reshape_exemption() -> None:
+    """A concrete scalar index remains data-dependent under the HIR contract."""
+
+    def make_function(storage: StorageKind) -> Function:
+        x = Var(type=make_tensor_type((8,), DType.f32), name="x")
+        induction_var = Var(
+            type=TensorType.scalar(DType.i32, storage=storage), name="i"
+        )
+        index = Call(
+            type=TensorType(shape=(1,), dtype=DType.i32, layout=None, storage=storage),
+            target=Reshape(new_shape=(1,)),
+            args=(induction_var,),
+        )
+        selected = Call(
+            type=make_tensor_type((1,), DType.f32),
+            target=IndexSelect(dim=0),
+            args=(x, index),
+        )
+        loop = GridRegionExpr(
+            type=selected.type,
+            induction_var=induction_var,
+            carried_args=(),
+            init_args=(),
+            body=selected,
+            yield_values=(selected,),
+            extent=1,
+            step=1,
+        )
+        return Function.build(
+            name=f"singleton_{storage.name.lower()}",
+            params=(x,),
+            body=loop,
+            return_type=selected.type,
+        )
+
+    umat_function = make_function(StorageKind.UMAT)
+    assert isinstance(umat_function.body, GridRegionExpr)
+    assert isinstance(umat_function.body.body, Call)
+    umat_index = umat_function.body.body.args[1]
+    assert is_induction_var_singleton_reshape(umat_index)
+    validate_authored((umat_function,))
+    build_partition_program(
+        Module("umat_singleton_partition", (umat_function,), entry=umat_function.name),
+        umat_function,
+    )
+
+    rmem_function = make_function(StorageKind.RMEM)
+    assert isinstance(rmem_function.body, GridRegionExpr)
+    assert isinstance(rmem_function.body.body, Call)
+    rmem_index = rmem_function.body.body.args[1]
+    assert not is_induction_var_singleton_reshape(rmem_index)
+    with pytest.raises(AnalysisError, match="unresolved layout"):
+        validate_authored((rmem_function,))
+    with pytest.raises(PartitionProgramError, match="storage.*RMEM"):
+        build_partition_program(
+            Module("rmem_singleton_partition", (rmem_function,), entry=rmem_function.name),
+            rmem_function,
+        )
 
 
 @func

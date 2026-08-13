@@ -36,8 +36,13 @@ class Reshape(Op):
 register_access_relation(Reshape)(identity_relations(1))
 
 
-def is_register_scalar_singleton_reshape(expr) -> bool:
-    """Whether ``expr`` only presents one unmaterialized scalar as a 1-D tensor."""
+def is_induction_var_singleton_reshape(expr) -> bool:
+    """Whether ``expr`` has the singleton view form for a loop index.
+
+    HIR induction variables use ``UMAT`` storage; the exact induction-variable
+    identity is checked by affine extraction, while this predicate keeps the
+    preflight and partition gates aligned with that representation.
+    """
     return (
         isinstance(expr, Call)
         and isinstance(expr.target, Reshape)

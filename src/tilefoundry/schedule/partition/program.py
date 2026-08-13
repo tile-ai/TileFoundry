@@ -24,7 +24,7 @@ from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, diagnostic_loc
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.tensor.reshape import is_register_scalar_singleton_reshape
+from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -339,7 +339,7 @@ class _Extractor:
                 f"kernel boundary {type(target).__name__} at "
                 f"{expr_location(expr)} is not a partitioned operation"
             )
-        if is_register_scalar_singleton_reshape(expr):
+        if is_induction_var_singleton_reshape(expr):
             refs = arg_refs[0] if arg_refs else ()
             self._expr_values[key] = refs
             self._record_requirement(refs, expr)

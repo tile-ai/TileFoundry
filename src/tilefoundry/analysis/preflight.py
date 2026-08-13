@@ -13,7 +13,7 @@ from tilefoundry.ir.constraints import ScheduleConstraintMetadata
 from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.tensor.reshape import is_register_scalar_singleton_reshape
+from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
 from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
@@ -81,7 +81,7 @@ def validate_authored(functions: Iterable[Function]) -> None:
             if (
                 isinstance(expr, Call)
                 and _unresolved_local_layout(expr.type)
-                and not is_register_scalar_singleton_reshape(expr)
+                and not is_induction_var_singleton_reshape(expr)
             ):
                 raise AnalysisError(
                     f"{describe(expr)}: distribution inference stopped with an "
