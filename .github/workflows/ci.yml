@@ -22,15 +22,40 @@ jobs:
   ci:
     runs-on: [self-hosted, tilefoundry]
     container: tilefoundry-ci-runner:local
+    env:
+      # The package cache lives in the runner's work directory, the same mount the
+      # checkout is on. Hardlinks cannot cross a mount point even within one
+      # filesystem, so a cache anywhere else would cost this job a full copy of
+      # every package -- 4.9 GB and nine seconds -- instead of links.
+      UV_CACHE_DIR: /__w/uv-cache
+      UV_NO_PROGRESS: "1"
     steps:
       - uses: actions/checkout@v4
+      # This job builds its whole environment from one pinned resolution of this
+      # checkout's pyproject.toml. Nothing is inherited from an environment on the
+      # host: venvs cannot nest, so sharing one needs a `.pth` bridge, and a branch
+      # that changes dependencies could not then test itself.
       - name: Prepare the project environment
         run: |
-          python -m venv --system-site-packages .venv
-          .venv/bin/python -m pip install \
+          uv venv --clear --no-project --python /usr/local/bin/python3.12 .venv
+          uv pip compile --quiet --all-extras --generate-hashes \
+            --python .venv/bin/python pyproject.toml -o "$RUNNER_TEMP/requirements.txt"
+          uv pip compile --quiet --generate-hashes \
+            --python .venv/bin/python pyproject.toml \
+            -o "$RUNNER_TEMP/requirements-runtime.txt"
+          uv pip sync --python .venv/bin/python \
+            --require-hashes "$RUNNER_TEMP/requirements.txt"
+          uv pip install --python .venv/bin/python \
             --no-deps --no-build-isolation --editable .
+          # What activating would set, for every later step.
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          # `isl-python` ships its own libisl under `<venv>/lib` but asks
+          # `ctypes.util.find_library` for it, which answers with the older system
+          # copy `libisl23` -- a package gcc depends on, so it cannot be removed.
+          echo "LD_LIBRARY_PATH=$PWD/.venv/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
       - name: Run pre-commit
-        run: .venv/bin/python -m pre_commit run --all-files
+        run: pre-commit run --all-files
       - name: Link CUTLASS headers
         run: |
           mkdir -p third_party/cutlass
@@ -41,35 +66,38 @@ jobs:
       # branch, which is what reading a report for redundancy needs.
       - name: Run tests
         run: |
-          .venv/bin/python -m pytest tests/ -n 4 \
+          pytest tests/ -n 4 \
             --cov=tilefoundry --cov-branch --cov-context=test \
             --cov-report=xml:coverage-source.xml --cov-report=
       - name: Build the wheel
-        run: |
-          mkdir -p "$RUNNER_TEMP/wheel"
-          .venv/bin/python -m pip wheel . --no-deps --no-build-isolation \
-            --wheel-dir "$RUNNER_TEMP/wheel"
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/wheel"
+      # Only what a user's `pip install tilefoundry` would bring, then the wheel
+      # itself with no dependency resolution of its own.
       - name: Install the wheel into a clean environment
         run: |
-          python -m venv --system-site-packages .wheel-venv
-          .wheel-venv/bin/python -m pip install --no-deps \
-            "$RUNNER_TEMP"/wheel/tilefoundry-*.whl
+          uv venv --clear --no-project --python /usr/local/bin/python3.12 .wheel-venv
+          uv pip sync --python .wheel-venv/bin/python \
+            --require-hashes "$RUNNER_TEMP/requirements-runtime.txt"
+          uv pip install --python .wheel-venv/bin/python \
+            --no-deps "$RUNNER_TEMP"/wheel/tilefoundry-*.whl
+      # The tests run from this job's own environment and aim the installed one at
+      # the wheel: the clean environment holds no test tooling, which is the point
+      # of it. What runs the wheel is a subprocess there, not this pytest, so
+      # coverage starts inside that interpreter -- the package is copied in and
+      # hooked with a `.pth`, because a `.pth` that cannot import writes a
+      # traceback to stderr and these tests assert stderr is empty. `[paths]` folds
+      # the wheel's own location back onto the checkout, so both modes report the
+      # same files.
       - name: Verify the installed surface
         run: |
+          export LD_LIBRARY_PATH="$PWD/.wheel-venv/lib:$LD_LIBRARY_PATH"
           clean_site=$(.wheel-venv/bin/python -c \
             'import sysconfig; print(sysconfig.get_path("purelib"))')
-          # What runs the wheel is a subprocess in the clean environment, not this
-          # pytest, so coverage starts inside that interpreter. The package is
-          # copied in beside the wheel rather than reached through the shared
-          # read-only environment: a `.pth` that cannot import writes a traceback
-          # to stderr, and these tests assert stderr is empty.
-          coverage_package=$(.venv/bin/python -c \
+          coverage_package=$(python -c \
             'import coverage, pathlib; print(pathlib.Path(coverage.__file__).parent)')
           cp -r "$coverage_package" "$clean_site/coverage"
           printf 'import coverage; coverage.process_startup()\n' \
             > "$clean_site/zzz-coverage-subprocess.pth"
-          # `[paths]` folds the wheel's own location back onto the checkout, so
-          # both modes report the same files.
           cat > coveragerc-installed <<EOF
           [run]
           branch = True
@@ -84,29 +112,36 @@ jobs:
           EOF
           COVERAGE_PROCESS_START="$PWD/coveragerc-installed" \
             TF_SMOKE_VENV="$PWD/.wheel-venv" \
-            .wheel-venv/bin/python -m pytest tests/installed \
-            -o python_files='smoke_*.py' -q -n 8
-          .venv/bin/python -m coverage combine --rcfile=coveragerc-installed
-          .venv/bin/python -m coverage xml --rcfile=coveragerc-installed \
-            -o coverage-installed.xml
+            pytest tests/installed -o python_files='smoke_*.py' -q -n 8
+          coverage combine --rcfile=coveragerc-installed
+          coverage xml --rcfile=coveragerc-installed -o coverage-installed.xml
       - name: Decode the published checkpoint with the shipped source
         run: |
+          export LD_LIBRARY_PATH="$PWD/.wheel-venv/lib:$LD_LIBRARY_PATH"
           .wheel-venv/bin/python tests/installed/qwen3_1_7b_l3.py \
             --venv "$PWD/.wheel-venv" \
             --work "$RUNNER_TEMP/l3"
       # A readable report of the source run, whose `--show-contexts` names the
-      # tests that reached each line. Percentages alone cannot answer which test
-      # a line is covered by, which is the question consolidating the suite asks.
+      # tests that reached each line. Percentages alone cannot answer which test a
+      # line is covered by, which is the question consolidating the suite asks.
       - name: Publish the coverage report
         if: always()
         run: |
           if [ -f .coverage ]; then
-            .venv/bin/python -m coverage html --show-contexts -d htmlcov \
-              --data-file=.coverage
+            coverage html --show-contexts -d htmlcov --data-file=.coverage
           fi
+          cp "$RUNNER_TEMP"/requirements*.txt . 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: coverage-html
           path: htmlcov/
+          if-no-files-found: ignore
+      # The resolution is generated, not tracked, so the run keeps a copy of the
+      # one it installed.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: requirements
+          path: requirements*.txt
           if-no-files-found: ignore

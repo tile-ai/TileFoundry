@@ -64,6 +64,10 @@ coverage-source.xml
 coverage-installed.xml
 coveragerc-installed
 .coverage-installed*
+#   The resolution each run installs from. Generated, not tracked; a run keeps its
+#   own copy as an artifact.
+/requirements.txt
+/requirements-runtime.txt
 
 # Translations
 *.mo
