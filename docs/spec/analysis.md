@@ -383,22 +383,16 @@ def render_analysis(result: AnalysisResult) -> AnalysisRendering:
   is a share of, and JSON MUST expose all four quantities without reconstructing
   any of them from the others.
 
-The output forms below are the values a record's fields hold, rendered by their
-own type ([inspection §2.8](./inspection.md#28-record-comment-forms)). A field
-whose plain `int`, `str`, or mapping already reads correctly has no type of its
-own:
+A value renders by the type its field holds, and those forms and their separators
+are owned by [inspection §2.8](./inspection.md#28-record-comment-forms). What this
+layer settles is which type a field holds and what its keys name:
 
-| Type | Form |
-|---|---|
-| `int` | `<int>` |
-| `str` | the bare token, `<resource>` being `compute`, `memory`, `balanced`, `unrated`, or `none` |
-| a mapping | `<key>:<value>[,<key>:<value>...]`, where a key is a dtype, a storage level, or an operand position (an argument integer or `result`) |
-| `TrafficBytes` | `r<int>/w<int>` |
-| `TotalAndPerUnit` | `<whole>@<one unit's share>` |
-| `TripInterval` | `[<int>,<int>)` for one trip; `[<int>t+<int>,<int>t+<int>)*<int>` for a repeated one, the coefficient being the stride and the suffix the trip count |
-
-A key that measured nothing is left out, so a record that measured nothing is
-its family name alone.
+- A mapping's key is a dtype, a storage level, or an operand position -- an
+  argument integer, or `result` for the value the Call produces.
+- `<resource>` is `compute`, `memory`, `balanced`, `unrated`, or `none`.
+- Bytes moved are `TrafficBytes`; a whole quantity paired with one unit's share
+  is `TotalAndPerUnit`; a Call's occurrence on the timeline is one
+  `TripInterval`.
 
 - constraints:
   - A family MUST obtain hardware only through a Facts aggregate it declares
