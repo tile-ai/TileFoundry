@@ -186,10 +186,10 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
     assert "# roofline ideal-ns=" in done.stdout
     assert "# peak-footprint=" in done.stdout
     assert "# timeline " not in done.stdout
-    assert "roofline ideal-ns=" in done.stdout
-    assert "memory peak=" not in done.stdout
-    assert "compute-cost flops=" not in done.stdout
-    assert "timeline=" not in done.stdout
+    assert "; roofline ideal-ns=" in done.stdout
+    assert "; memory peak=" not in done.stdout
+    assert "; compute-cost" not in done.stdout
+    assert "; timeline=" not in done.stdout
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
