@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -668,6 +669,16 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         f"estimated-kernel={summary['estimated_kernel_ns']}ns"
     ) in header.splitlines()
 
+    hoisted = {
+        line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line
+    }
+    assert hoisted == {"cta", "cta_2", "cta_3", "cta_4"}
+    annotated_types = [
+        line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
+    ]
+    assert 'Tensor[(120, 64), "f32", (120 @ cta_2.tile, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", (12 @ cta_3.tile, 10, 64)]' in annotated_types
+
     rows = payload["calls"]
     assert len(rows) == 7
     assert all(
@@ -689,6 +700,11 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
             f"timeline start={timeline['start_ns']}ns end={timeline['end_ns']}ns"
             in statement
         )
+        annotated_meshes = set(re.findall(r"@ (\w+)\.", statement.split("  # ", 1)[1]))
+        assert annotated_meshes <= hoisted
+        placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
+        if annotated_meshes and placed_meshes:
+            assert annotated_meshes == placed_meshes
     assert len([line for line in lines if "; timeline " in line]) == len(rows)
     assert len({row["value"] for row in rows}) == len(rows)
     assert "units=" not in annotated

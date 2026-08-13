@@ -187,6 +187,16 @@ Both modes MUST agree on semantics; only the level of detail differs.
 The meaning of `Split` / `Partial` / `Broadcast` is owned by
 [shard](./shard.md); these forms define only render syntax.
 
+The same-line type annotation `show_types` appends is the `canonical` form on
+one physical line, rendered through the same mesh name map
+([§2.5](#25-mesh-name-map)) as the signature and the prelude: an annotated
+layout MUST name the hoisted mesh rather than restate it, and a `Tuple[...]`
+annotation MUST name it in every field. The verbose `ShardLayout(...)` fallback
+is unchanged — a mesh with no named axes, or a layout the sugar cannot express,
+still renders verbose, so no annotation loses information. The annotation is
+**display-only** ([§2.7](#27-round-trip-contract)); what round-trips is the
+emitted code, not its comments.
+
 Canonical DType text is the descriptor's `name`. Tensor annotations and DType
 op attributes MUST emit that name as a quoted DSL string. Compact labels MAY
 omit the quotes, but MUST NOT use the descriptor's raw `repr()`.

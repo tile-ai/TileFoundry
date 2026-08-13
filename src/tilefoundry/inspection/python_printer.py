@@ -55,7 +55,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.shard import c_order_strides
+from tilefoundry.ir.types.shard import try_c_order_strides
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -113,17 +113,22 @@ def _physical_line_count(lines: list[str]) -> int:
     return sum(line.count("\n") + 1 for line in lines)
 
 
-def _compact_type(ty: object) -> str:
-    """One physical-line, DSL-shaped type annotation for inspection output."""
+def _compact_type(ty: object, mesh_name_map: dict[int, str]) -> str:
+    """One physical-line, DSL-shaped type annotation for inspection output.
+
+    Takes the same mesh-name map the signature and mesh prelude are rendered
+    from, so an annotated layout names the hoisted mesh instead of restating it.
+    """
     if isinstance(ty, TensorType):
-        rendered = _tensor_annotation(ty)
+        rendered = _tensor_annotation(ty, mesh_name_map=mesh_name_map)
         return " ".join(rendered.split())
     if isinstance(ty, TupleType):
-        return "Tuple[" + ", ".join(_compact_type(field) for field in ty.fields) + "]"
+        fields = ", ".join(_compact_type(field, mesh_name_map) for field in ty.fields)
+        return f"Tuple[{fields}]"
     return repr(ty)
 
 
-def _comments(expr: Expr, options: PythonPrintOptions) -> str:
+def _comments(expr: Expr, options: PythonPrintOptions, mesh_name_map: dict[int, str]) -> str:
     """Return same-line annotations for one printed statement.
 
     Omit the binding because the left-hand side already carries its emitted name
@@ -132,7 +137,7 @@ def _comments(expr: Expr, options: PythonPrintOptions) -> str:
     """
     comments: list[str] = []
     if options.show_types:
-        comments.append(_compact_type(expr.type))
+        comments.append(_compact_type(expr.type, mesh_name_map))
     for metadata_type in options.comment_metadata_types:
         metadata = get_metadata(expr, metadata_type)
         if metadata is None:
@@ -263,6 +268,9 @@ def _shard_layout_surface_str(
     Inline splits on layout dimensions, emit partial value states as a set, and
     omit broadcasts. Include explicit strides only when present. Return ``None``
     when sugar cannot express the layout so callers use verbose fallback.
+
+    A symbolic shape has no static C-order strides to compare against, so the
+    ones it states are emitted rather than assumed contiguous.
     """
     layout = sl.layout
     if not isinstance(layout, Layout):
@@ -287,7 +295,7 @@ def _shard_layout_surface_str(
         dim_str += ","
     axis_tuple = f"({dim_str})"
 
-    c_strides = c_order_strides(layout.shape)
+    c_strides = try_c_order_strides(layout.shape)
     explicit = layout.strides is not None and layout.strides != c_strides
     stride_str = _shape_tuple(layout.strides) if explicit else None
     value_set = "{" + ", ".join(partials) + "}" if partials else None
@@ -753,7 +761,7 @@ def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -
 
 
 def _emit_def(
-    fn: HirFunction, def_name: str, mesh_map: dict, indent: str,
+    fn: HirFunction, def_name: str, mesh_map: dict[int, str], indent: str,
     options: PythonPrintOptions, child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
@@ -1132,7 +1140,7 @@ def _emit_def(
             )
         lines.append(
             f"{level}{name} = {_format_call(expr, level)}"
-            f"{_comments(expr, options)}"
+            f"{_comments(expr, options, mesh_map)}"
         )
         printed.add(id(expr))
 
@@ -1147,7 +1155,7 @@ def _emit_def(
             printed.add(key)
             return
         if isinstance(expr, Constant):
-            lines.append(f"{level}{_names[key]} = {repr(expr.value)}{_comments(expr, options)}")
+            lines.append(f"{level}{_names[key]} = {repr(expr.value)}{_comments(expr, options, mesh_map)}")
             printed.add(key)
             return
         if isinstance(expr, Tuple):
@@ -1189,7 +1197,7 @@ def _emit_def(
             loop = f"range({extent})"
         else:
             loop = f"range({start}, {extent}, {step})"
-        lines.append(f"{level}for {grid.induction_var.name} in {loop}:{_comments(grid, options)}")
+        lines.append(f"{level}for {grid.induction_var.name} in {loop}:{_comments(grid, options, mesh_map)}")
         printed.add(key)
         inner = level + "    "
         _emit_expr(grid.body, inner)
@@ -1217,7 +1225,7 @@ def _emit_def(
             continue
         if isinstance(expr, Constant):
             name = _names[id(expr)]
-            lines.append(f"{indent}{name} = {repr(expr.value)}{_comments(expr, options)}")
+            lines.append(f"{indent}{name} = {repr(expr.value)}{_comments(expr, options, mesh_map)}")
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
@@ -1238,7 +1246,7 @@ def _emit_def(
                 )
             lines.append(
                 f"{indent}{name} = {_format_call(expr, indent)}"
-                f"{_comments(expr, options)}"
+                f"{_comments(expr, options, mesh_map)}"
             )
             line = _constraint_line(expr, indent, name)
             if line is not None:
