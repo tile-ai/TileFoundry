@@ -360,6 +360,12 @@ class BaseExprVisitor:
         finally:
             self._active_binding_hint = previous
 
+    @staticmethod
+    def _attach_metadata(expr: Expr, value: IRMetadata) -> None:
+        """Attach parser-authored metadata without rebuilding the SSA node."""
+        kept = tuple(item for item in expr.metadata if type(item) is not type(value))
+        object.__setattr__(expr, "metadata", (*kept, value))
+
     def _source_span(self) -> SourceSpanMetadata | None:
         node = self._active_source_node
         if node is None or not hasattr(node, "lineno"):

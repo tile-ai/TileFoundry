@@ -26,7 +26,6 @@ from tilefoundry.ir.core import (
     Constant,
     Expr,
     IRMetadata,
-    SourceSpanMetadata,
     Tuple,
     Var,
     binding_name,
@@ -758,8 +757,6 @@ def _emit_def(
             _op_names_set.add(_op_name(expr.target))
 
     _forced_names: dict[int, str] = {}
-    _preferred_names: dict[int, str] = {}
-    _carry_yield_aliases: dict[int, Call] = {}
     _tile_window_steps: dict[int, object] = {}
     collapsed_slice_ids = {
         id(expr.args[0])
@@ -807,41 +804,6 @@ def _emit_def(
         ):
             _forced_names[id(carry)] = _sanitize_name(carry.name)
             _forced_names[id(init)] = _sanitize_name(carry.name)
-            if not isinstance(value, Call):
-                continue
-            span = get_metadata(value, SourceSpanMetadata)
-            if span is None:
-                continue
-            candidates: list[Expr] = []
-            candidate_ids: set[int] = set()
-            for root in (expr.body, *expr.yield_values):
-                candidates.extend(iter_exprs(root, candidate_ids))
-            alias = next(
-                (
-                    candidate
-                    for candidate in candidates
-                    if isinstance(candidate, Call)
-                    and candidate is not value
-                    and candidate.target is value.target
-                    and candidate.type == value.type
-                    and len(candidate.args) == len(value.args)
-                    and all(
-                        left is right
-                        for left, right in zip(candidate.args, value.args)
-                    )
-                    and get_metadata(candidate, SourceSpanMetadata) == span
-                ),
-                None,
-            )
-            if alias is None:
-                continue
-            _carry_yield_aliases[id(alias)] = value
-            yielded_name = binding_name(value)
-            preferred = (
-                binding_name(alias) if yielded_name == carry.name else yielded_name
-            )
-            if preferred is not None:
-                _preferred_names[id(value)] = _sanitize_name(preferred)
         for _ in iter_exprs(expr.body, _grid_internal_ids):
             pass
         for value in expr.yield_values:
@@ -868,13 +830,7 @@ def _emit_def(
         key = id(expr)
         if key in _names:
             return _names[key]
-        if alias := _carry_yield_aliases.get(key):
-            name = _assign_name(alias)
-            _names[key] = name
-            return name
-        if key in _preferred_names:
-            name = _preferred_names[key]
-        elif key in _forced_names:
+        if key in _forced_names:
             name = _forced_names[key]
         elif isinstance(expr, Var):
             name = _sanitize_name(expr.name)
@@ -1102,11 +1058,6 @@ def _emit_def(
             f"{_comments(expr, options)}"
         )
         printed.add(id(expr))
-        printed.update(
-            alias_id
-            for alias_id, yielded in _carry_yield_aliases.items()
-            if yielded is expr
-        )
 
     def _emit_expr(expr: Expr, level: str) -> None:
         key = id(expr)
@@ -1129,10 +1080,6 @@ def _emit_def(
             _emit_grid(expr, level)
             return
         if isinstance(expr, Call):
-            expr = _carry_yield_aliases.get(key, expr)
-            if id(expr) in printed:
-                printed.add(key)
-                return
             if (
                 isinstance(expr.target, TupleGetItem)
                 and len(expr.args) == 1
@@ -1144,7 +1091,6 @@ def _emit_def(
             for arg in expr.args:
                 _emit_expr(arg, level)
             _emit_inline_call(expr, level)
-            printed.add(key)
 
     def _emit_grid(grid: GridRegionExpr, level: str) -> None:
         key = id(grid)

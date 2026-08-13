@@ -27,7 +27,14 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.walk import postorder, values_of
 from tilefoundry.dsl import ConstTensor, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
-from tilefoundry.ir.core import Call, TypeInferContext, Var, binding_name, get_metadata
+from tilefoundry.ir.core import (
+    Call,
+    SourceSpanMetadata,
+    TypeInferContext,
+    Var,
+    binding_name,
+    get_metadata,
+)
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -126,6 +133,15 @@ def test_check_program_keeps_loops_and_names_inlined_occurrences() -> None:
     assert tuple(item.name for item in loop.carried_args) == ("l", "o", "m")
     assert len(loop.yield_values) == 3
     assert len(first_calls) < 100
+    source_keys = [
+        (
+            get_metadata(expr, SourceSpanMetadata),
+            id(expr.target),
+            tuple(id(arg) for arg in expr.args),
+        )
+        for expr in authored_calls
+    ]
+    assert len(source_keys) == len(set(source_keys))
     assert [binding_name(expr) for expr in first_calls] == [
         binding_name(expr) for expr in second_calls
     ]

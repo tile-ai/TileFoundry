@@ -26,6 +26,7 @@ from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Partial, Split
+from tilefoundry.parser import hir_parser
 
 _MESH_PRELUDE = (
     "from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n\n"
@@ -87,6 +88,31 @@ def test_layout_mesh_storage_constraints_parse_verify_and_round_trip() -> None:
     assert again[0].bindings == layout.bindings
     assert again[0].layout.shape[1] == layout.layout.shape[1]
     assert again[2].storage == storage.storage
+
+
+def test_constraint_metadata_attaches_to_the_existing_ssa_node(monkeypatch) -> None:
+    attached = []
+    original = hir_parser._HirBodyVisitor._attach_metadata
+
+    def capture(expr, metadata):
+        attached.append(expr)
+        original(expr, metadata)
+
+    monkeypatch.setattr(
+        hir_parser._HirBodyVisitor, "_attach_metadata", staticmethod(capture)
+    )
+    function = import_dsl(
+        _source(
+            """    y: where(storage="gmem") = tf.add(x, x)
+    z = tf.mul(y, y)
+    return z"""
+        )
+    )
+
+    assert len(attached) == 1
+    assert function.body.args[0] is attached[0]
+    assert function.body.args[1] is attached[0]
+    assert constraint_metadata(attached[0]) is not None
 
 
 def test_layout_extent_names_resolve_through_the_closure_or_fail() -> None:

@@ -30,7 +30,6 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, Partial, Split, Topology
-from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 from .base import (
@@ -126,9 +125,6 @@ def _parse_func_node(
     else:
         body_expr = visitor.visit_body(node.body)
     return_type = _resolve_return_type(node, closure, body_expr)
-    params, body_expr = _finalize_schedule_metadata(
-        params, body_expr, visitor.pending_constraints
-    )
     return Function.build(
         name=node.name,
         params=params,
@@ -137,37 +133,6 @@ def _parse_func_node(
         specializations=tuple(specializations),
     )
 
-
-class _ScheduleMetadataFinalizer(ExprMutator):
-    """Rebuild the parsed DAG so metadata follows shared SSA identity."""
-
-    def __init__(self, pending: dict[int, ScheduleConstraintMetadata]) -> None:
-        self.pending = pending
-        self.memo: dict[int, Expr] = {}
-
-    def visit(self, expr: Expr) -> Expr:
-        cached = self.memo.get(id(expr))
-        if cached is not None:
-            return cached
-        rebuilt = super().visit(expr)
-        metadata = self.pending.get(id(expr))
-        if metadata is not None:
-            rebuilt = dataclasses.replace(
-                rebuilt, metadata=(*rebuilt.metadata, metadata)
-            )
-        self.memo[id(expr)] = rebuilt
-        return rebuilt
-
-
-def _finalize_schedule_metadata(
-    params: tuple[Var, ...],
-    body: Expr | None,
-    pending: dict[int, ScheduleConstraintMetadata],
-) -> tuple[tuple[Var, ...], Expr | None]:
-    finalizer = _ScheduleMetadataFinalizer(pending)
-    new_params = tuple(finalizer.visit(param) for param in params)
-    new_body = None if body is None else finalizer.visit(body)
-    return new_params, new_body
 
 def _constraint_value(node: ast.AST):
     """Read a stage-neutral layout extent or topology reference."""
@@ -297,7 +262,6 @@ class _HirBodyVisitor(BaseExprVisitor):
         super().__init__(env, closure, in_module_body=in_module_body)
         self.topo_ns: dict[str, "Topology"] = topo_ns or {}
         self.source_filename = source_filename
-        self.pending_constraints: dict[int, ScheduleConstraintMetadata] = {}
 
 
 
@@ -356,11 +320,7 @@ class _HirBodyVisitor(BaseExprVisitor):
 
                     self.env.define(tgt, bound)
                     return self._visit_chain(stmts, idx + 1, require_return)
-                rhs = self.expr_with_binding(node.value, tgt)
-
-
-
-                rhs = self._maybe_autofill_binding(rhs, tgt)
+                rhs = self._assignment_rhs(node.value, tgt)
 
                 self.env.define(tgt, rhs)
                 return self._visit_chain(stmts, idx + 1, require_return)
@@ -407,9 +367,7 @@ class _HirBodyVisitor(BaseExprVisitor):
                     f"at {self.source_filename}:{node.lineno}:{node.col_offset}"
                 )
         else:
-            target = self._maybe_autofill_binding(
-                self.expr_with_binding(node.value, node.target.id), node.target.id
-            )
+            target = self._assignment_rhs(node.value, node.target.id)
             self.env.define(node.target.id, target)
         self._record_annotated_assignment(node, target)
         return self._visit_chain(stmts, idx + 1, require_return)
@@ -423,8 +381,9 @@ class _HirBodyVisitor(BaseExprVisitor):
                 f"where annotation requires a tensor-valued Expr at "
                 f"{label}:{node.lineno}:{node.col_offset + 1}"
             )
-        if id(target) in self.pending_constraints:
-            previous = self.pending_constraints[id(target)].source_loc.describe()
+        previous_metadata = get_metadata(target, ScheduleConstraintMetadata)
+        if previous_metadata is not None:
+            previous = previous_metadata.source_loc.describe()
             current = metadata.source_loc.describe()
             binding = get_metadata(target, BindingMetadata)
             label = binding.name if binding is not None else "<unnamed>"
@@ -432,7 +391,22 @@ class _HirBodyVisitor(BaseExprVisitor):
                 f"duplicate where annotation for Expr {label!r} "
                 f"at {current}; first annotation at {previous}"
             )
-        self.pending_constraints[id(target)] = metadata
+        self._attach_metadata(target, metadata)
+
+    def _assignment_rhs(self, node: ast.AST, target_name: str) -> Expr:
+        """Parse an assignment RHS without turning a name alias into a node."""
+        if isinstance(node, ast.Name):
+            value = self.env.lookup(node.id)
+            if isinstance(value, Expr):
+                if not isinstance(self.env.lookup(target_name), Expr):
+                    raise VerifyError(
+                        f"hir: {target_name} = {node.id} does not name a new "
+                        "computation; use the existing name"
+                    )
+                return value
+        return self._maybe_autofill_binding(
+            self.expr_with_binding(node, target_name), target_name
+        )
 
     def _parse_where_annotation(
         self, annotation: ast.AST, node: ast.AnnAssign
@@ -808,8 +782,7 @@ class _HirBodyVisitor(BaseExprVisitor):
                     )
                 target = stmt.targets[0]
                 if isinstance(target, ast.Name):
-                    rhs = self.expr(stmt.value)
-                    rhs = self._maybe_autofill_binding(rhs, target.id)
+                    rhs = self._assignment_rhs(stmt.value, target.id)
                     self.env.define(target.id, rhs)
                     last_expr = rhs
                     continue

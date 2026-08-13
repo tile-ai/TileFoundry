@@ -68,7 +68,7 @@ def test_structurally_equal_params_keep_distinct_ssa_bindings():
 
 @func
 def _carry_sum(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    acc = a
+    acc = reshape(a, new_shape=(4,))
     for i in range(3):
         acc = add(acc, b)
     return acc
@@ -82,8 +82,8 @@ def test_single_carry_accumulator():
 
 @func
 def _carry_two(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-    p = a
-    q = b
+    p = reshape(a, new_shape=(4,))
+    q = reshape(b, new_shape=(4,))
     for i in range(2):
         p = add(p, b)
         q = add(q, a)
@@ -171,7 +171,7 @@ def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
 
         @func
         def looped(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            acc = x
+            acc = reshape(x, new_shape=(4,))
             for _ in range(3):
                 acc = scaled(acc)  # noqa: F821
             return acc

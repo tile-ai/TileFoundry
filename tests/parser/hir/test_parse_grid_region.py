@@ -130,6 +130,43 @@ def test_carry_lifting_is_scoped_to_outer_bindings():
 
 
 @func
+def _carry_reads_old_and_new_values(x: Tensor[(8,), "f32"]):
+    m = relu(x)
+    o = relu(x)
+    for i in range(8):
+        m_new = maximum(m, x)
+        correction = sub(m, m_new)
+        o = add(o, correction)
+        m = m_new
+    return o
+
+
+def test_carry_rebinding_reuses_the_existing_rhs_node() -> None:
+    grid = _carry_reads_old_and_new_values.body.args[0]
+    assert isinstance(grid, GridRegionExpr)
+    carried = dict(zip((value.name for value in grid.carried_args), grid.carried_args))
+    yielded = dict(zip((value.name for value in grid.carried_args), grid.yield_values))
+    correction = yielded["o"].args[1]
+
+    assert grid.body is yielded["m"]
+    assert correction.args[0] is carried["m"]
+    assert correction.args[1] is yielded["m"]
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["z = y", 'z: where(storage="gmem") = y'],
+    ids=["plain", "annotated"],
+)
+def test_a_bare_name_cannot_introduce_a_second_binding(alias: str) -> None:
+    with pytest.raises(
+        VerifyError,
+        match="does not name a new computation; use the existing name",
+    ):
+        import_dsl(_src("y = relu(x)", alias, "return y"))
+
+
+@func
 def _nested(x: Tensor[(8, 4), "f32"]) -> Tensor[(8, 4), "f32"]:
     o = relu(x)
     for r in range(8):

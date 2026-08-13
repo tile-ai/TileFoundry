@@ -78,15 +78,25 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("dims", "variant", "bound_by", "ideal_ns"),
+    ("dims", "variant", "bound_by", "ideal_ns", "f32_flops"),
     [
-        ({"ctx": 1024, "seq": 1}, "decode", "memory", 3_496),
-        ({"ctx": 1, "seq": 1024}, "prefill", "compute", 65_449),
+        ({"ctx": 1024, "seq": 1}, "decode", "memory", 3_496, 6_378_112),
+        (
+            {"ctx": 1, "seq": 1024},
+            "prefill",
+            "compute",
+            65_447,
+            4_384_751_616,
+        ),
     ],
     ids=["decode-open-context", "prefill-open-sequence"],
 )
 def test_block_attention_selects_and_analyzes_each_placed_regime(
-    dims: dict[str, int], variant: str, bound_by: str, ideal_ns: int
+    dims: dict[str, int],
+    variant: str,
+    bound_by: str,
+    ideal_ns: int,
+    f32_flops: int,
 ) -> None:
     result = analyze(
         PrefillDecodeAttention,
@@ -104,6 +114,9 @@ def test_block_attention_selects_and_analyzes_each_placed_regime(
     assert record is not None
     assert record.ideal_ns == ideal_ns
     assert record.bound_by == bound_by
+    cost = get_metadata(result.function, ComputeCostMetadata)
+    assert cost is not None
+    assert dict(cost.flops)["f32"] == f32_flops
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -247,10 +260,10 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
                 assert cost is not None
                 costs.append(cost)
         assert len(costs) == 2
-        assert len(timelines) == 19
+        assert len(timelines) == 18
         assert len(structural) == 1
         assert {record.trips for record in timelines} == {extent}
-        assert {record.stride_ns for record in timelines} == {922}
+        assert {record.stride_ns for record in timelines} == {920}
         structural_cost, structural_timeline = structural[0]
         assert structural_cost.flops_per_unit == ()
         assert structural_cost.traffic_per_unit_at("gmem").total_bytes == 0
@@ -310,16 +323,16 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         652,
         652,
     )
-    assert [record.local_makespan_ns for record in root_timelines] == [9_145, 16_521]
+    assert [record.local_makespan_ns for record in root_timelines] == [9_129, 16_489]
     assert [record.waves for record in root_timelines] == [1, 1]
-    assert [record.estimated_kernel_ns for record in root_timelines] == [9_145, 16_521]
+    assert [record.estimated_kernel_ns for record in root_timelines] == [9_129, 16_489]
 
     roots = []
     for result in results:
         root = get_metadata(result.function, ComputeCostMetadata)
         assert root is not None
         roots.append(root)
-    assert [dict(root.flops)["f32"] for root in roots] == [212_192, 386_272]
+    assert [dict(root.flops)["f32"] for root in roots] == [211_936, 385_760]
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

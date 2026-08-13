@@ -249,7 +249,7 @@ def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
     function = specialize_concretely(GqaOnline.entry_function(), {"ctx_len": 8})
     printed = as_script(function)
 
-    assert printed.count("        m_new = max(m, score)") == 1
+    assert printed.count("        m_new = max(m, score_2)") == 1
     assert " = sub(m, m_new)" in printed
     lines = printed.splitlines()
     start = lines.index("    for i in range(8):")
@@ -260,8 +260,8 @@ def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
         and not lines[index].startswith("        ")
     )
     assert lines[end - 3 : end] == [
-        "        l = l_2",
-        "        o = o_2",
+        "        l = l_3",
+        "        o = o_4",
         "        m = m_new",
     ]
     assert lines[end] == '    k_n = cast(k_new, dtype="f32")'

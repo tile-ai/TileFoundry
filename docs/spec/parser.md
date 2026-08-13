@@ -1052,6 +1052,13 @@ Python statements that the parser folds into a single `Expr` tree.
 | `pass` | Accepted only as the **entire** body: sets `Function.body = None`, declaring a dispatch prototype whose implementations are registered via `.specialize`
 ([hir §1.1](./hir.md#11-function)). A `pass` mixed with any other statement is rejected. |
 
+An assignment whose RHS computes a new expression records the LHS as that
+expression's binding. A bare-name RHS computes nothing: rebinding an existing
+name (for example the final `m = m_new` update of a loop carry) MUST reuse the
+same `Expr` object without replacing its binding metadata. Giving that value a
+second name (`z = y`, including the annotated `z: where(...) = y` form) is
+rejected; use the existing name instead.
+
 `for` / `if` / `while` over arbitrary ranges, conditionals, and other
 Stmt forms are TIR-only. They are rejected by the HIR parser.
 
@@ -1088,7 +1095,11 @@ nested loop is carried across both loops.
 ### 5.2 Constraint attachment
 
 The HIR parser attaches one `ScheduleConstraintMetadata` record to one
-concrete tensor `Expr`. Tensor parameters, tensor-valued intermediate SSA
+existing tensor `Expr`. Attachment MUST update that node in place: it MUST NOT
+rebuild the annotated value or any consumer in its SSA DAG. An annotation with
+a value still follows the assignment rule above, so it may annotate a newly
+computed RHS but cannot introduce an alias for a bare-name RHS.
+Tensor parameters, tensor-valued intermediate SSA
 values, and bound tensor-valued `TupleGetItem` values are valid subjects.
 Whole tuples, shape scalars, unit values, direct subscripts, and unresolved
 names are rejected. Inline and standalone annotations for the same Expr are
