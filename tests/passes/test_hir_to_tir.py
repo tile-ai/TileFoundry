@@ -29,7 +29,7 @@ from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.dim import DimMul
+from tilefoundry.ir.types.dim import DimAdd, DimMul
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.shard.shard_layout import Split
@@ -252,6 +252,66 @@ def test_grid_output_ordinal_lowers_to_an_absolute_element_start() -> None:
     assert isinstance(coordinate, Call) and isinstance(coordinate.target, DimMul)
     assert coordinate.args[0] is iv
     assert isinstance(coordinate.args[1], Constant) and coordinate.args[1].value == 2
+
+
+def test_a_moved_window_lowers_to_the_moved_address() -> None:
+    """A read window moved by a compile-time offset is an address, not a value.
+
+    The offset reaches the coordinate as arithmetic over the induction variable,
+    so nothing is materialized to hold it.
+    """
+
+    @func
+    def f(x: Tensor[(12, 4), "f32"], seed: Tensor[(3, 4), "f32"]):
+        out = tf.add(seed, seed)
+        for row in tile(6, 3):
+            out = tf.add(x[row + 6, :], seed)
+        return out
+
+    pf = HirToTirPass().run(Module(name="t", functions=(f,), entry=f.name)).lookup("f")
+    coordinates = []
+
+    def walk(stmt):
+        if (
+            isinstance(stmt, LetStmt)
+            and isinstance(stmt.value, Call)
+            and isinstance(stmt.value.target, TensorView)
+            and len(stmt.value.args) == 3
+        ):
+            coordinates.append(stmt.value.args[1])
+        for attr in ("body", "stmts"):
+            child = getattr(stmt, attr, None)
+            if isinstance(child, (list, tuple)):
+                for item in child:
+                    walk(item)
+            elif child is not None and hasattr(child, "__dict__"):
+                walk(child)
+
+    walk(pf.body)
+    moved = [c for c in coordinates if isinstance(c, Call) and isinstance(c.target, DimAdd)]
+    assert len(moved) == 1, coordinates
+    assert isinstance(moved[0].args[0], Var)
+    assert isinstance(moved[0].args[1], Constant) and moved[0].args[1].value == 6
+
+
+def test_a_computed_window_coordinate_fails_closed() -> None:
+    """An offset an op computes is refused, not materialized into a buffer.
+
+    A write coordinate spelled as `i + C` reaches lowering as an ordinary scalar
+    add rather than as an address, and a buffer holding its value is not a scalar
+    index. Lowering says so instead of emitting code that does not compile.
+    """
+
+    @func
+    def f(x: Tensor[(8, 4), "f32"], seed: Tensor[(2, 4), "f32"]):
+        acc = tf.add(seed, seed)
+        out = x
+        for row in tile(4, 2):
+            out = tf.insert_slice(out, acc, (row + 4, 0))
+        return out
+
+    with pytest.raises(NotImplementedError, match="coordinate computed by Binary"):
+        HirToTirPass().run(Module(name="t", functions=(f,), entry=f.name))
 
 
 def test_non_divisible_tile_window_lowering_fails_closed() -> None:

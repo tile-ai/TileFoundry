@@ -281,6 +281,8 @@ element starts; `InsertSlice` uses the same coordinate convention. Neither
 multiplies an already-absolute coordinate by a window extent. A start that is dim
 arithmetic over literals and scalar Vars is an address the emitter computes, so
 lowering MUST carry it to the coordinate site rather than lower it as a value. A
+coordinate that an **op** computes MUST be refused: materializing it produces a
+buffer, and a buffer is not a scalar index. A
 non-divisible tile loop whose body consumes such a fixed-shape window MUST raise
 until a handwritten residual-tail lowering is supplied; a window moved by a
 compile-time offset is still that loop's window for this rule.

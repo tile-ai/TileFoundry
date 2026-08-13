@@ -1191,13 +1191,12 @@ def _lower_cache_update(ctx: "_Lowerer", target, expr) -> Var:
 def _insert_slice_coord(ctx: "_Lowerer", off_expr):
     """The scalar window index for an in-place ``insert_slice``.
 
-    The scalar window index for an in-place ``insert_slice`` is the absolute
-    element coordinate where the update window starts. A
-    compile-time offset folds to a ``Constant`` scalar (emitted as a
-    literal coordinate); dim arithmetic over the induction variable is a
-    coordinate the emitter computes, so it is carried through rather than
-    lowered to a tensor op; a runtime scalar offset lowers to its scalar Var
-    (its single element is read at the coordinate site).
+    The absolute element coordinate where the update window starts. A
+    compile-time offset folds to a ``Constant`` literal; dim arithmetic over the
+    induction variable is an address the emitter computes, so it is carried
+    through; a runtime scalar offset lowers to its scalar Var, whose single
+    element is read at the coordinate site. A coordinate an *op* computes is
+    refused: materializing it gives a buffer, and a buffer is not a scalar index.
     """
     i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
     if isinstance(off_expr, Constant):
@@ -1206,8 +1205,14 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
         return Constant(value=elem, type=i32)
     if _is_coordinate_arithmetic(off_expr):
         return off_expr
-
-
+    if isinstance(off_expr, Call):
+        raise NotImplementedError(
+            f"hir_to_tir: a window coordinate computed by "
+            f"{type(off_expr.target).__name__} has no lowering -- it would be "
+            f"materialized into a buffer and that buffer used where a scalar "
+            f"index belongs. A coordinate is a literal, a scalar operand, or a "
+            f"compile-time offset off one (`i + C`)"
+        )
     return ctx.lower(off_expr)
 
 
