@@ -201,6 +201,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="bind one dimension the model left open, for example ctx_len=1024",
     )
     analyze.add_argument(
+        "--operands",
+        action="store_true",
+        help=(
+            "add what each operand of a call moved to its annotation; the JSON "
+            "report carries it either way"
+        ),
+    )
+    analyze.add_argument(
         "--json", action="store_true", help="print the report as JSON instead of text"
     )
     analyze.set_defaults(_command_parser=analyze)
@@ -356,6 +364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             analyses,
             topology=args.topology,
             as_json=args.json,
+            operands=args.operands,
             dims=one_extent_per_dim(parse_dims(args.dim)),
         )
     except (AnalysisError, VerifyError, OSError, TypeError, ValueError) as error:

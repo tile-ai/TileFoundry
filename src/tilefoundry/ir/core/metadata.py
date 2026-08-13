@@ -7,10 +7,6 @@ from dataclasses import dataclass, replace
 class IRMetadata:
     """Base class for typed metadata attached to an IR expression."""
 
-    def format_comment(self) -> str | None:
-        """Return an optional source-printer comment for this metadata."""
-        return None
-
 
 @dataclass(frozen=True)
 class BindingMetadata(IRMetadata):
@@ -28,9 +24,6 @@ class SourceSpanMetadata(IRMetadata):
     column: int
     end_line: int | None = None
     end_column: int | None = None
-
-    def format_comment(self) -> str:
-        return f"source={self.file}:{self.line}:{self.column}"
 
 
 def get_metadata[T: IRMetadata](expr: "Expr", cls: type[T]) -> T | None:

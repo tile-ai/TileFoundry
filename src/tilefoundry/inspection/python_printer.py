@@ -70,6 +70,8 @@ from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import _expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
+from .values import PARTS, render_comment
+
 _DIM_INFIX_OPS: dict[type, str] = {
     DimAdd: "+",
     DimSub: "-",
@@ -91,6 +93,7 @@ class PythonPrintOptions:
 
     show_types: bool = False
     comment_metadata_types: tuple[type[IRMetadata], ...] = ()
+    comment_opt_in: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,11 @@ def _comments(expr: Expr, options: PythonPrintOptions, mesh_name_map: dict[int, 
     Omit the binding because the left-hand side already carries its emitted name
     and importing recovers it there. Emit types as annotation fragments without
     a redundant ``type=`` key.
+
+    Part zero is the value's own type, which carries no key: it is not a
+    measurement of the value, it is the value, and it is DSL text that can be
+    pasted back. Every later part is what a record measured, and ``PARTS`` is
+    the boundary between those two languages.
     """
     comments: list[str] = []
     if options.show_types:
@@ -142,10 +150,10 @@ def _comments(expr: Expr, options: PythonPrintOptions, mesh_name_map: dict[int, 
         metadata = get_metadata(expr, metadata_type)
         if metadata is None:
             continue
-        comment = metadata.format_comment()
+        comment = render_comment(metadata, opt_in=options.comment_opt_in)
         if comment is not None:
             comments.append(comment)
-    return f"  # {'; '.join(comments)}" if comments else ""
+    return f"  # {PARTS.join(comments)}" if comments else ""
 
 
 def shape_entry_str(entry: object) -> str:

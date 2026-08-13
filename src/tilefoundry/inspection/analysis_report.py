@@ -199,8 +199,15 @@ def selected_types(
     return tuple(order)
 
 
-def render_analysis(result: AnalysisResult) -> AnalysisRendering:
-    """Render one result once for both annotated source and report data."""
+def render_analysis(
+    result: AnalysisResult, *, operands: bool = False
+) -> AnalysisRendering:
+    """Render one result once for both annotated source and report data.
+
+    *operands* asks the annotation for the per-operand split of the traffic it
+    already states. JSON carries it either way: it is read by programs, and a
+    reader of the text is not looking that closely by default.
+    """
     function = result.function
     selected_types_ = selected_types(result)
     selected = frozenset(selected_types_)
@@ -209,6 +216,7 @@ def render_analysis(result: AnalysisResult) -> AnalysisRendering:
         options=PythonPrintOptions(
             show_types=True,
             comment_metadata_types=selected_types_,
+            comment_opt_in=frozenset({"operands"}) if operands else frozenset(),
         ),
     )
     target = result.module.resolve_target()

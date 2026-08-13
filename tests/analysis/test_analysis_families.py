@@ -39,6 +39,7 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_json, render_text, report
+from tilefoundry.inspection.values import render_comment
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
 from tilefoundry.ir.hir import Function
 from tilefoundry.ir.hir.math.binary import Binary
@@ -1091,8 +1092,8 @@ def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
     assert cost.traffic_per_unit == (("gmem", TrafficBytes(read=256, write=256)),)
     assert cost.traffic_per_unit_at("gmem") == TrafficBytes(read=256, write=256)
     assert (
-        "bytes=gmem:r30720/w30720 per-unit-bytes=gmem:r256/w256 operands="
-        in cost.format_comment()
+        "traffic=gmem:r30720/w30720@r256/w256"
+        in render_comment(cost, opt_in=frozenset({"operands"}))
     )
 
     records = tuple(get_metadata(call, TimelineMetadata) for call in calls)
@@ -1360,8 +1361,10 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     assert get_metadata(result.function, MemoryMetadata) is not None
     cost = get_metadata(_calls(result.function)[-1], ComputeCostMetadata)
     assert cost is not None
-    assert " operands=0:r" in cost.format_comment()
-    assert ",result:r" in cost.format_comment()
+    asked = render_comment(cost, opt_in=frozenset({"operands"}))
+    assert " operands=0:r" in asked
+    assert ",result:r" in asked
+    assert "operands" not in render_comment(cost)
 
     payload = json.loads(render_json(data))
     assert payload == data

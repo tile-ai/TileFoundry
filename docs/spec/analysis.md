@@ -373,22 +373,26 @@ def render_analysis(result: AnalysisResult) -> AnalysisRendering:
   receives neither a comment nor a report row.
 - A parameterized loop occurrence MUST stay one record. Neither surface expands
   it into one entry per trip.
-- A compute-cost comment MUST place `per-unit-bytes` immediately after global
-  `bytes`, and JSON MUST expose all four quantities without reconstructing any
-  of them from the others.
+- A compute-cost comment MUST state one unit's share beside the whole quantity it
+  is a share of, and JSON MUST expose all four quantities without reconstructing
+  any of them from the others.
 
-The output forms below share these placeholders:
+The output forms below are the values a record's fields hold, rendered by their
+own type ([inspection §2.8](./inspection.md#28-record-comment-forms)). A field
+whose plain `int`, `str`, or mapping already reads correctly has no type of its
+own:
 
-| Placeholder | Form | Empty value |
-|---|---|---|
-| `<flopset>` | `<dtype>:<int>[,<dtype>:<int>...]` | `0` |
-| `<levelset>` | `<level>:r<int>/w<int>[,<level>:r<int>/w<int>...]` | `0` |
-| `<peakset>` | `<level>:<int>[,<level>:<int>...]` | `0` |
-| `<operandset>` | `<position>:r<int>/w<int>[,<position>:r<int>/w<int>...]`, where position is an argument integer or `result` | omitted |
-| `<resource>` | `compute`, `memory`, `balanced`, `unrated`, or `none` | `none` |
+| Type | Form |
+|---|---|
+| `int` | `<int>` |
+| `str` | the bare token, `<resource>` being `compute`, `memory`, `balanced`, `unrated`, or `none` |
+| a mapping | `<key>:<value>[,<key>:<value>...]`, where a key is a dtype, a storage level, or an operand position (an argument integer or `result`) |
+| `TrafficBytes` | `r<int>/w<int>` |
+| `TotalAndPerUnit` | `<whole>@<one unit's share>` |
+| `TripInterval` | `[<int>,<int>)` for one trip; `[<int>t+<int>,<int>t+<int>)*<int>` for a repeated one, the coefficient being the stride and the suffix the trip count |
 
-Summary sets use `=` and comma-space separators; annotation sets use `:` and
-comma separators. This difference is intentional.
+A key that measured nothing is left out, so a record that measured nothing is
+its family name alone.
 
 - constraints:
   - A family MUST obtain hardware only through a Facts aggregate it declares
@@ -465,11 +469,14 @@ traffic <level>=r<int>/w<int>[, <level>=r<int>/w<int>...]
 
 An empty flop or traffic set prints as `0` after its label.
 
-Every measured Call receives this annotation; `operands` is omitted for a
-Function Call:
+Every measured Call receives this annotation. Each key pairs the whole quantity
+with one unit's share, so the two `*_per_unit` fields are not separate keys.
+`operands` is the same traffic split by operand, one layer finer, so it is
+emitted only when asked for ([cli Analyze](./cli.md#analyze)) and is absent from a
+Function Call, which has no split:
 
 ```text
-compute-cost flops=<flopset> per-unit=<flopset> bytes=<levelset> per-unit-bytes=<levelset>[ operands=<operandset>]
+compute-cost flops=<dtype>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r<int>/w<int>[,...]]
 ```
 
 Each reported Call's JSON projection is under its `compute-cost` key. `operands`
@@ -662,10 +669,11 @@ advisory <text>
 An empty footprint prints as `peak-footprint 0`; no advisory line is emitted
 when there is no advisory.
 
-The record's single-line comment form is:
+The record's single-line comment form projects the footprint it holds; `traffic`
+and `lifetimes` are read from JSON, not from a line:
 
 ```text
-memory peak=<peakset> persistent=<int> advisories=<int>
+memory peak=<level>:<int>[,...] persistent=<int> advisories=<int>
 ```
 
 The `analyze` equation printer emits no memory annotation because the record is
@@ -767,10 +775,12 @@ the memory record's per-level peak, and this verdict to the summary:
 ideal-bound=<int>ns by=<resource>
 ```
 
-Every measured Call receives this annotation:
+Every measured Call receives this annotation. `compute_ns` and `memory_ns` are
+the two numbers the verdict was read off, so they are in JSON rather than on the
+line:
 
 ```text
-roofline bound=<int>ns by=<resource> compute=<int>ns memory=<int>ns
+roofline ideal-ns=<int> bound-by=<resource>
 ```
 
 Reported Call and Function records use the same projection under their
@@ -894,10 +904,15 @@ timeline root=<Module>::<Function> local-makespan=<int>ns waves=<int>
 estimated-kernel=<int>ns
 ```
 
-Every measured Call receives this annotation:
+Every measured Call receives this annotation, one interval whether or not it
+repeats: a single trip states its own bounds, and a repeated occurrence states
+them offset by the trip index, with the trip count as a suffix. The trip count is
+not a second key, because a reader deriving the later intervals reads it off the
+interval it is a coefficient in:
 
 ```text
-timeline start=<int>ns end=<int>ns
+timeline=[<int>,<int>)
+timeline=[<int>t+<int>,<int>t+<int>)*<int>
 ```
 
 Reported Call and Function records use distinct projections under their

@@ -16,6 +16,7 @@ from .metadata import (
     source_metadata,
 )
 from .op import Op, ParameterInfo
+from .values import TotalAndPerUnit, TripInterval
 from tilefoundry.visitor_registry.registries import (
     AnalysisRegistry,
     cost_evaluator_registry,
@@ -44,6 +45,8 @@ __all__ = [
     "remove_metadata",
     "Op",
     "ParameterInfo",
+    "TotalAndPerUnit",
+    "TripInterval",
     "AnalysisRegistry",
     "typeinfer_registry",
     "verify_stmt_registry",

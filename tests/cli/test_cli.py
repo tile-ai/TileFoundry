@@ -639,6 +639,13 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     second = capsys.readouterr().out
     assert first == second
 
+    assert cli.main(["analyze", selector, *flags, "--operands"]) == 0
+    asked = capsys.readouterr().out
+    assert "operands=" not in first
+    assert "operands=0:r30720/w0,result:r0/w30720" in asked
+    assert cli.main(["analyze", selector, *flags, "--operands", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == payload
+
     header, annotated = first.split("\n\n", 1)
     lines = annotated.splitlines()
     assert payload["requested"] == payload["executed"] == [
@@ -696,15 +703,12 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         stop = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines)
         statement = "\n".join(lines[start - 1 : stop])
         timeline = row["timeline"]
-        assert (
-            f"timeline start={timeline['start_ns']}ns end={timeline['end_ns']}ns"
-            in statement
-        )
+        assert f"timeline=[{timeline['start_ns']},{timeline['end_ns']})" in statement
         annotated_meshes = set(re.findall(r"@ (\w+)\.", statement.split("  # ", 1)[1]))
         assert annotated_meshes <= hoisted
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
         if annotated_meshes and placed_meshes:
             assert annotated_meshes == placed_meshes
-    assert len([line for line in lines if "; timeline " in line]) == len(rows)
+    assert len([line for line in lines if "; timeline=" in line]) == len(rows)
     assert len({row["value"] for row in rows}) == len(rows)
     assert "units=" not in annotated

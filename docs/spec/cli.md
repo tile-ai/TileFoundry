@@ -276,6 +276,11 @@ explicit analysis; there is no ordinary `--target` option.
     a report needs a requested root and printing the `analyze` usage. Both
     formats MUST carry the same conclusions
     ([analysis §2](./analysis.md#2-authored-hir-metrics)).
+  - `--operands` MUST add each operand's share of a call's traffic to that call's
+    annotation, and MUST NOT change the JSON report, which carries that split
+    either way. It is the traffic the annotation already states, one layer finer,
+    so a reader who did not ask is not made to read it.
+    With no analysis flag it MUST be accepted and inert.
   - `--topology LEVEL` MUST be optional, passed through as the public analysis
     operation's `level`, and name the unit for per-unit figures. Its help MUST
     state the default and, for every family, which figure changes with the level

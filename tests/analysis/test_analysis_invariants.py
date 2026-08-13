@@ -8,6 +8,11 @@ implementation output, so a formula round-trip cannot validate itself.
 
 from __future__ import annotations
 
+import re
+from dataclasses import MISSING
+from dataclasses import fields as dataclass_fields
+from typing import get_args, get_origin
+
 import isl
 import pytest
 
@@ -15,12 +20,14 @@ import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
+from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     AnalysisError,
     OccurrenceProvenance,
     TileGraph,
+    analyze,
     check_program,
     extract,
 )
@@ -28,9 +35,24 @@ from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.walk import postorder, values_of
 from tilefoundry.dsl import ConstTensor, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
+from tilefoundry.inspection.values import (
+    ENTRIES,
+    ENTRY,
+    FIELD,
+    FIELDS,
+    PAIR,
+    PER_UNIT,
+    TRIPS,
+    comment_of,
+    declared_records,
+    render_comment,
+)
 from tilefoundry.ir.core import (
+    BindingMetadata,
     Call,
     SourceSpanMetadata,
+    TotalAndPerUnit,
+    TripInterval,
     TypeInferContext,
     Var,
     binding_name,
@@ -56,6 +78,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
 )
+from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 REPEATS = 4
 B, S, H, D = 1, 5, 2, 3
@@ -536,3 +559,90 @@ def test_a_quantised_scale_is_written_once_per_group() -> None:
     scale = relation.outputs[1]
     assert isinstance(scale, isl.map)
     assert "128" in str(scale)
+
+
+def _emitted(text: str, family: str) -> dict[str, str]:
+    """One comment taken apart by the record and field layers of the ladder."""
+    if text.startswith(f"{family}{FIELD}"):
+        return {family: text[len(family) + len(FIELD) :]}
+    head, _, rest = text.partition(FIELDS)
+    assert head == family, text
+    return dict(part.split(FIELD, 1) for part in rest.split(FIELDS) if part)
+
+
+def _assert_shape(text: str, declared: object) -> None:
+    """One value keeps the shape its declared type renders in.
+
+    Which is also how the separator ladder is checked: an inner value holding an
+    outer separator would not match the shape its own type renders in.
+    """
+    if declared is int:
+        assert re.fullmatch(r"-?\d+", text), (text, declared)
+    elif declared is str:
+        assert FIELD not in text and FIELDS not in text, (text, declared)
+    elif declared is TrafficBytes:
+        assert re.fullmatch(rf"r-?\d+{re.escape(PAIR)}w-?\d+", text), text
+    elif declared is TripInterval:
+        assert re.fullmatch(rf"\[[^{ENTRIES}]+{ENTRIES}[^{ENTRIES}]+\)(\{TRIPS}\d+)?", text), text
+    elif get_origin(declared) is TotalAndPerUnit:
+        (inner,) = get_args(declared)
+        total, separator, per_unit = text.partition(PER_UNIT)
+        assert separator == PER_UNIT, text
+        _assert_shape(total, inner)
+        _assert_shape(per_unit, inner)
+    elif get_origin(declared) is dict:
+        key_type, value_type = get_args(declared)
+        for entry in text.split(ENTRIES):
+            key, separator, value = entry.partition(ENTRY)
+            assert separator == ENTRY, entry
+            _assert_shape(key, key_type)
+            _assert_shape(value, value_type)
+    else:
+        raise AssertionError(f"{declared} has no rendering: {text}")
+
+
+def test_a_record_comment_states_only_what_it_declared() -> None:
+    """Every key on a comment maps back to a field or a declared projection.
+
+    A key spelled by hand drifts from the field it reports -- five did -- and a
+    projection nobody declared can grow a sixth. So the walk is held to the
+    declarations: every key is one of them, every value keeps the shape its
+    declared type renders in, and a record that measured nothing states its
+    family name and stops. Metadata that is not a report states nothing at all.
+    """
+    result = analyze(
+        MoEMegaKernel,
+        MoEMegaKernel.entry_function(),
+        analysis=("compute-cost", "memory", "roofline", "timeline"),
+    )
+    function = result.function
+    found: dict[type, list[object]] = {}
+    for expr in (function, *postorder(function.body)):
+        for value in expr.metadata:
+            found.setdefault(type(value), []).append(value)
+
+    assert set(declared_records()) <= set(found)
+    assert {BindingMetadata, OccurrenceProvenance} <= set(found)
+
+    for record_type, records in found.items():
+        declared = comment_of(record_type)
+        if declared is None:
+            assert all(render_comment(record) is None for record in records)
+            continue
+        keys = {emission.key.replace("_", "-"): emission for emission in declared.emissions}
+        for record in records:
+            emitted = _emitted(render_comment(record), declared.family)
+            for key, value in emitted.items():
+                emission = keys.get(key) or (
+                    declared.emissions[0] if key == declared.family else None
+                )
+                assert emission is not None, (key, declared)
+                assert not emission.opt_in, (key, "asked for nothing")
+                _assert_shape(value, emission.type)
+
+    for record_type in declared_records():
+        if any(field.default is MISSING for field in dataclass_fields(record_type)):
+            continue
+        declared = comment_of(record_type)
+        nothing = render_comment(record_type())
+        assert nothing == declared.family or nothing.startswith(f"{declared.family}{FIELD}")

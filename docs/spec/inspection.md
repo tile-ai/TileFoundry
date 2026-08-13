@@ -61,10 +61,12 @@ class PythonPrintOptions:
     Attributes:
         show_types: attribute; Whether to append inferred types.
         comment_metadata_types: attribute; Metadata classes rendered as comments.
+        comment_opt_in: attribute; Declared keys a reader asked a comment for.
     """
 
     show_types: bool = False
     comment_metadata_types: tuple[type[IRMetadata], ...] = ()
+    comment_opt_in: frozenset[str] = frozenset()
 
 
 def hir_function_to_python(
@@ -289,6 +291,52 @@ be imported at all, which is a weaker artifact than display-only is meant to be
 -- the whole point of printing a program is that somebody can be handed the file.
 The bounds are not recoverable from the name, so they are restated rather than
 inferred.
+
+### 2.8 Record comment forms
+
+A record attached to an expression is typed fields and nothing else
+([core-ir §2](./core-ir.md#2-expr)). What one looks like on a printed line is
+decided here, by walking its fields: a family that wrote its own form string
+would be deciding presentation, and every family would then spell one value its
+own way.
+
+A record MUST declare that it renders as a comment, and MAY declare which keys
+it emits: a field by its own name, anything else as a projection carrying its
+key, its type, and where its value comes from. Metadata with no declaration
+renders as nothing, which is how an annotation that is not a report -- a binding
+name, a constraint -- stays off the line. A comment MUST NOT emit a key the
+family's JSON projection cannot state; it MAY emit fewer.
+
+One separator per layer, and a separator MUST NOT appear inside a value it
+separates unless that value brackets itself:
+
+| Layer | Separates | With |
+|---|---|---|
+| value | bytes read from bytes written | `/` |
+| value | a whole quantity from one unit's share | `@` |
+| value | a mapping's key from its value | `:` |
+| value | a mapping's entries | `,` |
+| field | a key from its value | `=` |
+| record | one field from the next | space |
+| line | one record from the next | `; ` |
+
+- constraints:
+  - A key MUST be its declared name with `_` written as `-`. It MUST NOT be
+    derived from the value, and a unit MUST be part of the name -- `ideal-ns=13`,
+    never `ideal=13ns` -- so the unit is stated once, where the field states it.
+  - A value MUST be an `int`, a `str`, a mapping of them, or a type with a
+    declared rendering. `int` and `str` MUST NOT be wrapped in a type that
+    renders identically.
+  - A key whose value equals what it declared it says nothing by MUST be left
+    out, so a record that measured nothing collapses to its family name.
+  - A record declaring exactly one key MUST use the family name as that key: for
+    a record of one thing the family and the key state the same thing.
+  - The family name MUST be the class name without a trailing `Metadata`, in
+    kebab case. A record whose reported name differs MUST state that name where
+    its keys are declared.
+  - Part zero of a line is the value's own type, which carries no key: it is not
+    a measurement of the value, it is the value, and it is DSL text
+    ([§2.3](#23-dsl-text-forms)) that pastes back. Every later part is a record.
 
 ## 3. Viewer
 

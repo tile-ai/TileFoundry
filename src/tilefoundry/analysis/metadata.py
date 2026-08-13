@@ -52,37 +52,6 @@ class ComputeCostMetadata(IRMetadata):
             TrafficBytes(),
         )
 
-    def format_comment(self) -> str:
-        flop_text = ",".join(f"{name}:{value}" for name, value in self.flops) or "0"
-        local_text = (
-            ",".join(f"{name}:{value}" for name, value in self.flops_per_unit)
-            or "0"
-        )
-        traffic_text = (
-            ",".join(
-                f"{level}:r{value.read}/w{value.write}"
-                for level, value in self.traffic
-            )
-            or "0"
-        )
-        local_traffic_text = (
-            ",".join(
-                f"{level}:r{value.read}/w{value.write}"
-                for level, value in self.traffic_per_unit
-            )
-            or "0"
-        )
-        operand_text = ",".join(
-            f"{'result' if index == len(self.operands) - 1 else index}:"
-            f"r{value.read}/w{value.write}"
-            for index, value in enumerate(self.operands)
-        )
-        operands = f" operands={operand_text}" if operand_text else ""
-        return (
-            f"compute-cost flops={flop_text} per-unit={local_text} "
-            f"bytes={traffic_text} per-unit-bytes={local_traffic_text}{operands}"
-        )
-
 
 @dataclass(frozen=True)
 class LevelFootprint:
@@ -142,17 +111,6 @@ class MemoryMetadata(IRMetadata):
         """The footprint recorded for *name*, if the function touches it."""
         return next((item for item in self.footprint if item.level == name), None)
 
-    def format_comment(self) -> str:
-        peaks = (
-            ",".join(f"{item.level}:{item.peak_bytes}" for item in self.footprint)
-            or "0"
-        )
-        persistent = sum(item.persistent_bytes for item in self.footprint)
-        return (
-            f"memory peak={peaks} persistent={persistent} "
-            f"advisories={len(self.advisories)}"
-        )
-
 
 @dataclass(frozen=True)
 class RooflineMetadata(IRMetadata):
@@ -173,12 +131,6 @@ class RooflineMetadata(IRMetadata):
     ideal_ns: int = 0
     bound_by: str = "none"
 
-    def format_comment(self) -> str:
-        return (
-            f"roofline bound={self.ideal_ns}ns by={self.bound_by} "
-            f"compute={self.compute_ns}ns memory={self.memory_ns}ns"
-        )
-
 
 @dataclass(frozen=True)
 class TimelineMetadata(IRMetadata):
@@ -193,16 +145,6 @@ class TimelineMetadata(IRMetadata):
     trips: int = 1
     stride_ns: int = 0
 
-    def format_comment(self) -> str:
-        if self.trips > 1:
-            span_end = self.start_ns + self.trips * self.stride_ns
-            return (
-                f"timeline [{self.start_ns}+{self.stride_ns}t, "
-                f"{self.end_ns}+{self.stride_ns}t) trips={self.trips} "
-                f"span=[{self.start_ns},{span_end})"
-            )
-        return f"timeline start={self.start_ns}ns end={self.end_ns}ns"
-
 
 @dataclass(frozen=True)
 class TimelineSummaryMetadata(IRMetadata):
@@ -211,12 +153,6 @@ class TimelineSummaryMetadata(IRMetadata):
     local_makespan_ns: int = 0
     waves: int = 1
     estimated_kernel_ns: int = 0
-
-    def format_comment(self) -> str:
-        return (
-            f"timeline local-makespan={self.local_makespan_ns}ns "
-            f"waves={self.waves} estimated-kernel={self.estimated_kernel_ns}ns"
-        )
 
 
 __all__ = [

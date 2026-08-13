@@ -115,10 +115,10 @@ def test_a_bare_analyze_typechecks_and_prints_only_typed_hir(tf, cmine) -> None:
     assert done.stderr == ""
     assert "# Tensor[" in done.stdout
     assert "# analysis " not in done.stdout
-    assert "compute-cost " not in done.stdout
+    assert "compute-cost" not in done.stdout
     assert "memory peak=" not in done.stdout
-    assert "roofline bound=" not in done.stdout
-    assert "timeline start=" not in done.stdout
+    assert "roofline" not in done.stdout
+    assert "timeline=" not in done.stdout
 
 
 def test_analyze_json_needs_an_explicit_analysis(tf, cmine) -> None:
@@ -183,10 +183,10 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
     assert "# ideal-bound=" in done.stdout
     assert "# peak-footprint" in done.stdout
     assert "# timeline local-makespan" not in done.stdout
-    assert "roofline bound=" in done.stdout
+    assert "roofline ideal-ns=" in done.stdout
     assert "memory peak=" not in done.stdout
     assert "compute-cost flops=" not in done.stdout
-    assert "timeline start=" not in done.stdout
+    assert "timeline=" not in done.stdout
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:

@@ -255,8 +255,6 @@ is not a thing a cost can be stated about.
 class IRMetadata:
     """Describe one immutable expression annotation."""
 
-    def format_comment(self) -> str | None: ...
-
 class BindingMetadata(IRMetadata):
     """Describe an authored SSA binding name.
 
@@ -285,9 +283,11 @@ class SourceSpanMetadata(IRMetadata):
 ```
 
 - constraints:
-  - the immutable base of every typed annotation stored on an `Expr`;
-    `format_comment()` returns `None` unless a concrete metadata class provides
-    a printable comment.
+  - the immutable base of every typed annotation stored on an `Expr`: typed
+    fields and nothing about how they are read. What a record looks like as text
+    or as JSON is decided by inspection
+    ([inspection §2.8](./inspection.md#28-record-comment-forms)), so a record
+    MUST NOT carry a rendering, a key name, or a family name of its own.
   - `BindingMetadata` is the authored SSA label. The parser maps explicit DSL
     `loc=` syntax and inferred assignment names to this metadata; there is no
     parallel `Expr.loc` field.

@@ -412,9 +412,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     lines = rendered.annotated.splitlines()
     rows = [row for row in rendered.data["calls"] if "timeline" in row]
     comments = [
-        line.split("; timeline ", 1)[1]
+        line.split("; timeline=", 1)[1]
         for line in lines
-        if "; timeline " in line
+        if "; timeline=" in line
     ]
     expected_comments = []
     for row in rows:
@@ -423,26 +423,21 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         assert lines[line - 1].lstrip().startswith(f"{value} = ")
         timeline = row["timeline"]
         if timeline["trips"] > 1:
-            span_end = (
-                timeline["start_ns"]
-                + timeline["trips"] * timeline["stride_ns"]
-            )
+            offset = f"{timeline['stride_ns']}t+"
             expected_comments.append(
-                f"[{timeline['start_ns']}+{timeline['stride_ns']}t, "
-                f"{timeline['end_ns']}+{timeline['stride_ns']}t) "
-                f"trips={timeline['trips']} "
-                f"span=[{timeline['start_ns']},{span_end})"
+                f"[{offset}{timeline['start_ns']},{offset}{timeline['end_ns']})"
+                f"*{timeline['trips']}"
             )
         else:
             expected_comments.append(
-                f"start={timeline['start_ns']}ns end={timeline['end_ns']}ns"
+                f"[{timeline['start_ns']},{timeline['end_ns']})"
             )
 
     assert comments == expected_comments
     first = next(row for row in rows if row["value"].startswith("v0:"))
     assert first["value"] == "v0:44"
     assert lines[43].lstrip().startswith("v0 = reshard(")
-    assert "; timeline start=0ns end=0ns" in lines[47]
+    assert "; timeline=[0,0)" in lines[47]
     structural = next(row for row in rows if row["value"].startswith("v10:"))
     assert set(structural) == {"value", "compute-cost", "timeline"}
     assert structural["value"] == "v10:59"
@@ -452,7 +447,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         "stride_ns": 920,
         "trips": 8,
     }
-    assert "timeline [652+920t, 652+920t) trips=8 span=[652,8012)" in lines[58]
+    assert "timeline=[920t+652,920t+652)*8" in lines[58]
     assert lines[82].strip() == "m = v16"
     assert "timeline" not in lines[82]
 @pytest.mark.parametrize("ctx_len", (1, 1024))

@@ -94,6 +94,7 @@ def run_authored_analysis(
     *,
     topology: str | None = None,
     as_json: bool = False,
+    operands: bool = False,
     dims: Mapping[str, int] | None = None,
 ) -> int:
     """Analyse one authored HIR selection and print what was found.
@@ -134,7 +135,7 @@ def run_authored_analysis(
         return 0
 
     result = analyze(module, function, analysis=analyses, level=topology, dims=dims)
-    rendered = render_analysis(result)
+    rendered = render_analysis(result, operands=operands)
     data = rendered.data
     if as_json:
         sys.stdout.write(f"{render_json(data)}\n")
