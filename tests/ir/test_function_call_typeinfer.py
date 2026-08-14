@@ -95,6 +95,7 @@ def test_explicit_sharded_formal_constrains_its_actual():
 
 def test_broadcast_formal_accepts_reshaped_runtime_slice():
     packed = make_shard_tensor_type((4, 8, 16), _F, mesh=_M, attrs=(Broadcast(),))
+    sliced_type = make_shard_tensor_type((1, 8, 16), _F, mesh=_M, attrs=(Broadcast(),))
     formal = make_shard_tensor_type((8, 16), _F, mesh=_M, attrs=(Broadcast(),))
     packed_var = Var(type=packed, name="packed")
     layer = Var(type=make_tensor_type((), DType.i64, storage="umat"), name="layer")
@@ -104,7 +105,7 @@ def test_broadcast_formal_accepts_reshaped_runtime_slice():
         elements=(layer, zero, zero),
     )
     sliced = Call(
-        type=packed,
+        type=sliced_type,
         target=Slice(sizes=(1, 8, 16), strides=(1, 1, 1)),
         args=(packed_var, starts),
     )

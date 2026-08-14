@@ -15,6 +15,7 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
+from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
 from tilefoundry.ir.visitor import ExprVisitor, StmtVisitor
 
@@ -42,6 +43,9 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
     def __init__(self, ctx: TypeInferContext) -> None:
         self.ctx = ctx
+
+    def visit(self, expr: Expr) -> Type:
+        return canonicalize_dims(super().visit(expr))
 
     def visit_Var(self, var: Var) -> Type:
         return var.type

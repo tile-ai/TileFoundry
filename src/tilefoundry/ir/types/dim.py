@@ -151,8 +151,9 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
     """Fold dimension arithmetic when every operand is an integer constant.
 
     Raw integers canonicalize to i64 constants. Unsupported operations and
-    division or modulo by zero remain calls for later verification; algebraic
-    identities are not folded.
+    division or modulo by zero remain calls for later verification. Algebraic
+    normalization happens once at the type-inference exit, not during
+    construction.
 
     See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
     """

@@ -111,6 +111,27 @@ def dim_range(dim) -> tuple[int, int]:
     return (int(pa.min_val().num_si()), int(pa.max_val().num_si()) + 1)
 
 
+def canonical_dim(dim):
+    """Return *dim* in isl's affine normal form when it can be decoded.
+
+    No parameter bounds participate. Expressions outside isl's affine subset,
+    or whose piecewise AST cannot be represented as a ``ShapeDim``, pass
+    through unchanged.
+    """
+    if isinstance(dim, int) and not isinstance(dim, bool):
+        return dim
+    try:
+        from tilefoundry.ir.types.substitute import dim_vars_by_name  # noqa: PLC0415
+
+        params: dict = {}
+        expr = _range_expr(dim, params)
+        prefix = f"[{', '.join(params)}] -> " if params else ""
+        pw_aff = isl.pw_aff(prefix + f"{{ [{expr}] }}")
+        return to_dim(pw_aff, dim_vars_by_name(dim))
+    except (TypeError, ValueError, NotImplementedError, isl.Error):
+        return dim
+
+
 def to_domain(extents: tuple) -> tuple:
     """Bounded iteration domain ``{ [d0, ..., dn] : 0 <= di < extent_i }``.
 
@@ -213,4 +234,4 @@ def to_dim(pw_aff: "isl.pw_aff", param_map: dict):
     return _visit(build.expr_from(pw_aff), param_map)
 
 
-__all__ = ["dim_range", "to_domain", "to_dim"]
+__all__ = ["canonical_dim", "dim_range", "to_domain", "to_dim"]

@@ -16,10 +16,42 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
-from tilefoundry.visitor_registry.isl_utility import dim_range, to_dim, to_domain
+from tilefoundry.visitor_registry.isl_utility import canonical_dim, dim_range, to_dim, to_domain
 
 P = DimVar("P", 2048, 1_048_577)
 Q = DimVar("Q", 2, 33)
+
+
+def test_canonical_dim_uses_isl_affine_normal_form():
+    verbose = simplify_dim(
+        DimFloorDiv,
+        (
+            simplify_dim(
+                DimAdd,
+                (simplify_dim(DimSub, (simplify_dim(DimAdd, (P, 0)), 0)), 0),
+            ),
+            1,
+        ),
+    )
+    quotient = simplify_dim(DimFloorDiv, (simplify_dim(DimAdd, (P, 8)), 4))
+    expected = simplify_dim(
+        DimAdd,
+        (simplify_dim(DimFloorDiv, (P, 4)), 2),
+    )
+
+    assert canonical_dim(verbose) is P
+    assert canonical_dim(quotient) == expected
+
+
+def test_canonical_dim_leaves_unsupported_expressions_unchanged():
+    symbolic_divisor = simplify_dim(
+        DimFloorDiv,
+        (simplify_dim(DimMul, (P, Q)), DimVar("G", 1, 65)),
+    )
+    piecewise = simplify_dim(DimMin, (P, 8192))
+
+    assert canonical_dim(symbolic_divisor) is symbolic_divisor
+    assert canonical_dim(piecewise) is piecewise
 
 
 def test_dim_range_interval_arithmetic():

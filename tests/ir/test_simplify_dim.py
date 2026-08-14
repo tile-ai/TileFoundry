@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
+import tilefoundry.ir.types.substitute as dim_substitute
 from tilefoundry.ir.core import Tuple, TypeInferContext
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.core.kinds import UnaryKind
@@ -29,6 +32,9 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
+from tilefoundry.ir.types.shard import ComposedLayout, Layout, Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.shard.shard_layout import Broadcast
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 
 def _i64(v: int) -> Constant:
@@ -102,6 +108,58 @@ def test_simplify_dim_refuses_to_fold_outside_all_int_constants() -> None:
     bool_arg = simplify_dim(DimAdd, (b_true, _i64(1)))
     assert isinstance(bool_arg, Call)
     assert isinstance(bool_arg.target, DimAdd)
+
+
+def test_typeinfer_canonicalizes_equivalent_symbolic_shapes() -> None:
+    seq = DimVar("S_canonical", 1, 8193)
+    verbose = simplify_dim(
+        DimFloorDiv,
+        (
+            simplify_dim(
+                DimAdd,
+                (simplify_dim(DimSub, (simplify_dim(DimAdd, (seq, 0)), 0)), 0),
+            ),
+            1,
+        ),
+    )
+    def layout(dim):
+        return ComposedLayout(
+            inner=Layout(shape=(dim,), strides=(dim,)),
+            offset=dim,
+            outer=ShardLayout(
+                layout=Layout(shape=(dim,), strides=(dim,)),
+                attrs=(Broadcast(),),
+                mesh=Mesh(
+                    topologies=(Topology("cta", dim),),
+                    layout=Layout(shape=(dim,), strides=(1,)),
+                ),
+            ),
+        )
+
+    verbose_type = TensorType(
+        shape=(verbose, 128), dtype=DType.f32, layout=layout(verbose), storage="gmem"
+    )
+    direct_type = TensorType(
+        shape=(seq, 128), dtype=DType.f32, layout=layout(seq), storage="gmem"
+    )
+
+    inferred = TypeInferVisitor(TypeInferContext()).visit(Var(type=verbose_type, name="verbose"))
+
+    assert inferred == direct_type
+    assert inferred.shape[0] is seq
+
+
+def test_static_typeinfer_does_not_enter_dim_canonicalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    static = TensorType(shape=(8, 128), dtype=DType.f32, layout=None, storage="gmem")
+
+    def fail_if_called(_):
+        raise AssertionError("static types must not enter isl canonicalization")
+
+    monkeypatch.setattr(dim_substitute, "canonical_dim", fail_if_called)
+
+    assert TypeInferVisitor(TypeInferContext()).visit(Var(type=static, name="static")) is static
 
 
 def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:

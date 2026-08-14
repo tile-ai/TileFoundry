@@ -494,7 +494,11 @@ def ceildiv(a, b) -> Expr:
     `simplify_dim`.
   - `simplify_dim` MUST fold two integer-valued constant operands, except
     division or modulo by zero; otherwise it MUST retain the canonical call.
-    It MUST NOT perform algebraic identity folding.
+    Construction MUST NOT perform algebraic identity folding. Type inference
+    MUST normalize every symbolic dimension once at its type exit using isl's
+    affine normal form, without applying `DimVar` envelope bounds. Expressions
+    outside that affine subset or not decodable as one `ShapeDim` MUST remain
+    unchanged.
   - `is_dim_expr` MUST accept non-boolean integers, `DimVar`, integer-valued
     `Constant`, and recursively valid calls to the seven dimension arithmetic
     operations, and MUST reject other values.
