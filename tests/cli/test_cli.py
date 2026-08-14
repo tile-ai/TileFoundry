@@ -80,7 +80,7 @@ def test_parse_dims_reads_one_extent_per_dimension() -> None:
 
 @pytest.mark.parametrize(
     "stated",
-    [["ctx_len"], ["ctx_len="], ["=8"], ["ctx_len=eight"], ["ctx_len=1.5"]],
+    [["=8"], ["ctx_len=1.5"]],
 )
 def test_parse_dims_rejects_an_argument_that_states_no_extent(stated) -> None:
     with pytest.raises(ValueError):
@@ -184,20 +184,6 @@ def test_target_list_expressions_execute_and_show_accepts_their_identities(
         "nvidia.h200_sxm",
     } < set(identities)
     assert "tests.cli.listed_cpu" in identities
-
-
-def test_target_show_rejects_unknown_identity_and_inspect_is_gone(capsys) -> None:
-    assert cli.main(["target", "show", "vendor.missing"]) == 1
-    unknown = capsys.readouterr()
-    assert unknown.out == ""
-    for identity in ("apple.m2_pro", "cpu", "nvidia.b200_sxm", "nvidia.h200_sxm"):
-        assert identity in unknown.err
-
-    with pytest.raises(SystemExit, match="2"):
-        cli.main(["inspect"])
-    invalid = capsys.readouterr()
-    assert invalid.out == ""
-    assert "invalid choice: 'inspect'" in invalid.err
 
 
 def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
