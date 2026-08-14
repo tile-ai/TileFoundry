@@ -27,6 +27,7 @@ from tilefoundry.ir.types import make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
+    Broadcast,
     Partial,
     Split,
     shard_layout_local_shape,
@@ -176,6 +177,34 @@ def test_reshape_then_reshard_rmem_no_split_aliasing():
     assert not aliased, (
         f"stride-0 axes with local extent > 1: {aliased} (local={local}, strides={strides})"
     )
+
+
+def test_broadcast_reshape_and_reshard_order_agree_in_smem():
+    source = make_tensor_type(
+        (1, 32, 128),
+        layout=Layout(shape=(1, 32, 128), strides=(4096, 128, 1)),
+    )
+    packed_layout = ShardLayout(
+        layout=Layout(shape=(1, 32, 128), strides=None),
+        attrs=(Broadcast(),),
+        mesh=_M,
+    )
+    reshaped_layout = ShardLayout(
+        layout=Layout(shape=(32, 128), strides=None),
+        attrs=(Broadcast(),),
+        mesh=_M,
+    )
+
+    resharded_then_reshaped = infer_call(
+        _reshape((32, 128)),
+        infer_call(Reshard(layout=packed_layout, storage=StorageKind.SMEM), source),
+    )
+    reshaped_then_resharded = infer_call(
+        Reshard(layout=reshaped_layout, storage=StorageKind.SMEM),
+        infer_call(_reshape((32, 128)), source),
+    )
+
+    assert resharded_then_reshaped == reshaped_then_resharded
 
 
 _S = DimVar(name="seq_len", lo=1, hi=4096)

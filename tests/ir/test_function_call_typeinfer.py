@@ -11,12 +11,14 @@ from __future__ import annotations
 import pytest
 
 from tests.ops.typeinfer_utils import infer_call
-from tilefoundry.ir.core import BindingMetadata, Call, Tuple, Var
+from tilefoundry.ir.core import BindingMetadata, Call, Constant, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
@@ -89,6 +91,29 @@ def test_explicit_sharded_formal_constrains_its_actual():
         infer_call(f, _PLAIN)
     with pytest.raises(VerifyError, match="type mismatch"):
         infer_call(f, make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(1),)))
+
+
+def test_broadcast_formal_accepts_reshaped_runtime_slice():
+    packed = make_shard_tensor_type((4, 8, 16), _F, mesh=_M, attrs=(Broadcast(),))
+    formal = make_shard_tensor_type((8, 16), _F, mesh=_M, attrs=(Broadcast(),))
+    packed_var = Var(type=packed, name="packed")
+    layer = Var(type=make_tensor_type((), DType.i64, storage="umat"), name="layer")
+    zero = Constant(type=make_tensor_type((), DType.i64), value=0)
+    starts = Tuple(
+        type=TupleType(fields=(layer.type, zero.type, zero.type)),
+        elements=(layer, zero, zero),
+    )
+    sliced = Call(
+        type=packed,
+        target=Slice(sizes=(1, 8, 16), strides=(1, 1, 1)),
+        args=(packed_var, starts),
+    )
+    reshaped = Call(type=formal, target=Reshape(new_shape=(8, 16)), args=(sliced,))
+    w = Var(type=formal, name="w")
+    callee = Function.build(name="consume", params=(w,), body=w, return_type=formal)
+    call = Call(type=formal, target=callee, args=(reshaped,))
+
+    assert TypeInferVisitor(TypeInferContext()).visit(call) == formal
 
 
 def test_plain_formal_rejects_shape_or_dtype_mismatch():

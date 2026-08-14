@@ -166,16 +166,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_layout = None
     if isinstance(x_ty.layout, ShardLayout):
         genuine = any(not isinstance(a, Broadcast) for a in x_ty.layout.attrs)
-        if not genuine:
-            new_layout = None
-        else:
-            new_layout = _carry_sharded_reshape(x_ty.layout, new_shape)
-            if new_layout is None:
-                ctx.error(
-                    call,
-                    "Reshape cannot express the sharded layout: new shape does "
-                    "not align with the input layout factorization",
-                )
+        new_layout = _carry_sharded_reshape(x_ty.layout, new_shape)
+        if new_layout is None and genuine:
+            ctx.error(
+                call,
+                "Reshape cannot express the sharded layout: new shape does "
+                "not align with the input layout factorization",
+            )
     else:
         source = x_ty.layout
         if isinstance(source, Layout):
