@@ -13,8 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tests.parser.error_cases import CTX_LEN, Callee, Weighted
-from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Tensor, ceildiv, tf
+from tilefoundry import func, module, prim_func
+from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, T, Tensor, ceildiv, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names used by the bodies
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.module import Module
@@ -22,8 +22,11 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor as TensorPattern
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types.shard import Layout, Mesh, P, Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import Layout, Mesh, P, ShardLayout, Split, Topology
+from tilefoundry.ir.types.shard import Mesh as TirMesh
+from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.visitor_registry import register_typeinfer
 
 SEQ_LEN = DimVar("seq_len", 1, 100)
@@ -513,3 +516,97 @@ PROGRAMS: tuple[ParserProgram, ...] = (
         ),
     ),
 )
+
+
+_TILE = 12
+_NT = DimVar("Ntile", 1, 64)
+
+
+@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+def tir_dynamic_device(a: Tensor[(_NT, _TILE), "f32"]):
+    with TirMesh((Topology("cta", _NT),), Layout(shape=(_NT,), strides=(1,))) as cta:
+        view = T.tensor_view(
+            a,
+            layout=ShardLayout(
+                layout=Layout(shape=(_NT, _TILE), strides=(_TILE, 1)),
+                attrs=(Split(0),),
+                mesh=cta,
+            ),
+        )
+        reg = T.alloc_tensor(
+            TensorType(
+                shape=(_NT, _TILE),
+                dtype=DType.f32,
+                layout=ShardLayout(
+                    layout=Layout(shape=(_NT, _TILE), strides=(_TILE, 1)),
+                    attrs=(Split(0),),
+                    mesh=cta,
+                ),
+                storage=StorageKind.RMEM,
+            )
+        )
+        T.copy(view, reg)
+
+
+@prim_func(target=CpuTarget())
+def tir_host_entry(a: Tensor[(_NT, _TILE), "f32"]):
+    launch(tir_dynamic_device, a, grid=(_NT, 1, 1), block=(1, 1, 1))  # noqa: F821
+
+
+@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+def tir_static_device(a: Tensor[(16, 8), "f32"]):
+    with TirMesh((Topology("thread", 8),), Layout(shape=(8,), strides=(1,))) as t:
+        view = T.tensor_view(
+            a,
+            layout=ShardLayout(
+                layout=Layout(shape=(16, 8), strides=(8, 1)), attrs=(Split(0),), mesh=t
+            ),
+        )
+        reg = T.alloc_tensor(
+            TensorType(
+                shape=(16, 8),
+                dtype=DType.f32,
+                layout=ShardLayout(
+                    layout=Layout(shape=(16, 8), strides=(8, 1)), attrs=(Split(0),), mesh=t
+                ),
+                storage=StorageKind.RMEM,
+            )
+        )
+        T.copy(view, reg)
+
+
+@prim_func(target=CpuTarget())
+def tir_effect_form_selector(a: Tensor[(128,), "f32"], b: Tensor[(128,), "f32"]):
+    copy_(a, b)  # noqa: F821 — resolved via dispatch.resolve_callable, not the closure
+
+
+@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+def tir_param_layout_sugar(a: Tensor[(1, 8192), "f32", (1, 8192 @ M_CTA), "smem"]):
+    return
+
+
+@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+def tir_sync_scopes(a: Tensor[(128,), "f32"]):  # noqa: ARG001
+    with TirMesh(
+        (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
+    ) as m:
+        T.sync(m)
+        T.sync(m[0, :])
+        T.sync(m[1:3, :])
+
+
+@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+def tir_static_atom_bindings(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
+    op = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
+    atom = T.cuda.mma.atom(op=op)  # noqa: F841
+
+
+@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+def tir_atom_fragment_in_a_warp_scope(a: Tensor[(16, 16), "bf16"]):  # noqa: ARG001
+    atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
+    with TirMesh(
+        (Topology("thread", 32),), Layout(shape=(4, 8), strides=(1, 4)), names=("warp", "lane")
+    ) as warp:  # noqa: F841
+        frag = T.alloc_tensor(  # noqa: F841
+            TensorType(shape=(16, 16), dtype=DType.bf16, layout=atom.A, storage=StorageKind.RMEM)
+        )
