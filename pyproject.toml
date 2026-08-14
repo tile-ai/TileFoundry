@@ -17,11 +17,6 @@ dependencies = [
     "apache-tvm-ffi",
     "torch>=2.7",  # DType.f8e8m0 -> torch.float8_e8m0fnu, added in torch 2.7
     "graphviz>=0.20",
-    # 5.15.0 cannot instantiate MiniCPM3 at all: `yarn_apply_mscale` reads
-    # `rope_parameters["factor"]` for every non-default rope type, and the
-    # longrope parameters MiniCPM3-4B ships carry `long_factor` / `short_factor`
-    # instead -- and the value it reads is only used when `mscale_all_dim` is set.
-    # Held below it until that read moves inside the branch that uses it.
     "transformers>=5.13,<5.15",
     "ortools>=9.15",
 ]
@@ -45,13 +40,9 @@ dev = ["pre-commit>=3", "ruff>=0.14", "clang-format==18.1.8", "setuptools>=68", 
 
 [tool.coverage.run]
 branch = true
-# The importable package, not a directory: the source run measures the checkout
-# and the installed run measures the same package inside a wheel's site-packages.
 source = ["tilefoundry"]
 
 [tool.coverage.report]
-# Coverage here is an instrument for consolidating the suite, not a pass mark; a
-# threshold waits until that consolidation is done.
 skip_empty = true
 
 [tool.setuptools_scm]

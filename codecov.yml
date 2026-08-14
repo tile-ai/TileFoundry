@@ -3,8 +3,6 @@ codecov:
 
 coverage:
   status:
-    # Consolidating the suite moves each file's percentage around, so the status
-    # reports the number and never blocks the merge.
     project:
       default:
         informational: true
@@ -12,12 +10,6 @@ coverage:
       default:
         informational: true
 
-# Two flags, one per mode, because neither mode reaches what the other does: the
-# source run misses the CLI commands only the installed wheel exercises. Codecov
-# unions them. Both name their files `src/tilefoundry/...` -- coverage.py writes
-# paths relative to the checkout, and the installed run folds the wheel's
-# site-packages location back onto the checkout before it reports -- so no path
-# fix is needed here.
 flags:
   source:
     paths:
