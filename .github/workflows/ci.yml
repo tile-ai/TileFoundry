@@ -69,13 +69,8 @@ jobs:
       - name: Verify the installed surface
         run: |
           export LD_LIBRARY_PATH="$PWD/.wheel-venv/lib:$LD_LIBRARY_PATH"
-          clean_site=$(.wheel-venv/bin/python -c \
-            'import sysconfig; print(sysconfig.get_path("purelib"))')
-          coverage_package=$(python -c \
-            'import coverage, pathlib; print(pathlib.Path(coverage.__file__).parent)')
-          cp -r "$coverage_package" "$clean_site/coverage"
-          printf 'import coverage; coverage.process_startup()\n' \
-            > "$clean_site/zzz-coverage-subprocess.pth"
+          uv pip install --python .wheel-venv/bin/python --no-deps \
+            --constraint test_results/requirements.txt coverage pytest-cov
           cat > test_results/coveragerc-installed <<EOF
           [run]
           branch = True
@@ -86,7 +81,7 @@ jobs:
           [paths]
           package =
               $PWD/src/tilefoundry
-              $clean_site/tilefoundry
+              $PWD/.wheel-venv/lib/*/site-packages/tilefoundry
           EOF
           COVERAGE_PROCESS_START="$PWD/test_results/coveragerc-installed" \
             TF_SMOKE_VENV="$PWD/.wheel-venv" \
