@@ -83,8 +83,9 @@ markers = [
 ]
 
 [tool.ruff]
-# Snapshot examples and shipped model sources are evidence; formatting them changes that evidence.
-extend-exclude = ["examples", "tests/models"]
+# Snapshot examples, shipped model sources, and recorded parser output are evidence;
+# formatting them changes that evidence.
+extend-exclude = ["examples", "tests/models", "tests/parser/golden"]
 force-exclude = true
 line-length = 100
 target-version = "py312"

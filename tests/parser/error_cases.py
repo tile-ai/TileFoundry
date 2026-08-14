@@ -381,6 +381,22 @@ def mesh_dims_reshard_func(warps, lanes):
     return _f
 
 
+def literal_reshard_func():
+    """The all-literal twin of ``mesh_dims_reshard_func``.
+
+    ``layout=(4, 32)`` mesh dims spelled out, so the closure-resolved builder
+    above has something to print equal to.
+    """
+
+    @func(topologies=(Topology("thread", 128),))
+    def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
+        with Mesh(("thread",), layout=(4, 32), names=("w", "t")) as m:
+            xr = reshard(x, (1, 128 @ (m.w, m.t)), "rmem")  # noqa: F405, F821
+            return reshard(xr, (1, 128), "gmem")  # noqa: F405, F821
+
+    return _f
+
+
 def _symbolic_mesh_extent() -> None:
     """A symbolic mesh extent is valid even when a later split is undecidable."""
     mesh_dims_reshard_func(_MESH_DIM_W, 32)
