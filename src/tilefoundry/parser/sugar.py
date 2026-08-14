@@ -58,6 +58,18 @@ def _is_constant(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant)
 
 
+def _is_layout_slot_constant(node: ast.AST) -> bool:
+    """Whether a constant in the third annotation slot is a layout rather than storage.
+
+    ``Tensor[shape, dtype, storage]`` puts a storage name where a layout would
+    go, and ``Tensor[shape, dtype, None, storage]`` leaves that slot empty
+    ([parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations)
+    makes both optional and independent). Neither is layout sugar, so neither
+    may pull the annotation onto the sugar path.
+    """
+    return _is_constant(node) and node.value is not None and not isinstance(node.value, str)
+
+
 def _is_matmul(node: ast.AST) -> bool:
     return isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult)
 
@@ -757,7 +769,7 @@ def try_parse_sugar_tensor_type(
 
     if not has_sugar and len(elts) >= 3:
         third = elts[2]
-        if mesh_by_name and (isinstance(third, ast.Tuple) or _is_constant(third)):
+        if mesh_by_name and (isinstance(third, ast.Tuple) or _is_layout_slot_constant(third)):
             has_sugar = True
 
     if not has_sugar:

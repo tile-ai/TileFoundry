@@ -90,6 +90,18 @@ class HirExpressions:
         return reduce(x, axes=(0,), keepdim=True, kind="sum")  # noqa: F405
 
     @func
+    def unmaterialized_surface_storage(
+        x: Tensor[(8,), "f32", None, "umat"],
+    ) -> Tensor[(8,), "f32"]:
+        return x
+
+    @func
+    def storage_without_a_layout_slot(
+        x: Tensor[(8,), "f32", "umat"],
+    ) -> Tensor[(8,), "f32"]:
+        return x
+
+    @func
     def literal_meets_bf16(x: Tensor[(1, 8), "bf16"]) -> Tensor[(1, 8), "bf16"]:
         return add(x, 1e-6)  # noqa: F405
 
@@ -464,6 +476,7 @@ PROGRAMS: tuple[ParserProgram, ...] = (
             "dim from a static call",
             "str dtype surface",
             "str reduce-kind surface",
+            "storage with and without an empty layout slot",
             "value literal dtype",
             "compile-time operands",
             "compile-time tuple unpack",

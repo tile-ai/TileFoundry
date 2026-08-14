@@ -261,20 +261,17 @@ def test_a_where_layout_extent_is_read_out_of_the_globals(monkeypatch) -> None:
 def test_umat_is_an_accepted_surface_storage() -> None:
     """An explicit ``umat`` annotation preserves unresolved residency.
 
-    This one cannot join a program: a storage-only annotation stops parsing as
-    soon as any ``Mesh`` sits in the defining module's globals, and
-    ``programs.py`` declares several.
+    Both spellings live in ``HirExpressions``, whose module declares meshes —
+    which is the point: the third annotation slot holds a storage name or an
+    empty layout, and a mesh being in scope does not make either one layout
+    sugar. The golden shows the storage; that it resolved to ``UMAT`` rather
+    than defaulting to ``GMEM`` is what is asserted here.
     """
-    parsed = import_dsl(
-        "from tilefoundry import func\n"
-        "from tilefoundry.dsl import Tensor\n"
-        "from tilefoundry.dsl.tf import *\n"
-        "@func\n"
-        "def f(x: Tensor[(8,), 'f32', None, 'umat']) -> Tensor[(8,), 'f32']:\n"
-        "    return x\n"
-    )
-    assert parsed.params[0].type.storage is StorageKind.UMAT
-    assert parsed.return_type.storage is StorageKind.GMEM
+    for name in ("unmaterialized_surface_storage", "storage_without_a_layout_slot"):
+        parsed = HirExpressions.lookup(name)
+        assert parsed.params[0].type.storage is StorageKind.UMAT, name
+        assert parsed.params[0].type.layout is None, name
+        assert parsed.return_type.storage is StorageKind.GMEM, name
 
 
 def test_a_value_literal_takes_the_dtype_of_the_operand_it_meets() -> None:
