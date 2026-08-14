@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.shapes.moved_tile_window_add import moved_tile_window_add
-from tests.fixtures.shapes.tile_window_add import tile_window_add
+from tests.fixtures.shapes.window_programs import moved_tile_window_add, tile_window_add
 from tilefoundry.dsl import (
     Mesh,
     ReduceKind,

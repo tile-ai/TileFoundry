@@ -10,6 +10,7 @@ absent.
 from __future__ import annotations
 
 from tests._source import import_dsl
+from tests.fixtures.logical import module_context as context_fixture
 from tests.fixtures.logical.hir_composition import Expert
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
@@ -31,47 +32,13 @@ from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.where import Where
-from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
-_CTA = Topology("cta", 132)
-_THREAD = Topology("thread", 32)
+_CTA = context_fixture.CONTEXT_CTA
+_WARP = context_fixture.CONTEXT_WARP
+_THREAD = context_fixture.CONTEXT_THREAD
+ContextTree = context_fixture.ContextTree
 _N = DimVar("n_print", 1, 9)
-
-
-@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
-class _Tree:
-    @func
-    def forward(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-
-    @func
-    def spare(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.square(x)
-
-    @module(entry="step")
-    class inherits:
-        @func
-        def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.relu(x)
-
-    @module(entry="step", topologies=(_THREAD,))
-    class replaces:
-        @func
-        def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.square(x)
-
-    @module(topologies=())
-    class topology_free:
-        @func
-        def helper(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.relu(x)
-
-    @module
-    class nominates_nothing:
-        @func
-        def helper(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.relu(x)
 
 
 def test_a_derived_topology_and_mesh_geometry_survive_the_round_trip() -> None:
@@ -129,13 +96,13 @@ def _child(mod: Module, name: str) -> Module:
 
 
 def test_the_root_declaration_and_its_functions_survive_the_round_trip() -> None:
-    imported = import_dsl(as_script(_Tree))
+    imported = import_dsl(as_script(ContextTree))
 
     assert isinstance(imported, Module)
-    assert imported.name == "_Tree"
+    assert imported.name == "ContextTree"
     assert imported.entry == "forward"
     assert imported.target == CudaTarget("nvidia.h200_sxm")
-    assert imported.topologies == (_CTA,)
+    assert imported.topologies == (_CTA, _WARP)
 
     assert [fn.name for fn in imported.functions] == ["spare", "forward"]
     assert imported.entry_function().name == "forward"
@@ -148,7 +115,7 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     not turn the second into the first: a copied-down target would freeze a child
     that should follow whatever parent it is attached to.
     """
-    imported = import_dsl(as_script(_Tree))
+    imported = import_dsl(as_script(ContextTree))
 
     assert sorted(child.name for child in imported.modules) == [
         "inherits",
@@ -163,7 +130,7 @@ def test_each_nested_module_survives_with_its_own_context() -> None:
     assert inherits.target is None
     assert inherits.topologies is None
     assert inherits.resolve_target() == CudaTarget("nvidia.h200_sxm")
-    assert inherits.effective_topologies() == (_CTA,)
+    assert inherits.effective_topologies() == (_CTA, _WARP)
 
     replaces = _child(imported, "replaces")
     assert replaces.topologies == (_THREAD,)
@@ -181,7 +148,7 @@ def test_a_child_nominating_no_step_prints_an_empty_argument_list() -> None:
     the absence has to print as an absence. The decorator is still called: a bare
     one has not run while a class body naming a child call is evaluated.
     """
-    source = as_script(_Tree)
+    source = as_script(ContextTree)
 
     assert "@module()\n    class nominates_nothing:" in source
     assert 'entry="None"' not in source
@@ -194,9 +161,9 @@ def test_printing_the_imported_tree_reaches_a_fixed_point_twice() -> None:
     The first print names each binding, so the source it produces is what
     every later print reproduces unchanged.
     """
-    source = as_script(_Tree)
-    once = as_script(import_dsl(source, "_Tree"))
-    twice = as_script(import_dsl(once, "_Tree"))
+    source = as_script(ContextTree)
+    once = as_script(import_dsl(source, "ContextTree"))
+    twice = as_script(import_dsl(once, "ContextTree"))
 
     assert once == source
     assert twice == source

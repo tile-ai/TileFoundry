@@ -13,11 +13,17 @@ from __future__ import annotations
 
 import torch
 
-from tests.fixtures.shapes.fused_scaled_parent import FusedScaledParent
-from tests.fixtures.shapes.paired_scaled_parent import PairedScaledParent
-from tests.fixtures.shapes.scaled_child import ScaledChild
+from tests.fixtures.shapes.scaled_modules import (
+    EVALUATOR_N as _N_EVAL,
+)
+from tests.fixtures.shapes.scaled_modules import (
+    DynamicScaledChild,
+    FusedScaledParent,
+    PairedScaledParent,
+    ScaledChild,
+)
 from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Tensor
+from tilefoundry.dsl import DimVarRangePat, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Var
@@ -161,22 +167,10 @@ def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
     assert torch.equal(reading.looped(x), x * w * w * w)
 
 
-_N_EVAL = DimVar("N_eval", 1, 8)
-
-
-@module(entry="run")
-class _ScaledDyn:
-    @func
-    def run(
-        x: Tensor[(_N_EVAL,), "f32"], w: ConstTensor[(_N_EVAL,), "f32"]
-    ) -> Tensor[(_N_EVAL,), "f32"]:
-        return mul(x, w)  # noqa: F821
-
-
 def test_a_variant_body_reaches_its_child_the_same_way() -> None:
     @module(entry="dispatch", target=CudaTarget("nvidia.h200_sxm"))
     class _Dispatch:
-        scaled = _ScaledDyn
+        scaled = DynamicScaledChild
 
         @func
         def dispatch(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:

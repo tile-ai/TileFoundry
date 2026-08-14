@@ -9,9 +9,24 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry import func
-from tilefoundry.dsl import Tensor
-from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul resolved dynamically
+from tests.fixtures.shapes.matmul_programs import (
+    amx_bf16_gemm as bf16_gemm,
+)
+from tests.fixtures.shapes.matmul_programs import (
+    amx_coarse_m_f32_gemm as coarse_m_f32_gemm,
+)
+from tests.fixtures.shapes.matmul_programs import (
+    amx_f32_gemm as f32_gemm,
+)
+from tests.fixtures.shapes.matmul_programs import (
+    amx_odd_m_f32_gemm as odd_m_f32_gemm,
+)
+from tests.fixtures.shapes.matmul_programs import (
+    amx_odd_n_f32_gemm as odd_n_f32_gemm,
+)
+from tests.fixtures.shapes.matmul_programs import (
+    amx_register_sized_f32_gemm as register_sized_f32_gemm,
+)
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
@@ -26,60 +41,6 @@ from tilefoundry.target.amx.atoms import (
     NEON_FMLA_4x4x1_F32,
     candidate_atoms,
 )
-
-
-@func(target=AmxTarget())
-def f32_gemm(
-    x: Tensor[(64, 128), "f32"],
-    w: Tensor[(128, 64), "f32"],
-) -> Tensor[(64, 64), "f32"]:
-    h = matmul(x, w)  # noqa: F405
-    return h
-
-
-@func(target=AmxTarget())
-def register_sized_f32_gemm(
-    x: Tensor[(16, 8), "f32"],
-    w: Tensor[(8, 16), "f32"],
-) -> Tensor[(16, 16), "f32"]:
-    h = matmul(x, w)  # noqa: F405
-    return h
-
-
-@func(target=AmxTarget())
-def coarse_m_f32_gemm(
-    x: Tensor[(8, 8), "f32"],
-    w: Tensor[(8, 16), "f32"],
-) -> Tensor[(8, 16), "f32"]:
-    h = matmul(x, w)  # noqa: F405
-    return h
-
-
-@func(target=AmxTarget())
-def odd_m_f32_gemm(
-    x: Tensor[(18, 128), "f32"],
-    w: Tensor[(128, 64), "f32"],
-) -> Tensor[(18, 64), "f32"]:
-    h = matmul(x, w)  # noqa: F405
-    return h
-
-
-@func(target=AmxTarget())
-def odd_n_f32_gemm(
-    x: Tensor[(64, 128), "f32"],
-    w: Tensor[(128, 18), "f32"],
-) -> Tensor[(64, 18), "f32"]:
-    h = matmul(x, w)  # noqa: F405
-    return h
-
-
-@func(target=AmxTarget())
-def bf16_gemm(
-    x: Tensor[(64, 128), "bf16"],
-    w: Tensor[(128, 64), "bf16"],
-) -> Tensor[(64, 64), "bf16"]:
-    h = matmul(x, w)  # noqa: F405
-    return h
 
 
 def test_amx_target_reports_and_validates_its_own_topology_levels():

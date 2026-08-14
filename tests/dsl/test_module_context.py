@@ -15,6 +15,7 @@ from dataclasses import replace
 import pytest
 
 from tests._source import import_dsl
+from tests.fixtures.logical import module_context as context_fixture
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, tf  # noqa: F401 -- used by bodies
 from tilefoundry.ir.core import VerifyError
@@ -23,34 +24,10 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
-_CTA = Topology("cta", 132)
-_WARP = Topology("warp", 4)
-_THREAD = Topology("thread", 32)
-
-
-@module(entry="forward", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA, _WARP))
-class _Root:
-    @func
-    def forward(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.relu(x)
-
-    @module(entry="step")
-    class inherits:
-        @func
-        def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.relu(x)
-
-    @module(entry="step", topologies=())
-    class topology_free:
-        @func
-        def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.relu(x)
-
-    @module(entry="step", topologies=(_THREAD,))
-    class replaces:
-        @func
-        def step(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return tf.relu(x)
+_CTA = context_fixture.CONTEXT_CTA
+_WARP = context_fixture.CONTEXT_WARP
+_THREAD = context_fixture.CONTEXT_THREAD
+_Root = context_fixture.ContextTree
 
 
 def test_the_root_declaration_is_the_only_target_anywhere_below() -> None:

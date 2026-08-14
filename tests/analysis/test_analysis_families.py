@@ -20,6 +20,7 @@ from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
+from tests.fixtures.shapes.window_programs import WindowCost
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -213,16 +214,6 @@ class _UnmaterializedIndexTensorCosts:
         row_positions = tf.reshape(tf.arange(128), new_shape=(1, 128))
         column_positions = tf.reshape(tf.arange(128), new_shape=(128, 1))
         return row_positions <= column_positions
-
-
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class _WindowCost:
-    @func
-    def main(source: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
-        out = tf.add(seed, seed)
-        for row in tile(10, 4):
-            out = tf.add(source[row, :], seed)
-        return out
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -693,8 +684,8 @@ def test_non_scalar_unmaterialized_operands_are_charged_at_rmem() -> None:
 
 
 def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
-    function = _WindowCost.entry_function()
-    result = analyze(_WindowCost, function, analysis="compute-cost")
+    function = WindowCost.entry_function()
+    result = analyze(WindowCost, function, analysis="compute-cost")
     adds = [call for call in _calls(result.function) if isinstance(call.target, Binary)]
     loop_cost = get_metadata(adds[-1], ComputeCostMetadata)
     root_cost = get_metadata(result.function, ComputeCostMetadata)

@@ -12,23 +12,11 @@ import re
 
 import isl
 
-from tilefoundry import func
+from tests.fixtures.shapes.matmul_programs import DYNAMIC_M as SEQ
+from tests.fixtures.shapes.matmul_programs import dynamic_bf16_gemm as dyn_matmul
 from tilefoundry.analysis import TileGraph, extract
-from tilefoundry.dsl import DimVar, Tensor
-from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul resolved dynamically
 from tilefoundry.schedule.kernel_schedule import build_schedule_tree
 from tilefoundry.schedule.render import emit_scaffold
-
-SEQ = DimVar("seq", 1, 128)
-
-
-@func
-def dyn_matmul(
-    x: Tensor[(SEQ, 4), "bf16"],
-    w: Tensor[(4, 2), "bf16"],
-) -> Tensor[(SEQ, 2), "bf16"]:
-    h = matmul(x, w)
-    return h
 
 
 def test_dynamic_matmul_extract_params_and_domain():

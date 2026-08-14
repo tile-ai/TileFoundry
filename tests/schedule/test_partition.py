@@ -16,7 +16,7 @@ from ortools.sat.python import cp_model
 
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
-from tests.fixtures.shapes.bf16_gemm_rms_norm import bf16_gemm_rms_norm
+from tests.fixtures.shapes.matmul_programs import bf16_gemm_rms_norm
 from tilefoundry.inspection.python_printer import as_script
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import ShardLayout, Topology

@@ -19,12 +19,12 @@ import pytest
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.fixtures.placed.square_cuda import Model as SquareCudaModel
+from tests.fixtures.shapes.matmul_programs import scheduling_gemm
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
-from tilefoundry import CompilerOptions, DType, build, func, jit, lower, module
+from tilefoundry import CompilerOptions, DType, build, jit, lower, module
 from tilefoundry.analysis import AnalysisError, analyze
 from tilefoundry.codegen.registry import group_functions_by_target
-from tilefoundry.dsl import DimVar, Tensor
-from tilefoundry.dsl.tf import matmul
+from tilefoundry.dsl import DimVar
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
@@ -75,14 +75,6 @@ class _NoBandwidthUnitRateCudaTarget(CudaTarget):
                 facts, memory_bandwidth_bytes_per_second_per_unit=None
             )
         return facts
-
-
-@func
-def scheduling_gemm(
-    x: Tensor[(64, 128), "f32"],
-    w: Tensor[(128, 64), "f32"],
-) -> Tensor[(64, 64), "f32"]:
-    return matmul(x, w)
 
 
 @dataclass(frozen=True)

@@ -14,10 +14,16 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.fixtures.shapes.fused_scaled_parent import FusedScaledParent
-from tests.fixtures.shapes.scaled_child import ScaledChild
+from tests.fixtures.shapes.scaled_modules import (
+    RESOURCE_N as _N,
+)
+from tests.fixtures.shapes.scaled_modules import (
+    BroadcastScaledChild,
+    FusedScaledParent,
+    ScaledChild,
+)
 from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Tensor, tf
+from tilefoundry.dsl import ConstTensor, DimVarRangePat, Tensor, tf
 from tilefoundry.target import CudaTarget
 
 
@@ -114,23 +120,13 @@ def test_a_converter_may_call_a_child_staged_before_it(tmp_path) -> None:
     assert torch.equal(prepared["scaled.w"], torch.full((4,), 2.0))
 
 
-_N = DimVar("n_resource", 1, 9)
-
-
-@module(entry="run")
-class _Broadcast:
-    @func
-    def run(x: Tensor[(_N,), "f32"], w: ConstTensor[(1,), "f32"]) -> Tensor[(_N,), "f32"]:
-        return tf.mul(x, w)
-
-
 def test_a_variant_this_dispatch_did_not_select_has_no_say() -> None:
     """Placement follows the body that runs, not every body that could have."""
 
     @module(entry="dispatch", target=CudaTarget("nvidia.h200_sxm"))
     class _Dispatch:
-        near = _Broadcast
-        far = _Broadcast
+        near = BroadcastScaledChild
+        far = BroadcastScaledChild
 
         @func
         def dispatch(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
@@ -197,8 +193,8 @@ def test_preparation_stages_on_the_device_it_was_given() -> None:
 
 @module(entry="pick")
 class _Nested:
-    near = _Broadcast
-    far = _Broadcast
+    near = BroadcastScaledChild
+    far = BroadcastScaledChild
 
     @func
     def pick(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:

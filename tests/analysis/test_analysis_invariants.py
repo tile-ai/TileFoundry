@@ -24,8 +24,8 @@ from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
-from tests.fixtures.shapes.gemm_rms_norm import gemm_rms_norm
-from tests.fixtures.shapes.paired_scaled_parent import PairedScaledParent
+from tests.fixtures.shapes.matmul_programs import gemm_rms_norm
+from tests.fixtures.shapes.scaled_modules import PairedScaledParent
 from tilefoundry import func
 from tilefoundry.analysis import (
     AnalysisError,

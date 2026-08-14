@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from tests.fixtures.shapes.bf16_gemm_rms_norm import bf16_gemm_rms_norm
+from tests.fixtures.shapes.matmul_programs import bf16_gemm_rms_norm
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import sigmoid

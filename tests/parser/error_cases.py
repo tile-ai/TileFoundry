@@ -22,7 +22,7 @@ import torch
 import tilefoundry.codegen.cuda  # noqa: F401 — trigger emitter autodiscovery
 from tests._source import import_dsl
 from tests.fixtures.logical.hir_composition import Expert
-from tests.fixtures.shapes.tile_window_add import tile_window_add
+from tests.fixtures.shapes.window_programs import tile_window_add
 from tilefoundry import func, module, prim_func
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.dsl import ConstTensor, DimVar, T, Tensor, tf

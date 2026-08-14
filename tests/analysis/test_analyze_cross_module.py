@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.logical.hir_composition import REFERENCE_PROGRAMS, Expert
+from tests.fixtures.logical.hir_composition import REFERENCE_PROGRAMS, CrossModule, Expert
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
@@ -60,14 +60,6 @@ def _traffic(records) -> dict[str, int]:
 
 
 def test_a_repeated_call_site_counts_its_work_again() -> None:
-    @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
-    class _Once:
-        mm = Expert
-
-        @func
-        def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return mm(x)  # noqa: F821
-
     @module(entry="twice", target=CudaTarget(_H200), topologies=_CTA)
     class _Twice:
         mm = Expert
@@ -76,7 +68,7 @@ def test_a_repeated_call_site_counts_its_work_again() -> None:
         def twice(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
             return tf.add(mm(x), mm(x))  # noqa: F821
 
-    one_result = analyze(_Once, _Once.entry_function(), analysis="compute-cost")
+    one_result = analyze(CrossModule, CrossModule.entry_function(), analysis="compute-cost")
     two_result = analyze(_Twice, _Twice.entry_function(), analysis="compute-cost")
     one_records = _matmul_records(one_result)
     two_records = _matmul_records(two_result)
@@ -99,15 +91,7 @@ def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
                 acc = mm(acc)  # noqa: F821
             return acc
 
-    @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
-    class _Once:
-        mm = Expert
-
-        @func
-        def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return mm(x)  # noqa: F821
-
-    one_result = analyze(_Once, _Once.entry_function(), analysis="compute-cost")
+    one_result = analyze(CrossModule, CrossModule.entry_function(), analysis="compute-cost")
     looped_result = analyze(
         _Looped, _Looped.entry_function(), analysis="compute-cost"
     )
@@ -132,16 +116,8 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
         ) -> Tensor[(4, 8), "f32"]:
             return tf.matmul(x, w)
 
-    @module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
-    class _Fused:
-        mm = Expert
-
-        @func
-        def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-            return mm(x)  # noqa: F821
-
     direct_result = analyze(_Direct, _Direct.entry_function(), analysis="compute-cost")
-    fused_result = analyze(_Fused, _Fused.entry_function(), analysis="compute-cost")
+    fused_result = analyze(CrossModule, CrossModule.entry_function(), analysis="compute-cost")
     direct = _traffic(_matmul_records(direct_result))
     fused = _traffic(_matmul_records(fused_result))
 
