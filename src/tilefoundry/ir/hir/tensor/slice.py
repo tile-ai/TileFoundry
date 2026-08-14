@@ -52,27 +52,7 @@ def _i64(value: int) -> Constant:
 
 
 def slice_size(begin: Expr, end: Expr, stride: Expr) -> Expr:
-    """Return ``max(0, ceil((end - begin) / stride))`` as a dimension Expr.
-
-    Constant chains fold through ``simplify_dim``. A non-positive constant
-    stride returns zero explicitly because generic arithmetic folding does not
-    encode slice-domain semantics.
-    """
-    if isinstance(begin, Constant) and isinstance(end, Constant) and isinstance(stride, Constant):
-        b, e, s = int(begin.value), int(end.value), int(stride.value)
-        if s <= 0:
-            return _i64(0)
-        n = max(0, (e - b + s - 1) // s)
-        return _i64(n)
-    if isinstance(end, Call) and isinstance(end.target, DimAdd) and end.args[0] is begin:
-        window = end.args[1]
-        if isinstance(stride, Constant) and stride.value == 1:
-            return window
-        bump = simplify_dim(
-            DimAdd,
-            (window, simplify_dim(DimSub, (stride, _i64(1)))),
-        )
-        return simplify_dim(DimFloorDiv, (bump, stride))
+    """Return ``ceil((end - begin) / stride)`` as a dimension expression."""
     diff = simplify_dim(DimSub, (end, begin))
 
     bump = simplify_dim(

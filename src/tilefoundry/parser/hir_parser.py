@@ -33,6 +33,7 @@ from tilefoundry.ir.types.dim import (
     is_dim_expr,
     simplify_dim,
 )
+from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.shard import (
     Broadcast,
     Layout,
@@ -736,6 +737,9 @@ class _HirBodyVisitor(BaseExprVisitor):
                 raise VerifyError(
                     f"tile() takes 2 arguments (extent, step), got {len(loop_args)}"
                 )
+        start, extent, step = (
+            normalize_dim(value) for value in (start, extent, step)
+        )
         if not (is_dim_expr(start) and is_dim_expr(extent) and is_dim_expr(step)):
             offending = ", ".join(
                 f"{label}={_dim_operand_str(value)}"

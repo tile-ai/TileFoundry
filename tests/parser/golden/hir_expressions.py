@@ -17,8 +17,8 @@ class HirExpressions:
     @func
     def dim_from_a_static_call(
         x: Tensor[(CTX_LEN,), "bf16"]
-    ) -> Tensor[(ceildiv(CTX_LEN, 128) * 128,), "bf16"]:
-        v0 = zeros(shape=(ceildiv(CTX_LEN, 128) * 128,), dtype="bf16", storage=gmem)
+    ) -> Tensor[((128 * ((CTX_LEN - 1) // 128)) + 128,), "bf16"]:
+        v0 = zeros(shape=((128 * ((CTX_LEN - 1) // 128)) + 128,), dtype="bf16", storage=gmem)
         return v0
 
     @func

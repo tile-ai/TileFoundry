@@ -457,6 +457,15 @@ def test_a_range_scalar_and_a_runtime_endpoint_drive_a_slice_window() -> None:
     assert runtime_start.body.args[1].elements[0] is runtime_start.params[1]
     assert runtime_start.body.type.layout is None
 
+    shifted_start = import_dsl(
+        prelude
+        + '\n@func\ndef f(x: Tensor[(16, 4), "f32"], '
+        'start: Tensor[(), "i64"]) -> Tensor[(8, 4), "f32"]:\n'
+        "    return x[start + 1:start + 9, :]\n"
+    )
+    assert shifted_start.body.target.sizes == (8, 4)
+    assert shifted_start.body.type.shape == (8, 4)
+
     x = torch.arange(32, dtype=torch.float32).reshape(8, 4)
     torch.testing.assert_close(
         evaluate(runtime_start, x, torch.tensor(2, dtype=torch.int64), device="cpu"), x[2:6, :]

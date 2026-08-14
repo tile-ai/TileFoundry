@@ -13,6 +13,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
+from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
@@ -62,7 +63,7 @@ def _out_spatial(in_dim: Expr, k: int, s: int, p: int, d: int) -> Expr:
     sub_k = simplify_dim(DimSub, (add_pad, _i64(eff_k)))
     div_s = simplify_dim(DimFloorDiv, (sub_k, _i64(s)))
     plus_1 = simplify_dim(DimAdd, (div_s, _i64(1)))
-    return plus_1
+    return normalize_dim(plus_1)
 
 
 def _pair(call, ctx, name: str, values: tuple, *, positive: bool) -> tuple[int, int]:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import isl
 import pytest
 
+from tilefoundry.ir.core.expr import Call, Var
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -16,13 +18,13 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
-from tilefoundry.visitor_registry.isl_utility import canonical_dim, dim_range, to_dim, to_domain
+from tilefoundry.ir.types.dim_isl import dim_range, normalize_dim, to_dim, to_domain
 
 P = DimVar("P", 2048, 1_048_577)
 Q = DimVar("Q", 2, 33)
 
 
-def test_canonical_dim_uses_isl_affine_normal_form():
+def test_normalize_dim_uses_isl_affine_normal_form():
     verbose = simplify_dim(
         DimFloorDiv,
         (
@@ -39,19 +41,53 @@ def test_canonical_dim_uses_isl_affine_normal_form():
         (simplify_dim(DimFloorDiv, (P, 4)), 2),
     )
 
-    assert canonical_dim(verbose) is P
-    assert canonical_dim(quotient) == expected
+    constant = simplify_dim(DimMul, (simplify_dim(DimAdd, (4, 2)), 3))
+
+    assert normalize_dim(constant) == 18
+    assert isinstance(normalize_dim(constant), int)
+    assert normalize_dim(verbose) is P
+    assert normalize_dim(quotient) == expected
 
 
-def test_canonical_dim_leaves_unsupported_expressions_unchanged():
+def test_normalize_dim_leaves_unsupported_expressions_unchanged():
     symbolic_divisor = simplify_dim(
         DimFloorDiv,
         (simplify_dim(DimMul, (P, Q)), DimVar("G", 1, 65)),
     )
     piecewise = simplify_dim(DimMin, (P, 8192))
 
-    assert canonical_dim(symbolic_divisor) is symbolic_divisor
-    assert canonical_dim(piecewise) is piecewise
+    assert normalize_dim(symbolic_divisor) is symbolic_divisor
+    assert normalize_dim(piecewise) is piecewise
+
+
+def test_normalize_dim_keys_runtime_parameters_by_object_identity():
+    scalar = TensorType.umat_scalar()
+    first = Var(type=scalar, name="start")
+    second = Var(type=scalar, name="start")
+
+    def distance(left, right):
+        return simplify_dim(
+            DimSub,
+            (
+                simplify_dim(DimAdd, (left, 9)),
+                simplify_dim(DimAdd, (right, 1)),
+            ),
+        )
+
+    assert normalize_dim(distance(first, first)) == 8
+    distinct = normalize_dim(distance(first, second))
+    assert isinstance(distinct, Call)
+
+    def vars_in(value):
+        if isinstance(value, Var):
+            return [value]
+        if isinstance(value, Call):
+            return [leaf for arg in value.args for leaf in vars_in(arg)]
+        return []
+
+    leaves = vars_in(distinct)
+    assert any(leaf is first for leaf in leaves)
+    assert any(leaf is second for leaf in leaves)
 
 
 def test_dim_range_interval_arithmetic():

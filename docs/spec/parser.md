@@ -457,6 +457,10 @@ compile-time-expr ::= number-literal | identifier | compile-time-expr '.' identi
   rejected ([hir §1.3](./hir.md#13-op)).
 - Evaluation MUST NOT call anything reached from a speculative position: a value
   that is not statically reachable is parsed as IR instead.
+- Dimension arithmetic has one canonical spelling after it enters IR, including
+  shape annotations and op attributes. Slice endpoints that contain the same
+  runtime scalar value MAY cancel to a static window size; an unrelated runtime
+  endpoint remains invalid under the ordinary `ShapeDim` rule.
 
 A **compile-time list** holds `Expr` elements and never reaches the IR:
 

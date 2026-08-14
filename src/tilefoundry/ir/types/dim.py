@@ -136,24 +136,11 @@ class DimMax(Op):
     b = ParamDef(kind="input")
 
 
-_DIM_FOLDERS: dict[type[Op], object] = {
-    DimAdd: lambda a, b: a + b,
-    DimSub: lambda a, b: a - b,
-    DimMul: lambda a, b: a * b,
-    DimFloorDiv: lambda a, b: a // b,
-    DimMod: lambda a, b: a % b,
-    DimMin: min,
-    DimMax: max,
-}
-
-
 def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
-    """Fold dimension arithmetic when every operand is an integer constant.
+    """Build dimension arithmetic without applying algebraic rules.
 
-    Raw integers canonicalize to i64 constants. Unsupported operations and
-    division or modulo by zero remain calls for later verification. Algebraic
-    normalization happens once at the type-inference exit, not during
-    construction.
+    Raw integers become i64 constants and bool remains invalid. The dimension
+    is normalized only when it enters IR.
 
     See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
     """
@@ -174,21 +161,6 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
 
     canon_args = tuple(_wrap(a) for a in args)
 
-    fold = _DIM_FOLDERS.get(op_cls)
-    if (
-        fold is not None
-        and len(canon_args) == 2
-        and all(
-            isinstance(a, Constant) and isinstance(a.value, int) and not isinstance(a.value, bool)
-            for a in canon_args
-        )
-    ):
-        a_val = int(canon_args[0].value)
-        b_val = int(canon_args[1].value)
-        if op_cls in (DimFloorDiv, DimMod) and b_val == 0:
-            pass
-        else:
-            return Constant(type=ti64, value=fold(a_val, b_val))
     return Call(type=ti64, target=op_cls(), args=canon_args)
 
 
@@ -231,11 +203,7 @@ def is_dim_op_call(value) -> bool:
 
 
 def dim_min(a, b) -> Expr:
-    """Symbolic ``min`` dim expression, folded to a ``Constant`` when both operands are static.
-
-    Symbolic ``min(a, b)`` dim expression, folded to a ``Constant`` when both
-    operands are static.
-    """
+    """Build a symbolic ``min(a, b)`` dimension expression."""
     result = _dim_binop(DimMin, a, b)
     if result is NotImplemented:
         raise TypeError(
@@ -261,8 +229,7 @@ def ceildiv(a, b) -> Expr:
 
     Composes existing dim-arithmetic ops — there is no dedicated ceil-div
     op. Operands may be ``int`` (non-bool), ``DimVar`` or ``Expr``; the
-    result is the same ``ShapeDim`` form produced by ``simplify_dim`` and
-    folds to a ``Constant`` when both operands are static.
+    result is the same ``ShapeDim`` form produced by ``simplify_dim``.
     """
     num = simplify_dim(DimSub, (simplify_dim(DimAdd, (a, b)), 1))
     return simplify_dim(DimFloorDiv, (num, b))

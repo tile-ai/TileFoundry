@@ -20,6 +20,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
@@ -115,6 +116,25 @@ def test_broadcast_formal_accepts_reshaped_runtime_slice():
     call = Call(type=formal, target=callee, args=(reshaped,))
 
     assert TypeInferVisitor(TypeInferContext()).visit(call) == formal
+
+
+def test_symbolic_arithmetic_signature_matches_inferred_argument():
+    seq = DimVar("call_seq", 1, 4097)
+    authored_dim = simplify_dim(DimMul, (seq, 2))
+    authored_type = make_tensor_type((authored_dim, 8), _F)
+    x = Var(type=authored_type, name="x")
+    stage = Function.build(
+        name="stage",
+        params=(x,),
+        body=x,
+        return_type=authored_type,
+    )
+    y = Var(type=authored_type, name="y")
+    call = Call(type=authored_type, target=stage, args=(y,))
+    expected_dim = simplify_dim(DimMul, (2, seq))
+
+    assert stage.params[0].type.shape == (expected_dim, 8)
+    assert TypeInferVisitor(TypeInferContext()).visit(call) == stage.return_type
 
 
 def test_plain_formal_rejects_shape_or_dtype_mismatch():

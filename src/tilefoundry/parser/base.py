@@ -34,13 +34,15 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimAdd, is_dim_expr, simplify_dim
+from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.dtype import FloatDType
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
-from tilefoundry.visitor_registry import typeinfer_registry
+from tilefoundry.ir.types.substitute import canonicalize_dims
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .dispatch import (
     Token,
@@ -186,14 +188,14 @@ def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
     """
     result = try_parse_sugar_tensor_type(node, closure)
     if result is not None:
-        return result
+        return canonicalize_dims(result)
     try:
         code = compile(ast.Expression(body=node), "<ann>", "eval")
         val = eval(code, closure)  # noqa: S307 — controlled internal eval
     except Exception as exc:
         raise VerifyError(f"failed to resolve type annotation: {exc}")
     if isinstance(val, TensorType):
-        return val
+        return canonicalize_dims(val)
     raise VerifyError(f"annotation did not resolve to TensorType, got {type(val).__name__}")
 
 
@@ -619,7 +621,7 @@ class BaseExprVisitor:
             starts.append(b_expr)
             from tilefoundry.ir.hir.tensor.slice import slice_size  # noqa: PLC0415
 
-            size = slice_size(b_expr, e_expr, s_expr)
+            size = normalize_dim(slice_size(b_expr, e_expr, s_expr))
             if not is_dim_expr(size):
                 raise VerifyError(
                     f"tensor subscript axis {axis}: a run-time start needs the "
@@ -1296,10 +1298,7 @@ class BaseExprVisitor:
             type=TensorType.scalar(DType.f32), target=op_inst, args=args,
             metadata=(*self._source_metadata(), *records),
         )
-        fn = typeinfer_registry.lookup(type(op_inst))
-        if fn is None:
-            raise VerifyError(f"no typeinfer registered for {type(op_inst).__name__}")
-        computed = fn(placeholder, self._ctx)
+        computed = TypeInferVisitor(self._ctx).visit(placeholder)
         return dataclasses.replace(placeholder, type=computed)
 
     def _eval_static_or_sugar(

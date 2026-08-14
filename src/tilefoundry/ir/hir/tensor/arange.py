@@ -12,6 +12,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimSub, ceildiv, is_dim_expr, simplify_dim
+from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
@@ -46,7 +47,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if op.dtype not in (DType.i32, DType.i64):
         ctx.error(call, f"dtype must be i32 or i64, got {op.dtype}")
 
-    difference = simplify_dim(DimSub, (op.end, op.start))
+    difference = normalize_dim(simplify_dim(DimSub, (op.end, op.start)))
     static_difference = static_dim_value(difference)
     if static_difference is not None and static_difference < 0:
         ctx.error(

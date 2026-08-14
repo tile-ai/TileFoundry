@@ -16,6 +16,7 @@ from tilefoundry.ir.hir.specialize import residual_dims, specialize_concretely
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import ceildiv
+from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -53,7 +54,7 @@ def test_arange_static_type_evaluation_and_cost():
 def test_arange_symbolic_extent_resolves_from_runtime_shape():
     call = _symbolic_arange.body
     assert isinstance(call, Call) and isinstance(call.target, Arange)
-    assert call.type.shape == (ceildiv(_N - 1, 2),)
+    assert call.type.shape == (normalize_dim(ceildiv(_N - 1, 2)),)
     assert call.type.dtype == DType.i32
 
     actual = evaluate(_symbolic_arange, torch.zeros(8), device="cpu")

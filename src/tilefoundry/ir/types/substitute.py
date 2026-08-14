@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from tilefoundry.ir.core.expr import Call, Constant
-from tilefoundry.visitor_registry.isl_utility import canonical_dim
 
 from .dim import _DIM_OP_TYPES, DimVar, simplify_dim
+from .dim_isl import normalize_dim
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -138,7 +138,7 @@ def canonicalize_dims(value: Type) -> Type:
     if not has_symbolic_dims(value):
         return value
     if isinstance(value, TensorType):
-        shape = tuple(canonical_dim(entry) for entry in value.shape)
+        shape = tuple(normalize_dim(entry) for entry in value.shape)
         layout = _canonicalize_layout_dims(value.layout)
         if shape == value.shape and layout is value.layout:
             return value
@@ -169,7 +169,7 @@ def _canonicalize_layout_dims(layout: object) -> object:
     if isinstance(layout, ComposedLayout):
         outer = _canonicalize_layout_dims(layout.outer)
         inner = _canonicalize_layout_dims(layout.inner)
-        offset = canonical_dim(layout.offset)
+        offset = normalize_dim(layout.offset)
         if outer is layout.outer and inner is layout.inner and offset == layout.offset:
             return layout
         return ComposedLayout(inner=inner, offset=offset, outer=outer)
@@ -186,7 +186,7 @@ def _canonicalize_topology_dims(topology: object) -> object:
     _, _, _, _, Topology = _shard_types()
     if not isinstance(topology, Topology):
         return topology
-    size = canonical_dim(topology.size)
+    size = normalize_dim(topology.size)
     if size == topology.size:
         return topology
     return Topology(topology.name, size)
@@ -207,7 +207,7 @@ def _canonicalize_nested(entries: tuple) -> tuple:
     return tuple(
         _canonicalize_nested(entry)
         if isinstance(entry, tuple)
-        else (None if entry is None else canonical_dim(entry))
+        else (None if entry is None else normalize_dim(entry))
         for entry in entries
     )
 
@@ -304,7 +304,7 @@ def substitute_shape_dim(entry: object, bindings: Mapping[str, int]) -> object:
         args = tuple(substitute_shape_dim(arg, bindings) for arg in entry.args)
         if args == tuple(entry.args):
             return entry
-        folded = simplify_dim(type(entry.target), args)
+        folded = normalize_dim(simplify_dim(type(entry.target), args))
 
         if isinstance(folded, Constant) and isinstance(folded.value, int):
             return int(folded.value)

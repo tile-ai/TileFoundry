@@ -10,7 +10,7 @@ from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, Type, callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
-from tilefoundry.ir.types.substitute import substitute_shape_dim
+from tilefoundry.ir.types.substitute import canonicalize_dims, substitute_shape_dim
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
@@ -46,7 +46,12 @@ class Function(Expr):
         variants: tuple["Function", ...] = (),
         converters: tuple[tuple[str, "Function"], ...] = (),
     ) -> "Function":
-        """Construct a Function with the canonical CallableType."""
+        """Construct a Function whose declarations and callable type are canonical."""
+        for param in params:
+            canonical = canonicalize_dims(param.type)
+            if canonical is not param.type:
+                object.__setattr__(param, "type", canonical)
+        return_type = canonicalize_dims(return_type)
         return cls(
             name=name,
             params=params,
